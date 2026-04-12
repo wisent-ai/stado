@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"github.com/stripe/stripe-go/v76"
 	checkoutsession "github.com/stripe/stripe-go/v76/checkout/session"
@@ -16,11 +17,11 @@ import (
 )
 
 type BillingHandler struct {
-	billingRepo     *repository.BillingRepo
-	webhookSecret   string
-	stripeKey       string
-	successURL      string
-	cancelURL       string
+	billingRepo   *repository.BillingRepo
+	webhookSecret string
+	stripeKey     string
+	successURL    string
+	cancelURL     string
 }
 
 func NewBillingHandler(br *repository.BillingRepo, webhookSecret, stripeKey, corsOrigins string) *BillingHandler {
@@ -140,10 +141,8 @@ func (h *BillingHandler) StripeWebhook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		userIDStr := session.Metadata["user_id"]
-		creditsStr := session.Metadata["credits"]
-		userID, _ := parseUUID(userIDStr)
-		credits, _ := strconv.ParseInt(creditsStr, 10, 64)
+		userID, _ := uuid.Parse(session.Metadata["user_id"])
+		credits, _ := strconv.ParseInt(session.Metadata["credits"], 10, 64)
 
 		piID := ""
 		if session.PaymentIntent != nil {
@@ -159,9 +158,3 @@ func (h *BillingHandler) StripeWebhook(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 }
-
-func parseUUID(s string) (uuid.UUID, error) {
-	return uuid.Parse(s)
-}
-
-import "github.com/google/uuid"
