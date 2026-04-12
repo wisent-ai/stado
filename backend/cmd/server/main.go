@@ -44,21 +44,27 @@ func main() {
 	}
 	log.Info().Msg("connected to database")
 
+	// Repositories
 	userRepo := repository.NewUserRepo(pool)
 	machineRepo := repository.NewMachineRepo(pool)
 	instanceRepo := repository.NewInstanceRepo(pool)
 	billingRepo := repository.NewBillingRepo(pool)
 	payoutRepo := repository.NewPayoutRepo(pool)
+	cryptoRepo := repository.NewCryptoRepo(pool)
 
+	// Handlers
 	healthH := handler.NewHealthHandler()
 	userH := handler.NewUserHandler(userRepo, pool)
 	offerH := handler.NewOfferHandler(machineRepo)
 	instanceH := handler.NewInstanceHandler(instanceRepo, machineRepo, billingRepo)
 	billingH := handler.NewBillingHandler(billingRepo, cfg.StripeWebhookSecret, cfg.StripeSecretKey, cfg.CORSOrigins)
 	hostH := handler.NewHostHandler(machineRepo, billingRepo, payoutRepo, userRepo, instanceRepo)
+	connectH := handler.NewConnectHandler(payoutRepo, billingRepo, cfg.StripeSecretKey, cfg.StripeConnectWebhookSecret, cfg.StripeConnectReturnURL, cfg.StripeConnectRefreshURL)
+	cryptoH := handler.NewCryptoHandler(cryptoRepo, billingRepo, cfg, nil)
 
 	hub := ws.NewHub()
 
+	// Router
 	r := chi.NewRouter()
 	r.Use(chimw.RequestID)
 	r.Use(chimw.RealIP)
@@ -66,16 +72,16 @@ func main() {
 	r.Use(middleware.CORSHandler(cfg.CORSOrigins).Handler)
 	r.Use(chimw.Recoverer)
 
+	// Public
 	r.Get("/healthz", healthH.Health)
-
 	r.Post("/api/v1/auth/callback", userH.AuthCallback)
-
-	// Public endpoints
 	r.Get("/api/v1/offers", offerH.List)
 	r.Get("/api/v1/offers/{id}", offerH.Get)
+	r.Get("/api/v1/crypto/price", cryptoH.GetPrice)
 
-	// Stripe webhook (no JWT auth, uses Stripe signature)
+	// Webhooks (signature-verified, no JWT)
 	r.Post("/api/v1/billing/webhook/stripe", billingH.StripeWebhook)
+	r.Post("/api/v1/billing/webhook/stripe-connect", connectH.ConnectWebhook)
 
 	// Agent endpoints (agent token auth)
 	r.Post("/api/v1/agent/heartbeat", hostH.Heartbeat)
@@ -84,9 +90,11 @@ func main() {
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.Auth(cfg.SupabaseJWTSecret, pool))
 
+		// User
 		r.Get("/api/v1/users/me", userH.GetMe)
 		r.Put("/api/v1/users/me", userH.UpdateMe)
 
+		// Instances
 		r.Get("/api/v1/instances", instanceH.List)
 		r.Post("/api/v1/instances", instanceH.Create)
 		r.Get("/api/v1/instances/{id}", instanceH.Get)
@@ -94,10 +102,17 @@ func main() {
 		r.Post("/api/v1/instances/{id}/stop", instanceH.Stop)
 		r.Delete("/api/v1/instances/{id}", instanceH.Destroy)
 
+		// Billing (Stripe)
 		r.Get("/api/v1/billing/balance", billingH.GetBalance)
 		r.Get("/api/v1/billing/transactions", billingH.ListTransactions)
 		r.Post("/api/v1/billing/checkout", billingH.Checkout)
 
+		// Crypto (WST token)
+		r.Get("/api/v1/crypto/deposit-address", cryptoH.GetDepositAddress)
+		r.Post("/api/v1/crypto/withdraw", cryptoH.Withdraw)
+		r.Get("/api/v1/crypto/transactions", cryptoH.ListTransactions)
+
+		// API Keys
 		r.Get("/api/v1/api-keys", userH.ListAPIKeys)
 		r.Post("/api/v1/api-keys", userH.CreateAPIKey)
 		r.Delete("/api/v1/api-keys/{keyID}", userH.RevokeAPIKey)
@@ -112,6 +127,10 @@ func main() {
 			r.Get("/earnings", hostH.GetEarnings)
 			r.Post("/payouts", hostH.RequestPayout)
 			r.Get("/payouts", hostH.ListPayouts)
+			// Stripe Connect
+			r.Post("/connect/onboard", connectH.Onboard)
+			r.Get("/connect/status", connectH.Status)
+			r.Post("/payouts/{payoutID}/execute", connectH.ExecutePayout)
 		})
 
 		// WebSocket
@@ -127,6 +146,10 @@ func main() {
 	staleChecker := scheduler.NewStaleChecker(machineRepo, cfg.AgentHeartbeatStaleSec)
 	go staleChecker.Start(ctx)
 
+	depositMonitor := scheduler.NewDepositMonitor(cryptoRepo, billingRepo, cfg)
+	go depositMonitor.Start(ctx)
+
+	// Start server
 	log.Info().Str("port", cfg.ServerPort).Msg("starting server")
 	server := &http.Server{Addr: ":" + cfg.ServerPort, Handler: r}
 
