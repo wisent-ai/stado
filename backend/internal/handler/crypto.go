@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"net/http"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"github.com/wisent-ai/compute.wisent.com/backend/internal/config"
 	"github.com/wisent-ai/compute.wisent.com/backend/internal/middleware"
@@ -110,7 +111,7 @@ func (h *CryptoHandler) Withdraw(w http.ResponseWriter, r *http.Request) {
 		AmountUSDCents: req.AmountCents,
 	}
 
-	instID := (*uuid.UUID)(nil)
+	var instID *uuid.UUID
 	desc := fmt.Sprintf("WST withdrawal to %s", req.ToAddress[:10]+"...")
 	success, err := h.billingRepo.DeductCredits(r.Context(), userID, req.AmountCents, desc, instID)
 	if err != nil || !success {
@@ -152,5 +153,3 @@ func (h *CryptoHandler) GetPrice(w http.ResponseWriter, r *http.Request) {
 		PriceUSDCents: h.cfg.WSTPriceUSDCents,
 	})
 }
-
-import "github.com/google/uuid"
