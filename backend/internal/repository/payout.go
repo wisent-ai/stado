@@ -89,3 +89,19 @@ func (r *PayoutRepo) UpsertSettings(ctx context.Context, s model.PayoutSettings)
 		s.HostID, s.StripeConnectAccountID, s.PayoutThresholdCents, s.AutoPayout)
 	return err
 }
+
+func (r *PayoutRepo) UpdateConnectStatus(ctx context.Context, hostID uuid.UUID, chargesEnabled, payoutsEnabled bool) error {
+	status := "pending"
+	if chargesEnabled && payoutsEnabled {
+		status = "active"
+	}
+	_, err := r.db.Exec(ctx,
+		`UPDATE host_payout_settings SET
+			stripe_connect_status = $2,
+			charges_enabled = $3,
+			payouts_enabled = $4,
+			updated_at = now()
+		 WHERE host_id = $1`,
+		hostID, status, chargesEnabled, payoutsEnabled)
+	return err
+}
