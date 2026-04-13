@@ -13,6 +13,7 @@ export default function HostDashboardPage() {
   const { getAccessToken, loading: authLoading } = useAuth();
   const [machines, setMachines] = useState<any[]>([]);
   const [earnings, setEarnings] = useState<any>(null);
+  const [connectStatus, setConnectStatus] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -20,12 +21,14 @@ export default function HostDashboardPage() {
     const load = async () => {
       const token = await getAccessToken();
       if (!token) return;
-      const [m, e] = await Promise.all([
+      const [m, e, cs] = await Promise.all([
         api.listMachines(token).catch(() => []),
         api.getEarnings(token).catch(() => null),
+        api.connectStatus(token).catch(() => null),
       ]);
       setMachines(m || []);
       setEarnings(e);
+      setConnectStatus(cs);
       setLoading(false);
     };
     load();
@@ -34,6 +37,7 @@ export default function HostDashboardPage() {
   if (loading) return <div className="py-12 text-center text-muted-foreground">Loading...</div>;
 
   const onlineMachines = machines.filter((m) => m.status === 'online');
+  const isConnected = connectStatus?.status === 'active';
 
   return (
     <div>
@@ -42,7 +46,19 @@ export default function HostDashboardPage() {
         <Link href="/host/machines/register"><Button>Register Machine</Button></Link>
       </div>
 
-      <div className="mb-8 grid gap-6 md:grid-cols-3">
+      {!isConnected && (
+        <Card className="mb-6 border-yellow-500/30 bg-yellow-500/5">
+          <CardContent className="flex items-center justify-between p-4">
+            <div>
+              <p className="font-medium">Connect your bank account to receive payouts</p>
+              <p className="text-sm text-muted-foreground">Set up Stripe Connect to withdraw your earnings.</p>
+            </div>
+            <Link href="/host/connect"><Button>Set Up Payouts</Button></Link>
+          </CardContent>
+        </Card>
+      )}
+
+      <div className="mb-8 grid gap-6 md:grid-cols-4">
         <Card>
           <CardHeader><CardTitle className="text-sm text-muted-foreground">This Month</CardTitle></CardHeader>
           <CardContent>
@@ -60,6 +76,17 @@ export default function HostDashboardPage() {
           <CardContent>
             <p className="text-3xl font-bold">{onlineMachines.length}<span className="text-lg text-muted-foreground">/{machines.length}</span></p>
             <p className="text-sm text-muted-foreground">online</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader><CardTitle className="text-sm text-muted-foreground">Payout Status</CardTitle></CardHeader>
+          <CardContent>
+            <Badge variant={isConnected ? 'success' : 'warning'} className="text-sm">
+              {isConnected ? 'Connected' : 'Not Connected'}
+            </Badge>
+            <Link href="/host/connect" className="mt-2 block text-xs text-primary hover:underline">
+              {isConnected ? 'Manage' : 'Set up'}
+            </Link>
           </CardContent>
         </Card>
       </div>
@@ -95,8 +122,9 @@ export default function HostDashboardPage() {
         </div>
       )}
 
-      <div className="mt-8">
+      <div className="mt-8 flex gap-3">
         <Link href="/host/earnings"><Button variant="outline">View Earnings & Payouts</Button></Link>
+        <Link href="/host/connect"><Button variant="outline">Bank Account Settings</Button></Link>
       </div>
     </div>
   );

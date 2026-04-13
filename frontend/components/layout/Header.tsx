@@ -20,6 +20,7 @@ export function Header() {
                 <Link href="/instances" className="text-muted-foreground hover:text-foreground">Instances</Link>
                 <Link href="/billing" className="text-muted-foreground hover:text-foreground">Billing</Link>
                 <Link href="/host" className="text-muted-foreground hover:text-foreground">Host</Link>
+                <Link href="/api-keys" className="text-muted-foreground hover:text-foreground">API Keys</Link>
               </>
             )}
           </nav>
