@@ -42,13 +42,22 @@ export const api = {
   destroyInstance: (token: string, id: string) =>
     apiFetch<any>(`/api/v1/instances/${id}`, { token, method: 'DELETE' }),
 
-  // Billing
+  // Billing (Stripe)
   getBalance: (token: string) => apiFetch<any>('/api/v1/billing/balance', { token }),
   listTransactions: (token: string) => apiFetch<any[]>('/api/v1/billing/transactions', { token }),
   checkout: (token: string, packageId: string) =>
     apiFetch<{ checkout_url: string }>('/api/v1/billing/checkout', {
       token, method: 'POST', body: JSON.stringify({ package_id: packageId }),
     }),
+
+  // Crypto (WST)
+  getDepositAddress: (token: string) => apiFetch<{ address: string; chain: string; token: string }>('/api/v1/crypto/deposit-address', { token }),
+  withdrawCrypto: (token: string, toAddress: string, amountCents: number) =>
+    apiFetch<any>('/api/v1/crypto/withdraw', {
+      token, method: 'POST', body: JSON.stringify({ to_address: toAddress, amount_cents: amountCents }),
+    }),
+  listCryptoTransactions: (token: string) => apiFetch<{ deposits: any[]; withdrawals: any[] }>('/api/v1/crypto/transactions', { token }),
+  getCryptoPrice: () => apiFetch<{ token: string; symbol: string; chain: string; price_usd_cents: number }>('/api/v1/crypto/price'),
 
   // Host
   listMachines: (token: string) => apiFetch<any[]>('/api/v1/host/machines', { token }),
@@ -61,6 +70,14 @@ export const api = {
   listPayouts: (token: string) => apiFetch<any[]>('/api/v1/host/payouts', { token }),
   requestPayout: (token: string) =>
     apiFetch<any>('/api/v1/host/payouts', { token, method: 'POST' }),
+  executePayout: (token: string, payoutId: string) =>
+    apiFetch<any>(`/api/v1/host/payouts/${payoutId}/execute`, { token, method: 'POST' }),
+
+  // Stripe Connect
+  connectOnboard: (token: string) =>
+    apiFetch<{ onboarding_url: string; account_id: string }>('/api/v1/host/connect/onboard', { token, method: 'POST' }),
+  connectStatus: (token: string) =>
+    apiFetch<{ status: string; charges_enabled: boolean; payouts_enabled: boolean; details_submitted?: boolean }>('/api/v1/host/connect/status', { token }),
 
   // API Keys
   listAPIKeys: (token: string) => apiFetch<any[]>('/api/v1/api-keys', { token }),
