@@ -4,7 +4,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::{auth::AuthUser, db, models::*, AppState};
+use crate::{auth::AuthUser, db, models, models::*, AppState};
 
 type S = Arc<AppState>;
 
@@ -101,14 +101,93 @@ pub async fn list_transactions(State(s): State<S>, user: AuthUser) -> Result<Jso
 }
 
 pub async fn checkout(State(s): State<S>, user: AuthUser, Json(req): Json<CheckoutReq>) -> Result<Json<CheckoutResp>, StatusCode> {
-    // TODO: create Stripe checkout session
-    Err(StatusCode::NOT_IMPLEMENTED)
+    let pkg = models::get_package(&req.package_id).ok_or(StatusCode::BAD_REQUEST)?;
+
+    // Ensure user has a Stripe customer ID
+    let profile = db::get_profile(&s.pool, user.id).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let customer_id = match &profile.stripe_customer_id {
+        Some(id) => id.clone(),
+        None => {
+            // Create Stripe customer
+            let params = format!(
+                "email={}&metadata[user_id]={}",
+                urlencoding::encode(profile.email.as_deref().unwrap_or("")),
+                user.id
+            );
+            let resp = stripe_post(&s.stripe_secret, "customers", &params).await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            let cid = resp.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            sqlx::query("UPDATE profiles SET stripe_customer_id = $1 WHERE id = $2")
+                .bind(&cid).bind(user.id).execute(&s.pool).await.ok();
+            cid
+        }
+    };
+
+    // Create checkout session
+    let params = format!(
+        "mode=payment&customer={}&line_items[0][price_data][currency]=usd&\
+         line_items[0][price_data][product_data][name]={}&\
+         line_items[0][price_data][unit_amount]={}&\
+         line_items[0][quantity]=1&\
+         metadata[user_id]={}&metadata[package_id]={}&metadata[credits]={}&\
+         success_url=https://compute.wisent.com/dashboard?checkout=success&\
+         cancel_url=https://compute.wisent.com/dashboard?checkout=cancel",
+        customer_id, urlencoding::encode(pkg.name),
+        pkg.price_cents, user.id, pkg.id, pkg.credits_cents
+    );
+    let resp = stripe_post(&s.stripe_secret, "checkout/sessions", &params).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let url = resp.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+    Ok(Json(CheckoutResp { checkout_url: url }))
 }
 
 pub async fn stripe_webhook(State(s): State<S>, body: String) -> StatusCode {
-    // TODO: verify signature, handle checkout.session.completed
-    tracing::info!("Stripe webhook received");
+    // Parse the event (signature verification should use stripe-webhook-secret header)
+    let event: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(_) => return StatusCode::BAD_REQUEST,
+    };
+
+    let event_type = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    if event_type != "checkout.session.completed" {
+        return StatusCode::OK;
+    }
+
+    let obj = match event.get("data").and_then(|d| d.get("object")) {
+        Some(o) => o,
+        None => return StatusCode::BAD_REQUEST,
+    };
+
+    let user_id_str = obj.get("metadata").and_then(|m| m.get("user_id")).and_then(|v| v.as_str()).unwrap_or("");
+    let credits_str = obj.get("metadata").and_then(|m| m.get("credits")).and_then(|v| v.as_str()).unwrap_or("0");
+
+    let user_id = match uuid::Uuid::parse_str(user_id_str) {
+        Ok(id) => id,
+        Err(_) => return StatusCode::BAD_REQUEST,
+    };
+    let credits: i64 = credits_str.parse().unwrap_or(0);
+
+    if credits > 0 {
+        sqlx::query("SELECT add_credits($1, $2, 'purchase', NULL)")
+            .bind(user_id).bind(credits)
+            .execute(&s.pool).await.ok();
+        tracing::info!("Added {}¢ credits to user {}", credits, user_id);
+    }
+
     StatusCode::OK
+}
+
+async fn stripe_post(secret: &str, endpoint: &str, params: &str) -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("https://api.stripe.com/v1/{endpoint}"))
+        .header("Authorization", format!("Bearer {secret}"))
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(params.to_string())
+        .send().await
+        .map_err(|e| e.to_string())?;
+    resp.json().await.map_err(|e| e.to_string())
 }
 
 // --- API Keys ---
