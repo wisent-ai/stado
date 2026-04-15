@@ -43,3 +43,4 @@ npm-debug.log*
 # Supabase
 supabase/.temp/
 rust/target/
+target/
