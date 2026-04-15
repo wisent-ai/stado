@@ -31,7 +31,7 @@ struct Ack {
     error: Option<String>,
 }
 
-pub async fn poll_commands(client: &Client, docker: &Docker, server: &str, machine_id: &str, token: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn poll_commands(client: &Client, docker: &Docker, server: &str, machine_id: &str, token: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let url = format!("{server}/api/v1/agent/commands");
     let resp = client.get(&url)
         .bearer_auth(token)
@@ -53,7 +53,7 @@ pub async fn poll_commands(client: &Client, docker: &Docker, server: &str, machi
     Ok(())
 }
 
-async fn execute(docker: &Docker, cmd: &AgentCommand) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+async fn execute(docker: &Docker, cmd: &AgentCommand) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
     match cmd.cmd_type.as_str() {
         "CREATE_CONTAINER" => create(docker, cmd).await,
         "STOP_CONTAINER" => stop(docker, &cmd.instance_id).await,
@@ -63,7 +63,7 @@ async fn execute(docker: &Docker, cmd: &AgentCommand) -> Result<serde_json::Valu
     }
 }
 
-async fn create(docker: &Docker, cmd: &AgentCommand) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+async fn create(docker: &Docker, cmd: &AgentCommand) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
     let p = cmd.payload.as_ref().ok_or("missing payload")?;
     let name = format!("wisent-{}", &cmd.instance_id[..8.min(cmd.instance_id.len())]);
 
@@ -119,21 +119,21 @@ async fn find_container(docker: &Docker, instance_id: &str) -> Option<String> {
     None
 }
 
-async fn stop(docker: &Docker, instance_id: &str) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+async fn stop(docker: &Docker, instance_id: &str) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
     if let Some(id) = find_container(docker, instance_id).await {
         docker.stop_container(&id, Some(StopContainerOptions { t: 30 })).await?;
     }
     Ok(serde_json::json!({"stopped": true}))
 }
 
-async fn start(docker: &Docker, instance_id: &str) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+async fn start(docker: &Docker, instance_id: &str) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
     if let Some(id) = find_container(docker, instance_id).await {
         docker.start_container(&id, None::<StartContainerOptions<String>>).await?;
     }
     Ok(serde_json::json!({"started": true}))
 }
 
-async fn destroy(docker: &Docker, instance_id: &str) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+async fn destroy(docker: &Docker, instance_id: &str) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
     if let Some(id) = find_container(docker, instance_id).await {
         docker.remove_container(&id, Some(RemoveContainerOptions { force: true, ..Default::default() })).await?;
     }
