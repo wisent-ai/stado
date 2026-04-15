@@ -178,6 +178,26 @@ pub struct CreditTransaction {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct CreditPackage {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub credits_cents: i64,
+    pub price_cents: i64,
+    pub bonus_percent: i32,
+}
+
+pub const CREDIT_PACKAGES: &[CreditPackage] = &[
+    CreditPackage { id: "starter", name: "Starter", credits_cents: 500, price_cents: 500, bonus_percent: 0 },
+    CreditPackage { id: "builder", name: "Builder", credits_cents: 2200, price_cents: 2000, bonus_percent: 10 },
+    CreditPackage { id: "pro", name: "Pro", credits_cents: 6000, price_cents: 5000, bonus_percent: 20 },
+    CreditPackage { id: "enterprise", name: "Enterprise", credits_cents: 15000, price_cents: 10000, bonus_percent: 50 },
+];
+
+pub fn get_package(id: &str) -> Option<&'static CreditPackage> {
+    CREDIT_PACKAGES.iter().find(|p| p.id == id)
+}
+
 #[derive(Debug, Deserialize)]
 pub struct CheckoutReq {
     pub package_id: String,
