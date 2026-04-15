@@ -18,8 +18,10 @@ async fn main() {
     tracing::info!("Agent starting: machine_id={machine_id}");
 
     let client = reqwest::Client::new();
-    let docker = bollard::Docker::connect_with_local_defaults()
-        .expect("Failed to connect to Docker");
+    let docker = std::sync::Arc::new(
+        bollard::Docker::connect_with_local_defaults()
+            .expect("Failed to connect to Docker"),
+    );
 
     // Heartbeat loop
     let hb_client = client.clone();
@@ -40,7 +42,7 @@ async fn main() {
         let mut interval = tokio::time::interval(Duration::from_secs(5));
         loop {
             interval.tick().await;
-            if let Err(e) = container::poll_commands(&cmd_client, &cmd_docker, &cmd_url, &cmd_mid, &cmd_token).await {
+            if let Err(e) = container::poll_commands(&cmd_client, &*cmd_docker, &cmd_url, &cmd_mid, &cmd_token).await {
                 tracing::error!("command poll error: {e}");
             }
         }
