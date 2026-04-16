@@ -42,8 +42,10 @@ async fn main() {
         let mut interval = tokio::time::interval(Duration::from_secs(5));
         loop {
             interval.tick().await;
-            if let Err(e) = container::poll_commands(&cmd_client, &*cmd_docker, &cmd_url, &cmd_mid, &cmd_token).await {
-                tracing::error!("command poll error: {e}");
+            tracing::info!("polling commands...");
+            match container::poll_commands(&cmd_client, &*cmd_docker, &cmd_url, &cmd_mid, &cmd_token).await {
+                Ok(()) => {}
+                Err(e) => tracing::error!("command poll error: {e}"),
             }
         }
     });
