@@ -1,6 +1,7 @@
 mod api;
 mod auth;
 mod db;
+pub mod gcp;
 mod models;
 mod scheduler;
 
@@ -58,6 +59,12 @@ async fn main() {
     let stale_pool = pool.clone();
     tokio::spawn(async move {
         scheduler::stale_checker(stale_pool).await;
+    });
+    let prov_pool = pool.clone();
+    let gcp_project = std::env::var("GCP_PROJECT").unwrap_or_else(|_| "wisent-480400".into());
+    let backend_url = std::env::var("BACKEND_URL").unwrap_or_else(|_| "https://wisent-compute-backend-d6ubffhi6q-uc.a.run.app".into());
+    tokio::spawn(async move {
+        scheduler::provisioner::run(prov_pool, gcp_project, backend_url).await;
     });
 
     let cors = CorsLayer::new()

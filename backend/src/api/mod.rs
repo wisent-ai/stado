@@ -51,17 +51,25 @@ pub async fn list_instances(State(s): State<S>, user: AuthUser) -> Result<Json<V
 }
 
 pub async fn create_instance(State(s): State<S>, user: AuthUser, Json(req): Json<CreateInstanceReq>) -> Result<(StatusCode, Json<Instance>), StatusCode> {
-    let machine = db::get_machine(&s.pool, req.machine_id).await.map_err(|_| StatusCode::NOT_FOUND)?;
-    if !machine.is_available || machine.status != "online" {
-        return Err(StatusCode::CONFLICT);
+    if let Some(mid) = req.machine_id {
+        // Specific machine requested
+        let machine = db::get_machine(&s.pool, mid).await.map_err(|_| StatusCode::NOT_FOUND)?;
+        if !machine.is_available || machine.status != "online" {
+            return Err(StatusCode::CONFLICT);
+        }
+        let balance = db::get_balance(&s.pool, user.id).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        if balance < machine.price_per_hour_cents as i64 {
+            return Err(StatusCode::PAYMENT_REQUIRED);
+        }
+        let inst = db::create_instance(&s.pool, user.id, &machine, &req).await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        Ok((StatusCode::CREATED, Json(inst)))
+    } else {
+        // No machine specified → provisioner will assign one (local or cloud)
+        let inst = db::create_unassigned_instance(&s.pool, user.id, &req).await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        Ok((StatusCode::CREATED, Json(inst)))
     }
-    let balance = db::get_balance(&s.pool, user.id).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    if balance < machine.price_per_hour_cents as i64 {
-        return Err(StatusCode::PAYMENT_REQUIRED);
-    }
-    let inst = db::create_instance(&s.pool, user.id, &machine, &req).await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok((StatusCode::CREATED, Json(inst)))
 }
 
 pub async fn get_instance(State(s): State<S>, user: AuthUser, Path(id): Path<Uuid>) -> Result<Json<Instance>, StatusCode> {

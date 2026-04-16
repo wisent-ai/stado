@@ -119,6 +119,19 @@ pub async fn create_instance(pool: &PgPool, user_id: Uuid, machine: &Machine, re
         .fetch_one(pool).await
 }
 
+pub async fn create_unassigned_instance(pool: &PgPool, user_id: Uuid, req: &CreateInstanceReq) -> sqlx::Result<Instance> {
+    let disk = req.disk_gb.unwrap_or(20);
+    let env = req.docker_env.clone().unwrap_or(serde_json::json!({}));
+    let ports = req.docker_ports.clone().unwrap_or(serde_json::json!({}));
+    sqlx::query_as(
+        "INSERT INTO instances (user_id, docker_image, docker_env, docker_ports, docker_cmd,
+         disk_gb, ssh_public_key, label, price_per_hour_cents, status, host_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,50,'creating','00000000-0000-0000-0000-000000000001') RETURNING *")
+        .bind(user_id).bind(&req.docker_image).bind(&env).bind(&ports)
+        .bind(&req.docker_cmd).bind(disk).bind(&req.ssh_public_key).bind(&req.label)
+        .fetch_one(pool).await
+}
+
 pub async fn list_instances(pool: &PgPool, user_id: Uuid) -> sqlx::Result<Vec<Instance>> {
     sqlx::query_as("SELECT * FROM instances WHERE user_id = $1 ORDER BY created_at DESC")
         .bind(user_id).fetch_all(pool).await

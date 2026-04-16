@@ -1,3 +1,5 @@
+pub mod provisioner;
+
 use sqlx::PgPool;
 use std::time::Duration;
 

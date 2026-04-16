@@ -153,7 +153,7 @@ pub struct Instance {
 
 #[derive(Debug, Deserialize)]
 pub struct CreateInstanceReq {
-    pub machine_id: Uuid,
+    pub machine_id: Option<Uuid>,
     pub docker_image: String,
     pub docker_env: Option<serde_json::Value>,
     pub docker_ports: Option<serde_json::Value>,
