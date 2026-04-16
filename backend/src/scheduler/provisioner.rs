@@ -8,7 +8,6 @@ const STARTUP_TEMPLATE: &str = r#"#!/bin/bash
 set -euxo pipefail
 exec > /var/log/wisent-agent-setup.log 2>&1
 
-# Install Docker + NVIDIA container toolkit
 apt-get update && apt-get install -y docker.io curl
 distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
 curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
@@ -18,7 +17,6 @@ curl -s -L https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-
 apt-get update && apt-get install -y nvidia-container-toolkit
 nvidia-ctk runtime configure --runtime=docker && systemctl restart docker
 
-# Download and run agent
 curl -sL "AGENT_BINARY_URL" -o /usr/local/bin/wisent-agent && chmod +x /usr/local/bin/wisent-agent
 export BACKEND_URL="BACKEND_URL_PLACEHOLDER"
 export MACHINE_ID="MACHINE_ID_PLACEHOLDER"
@@ -38,7 +36,6 @@ pub async fn run(pool: PgPool, project: String, backend_url: String) {
 }
 
 async fn tick(pool: &PgPool, project: &str, backend_url: &str) -> Result<(), String> {
-    // Find unassigned creating instances (older than 10s to avoid racing with local agents)
     let unassigned: Vec<(Uuid, Option<String>)> = sqlx::query_as(
         "SELECT i.id, i.docker_image FROM instances i
          LEFT JOIN machines m ON i.machine_id = m.id
@@ -48,12 +45,16 @@ async fn tick(pool: &PgPool, project: &str, backend_url: &str) -> Result<(), Str
         .fetch_all(pool).await.map_err(|e| e.to_string())?;
 
     for (inst_id, _docker_image) in &unassigned {
-        // Try local machine first
+        // Find local machine with free GPU slots
+        // Free slots = gpu_count - count of running/creating instances on that machine
         let local: Option<(Uuid, Uuid)> = sqlx::query_as(
-            "SELECT id, host_id FROM machines
-             WHERE is_cloud = false AND status = 'online' AND is_available = true
-             AND current_instance_id IS NULL
-             ORDER BY price_per_hour_cents ASC LIMIT 1")
+            "SELECT m.id, m.host_id FROM machines m
+             WHERE m.is_cloud = false AND m.status = 'online' AND m.is_available = true
+             AND m.gpu_count > (
+                 SELECT COUNT(*) FROM instances i
+                 WHERE i.machine_id = m.id AND i.status IN ('creating', 'running')
+             )
+             ORDER BY m.price_per_hour_cents ASC LIMIT 1")
             .fetch_optional(pool).await.map_err(|e| e.to_string())?;
 
         if let Some((machine_id, host_id)) = local {
@@ -64,13 +65,12 @@ async fn tick(pool: &PgPool, project: &str, backend_url: &str) -> Result<(), Str
             continue;
         }
 
-        // No local → provision cloud VM
+        // No local GPU slots → provision cloud VM (one per job)
         let short_id = &inst_id.to_string()[..8];
         let vm_name = format!("wisent-cloud-{short_id}");
         let machine_type = "n1-standard-4";
         let accel_type = "nvidia-tesla-t4";
 
-        // Create machine record first to get ID
         let machine_id: Uuid = sqlx::query_scalar(
             "INSERT INTO machines (hostname, gpu_model, gpu_count, gpu_vram_gb, cpu_cores, ram_gb, disk_gb,
              price_per_hour_cents, status, is_available, is_cloud, cloud_instance_name,
@@ -84,8 +84,7 @@ async fn tick(pool: &PgPool, project: &str, backend_url: &str) -> Result<(), Str
         let script = STARTUP_TEMPLATE
             .replace("BACKEND_URL_PLACEHOLDER", backend_url)
             .replace("MACHINE_ID_PLACEHOLDER", &machine_id.to_string())
-            .replace("AGENT_BINARY_URL", &format!(
-                "https://storage.googleapis.com/wisent-compute/agent/wisent-agent-linux-amd64"));
+            .replace("AGENT_BINARY_URL", "https://storage.googleapis.com/wisent-compute/agent/wisent-agent-linux-amd64");
 
         match gcp::create_vm(project, machine_type, accel_type, &script, &vm_name).await {
             Ok((name, zone)) => {
@@ -93,7 +92,7 @@ async fn tick(pool: &PgPool, project: &str, backend_url: &str) -> Result<(), Str
                     .bind(&zone).bind(machine_id).execute(pool).await.ok();
                 sqlx::query("UPDATE instances SET machine_id = $1, host_id = '00000000-0000-0000-0000-000000000001' WHERE id = $2")
                     .bind(machine_id).bind(inst_id).execute(pool).await.ok();
-                tracing::info!("Provisioned cloud VM {} for instance {}", name, inst_id);
+                tracing::info!("Provisioned cloud VM {} for {}", name, inst_id);
             }
             Err(e) => {
                 sqlx::query("DELETE FROM machines WHERE id = $1").bind(machine_id).execute(pool).await.ok();
@@ -102,7 +101,7 @@ async fn tick(pool: &PgPool, project: &str, backend_url: &str) -> Result<(), Str
         }
     }
 
-    // Cleanup: delete cloud VMs for destroyed instances
+    // Cleanup cloud VMs with no active instances
     let destroyed: Vec<(Uuid, Option<String>, Option<String>)> = sqlx::query_as(
         "SELECT m.id, m.cloud_instance_name, m.cloud_zone FROM machines m
          WHERE m.is_cloud = true AND m.status != 'offline'
