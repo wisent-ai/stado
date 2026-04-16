@@ -75,6 +75,8 @@ async fn main() {
         .route("/api/v1/billing/webhook/stripe", axum::routing::post(api::stripe_webhook))
         // Agent
         .route("/api/v1/agent/heartbeat", axum::routing::post(api::agent_heartbeat))
+        .route("/api/v1/agent/commands", axum::routing::get(api::agent::commands))
+        .route("/api/v1/agent/commands/{id}/ack", axum::routing::post(api::agent::command_ack))
         // Authenticated
         .route("/api/v1/users/me", axum::routing::get(api::get_me).put(api::update_me))
         .route("/api/v1/instances", axum::routing::get(api::list_instances).post(api::create_instance))
