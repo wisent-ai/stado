@@ -44,26 +44,34 @@ async fn tick(pool: &PgPool, project: &str, backend_url: &str) -> Result<(), Str
          AND i.created_at < now() - interval '10 seconds'")
         .fetch_all(pool).await.map_err(|e| e.to_string())?;
 
-    for (inst_id, _docker_image) in &unassigned {
-        // Find local machine with free GPU slots
-        // Free slots = gpu_count - count of running/creating instances on that machine
-        let local: Option<(Uuid, Uuid)> = sqlx::query_as(
-            "SELECT m.id, m.host_id FROM machines m
-             WHERE m.is_cloud = false AND m.status = 'online' AND m.is_available = true
-             AND m.gpu_count > (
-                 SELECT COUNT(*) FROM instances i
-                 WHERE i.machine_id = m.id AND i.status IN ('creating', 'running')
-             )
-             ORDER BY m.price_per_hour_cents ASC LIMIT 1")
-            .fetch_optional(pool).await.map_err(|e| e.to_string())?;
+    // Track assignments this tick to avoid over-assigning before DB reflects changes
+    let mut tick_assignments: std::collections::HashMap<Uuid, i32> = std::collections::HashMap::new();
 
-        if let Some((machine_id, host_id)) = local {
-            sqlx::query("UPDATE instances SET machine_id = $1, host_id = $2 WHERE id = $3")
-                .bind(machine_id).bind(host_id).bind(inst_id)
-                .execute(pool).await.ok();
-            tracing::info!("Assigned {} to local machine {}", inst_id, machine_id);
-            continue;
+    for (inst_id, _docker_image) in &unassigned {
+        // Find local machine with free GPU slots (accounting for this tick's assignments)
+        let locals: Vec<(Uuid, Uuid, i32, i64)> = sqlx::query_as(
+            "SELECT m.id, m.host_id, m.gpu_count,
+             (SELECT COUNT(*) FROM instances i WHERE i.machine_id = m.id AND i.status IN ('creating', 'running'))
+             FROM machines m
+             WHERE m.is_cloud = false AND m.status = 'online' AND m.is_available = true
+             ORDER BY m.price_per_hour_cents ASC")
+            .fetch_all(pool).await.map_err(|e| e.to_string())?;
+
+        let mut assigned_locally = false;
+        for (mid, hid, gpu_count, db_count) in &locals {
+            let tick_count = tick_assignments.get(mid).copied().unwrap_or(0);
+            let total_used = *db_count as i32 + tick_count;
+            if *gpu_count > total_used {
+                sqlx::query("UPDATE instances SET machine_id = $1, host_id = $2 WHERE id = $3")
+                    .bind(mid).bind(hid).bind(inst_id)
+                    .execute(pool).await.ok();
+                *tick_assignments.entry(*mid).or_insert(0) += 1;
+                tracing::info!("Assigned {} to local machine {} (slot {}/{})", inst_id, mid, total_used + 1, gpu_count);
+                assigned_locally = true;
+                break;
+            }
         }
+        if assigned_locally { continue; }
 
         // No local GPU slots → provision cloud VM (one per job)
         let short_id = &inst_id.to_string()[..8];
