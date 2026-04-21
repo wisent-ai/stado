@@ -1,6 +1,5 @@
 mod container;
 mod heartbeat;
-mod vast;
 
 use std::time::Duration;
 use tracing_subscriber::EnvFilter;
