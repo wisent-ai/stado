@@ -65,11 +65,6 @@ async fn execute(docker: &Docker, cmd: &AgentCommand) -> Result<serde_json::Valu
 
 async fn create(docker: &Docker, cmd: &AgentCommand) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
     let p = cmd.payload.as_ref().ok_or("missing payload")?;
-    // Yield if a Vast.ai rental is active on this host so we do not
-    // starve a paid renter mid-lease. Scheduler retries on the next poll.
-    if crate::vast::is_vast_renting(docker).await {
-        return Err("vast rental active on this host; yielding".into());
-    }
     let name = format!("wisent-{}", &cmd.instance_id[..8.min(cmd.instance_id.len())]);
 
     // Pull
