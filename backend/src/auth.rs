@@ -38,6 +38,36 @@ impl FromRequestParts<Arc<AppState>> for AuthUser {
                     if bcrypt::verify(key, &hash).unwrap_or(false) {
                         sqlx::query("UPDATE api_keys SET last_used_at = now() WHERE key_prefix = $1")
                             .bind(prefix).execute(&state.pool).await.ok();
+
+                        // Enterprise frontend proxy trust: when the admin
+                        // key is accompanied by X-Enterprise-User-Id, treat
+                        // the request as that enterprise user (upserting
+                        // their row on first sight) so per-user attribution
+                        // works without the backend needing to validate the
+                        // enterprise Supabase JWT itself. The proxy has
+                        // already validated the Supabase session server-side.
+                        let ent_id = parts.headers.get("x-enterprise-user-id")
+                            .and_then(|v| v.to_str().ok())
+                            .and_then(|v| Uuid::parse_str(v).ok());
+                        if let Some(eid) = ent_id {
+                            let email = parts.headers.get("x-enterprise-user-email")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("");
+                            sqlx::query(
+                                "INSERT INTO auth.users (id, email) VALUES ($1, $2) \
+                                 ON CONFLICT (id) DO NOTHING")
+                                .bind(eid).bind(email)
+                                .execute(&state.pool).await
+                                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                            sqlx::query(
+                                "INSERT INTO profiles (id, email, role) VALUES ($1, $2, 'user') \
+                                 ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email")
+                                .bind(eid).bind(email)
+                                .execute(&state.pool).await
+                                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                            return Ok(AuthUser { id: eid, role: "user".into() });
+                        }
+
                         return Ok(AuthUser { id: user_id, role });
                     }
                 }
