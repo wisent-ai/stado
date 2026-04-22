@@ -1,13 +1,14 @@
-// Vast.ai coexistence helper.
+// Vast.ai coexistence + auto-registration helper.
 //
-// When the host machine is registered on Vast.ai (vast.ai runs its own
-// docker daemon containers alongside ours), we want Wisent jobs to yield
-// politely: don't start a new Wisent container on top of an active paid
-// Vast rental. Vast-labeled containers can be detected by container name
-// (Vast convention: starts with "C.") or by image prefix.
+// Coexistence: when a paid Vast rental is running on this host, we want
+// Wisent jobs to yield politely (no new Wisent container on top of the
+// rental). Detected by container name (Vast convention: starts with "C.")
+// or image prefix.
 //
-// This module only inspects the local docker socket; it never talks to
-// the Vast API. That keeps the agent free of Vast credentials.
+// Auto-registration: on agent startup, if VAST_HOST_API_KEY is present and
+// the vastai daemon is not already active, we run the embedded install
+// script once. This is what makes idle GPU time automatically rentable:
+// every Wisent compute host also advertises on Vast while not busy.
 
 use bollard::Docker;
 use bollard::container::ListContainersOptions;
@@ -56,4 +57,47 @@ pub async fn active_vast_container_count(docker: &Docker) -> usize {
         tracing::info!("vast: {count} active rental container(s) detected; yielding Wisent jobs");
     }
     count
+}
+
+const VAST_INSTALL_SH: &str = include_str!("../vast_install.sh");
+
+/// Register this host on Vast.ai so idle GPU time auto-rents. No-ops if
+/// VAST_HOST_API_KEY is unset, if the daemon is already active, or if the
+/// required system binaries are missing.
+pub async fn ensure_host_daemon_installed() {
+    let active = tokio::process::Command::new("systemctl")
+        .args(["is-active", "vastai"])
+        .output().await;
+    if let Ok(out) = active {
+        if out.status.success() {
+            tracing::info!("vast: vastai daemon already active");
+            return;
+        }
+    }
+
+    let api_key = match std::env::var("VAST_HOST_API_KEY") {
+        Ok(k) if !k.trim().is_empty() => k,
+        _ => {
+            tracing::info!("vast: VAST_HOST_API_KEY unset; host will not auto-rent");
+            return;
+        }
+    };
+
+    let script_path = "/tmp/wisent_vast_install.sh";
+    if let Err(e) = tokio::fs::write(script_path, VAST_INSTALL_SH).await {
+        tracing::error!("vast: could not stage install script: {e}");
+        return;
+    }
+
+    tracing::info!("vast: installing host daemon");
+    let out = tokio::process::Command::new("sudo")
+        .args(["-E", "bash", script_path])
+        .env("VAST_HOST_API_KEY", &api_key)
+        .output().await;
+    match out {
+        Ok(o) if o.status.success() => tracing::info!("vast: install complete; host now listed"),
+        Ok(o) => tracing::error!("vast: install exited {:?}: {}", o.status.code(),
+            String::from_utf8_lossy(&o.stderr)),
+        Err(e) => tracing::error!("vast: install spawn failed: {e}"),
+    }
 }
