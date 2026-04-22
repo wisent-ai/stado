@@ -18,6 +18,12 @@ async fn main() {
 
     tracing::info!("Agent starting: machine_id={machine_id}");
 
+    // If VAST_HOST_API_KEY is set and the vastai daemon is not yet running,
+    // install it now so idle GPU time automatically earns on Vast. The
+    // coexistence check in container::create yields Wisent jobs whenever a
+    // paid Vast rental is active on this host.
+    vast::ensure_host_daemon_installed().await;
+
     let client = reqwest::Client::new();
     let docker = std::sync::Arc::new(
         bollard::Docker::connect_with_local_defaults()
