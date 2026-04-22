@@ -2,26 +2,21 @@ name: Agent CI
 
 on:
   push:
-    paths: ['agent/**']
+    paths: ['agent/**', 'Cargo.toml', 'Cargo.lock']
   pull_request:
-    paths: ['agent/**']
+    paths: ['agent/**', 'Cargo.toml', 'Cargo.lock']
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.22'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: Build
-        working-directory: agent
-        run: go build ./...
-      - name: Test
-        working-directory: agent
-        run: go test ./...
-      - name: Build Release Binaries
-        working-directory: agent
-        run: |
-          GOOS=linux GOARCH=amd64 go build -o bin/wisent-agent-linux-amd64 ./cmd/wisent-agent
-          GOOS=linux GOARCH=arm64 go build -o bin/wisent-agent-linux-arm64 ./cmd/wisent-agent
+        run: cargo build -p wisent-agent --release
+      - name: Upload linux-amd64 binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: wisent-agent-linux-amd64
+          path: target/release/wisent-agent
