@@ -8,21 +8,67 @@ const STARTUP_TEMPLATE: &str = r#"#!/bin/bash
 set -euxo pipefail
 exec > /var/log/wisent-agent-setup.log 2>&1
 
-apt-get update && apt-get install -y docker.io curl
-distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
-curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-curl -s -L https://nvidia.github.io/libnvidia-container/$distribution/libnvidia-container.list | \
-  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-  tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
-apt-get update && apt-get install -y nvidia-container-toolkit
-nvidia-ctk runtime configure --runtime=docker && systemctl restart docker
+export DEBIAN_FRONTEND=noninteractive
 
-curl -sL "AGENT_BINARY_URL" -o /usr/local/bin/wisent-agent && chmod +x /usr/local/bin/wisent-agent
-export BACKEND_URL="BACKEND_URL_PLACEHOLDER"
-export MACHINE_ID="MACHINE_ID_PLACEHOLDER"
-export AGENT_TOKEN="cloud-auto"
-export RUST_LOG=info
-nohup /usr/local/bin/wisent-agent > /var/log/wisent-agent.log 2>&1 &
+# Install Docker if not present. The pytorch deep-learning images we use
+# ship with CUDA + drivers but no Docker; install via the official APT repo.
+if ! command -v docker >/dev/null 2>&1; then
+    apt-get update -qq
+    apt-get install -y -qq ca-certificates curl gnupg
+    install -m 0755 -d /etc/apt/keyrings
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+    chmod a+r /etc/apt/keyrings/docker.gpg
+    echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu jammy stable" > /etc/apt/sources.list.d/docker.list
+    apt-get update -qq
+    apt-get install -y -qq docker-ce docker-ce-cli containerd.io
+    systemctl enable --now docker
+fi
+
+# Install nvidia-container-toolkit if missing, then wire it into Docker
+if ! dpkg -l nvidia-container-toolkit >/dev/null 2>&1; then
+    apt-get install -y -qq nvidia-container-toolkit || true
+fi
+nvidia-ctk runtime configure --runtime=docker || true
+systemctl restart docker
+
+# Wire docker to authenticate with GCP Artifact Registry using the VM's
+# attached service account token from the metadata server. Without this,
+# docker pull against a private AR repo returns 404 (anonymous miss).
+install -d /root/.docker
+cat > /root/.docker/config.json << 'DOCKERCFG'
+{ "credHelpers": {
+    "us-central1-docker.pkg.dev": "gcr",
+    "us-docker.pkg.dev": "gcr",
+    "gcr.io": "gcr",
+    "us.gcr.io": "gcr"
+} }
+DOCKERCFG
+curl -sL https://github.com/GoogleCloudPlatform/docker-credential-gcr/releases/download/v2.1.22/docker-credential-gcr_linux_amd64-2.1.22.tar.gz \
+  | tar -xz -C /usr/local/bin docker-credential-gcr
+chmod +x /usr/local/bin/docker-credential-gcr
+
+# Download and run agent
+curl -sL "AGENT_BINARY_URL" -o /usr/local/bin/wisent-agent
+chmod +x /usr/local/bin/wisent-agent
+
+cat > /etc/systemd/system/wisent-agent.service << EOF
+[Unit]
+Description=Wisent Compute Agent
+After=docker.service
+[Service]
+Environment=BACKEND_URL=BACKEND_URL_PLACEHOLDER
+Environment=MACHINE_ID=MACHINE_ID_PLACEHOLDER
+Environment=AGENT_TOKEN=cloud-auto
+Environment=RUST_LOG=info
+ExecStart=/usr/local/bin/wisent-agent
+Restart=always
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable wisent-agent
+systemctl start wisent-agent
 "#;
 
 pub async fn run(pool: PgPool, project: String, backend_url: String) {
@@ -36,8 +82,8 @@ pub async fn run(pool: PgPool, project: String, backend_url: String) {
 }
 
 async fn tick(pool: &PgPool, project: &str, backend_url: &str) -> Result<(), String> {
-    let unassigned: Vec<(Uuid, Option<String>)> = sqlx::query_as(
-        "SELECT i.id, i.docker_image FROM instances i
+    let unassigned: Vec<(Uuid, Option<String>, serde_json::Value)> = sqlx::query_as(
+        "SELECT i.id, i.docker_image, i.docker_env FROM instances i
          LEFT JOIN machines m ON i.machine_id = m.id
          WHERE i.status = 'creating'
          AND (i.machine_id IS NULL OR m.status != 'online')
@@ -47,7 +93,7 @@ async fn tick(pool: &PgPool, project: &str, backend_url: &str) -> Result<(), Str
     // Track assignments this tick to avoid over-assigning before DB reflects changes
     let mut tick_assignments: std::collections::HashMap<Uuid, i32> = std::collections::HashMap::new();
 
-    for (inst_id, _docker_image) in &unassigned {
+    for (inst_id, _docker_image, docker_env) in &unassigned {
         // Find local machine with free GPU slots (accounting for this tick's assignments)
         let locals: Vec<(Uuid, Uuid, i32, i64)> = sqlx::query_as(
             "SELECT m.id, m.host_id, m.gpu_count,
@@ -73,20 +119,37 @@ async fn tick(pool: &PgPool, project: &str, backend_url: &str) -> Result<(), Str
         }
         if assigned_locally { continue; }
 
-        // No local GPU slots → provision cloud VM (one per job)
+        // No local GPU slots → provision cloud VM (one per job).
+        // Caller can request a beefier GPU via docker_env.GPU_PREFERENCE
+        // ("a100" maps to a2-highgpu-1g + nvidia-tesla-a100); default stays
+        // n1-standard-4 + T4 for cheap inference jobs.
+        let pref = docker_env
+            .get("GPU_PREFERENCE")
+            .and_then(|v| v.as_str())
+            .unwrap_or("t4")
+            .to_lowercase();
+        let (machine_type, accel_type, gpu_model, gpu_vram_gb, ram_gb, price_cents) = match pref.as_str() {
+            "a100" => ("a2-highgpu-1g", "nvidia-tesla-a100", "NVIDIA A100", 40, 85, 350),
+            _      => ("n1-standard-4", "nvidia-tesla-t4",   "NVIDIA Tesla T4", 16, 32, 50),
+        };
+
         let short_id = &inst_id.to_string()[..8];
         let vm_name = format!("wisent-cloud-{short_id}");
-        let machine_type = "n1-standard-4";
-        let accel_type = "nvidia-tesla-t4";
+
+        // Purge any prior machine row for the same hostname so the cleanup
+        // step can't race against this provisioning round (two rows sharing
+        // a hostname caused us to delete the active VM in tick N+1).
+        sqlx::query("DELETE FROM machines WHERE hostname = $1 AND id NOT IN (SELECT machine_id FROM instances WHERE machine_id IS NOT NULL AND status NOT IN ('destroyed','error'))")
+            .bind(&vm_name).execute(pool).await.ok();
 
         let machine_id: Uuid = sqlx::query_scalar(
             "INSERT INTO machines (hostname, gpu_model, gpu_count, gpu_vram_gb, cpu_cores, ram_gb, disk_gb,
              price_per_hour_cents, status, is_available, is_cloud, cloud_instance_name,
              host_id, location_country)
-             VALUES ($1, 'NVIDIA Tesla T4', 1, 16, 4, 32, 200, 50, 'pending', false, true, $1,
+             VALUES ($1, $2, 1, $3, 12, $4, 500, $5, 'pending', false, true, $1,
                      '00000000-0000-0000-0000-000000000001', 'US')
              RETURNING id")
-            .bind(&vm_name)
+            .bind(&vm_name).bind(gpu_model).bind(gpu_vram_gb).bind(ram_gb).bind(price_cents)
             .fetch_one(pool).await.map_err(|e| e.to_string())?;
 
         let script = STARTUP_TEMPLATE
@@ -109,11 +172,17 @@ async fn tick(pool: &PgPool, project: &str, backend_url: &str) -> Result<(), Str
         }
     }
 
-    // Cleanup cloud VMs with no active instances
+    // Cleanup cloud VMs with no active instances. Guard against deleting a VM
+    // whose hostname is still claimed by another active machine row (would
+    // happen during a hostname-reuse race where the freshly-created VM gets
+    // taken down). Also age-gate (>5 min) so we don't race the agent's first
+    // heartbeat.
     let destroyed: Vec<(Uuid, Option<String>, Option<String>)> = sqlx::query_as(
         "SELECT m.id, m.cloud_instance_name, m.cloud_zone FROM machines m
          WHERE m.is_cloud = true AND m.status != 'offline'
-         AND NOT EXISTS (SELECT 1 FROM instances i WHERE i.machine_id = m.id AND i.status NOT IN ('destroyed', 'error'))")
+         AND m.created_at < now() - interval '5 minutes'
+         AND NOT EXISTS (SELECT 1 FROM instances i WHERE i.machine_id = m.id AND i.status NOT IN ('destroyed', 'error'))
+         AND NOT EXISTS (SELECT 1 FROM machines m2 WHERE m2.hostname = m.hostname AND m2.id != m.id AND m2.status != 'offline')")
         .fetch_all(pool).await.map_err(|e| e.to_string())?;
 
     for (mid, name, zone) in &destroyed {
