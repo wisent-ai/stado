@@ -1,4 +1,5 @@
 use bollard::Docker;
+use bollard::auth::DockerCredentials;
 use bollard::container::{Config, CreateContainerOptions, StartContainerOptions, StopContainerOptions, RemoveContainerOptions, ListContainersOptions};
 use bollard::image::CreateImageOptions;
 use bollard::models::{DeviceRequest, HostConfig, PortBinding};
@@ -6,6 +7,31 @@ use futures_util::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+/// Fetch a GCE service-account access token from the instance metadata server
+/// for authenticating `docker pull` against private Artifact Registry / GCR
+/// repos. Returns DockerCredentials in the oauth2accesstoken form bollard
+/// passes via X-Registry-Auth, since the daemon itself does NOT read any
+/// user's docker config.json.
+async fn gcp_registry_credentials(image: &str) -> Option<DockerCredentials> {
+    if !(image.contains(".pkg.dev") || image.contains("gcr.io")) {
+        return None;
+    }
+    let resp = reqwest::Client::new()
+        .get("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token")
+        .header("Metadata-Flavor", "Google")
+        .send().await.ok()?;
+    if !resp.status().is_success() { return None; }
+    let body: serde_json::Value = resp.json().await.ok()?;
+    let token = body.get("access_token")?.as_str()?.to_string();
+    let server = image.split('/').next().unwrap_or("").to_string();
+    Some(DockerCredentials {
+        username: Some("oauth2accesstoken".into()),
+        password: Some(token),
+        serveraddress: Some(server),
+        ..Default::default()
+    })
+}
 
 #[derive(Debug, Deserialize)]
 pub struct AgentCommand {
@@ -72,10 +98,23 @@ async fn create(docker: &Docker, cmd: &AgentCommand) -> Result<serde_json::Value
     }
     let name = format!("wisent-{}", &cmd.instance_id[..8.min(cmd.instance_id.len())]);
 
-    // Pull
+    // Pull. The daemon doesn't read any user's docker config.json, so for
+    // private Artifact Registry / GCR images we fetch a GCE service-account
+    // access token from the metadata server and pass it via the bollard
+    // credentials arg (becomes X-Registry-Auth). Propagate pull errors so
+    // the marketplace marks the instance failed instead of silently moving
+    // on to create_container, which would then 404.
     let opts = CreateImageOptions { from_image: p.docker_image.as_str(), ..Default::default() };
-    let mut stream = docker.create_image(Some(opts), None, None);
-    while let Some(info) = stream.next().await { if let Err(e) = info { tracing::warn!("pull: {e}"); } }
+    let creds = gcp_registry_credentials(&p.docker_image).await;
+    let mut stream = docker.create_image(Some(opts), None, creds);
+    let mut pull_err: Option<String> = None;
+    while let Some(info) = stream.next().await {
+        if let Err(e) = info {
+            tracing::error!("pull: {e}");
+            pull_err = Some(e.to_string());
+        }
+    }
+    if let Some(e) = pull_err { return Err(format!("docker pull failed: {e}").into()); }
 
     let mut env: Vec<String> = Vec::new();
     if let Some(vars) = &p.docker_env { for (k, v) in vars { env.push(format!("{k}={v}")); } }

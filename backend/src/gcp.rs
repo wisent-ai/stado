@@ -39,13 +39,17 @@ pub async fn create_vm(
                 "boot": true,
                 "autoDelete": true,
                 "initializeParams": {
-                    "diskSizeGb": "200",
+                    "diskSizeGb": "500",
                     "sourceImage": "projects/deeplearning-platform-release/global/images/pytorch-2-9-cu129-ubuntu-2204-nvidia-580-v20260408"
                 }
             }],
             "networkInterfaces": [{"accessConfigs": [{"name": "External NAT", "type": "ONE_TO_ONE_NAT"}]}],
             "scheduling": {"preemptible": false, "onHostMaintenance": "TERMINATE"},
             "guestAccelerators": guest_accelerators,
+            "serviceAccounts": [{
+                "email": "default",
+                "scopes": ["https://www.googleapis.com/auth/cloud-platform"]
+            }],
             "metadata": {"items": [{"key": "startup-script", "value": startup_script}]}
         });
 
