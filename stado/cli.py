@@ -260,9 +260,8 @@ def submit(command, provider, batch_file, spot, max_cost_per_hour, any_provider,
     else:
         commands = [command]
     batch_id = f"batch-{int(time.time())}"
-    from .queue.submit import submit_batch
-    n = submit_batch(
-        commands, provider=provider, batch_id=batch_id, bucket=BUCKET,
+    submit_kw = dict(
+        provider=provider, batch_id=batch_id, bucket=BUCKET,
         preemptible=spot, max_cost_per_hour_usd=max_cost_per_hour,
         pin_to_provider=not any_provider, priority=priority,
         repo=repo, repo_workdir=repo_workdir, repo_extras=repo_extras,
@@ -276,6 +275,13 @@ def submit(command, provider, batch_file, spot, max_cost_per_hour, any_provider,
         input_artifacts=requested_artifacts,
         resolved_input_artifacts=resolved_artifacts,
     )
+    from .queue.submit import submit_batch
+    jobs = submit_batch(commands, return_jobs=True, **submit_kw)
+    n = len(jobs)
+    if n == 1:
+        # Single job: echo its id so callers (probierz bridge) watch the
+        # job itself instead of guessing from the batch id.
+        click.echo(f"Job ID: {jobs[0].job_id}")
     click.echo(f"  submitted {n}/{len(commands)} jobs")
     mode = "API" if _api_key() else "GCS"
     flags = []
