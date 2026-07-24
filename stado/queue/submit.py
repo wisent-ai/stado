@@ -48,8 +48,10 @@ def _render_repo_block(repo: str, workdir: str, extras: str) -> str:
     )
 
 
-def submit_batch(commands: list[str], **kwargs) -> int:
-    """Submit many commands concurrently as one run. Returns the count.
+def submit_batch(commands: list[str], return_jobs: bool = False, **kwargs):
+    """Submit many commands concurrently as one run. Returns the count
+    (or the Job list when return_jobs=True — the CLI's single-job path
+    echoes the id so callers can watch the job, not the batch).
 
     Generates one run_id for the whole invocation, threads it onto every
     job, then writes the immutable runs/<run_id>.json manifest with all
@@ -81,6 +83,8 @@ def submit_batch(commands: list[str], **kwargs) -> int:
             platform.node(),
             commands, [j.job_id for j in jobs],
         )
+    if return_jobs:
+        return jobs
     return len(jobs)
 
 
