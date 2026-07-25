@@ -25,11 +25,21 @@ from .validation import normalize_hostname, ssh_hostname
 class WelesPolicy:
     enabled: bool
     actions: list[str]
+    # Where the Weles worker writes run recordings (WELES_RECORDINGS_ROOT).
+    # Optional; when set, the disk cleaner's weles_recordings.root should
+    # point at <recordings_dir> so policy and writer never drift apart.
+    recordings_dir: Optional[str] = None
 
 
 @dataclass(frozen=True)
 class DiskCleanerPolicy:
     min_age_seconds: int
+    # Explicit opt-in to delete weles run directories WITHOUT durable upload
+    # proof (default False: age is reportable but never authorizes deletion).
+    allow_missing_upload_proof: bool = False
+    # Absolute path override for the cleaner's scan root (default: the
+    # cleaner's well-known location, e.g. ~/weles/recordings for weles).
+    root: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -93,6 +103,7 @@ def _from_dict(d: dict) -> ComputeTarget:
         WelesPolicy(
             enabled=weles_data["enabled"],
             actions=list(weles_data["actions"]),
+            recordings_dir=weles_data.get("recordings_dir"),
         )
         if isinstance(weles_data, dict)
         else None
@@ -108,7 +119,11 @@ def _from_dict(d: dict) -> ComputeTarget:
             max_items_per_pass=cleanup_data["max_items_per_pass"],
             max_scan_items=cleanup_data["max_scan_items"],
             cleaners={
-                name: DiskCleanerPolicy(min_age_seconds=value["min_age_seconds"])
+                name: DiskCleanerPolicy(
+                    min_age_seconds=value["min_age_seconds"],
+                    allow_missing_upload_proof=bool(value.get("allow_missing_upload_proof", False)),
+                    root=value.get("root"),
+                )
                 for name, value in cleanup_data["cleaners"].items()
             },
         )

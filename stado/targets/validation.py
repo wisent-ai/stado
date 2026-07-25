@@ -91,10 +91,19 @@ def _validate_disk_cleanup(value: Any, location: str) -> None:
         _fail(f"{location}.cleaners", f"unknown cleaners {sorted(unknown)!r}")
     for name, cleaner in cleaners.items():
         cleaner_location = f"{location}.cleaners.{name}"
-        if not isinstance(cleaner, dict) or set(cleaner) != {"min_age_seconds"}:
-            _fail(cleaner_location, "must contain exactly 'min_age_seconds'")
+        if not isinstance(cleaner, dict):
+            _fail(cleaner_location, "must be an object")
+        unknown_keys = set(cleaner) - {"min_age_seconds", "allow_missing_upload_proof", "root"}
+        if unknown_keys:
+            _fail(cleaner_location, f"unknown keys {sorted(unknown_keys)!r}")
+        if "min_age_seconds" not in cleaner:
+            _fail(cleaner_location, "must contain 'min_age_seconds'")
         minimum = 3600 if name == "huggingface_cache" else 86400
         _require_int(cleaner["min_age_seconds"], f"{cleaner_location}.min_age_seconds", minimum)
+        if "allow_missing_upload_proof" in cleaner and not isinstance(cleaner["allow_missing_upload_proof"], bool):
+            _fail(f"{cleaner_location}.allow_missing_upload_proof", "must be a boolean")
+        if "root" in cleaner and (not isinstance(cleaner["root"], str) or not cleaner["root"].strip()):
+            _fail(f"{cleaner_location}.root", "must be a non-empty string")
 
 def _target_identities(target: dict[str, Any], location: str) -> list[tuple[str, str]]:
     identities: list[tuple[str, str]] = []
@@ -163,11 +172,18 @@ def validate_registry(data: Any) -> dict[str, Any]:
                 _fail(f"{location}.weles", "is allowed only for kind='local'")
             if not isinstance(weles, dict):
                 _fail(f"{location}.weles", "must be an object")
-            if set(weles) != {"enabled", "actions"}:
-                _fail(f"{location}.weles", "must contain exactly 'enabled' and 'actions'")
+            unknown_weles_keys = set(weles) - {"enabled", "actions", "recordings_dir"}
+            if unknown_weles_keys:
+                _fail(f"{location}.weles", f"unknown keys {sorted(unknown_weles_keys)!r}")
+            if "enabled" not in weles or "actions" not in weles:
+                _fail(f"{location}.weles", "must contain 'enabled' and 'actions'")
             if not isinstance(weles["enabled"], bool):
                 _fail(f"{location}.weles.enabled", "must be a boolean")
             _validate_action_list(weles["actions"], f"{location}.weles.actions")
+            if "recordings_dir" in weles:
+                recordings_dir = weles["recordings_dir"]
+                if not isinstance(recordings_dir, str) or not recordings_dir.startswith("/"):
+                    _fail(f"{location}.weles.recordings_dir", "must be an absolute path string")
 
         if "disk_cleanup" in target:
             if kind != "local":
