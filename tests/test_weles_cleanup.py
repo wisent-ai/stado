@@ -84,6 +84,55 @@ def test_reserved_local_dir_never_scanned_for_delete(tmp_path):
     assert report["cleaners"]["weles_recordings"]["skipped"]["reserved_or_hidden"] == 1
 
 
+def _write_proof(run: Path, uploaded_at: float, file_count=2):
+    proof = {
+        "version": 1,
+        "run": run.name,
+        "uploaded_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(uploaded_at)),
+        "file_count": file_count,
+        "total_bytes": 12,
+        "sha256": "x" * 64,
+        "destination": f"recordings/{run.name}/",
+    }
+    (run / ".uploaded.json").write_text(__import__("json").dumps(proof))
+    os.utime(run / ".uploaded.json", (uploaded_at, uploaded_at))
+    # Writing the marker refreshed the run dir's mtime; restore it so the
+    # scenario keeps its aged shape (production proofs age with the run).
+    os.utime(run, (uploaded_at, uploaded_at))
+
+
+def test_proven_run_deletable_without_bypass(tmp_path):
+    run = _make_run(tmp_path, "proven-run", 30)
+    _write_proof(run, NOW - 25 * DAY)  # proof after the run's files, both old
+    report = _report()
+    _scan_weles(tmp_path, _policy(allow=False), NOW, 100, report)
+    assert not run.exists()
+    assert report["cleaners"]["weles_recordings"]["deleted_items"] == 1
+
+
+def test_stale_proof_rejected_when_files_newer_than_upload(tmp_path):
+    run = _make_run(tmp_path, "tampered-run", 30)
+    _write_proof(run, NOW - 25 * DAY)
+    late = run / "late-addition.log"
+    late.write_text("written after the upload")
+    late_time = NOW - 20 * DAY
+    os.utime(late, (late_time, late_time))
+    # Keep the run dir old: adding the file refreshed its mtime.
+    os.utime(run, (NOW - 30 * DAY, NOW - 30 * DAY))
+    report = _report()
+    _scan_weles(tmp_path, _policy(allow=False), NOW, 100, report)
+    assert run.is_dir()
+    assert report["cleaners"]["weles_recordings"]["skipped"]["upload_proof_unavailable_v1"] == 1
+
+
+def test_broken_proof_json_rejected(tmp_path):
+    run = _make_run(tmp_path, "broken-run", 30)
+    (run / ".uploaded.json").write_text("{not json")
+    report = _report()
+    _scan_weles(tmp_path, _policy(allow=False), NOW, 100, report)
+    assert run.is_dir()
+
+
 def test_root_override_is_honored(tmp_path):
     custom = tmp_path / "elsewhere"
     run = custom / "old-run"
