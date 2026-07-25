@@ -12,12 +12,14 @@ from __future__ import annotations
 
 from ipaddress import ip_address
 import json
+import os
 import sys
 import threading
 import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
+from urllib.request import Request, urlopen
 from typing import Any
 
 from .config import (
@@ -109,8 +111,8 @@ def _refresh_loop(interval: int) -> None:
 
 
 
-def _trusted_request_host(value: str | None) -> bool:
-    """Require a direct IP Host header to prevent DNS rebinding."""
+def _trusted_request_host(value: str | None, forwarded_proto: str | None = None) -> bool:
+    """Reject rebinding locally; allow authenticated HTTPS reverse proxies."""
     if not value:
         return False
     try:
@@ -120,9 +122,43 @@ def _trusted_request_host(value: str | None) -> bool:
         if not host or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment:
             return False
         ip_address(host)
+        return True
     except ValueError:
+        return bool(
+            os.environ.get("STADO_DEPLOYMENT_ID", "").strip()
+            and forwarded_proto == "https"
+        )
+
+
+def _authorized(headers, permission: str) -> bool:
+    """Validate the Wisent session and deployment grant through Supabase RLS."""
+    deployment_id = os.environ.get("STADO_DEPLOYMENT_ID", "").strip()
+    if not deployment_id:
+        return True
+    supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    anon_key = os.environ.get("SUPABASE_ANON_KEY", "").strip()
+    authorization = (headers.get("Authorization") or "").strip()
+    if not supabase_url or not anon_key or not authorization.startswith("Bearer "):
         return False
-    return True
+    body = json.dumps({
+        "target_deployment_id": deployment_id,
+        "requested_permission": permission,
+    }).encode()
+    request = Request(
+        f"{supabase_url}/rest/v1/rpc/stado_can_access",
+        data=body,
+        method="POST",
+        headers={
+            "apikey": anon_key,
+            "Authorization": authorization,
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urlopen(request, timeout=5) as response:
+            return response.status == 200 and json.loads(response.read()) is True
+    except Exception:
+        return False
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -139,8 +175,17 @@ class _Handler(BaseHTTPRequestHandler):
         self._send_json(status, {"ok": False, "service": "error", "report": report})
 
     def do_GET(self):  # noqa: N802 (stdlib API)
-        if not _trusted_request_host(self.headers.get("Host")):
+        if not _trusted_request_host(
+            self.headers.get("Host"),
+            self.headers.get("X-Forwarded-Proto"),
+        ):
             self._cleanup_failure(403)
+            return
+        if self.path.partition("?")[0] == "/healthz":
+            self._send_json(200, {"ok": True})
+            return
+        if not _authorized(self.headers, "view"):
+            self._send_json(401, {"error": "unauthorized"})
             return
         try:
             with _CACHE_LOCK:
@@ -176,6 +221,10 @@ class _Handler(BaseHTTPRequestHandler):
             if self.path == "/api/state.json":
                 self._send_json(200, state)
                 return
+            if self.path == "/api/registry.json":
+                from .dashboard_policy import policy_view
+                self._send_json(200, policy_view())
+                return
             if self.path == "/api/cleanup.json":
                 payload = cleanup_envelope(read_cleanup_state())
                 self._send_json(409 if payload["service"] == "busy" else 200, payload)
@@ -203,8 +252,38 @@ class _Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def do_POST(self):  # noqa: N802 (stdlib API)
-        if not _trusted_request_host(self.headers.get("Host")):
+        if not _trusted_request_host(
+            self.headers.get("Host"),
+            self.headers.get("X-Forwarded-Proto"),
+        ):
             self._cleanup_failure(403)
+            return
+        if not _authorized(self.headers, "operate"):
+            self._send_json(401, {"error": "unauthorized"})
+            return
+        if self.path == "/api/registry/policy":
+            if self.headers.get("X-Stado-Action") != "registry-policy":
+                self._cleanup_failure(403)
+                return
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+            except (TypeError, ValueError):
+                self._cleanup_failure(400)
+                return
+            if content_length <= 0 or content_length > 65536 or self.headers.get("Transfer-Encoding"):
+                self._cleanup_failure(400)
+                return
+            from .dashboard_policy import apply_policy_update
+            try:
+                payload = json.loads(self.rfile.read(content_length) or b"{}")
+                result = apply_policy_update(payload)
+            except (ValueError, KeyError) as exc:
+                self._send_json(400, {"ok": False, "error": str(exc)})
+                return
+            except Exception:
+                self._cleanup_failure()
+                return
+            self._send_json(200, {"ok": True, **result})
             return
         if self.path != "/api/cleanup/run":
             if self.path.partition("?")[0] == "/api/cleanup/run":

@@ -84,6 +84,108 @@ def _cleanup_card(cleanup: dict[str, Any]) -> str:
 </section>"""
 
 
+def _policy_card() -> str:
+    return """
+<section class="cleanup-card" aria-labelledby="policy-title">
+  <div class="cleanup-heading">
+    <div><h2 id="policy-title">Registry disk policy</h2>
+      <p class="muted">Per-target disk cleanup and Weles recordings location. Writes go through the canonical registry (generation-checked, whitelisted fields only).</p></div>
+    <div class="controls"><button type="button" id="policy-refresh">Refresh</button></div>
+  </div>
+  <p id="policy-status" class="service-status" role="status" aria-live="polite"></p>
+  <table id="policy-table">
+    <thead><tr>
+      <th>target</th><th>mode</th><th>low GB</th><th>target GB</th>
+      <th>items/pass</th><th>bytes/pass (GiB)</th><th>weles min age (d)</th>
+      <th>proof bypass</th><th>recordings root</th><th>pinned only</th><th></th>
+    </tr></thead>
+    <tbody></tbody>
+  </table>
+</section>"""
+
+
+def _policy_script() -> str:
+    return """
+<script>
+(() => {
+  const status = document.getElementById('policy-status');
+  const tbody = document.querySelector('#policy-table tbody');
+  const numberFields = ['low_free_gb','target_free_gb','max_items_per_pass'];
+  async function load() {
+    status.textContent = 'Loading registry policy.';
+    try {
+      const response = await fetch('/api/registry.json');
+      const data = await response.json();
+      tbody.textContent = '';
+      for (const t of data.targets || []) {
+        const dc = t.disk_cleanup || {};
+        const cl = ((dc.cleaners || {}).weles_recordings) || {};
+        const row = document.createElement('tr');
+        row.dataset.target = t.name;
+        row.innerHTML =
+          `<td><code>${t.name}</code></td>` +
+          `<td><select data-k="mode">${['off','report','enforce'].map(m => `<option${m === dc.mode ? ' selected' : ''}>${m}</option>`).join('')}</select></td>` +
+          `<td><input size="4" data-k="low_free_gb" value="${dc.low_free_gb ?? ''}"></td>` +
+          `<td><input size="4" data-k="target_free_gb" value="${dc.target_free_gb ?? ''}"></td>` +
+          `<td><input size="4" data-k="max_items_per_pass" value="${dc.max_items_per_pass ?? ''}"></td>` +
+          `<td><input size="4" data-k="max_bytes_per_pass" value="${dc.max_bytes_per_pass != null ? Math.round(dc.max_bytes_per_pass / 1073741824) : ''}"></td>` +
+          `<td><input size="4" data-k="weles_min_age_days" value="${cl.min_age_seconds != null ? Math.round(cl.min_age_seconds / 86400) : ''}"></td>` +
+          `<td><input type="checkbox" data-k="allow_missing_upload_proof"${cl.allow_missing_upload_proof ? ' checked' : ''}></td>` +
+          `<td><input size="16" data-k="recordings_dir" value="${(t.weles && t.weles.recordings_dir) || cl.root || ''}" placeholder="/abs/path"></td>` +
+          `<td><input type="checkbox" data-k="pinned_only"${t.pinned_only ? ' checked' : ''}></td>` +
+          `<td><button type="button" data-save>Save</button></td>`;
+        tbody.appendChild(row);
+      }
+      status.textContent = `Registry generation ${data.generation}.`;
+    } catch (_) { status.textContent = 'Registry policy request failed safely.'; }
+  }
+  tbody.addEventListener('click', async (event) => {
+    const button = event.target.closest('button[data-save]');
+    if (!button) return;
+    const row = button.closest('tr');
+    const values = {};
+    row.querySelectorAll('[data-k]').forEach((input) => { values[input.dataset.k] = input.type === 'checkbox' ? input.checked : input.value.trim(); });
+    const GiB = 1073741824, DAY = 86400;
+    const payload = {
+      target: row.dataset.target,
+      disk_cleanup: {
+        mode: values.mode,
+        low_free_gb: Number(values.low_free_gb),
+        target_free_gb: Number(values.target_free_gb),
+        max_items_per_pass: Number(values.max_items_per_pass),
+        max_bytes_per_pass: Number(values.max_bytes_per_pass) * GiB,
+        cleaners: { weles_recordings: {
+          min_age_seconds: Number(values.weles_min_age_days) * DAY,
+          allow_missing_upload_proof: values.allow_missing_upload_proof,
+        } },
+      },
+      pinned_only: values.pinned_only,
+    };
+    if (values.recordings_dir) payload.weles = { recordings_dir: values.recordings_dir };
+    button.disabled = true;
+    status.textContent = `Saving policy for ${row.dataset.target}.`;
+    try {
+      const response = await fetch('/api/registry/policy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Stado-Action': 'registry-policy' },
+        body: JSON.stringify(payload),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) {
+        status.textContent = `Rejected: ${result.error || response.status}`;
+      } else {
+        status.textContent = `Saved ${row.dataset.target} (generation ${result.generation}).`;
+        window.setTimeout(load, 800);
+      }
+    } catch (_) { status.textContent = 'Registry policy save failed safely.'; }
+    finally { button.disabled = false; }
+  });
+  document.getElementById('policy-refresh').addEventListener('click', load);
+  load();
+})();
+</script>"""
+
+
 def render_html(state: dict[str, Any], cleanup: dict[str, Any], refresh: int) -> str:
     counts = state.get("counts") if isinstance(state.get("counts"), dict) else {}
     throughput = state.get("throughput") if isinstance(state.get("throughput"), dict) else {}
@@ -154,6 +256,7 @@ th,td{{border:1px solid #ddd;padding:4px 8px;text-align:left;vertical-align:top}
 </style></head><body>
 <h1>Stado Control Center</h1><div class="muted">refreshed every {_e(refresh)}s &middot; now {_e(state.get('now') or '?')}</div>
 {_cleanup_card(cleanup)}
+{_policy_card()}
 <h2>queue</h2><div class="big">queued <strong>{_e(counts.get('queue', 0))}</strong> &nbsp; running <strong>{_e(counts.get('running', 0))}</strong> &nbsp; completed <strong>{_e(counts.get('completed', 0))}</strong> &nbsp; failed <strong>{_e(counts.get('failed', 0))}</strong></div>
 <h2>throughput &amp; ETA</h2><div>avg wall per completed job: <strong>{_e(_format_age(throughput.get('avg_wall_seconds_per_completed_job')))}</strong> ({_e(throughput.get('samples', 0))} samples)</div><div>live free slots across all agents: <strong>{_e(throughput.get('live_total_free_slots', 0))}</strong></div><div>projected drain of current queue: <strong>{_e(_format_age(throughput.get('projected_remaining_seconds')))}</strong></div>
 <h2>per model</h2><table><tr><th>model</th><th>queued</th><th>running</th><th>completed</th><th>failed</th></tr>{''.join(model_rows) or '<tr><td colspan="5" class="muted">no jobs</td></tr>'}</table>
@@ -182,4 +285,5 @@ th,td{{border:1px solid #ddd;padding:4px 8px;text-align:left;vertical-align:top}
   buttons[0].addEventListener('click', () => request('/api/cleanup.json'));
   buttons[1].addEventListener('click', () => request('/api/cleanup/run', {{method:'POST', headers:{{'X-Stado-Action':'cleanup'}}}}));
 }})();
-</script></body></html>"""
+</script>
+{_policy_script()}</body></html>"""
