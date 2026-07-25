@@ -1524,16 +1524,50 @@ def _run_hf(
             os.close(root_fd)
 
 
+def _weles_run_active(path: Path, cutoff: float) -> bool:
+    """Any direct child fresher than cutoff means the run is likely live
+    (dir mtime alone misses in-place file writes). Errors read as inactive:
+    the outer age gate already passed."""
+    try:
+        with os.scandir(path) as entries:
+            for entry in entries:
+                try:
+                    if entry.stat(follow_symlinks=False).st_mtime > cutoff:
+                        return True
+                except OSError:
+                    continue
+    except OSError:
+        return False
+    return False
+
+
+def _weles_dir_size(path: Path) -> int:
+    total = 0
+    for current, _, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.path.getsize(os.path.join(current, name))
+            except OSError:
+                continue
+    return total
+
+
 def _scan_weles(home: Path, policy: DiskCleanupPolicy, now: float, remaining_scan: int, report: dict) -> None:
     cleaner = report["cleaners"]["weles_recordings"]
     configured = policy.cleaners.get("weles_recordings")
     if configured is None or remaining_scan <= 0:
         return
     try:
-        root = _fixed_root(home, ("weles", "recordings"), required=False)
-        if root is None:
-            _skip(cleaner, "root_absent")
-            return
+        if configured.root:
+            root = Path(configured.root).expanduser()
+            if not root.is_dir():
+                _skip(cleaner, "root_absent")
+                return
+        else:
+            root = _fixed_root(home, ("weles", "recordings"), required=False)
+            if root is None:
+                _skip(cleaner, "root_absent")
+                return
         ordered = []
         with os.scandir(root) as entries:
             for entry in entries:
@@ -1541,6 +1575,7 @@ def _scan_weles(home: Path, policy: DiskCleanupPolicy, now: float, remaining_sca
                 if len(ordered) >= remaining_scan:
                     break
         ordered.sort(key=lambda entry: entry.name)
+        deleted_bytes = 0
         for entry in ordered:
             cleaner["scanned_items"] += 1
             if entry.name == "local" or entry.name.startswith("."):
@@ -1560,9 +1595,40 @@ def _scan_weles(home: Path, policy: DiskCleanupPolicy, now: float, remaining_sca
             if info.st_mtime > now - configured.min_age_seconds:
                 _skip(cleaner, "too_young")
                 continue
-            # Current Weles uploads provide no durable whole-run proof.  Age is
-            # reportable but never sufficient authorization to delete.
-            _skip(cleaner, "upload_proof_unavailable_v1")
+            if not configured.allow_missing_upload_proof:
+                # Without durable whole-run upload proof, age alone is never
+                # sufficient authorization to delete (default, conservative).
+                _skip(cleaner, "upload_proof_unavailable_v1")
+                continue
+            if _weles_run_active(Path(entry.path), now - configured.min_age_seconds):
+                _skip(cleaner, "active_run")
+                continue
+            cleaner["eligible_items"] += 1
+            expected = _weles_dir_size(Path(entry.path))
+            cleaner["expected_bytes"] += expected
+            if policy.mode != "enforce":
+                continue
+            if cleaner["deleted_items"] >= policy.max_items_per_pass:
+                report["caps"]["items"] = True
+                _skip(cleaner, "item_cap")
+                continue
+            if deleted_bytes >= policy.max_bytes_per_pass:
+                report["caps"]["bytes"] = True
+                _skip(cleaner, "byte_cap")
+                continue
+            if _free_bytes(home) >= policy.target_free_gb * _GIB:
+                break
+            try:
+                if os.path.commonpath([str(root), entry.path]) != str(root):
+                    _skip(cleaner, "escapes_root")
+                    continue
+                before = _free_bytes(home)
+                shutil.rmtree(entry.path)
+                cleaner["actual_free_delta_bytes"] += max(0, _free_bytes(home) - before)
+                cleaner["deleted_items"] += 1
+                deleted_bytes += expected
+            except (OSError, shutil.Error) as exc:
+                _add_error(report, "weles_recordings", exc)
     except BaseException as exc:
         _add_error(report, "weles_recordings", exc)
 
