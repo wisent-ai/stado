@@ -1887,5 +1887,74 @@ def vast_auto_list(idle_window_s, poll_interval_s, price_gpu, max_duration_s, dr
         raise click.ClickException(str(e))
 
 
+@host.command("weles-recordings-dir")
+@click.argument("target")
+@click.argument("path")
+def host_weles_recordings_dir(target, path):
+    """Point TARGET's Weles recordings store at PATH.
+
+    Registry (canonical): weles.recordings_dir=PATH and the
+    weles_recordings cleaner root follow, so writer and cleaner never
+    drift apart. When run ON the target host, also writes
+    WELES_RECORDINGS_ROOT into the local com.wisent.weles-* LaunchAgents
+    (they pick it up on next load) and creates PATH.
+    """
+    import json as _json
+    import os as _os
+    import plistlib as _plistlib
+    from pathlib import Path as _Path
+    from google.cloud import storage as _storage
+    from .targets import GCS_REGISTRY_URI, lookup_self, _load_from_gcs
+    from .targets.validation import RegistryValidationError, validate_registry
+
+    if not path.startswith("/"):
+        raise click.ClickException("PATH must be absolute")
+    data = _load_from_gcs()
+    if data is None:
+        raise click.ClickException("could not fetch registry from GCS")
+    matches = [t for t in data.get("targets", []) if t.get("name") == target]
+    if not matches:
+        raise click.ClickException(f"target not in registry: {target}")
+    entry = matches[0]
+    weles = entry.setdefault("weles", {"enabled": True, "actions": ["*"]})
+    weles["recordings_dir"] = path
+    cleanup = entry.get("disk_cleanup")
+    if isinstance(cleanup, dict):
+        cleaner = cleanup.setdefault("cleaners", {}).setdefault("weles_recordings", {"min_age_seconds": 604800})
+        cleaner["root"] = path
+    try:
+        validate_registry(data)
+    except RegistryValidationError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    _, remainder = GCS_REGISTRY_URI.split("//", 1)
+    bucket_name, blob_name = remainder.split("/", 1)
+    blob = _storage.Client().bucket(bucket_name).blob(blob_name)
+    blob.reload()
+    generation = int(blob.generation) if blob.generation is not None else 0
+    payload = _json.dumps(data, indent=2).encode() + b"\n"
+    blob.upload_from_string(payload, content_type="application/json",
+                            if_generation_match=generation)
+    click.echo(f"registry: {target} weles.recordings_dir={path} (generation {generation})")
+
+    self_target = lookup_self(_os.uname().nodename, source="gcs")
+    if not self_target or self_target.name != target:
+        click.echo(f"run `wc host weles-recordings-dir {target} {path}` on {target} to update its LaunchAgents")
+        return
+    _Path(path).mkdir(parents=True, exist_ok=True)
+    agents_dir = _Path.home() / "Library" / "LaunchAgents"
+    touched = 0
+    for plist in agents_dir.glob("com.wisent.weles-*.plist"):
+        with plist.open("rb") as fh:
+            document = _plistlib.load(fh)
+        env = document.setdefault("EnvironmentVariables", {})
+        env["WELES_RECORDINGS_ROOT"] = path
+        with plist.open("wb") as fh:
+            _plistlib.dump(document, fh)
+        touched += 1
+        click.echo(f"  {plist.name}: WELES_RECORDINGS_ROOT={path}")
+    click.echo(f"updated {touched} LaunchAgent plist(s); reload weles agents to apply")
+
+
 if __name__ == "__main__":
     main()
