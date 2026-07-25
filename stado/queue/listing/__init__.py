@@ -117,7 +117,7 @@ def list_priority_first(store, prefix: str, *, cap: int) -> list[Job]:
 def list_fitting(store, prefix: str, *, max_gpu_mem_gb: int, cap: int = 4000) -> list[Job]:
     """Priority-aware fitting jobs: queue_priority/ markers first, then FIFO
     from queue/. Metadata stamping filters non-fitting blobs before download."""
-    if store._azure_backend is None and store._sdk_bucket is None:
+    if store._blob_backend is None and store._sdk_bucket is None:
         # gsutil-only mode: no metadata reads available, so download all.
         jobs = list_jobs(store, prefix, oldest_first=cap)
         return [j for j in jobs if int(getattr(j, "gpu_mem_gb", 0) or 0) <= max_gpu_mem_gb]
