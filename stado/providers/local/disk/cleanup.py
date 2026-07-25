@@ -1524,6 +1524,47 @@ def _run_hf(
             os.close(root_fd)
 
 
+def _weles_upload_proof_ok(run_dir: Path) -> bool:
+    """True only when the run carries a valid whole-run upload proof and
+    nothing was written into the run afterwards.
+
+    The proof (recordings/<run>/.uploaded.json, written by the Weles worker
+    after a zero-failure mirror) is invalidated by any newer direct child —
+    a file added after the upload means storage is no longer complete.
+    """
+    import json as _json
+    proof_path = run_dir / ".uploaded.json"
+    try:
+        proof = _json.loads(proof_path.read_text())
+    except (OSError, ValueError):
+        return False
+    if not isinstance(proof, dict) or proof.get("version") != 1:
+        return False
+    if not isinstance(proof.get("file_count"), int) or proof["file_count"] <= 0:
+        return False
+    uploaded_at_raw = proof.get("uploaded_at")
+    if not isinstance(uploaded_at_raw, str):
+        return False
+    try:
+        from datetime import datetime as _dt
+        uploaded_at = _dt.fromisoformat(uploaded_at_raw.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return False
+    try:
+        with os.scandir(run_dir) as entries:
+            for entry in entries:
+                if entry.name == ".uploaded.json":
+                    continue
+                try:
+                    if entry.stat(follow_symlinks=False).st_mtime > uploaded_at:
+                        return False
+                except OSError:
+                    return False
+    except OSError:
+        return False
+    return True
+
+
 def _weles_run_active(path: Path, cutoff: float) -> bool:
     """Any direct child fresher than cutoff means the run is likely live
     (dir mtime alone misses in-place file writes). Errors read as inactive:
@@ -1595,7 +1636,7 @@ def _scan_weles(home: Path, policy: DiskCleanupPolicy, now: float, remaining_sca
             if info.st_mtime > now - configured.min_age_seconds:
                 _skip(cleaner, "too_young")
                 continue
-            if not configured.allow_missing_upload_proof:
+            if not configured.allow_missing_upload_proof and not _weles_upload_proof_ok(Path(entry.path)):
                 # Without durable whole-run upload proof, age alone is never
                 # sufficient authorization to delete (default, conservative).
                 _skip(cleaner, "upload_proof_unavailable_v1")
