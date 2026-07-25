@@ -21,7 +21,8 @@
           },
           "weles_recordings": {
             "min_age_seconds": 604800,
-            "allow_missing_upload_proof": true
+            "allow_missing_upload_proof": false,
+            "root": "/Users/charles/weles/recordings"
           }
         },
         "low_free_gb": 55,
@@ -42,7 +43,8 @@
         "actions": [
           "*"
         ],
-        "enabled": true
+        "enabled": true,
+        "recordings_dir": "/Users/charles/weles/recordings"
       },
       "pinned_only": true
     },
