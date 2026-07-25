@@ -1899,43 +1899,21 @@ def host_weles_recordings_dir(target, path):
     WELES_RECORDINGS_ROOT into the local com.wisent.weles-* LaunchAgents
     (they pick it up on next load) and creates PATH.
     """
-    import json as _json
     import os as _os
     import plistlib as _plistlib
     from pathlib import Path as _Path
-    from google.cloud import storage as _storage
-    from .targets import GCS_REGISTRY_URI, lookup_self, _load_from_gcs
-    from .targets.validation import RegistryValidationError, validate_registry
+    from .targets import lookup_self
+    from .targets.store import update_target
 
     if not path.startswith("/"):
         raise click.ClickException("PATH must be absolute")
-    data = _load_from_gcs()
-    if data is None:
-        raise click.ClickException("could not fetch registry from GCS")
-    matches = [t for t in data.get("targets", []) if t.get("name") == target]
-    if not matches:
-        raise click.ClickException(f"target not in registry: {target}")
-    entry = matches[0]
-    weles = entry.setdefault("weles", {"enabled": True, "actions": ["*"]})
-    weles["recordings_dir"] = path
-    cleanup = entry.get("disk_cleanup")
-    if isinstance(cleanup, dict):
-        cleaner = cleanup.setdefault("cleaners", {}).setdefault("weles_recordings", {"min_age_seconds": 604800})
-        cleaner["root"] = path
     try:
-        validate_registry(data)
-    except RegistryValidationError as exc:
+        result = update_target(target, {"weles": {"recordings_dir": path}})
+    except KeyError as exc:
+        raise click.ClickException(f"target not in registry: {target}") from exc
+    except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
-
-    _, remainder = GCS_REGISTRY_URI.split("//", 1)
-    bucket_name, blob_name = remainder.split("/", 1)
-    blob = _storage.Client().bucket(bucket_name).blob(blob_name)
-    blob.reload()
-    generation = int(blob.generation) if blob.generation is not None else 0
-    payload = _json.dumps(data, indent=2).encode() + b"\n"
-    blob.upload_from_string(payload, content_type="application/json",
-                            if_generation_match=generation)
-    click.echo(f"registry: {target} weles.recordings_dir={path} (generation {generation})")
+    click.echo(f"registry: {target} weles.recordings_dir={path} (generation {result['generation']})")
 
     self_target = lookup_self(_os.uname().nodename, source="gcs")
     if not self_target or self_target.name != target:
