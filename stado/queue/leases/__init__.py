@@ -140,7 +140,7 @@ class ProviderLeaseStore:
 
     def _require_conditional_backend(self) -> None:
         if (
-            getattr(self.storage, "_azure_backend", None) is None
+            getattr(self.storage, "_blob_backend", None) is None
             and getattr(self.storage, "_sdk_bucket", None) is None
         ):
             raise RuntimeError(
