@@ -118,7 +118,7 @@ def read_consumer_capacity(store: JobStorage) -> dict[str, dict]:
     via JobStorage.list_blobs_with_meta. The gsutil-only fallback (no SDK
     on either side) is unsupported on the dispatcher path.
     """
-    if store._sdk_bucket is None and store._azure_backend is None:
+    if store._sdk_bucket is None and store._blob_backend is None:
         raise RuntimeError(
             "read_consumer_capacity requires either the GCS SDK bucket or "
             "the Azure Blob backend. JobStorage was constructed without "

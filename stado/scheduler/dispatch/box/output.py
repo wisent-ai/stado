@@ -149,7 +149,7 @@ def upload_artifacts(store: Any, provider: BoxProvider, job: Job,
         content = provider.client.download_artifact(lease.provider_resource_id, path, remaining)
         remaining -= len(content)
         destination = f"status/{job.job_id}/output/artifacts/{path.replace('/', '_')}"
-        azure = getattr(store, "_azure_backend", None)
+        azure = getattr(store, "_blob_backend", None)
         bucket = getattr(store, "_sdk_bucket", None)
         if azure is not None:
             azure._container.upload_blob(name=destination, data=content, overwrite=True)
