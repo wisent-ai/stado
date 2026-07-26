@@ -1,0 +1,960 @@
+//! CLI entry point: submit, status, results, cancel, profiles, config.
+//!
+//! Port of `stado/cli.py` (click) to clap derive. The full command tree is
+//! declared and every branch dispatches to its Rust implementation.
+//!
+//! Implemented and wired to the library: `package-root`, `submit`,
+//! `status`, `cancel`, `results`, `profiles`, `config`, `schedule`,
+//! `artifact`, `cost`, `vast`, `agent`, `disk-cleanup`,
+//! `install-disk-cleanup`, `bootstrap`, the complete `host`, `registry`,
+//! and `quota` groups, plus coordinator and dashboard control planes.
+
+use clap::{Parser, Subcommand};
+
+pub mod agent;
+pub mod artifact;
+pub mod bootstrap;
+pub mod cancel;
+pub mod config_cmd;
+pub mod control_plane;
+pub mod coordinator;
+pub mod cost;
+pub mod dashboard;
+pub mod disk_cleanup;
+pub mod host;
+pub mod machine;
+pub mod profiles_cmd;
+pub mod quota;
+pub mod registry;
+pub mod results;
+pub mod schedule;
+pub mod status;
+pub mod submit;
+pub mod vast;
+
+/// Command failure with a click-matching exit code. A `Some` message is
+/// printed as `Error: {msg}` on stderr (click `ClickException`, code 1);
+/// a `None` message exits silently (click `SystemExit`, e.g. config
+/// validation failure after the ERROR lines were already printed).
+#[derive(Debug)]
+pub struct CmdError {
+    pub message: Option<String>,
+    pub code: i32,
+}
+
+impl CmdError {
+    /// click `ClickException`: "Error: {msg}" on stderr, exit 1.
+    pub fn click(msg: impl Into<String>) -> Self {
+        Self { message: Some(msg.into()), code: 1 }
+    }
+
+    /// click `SystemExit(code)`: nothing more to print.
+    pub fn silent(code: i32) -> Self {
+        Self { message: None, code }
+    }
+}
+
+impl From<String> for CmdError {
+    fn from(msg: String) -> Self {
+        Self::click(msg)
+    }
+}
+
+impl From<&str> for CmdError {
+    fn from(msg: &str) -> Self {
+        Self::click(msg)
+    }
+}
+
+impl From<crate::queue::submit::SubmitError> for CmdError {
+    fn from(exc: crate::queue::submit::SubmitError) -> Self {
+        Self::click(exc.to_string())
+    }
+}
+
+impl From<crate::queue::StorageError> for CmdError {
+    fn from(exc: crate::queue::StorageError) -> Self {
+        Self::click(exc.to_string())
+    }
+}
+
+impl From<crate::profiles::ProfileError> for CmdError {
+    fn from(exc: crate::profiles::ProfileError) -> Self {
+        Self::click(exc.to_string())
+    }
+}
+
+impl From<crate::config_file::ConfigError> for CmdError {
+    fn from(exc: crate::config_file::ConfigError) -> Self {
+        Self::click(exc.to_string())
+    }
+}
+
+impl From<serde_json::Error> for CmdError {
+    fn from(exc: serde_json::Error) -> Self {
+        Self::click(exc.to_string())
+    }
+}
+
+impl From<std::io::Error> for CmdError {
+    fn from(exc: std::io::Error) -> Self {
+        Self::click(exc.to_string())
+    }
+}
+
+impl From<reqwest::Error> for CmdError {
+    fn from(exc: reqwest::Error) -> Self {
+        Self::click(exc.to_string())
+    }
+}
+
+/// COMPUTE_API_KEY env var, stripped (Python `_api_key()`).
+pub(crate) fn api_key() -> String {
+    crate::queue::submit::compute_api_key()
+}
+
+#[derive(Parser)]
+#[command(about = "Wisent Compute — GPU job queue management.")]
+pub struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Print the installed crate data root for desktop provisioning.
+    #[command(name = "package-root", hide = true)]
+    PackageRoot,
+
+    /// Run registry-authorized cleanup for this local target.
+    #[command(name = "disk-cleanup")]
+    DiskCleanup {
+        /// Run one interval-gated cleanup check (default).
+        #[arg(long)]
+        once: bool,
+        /// Continuously check at the canonical policy interval.
+        #[arg(long)]
+        watch: bool,
+    },
+
+    /// Install the registry-controlled cleanup watch on this Mac.
+    #[command(name = "install-disk-cleanup")]
+    InstallDiskCleanup,
+
+    /// Stable JSON machine interface.
+    #[command(subcommand)]
+    Machine(MachineCommands),
+
+    /// Submit a job (or batch) to the queue.
+    Submit(Box<submit::SubmitArgs>),
+
+    /// Show job status.
+    Status {
+        /// Job id (8 hex chars) or batch id substring to filter by.
+        filter_id: Option<String>,
+    },
+
+    /// Download job results.
+    Results {
+        job_id: String,
+        output_dir: String,
+    },
+
+    /// Cancel a queued or running job.
+    Cancel {
+        job_id: String,
+    },
+
+    /// Run local GPU agent. Polls queue, respects Vast.ai renters.
+    Agent {
+        /// GPU type (auto-detected if --target/--auto absent)
+        #[arg(long, default_value = "")]
+        gpu_type: String,
+        /// Pull gpu_type/slots from registry by name.
+        #[arg(long)]
+        target: Option<String>,
+        /// Look up self in registry by hostname; no manual config.
+        #[arg(long)]
+        auto: bool,
+        /// Exit (and self-delete the GCE VM) when no slots active and no
+        /// queued job is eligible. Use on ephemeral cloud-VM agents.
+        #[arg(long)]
+        idle_shutdown: bool,
+        /// Consumer label in capacity broadcasts: "local" (physical box,
+        /// default), "gcp" / "azure" / "aws" / "vast" (ephemeral cloud-agent VM).
+        #[arg(long, default_value = "local")]
+        kind: String,
+        /// When the wisent-compute queue is empty, list this box on
+        /// Vast.ai so external renters use the otherwise-idle GPU.
+        /// Requires VAST_API_KEY + WC_VAST_MACHINE_ID in env.
+        #[arg(long)]
+        vast_auto_list: bool,
+        /// Per-GPU-hour rental price USD when --vast-auto-list lists
+        /// the box (default 0.50).
+        #[arg(long, default_value_t = 0.50)]
+        vast_price_gpu: f64,
+        /// Cap the max rental length any Vast renter can buy from
+        /// this offer (default 3600s = 1h). 0 to leave open-ended.
+        #[arg(long, default_value_t = 3600)]
+        vast_max_duration_s: i64,
+    },
+
+    /// Run the scheduling tick locally instead of the GCP Cloud Function.
+    ///
+    /// Reads the named coordinator entry from the registry, loops on its
+    /// interval_seconds, runs the same monitor_jobs/schedule_queued_jobs
+    /// chain the Cloud Function does. State stays in the registry-declared
+    /// state_uri so all consumers (cloud + local) keep seeing the same queue.
+    Coordinator {
+        /// Coordinator name in registry (default: the one with active=true).
+        #[arg(long)]
+        target: Option<String>,
+        /// Run a single scheduling tick and exit (cron-friendly).
+        #[arg(long)]
+        once: bool,
+    },
+
+    /// Run the read-only HTTP dashboard for the wisent-compute queue.
+    ///
+    /// Renders queue counts, per-model breakdown, live agent capacity, recent
+    /// failures, and a throughput-based completion projection at GET / with
+    /// auto-refresh, and the same data as JSON at GET /api/state.json.
+    Dashboard {
+        /// Bind address. Default WC_DASHBOARD_BIND or 127.0.0.1.
+        #[arg(long)]
+        bind: Option<String>,
+        /// Port. Default WC_DASHBOARD_PORT or 8765.
+        #[arg(long)]
+        port: Option<i64>,
+    },
+
+    /// Run a device-local dashboard, scheduler, and worker.
+    #[command(name = "local-control-plane", hide = true)]
+    LocalControlPlane {
+        #[arg(long, default_value = "127.0.0.1")]
+        bind: String,
+        #[arg(long, default_value_t = 8765)]
+        port: i64,
+        #[arg(long, default_value_t = 15)]
+        interval: i64,
+    },
+
+    /// Run a cloud-hosted coordinator and dashboard.
+    #[command(name = "cloud-control-plane", hide = true)]
+    CloudControlPlane {
+        #[arg(long, default_value = "0.0.0.0")]
+        bind: String,
+        #[arg(long, default_value_t = 8080)]
+        port: i64,
+        #[arg(long, default_value_t = 30)]
+        interval: i64,
+    },
+
+    /// GPU quota inspection and increase requests across WC_PROVIDERS.
+    ///
+    /// Default (no subcommand) is equivalent to `quota show` — prints
+    /// live cloud quota minus reservation minus running per provider.
+    Quota {
+        /// Emit machine-readable JSON instead of the table (show subcommand).
+        #[arg(long)]
+        json: bool,
+        #[command(subcommand)]
+        sub: Option<QuotaCommands>,
+    },
+
+    /// List available submit profiles, or show one profile's JSON.
+    Profiles {
+        name: Option<String>,
+    },
+
+    /// Inspect stado configuration: show | validate | init.
+    Config {
+        #[arg(default_value = "show")]
+        sub: String,
+    },
+
+    /// Publish and consume immutable, versioned artifacts.
+    #[command(subcommand)]
+    Artifact(ArtifactCommands),
+
+    /// Manage recurring (cron) jobs — submit a command on a cron schedule.
+    ///
+    /// A schedule is evaluated every coordinator tick; when it comes due the
+    /// coordinator submits a fresh job (resolving the same routing/sizing
+    /// flags as `submit`). Schedules live in gs://<bucket>/schedules/.
+    #[command(subcommand)]
+    Schedule(ScheduleCommands),
+
+    /// Per-job and per-batch cost reporting from observed wall-times.
+    #[command(subcommand)]
+    Cost(CostCommands),
+
+    /// Manage the canonical compute-target registry hosted in GCS.
+    #[command(subcommand)]
+    Registry(RegistryCommands),
+
+    /// Manage operating-system resources on registry hosts.
+    #[command(subcommand)]
+    Host(HostCommands),
+
+    /// Provision wisent-compute services persistently across reboots.
+    Bootstrap {
+        /// Specific entry name (target or coordinator).
+        #[arg(long)]
+        target: Option<String>,
+        /// Print unit/plist; do not enable.
+        #[arg(long)]
+        dry_run: bool,
+        /// Install on THIS machine (launchd/systemd --user) instead of via SSH.
+        #[arg(long)]
+        local: bool,
+    },
+
+    /// Vast.ai marketplace host-listing (rent our idle GPU).
+    #[command(subcommand)]
+    Vast(VastCommands),
+}
+
+#[derive(Subcommand)]
+enum MachineCommands {
+    /// Submit one idempotent request from a JSON file.
+    Submit {
+        #[arg(long, required = true)]
+        request_file: String,
+    },
+    /// Read one job directly by ID.
+    Status {
+        job_id: String,
+    },
+    /// Read a byte-cursor page from the canonical command log.
+    Logs {
+        job_id: String,
+        #[arg(long, default_value_t = 0, allow_hyphen_values = true)]
+        cursor: i64,
+        #[arg(long, default_value_t = 65536, allow_hyphen_values = true)]
+        limit: i64,
+    },
+    /// Durably and idempotently cancel one job.
+    Cancel {
+        job_id: String,
+    },
+    /// Download and verify canonical artifacts for a terminal job.
+    Artifacts {
+        job_id: String,
+        #[arg(long, required = true)]
+        output_dir: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum QuotaCommands {
+    /// Show GPU quota totals across all providers in WC_PROVIDERS.
+    Show {
+        /// Emit machine-readable JSON instead of the table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Submit GPU quota-increase request(s) for ACCEL via the provider Quotas API.
+    Request {
+        accel: String,
+        /// New per-region quota limit to request (e.g. 16).
+        #[arg(long = "to", required = true)]
+        new_limit: i64,
+        /// Comma-separated regions/locations; default = every region
+        /// the provider dispatches into (REGIONS / AZURE_LOCATIONS).
+        #[arg(long, default_value = "")]
+        region: String,
+        /// Comma-separated provider list (gcp,azure); default = WC_PROVIDERS.
+        #[arg(long, default_value = "")]
+        provider: String,
+        /// Reviewer-visible justification text.
+        #[arg(long, default_value = "wisent-compute autoscaler queue depth requires more parallel GPU capacity")]
+        justification: String,
+        /// Contact email for the Cloud Quotas reviewer (required for GCP).
+        /// Default: $WC_QUOTA_CONTACT_EMAIL.
+        #[arg(long, default_value = "")]
+        email: String,
+        /// Emit machine-readable JSON result list.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Respond to Open Azure quota support tickets awaiting customer info.
+    #[command(name = "azure-replies")]
+    AzureReplies {
+        /// Print what would be sent without invoking az
+        /// support communication create.
+        #[arg(long)]
+        dry_run: bool,
+        /// Contact email shown in the response signature.
+        /// Default: $WC_QUOTA_CONTACT_EMAIL.
+        #[arg(long, default_value = "")]
+        email: String,
+    },
+    /// Post a credit-funded-subscription escalation reply on every
+    /// Open Azure quota ticket whose latest Microsoft message was a
+    /// billing-side denial.
+    #[command(name = "azure-escalate")]
+    AzureEscalate {
+        /// Print what would be sent without invoking az
+        /// support communication create.
+        #[arg(long)]
+        dry_run: bool,
+        /// Contact email shown in the response signature.
+        /// Default: $WC_QUOTA_CONTACT_EMAIL.
+        #[arg(long, default_value = "")]
+        email: String,
+    },
+    /// List the full GPU catalog for each provider in WC_PROVIDERS.
+    Catalog {
+        /// Comma-separated provider list (gcp,azure); default = WC_PROVIDERS.
+        #[arg(long, default_value = "")]
+        provider: String,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Submit quota-increase requests for EVERY known GPU family on each provider.
+    #[command(name = "request-all")]
+    RequestAll {
+        /// New per-region quota limit to request for every GPU family.
+        #[arg(long = "to", required = true)]
+        new_limit: i64,
+        /// Comma-separated provider list (gcp,azure); default = WC_PROVIDERS.
+        #[arg(long, default_value = "")]
+        provider: String,
+        /// Comma-separated regions/locations; default = the provider's
+        /// configured REGIONS / AZURE_LOCATIONS.
+        #[arg(long, default_value = "")]
+        region: String,
+        /// Reviewer-visible justification text.
+        #[arg(long, default_value = "wisent-compute autoscaler bulk capacity request: provision GPU headroom across every supported family in the dispatch regions so the scheduler can fall through to whichever family Google/Azure can serve.")]
+        justification: String,
+        /// Contact email for the GCP Cloud Quotas reviewer.
+        /// Default: $WC_QUOTA_CONTACT_EMAIL.
+        #[arg(long, default_value = "")]
+        email: String,
+        /// Emit machine-readable JSON result list.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Cross-provider in-flight quota requests + support communications.
+    Requests {
+        /// Comma-separated provider list (gcp,azure); default = WC_PROVIDERS.
+        #[arg(long, default_value = "")]
+        provider: String,
+        /// Filter GCP rows by state (reconciling, approved, denied,
+        /// partially_approved, unknown); empty = all.
+        #[arg(long, default_value = "")]
+        state: String,
+        /// For Azure, only show tickets where Microsoft has the
+        /// latest message and is awaiting a customer reply.
+        #[arg(long)]
+        awaiting_customer: bool,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ArtifactCommands {
+    /// Build manifests from supported external artifact formats.
+    #[command(subcommand)]
+    Import(ArtifactImportCommands),
+    /// List registered artifact versions.
+    List {
+        #[arg(long = "type", default_value = "")]
+        type_name: String,
+        #[arg(long, default_value = "")]
+        namespace: String,
+        #[arg(long, default_value = "")]
+        name: String,
+        /// Filter by KEY=VALUE.
+        #[arg(long)]
+        label: Vec<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show one version or resolve an alias.
+    Show {
+        r#ref: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Resolve an alias to its immutable version.
+    Resolve {
+        r#ref: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate and atomically publish a manifest JSON file.
+    Publish {
+        manifest_path: String,
+        #[arg(long = "verify", overrides_with = "no_verify")]
+        verify: bool,
+        #[arg(long = "no-verify", overrides_with = "verify")]
+        no_verify: bool,
+        /// Run the adapter's exhaustive verification.
+        #[arg(long)]
+        full: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Manage mutable aliases that point at immutable versions.
+    #[command(subcommand)]
+    Alias(ArtifactAliasCommands),
+    /// Re-run generic and type-specific verification.
+    Verify {
+        r#ref: String,
+        #[arg(long)]
+        full: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show producer and dependency provenance.
+    Lineage {
+        r#ref: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ArtifactImportCommands {
+    /// Verify and publish a pinned activation dataset revision.
+    Activations {
+        /// Hugging Face dataset, e.g. wisent-ai/activations.
+        #[arg(long, required = true)]
+        repo: String,
+        /// Immutable Hugging Face commit SHA.
+        #[arg(long, required = true)]
+        revision: String,
+        #[arg(long, required = true)]
+        desired_state_dir: String,
+        #[arg(long, default_value = "")]
+        run_id: String,
+        #[arg(long = "job-id")]
+        job_ids: Vec<String>,
+        #[arg(long, default_value = "")]
+        version: String,
+        #[arg(long)]
+        alias: Vec<String>,
+        #[arg(long)]
+        full: bool,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ArtifactAliasCommands {
+    /// Create an alias or update it with an optimistic precondition.
+    Set {
+        target_ref: String,
+        alias: String,
+        #[arg(long)]
+        expected_previous: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ScheduleCommands {
+    /// Create a recurring schedule that submits COMMAND on a cron schedule.
+    Create(Box<ScheduleCreateArgs>),
+    /// List all schedules.
+    List,
+    /// Print a schedule's full JSON.
+    Show {
+        schedule_id: String,
+    },
+    /// Delete a schedule (does not affect jobs it already submitted).
+    Rm {
+        schedule_id: String,
+    },
+    /// Disable a schedule without deleting it.
+    Pause {
+        schedule_id: String,
+    },
+    /// Re-enable a paused schedule (next run recomputed from now).
+    Resume {
+        schedule_id: String,
+    },
+    /// Fire a schedule once right now, regardless of its next run time.
+    Run {
+        schedule_id: String,
+    },
+}
+
+/// `schedule create` options (boxed out of the enum to keep variant sizes
+/// uniform — clippy::large_enum_variant).
+#[derive(clap::Args)]
+pub struct ScheduleCreateArgs {
+    command: String,
+    /// 5-field cron expression, e.g. "0 2 * * *" (daily 02:00).
+    #[arg(long, required = true)]
+    cron: String,
+    /// IANA timezone the cron is interpreted in (default UTC).
+    #[arg(long, default_value = "UTC")]
+    tz: String,
+    /// Preferred provider.
+    #[arg(long, default_value = "gcp")]
+    provider: String,
+    /// Pin to --provider, or let any consumer claim (default).
+    #[arg(long = "pin-provider", overrides_with = "any_provider")]
+    pin_provider: bool,
+    /// Let any consumer claim (default).
+    #[arg(long = "any-provider", overrides_with = "pin_provider")]
+    any_provider: bool,
+    /// Dispatch on Spot/Preemptible GPUs.
+    #[arg(long = "spot", overrides_with = "no_spot")]
+    spot: bool,
+    /// Do not dispatch on Spot/Preemptible GPUs (default).
+    #[arg(long = "no-spot", overrides_with = "spot")]
+    no_spot: bool,
+    /// Hard $/hour cap (0 = none).
+    #[arg(long, default_value_t = 0.0)]
+    max_cost_per_hour: f64,
+    /// Higher = scheduled first within FIFO bucket.
+    #[arg(long, default_value_t = 0)]
+    priority: i64,
+    /// Pin accelerator label (e.g. 'nvidia-l4').
+    #[arg(long, default_value = "")]
+    gpu_type: String,
+    /// Caller-declared VRAM (GB).
+    #[arg(long, default_value_t = 0)]
+    vram_gb: i64,
+    /// Pin machine type verbatim.
+    #[arg(long, default_value = "")]
+    machine_type: String,
+    /// Git URL to clone before running.
+    #[arg(long, default_value = "")]
+    repo: String,
+    /// Override cloned-repo dir.
+    #[arg(long, default_value = "")]
+    repo_workdir: String,
+    /// pip extras on the clone.
+    #[arg(long, default_value = "train")]
+    repo_extras: String,
+    /// Shell snippet placed before the command in the same shell.
+    #[arg(long, default_value = "")]
+    pre_command: String,
+    /// Comma-separated apt packages.
+    #[arg(long, default_value = "")]
+    apt: String,
+    /// Extra gs:// output destination.
+    #[arg(long, default_value = "")]
+    output_uri: String,
+    /// Command that must exit 0 after success (reverses to FAILED otherwise).
+    #[arg(long, default_value = "")]
+    verify: String,
+    /// Claim the whole GPU.
+    #[arg(long)]
+    exclusive: bool,
+    /// skip (default): don't fire while the prior instance is
+    /// still queued/running. allow: fire regardless.
+    #[arg(long, default_value = "skip", value_parser = ["skip", "allow"])]
+    overlap_policy: String,
+    /// Create the schedule paused (enable later with `schedule resume`).
+    #[arg(long)]
+    disabled: bool,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum CostCommands {
+    /// Summarize $ spent per target_kind and per model from completed jobs.
+    Report,
+    /// Project total $ for a batch file using observed per-job cost.
+    Estimate {
+        batch_file: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum RegistryCommands {
+    /// Validate a local registry-v2 JSON document.
+    Validate {
+        path: Option<String>,
+    },
+    /// Upload local registry.json to gs://wisent-compute/registry.json.
+    Push {
+        path: Option<String>,
+    },
+    /// Print the GCS-hosted registry to stdout.
+    Pull,
+}
+
+#[derive(Subcommand)]
+enum HostCommands {
+    /// Show the latest Stado health beacon and log tail for TARGET.
+    Health {
+        target: String,
+        /// Emit the beacon and object metadata as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Recover a registry-managed macOS host through its approved channel.
+    Recover {
+        target: String,
+    },
+    /// Manage local macOS and Linux user accounts.
+    #[command(subcommand)]
+    User(HostUserCommands),
+    /// Point TARGET's Weles recordings store at PATH.
+    #[command(name = "weles-recordings-dir")]
+    WelesRecordingsDir {
+        target: String,
+        path: String,
+    },
+    /// Report or revert the GUI-automation enablement of TARGET.
+    #[command(name = "gui-automation", subcommand)]
+    GuiAutomation(HostGuiAutomationCommands),
+}
+
+#[derive(Subcommand)]
+enum HostGuiAutomationCommands {
+    /// Report autologin, remote management, TCC and automation artifacts.
+    Status {
+        target: String,
+    },
+    /// Revert the enablement: autologin, kcpassword, remote management,
+    /// the driver's accessibility grant, and the installed artifacts.
+    Disable {
+        target: String,
+        /// Bundle id whose accessibility grant is revoked; omitted leaves TCC alone.
+        #[arg(long)]
+        bundle: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum HostUserCommands {
+    /// Create USERNAME on selected registry-managed hosts over SSH.
+    Create {
+        username: String,
+        /// Registry target name. Repeat to provision several hosts.
+        #[arg(long)]
+        target: Vec<String>,
+        /// Provision every kind=local registry target with SSH configured.
+        #[arg(long)]
+        all: bool,
+        /// Account display name.
+        #[arg(long)]
+        full_name: Option<String>,
+        /// Absolute login shell; host OS default if omitted.
+        #[arg(long, default_value = "")]
+        shell: String,
+        /// Create an administrator account instead of a standard user.
+        #[arg(long)]
+        admin: bool,
+        /// Require the new user to change the initial password on first login.
+        #[arg(long)]
+        require_password_change: bool,
+        /// Validate and list targets without connecting.
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long, default_value = "gcs", value_parser = ["gcs", "local", "auto"])]
+        registry_source: String,
+    },
+    /// Delete USERNAME from a registry-managed host over SSH.
+    Delete {
+        username: String,
+        /// Registry target name.
+        #[arg(long)]
+        target: String,
+        /// Leave the home directory in place.
+        #[arg(long)]
+        keep_home: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum VastCommands {
+    /// List the configured Vast.ai machine on the marketplace.
+    ///
+    /// Requires VAST_API_KEY and WC_VAST_MACHINE_ID env vars.
+    List {
+        /// Per-GPU-hour rental price USD (default 0.50).
+        #[arg(long, default_value_t = 0.50)]
+        price_gpu: f64,
+        /// Per-GB-month disk price USD (default 0.05).
+        #[arg(long, default_value_t = 0.05)]
+        price_disk: f64,
+        /// Optional minimum interruptible-bid price floor.
+        #[arg(long)]
+        price_min_bid: Option<f64>,
+    },
+    /// Remove every offer for our Vast.ai machine.
+    ///
+    /// Existing rentals are NOT terminated — only NEW renters are
+    /// blocked. Requires VAST_API_KEY and WC_VAST_MACHINE_ID.
+    Unlist,
+    /// Show Vast.ai's current view of our machine (rentals, listed).
+    Status,
+    /// One-shot snapshot of the Vast bridge + wisent-compute state.
+    Monitor {
+        /// GCS bucket holding the wisent-compute state (default wisent-compute).
+        #[arg(long, default_value = "wisent-compute")]
+        bucket: String,
+    },
+    /// Daemon: list on Vast.ai when wisent-compute is idle, unlist when work appears.
+    #[command(name = "auto-list")]
+    AutoList {
+        /// Wisent-compute must be idle this many seconds before listing.
+        #[arg(long, default_value_t = 300)]
+        idle_window_s: i64,
+        /// Polling interval against the wisent-compute bucket
+        /// (default 10s — short enough to catch transient queue states).
+        #[arg(long, default_value_t = 10)]
+        poll_interval_s: i64,
+        /// Per-GPU-hour rental price USD when we list.
+        #[arg(long, default_value_t = 0.50)]
+        price_gpu: f64,
+        /// Cap the max rental length any Vast renter can buy from
+        /// this offer (default 3600s = 1h). 0 to leave open-ended.
+        #[arg(long, default_value_t = 3600)]
+        max_duration_s: i64,
+        /// Print the toggle decisions without calling the Vast API.
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+/// Parse argv and run the dispatched command. Returns the process exit
+/// code: 0 on success, 1 on a click-`ClickException`-style runtime error,
+/// 2 on usage errors (clap parse failures exit 2 on their own) and for
+/// not-yet-implemented commands.
+pub async fn main_entry() -> i32 {
+    let cli = Cli::parse();
+    match dispatch(cli).await {
+        Ok(()) => 0,
+        Err(err) => {
+            if let Some(message) = err.message {
+                eprintln!("Error: {message}");
+            }
+            err.code
+        }
+    }
+}
+
+async fn dispatch(cli: Cli) -> Result<(), CmdError> {
+    match cli.command {
+        Commands::PackageRoot => {
+            // Python prints the installed package source root; the Rust
+            // equivalent is the crate data directory (profiles, templates,
+            // registry) used by desktop provisioning.
+            println!("{}", crate::data_dir().display());
+            Ok(())
+        }
+        Commands::Submit(args) => submit::run(&args).await,
+        Commands::Status { filter_id } => status::run(filter_id.as_deref()).await,
+        Commands::Cancel { job_id } => cancel::run(&job_id).await,
+        Commands::Results { job_id, output_dir } => results::run(&job_id, &output_dir).await,
+        Commands::Profiles { name } => profiles_cmd::run(name.as_deref()),
+        Commands::Config { sub } => config_cmd::run(&sub),
+        Commands::Machine(sub) => match sub {
+            MachineCommands::Submit { request_file } => machine::submit(&request_file).await,
+            MachineCommands::Status { job_id } => machine::status(&job_id).await,
+            MachineCommands::Logs { job_id, cursor, limit } => {
+                machine::logs(&job_id, cursor, limit).await
+            }
+            MachineCommands::Cancel { job_id } => machine::cancel(&job_id).await,
+            MachineCommands::Artifacts { job_id, output_dir } => {
+                machine::artifacts(&job_id, &output_dir).await
+            }
+        },
+        Commands::Agent {
+            gpu_type,
+            target,
+            auto,
+            idle_shutdown,
+            kind,
+            vast_auto_list,
+            vast_price_gpu,
+            vast_max_duration_s,
+        } => {
+            agent::run(
+                gpu_type,
+                target,
+                auto,
+                idle_shutdown,
+                kind,
+                vast_auto_list,
+                vast_price_gpu,
+                vast_max_duration_s,
+            )
+            .await
+        }
+        Commands::Schedule(sub) => match sub {
+            ScheduleCommands::Create(args) => schedule::create(&args).await,
+            ScheduleCommands::List => schedule::list().await,
+            ScheduleCommands::Show { schedule_id } => schedule::show(&schedule_id).await,
+            ScheduleCommands::Rm { schedule_id } => schedule::rm(&schedule_id).await,
+            ScheduleCommands::Pause { schedule_id } => schedule::pause(&schedule_id).await,
+            ScheduleCommands::Resume { schedule_id } => schedule::resume(&schedule_id).await,
+            ScheduleCommands::Run { schedule_id } => schedule::run(&schedule_id).await,
+        },
+        Commands::DiskCleanup { once, watch } => disk_cleanup::run(once, watch).await,
+        Commands::InstallDiskCleanup => disk_cleanup::install().await,
+        Commands::Artifact(sub) => artifact::dispatch(sub).await,
+        Commands::Cost(sub) => cost::dispatch(&sub).await,
+        Commands::Vast(sub) => vast::dispatch(&sub).await,
+        Commands::Quota { json, sub } => quota::dispatch(json, &sub).await,
+        Commands::Coordinator { target, once } => coordinator::run(target, once).await,
+        Commands::Dashboard { bind, port } => dashboard::run(bind, port).await,
+        Commands::LocalControlPlane { bind, port, interval } => {
+            control_plane::local(bind, port, interval).await
+        }
+        Commands::CloudControlPlane { bind, port, interval } => {
+            control_plane::cloud(bind, port, interval).await
+        }
+        Commands::Registry(sub) => match sub {
+            RegistryCommands::Validate { path } => registry::validate(path),
+            RegistryCommands::Push { path } => registry::push(path).await,
+            RegistryCommands::Pull => registry::pull().await,
+        },
+        Commands::Host(sub) => match sub {
+            HostCommands::Health { target, json } => host::health(&target, json).await,
+            HostCommands::Recover { target } => host::recover(&target).await,
+            HostCommands::User(HostUserCommands::Create {
+                username,
+                target,
+                all,
+                full_name,
+                shell,
+                admin,
+                require_password_change,
+                dry_run,
+                registry_source,
+            }) => {
+                host::user_create(
+                    &username,
+                    target,
+                    all,
+                    full_name,
+                    shell,
+                    admin,
+                    require_password_change,
+                    dry_run,
+                    &registry_source,
+                )
+                .await
+            }
+            HostCommands::User(HostUserCommands::Delete { username, target, keep_home }) => {
+                host::user_delete(&username, &target, keep_home).await
+            }
+            HostCommands::WelesRecordingsDir { target, path } => {
+                host::weles_recordings_dir(&target, &path).await
+            }
+            HostCommands::GuiAutomation(HostGuiAutomationCommands::Status { target }) => {
+                host::gui_automation_status(&target).await
+            }
+            HostCommands::GuiAutomation(HostGuiAutomationCommands::Disable { target, bundle }) => {
+                host::gui_automation_disable(&target, bundle.as_deref().unwrap_or("")).await
+            }
+        },
+        Commands::Bootstrap { target, dry_run, local } => bootstrap::run(target, dry_run, local).await,
+    }
+}
+
