@@ -683,6 +683,13 @@ enum RegistryCommands {
     },
     /// Print the GCS-hosted registry to stdout.
     Pull,
+    /// Print which registry target is this machine.
+    #[command(name = "self")]
+    SelfTarget {
+        /// Print only the target name, for scripts.
+        #[arg(long)]
+        name_only: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -938,6 +945,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             RegistryCommands::Validate { path } => registry::validate(path),
             RegistryCommands::Push { path } => registry::push(path).await,
             RegistryCommands::Pull => registry::pull().await,
+            RegistryCommands::SelfTarget { name_only } => registry::self_target(name_only).await,
         },
         Commands::Host(sub) => match sub {
             HostCommands::Health { target, json } => host::health(&target, json).await,
