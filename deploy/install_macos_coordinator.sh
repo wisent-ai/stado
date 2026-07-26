@@ -113,6 +113,23 @@ if [ -z "$COORD_SUPA_TOKEN" ]; then
     echo "INFO: $COORD_SUPA_TOKEN_FILE missing or empty -- VMs will skip supabase activation writes" >&2
 fi
 
+# The coordinator identifies itself to the scheduler by registry target name.
+# This used to be the literal "local-mac", which no registry entry carries:
+# the daemon started, failed its own identity lookup and exited, on every
+# launchd respawn, forever ("coordinator 'local-mac' not in GCS registry;
+# exiting"). Resolve the name from this machine instead, and refuse to write a
+# plist that would loop the same way.
+COORD_TARGET="${COORD_TARGET:-}"
+if [ -z "$COORD_TARGET" ]; then
+    COORD_TARGET=$("$WC_BIN" registry self --name-only || true)
+fi
+if [ -z "$COORD_TARGET" ]; then
+    echo "ERROR: this host is not in the compute registry; set COORD_TARGET=<registry name>"
+    false
+    exit $?
+fi
+echo "coordinator target: $COORD_TARGET"
+
 # Compose the LaunchAgent plist. KeepAlive on Crashed=true so the daemon
 # self-revives if it dies; SuccessfulExit=false means a clean exit (e.g.
 # launchctl bootout) will not respawn it.
@@ -128,7 +145,7 @@ cat > "$PLIST" <<PLISTEOF
         <string>${WC_BIN}</string>
         <string>coordinator</string>
         <string>--target</string>
-        <string>local-mac</string>
+        <string>${COORD_TARGET}</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>
