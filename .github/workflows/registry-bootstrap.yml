@@ -1,7 +1,7 @@
 name: registry-bootstrap
 
 # Auto-provisions agents on every kind=local registry entry whose `ssh` field
-# is set, triggered when stado/targets/registry.json changes on main.
+# is set, triggered when stado-rs/data/registry.json changes on main.
 # After the operator has dropped the deploy public key into the workstation's
 # ~/.ssh/authorized_keys ONCE, every subsequent registry edit lands the agent
 # (or refreshes the unit) on the named host without anyone touching the box.
@@ -10,7 +10,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "stado/targets/registry.json"
+      - "stado-rs/data/registry.json"
       - ".github/workflows/registry-bootstrap.yml"
   workflow_dispatch:
 
@@ -29,13 +29,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install wisent-compute
-        run: python -m pip install --upgrade wisent-compute
+      - name: Install Rust stado release
+        run: |
+          version="$(curl -fsSL https://storage.googleapis.com/wisent-compute/releases/stado/latest.json | jq -r .version)"
+          base="https://storage.googleapis.com/wisent-compute/releases/stado/${version}/linux-amd64"
+          tmp="$(mktemp -d)"
+          curl -fsSL "${base}/stado" -o "${tmp}/stado"
+          curl -fsSL "${base}/SHA256SUMS" -o "${tmp}/SHA256SUMS"
+          grep -E '[ *]stado$' "${tmp}/SHA256SUMS" > "${tmp}/stado.sha256"
+          (cd "${tmp}" && sha256sum -c stado.sha256)
+          chmod +x "${tmp}/stado"
+          mkdir -p "${HOME}/.local/bin"
+          mv "${tmp}/stado" "${HOME}/.local/bin/stado"
+          echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
 
       - name: Load deploy SSH key
         # WISENT_BOOTSTRAP_SSH_KEY is a repo or org secret containing the
@@ -58,30 +64,23 @@ jobs:
       - name: List local targets to provision
         id: targets
         run: |
-          python - <<'PY'
-          import json, os
-          with open("stado/targets/registry.json") as f:
-              data = json.load(f)
-          targets = [
-              t for t in data.get("targets", [])
-              if t.get("kind") == "local" and t.get("ssh")
-          ]
-          print(f"::group::Targets to provision ({len(targets)})")
-          for t in targets:
-              print(f"  {t['name']}  ssh={t['ssh']}  slots={t.get('slots',1)}")
-          print("::endgroup::")
-          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
-              fh.write("names=" + ",".join(t["name"] for t in targets) + "\n")
-              fh.write("count=" + str(len(targets)) + "\n")
-          PY
+          registry="${RUNNER_TEMP}/registry.json"
+          curl -fsSL "https://storage.googleapis.com/wisent-compute/registry.json" -o "$registry"
+          names="$(jq -r '[.targets[] | select(.kind == "local" and (.ssh // "") != "") | .name] | join(",")' "$registry")"
+          count="$(jq '[.targets[] | select(.kind == "local" and (.ssh // "") != "")] | length' "$registry")"
+          echo "::group::Targets to provision (${count})"
+          jq -r '.targets[] | select(.kind == "local" and (.ssh // "") != "") | "  \(.name)  ssh=\(.ssh)  slots=\(.slots // "default")"' "$registry"
+          echo "::endgroup::"
+          echo "names=${names}" >> "${GITHUB_OUTPUT}"
+          echo "count=${count}" >> "${GITHUB_OUTPUT}"
 
-      - name: Run wc bootstrap for each named target
+      - name: Run stado bootstrap for each named target
         if: ${{ steps.targets.outputs.count != '0' }}
         run: |
           IFS=',' read -ra NAMES <<< "${{ steps.targets.outputs.names }}"
           for name in "${NAMES[@]}"; do
               echo "::group::bootstrap $name"
-              wc bootstrap --target "$name" || echo "[err] $name failed"
+              stado bootstrap --target "$name" || echo "[err] $name failed"
               echo "::endgroup::"
           done
 
