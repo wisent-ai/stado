@@ -73,6 +73,38 @@ pub async fn user_delete(username: &str, target: &str, keep_home: bool) -> Resul
         }
     }
 }
+
+/// `stado host build-caches report|prune TARGET --root PATH --min-age-days N`
+/// — the disk cleaner covers model caches and recordings, not build output,
+/// which is what actually fills a developer host.
+pub async fn build_caches(
+    target: &str,
+    root: &str,
+    min_age_days: &str,
+    apply: bool,
+) -> Result<(), CmdError> {
+    let resolved = registry_target(target).await?;
+    let runner = crate::deploy::production_runner();
+    let report = crate::deploy::host_build_caches::run_on_host(
+        &resolved,
+        root,
+        min_age_days,
+        apply,
+        &runner,
+    )
+    .await;
+    let mut total_kib: u64 = u64::default();
+    for entry in &report.entries {
+        println!("{}\t{}\t{}\t{}", report.target, entry.state, entry.kib, entry.path);
+        total_kib += entry.kib.parse::<u64>().unwrap_or_default();
+    }
+    println!("{}\ttotal-kib\t{total_kib}", report.target);
+    match report.error {
+        Some(detail) if !detail.is_empty() => Err(CmdError::click(detail)),
+        Some(_) => Err(CmdError::click("remote command failed".to_string())),
+        None => Ok(()),
+    }
+}
 fn print_report(
     report: &crate::deploy::host_gui_automation::GuiAutomationReport,
 ) -> Result<(), CmdError> {

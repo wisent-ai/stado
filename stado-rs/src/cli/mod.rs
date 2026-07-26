@@ -710,6 +710,31 @@ enum HostCommands {
     /// Report or revert the GUI-automation enablement of TARGET.
     #[command(name = "gui-automation", subcommand)]
     GuiAutomation(HostGuiAutomationCommands),
+    /// Report or reclaim tagged build caches on TARGET.
+    #[command(name = "build-caches", subcommand)]
+    BuildCaches(HostBuildCacheCommands),
+}
+
+#[derive(Subcommand)]
+enum HostBuildCacheCommands {
+    /// List tagged cache directories older than --min-age-days with sizes.
+    Report {
+        target: String,
+        /// Absolute directory to search.
+        #[arg(long)]
+        root: String,
+        /// Only consider directories untouched for this many whole days.
+        #[arg(long)]
+        min_age_days: String,
+    },
+    /// Delete those directories.
+    Prune {
+        target: String,
+        #[arg(long)]
+        root: String,
+        #[arg(long)]
+        min_age_days: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -953,6 +978,16 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::GuiAutomation(HostGuiAutomationCommands::Disable { target, bundle }) => {
                 host::gui_automation_disable(&target, bundle.as_deref().unwrap_or("")).await
             }
+            HostCommands::BuildCaches(HostBuildCacheCommands::Report {
+                target,
+                root,
+                min_age_days,
+            }) => host::build_caches(&target, &root, &min_age_days, false).await,
+            HostCommands::BuildCaches(HostBuildCacheCommands::Prune {
+                target,
+                root,
+                min_age_days,
+            }) => host::build_caches(&target, &root, &min_age_days, true).await,
         },
         Commands::Bootstrap { target, dry_run, local } => bootstrap::run(target, dry_run, local).await,
     }
