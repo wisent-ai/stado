@@ -30,6 +30,7 @@ use std::time::Duration;
 use futures::future::BoxFuture;
 
 pub mod bootstrap;
+pub mod host_build_caches;
 pub mod host_gui_automation;
 pub mod host_user_delete;
 pub mod host_recovery;
