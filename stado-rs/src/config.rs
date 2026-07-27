@@ -21,7 +21,11 @@ static ALERTS_TOPIC: LazyLock<String> = LazyLock::new(|| {
         .ok()
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| {
-            cfg("", "alerts.topic", &format!("projects/{}/topics/stado-alerts", project()))
+            cfg(
+                "",
+                "alerts.topic",
+                &format!("projects/{}/topics/stado-alerts", project()),
+            )
         })
 });
 
@@ -49,7 +53,13 @@ static REGIONS: LazyLock<Vec<String>> = LazyLock::new(|| {
     cfg_list(
         "GCP_REGIONS",
         "regions",
-        &["us-central1", "europe-west4", "us-east1", "us-east4", "us-east5"],
+        &[
+            "us-central1",
+            "europe-west4",
+            "us-east1",
+            "us-east4",
+            "us-east5",
+        ],
     )
 });
 
@@ -229,10 +239,19 @@ static DASHBOARD_BIND: LazyLock<String> =
     LazyLock::new(|| cfg("WC_DASHBOARD_BIND", "dashboard.bind", "127.0.0.1"));
 static DASHBOARD_PORT: LazyLock<i64> =
     LazyLock::new(|| cfg_i64("WC_DASHBOARD_PORT", "dashboard.port", "8765"));
-static DASHBOARD_REFRESH_SECONDS: LazyLock<i64> =
-    LazyLock::new(|| cfg_i64("WC_DASHBOARD_REFRESH_SECONDS", "dashboard.refresh_seconds", "10"));
+static DASHBOARD_REFRESH_SECONDS: LazyLock<i64> = LazyLock::new(|| {
+    cfg_i64(
+        "WC_DASHBOARD_REFRESH_SECONDS",
+        "dashboard.refresh_seconds",
+        "10",
+    )
+});
 static DASHBOARD_AGENT_FRESH_SECONDS: LazyLock<i64> = LazyLock::new(|| {
-    cfg_i64("WC_DASHBOARD_AGENT_FRESH_SECONDS", "dashboard.agent_fresh_seconds", "180")
+    cfg_i64(
+        "WC_DASHBOARD_AGENT_FRESH_SECONDS",
+        "dashboard.agent_fresh_seconds",
+        "180",
+    )
 });
 
 /// Dashboard HTTP server bind address (env `WC_DASHBOARD_BIND`). Bind to
@@ -264,7 +283,10 @@ pub fn dashboard_agent_fresh_seconds() -> i64 {
 /// proxies. Read per call (Python reads `os.environ` at request time), not
 /// cached in a `LazyLock`.
 pub fn stado_deployment_id() -> String {
-    std::env::var("STADO_DEPLOYMENT_ID").unwrap_or_default().trim().to_string()
+    std::env::var("STADO_DEPLOYMENT_ID")
+        .unwrap_or_default()
+        .trim()
+        .to_string()
 }
 
 pub const DEFAULT_IMAGE: &str = "pytorch-2-9-cu129-ubuntu-2204-nvidia-580-v20260408";
@@ -279,10 +301,19 @@ pub const DEFAULT_BOOT_DISK_GB: i64 = 200;
 // it expects pre-provisioned infra named below.
 static AZURE_SUBSCRIPTION_ID: LazyLock<String> =
     LazyLock::new(|| cfg("AZURE_SUBSCRIPTION_ID", "azure.subscription_id", ""));
-static AZURE_RESOURCE_GROUP: LazyLock<String> =
-    LazyLock::new(|| cfg("AZURE_RESOURCE_GROUP", "azure.resource_group", "wisent-compute"));
+static AZURE_RESOURCE_GROUP: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "AZURE_RESOURCE_GROUP",
+        "azure.resource_group",
+        "wisent-compute",
+    )
+});
 static AZURE_LOCATIONS: LazyLock<Vec<String>> = LazyLock::new(|| {
-    cfg_list("AZURE_LOCATIONS", "azure.locations", &["eastus", "westus3", "westus2", "northeurope"])
+    cfg_list(
+        "AZURE_LOCATIONS",
+        "azure.locations",
+        &["eastus", "westus3", "westus2", "northeurope"],
+    )
 });
 static AZURE_VNET: LazyLock<String> =
     LazyLock::new(|| cfg("AZURE_VNET", "azure.vnet", "wisent-compute-vnet"));
@@ -291,12 +322,18 @@ static AZURE_SUBNET: LazyLock<String> =
 static AZURE_NSG: LazyLock<String> =
     LazyLock::new(|| cfg("AZURE_NSG", "azure.nsg", "wisent-compute-nsg"));
 static AZURE_IMAGE_URN: LazyLock<String> = LazyLock::new(|| {
-    cfg("AZURE_IMAGE_URN", "azure.image_urn", "microsoft-dsvm:ubuntu-hpc:2204:latest")
+    cfg(
+        "AZURE_IMAGE_URN",
+        "azure.image_urn",
+        "microsoft-dsvm:ubuntu-hpc:2204:latest",
+    )
 });
 static AZURE_VM_USERNAME: LazyLock<String> =
     LazyLock::new(|| cfg("AZURE_VM_USERNAME", "azure.vm_username", "wisent"));
 static AZURE_SSH_PUBLIC_KEY: LazyLock<String> =
     LazyLock::new(|| cfg("AZURE_SSH_PUBLIC_KEY", "azure.ssh_public_key", ""));
+static AZURE_VM_IDENTITY_ID: LazyLock<String> =
+    LazyLock::new(|| cfg("AZURE_VM_IDENTITY_ID", "azure.vm_identity_id", ""));
 
 /// Azure subscription id (env `AZURE_SUBSCRIPTION_ID`).
 pub fn azure_subscription_id() -> &'static str {
@@ -349,6 +386,20 @@ pub fn azure_ssh_public_key() -> &'static str {
     AZURE_SSH_PUBLIC_KEY.as_str()
 }
 
+/// Resource id of the pre-provisioned user-assigned managed identity
+/// attached to every agent VM (env `AZURE_VM_IDENTITY_ID`): a full ARM
+/// path under
+/// `.../providers/Microsoft.ManagedIdentity/userAssignedIdentities/`.
+/// This is how the agent gets Azure credentials at all — on the VM the
+/// token chain in [`crate::azure_token`] has no service-principal env
+/// vars and no `az` CLI, so it falls through to IMDS, which answers only
+/// for a VM that carries an identity. Empty (the default) emits no
+/// identity block at VM create, leaving the agent unable to reach the
+/// blob queue or to self-delete.
+pub fn azure_vm_identity_id() -> &'static str {
+    AZURE_VM_IDENTITY_ID.as_str()
+}
+
 // AWS (parallel to GCP). Python aws.py reads these straight from
 // os.environ (no config-file keys), so these accessors do the same — no
 // `cfg(...)` fallback. Python resolves them per create_instance call;
@@ -358,10 +409,15 @@ static AWS_REGION: LazyLock<String> =
     LazyLock::new(|| std::env::var("AWS_REGION").unwrap_or_else(|_| "us-east-1".to_string()));
 static AWS_SECURITY_GROUP: LazyLock<String> =
     LazyLock::new(|| std::env::var("AWS_SECURITY_GROUP").unwrap_or_default());
-static AWS_IAM_PROFILE: LazyLock<String> =
-    LazyLock::new(|| std::env::var("AWS_IAM_PROFILE").unwrap_or_else(|_| "stado-agent".to_string()));
-static AWS_AMI_ID: LazyLock<String> =
-    LazyLock::new(|| std::env::var("AWS_AMI_ID").unwrap_or_default().trim().to_string());
+static AWS_IAM_PROFILE: LazyLock<String> = LazyLock::new(|| {
+    std::env::var("AWS_IAM_PROFILE").unwrap_or_else(|_| "stado-agent".to_string())
+});
+static AWS_AMI_ID: LazyLock<String> = LazyLock::new(|| {
+    std::env::var("AWS_AMI_ID")
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+});
 
 /// AWS region for the EC2 provider (env `AWS_REGION`, default us-east-1).
 pub fn aws_region() -> &'static str {
@@ -403,8 +459,20 @@ static WC_STORAGE_BACKEND: LazyLock<String> =
     LazyLock::new(|| cfg("WC_STORAGE_BACKEND", "storage.backend", "gcs"));
 static WC_AZURE_STORAGE_ACCOUNT: LazyLock<String> =
     LazyLock::new(|| cfg("WC_AZURE_STORAGE_ACCOUNT", "storage.azure.account", ""));
-static WC_AZURE_CONTAINER: LazyLock<String> =
-    LazyLock::new(|| cfg("WC_AZURE_CONTAINER", "storage.azure.container", "wisent-compute"));
+/// Compiled-in default for [`wc_azure_container`]. Exported for the same
+/// reason as [`DEFAULT_RELEASE_BASE_URL`]: a caller has to be able to tell
+/// a configured container from the default one. The name predates the
+/// rename to `stado`, so on an azure deployment the default silently reads
+/// an empty container rather than the queue — which is exactly what
+/// `crate::doctor` warns about.
+pub const DEFAULT_AZURE_CONTAINER: &str = "wisent-compute";
+static WC_AZURE_CONTAINER: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "WC_AZURE_CONTAINER",
+        "storage.azure.container",
+        DEFAULT_AZURE_CONTAINER,
+    )
+});
 static WC_S3_BUCKET: LazyLock<String> =
     LazyLock::new(|| cfg("WC_S3_BUCKET", "storage.s3.bucket", ""));
 static WC_S3_REGION: LazyLock<String> = LazyLock::new(|| {
@@ -413,7 +481,38 @@ static WC_S3_REGION: LazyLock<String> = LazyLock::new(|| {
 });
 static WC_LOCAL_STORAGE_PATH: LazyLock<String> = LazyLock::new(|| {
     let default = expand_tilde("~/.stado/local-storage");
-    cfg("WC_LOCAL_STORAGE_PATH", "storage.local.path", &default.to_string_lossy())
+    cfg(
+        "WC_LOCAL_STORAGE_PATH",
+        "storage.local.path",
+        &default.to_string_lossy(),
+    )
+});
+static WC_BACKUP_STORAGE_BACKEND: LazyLock<String> =
+    LazyLock::new(|| cfg("WC_BACKUP_STORAGE_BACKEND", "storage.backup.backend", ""));
+static WC_BACKUP_BUCKET: LazyLock<String> =
+    LazyLock::new(|| cfg("WC_BACKUP_BUCKET", "storage.backup.bucket", ""));
+static WC_BACKUP_AZURE_STORAGE_ACCOUNT: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "WC_BACKUP_AZURE_STORAGE_ACCOUNT",
+        "storage.backup.azure.account",
+        "",
+    )
+});
+static WC_BACKUP_AZURE_CONTAINER: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "WC_BACKUP_AZURE_CONTAINER",
+        "storage.backup.azure.container",
+        "",
+    )
+});
+static WC_BACKUP_S3_REGION: LazyLock<String> =
+    LazyLock::new(|| cfg("WC_BACKUP_S3_REGION", "storage.backup.s3.region", ""));
+static WC_BACKUP_LOCAL_STORAGE_PATH: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "WC_BACKUP_LOCAL_STORAGE_PATH",
+        "storage.backup.local.path",
+        "",
+    )
 });
 
 /// Queue storage backend (env `WC_STORAGE_BACKEND`). "gcs", "azure", and
@@ -451,6 +550,80 @@ pub fn wc_local_storage_path() -> &'static str {
     WC_LOCAL_STORAGE_PATH.as_str()
 }
 
+/// Disaster-recovery storage backend. Empty means no backup is configured.
+///
+/// This is intentionally not an automatic read fallback: queue state is
+/// mutable and transparent fallback can dispatch the same job from two
+/// divergent stores. `stado blast-radius` uses this endpoint to report
+/// backup coverage before an explicit, fenced promotion.
+pub fn wc_backup_storage_backend() -> &'static str {
+    WC_BACKUP_STORAGE_BACKEND.as_str()
+}
+
+/// GCS or S3 bucket used by the disaster-recovery endpoint.
+pub fn wc_backup_bucket() -> &'static str {
+    WC_BACKUP_BUCKET.as_str()
+}
+
+/// Azure account used by the disaster-recovery endpoint.
+pub fn wc_backup_azure_storage_account() -> &'static str {
+    WC_BACKUP_AZURE_STORAGE_ACCOUNT.as_str()
+}
+
+/// Azure container used by the disaster-recovery endpoint.
+pub fn wc_backup_azure_container() -> &'static str {
+    WC_BACKUP_AZURE_CONTAINER.as_str()
+}
+
+/// S3 region used by the disaster-recovery endpoint.
+pub fn wc_backup_s3_region() -> &'static str {
+    WC_BACKUP_S3_REGION.as_str()
+}
+
+/// Local path used by the disaster-recovery endpoint.
+pub fn wc_backup_local_storage_path() -> &'static str {
+    WC_BACKUP_LOCAL_STORAGE_PATH.as_str()
+}
+
+/// Compiled-in default for [`release_base_url`]: the public GCS endpoint
+/// the release pipeline has always published to. Exported so callers that
+/// PROPAGATE the channel to another machine (`deploy::bootstrap`,
+/// `deploy/stado-up.sh`) can tell a configured channel from the default
+/// and forward only the former, keeping a default install byte-identical.
+pub const DEFAULT_RELEASE_BASE_URL: &str =
+    "https://storage.googleapis.com/wisent-compute/releases/stado";
+
+static RELEASE_BASE_URL: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "WC_RELEASE_BASE_URL",
+        "release.base_url",
+        DEFAULT_RELEASE_BASE_URL,
+    )
+    .trim_end_matches('/')
+    .to_string()
+});
+
+/// Base URL of the binary release channel (env `WC_RELEASE_BASE_URL`,
+/// config key `release.base_url`, trailing slash stripped).
+///
+/// Deliberately NOT derived from [`wc_storage_backend`] or [`bucket`]:
+/// the release tree is published independently of the queue, and the
+/// layout underneath is fixed and backend-agnostic — a `latest.json`
+/// pointer plus a per-version, per-platform directory holding the
+/// binaries and their checksum manifest. Anything that can serve those
+/// paths over HTTPS is a valid channel.
+///
+/// The default is the public GCS endpoint the release pipeline has always
+/// published to, so an unconfigured install is unchanged. An Azure
+/// deployment points this at
+/// `https://<account>.blob.core.windows.net/<container>/releases/stado`,
+/// which [`crate::self_update`] fetches with a storage-scoped bearer
+/// token and the agent startup templates fetch with the VM's managed
+/// identity.
+pub fn release_base_url() -> &'static str {
+    RELEASE_BASE_URL.as_str()
+}
+
 static BILLING_DATASET: LazyLock<String> = LazyLock::new(|| {
     std::env::var("WC_BILLING_DATASET").unwrap_or_else(|_| "billing_export".to_string())
 });
@@ -468,6 +641,8 @@ static AZURE_BILLING_SECRET: LazyLock<String> = LazyLock::new(|| {
     std::env::var("WC_AZURE_BILLING_SECRET")
         .unwrap_or_else(|_| "wisent-azure-billing-sp".to_string())
 });
+static AZURE_KEY_VAULT_URL: LazyLock<String> =
+    LazyLock::new(|| std::env::var("WC_AZURE_KEY_VAULT_URL").unwrap_or_default());
 
 /// BigQuery billing export dataset (env `WC_BILLING_DATASET`).
 ///
@@ -497,13 +672,20 @@ pub fn billing_net_alert_usd() -> f64 {
     *BILLING_NET_ALERT_USD
 }
 
-/// Secret Manager secret holding the Azure billing service principal as
+/// Azure Key Vault secret holding the Azure billing service principal as
 /// JSON {"tenant_id","client_id","client_secret", and one of
-/// "billing_account"/"billing_profile" or "subscription_id"} (env
-/// `WC_AZURE_BILLING_SECRET`). Absent secret is reported as an explicit
-/// no_credentials status, never silently skipped.
+/// "billing_account"/"billing_profile" or "subscription_id"} (secret name
+/// env `WC_AZURE_BILLING_SECRET`). The value is never read from a file,
+/// process environment, queue blob, or another cloud's secret manager.
 pub fn azure_billing_secret() -> &'static str {
     AZURE_BILLING_SECRET.as_str()
+}
+
+/// Azure Key Vault data-plane URL (env `WC_AZURE_KEY_VAULT_URL`), for
+/// example `https://wisent-stado-kv.vault.azure.net`. Authentication uses a
+/// managed identity or the current Azure CLI identity, never a client secret.
+pub fn azure_key_vault_url() -> &'static str {
+    AZURE_KEY_VAULT_URL.as_str()
 }
 
 /// In-process cache TTL for the GCS-fetched model policy (Python
@@ -535,7 +717,9 @@ pub async fn refresh_model_policy(
     store: &crate::queue::JobStorage,
 ) -> Result<ModelPolicy, crate::queue::StorageError> {
     {
-        let cache = MODEL_POLICY.read().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let cache = MODEL_POLICY
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if cache
             .fetched_at
             .is_some_and(|at| at.elapsed().as_secs() < MODEL_POLICY_TTL_S)
@@ -548,7 +732,9 @@ pub async fn refresh_model_policy(
         Some(raw) => serde_json::from_str::<ModelPolicy>(&raw)?,
         None => ModelPolicy::default(),
     };
-    let mut cache = MODEL_POLICY.write().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut cache = MODEL_POLICY
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     cache.policy = policy.clone();
     cache.fetched_at = Some(Instant::now());
     Ok(policy)
@@ -565,12 +751,18 @@ pub fn model_policy() -> ModelPolicy {
 
 /// True when `model` must run with exclusive GPU ownership.
 pub fn is_exclusive_model(model: &str) -> bool {
-    model_policy().exclusive.iter().any(|candidate| candidate == model)
+    model_policy()
+        .exclusive
+        .iter()
+        .any(|candidate| candidate == model)
 }
 
 /// True when `model` is restricted to local execution.
 pub fn is_local_only_model(model: &str) -> bool {
-    model_policy().local_only.iter().any(|candidate| candidate == model)
+    model_policy()
+        .local_only
+        .iter()
+        .any(|candidate| candidate == model)
 }
 
 /// Compute API base URL (env `COMPUTE_API_URL`). Python resolves this at
@@ -639,7 +831,11 @@ pub fn lookup_instance_type(provider: &str, gpu_mem_gb: i64) -> (&'static str, &
     if let Some((_, spec)) = sizing.range(gpu_mem_gb..).next() {
         return *spec;
     }
-    sizing.iter().next_back().map(|(_, spec)| *spec).unwrap_or(("", ""))
+    sizing
+        .iter()
+        .next_back()
+        .map(|(_, spec)| *spec)
+        .unwrap_or(("", ""))
 }
 
 #[cfg(test)]
@@ -652,7 +848,16 @@ mod tests {
         assert_eq!(bucket(), "stado");
         assert_eq!(region(), "us-central1");
         assert_eq!(alerts_topic(), "projects/wisent-480400/topics/stado-alerts");
-        assert_eq!(regions(), ["us-central1", "europe-west4", "us-east1", "us-east4", "us-east5"]);
+        assert_eq!(
+            regions(),
+            [
+                "us-central1",
+                "europe-west4",
+                "us-east1",
+                "us-east4",
+                "us-east5"
+            ]
+        );
         assert_eq!(wc_providers(), ["gcp"]);
         assert_eq!(wc_storage_backend(), "gcs");
         assert_eq!(wc_azure_container(), "wisent-compute");
@@ -661,11 +866,17 @@ mod tests {
         assert_eq!(dashboard_refresh_seconds(), 10);
         assert_eq!(dashboard_agent_fresh_seconds(), 180);
         assert_eq!(azure_resource_group(), "wisent-compute");
-        assert_eq!(azure_locations(), ["eastus", "westus3", "westus2", "northeurope"]);
+        assert_eq!(
+            azure_locations(),
+            ["eastus", "westus3", "westus2", "northeurope"]
+        );
         assert_eq!(azure_image_urn(), "microsoft-dsvm:ubuntu-hpc:2204:latest");
         assert_eq!(azure_vm_username(), "wisent");
         assert_eq!(billing_dataset(), "billing_export");
-        assert_eq!(billing_table(), "gcp_billing_export_v1_017364_D3B657_F207B5");
+        assert_eq!(
+            billing_table(),
+            "gcp_billing_export_v1_017364_D3B657_F207B5"
+        );
         assert_eq!(billing_net_alert_usd(), 100.0);
         assert_eq!(azure_billing_secret(), "wisent-azure-billing-sp");
         assert!(wc_local_storage_path().ends_with(".stado/local-storage"));
@@ -674,7 +885,15 @@ mod tests {
     #[test]
     fn zone_rotation_starts_with_primary_region() {
         let zones = zone_rotation();
-        assert_eq!(&zones[..4], ["us-central1-b", "us-central1-a", "us-central1-c", "us-central1-f"]);
+        assert_eq!(
+            &zones[..4],
+            [
+                "us-central1-b",
+                "us-central1-a",
+                "us-central1-c",
+                "us-central1-f"
+            ]
+        );
         assert_eq!(zones.len(), 15);
         let mt = machine_type_zones();
         assert_eq!(mt.len(), 3);
@@ -683,19 +902,34 @@ mod tests {
 
     #[test]
     fn lookup_instance_type_picks_smallest_fitting_tier() {
-        assert_eq!(lookup_instance_type("gcp", 16), ("n1-standard-4", "nvidia-tesla-t4"));
-        assert_eq!(lookup_instance_type("gcp", 17), ("g2-standard-4", "nvidia-l4"));
-        assert_eq!(lookup_instance_type("azure", 24), ("Standard_NC8ads_A10_v4", "nvidia-a10"));
+        assert_eq!(
+            lookup_instance_type("gcp", 16),
+            ("n1-standard-4", "nvidia-tesla-t4")
+        );
+        assert_eq!(
+            lookup_instance_type("gcp", 17),
+            ("g2-standard-4", "nvidia-l4")
+        );
+        assert_eq!(
+            lookup_instance_type("azure", 24),
+            ("Standard_NC8ads_A10_v4", "nvidia-a10")
+        );
         // Oversized request falls back to the largest tier rather than "".
-        assert_eq!(lookup_instance_type("gcp", 1000), ("a4x-highgpu-4g", "nvidia-gb200-192gb"));
-        assert_eq!(lookup_instance_type("aws", 1000), ("p5.4xlarge", "nvidia-h100-80gb"));
+        assert_eq!(
+            lookup_instance_type("gcp", 1000),
+            ("a4x-highgpu-4g", "nvidia-gb200-192gb")
+        );
+        assert_eq!(
+            lookup_instance_type("aws", 1000),
+            ("p5.4xlarge", "nvidia-h100-80gb")
+        );
         // Unknown provider.
         assert_eq!(lookup_instance_type("dcloud", 16), ("", ""));
     }
 
     #[test]
     fn model_policy_is_empty_until_gcs_fetch_is_wired() {
-        assert_eq!(model_policy(), &ModelPolicy::default());
+        assert_eq!(model_policy(), ModelPolicy::default());
         assert!(!is_exclusive_model("any-model"));
         assert!(!is_local_only_model("any-model"));
     }

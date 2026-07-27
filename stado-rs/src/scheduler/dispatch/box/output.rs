@@ -56,8 +56,10 @@ pub fn runtime_paths(job_id: &str) -> RuntimePaths {
 /// the `'"'"'` escape.
 pub(crate) fn shell_quote(s: &str) -> String {
     let safe = !s.is_empty()
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '@' | '%' | '+' | '=' | ',' | ':' | '.' | '/' | '-'));
+        && s.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(c, '_' | '@' | '%' | '+' | '=' | ',' | ':' | '.' | '/' | '-')
+        });
     if safe {
         return s.to_string();
     }
@@ -104,7 +106,12 @@ fn pre_command_prelude(job: &Job) -> String {
 
 /// Python `build_job_command`.
 pub fn build_job_command(job: &Job) -> String {
-    format!("{}{}{}", repo_prelude(job), pre_command_prelude(job), job.command)
+    format!(
+        "{}{}{}",
+        repo_prelude(job),
+        pre_command_prelude(job),
+        job.command
+    )
 }
 
 /// Python `verify_command`.
@@ -124,8 +131,16 @@ fn base64_encode(data: &[u8]) -> String {
         let n = (b0 << 16) | (b1 << 8) | b2;
         out.push(B64[(n >> 18) as usize & 63] as char);
         out.push(B64[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 { B64[(n >> 6) as usize & 63] as char } else { '=' });
-        out.push(if chunk.len() > 2 { B64[n as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            B64[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            B64[n as usize & 63] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -141,7 +156,9 @@ pub fn command_wrapper(job: &Job, paths: &RuntimePaths) -> String {
     let sorted: std::collections::BTreeMap<String, Value> =
         job.resolved_input_artifacts.clone().into_iter().collect();
     let artifact_payload = base64_encode(
-        serde_json::to_string(&sorted).expect("artifact map serialization is infallible").as_bytes(),
+        serde_json::to_string(&sorted)
+            .expect("artifact map serialization is infallible")
+            .as_bytes(),
     );
     let mut lines = vec![
         "#!/bin/bash".to_string(),
@@ -195,7 +212,9 @@ pub fn file_content(value: &Map<String, Value>) -> Result<String, BoxError> {
     };
     match nested.get("content") {
         Some(Value::String(content)) => Ok(content.clone()),
-        _ => Err(BoxError::transport("Box file response omitted string content")),
+        _ => Err(BoxError::transport(
+            "Box file response omitted string content",
+        )),
     }
 }
 
@@ -208,7 +227,9 @@ pub(crate) async fn recover_prompt_id(
 ) -> Result<String, BoxDispatchError> {
     let mut cursor = String::new();
     for _ in 0..EVENT_PAGES {
-        let page = client.list_events(box_id, &cursor, EVENT_LIMIT, "asc", "prompt").await?;
+        let page = client
+            .list_events(box_id, &cursor, EVENT_LIMIT, "asc", "prompt")
+            .await?;
         keepalive.ping().await?;
         for event in &page.events {
             let empty = Map::new();
@@ -217,7 +238,9 @@ pub(crate) async fn recover_prompt_id(
                 _ => &empty,
             };
             let prompt = data.get("prompt").and_then(Value::as_str).unwrap_or("");
-            if event.get("type").and_then(Value::as_str) == Some("prompt") && prompt.starts_with(marker) {
+            if event.get("type").and_then(Value::as_str) == Some("prompt")
+                && prompt.starts_with(marker)
+            {
                 let id = event
                     .get("taskId")
                     .and_then(Value::as_str)
@@ -247,7 +270,9 @@ pub(crate) async fn prompt_output(
     let mut parts: Vec<String> = Vec::new();
     let mut size = 0usize;
     for _ in 0..EVENT_PAGES {
-        let page = client.list_events(box_id, &cursor, EVENT_LIMIT, "asc", "response").await?;
+        let page = client
+            .list_events(box_id, &cursor, EVENT_LIMIT, "asc", "response")
+            .await?;
         keepalive.ping().await?;
         for event in &page.events {
             let empty = Map::new();
@@ -255,11 +280,19 @@ pub(crate) async fn prompt_output(
                 Some(Value::Object(data)) => data,
                 _ => &empty,
             };
-            let Some(content) = data.get("content").and_then(Value::as_str) else { continue };
+            let Some(content) = data.get("content").and_then(Value::as_str) else {
+                continue;
+            };
             if event.get("type").and_then(Value::as_str) != Some("response")
                 || event.get("taskId").and_then(Value::as_str) != Some(prompt_id)
-                || data.get("is_streaming").and_then(Value::as_bool).unwrap_or(false)
-                || data.get("is_reverted").and_then(Value::as_bool).unwrap_or(false)
+                || data
+                    .get("is_streaming")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                || data
+                    .get("is_reverted")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
             {
                 continue;
             }
@@ -285,11 +318,11 @@ fn safe_artifact_path(value: &str) -> Result<String, BoxDispatchError> {
     let path = value.trim();
     // PurePosixPath semantics: absolute paths and any ".." part are
     // rejected; repeated slashes / "." parts normalize away.
-    let bad = path.is_empty()
-        || path.starts_with('/')
-        || path.split('/').any(|part| part == "..");
+    let bad = path.is_empty() || path.starts_with('/') || path.split('/').any(|part| part == "..");
     if bad {
-        return Err(BoxDispatchError::value("Box artifact path must be relative and contained"));
+        return Err(BoxDispatchError::value(
+            "Box artifact path must be relative and contained",
+        ));
     }
     Ok(path.to_string())
 }
@@ -310,12 +343,17 @@ pub(crate) async fn upload_artifacts(
         keepalive.ping().await?;
         let path = safe_artifact_path(source)?;
         if remaining == 0 {
-            return Err(BoxDispatchError::value("Box artifact aggregate byte bound exceeded"));
+            return Err(BoxDispatchError::value(
+                "Box artifact aggregate byte bound exceeded",
+            ));
         }
         let content = client.download_artifact(box_id, &path, remaining).await?;
         remaining -= content.len();
-        let destination =
-            format!("status/{}/output/artifacts/{}", job.job_id, path.replace('/', "_"));
+        let destination = format!(
+            "status/{}/output/artifacts/{}",
+            job.job_id,
+            path.replace('/', "_")
+        );
         store.upload_bytes(&destination, &content).await?;
         keepalive.ping().await?;
     }
@@ -328,7 +366,10 @@ mod tests {
 
     #[test]
     fn shell_quote_matches_shlex() {
-        assert_eq!(shell_quote("abc-DEF_123/@%+=:,./-"), "abc-DEF_123/@%+=:,./-");
+        assert_eq!(
+            shell_quote("abc-DEF_123/@%+=:,./-"),
+            "abc-DEF_123/@%+=:,./-"
+        );
         assert_eq!(shell_quote(""), "''");
         assert_eq!(shell_quote("a b"), "'a b'");
         assert_eq!(shell_quote("it's"), "'it'\"'\"'s'");
@@ -374,7 +415,10 @@ mod tests {
         job.repo_extras = String::new();
         job.repo_workdir = "custom-dir".into();
         let cmd = build_job_command(&job);
-        assert!(cmd.starts_with("rm -rf custom-dir && git clone --depth 1"), "{cmd}");
+        assert!(
+            cmd.starts_with("rm -rf custom-dir && git clone --depth 1"),
+            "{cmd}"
+        );
         assert!(!cmd.contains("pip install"), "{cmd}");
     }
 
@@ -382,16 +426,27 @@ mod tests {
     fn command_wrapper_bounds_logs_and_writes_exit() {
         let mut job = Job::new("j9", "echo 'hi there'");
         job.verify_command = "test -f out".into();
-        job.resolved_input_artifacts.insert("b".into(), Value::from(1));
-        job.resolved_input_artifacts.insert("a".into(), Value::from(2));
+        job.resolved_input_artifacts
+            .insert("b".into(), Value::from(1));
+        job.resolved_input_artifacts
+            .insert("a".into(), Value::from(2));
         let script = command_wrapper(&job, &runtime_paths("j9"));
-        assert!(script.starts_with("#!/bin/bash\nset +e\numask 077\n"), "{script}");
+        assert!(
+            script.starts_with("#!/bin/bash\nset +e\numask 077\n"),
+            "{script}"
+        );
         // sorted compact JSON: {"a":2,"b":1} -> eyJhIjoyLCJiIjoxfQ==
         assert!(script.contains("eyJhIjoyLCJiIjoxfQ=="), "{script}");
-        assert!(script.contains("bash -lc 'echo '\"'\"'hi there'\"'\"''"), "{script}");
+        assert!(
+            script.contains("bash -lc 'echo '\"'\"'hi there'\"'\"''"),
+            "{script}"
+        );
         assert!(script.contains("tail -c 57344"), "{script}");
         assert!(script.contains("bash -lc 'test -f out'"), "{script}");
-        assert!(script.contains("printf '%s' \"$rc\" >.stado/j9/exit_code"), "{script}");
+        assert!(
+            script.contains("printf '%s' \"$rc\" >.stado/j9/exit_code"),
+            "{script}"
+        );
         assert!(script.ends_with("exit \"$rc\"\n"), "{script}");
     }
 
@@ -401,7 +456,10 @@ mod tests {
         assert_eq!(file_content(&flat).unwrap(), "data");
         let nested = Map::from_iter([(
             "file".to_string(),
-            Value::Object(Map::from_iter([("content".to_string(), Value::from("deep"))])),
+            Value::Object(Map::from_iter([(
+                "content".to_string(),
+                Value::from("deep"),
+            )])),
         )]);
         assert_eq!(file_content(&nested).unwrap(), "deep");
         let bad = Map::from_iter([("content".to_string(), Value::from(3))]);

@@ -85,7 +85,12 @@ impl BoxDispatchError {
 
 /// Python `_log_failure`.
 fn log_failure(job_id: &str, exc: &BoxDispatchError) {
-    let text: String = exc.to_string().replace(['\r', '\n'], " ").chars().take(512).collect();
+    let text: String = exc
+        .to_string()
+        .replace(['\r', '\n'], " ")
+        .chars()
+        .take(512)
+        .collect();
     eprintln!("[box] job={job_id} {}: {text}", exc.type_name());
 }
 
@@ -130,9 +135,27 @@ pub async fn dispatch_box_jobs(
     provider: &BoxProvider,
     owner_id: &str,
 ) -> Result<i64, BoxDispatchError> {
+    // Maintenance-mode gate (queue::control). Box dispatch is the OTHER
+    // queue/ -> running/ mover in the coordinator tick, so a pause has to
+    // stop it too or `stado queue drain --wait` would watch running/ grow
+    // while it waits. Only the ADMIT half is gated: run_box_tick's
+    // reconcile pass still drives already-leased boxes to completion —
+    // the same asymmetry the local agent has between advance_slot and its
+    // claim scan.
+    let queue_control = crate::queue::control::read(store).await?;
+    if queue_control.paused {
+        eprintln!(
+            "[box] queue paused ({}); admitting no new jobs",
+            queue_control.pause_summary()
+        );
+        return Ok(i64::default());
+    }
     let leases = ProviderLeaseStore::new(store.clone());
     let mut scheduled: i64 = 0;
-    for mut job in store.list_jobs_priority_first("queue", QUEUE_SCAN_CAP).await? {
+    for mut job in store
+        .list_jobs_priority_first("queue", QUEUE_SCAN_CAP)
+        .await?
+    {
         if !matches!(job.provider.as_str(), "box" | "box-ascii") {
             continue;
         }
@@ -145,13 +168,22 @@ pub async fn dispatch_box_jobs(
             fail_queued(store, &mut job, &decision.reasons.join("; ")).await?;
             continue;
         }
-        let resource_ttl =
-            if job.box_ttl_seconds != 0 { job.box_ttl_seconds } else { provider.ttl_seconds };
+        let resource_ttl = if job.box_ttl_seconds != 0 {
+            job.box_ttl_seconds
+        } else {
+            provider.ttl_seconds
+        };
         let mut lease: Option<ProviderLease> = None;
         let mut resource_recorded = false;
         let outcome: Result<bool, BoxDispatchError> = async {
             let mut acquired = leases
-                .acquire(&job.job_id, "box", owner_id, OWNER_TTL_SECONDS, resource_ttl)
+                .acquire(
+                    &job.job_id,
+                    "box",
+                    owner_id,
+                    OWNER_TTL_SECONDS,
+                    resource_ttl,
+                )
                 .await?;
             let scheduled = provision_and_move(
                 store,
@@ -278,23 +310,38 @@ async fn reconcile_one(
         return Ok(true);
     }
     if lease.provider_resource_id.is_empty() {
-        runtime.fail(job, lease, "Box lease has no provider resource", true).await?;
+        runtime
+            .fail(job, lease, "Box lease has no provider resource", true)
+            .await?;
         return Ok(true);
     }
     let box_state = box_state(provider, lease).await?;
     if box_state == "gone" || box_state == "archived" {
         runtime
-            .fail(job, lease, &format!("Box became {box_state} before completion"), true)
+            .fail(
+                job,
+                lease,
+                &format!("Box became {box_state} before completion"),
+                true,
+            )
             .await?;
         return Ok(true);
     }
     if box_state == "error" {
-        runtime.fail(job, lease, "Box entered error state", false).await?;
+        runtime
+            .fail(job, lease, "Box entered error state", false)
+            .await?;
         return Ok(true);
     }
-    let ttl = if job.box_ttl_seconds != 0 { job.box_ttl_seconds } else { provider.ttl_seconds };
+    let ttl = if job.box_ttl_seconds != 0 {
+        job.box_ttl_seconds
+    } else {
+        provider.ttl_seconds
+    };
     if renewed_state(&lease.state) {
-        provider.renew_box(&lease.provider_resource_id, Some(ttl)).await?;
+        provider
+            .renew_box(&lease.provider_resource_id, Some(ttl))
+            .await?;
         let (owner, token) = (lease.owner_id.clone(), lease.fence_token.clone());
         lease.renew_resource(&owner, &token, ttl)?;
         lease.renew_owner(&owner, &token, OWNER_TTL_SECONDS)?;
@@ -319,7 +366,12 @@ async fn reconcile_one(
                         let age = (Utc::now() - started).num_seconds();
                         if age >= START_RECOVERY_SECONDS {
                             runtime
-                                .fail(job, lease, "Box start did not recover before deadline", false)
+                                .fail(
+                                    job,
+                                    lease,
+                                    "Box start did not recover before deadline",
+                                    false,
+                                )
                                 .await?;
                             return Ok(true);
                         }
@@ -338,7 +390,10 @@ async fn reconcile_one(
             .await?;
         return Ok(true);
     }
-    Err(BoxDispatchError::runtime(format!("unhandled Box lease state {}", lease.state)))
+    Err(BoxDispatchError::runtime(format!(
+        "unhandled Box lease state {}",
+        lease.state
+    )))
 }
 
 /// Python `reconcile_box_jobs`: advance every persisted lease state
@@ -355,7 +410,11 @@ pub async fn reconcile_box_jobs(
         if !matches!(job.provider.as_str(), "box" | "box-ascii") {
             continue;
         }
-        let ttl = if job.box_ttl_seconds != 0 { job.box_ttl_seconds } else { provider.ttl_seconds };
+        let ttl = if job.box_ttl_seconds != 0 {
+            job.box_ttl_seconds
+        } else {
+            provider.ttl_seconds
+        };
         let mut lease = match leases
             .acquire(&job.job_id, "box", owner_id, OWNER_TTL_SECONDS, ttl)
             .await
@@ -390,7 +449,11 @@ pub async fn cancel_box_job(
 ) -> Result<(), BoxDispatchError> {
     let leases = ProviderLeaseStore::new(store.clone());
     let session_owner = format!("{owner_id}:{}", Uuid::new_v4().simple());
-    let ttl = if job.box_ttl_seconds != 0 { job.box_ttl_seconds } else { provider.ttl_seconds };
+    let ttl = if job.box_ttl_seconds != 0 {
+        job.box_ttl_seconds
+    } else {
+        provider.ttl_seconds
+    };
     let mut lease = leases
         .acquire(&job.job_id, "box", &session_owner, OWNER_TTL_SECONDS, ttl)
         .await?;
@@ -412,7 +475,11 @@ pub async fn cancel_box_for_legacy_move(
 ) -> Result<(), BoxDispatchError> {
     let leases = ProviderLeaseStore::new(store.clone());
     let session_owner = format!("{owner_id}:{}", Uuid::new_v4().simple());
-    let ttl = if job.box_ttl_seconds != 0 { job.box_ttl_seconds } else { provider.ttl_seconds };
+    let ttl = if job.box_ttl_seconds != 0 {
+        job.box_ttl_seconds
+    } else {
+        provider.ttl_seconds
+    };
     let mut lease = leases
         .acquire(&job.job_id, "box", &session_owner, OWNER_TTL_SECONDS, ttl)
         .await?;
@@ -492,7 +559,9 @@ mod tests {
         http_response(
             200,
             "OK",
-            &format!(r#"{{"ok": true, "type": "box.info", "box": {{"id": "{BX}", "state": "{state}"}}}}"#),
+            &format!(
+                r#"{{"ok": true, "type": "box.info", "box": {{"id": "{BX}", "state": "{state}"}}}}"#
+            ),
         )
     }
 
@@ -538,7 +607,11 @@ mod tests {
         // Tick 1: dispatch admits the pinned box job and allocates a box.
         let n = run_box_tick(&store, &provider, "coord").await.unwrap();
         assert_eq!(n, 1);
-        let running = store.read_job("running", "j1").await.unwrap().expect("job in running/");
+        let running = store
+            .read_job("running", "j1")
+            .await
+            .unwrap()
+            .expect("job in running/");
         assert_eq!(running.instance_ref.as_deref(), Some(BX));
         let leases = ProviderLeaseStore::new(store.clone());
         let lease = leases.load("j1").await.unwrap().unwrap();
@@ -559,14 +632,24 @@ mod tests {
         let lease = leases.load("j1").await.unwrap().unwrap();
         assert_eq!(lease.state, "released");
         assert_eq!(lease.result_state, "completed");
-        let completed = store.read_job("completed", "j1").await.unwrap().expect("job in completed/");
+        let completed = store
+            .read_job("completed", "j1")
+            .await
+            .unwrap()
+            .expect("job in completed/");
         assert!(completed.completed_at.is_some());
         assert!(store.read_job("running", "j1").await.unwrap().is_none());
-        let stdout =
-            store.download_text("status/j1/output/command_stdout.log").await.unwrap().unwrap();
+        let stdout = store
+            .download_text("status/j1/output/command_stdout.log")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(stdout, "hello world");
-        let stderr =
-            store.download_text("status/j1/output/command_stderr.log").await.unwrap().unwrap();
+        let stderr = store
+            .download_text("status/j1/output/command_stderr.log")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(stderr, "");
 
         // Endpoint-level assertions over the recorded request sequence.
@@ -575,18 +658,38 @@ mod tests {
         assert_eq!(requests.len(), 13, "{requests:?}");
         assert!(requests[0].starts_with("GET /limits "), "{}", requests[0]);
         assert!(requests[1].starts_with("POST /boxes "), "{}", requests[1]);
-        assert!(requests[2].starts_with("GET /boxes/bx_2abcdefg "), "{}", requests[2]);
-        assert!(requests[3].starts_with("PATCH /boxes/bx_2abcdefg "), "{}", requests[3]);
-        assert!(requests[4].starts_with("PUT /boxes/bx_2abcdefg/files "), "{}", requests[4]);
+        assert!(
+            requests[2].starts_with("GET /boxes/bx_2abcdefg "),
+            "{}",
+            requests[2]
+        );
+        assert!(
+            requests[3].starts_with("PATCH /boxes/bx_2abcdefg "),
+            "{}",
+            requests[3]
+        );
+        assert!(
+            requests[4].starts_with("PUT /boxes/bx_2abcdefg/files "),
+            "{}",
+            requests[4]
+        );
         // run.sh contents: the idempotent command wrapper.
         assert!(requests[4].contains(".stado/j1/run.sh"), "{}", requests[4]);
-        assert!(requests[5].starts_with("POST /boxes/bx_2abcdefg/commands "), "{}", requests[5]);
+        assert!(
+            requests[5].starts_with("POST /boxes/bx_2abcdefg/commands "),
+            "{}",
+            requests[5]
+        );
         // The launch shell is exit-file/marker/pid guarded (idempotent).
         assert!(requests[5].contains("launch_intent"), "{}", requests[5]);
         assert!(requests[8].contains("exit_code"), "{}", requests[8]);
         assert!(requests[9].contains("stdout.log"), "{}", requests[9]);
         assert!(requests[10].contains("stderr.log"), "{}", requests[10]);
-        assert!(requests[12].starts_with("POST /boxes/bx_2abcdefg/stop "), "{}", requests[12]);
+        assert!(
+            requests[12].starts_with("POST /boxes/bx_2abcdefg/stop "),
+            "{}",
+            requests[12]
+        );
     }
 
     /// A queued job pinned to box that fails admission is moved to
@@ -606,8 +709,15 @@ mod tests {
 
         let n = dispatch_box_jobs(&store, &provider, "coord").await.unwrap();
         assert_eq!(n, 0);
-        let failed = store.read_job("failed", "j-unpinned").await.unwrap().unwrap();
-        assert_eq!(failed.error.as_deref(), Some("Box jobs must set pin_to_provider=true"));
+        let failed = store
+            .read_job("failed", "j-unpinned")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            failed.error.as_deref(),
+            Some("Box jobs must set pin_to_provider=true")
+        );
         let failed = store.read_job("failed", "j-gpu").await.unwrap().unwrap();
         assert_eq!(failed.error.as_deref(), Some("target has no accelerator"));
         // Nothing was allocated; no HTTP calls, no leases.
@@ -638,19 +748,27 @@ mod tests {
 
         let server = mock_http(vec![
             // renew_box PATCH (state is RUNNING -> renewed).
-            http_response(404, "Not Found", r#"{"code": "box_not_found", "message": "gone"}"#),
+            http_response(
+                404,
+                "Not Found",
+                r#"{"code": "box_not_found", "message": "gone"}"#,
+            ),
         ])
         .await;
         let provider = provider_for(&server.base_url);
         // box_state maps the 404 to "gone" -> fail(resource_released=true)
         // drives the lease straight to RELEASED without a provider call.
-        let n = reconcile_box_jobs(&store, &provider, "coord").await.unwrap();
+        let n = reconcile_box_jobs(&store, &provider, "coord")
+            .await
+            .unwrap();
         assert_eq!(n, 1);
         server.stop();
         let lease = leases.load("j2").await.unwrap().unwrap();
         assert_eq!(lease.state, "released");
         assert_eq!(lease.result_state, "failed");
-        assert!(lease.last_error.contains("Box became gone before completion"));
+        assert!(lease
+            .last_error
+            .contains("Box became gone before completion"));
         let failed = store.read_job("failed", "j2").await.unwrap().unwrap();
         assert_eq!(
             failed.error.as_deref(),

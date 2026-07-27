@@ -14,6 +14,21 @@
 //! - [`host_users`] — `stado host user create`: account creation on
 //!   registry hosts over SSH; the password travels only on SSH stdin.
 //!
+//! The read-only `stado host ...` commands of `docs/missing-commands.md`
+//! items two through six have NO Python original. They all ride one
+//! channel, [`host_channel`], which is the option set and report shape of
+//! [`host_reboot`] factored out:
+//!
+//! - [`host_uptime`] — `stado host uptime`: uptime, load averages, logins.
+//! - [`host_ping`] — `stado host ping`: ssh reachability AND health-beacon
+//!   age, combined into the worse of the two verdicts.
+//! - [`host_disk`] — `stado host disk`: `df` plus the registry cleanup
+//!   policy and the janitor's own recorded state.
+//! - [`host_cleanup`] — `stado host cleanup --dry-run`: drives the host's
+//!   own janitor in preview mode; contains no cleanup policy itself.
+//! - [`host_exec`] — `stado host exec`: one command from a fixed
+//!   read-only allowlist. Not a shell.
+//!
 //! Every subprocess is orchestrated through the [`Runner`] seam so tests
 //! can inject a fake command runner and never spawn real
 //! ssh/launchctl/systemctl. The production runner is
@@ -31,11 +46,19 @@ use futures::future::BoxFuture;
 
 pub mod bootstrap;
 pub mod host_build_caches;
+pub mod host_channel;
+pub mod host_cleanup;
+pub mod host_disk;
+pub mod host_exec;
 pub mod host_gui_automation;
-pub mod host_user_delete;
+pub mod host_ping;
+pub mod host_reboot;
 pub mod host_recovery;
+pub mod host_uptime;
+pub mod host_user_delete;
 pub mod host_users;
 pub mod local_install;
+pub mod service;
 
 /// Deploy-layer failure carrying the exact Python exception message
 /// (RuntimeError / ValueError / LookupError text). The CLI maps it to a
@@ -69,7 +92,11 @@ pub struct CommandSpec {
 impl CommandSpec {
     /// A command with no stdin payload and no timeout.
     pub fn new(argv: Vec<String>) -> Self {
-        Self { argv, stdin: None, timeout: None }
+        Self {
+            argv,
+            stdin: None,
+            timeout: None,
+        }
     }
 }
 
@@ -182,7 +209,10 @@ pub fn shlex_quote(value: &str) -> String {
     }
     let safe = |b: u8| {
         b.is_ascii_alphanumeric()
-            || matches!(b, b'_' | b'@' | b'%' | b'+' | b'=' | b':' | b',' | b'.' | b'/' | b'-')
+            || matches!(
+                b,
+                b'_' | b'@' | b'%' | b'+' | b'=' | b':' | b',' | b'.' | b'/' | b'-'
+            )
     };
     if value.bytes().all(safe) {
         return value.to_string();
@@ -194,7 +224,11 @@ pub fn shlex_quote(value: &str) -> String {
 /// quotes when the value contains a single quote but no double quote;
 /// backslash, the quote char, and `\n`/`\r`/`\t` are escaped.
 pub fn py_str_repr(value: &str) -> String {
-    let quote = if value.contains('\'') && !value.contains('"') { '"' } else { '\'' };
+    let quote = if value.contains('\'') && !value.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
     let mut out = String::new();
     out.push(quote);
     for ch in value.chars() {
@@ -253,9 +287,18 @@ mod tests {
     fn shlex_quote_matches_python() {
         // Cases verified against CPython shlex.quote.
         assert_eq!(shlex_quote(""), "''");
-        assert_eq!(shlex_quote("wisent-compute-agent.service"), "wisent-compute-agent.service");
-        assert_eq!(shlex_quote("/etc/systemd/system/x.service"), "/etc/systemd/system/x.service");
-        assert_eq!(shlex_quote("wisent@mini-one.local"), "wisent@mini-one.local");
+        assert_eq!(
+            shlex_quote("wisent-compute-agent.service"),
+            "wisent-compute-agent.service"
+        );
+        assert_eq!(
+            shlex_quote("/etc/systemd/system/x.service"),
+            "/etc/systemd/system/x.service"
+        );
+        assert_eq!(
+            shlex_quote("wisent@mini-one.local"),
+            "wisent@mini-one.local"
+        );
         assert_eq!(shlex_quote("Ada Lovelace"), "'Ada Lovelace'");
         assert_eq!(shlex_quote("it's"), "'it'\"'\"'s'");
         assert_eq!(shlex_quote("a b'c"), "'a b'\"'\"'c'");
@@ -266,7 +309,10 @@ mod tests {
         assert_eq!(py_str_repr("mini-one"), "'mini-one'");
         assert_eq!(py_str_repr("it's"), "\"it's\"");
         assert_eq!(py_str_repr("a\nb"), "'a\\nb'");
-        assert_eq!(py_list_repr(&["a".to_string(), "b".to_string()]), "['a', 'b']");
+        assert_eq!(
+            py_list_repr(&["a".to_string(), "b".to_string()]),
+            "['a', 'b']"
+        );
         assert_eq!(
             py_dict_repr(&[("PYTHONUNBUFFERED".to_string(), "1".to_string())]),
             "{'PYTHONUNBUFFERED': '1'}"
@@ -309,6 +355,9 @@ mod tests {
         })
         .await
         .unwrap_err();
-        assert_eq!(err, "Command '['/bin/sleep', '5']' timed out after 0 seconds");
+        assert_eq!(
+            err,
+            "Command '['/bin/sleep', '5']' timed out after 0 seconds"
+        );
     }
 }

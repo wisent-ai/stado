@@ -117,6 +117,14 @@ impl Default for SubmitOptions {
     }
 }
 
+/// The SKU the CPU branch of [`submit_via_gcs`] writes: no accelerator was
+/// asked for and the command sized to nothing. Named because it is also a
+/// *readback* marker — `cli::job` recognizes a job that came out of that
+/// branch by this machine_type, and must then resubmit with the routing
+/// flags left empty rather than pinning them (pinning any of them flips
+/// `caller_asked_for_gpu` and stamps an accelerator onto a CPU job).
+pub const CPU_MACHINE_TYPE: &str = "e2-standard-8";
+
 /// `os.urandom(4).hex()` — 4 random bytes as 8 hex chars.
 pub fn generate_job_id() -> String {
     hex::encode(&uuid::Uuid::new_v4().as_bytes()[..4])
@@ -125,14 +133,20 @@ pub fn generate_job_id() -> String {
 /// COMPUTE_API_KEY env var, stripped (Python `_api_key()` in cli.py and the
 /// inline reads in submit.py).
 pub fn compute_api_key() -> String {
-    std::env::var("COMPUTE_API_KEY").unwrap_or_default().trim().to_string()
+    std::env::var("COMPUTE_API_KEY")
+        .unwrap_or_default()
+        .trim()
+        .to_string()
 }
 
 /// Render a startup-script template: naive sequential `${KEY}` replacement,
 /// exactly Python `str.replace(f"${{{key}}}", str(value))` per variable.
 /// Variables not present in the template are ignored; `${...}` placeholders
 /// with no matching variable are left untouched (Python parity).
-fn render_template(template_name: &str, variables: &[(String, String)]) -> Result<String, SubmitError> {
+fn render_template(
+    template_name: &str,
+    variables: &[(String, String)],
+) -> Result<String, SubmitError> {
     let mut content = std::fs::read_to_string(template_dir().join(template_name))?;
     for (key, value) in variables {
         content = content.replace(&format!("${{{key}}}"), value);
@@ -150,11 +164,18 @@ fn render_repo_block(repo: &str, workdir: &str, extras: &str) -> String {
     // Default workdir = repo basename without .git
     let workdir = if workdir.is_empty() {
         let basename = repo.trim_end_matches('/').rsplit('/').next().unwrap_or("");
-        basename.strip_suffix(".git").unwrap_or(basename).to_string()
+        basename
+            .strip_suffix(".git")
+            .unwrap_or(basename)
+            .to_string()
     } else {
         workdir.to_string()
     };
-    let install = if extras.is_empty() { String::new() } else { format!("pip install -e '.[{extras}]'") };
+    let install = if extras.is_empty() {
+        String::new()
+    } else {
+        format!("pip install -e '.[{extras}]'")
+    };
     format!("git clone --depth 1 {repo} {workdir}\ncd {workdir}\n{install}\ncd $WORK\n")
 }
 
@@ -216,7 +237,10 @@ fn submitter() -> String {
 /// batches submit sequentially. Returns the submitted jobs (the Python
 /// `return_jobs=True` form — the CLI's single-job path echoes the id so
 /// callers can watch the job, not the batch).
-pub async fn submit_batch(commands: &[String], options: &SubmitOptions) -> Result<Vec<Job>, SubmitError> {
+pub async fn submit_batch(
+    commands: &[String],
+    options: &SubmitOptions,
+) -> Result<Vec<Job>, SubmitError> {
     let mut options = options.clone();
     if options.run_id.is_empty() {
         options.run_id = generate_run_id();
@@ -239,7 +263,11 @@ pub async fn submit_batch(commands: &[String], options: &SubmitOptions) -> Resul
     };
 
     if compute_api_key().is_empty() {
-        let bucket = if options.bucket.is_empty() { config::bucket() } else { options.bucket.as_str() };
+        let bucket = if options.bucket.is_empty() {
+            config::bucket()
+        } else {
+            options.bucket.as_str()
+        };
         let store = JobStorage::with_bucket(bucket).await?;
         write_run_manifest(
             &store,
@@ -250,7 +278,10 @@ pub async fn submit_batch(commands: &[String], options: &SubmitOptions) -> Resul
                 submitted_by: &submitter(),
                 submitted_from: &hostname(),
                 commands,
-                job_ids: &jobs.iter().map(|job| job.job_id.clone()).collect::<Vec<_>>(),
+                job_ids: &jobs
+                    .iter()
+                    .map(|job| job.job_id.clone())
+                    .collect::<Vec<_>>(),
             },
         )
         .await?;
@@ -303,13 +334,20 @@ async fn estimate_gpu_mem(command: &str) -> Result<i64, SubmitError> {
 /// API-path submit (Python `_submit_via_api`): POST
 /// `{COMPUTE_API}/api/v1/instances` with the X-API-Key header. Python used
 /// stdlib urllib; here reqwest.
-async fn submit_via_api(command: &str, api_key: &str, options: &SubmitOptions) -> Result<Job, SubmitError> {
+async fn submit_via_api(
+    command: &str,
+    api_key: &str,
+    options: &SubmitOptions,
+) -> Result<Job, SubmitError> {
     let gpu_mem = estimate_gpu_mem(command).await?;
     let mut env_vars = Map::new();
     let hf_token = std::env::var("HF_TOKEN").unwrap_or_default();
     if !hf_token.is_empty() {
         env_vars.insert("HF_TOKEN".into(), Value::from(hf_token.as_str()));
-        env_vars.insert("HUGGING_FACE_HUB_TOKEN".into(), Value::from(hf_token.as_str()));
+        env_vars.insert(
+            "HUGGING_FACE_HUB_TOKEN".into(),
+            Value::from(hf_token.as_str()),
+        );
     }
     if !options.resolved_input_artifacts.is_empty() {
         env_vars.insert(
@@ -323,7 +361,10 @@ async fn submit_via_api(command: &str, api_key: &str, options: &SubmitOptions) -
     let generated = generate_job_id();
     // Key order matches the Python dict literal.
     let mut payload = Map::new();
-    payload.insert("docker_image".into(), Value::from("pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime"));
+    payload.insert(
+        "docker_image".into(),
+        Value::from("pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime"),
+    );
     payload.insert("docker_cmd".into(), Value::from(command));
     payload.insert("docker_env".into(), Value::Object(env_vars));
     payload.insert("disk_gb".into(), Value::from(50));
@@ -340,12 +381,24 @@ async fn submit_via_api(command: &str, api_key: &str, options: &SubmitOptions) -
     let status = response.status();
     let body = response.text().await?;
     if !status.is_success() {
-        return Err(SubmitError::Api(format!("API error {}: {}", status.as_u16(), body)));
+        return Err(SubmitError::Api(format!(
+            "API error {}: {}",
+            status.as_u16(),
+            body
+        )));
     }
     let data: Value = serde_json::from_str(&body)?;
-    let instance_id = data.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+    let instance_id = data
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
     let mut job = Job::new(
-        if instance_id.is_empty() { generated } else { instance_id.clone() },
+        if instance_id.is_empty() {
+            generated
+        } else {
+            instance_id.clone()
+        },
         command,
     );
     job.gpu_mem_gb = gpu_mem;
@@ -371,22 +424,35 @@ async fn submit_via_api(command: &str, api_key: &str, options: &SubmitOptions) -
 ///   4. machine_type argument — caller-pinned GCE machine type, taken
 ///      verbatim. Use this for non-cataloged SKUs.
 async fn submit_via_gcs(command: &str, options: &SubmitOptions) -> Result<Job, SubmitError> {
-    let bucket = if options.bucket.is_empty() { config::bucket().to_string() } else { options.bucket.clone() };
+    let bucket = if options.bucket.is_empty() {
+        config::bucket().to_string()
+    } else {
+        options.bucket.clone()
+    };
     let job_id = generate_job_id();
 
     let caller_asked_for_gpu =
         !options.gpu_type.is_empty() || options.vram_gb > 0 || !options.machine_type.is_empty();
-    let mut gpu_mem = if options.vram_gb > 0 { options.vram_gb } else { estimate_gpu_mem(command).await? };
+    let mut gpu_mem = if options.vram_gb > 0 {
+        options.vram_gb
+    } else {
+        estimate_gpu_mem(command).await?
+    };
 
     let machine_type: String;
     let accel_type: String;
     if !caller_asked_for_gpu && gpu_mem == 0 {
         // CPU path — no GPU requirements, no regex hit. Same as pre-0.4.122.
-        machine_type = "e2-standard-8".into();
+        machine_type = CPU_MACHINE_TYPE.into();
         accel_type = String::new();
     } else {
-        let (inferred_machine, inferred_accel) = config::lookup_instance_type(&options.provider, gpu_mem);
-        accel_type = if options.gpu_type.is_empty() { inferred_accel.to_string() } else { options.gpu_type.clone() };
+        let (inferred_machine, inferred_accel) =
+            config::lookup_instance_type(&options.provider, gpu_mem);
+        accel_type = if options.gpu_type.is_empty() {
+            inferred_accel.to_string()
+        } else {
+            options.gpu_type.clone()
+        };
         if !options.machine_type.is_empty() {
             // caller-pinned, take verbatim
             machine_type = options.machine_type.clone();
@@ -395,7 +461,9 @@ async fn submit_via_gcs(command: &str, options: &SubmitOptions) -> Result<Job, S
             // machine_type from GPU_SIZING by matching accel label.
             let empty = BTreeMap::new();
             let sizing = GPU_SIZING.get(options.provider.as_str()).unwrap_or(&empty);
-            let matched = sizing.iter().find(|(_, (_, accel))| *accel == options.gpu_type);
+            let matched = sizing
+                .iter()
+                .find(|(_, (_, accel))| *accel == options.gpu_type);
             match matched {
                 Some((mem, (machine, _))) => {
                     machine_type = machine.to_string();
@@ -413,7 +481,11 @@ async fn submit_via_gcs(command: &str, options: &SubmitOptions) -> Result<Job, S
     let hf_token = std::env::var("HF_TOKEN").unwrap_or_default();
     let gh_token = std::env::var("GH_TOKEN").unwrap_or_default();
 
-    let template = if gpu_mem > 0 { "startup_gpu.sh" } else { "startup_cpu.sh" };
+    let template = if gpu_mem > 0 {
+        "startup_gpu.sh"
+    } else {
+        "startup_cpu.sh"
+    };
     let script = render_template(
         template,
         &[
@@ -421,8 +493,14 @@ async fn submit_via_gcs(command: &str, options: &SubmitOptions) -> Result<Job, S
             ("COMMAND".into(), command.to_string()),
             ("HF_TOKEN".into(), hf_token),
             ("GH_TOKEN".into(), gh_token),
-            ("WISENT_VERSION".into(), std::env::var("WISENT_VERSION").unwrap_or_else(|_| "latest".into())),
-            ("REPO_BLOCK".into(), render_repo_block(&options.repo, &options.repo_workdir, &options.repo_extras)),
+            (
+                "WISENT_VERSION".into(),
+                std::env::var("WISENT_VERSION").unwrap_or_else(|_| "latest".into()),
+            ),
+            (
+                "REPO_BLOCK".into(),
+                render_repo_block(&options.repo, &options.repo_workdir, &options.repo_extras),
+            ),
             ("PRE_COMMAND".into(), options.pre_command.clone()),
             ("APT_PACKAGES".into(), options.apt_packages.join(" ")),
             (
@@ -482,7 +560,11 @@ async fn submit_via_gcs(command: &str, options: &SubmitOptions) -> Result<Job, S
 /// `JobStorage(bucket or BUCKET)` — exposed for consumers (cancel, status)
 /// that follow the same pattern.
 pub async fn default_store(bucket: &str) -> Result<JobStorage, StorageError> {
-    let bucket = if bucket.is_empty() { config::bucket() } else { bucket };
+    let bucket = if bucket.is_empty() {
+        config::bucket()
+    } else {
+        bucket
+    };
     JobStorage::with_bucket(bucket).await
 }
 
@@ -509,7 +591,10 @@ mod tests {
         );
         // Explicit workdir + empty extras skips the install line content.
         let block = render_repo_block("https://github.com/org/repo", "wd", "");
-        assert_eq!(block, "git clone --depth 1 https://github.com/org/repo wd\ncd wd\n\ncd $WORK\n");
+        assert_eq!(
+            block,
+            "git clone --depth 1 https://github.com/org/repo wd\ncd wd\n\ncd $WORK\n"
+        );
     }
 
     #[test]
@@ -523,9 +608,16 @@ mod tests {
 
     #[tokio::test]
     async fn yieldable_without_command_is_refused() {
-        let options = SubmitOptions { yieldable: true, ..Default::default() };
+        let options = SubmitOptions {
+            yieldable: true,
+            ..Default::default()
+        };
         let err = submit_job("echo hi", &options).await.unwrap_err();
-        assert!(err.to_string().starts_with("yieldable=True requires a yield_command"), "{err}");
+        assert!(
+            err.to_string()
+                .starts_with("yieldable=True requires a yield_command"),
+            "{err}"
+        );
     }
 
     #[tokio::test]
@@ -579,7 +671,10 @@ mod tests {
         let mut job = Job::new("abcd1234", "echo hi");
         job.gpu_mem_gb = 0;
         job.machine_type = "e2-standard-8".into();
-        store.upload_script("abcd1234", "#!/bin/bash\n").await.unwrap();
+        store
+            .upload_script("abcd1234", "#!/bin/bash\n")
+            .await
+            .unwrap();
         store.write_job("queue", &job).await.unwrap();
         let back = store.read_job("queue", "abcd1234").await.unwrap().unwrap();
         assert_eq!(back.machine_type, "e2-standard-8");

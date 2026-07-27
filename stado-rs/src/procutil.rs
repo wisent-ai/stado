@@ -15,7 +15,11 @@ use std::time::{Duration, Instant};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Capture {
     /// The child exited on its own.
-    Completed { rc: i32, stdout: String, stderr: String },
+    Completed {
+        rc: i32,
+        stdout: String,
+        stderr: String,
+    },
     /// The deadline passed; the child was killed and reaped. stdout/stderr
     /// hold whatever the child wrote before the kill (Python
     /// `TimeoutExpired.stdout` / `.stderr`).
@@ -27,7 +31,10 @@ pub(crate) enum Capture {
 /// `except Exception` branch / `FileNotFoundError`).
 pub(crate) fn run_capture(argv: &[String], timeout: Duration) -> std::io::Result<Capture> {
     let Some(program) = argv.first() else {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "empty argv"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "empty argv",
+        ));
     };
     let mut child = Command::new(program)
         .args(&argv[1..])
@@ -36,10 +43,16 @@ pub(crate) fn run_capture(argv: &[String], timeout: Duration) -> std::io::Result
         .spawn()?;
     let mut out_pipe = child.stdout.take().expect("stdout piped");
     let mut err_pipe = child.stderr.take().expect("stderr piped");
-    let out_thread =
-        thread::spawn(move || -> Vec<u8> { let mut buf = Vec::new(); out_pipe.read_to_end(&mut buf).ok(); buf });
-    let err_thread =
-        thread::spawn(move || -> Vec<u8> { let mut buf = Vec::new(); err_pipe.read_to_end(&mut buf).ok(); buf });
+    let out_thread = thread::spawn(move || -> Vec<u8> {
+        let mut buf = Vec::new();
+        out_pipe.read_to_end(&mut buf).ok();
+        buf
+    });
+    let err_thread = thread::spawn(move || -> Vec<u8> {
+        let mut buf = Vec::new();
+        err_pipe.read_to_end(&mut buf).ok();
+        buf
+    });
     let deadline = Instant::now() + timeout;
     loop {
         match child.try_wait()? {
@@ -84,7 +97,11 @@ mod tests {
         .unwrap();
         assert_eq!(
             cap,
-            Capture::Completed { rc: 3, stdout: "out\n".into(), stderr: "err\n".into() }
+            Capture::Completed {
+                rc: 3,
+                stdout: "out\n".into(),
+                stderr: "err\n".into()
+            }
         );
     }
 
@@ -95,11 +112,21 @@ mod tests {
             Duration::from_millis(300),
         )
         .unwrap();
-        assert_eq!(cap, Capture::TimedOut { stdout: "before\n".into(), stderr: String::new() });
+        assert_eq!(
+            cap,
+            Capture::TimedOut {
+                stdout: "before\n".into(),
+                stderr: String::new()
+            }
+        );
     }
 
     #[test]
     fn missing_program_is_an_io_error() {
-        assert!(run_capture(&argv(&["definitely-not-a-real-binary-xyz"]), Duration::from_secs(1)).is_err());
+        assert!(run_capture(
+            &argv(&["definitely-not-a-real-binary-xyz"]),
+            Duration::from_secs(1)
+        )
+        .is_err());
     }
 }

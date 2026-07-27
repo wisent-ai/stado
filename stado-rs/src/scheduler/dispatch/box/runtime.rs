@@ -10,8 +10,8 @@ use crate::queue::leases::{LeaseState, ProviderLease, ProviderLeaseStore};
 use crate::queue::JobStorage;
 
 use super::output::{
-    command_wrapper, file_content, prompt_output, recover_prompt_id, runtime_paths,
-    shell_quote, upload_artifacts,
+    command_wrapper, file_content, prompt_output, recover_prompt_id, runtime_paths, shell_quote,
+    upload_artifacts,
 };
 use super::BoxDispatchError;
 
@@ -60,7 +60,11 @@ impl<'a> BoxRuntime<'a> {
         provider: &'a BoxProvider,
         leases: &'a ProviderLeaseStore,
     ) -> Self {
-        BoxRuntime { store, provider, leases }
+        BoxRuntime {
+            store,
+            provider,
+            leases,
+        }
     }
 
     async fn save(&self, lease: &mut ProviderLease) -> Result<(), BoxDispatchError> {
@@ -78,7 +82,10 @@ impl<'a> BoxRuntime<'a> {
 
     /// A Keepalive handle borrowing this runtime and the lease.
     fn keepalive_handle<'r, 'l>(&'r self, lease: &'l mut ProviderLease) -> Keepalive<'r, 'l> {
-        Keepalive { runtime: self, lease }
+        Keepalive {
+            runtime: self,
+            lease,
+        }
     }
 
     /// Python `start`: READY -> STARTING -> RUNNING (idempotent).
@@ -125,7 +132,12 @@ impl<'a> BoxRuntime<'a> {
         let box_id = lease.provider_resource_id.clone();
         let paths = runtime_paths(&job.job_id);
         if !fresh {
-            match self.provider.client.read_file(&box_id, &paths.launch, "utf-8").await {
+            match self
+                .provider
+                .client
+                .read_file(&box_id, &paths.launch, "utf-8")
+                .await
+            {
                 Ok(_) => {}
                 Err(BoxError::Api(api)) if api.status == 404 => fresh = true,
                 Err(err) => return Err(err.into()),
@@ -134,7 +146,12 @@ impl<'a> BoxRuntime<'a> {
         if fresh {
             self.provider
                 .client
-                .write_file(&box_id, &paths.script, &command_wrapper(job, &paths), "utf-8")
+                .write_file(
+                    &box_id,
+                    &paths.script,
+                    &command_wrapper(job, &paths),
+                    "utf-8",
+                )
                 .await?;
         }
         let root = shell_quote(&paths.root);
@@ -160,8 +177,13 @@ impl<'a> BoxRuntime<'a> {
             .execute_command(&box_id, &launch, "", CONTROL_TIMEOUT_SECONDS)
             .await?;
         if !result.success {
-            self.fail(job, lease, "Box launch marker exists without a live or completed process", false)
-                .await?;
+            self.fail(
+                job,
+                lease,
+                "Box launch marker exists without a live or completed process",
+                false,
+            )
+            .await?;
             return Ok(());
         }
         let (owner, token) = (lease.owner_id.clone(), lease.fence_token.clone());
@@ -182,14 +204,17 @@ impl<'a> BoxRuntime<'a> {
         allow_submit: bool,
     ) -> Result<bool, BoxDispatchError> {
         if job.prompt.is_empty() || job.prompt_provider.is_empty() {
-            return Err(BoxDispatchError::value("box-prompt requires prompt and prompt_provider"));
+            return Err(BoxDispatchError::value(
+                "box-prompt requires prompt and prompt_provider",
+            ));
         }
         let box_id = lease.provider_resource_id.clone();
         let marker = Self::prompt_marker(lease);
         let mut prompt_id = lease.prompt_id.clone();
         if prompt_id.is_empty() {
             let mut keepalive = self.keepalive_handle(lease);
-            prompt_id = recover_prompt_id(&self.provider.client, &box_id, &marker, &mut keepalive).await?;
+            prompt_id =
+                recover_prompt_id(&self.provider.client, &box_id, &marker, &mut keepalive).await?;
         }
         if prompt_id.is_empty() && allow_submit {
             let run = self
@@ -212,7 +237,13 @@ impl<'a> BoxRuntime<'a> {
             if age < PROMPT_RECOVERY_SECONDS {
                 return Ok(false);
             }
-            self.fail(job, lease, "Box prompt start outcome remained unknown", false).await?;
+            self.fail(
+                job,
+                lease,
+                "Box prompt start outcome remained unknown",
+                false,
+            )
+            .await?;
             return Ok(true);
         }
         lease.prompt_id = prompt_id;
@@ -244,7 +275,12 @@ impl<'a> BoxRuntime<'a> {
     ) -> Result<bool, BoxDispatchError> {
         let box_id = lease.provider_resource_id.clone();
         let paths = runtime_paths(&job.job_id);
-        let exit_text = match self.provider.client.read_file(&box_id, &paths.exit, "utf-8").await {
+        let exit_text = match self
+            .provider
+            .client
+            .read_file(&box_id, &paths.exit, "utf-8")
+            .await
+        {
             Ok(value) => {
                 let text = file_content(&value)?;
                 self.keepalive(lease).await?;
@@ -261,7 +297,11 @@ impl<'a> BoxRuntime<'a> {
             .parse()
             .map_err(|_| BoxError::transport("Box command exit file is invalid"))?;
         for key in ["stdout", "stderr"] {
-            let path = if key == "stdout" { &paths.stdout } else { &paths.stderr };
+            let path = if key == "stdout" {
+                &paths.stdout
+            } else {
+                &paths.stderr
+            };
             let content = match self.provider.client.read_file(&box_id, path, "utf-8").await {
                 Ok(value) => file_content(&value)?,
                 Err(BoxError::Api(api)) if api.status == 404 => String::new(),
@@ -269,7 +309,10 @@ impl<'a> BoxRuntime<'a> {
             };
             self.keepalive(lease).await?;
             self.store
-                .upload_text(&format!("status/{}/output/command_{key}.log", job.job_id), &content)
+                .upload_text(
+                    &format!("status/{}/output/command_{key}.log", job.job_id),
+                    &content,
+                )
                 .await?;
             self.keepalive(lease).await?;
         }
@@ -278,7 +321,11 @@ impl<'a> BoxRuntime<'a> {
             job,
             lease,
             success,
-            if success { "" } else { "Box command or verification failed" },
+            if success {
+                ""
+            } else {
+                "Box command or verification failed"
+            },
         )
         .await?;
         Ok(true)
@@ -292,10 +339,16 @@ impl<'a> BoxRuntime<'a> {
         lease: &mut ProviderLease,
     ) -> Result<bool, BoxDispatchError> {
         if lease.prompt_id.is_empty() {
-            return Err(BoxDispatchError::runtime("Box prompt lease omitted prompt id"));
+            return Err(BoxDispatchError::runtime(
+                "Box prompt lease omitted prompt id",
+            ));
         }
         let box_id = lease.provider_resource_id.clone();
-        let run = self.provider.client.prompt_status(&box_id, &lease.prompt_id).await?;
+        let run = self
+            .provider
+            .client
+            .prompt_status(&box_id, &lease.prompt_id)
+            .await?;
         self.keepalive(lease).await?;
         if !run.done {
             return Ok(false);
@@ -306,12 +359,16 @@ impl<'a> BoxRuntime<'a> {
             prompt_output(&self.provider.client, &box_id, &prompt_id, &mut keepalive).await?
         };
         self.store
-            .upload_text(&format!("status/{}/output/prompt_output.txt", job.job_id), &output)
+            .upload_text(
+                &format!("status/{}/output/prompt_output.txt", job.job_id),
+                &output,
+            )
             .await?;
         self.keepalive(lease).await?;
         let success = run.status == "finished";
         let error = format!("Box prompt {}", run.status);
-        self.complete(job, lease, success, if success { "" } else { &error }).await?;
+        self.complete(job, lease, success, if success { "" } else { &error })
+            .await?;
         Ok(true)
     }
 
@@ -323,8 +380,12 @@ impl<'a> BoxRuntime<'a> {
         success: bool,
         error: &str,
     ) -> Result<(), BoxDispatchError> {
-        lease.result_state =
-            if success { job_state::COMPLETED } else { job_state::FAILED }.to_string();
+        lease.result_state = if success {
+            job_state::COMPLETED
+        } else {
+            job_state::FAILED
+        }
+        .to_string();
         lease.last_error = error.chars().take(512).collect();
         if lease.state == LeaseState::Running.as_str() {
             let (owner, token) = (lease.owner_id.clone(), lease.fence_token.clone());
@@ -378,8 +439,14 @@ impl<'a> BoxRuntime<'a> {
             if lease.result_state == job_state::COMPLETED {
                 let box_id = lease.provider_resource_id.clone();
                 let mut keepalive = self.keepalive_handle(lease);
-                upload_artifacts(self.store, &self.provider.client, job, &box_id, &mut keepalive)
-                    .await?;
+                upload_artifacts(
+                    self.store,
+                    &self.provider.client,
+                    job,
+                    &box_id,
+                    &mut keepalive,
+                )
+                .await?;
             }
             let (owner, token) = (lease.owner_id.clone(), lease.fence_token.clone());
             lease.transition(LeaseState::Releasing, &owner, &token)?;
@@ -391,7 +458,9 @@ impl<'a> BoxRuntime<'a> {
             self.save(lease).await?;
         }
         if lease.state == LeaseState::Releasing.as_str() {
-            self.provider.release_box(&lease.provider_resource_id).await?;
+            self.provider
+                .release_box(&lease.provider_resource_id)
+                .await?;
             let (owner, token) = (lease.owner_id.clone(), lease.fence_token.clone());
             lease.transition(LeaseState::Released, &owner, &token)?;
             self.save(lease).await?;
@@ -432,7 +501,11 @@ impl<'a> BoxRuntime<'a> {
             _ => false,
         };
         let result = if job.executor == "box-prompt" {
-            self.provider.client.interrupt(&lease.provider_resource_id).await.map(|_| ())
+            self.provider
+                .client
+                .interrupt(&lease.provider_resource_id)
+                .await
+                .map(|_| ())
         } else {
             let pid_path = runtime_paths(&job.job_id).pid;
             self.provider

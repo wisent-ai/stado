@@ -117,7 +117,10 @@ impl BoxApiError {
             ("status".to_string(), Value::from(self.status)),
             ("code".to_string(), Value::from(self.code.clone())),
             ("message".to_string(), Value::from(self.message.clone())),
-            ("request_id".to_string(), Value::from(self.request_id.clone())),
+            (
+                "request_id".to_string(),
+                Value::from(self.request_id.clone()),
+            ),
             ("retryable".to_string(), Value::from(self.retryable)),
         ])
     }
@@ -126,9 +129,16 @@ impl BoxApiError {
 impl std::fmt::Display for BoxApiError {
     /// Python `BoxAPIError.__str__`.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let suffix =
-            if self.request_id.is_empty() { String::new() } else { format!(" request_id={}", self.request_id) };
-        write!(f, "Box API HTTP {} [{}]: {}{}", self.status, self.code, self.message, suffix)
+        let suffix = if self.request_id.is_empty() {
+            String::new()
+        } else {
+            format!(" request_id={}", self.request_id)
+        };
+        write!(
+            f,
+            "Box API HTTP {} [{}]: {}{}",
+            self.status, self.code, self.message, suffix
+        )
     }
 }
 
@@ -200,7 +210,11 @@ pub fn safe_text(value: &str, default_text: &str) -> String {
 
 /// [`safe_text`] with an explicit limit (Python `limit=512` default).
 pub fn safe_text_limited(value: &str, default_text: &str, limit: usize) -> String {
-    let text = if value.is_empty() { default_text } else { value };
+    let text = if value.is_empty() {
+        default_text
+    } else {
+        value
+    };
     let text = text.replace(['\r', '\n'], " ");
     let text = box_key_pattern().replace_all(&text, "[REDACTED]");
     let text = url_token_pattern().replace_all(&text, "$1[REDACTED]");
@@ -213,7 +227,9 @@ pub fn safe_text_limited(value: &str, default_text: &str, limit: usize) -> Strin
 pub fn required_dict(value: Value, context: &str) -> Result<Map<String, Value>, BoxError> {
     match value {
         Value::Object(map) => Ok(map),
-        _ => Err(BoxError::transport(format!("Box {context} response is not an object"))),
+        _ => Err(BoxError::transport(format!(
+            "Box {context} response is not an object"
+        ))),
     }
 }
 
@@ -258,7 +274,10 @@ pub(crate) fn jint_or(value: Option<&Value>, default: i64) -> Result<i64, BoxErr
     match value {
         Value::Number(n) => Ok(n.as_f64().unwrap_or(0.0) as i64),
         Value::String(s) => s.trim().parse::<i64>().map_err(|_| {
-            BoxError::value(format!("invalid literal for int() with base 10: {:?}", s.trim()))
+            BoxError::value(format!(
+                "invalid literal for int() with base 10: {:?}",
+                s.trim()
+            ))
         }),
         other => Err(BoxError::value(format!(
             "int() argument must be a string or a number, not {}",
@@ -286,11 +305,16 @@ pub(crate) fn first_truthy_str(values: &[Option<&Value>], fallback: &str) -> Str
 /// Python `parse_box_info`: unwrap the `"box"` envelope when present,
 /// require a pattern-conforming id, default every other field.
 pub fn parse_box_info(payload: &Map<String, Value>) -> Result<BoxInfo, BoxError> {
-    let box_value = payload.get("box").cloned().unwrap_or(Value::Object(payload.clone()));
+    let box_value = payload
+        .get("box")
+        .cloned()
+        .unwrap_or(Value::Object(payload.clone()));
     let boxed = required_dict(box_value, "box")?;
     let box_id = jstr(boxed.get("id"));
     if !box_id_pattern().is_match(&box_id) {
-        return Err(BoxError::transport("Box response contains an invalid box id"));
+        return Err(BoxError::transport(
+            "Box response contains an invalid box id",
+        ));
     }
     Ok(BoxInfo {
         box_id,
@@ -317,7 +341,10 @@ mod tests {
     #[test]
     fn safe_text_redacts_keys_tokens_and_auth_headers() {
         // Box API keys never survive into logs.
-        assert_eq!(safe_text("failed with box_abc123_XYZ-9 in play", "d"), "failed with [REDACTED] in play");
+        assert_eq!(
+            safe_text("failed with box_abc123_XYZ-9 in play", "d"),
+            "failed with [REDACTED] in play"
+        );
         // URL token query params keep the key name, drop the value.
         assert_eq!(
             safe_text("GET https://x/y?access_token=sekrit&ok=1", "d"),
@@ -327,8 +354,14 @@ mod tests {
         assert_eq!(safe_text("a&KEY=k1", "d"), "a&KEY=[REDACTED]");
         // Authorization headers, either separator, any case. Python's
         // [^,;\s]+ consumes only the first token after the separator.
-        assert_eq!(safe_text("authorization: Bearer xyz, next", "d"), "Authorization=[REDACTED] xyz, next");
-        assert_eq!(safe_text("Authorization=Bearer xyz; rest", "d"), "Authorization=[REDACTED] xyz; rest");
+        assert_eq!(
+            safe_text("authorization: Bearer xyz, next", "d"),
+            "Authorization=[REDACTED] xyz, next"
+        );
+        assert_eq!(
+            safe_text("Authorization=Bearer xyz; rest", "d"),
+            "Authorization=[REDACTED] xyz; rest"
+        );
         // Newlines flatten to spaces; empty input falls back to the default.
         assert_eq!(safe_text("line1\r\nline2", "d"), "line1  line2");
         assert_eq!(safe_text("", "fallback"), "fallback");
@@ -345,7 +378,13 @@ mod tests {
 
     #[test]
     fn api_error_redacts_fields_and_formats_like_python() {
-        let err = BoxApiError::new(429, "rate box_key9 limited", "slow down box_zz9 ?token=t", "req-1", true);
+        let err = BoxApiError::new(
+            429,
+            "rate box_key9 limited",
+            "slow down box_zz9 ?token=t",
+            "req-1",
+            true,
+        );
         assert_eq!(err.code, "rate [REDACTED] limited");
         assert_eq!(err.message, "slow down [REDACTED] ?token=[REDACTED]");
         assert_eq!(
@@ -354,14 +393,20 @@ mod tests {
         );
         let record = err.to_record();
         let keys: Vec<&String> = record.keys().collect();
-        assert_eq!(keys, ["status", "code", "message", "request_id", "retryable"]);
+        assert_eq!(
+            keys,
+            ["status", "code", "message", "request_id", "retryable"]
+        );
         assert_eq!(record["retryable"], json!(true));
         // Empty request id -> no suffix. Note the "box_error" default is
         // itself eaten by the box-key redaction pattern — Python behavior.
         let err = BoxApiError::new(500, "", "", "", false);
         assert_eq!(err.code, "[REDACTED]");
         assert_eq!(err.message, "Box API request failed");
-        assert_eq!(err.to_string(), "Box API HTTP 500 [[REDACTED]]: Box API request failed");
+        assert_eq!(
+            err.to_string(),
+            "Box API HTTP 500 [[REDACTED]]: Box API request failed"
+        );
     }
 
     #[test]
@@ -404,7 +449,11 @@ mod tests {
         // Non-object envelope.
         let bad = json!({"box": [1, 2]});
         let err = parse_box_info(bad.as_object().unwrap()).unwrap_err();
-        assert!(err.to_string().contains("Box box response is not an object"), "{err}");
+        assert!(
+            err.to_string()
+                .contains("Box box response is not an object"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -422,10 +471,19 @@ mod tests {
         assert_eq!(jint_or(Some(&json!("42")), 0).unwrap(), 42);
         assert_eq!(jint_or(Some(&json!(5.9)), 0).unwrap(), 5); // int() truncates
         let err = jint_or(Some(&json!("abc")), 0).unwrap_err();
-        assert!(err.to_string().contains("invalid literal for int()"), "{err}");
+        assert!(
+            err.to_string().contains("invalid literal for int()"),
+            "{err}"
+        );
 
-        assert_eq!(first_truthy_str(&[None, Some(&json!("code1"))], "fb"), "code1");
-        assert_eq!(first_truthy_str(&[Some(&json!(null)), Some(&json!(0))], "fb"), "fb");
+        assert_eq!(
+            first_truthy_str(&[None, Some(&json!("code1"))], "fb"),
+            "code1"
+        );
+        assert_eq!(
+            first_truthy_str(&[Some(&json!(null)), Some(&json!(0))], "fb"),
+            "fb"
+        );
         assert_eq!(py_str(&json!(null)), "None");
     }
 }

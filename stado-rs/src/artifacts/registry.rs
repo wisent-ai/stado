@@ -83,7 +83,9 @@ impl ArtifactRegistry {
     /// Registry over the configured storage (Python
     /// `ArtifactRegistry()` → `JobStorage(BUCKET)`).
     pub async fn new() -> Result<Self, StorageError> {
-        Ok(Self { store: JobStorage::new().await? })
+        Ok(Self {
+            store: JobStorage::new().await?,
+        })
     }
 
     /// Registry over an explicit store (tests, custom deployments).
@@ -99,10 +101,18 @@ impl ArtifactRegistry {
         verify: bool,
         full: bool,
     ) -> Result<ArtifactManifest, RegistryError> {
-        if self.store.download_text(&alias_path(&manifest.ref_)).await?.is_some() {
+        if self
+            .store
+            .download_text(&alias_path(&manifest.ref_))
+            .await?
+            .is_some()
+        {
             return Err(ArtifactError::new(
                 "ARTIFACT_VERSION_CONFLICT",
-                format!("artifact version collides with an existing alias: {}", manifest.ref_),
+                format!(
+                    "artifact version collides with an existing alias: {}",
+                    manifest.ref_
+                ),
             )
             .into());
         }
@@ -124,7 +134,9 @@ impl ArtifactRegistry {
             issues.push(format!("{} verification failed", report.adapter));
         }
         if !issues.is_empty() {
-            return Err(ArtifactError::new("ARTIFACT_VERIFICATION_FAILED", issues.join("; ")).into());
+            return Err(
+                ArtifactError::new("ARTIFACT_VERIFICATION_FAILED", issues.join("; ")).into(),
+            );
         }
 
         let mut prepared = manifest.clone();
@@ -194,7 +206,12 @@ impl ArtifactRegistry {
     /// Resolve a version-or-alias ref to the immutable version ref.
     /// Python `ArtifactRegistry.resolve`.
     pub async fn resolve(&self, reference: &ArtifactRef) -> Result<ArtifactRef, RegistryError> {
-        if self.store.download_text(&manifest_path(reference)).await?.is_some() {
+        if self
+            .store
+            .download_text(&manifest_path(reference))
+            .await?
+            .is_some()
+        {
             self.get(reference).await?;
             return Ok(reference.clone());
         }
@@ -212,8 +229,7 @@ impl ArtifactRegistry {
                 format!("invalid alias record for {reference}: {exc}"),
             )
         };
-        let alias: Value = serde_json::from_str(&raw)
-            .map_err(|exc| corrupt(exc.to_string()))?;
+        let alias: Value = serde_json::from_str(&raw).map_err(|exc| corrupt(exc.to_string()))?;
         let target_version = alias
             .get("target_version")
             .map(stringify_json_scalar)
@@ -297,7 +313,12 @@ impl ArtifactRegistry {
     ) -> Result<ArtifactRef, RegistryError> {
         self.get(target).await?;
         let alias_ref = target.with_version(alias)?;
-        if self.store.download_text(&manifest_path(&alias_ref)).await?.is_some() {
+        if self
+            .store
+            .download_text(&manifest_path(&alias_ref))
+            .await?
+            .is_some()
+        {
             return Err(ArtifactError::new(
                 "ARTIFACT_ALIAS_CONFLICT",
                 format!("alias name collides with immutable artifact version: {alias_ref}"),
@@ -343,8 +364,8 @@ impl ArtifactRegistry {
                 format!("invalid alias record for {alias_ref}: {exc}"),
             )
         };
-        let current_record: Value = serde_json::from_str(&current.content)
-            .map_err(|exc| corrupt(exc.to_string()))?;
+        let current_record: Value =
+            serde_json::from_str(&current.content).map_err(|exc| corrupt(exc.to_string()))?;
         let current_target = current_record
             .get("target_version")
             .map(stringify_json_scalar)
@@ -364,7 +385,9 @@ impl ArtifactRegistry {
         if current_target != expected_previous {
             return Err(ArtifactError::new(
                 "ARTIFACT_ALIAS_CONFLICT",
-                format!("alias {alias_ref} targets {current_target}, not expected {expected_previous}"),
+                format!(
+                    "alias {alias_ref} targets {current_target}, not expected {expected_previous}"
+                ),
             )
             .into());
         }
@@ -396,13 +419,19 @@ impl ArtifactRegistry {
             let Ok(value) = serde_json::from_str::<Value>(&raw) else {
                 continue;
             };
-            if value.get("target_version").and_then(Value::as_str) == Some(reference.version.as_str()) {
+            if value.get("target_version").and_then(Value::as_str)
+                == Some(reference.version.as_str())
+            {
                 let alias = value
                     .get("alias")
                     .map(stringify_json_scalar)
                     .filter(|alias| !alias.is_empty())
                     .unwrap_or_else(|| {
-                        path.rsplit('/').next().unwrap_or("").trim_end_matches(".json").to_string()
+                        path.rsplit('/')
+                            .next()
+                            .unwrap_or("")
+                            .trim_end_matches(".json")
+                            .to_string()
                     });
                 aliases.push(alias);
             }
@@ -498,9 +527,16 @@ mod tests {
     #[tokio::test]
     async fn publish_stamps_metadata_and_hashes_canonical_document() {
         let (_dir, reg) = registry();
-        let published = reg.publish(&manifest("demo", "v1"), false, false).await.unwrap();
+        let published = reg
+            .publish(&manifest("demo", "v1"), false, false)
+            .await
+            .unwrap();
         assert!(!published.created_at.is_empty());
-        assert!(published.created_by.contains('@'), "{}", published.created_by);
+        assert!(
+            published.created_by.contains('@'),
+            "{}",
+            published.created_by
+        );
         // verify=false → skipped, no verified_at.
         assert_eq!(published.verification.result, "skipped");
         assert_eq!(published.verification.verified_at, "");
@@ -533,7 +569,10 @@ mod tests {
         // Idempotency holds when re-publishing the prepared manifest with
         // the same verify flag (verify=false keeps verified_at="" so the
         // canonical content is byte-identical).
-        let first = reg.publish(&manifest("demo", "v1"), false, false).await.unwrap();
+        let first = reg
+            .publish(&manifest("demo", "v1"), false, false)
+            .await
+            .unwrap();
         let again = reg.publish(&first, false, false).await.unwrap();
         assert_eq!(again, first);
 
@@ -541,7 +580,9 @@ mod tests {
         let mut changed = first.clone();
         changed.description = "mutated".to_string();
         let err = reg.publish(&changed, false, false).await.unwrap_err();
-        let RegistryError::Artifact(err) = err else { panic!("expected ArtifactError") };
+        let RegistryError::Artifact(err) = err else {
+            panic!("expected ArtifactError")
+        };
         assert_eq!(err.code, "ARTIFACT_VERSION_CONFLICT");
         assert!(err.message.contains("different content"), "{}", err.message);
     }
@@ -555,12 +596,20 @@ mod tests {
             "Bad",
         );
         let err = reg.publish(&bad, true, false).await.unwrap_err();
-        let RegistryError::Artifact(err) = err else { panic!("expected ArtifactError") };
+        let RegistryError::Artifact(err) = err else {
+            panic!("expected ArtifactError")
+        };
         assert_eq!(err.code, "ARTIFACT_VERIFICATION_FAILED");
-        assert!(err.message.contains("at least one location is required"), "{}", err.message);
+        assert!(
+            err.message.contains("at least one location is required"),
+            "{}",
+            err.message
+        );
 
         // A version whose name collides with an existing alias is refused.
-        reg.publish(&manifest("demo", "v1"), false, false).await.unwrap();
+        reg.publish(&manifest("demo", "v1"), false, false)
+            .await
+            .unwrap();
         reg.set_alias(
             &ArtifactRef::new("dataset", "wisent", "demo", "v1").unwrap(),
             "latest",
@@ -569,10 +618,19 @@ mod tests {
         )
         .await
         .unwrap();
-        let err = reg.publish(&manifest("demo", "latest"), false, false).await.unwrap_err();
-        let RegistryError::Artifact(err) = err else { panic!("expected ArtifactError") };
+        let err = reg
+            .publish(&manifest("demo", "latest"), false, false)
+            .await
+            .unwrap_err();
+        let RegistryError::Artifact(err) = err else {
+            panic!("expected ArtifactError")
+        };
         assert_eq!(err.code, "ARTIFACT_VERSION_CONFLICT");
-        assert!(err.message.contains("collides with an existing alias"), "{}", err.message);
+        assert!(
+            err.message.contains("collides with an existing alias"),
+            "{}",
+            err.message
+        );
     }
 
     #[tokio::test]
@@ -580,7 +638,9 @@ mod tests {
         let (_dir, reg) = registry();
         let reference = ArtifactRef::new("dataset", "wisent", "ghost", "v1").unwrap();
         let err = reg.get(&reference).await.unwrap_err();
-        let RegistryError::Artifact(err) = err else { panic!("expected ArtifactError") };
+        let RegistryError::Artifact(err) = err else {
+            panic!("expected ArtifactError")
+        };
         assert_eq!(err.code, "ARTIFACT_NOT_FOUND");
 
         // A manifest stored under a path that does not match its identity.
@@ -593,7 +653,9 @@ mod tests {
             .unwrap();
         let reference = ArtifactRef::new("dataset", "wisent", "swapped", "v1").unwrap();
         let err = reg.get(&reference).await.unwrap_err();
-        let RegistryError::Artifact(err) = err else { panic!("expected ArtifactError") };
+        let RegistryError::Artifact(err) = err else {
+            panic!("expected ArtifactError")
+        };
         assert_eq!(err.code, "ARTIFACT_CORRUPT_MANIFEST");
     }
 
@@ -601,7 +663,9 @@ mod tests {
     async fn resolve_walks_alias_to_immutable_ref() {
         let (_dir, reg) = registry();
         let v1 = ArtifactRef::new("dataset", "wisent", "demo", "v1").unwrap();
-        reg.publish(&manifest("demo", "v1"), false, false).await.unwrap();
+        reg.publish(&manifest("demo", "v1"), false, false)
+            .await
+            .unwrap();
         reg.set_alias(&v1, "latest", None, "").await.unwrap();
 
         // Direct version refs resolve to themselves.
@@ -616,7 +680,9 @@ mod tests {
         // Unknown ref and dangling alias.
         let ghost = ArtifactRef::new("dataset", "wisent", "ghost", "v9").unwrap();
         let err = reg.resolve(&ghost).await.unwrap_err();
-        let RegistryError::Artifact(err) = err else { panic!("expected ArtifactError") };
+        let RegistryError::Artifact(err) = err else {
+            panic!("expected ArtifactError")
+        };
         assert_eq!(err.code, "ARTIFACT_NOT_FOUND");
         reg.store
             .upload_text(
@@ -625,8 +691,13 @@ mod tests {
             )
             .await
             .unwrap();
-        let err = reg.resolve(&v1.with_version("dangling").unwrap()).await.unwrap_err();
-        let RegistryError::Artifact(err) = err else { panic!("expected ArtifactError") };
+        let err = reg
+            .resolve(&v1.with_version("dangling").unwrap())
+            .await
+            .unwrap_err();
+        let RegistryError::Artifact(err) = err else {
+            panic!("expected ArtifactError")
+        };
         assert_eq!(err.code, "ARTIFACT_NOT_FOUND"); // target manifest missing
     }
 
@@ -635,8 +706,12 @@ mod tests {
         let (_dir, reg) = registry();
         let v1 = ArtifactRef::new("dataset", "wisent", "demo", "v1").unwrap();
         let v2 = ArtifactRef::new("dataset", "wisent", "demo", "v2").unwrap();
-        reg.publish(&manifest("demo", "v1"), false, false).await.unwrap();
-        reg.publish(&manifest("demo", "v2"), false, false).await.unwrap();
+        reg.publish(&manifest("demo", "v1"), false, false)
+            .await
+            .unwrap();
+        reg.publish(&manifest("demo", "v2"), false, false)
+            .await
+            .unwrap();
 
         // Create.
         let alias_ref = reg.set_alias(&v1, "latest", None, "").await.unwrap();
@@ -645,38 +720,75 @@ mod tests {
         reg.set_alias(&v1, "latest", None, "").await.unwrap();
         // Retarget without a precondition conflicts.
         let err = reg.set_alias(&v2, "latest", None, "").await.unwrap_err();
-        let RegistryError::Artifact(err) = err else { panic!("expected ArtifactError") };
+        let RegistryError::Artifact(err) = err else {
+            panic!("expected ArtifactError")
+        };
         assert_eq!(err.code, "ARTIFACT_ALIAS_CONFLICT");
-        assert!(err.message.contains("currently targets v1; pass expected_previous"), "{}", err.message);
+        assert!(
+            err.message
+                .contains("currently targets v1; pass expected_previous"),
+            "{}",
+            err.message
+        );
         // Wrong precondition conflicts.
-        let err = reg.set_alias(&v2, "latest", Some("v9"), "").await.unwrap_err();
-        let RegistryError::Artifact(err) = err else { panic!("expected ArtifactError") };
+        let err = reg
+            .set_alias(&v2, "latest", Some("v9"), "")
+            .await
+            .unwrap_err();
+        let RegistryError::Artifact(err) = err else {
+            panic!("expected ArtifactError")
+        };
         assert_eq!(err.code, "ARTIFACT_ALIAS_CONFLICT");
-        assert!(err.message.contains("targets v1, not expected v9"), "{}", err.message);
+        assert!(
+            err.message.contains("targets v1, not expected v9"),
+            "{}",
+            err.message
+        );
         // Correct precondition commits via CAS.
         reg.set_alias(&v2, "latest", Some("v1"), "").await.unwrap();
         assert_eq!(reg.resolve(&alias_ref).await.unwrap(), v2);
 
         // expected_previous on a nonexistent alias conflicts.
-        let err = reg.set_alias(&v1, "stable", Some("v1"), "").await.unwrap_err();
-        let RegistryError::Artifact(err) = err else { panic!("expected ArtifactError") };
+        let err = reg
+            .set_alias(&v1, "stable", Some("v1"), "")
+            .await
+            .unwrap_err();
+        let RegistryError::Artifact(err) = err else {
+            panic!("expected ArtifactError")
+        };
         assert_eq!(err.code, "ARTIFACT_ALIAS_CONFLICT");
-        assert!(err.message.contains("does not exist; expected v1"), "{}", err.message);
+        assert!(
+            err.message.contains("does not exist; expected v1"),
+            "{}",
+            err.message
+        );
 
         // An alias name that collides with an immutable version is refused.
         let err = reg.set_alias(&v2, "v1", None, "").await.unwrap_err();
-        let RegistryError::Artifact(err) = err else { panic!("expected ArtifactError") };
+        let RegistryError::Artifact(err) = err else {
+            panic!("expected ArtifactError")
+        };
         assert_eq!(err.code, "ARTIFACT_ALIAS_CONFLICT");
-        assert!(err.message.contains("collides with immutable artifact version"), "{}", err.message);
+        assert!(
+            err.message
+                .contains("collides with immutable artifact version"),
+            "{}",
+            err.message
+        );
 
         // Aliases must target an existing manifest.
         let ghost = ArtifactRef::new("dataset", "wisent", "ghost", "v1").unwrap();
         let err = reg.set_alias(&ghost, "latest", None, "").await.unwrap_err();
-        let RegistryError::Artifact(err) = err else { panic!("expected ArtifactError") };
+        let RegistryError::Artifact(err) = err else {
+            panic!("expected ArtifactError")
+        };
         assert_eq!(err.code, "ARTIFACT_NOT_FOUND");
 
         // aliases_for reflects the retarget.
-        assert_eq!(reg.aliases_for(&v2).await.unwrap(), vec!["latest".to_string()]);
+        assert_eq!(
+            reg.aliases_for(&v2).await.unwrap(),
+            vec!["latest".to_string()]
+        );
         assert_eq!(reg.aliases_for(&v1).await.unwrap(), Vec::<String>::new());
     }
 
@@ -719,10 +831,16 @@ mod tests {
         assert_eq!(named.len(), 2);
         let missing = reg.list("dataset", "wisent", "nope", &[]).await.unwrap();
         assert!(missing.is_empty());
-        let gold = reg.list("", "", "", &[("tier".to_string(), "gold".to_string())]).await.unwrap();
+        let gold = reg
+            .list("", "", "", &[("tier".to_string(), "gold".to_string())])
+            .await
+            .unwrap();
         assert_eq!(gold.len(), 1);
         assert_eq!(gold[0].ref_.version, "v1");
-        let none = reg.list("", "", "", &[("tier".to_string(), "platinum".to_string())]).await.unwrap();
+        let none = reg
+            .list("", "", "", &[("tier".to_string(), "platinum".to_string())])
+            .await
+            .unwrap();
         assert!(none.is_empty());
     }
 
@@ -730,7 +848,10 @@ mod tests {
     async fn verify_generic_passes_and_validation_failure_short_circuits() {
         let (_dir, reg) = registry();
         // Unknown artifact type → generic-v1 adapter, passes when valid.
-        let published = reg.publish(&manifest("demo", "v1"), false, false).await.unwrap();
+        let published = reg
+            .publish(&manifest("demo", "v1"), false, false)
+            .await
+            .unwrap();
         let report = reg.verify(&published.ref_, false).await.unwrap();
         assert!(report.passed);
         assert_eq!(report.adapter, "generic-v1");
@@ -749,11 +870,16 @@ mod tests {
             .await
             .unwrap();
         let report = reg
-            .verify(&ArtifactRef::new("dataset", "wisent", "broken", "v1").unwrap(), false)
+            .verify(
+                &ArtifactRef::new("dataset", "wisent", "broken", "v1").unwrap(),
+                false,
+            )
             .await
             .unwrap();
         assert!(!report.passed);
         assert_eq!(report.adapter, "generic-v1");
-        assert!(report.issues.contains(&"at least one location is required".to_string()));
+        assert!(report
+            .issues
+            .contains(&"at least one location is required".to_string()));
     }
 }

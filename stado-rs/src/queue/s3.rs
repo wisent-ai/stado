@@ -69,7 +69,11 @@ impl S3Backend {
             .region()
             .map(|r| r.as_ref().to_string())
             .unwrap_or_else(|| "us-east-1".to_string());
-        Ok(Self::assemble(aws_sdk_s3::Client::new(&shared), bucket, &resolved))
+        Ok(Self::assemble(
+            aws_sdk_s3::Client::new(&shared),
+            bucket,
+            &resolved,
+        ))
     }
 
     /// Assemble from an explicit client (tests bind a loopback endpoint).
@@ -104,9 +108,10 @@ fn code_and_status<E: ProvideErrorMetadata>(
     err: &aws_sdk_s3::error::SdkError<E>,
 ) -> (Option<String>, Option<u16>) {
     match err {
-        aws_sdk_s3::error::SdkError::ServiceError(se) => {
-            (se.err().meta().code().map(str::to_string), Some(se.raw().status().as_u16()))
-        }
+        aws_sdk_s3::error::SdkError::ServiceError(se) => (
+            se.err().meta().code().map(str::to_string),
+            Some(se.raw().status().as_u16()),
+        ),
         _ => (None, None),
     }
 }
@@ -115,14 +120,11 @@ fn code_and_status<E: ProvideErrorMetadata>(
 /// also accept an explicit NoSuchKey/NotFound code for robustness).
 fn is_not_found<E: ProvideErrorMetadata>(err: &aws_sdk_s3::error::SdkError<E>) -> bool {
     let (code, status) = code_and_status(err);
-    status == Some(404)
-        || matches!(code.as_deref(), Some("404" | "NoSuchKey" | "NotFound"))
+    status == Some(404) || matches!(code.as_deref(), Some("404" | "NoSuchKey" | "NotFound"))
 }
 
 /// Python's `Code in {"PreconditionFailed", "412"}` / raw 412.
-fn is_precondition_failed<E: ProvideErrorMetadata>(
-    err: &aws_sdk_s3::error::SdkError<E>,
-) -> bool {
+fn is_precondition_failed<E: ProvideErrorMetadata>(err: &aws_sdk_s3::error::SdkError<E>) -> bool {
     let (code, status) = code_and_status(err);
     status == Some(412) || matches!(code.as_deref(), Some("PreconditionFailed" | "412"))
 }
@@ -158,8 +160,11 @@ fn to_utc(dt: &aws_sdk_s3::primitives::DateTime) -> Option<DateTime<Utc>> {
 /// percent-encoded except `/` separators (boto3's
 /// `quote(key, safe='/~')` for the dict form of CopySource).
 fn copy_source(bucket: &str, key: &str) -> String {
-    let encoded =
-        key.split('/').map(percent_encode).collect::<Vec<_>>().join("/");
+    let encoded = key
+        .split('/')
+        .map(percent_encode)
+        .collect::<Vec<_>>()
+        .join("/");
     format!("{bucket}/{encoded}")
 }
 
@@ -214,11 +219,7 @@ impl BlobBackend for S3Backend {
         Ok(Some(bytes.to_vec()))
     }
 
-    async fn download_to_filename(
-        &self,
-        path: &str,
-        dest: &Path,
-    ) -> Result<bool, StorageError> {
+    async fn download_to_filename(&self, path: &str, dest: &Path) -> Result<bool, StorageError> {
         let Some(bytes) = self.download_bytes(path).await? else {
             return Ok(false);
         };
@@ -226,12 +227,9 @@ impl BlobBackend for S3Backend {
         Ok(true)
     }
 
-    async fn upload_text_if_absent(
-        &self,
-        path: &str,
-        content: &str,
-    ) -> Result<bool, StorageError> {
-        self.upload_bytes_if_absent(path, content.as_bytes().to_vec()).await
+    async fn upload_text_if_absent(&self, path: &str, content: &str) -> Result<bool, StorageError> {
+        self.upload_bytes_if_absent(path, content.as_bytes().to_vec())
+            .await
     }
 
     async fn upload_file_if_absent(
@@ -262,7 +260,11 @@ impl BlobBackend for S3Backend {
         };
         // Python `response["ETag"].strip('"')` — the version token is the
         // UNQUOTED ETag.
-        let version = output.e_tag().map(unquote_etag).unwrap_or_default().to_string();
+        let version = output
+            .e_tag()
+            .map(unquote_etag)
+            .unwrap_or_default()
+            .to_string();
         let bytes = output
             .body
             .collect()
@@ -302,7 +304,11 @@ impl BlobBackend for S3Backend {
             Err(err) => return Err(sdk_err("conditional put_object", err)),
         };
         // Python: response.headers.get("etag", "").strip('"') — possibly "".
-        Ok(output.e_tag().map(unquote_etag).unwrap_or_default().to_string())
+        Ok(output
+            .e_tag()
+            .map(unquote_etag)
+            .unwrap_or_default()
+            .to_string())
     }
 
     async fn delete(&self, path: &str) -> Result<(), StorageError> {
@@ -385,10 +391,14 @@ impl BlobBackend for S3Backend {
             .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
             .unwrap_or_default();
         metadata.extend(
-            kv.iter().filter(|(_, v)| !v.is_empty()).map(|(k, v)| (k.clone(), v.clone())),
+            kv.iter()
+                .filter(|(_, v)| !v.is_empty())
+                .map(|(k, v)| (k.clone(), v.clone())),
         );
-        let content_type =
-            head.content_type().unwrap_or("application/octet-stream").to_string();
+        let content_type = head
+            .content_type()
+            .unwrap_or("application/octet-stream")
+            .to_string();
         let mut request = self
             .inner
             .client
@@ -401,7 +411,10 @@ impl BlobBackend for S3Backend {
         for (key, value) in &metadata {
             request = request.metadata(key, value);
         }
-        request.send().await.map_err(|err| sdk_err("copy_object", err))?;
+        request
+            .send()
+            .await
+            .map_err(|err| sdk_err("copy_object", err))?;
         Ok(())
     }
 
@@ -474,7 +487,10 @@ impl S3Backend {
             if let Some(token) = &token {
                 request = request.continuation_token(token);
             }
-            let page = request.send().await.map_err(|err| sdk_err("list_objects_v2", err))?;
+            let page = request
+                .send()
+                .await
+                .map_err(|err| sdk_err("list_objects_v2", err))?;
             for object in page.contents() {
                 out.push((
                     object.key().unwrap_or_default().to_string(),
@@ -496,13 +512,8 @@ mod tests {
     use crate::testutil::mock_http;
 
     fn test_backend(base_url: &str) -> S3Backend {
-        let credentials = aws_sdk_s3::config::Credentials::new(
-            "test-akid",
-            "test-secret",
-            None,
-            None,
-            "test",
-        );
+        let credentials =
+            aws_sdk_s3::config::Credentials::new("test-akid", "test-secret", None, None, "test");
         let config = aws_sdk_s3::config::Builder::new()
             .region(aws_sdk_s3::config::Region::new("us-east-1"))
             .credentials_provider(credentials)
@@ -562,13 +573,24 @@ mod tests {
         .await;
         let b = test_backend(&server.base_url);
         b.upload_text("queue/j1.json", "hello").await.unwrap();
-        assert_eq!(b.download_text("queue/j1.json").await.unwrap().as_deref(), Some("hello"));
+        assert_eq!(
+            b.download_text("queue/j1.json").await.unwrap().as_deref(),
+            Some("hello")
+        );
         assert_eq!(b.download_text("gone.json").await.unwrap(), None);
         let reqs = requests(&server);
         assert_eq!(reqs.len(), 3, "{reqs:?}");
-        assert!(reqs[0].starts_with("PUT /test-bucket/queue/j1.json"), "{}", reqs[0]);
+        assert!(
+            reqs[0].starts_with("PUT /test-bucket/queue/j1.json"),
+            "{}",
+            reqs[0]
+        );
         assert!(reqs[0].contains("hello"), "{}", reqs[0]);
-        assert!(reqs[1].starts_with("GET /test-bucket/queue/j1.json"), "{}", reqs[1]);
+        assert!(
+            reqs[1].starts_with("GET /test-bucket/queue/j1.json"),
+            "{}",
+            reqs[1]
+        );
         server.stop();
     }
 
@@ -606,15 +628,25 @@ mod tests {
 
     #[tokio::test]
     async fn cas_success_sends_quoted_if_match_and_returns_new_etag() {
-        let server = mock_http(vec![
-            response_with(200, "OK", &[("ETag", "\"def456\"")], ""),
-        ])
+        let server = mock_http(vec![response_with(
+            200,
+            "OK",
+            &[("ETag", "\"def456\"")],
+            "",
+        )])
         .await;
         let b = test_backend(&server.base_url);
-        let new_version = b.compare_and_swap_text("state/x", "abc123", "new").await.unwrap();
+        let new_version = b
+            .compare_and_swap_text("state/x", "abc123", "new")
+            .await
+            .unwrap();
         assert_eq!(new_version, "def456");
         let reqs = requests(&server);
-        assert!(reqs[0].starts_with("PUT /test-bucket/state/x"), "{}", reqs[0]);
+        assert!(
+            reqs[0].starts_with("PUT /test-bucket/state/x"),
+            "{}",
+            reqs[0]
+        );
         assert!(reqs[0].contains("if-match: \"abc123\""), "{}", reqs[0]);
         assert!(reqs[0].contains("new"), "{}", reqs[0]);
         server.stop();
@@ -624,7 +656,10 @@ mod tests {
     async fn cas_conflict_maps_412_to_storage_conflict() {
         let server = mock_http(vec![error_response(412, "PreconditionFailed")]).await;
         let b = test_backend(&server.base_url);
-        let err = b.compare_and_swap_text("state/x", "stale", "new").await.unwrap_err();
+        let err = b
+            .compare_and_swap_text("state/x", "stale", "new")
+            .await
+            .unwrap_err();
         assert!(matches!(err, StorageError::StorageConflict(_)), "{err:?}");
         assert!(err.to_string().contains("changed concurrently"), "{err}");
         server.stop();
@@ -675,8 +710,16 @@ mod tests {
         assert!(b.exists("present").await.unwrap());
         assert!(!b.exists("missing").await.unwrap());
         let reqs = requests(&server);
-        assert!(reqs[0].starts_with("DELETE /test-bucket/gone"), "{}", reqs[0]);
-        assert!(reqs[1].starts_with("HEAD /test-bucket/present"), "{}", reqs[1]);
+        assert!(
+            reqs[0].starts_with("DELETE /test-bucket/gone"),
+            "{}",
+            reqs[0]
+        );
+        assert!(
+            reqs[1].starts_with("HEAD /test-bucket/present"),
+            "{}",
+            reqs[1]
+        );
         server.stop();
     }
 
@@ -725,7 +768,10 @@ mod tests {
             response_with(
                 200,
                 "OK",
-                &[("ETag", "\"e1\""), ("Last-Modified", "Fri, 02 Jan 2026 03:04:05 GMT")],
+                &[
+                    ("ETag", "\"e1\""),
+                    ("Last-Modified", "Fri, 02 Jan 2026 03:04:05 GMT"),
+                ],
                 "",
             ),
             error_response(404, "404"),
@@ -770,9 +816,21 @@ mod tests {
         .await
         .unwrap();
         let reqs = requests(&server);
-        assert!(reqs[1].starts_with("PUT /test-bucket/queue/j1.json"), "{}", reqs[1]);
-        assert!(reqs[1].contains("x-amz-copy-source: test-bucket/queue/j1.json"), "{}", reqs[1]);
-        assert!(reqs[1].contains("x-amz-metadata-directive: REPLACE"), "{}", reqs[1]);
+        assert!(
+            reqs[1].starts_with("PUT /test-bucket/queue/j1.json"),
+            "{}",
+            reqs[1]
+        );
+        assert!(
+            reqs[1].contains("x-amz-copy-source: test-bucket/queue/j1.json"),
+            "{}",
+            reqs[1]
+        );
+        assert!(
+            reqs[1].contains("x-amz-metadata-directive: REPLACE"),
+            "{}",
+            reqs[1]
+        );
         assert!(reqs[1].contains("x-amz-meta-a: 1"), "{}", reqs[1]);
         assert!(reqs[1].contains("x-amz-meta-b: 2"), "{}", reqs[1]);
         // Empty new values are skipped (Python parity).
@@ -820,7 +878,10 @@ mod tests {
         let infos = b.list_blobs_with_meta("queue/").await.unwrap();
         assert_eq!(infos.len(), 1);
         assert_eq!(infos[0].name, "queue/j1.json");
-        assert_eq!(infos[0].updated.unwrap().to_rfc3339(), "2026-01-02T03:04:05+00:00");
+        assert_eq!(
+            infos[0].updated.unwrap().to_rfc3339(),
+            "2026-01-02T03:04:05+00:00"
+        );
         assert_eq!(
             infos[0].metadata,
             BTreeMap::from([
@@ -860,11 +921,13 @@ mod tests {
             (Some("AccessDenied"), Some(403), false, false),
             (None, None, false, false),
         ] {
-            let nf = status == Some(404)
-                || matches!(code, Some("404" | "NoSuchKey" | "NotFound"));
-            let pc = status == Some(412)
-                || matches!(code, Some("PreconditionFailed" | "412"));
-            assert_eq!((nf, pc), (want_nf, want_pc), "code={code:?} status={status:?}");
+            let nf = status == Some(404) || matches!(code, Some("404" | "NoSuchKey" | "NotFound"));
+            let pc = status == Some(412) || matches!(code, Some("PreconditionFailed" | "412"));
+            assert_eq!(
+                (nf, pc),
+                (want_nf, want_pc),
+                "code={code:?} status={status:?}"
+            );
         }
     }
 

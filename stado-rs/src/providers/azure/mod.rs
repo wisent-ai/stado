@@ -14,6 +14,29 @@
 //! `az` CLI), shared with the Azure Blob queue backend; here it is scoped to
 //! ARM (`https://management.azure.com`).
 //!
+//! On an agent VM that chain has neither service-principal env vars nor the
+//! `az` CLI, so it can only resolve through IMDS — which answers solely for
+//! a VM that carries a managed identity. Agent VMs are therefore created
+//! with the pre-provisioned user-assigned identity named by
+//! [`crate::config::azure_vm_identity_id`] (`AZURE_VM_IDENTITY_ID`), whose
+//! resource id [`vm_body`] renders into the ARM `identity` block. The
+//! operator grants that single identity, once:
+//!
+//! - `Storage Blob Data Contributor` on the queue storage account. That is
+//!   a data-plane role; `Contributor` is management-plane only and does NOT
+//!   authorize blob reads or writes.
+//! - Permission to delete VMs in the resource group, so an idle agent can
+//!   ARM-DELETE itself.
+//!
+//! Without it the agent can neither reach the blob queue (it never sees a
+//! job, so the fleet is inert) nor self-delete (the VM bills until someone
+//! notices). User-assigned rather than system-assigned is deliberate: a
+//! system-assigned principal is minted per VM, so it would need its own
+//! role assignment at create time and would leave orphans behind at
+//! self-delete. Creating the identity and granting it those roles is an
+//! operator provisioning step — this provider hands out no role
+//! assignments, just as it creates no networking.
+//!
 //! Long-running operations are polled via the Azure-AsyncOperation header
 //! (falling back to Location) until terminal — the equivalent of the Python
 //! SDK's `op.result()`.
@@ -42,7 +65,10 @@ use super::{Provider, ProviderError};
 
 /// ARM REST base.
 pub const ARM_API_BASE: &str = "https://management.azure.com";
-const COMPUTE_API_VERSION: &str = "2023-09-01";
+/// Compute RP API version for VM resource paths. Crate-visible so the
+/// agent's self-delete ([`crate::providers::local::azure_self`]) targets
+/// the same VM contract this provider creates against.
+pub(crate) const COMPUTE_API_VERSION: &str = "2023-09-01";
 const NETWORK_API_VERSION: &str = "2023-09-01";
 /// OAuth scope for the client-credentials token request.
 const ARM_SCOPE: &str = "https://management.azure.com/.default";
@@ -56,7 +82,11 @@ fn log(msg: &str) {
 
 /// Python f-string rendering of a bool.
 fn py_bool(value: bool) -> &'static str {
-    if value { "True" } else { "False" }
+    if value {
+        "True"
+    } else {
+        "False"
+    }
 }
 
 /// Azure auth/transport/API error. The `Api` message embeds the ARM
@@ -80,11 +110,12 @@ pub enum AzureError {
 
 /// Fresh bearer token for ARM, from the shared chain's per-scope cache.
 async fn bearer_token(http: &reqwest::Client) -> Result<String, AzureError> {
-    crate::azure_token::bearer_token(http, ARM_SCOPE, ARM_RESOURCE).await.map_err(|err| match err
-    {
-        crate::azure_token::TokenError::Auth(msg) => AzureError::Auth(msg),
-        crate::azure_token::TokenError::Http(err) => AzureError::Http(err),
-    })
+    crate::azure_token::bearer_token(http, ARM_SCOPE, ARM_RESOURCE)
+        .await
+        .map_err(|err| match err {
+            crate::azure_token::TokenError::Auth(msg) => AzureError::Auth(msg),
+            crate::azure_token::TokenError::Http(err) => AzureError::Http(err),
+        })
 }
 
 // --- ARM REST client ---
@@ -237,7 +268,11 @@ impl ArmClient {
             return Err(Self::api_error(response, desc).await);
         }
         let header = |name: &str| {
-            response.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_string)
+            response
+                .headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string)
         };
         let async_op = header("azure-asyncoperation");
         let location = header("location");
@@ -323,7 +358,9 @@ impl ArmClient {
              /usages?api-version={COMPUTE_API_VERSION}",
             self.subscription()
         );
-        let page = self.get(&path, &format!("list compute usages in {location}")).await?;
+        let page = self
+            .get(&path, &format!("list compute usages in {location}"))
+            .await?;
         Ok(page
             .get("value")
             .and_then(Value::as_array)
@@ -332,8 +369,9 @@ impl ArmClient {
     }
 }
 
-/// ARM resource path of a VM (no api-version).
-fn vm_path(subscription: &str, rg: &str, name: &str) -> String {
+/// ARM resource path of a VM (no api-version). Crate-visible for the
+/// agent's self-delete ([`crate::providers::local::azure_self`]).
+pub(crate) fn vm_path(subscription: &str, rg: &str, name: &str) -> String {
     format!(
         "/subscriptions/{subscription}\
          /resourceGroups/{rg}\
@@ -361,6 +399,11 @@ pub fn parse_image_urn(urn: &str) -> Result<Value, String> {
 
 /// Python's VM body from `create_instance`. Split out pure for tests.
 /// Err is the Python ValueError from `_parse_image_urn`.
+///
+/// Deviation from Python: a non-empty `identity_id` also renders the ARM
+/// `identity` block, which is what gives the VM a token source (IMDS) for
+/// the blob queue and for deleting itself. Empty renders the Python body
+/// unchanged.
 #[allow(clippy::too_many_arguments)]
 pub fn vm_body(
     name: &str,
@@ -372,6 +415,7 @@ pub fn vm_body(
     ssh_public_key: &str,
     startup_script: &str,
     nic_id: &str,
+    identity_id: &str,
     preemptible: bool,
 ) -> Result<Value, String> {
     let image_reference = parse_image_urn(image_urn)?;
@@ -426,7 +470,7 @@ pub fn vm_body(
         properties["evictionPolicy"] = json!("Delete");
         properties["billingProfile"] = json!({ "maxPrice": -1.0 });
     }
-    Ok(json!({
+    let mut body = json!({
         "location": location,
         "tags": {
             "wisent_managed": "true",
@@ -434,7 +478,20 @@ pub fn vm_body(
                 .to_rfc3339_opts(chrono::SecondsFormat::Micros, false),
         },
         "properties": properties,
-    }))
+    });
+    if !identity_id.is_empty() {
+        // ARM hangs `identity` off the resource root, beside `location` and
+        // `properties`, not inside them. userAssignedIdentities is a map
+        // keyed by the identity's resource id whose value ARM fills in with
+        // principalId/clientId, so we send an empty object. Skipped when
+        // unconfigured, keeping the rendered body byte-identical to the
+        // Python original.
+        body["identity"] = json!({
+            "type": "UserAssigned",
+            "userAssignedIdentities": { identity_id: {} },
+        });
+    }
+    Ok(body)
 }
 
 /// Python NIC-create failure classification: QuotaExceeded /
@@ -451,7 +508,11 @@ fn vm_skip_error(msg: &str) -> bool {
 /// First `PowerState/...` code of the instanceView ("running",
 /// "deallocated", ...), None when absent.
 pub fn power_state(vm: &Value) -> Option<String> {
-    let statuses = vm.get("properties")?.get("instanceView")?.get("statuses")?.as_array()?;
+    let statuses = vm
+        .get("properties")?
+        .get("instanceView")?
+        .get("statuses")?
+        .as_array()?;
     for status in statuses {
         if let Some(code) = status.get("code").and_then(Value::as_str) {
             if let Some(state) = code.strip_prefix("PowerState/") {
@@ -496,7 +557,9 @@ pub struct AzureProvider {
 impl AzureProvider {
     /// Python `AzureProvider()` — lazy in Rust (see the module docs).
     pub fn from_env() -> Self {
-        AzureProvider { state: OnceCell::new() }
+        AzureProvider {
+            state: OnceCell::new(),
+        }
     }
 
     /// Bind an explicit client (tests).
@@ -519,7 +582,9 @@ impl AzureProvider {
                             .to_string(),
                     ));
                 }
-                Ok::<_, ProviderError>(AzureState { client: ArmClient::new(subscription) })
+                Ok::<_, ProviderError>(AzureState {
+                    client: ArmClient::new(subscription),
+                })
             })
             .await
     }
@@ -550,7 +615,10 @@ impl AzureProvider {
         &self,
     ) -> Result<Vec<(String, f64)>, ProviderError> {
         let state = self.state().await?;
-        let vms = state.client.list_vms(config::azure_resource_group()).await?;
+        let vms = state
+            .client
+            .list_vms(config::azure_resource_group())
+            .await?;
         let prefix = format!("{}-agent-", config::INSTANCE_PREFIX);
         let now = chrono::Utc::now();
         let mut out = Vec::new();
@@ -559,8 +627,11 @@ impl AzureProvider {
             if !name.starts_with(&prefix) {
                 continue;
             }
-            let created =
-                vm.get("tags").and_then(|t| t.get("wisent_created")).and_then(Value::as_str).unwrap_or("");
+            let created = vm
+                .get("tags")
+                .and_then(|t| t.get("wisent_created"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
             let mut age = 0.0;
             if !created.is_empty() {
                 // Python: datetime.fromisoformat(created.replace("Z",
@@ -639,6 +710,7 @@ impl Provider for AzureProvider {
                 config::azure_ssh_public_key(),
                 startup_script,
                 &nic_id,
+                config::azure_vm_identity_id(),
                 preemptible,
             )
             .map_err(ProviderError::Value)?;
@@ -646,7 +718,10 @@ impl Provider for AzureProvider {
                 "{}?api-version={COMPUTE_API_VERSION}",
                 vm_path(client.subscription(), rg, name)
             );
-            match client.put_lro(&path, &body, &format!("create VM {name}@{location}")).await {
+            match client
+                .put_lro(&path, &body, &format!("create VM {name}@{location}"))
+                .await
+            {
                 Ok(_) => {
                     log(&format!(
                         "Created {} preemptible={}",
@@ -683,7 +758,10 @@ impl Provider for AzureProvider {
             vm_path(state.client.subscription(), rg, name)
         );
         // Idempotent: already gone is the desired terminal state.
-        state.client.delete_allow_404(&path, &format!("delete VM {name}")).await?;
+        state
+            .client
+            .delete_allow_404(&path, &format!("delete VM {name}"))
+            .await?;
         // NIC cleanup mirrors the VM-delete contract: NotFound is
         // idempotent success, and failures are best-effort log-only
         // inside delete_nic (Python network.py swallows all exceptions).
@@ -694,7 +772,11 @@ impl Provider for AzureProvider {
     async fn instance_exists(&self, instance_ref: &str) -> Result<bool, ProviderError> {
         let state = self.state().await?;
         let name = Self::parse_ref(instance_ref)?;
-        let Some(vm) = state.client.get_vm(config::azure_resource_group(), name).await? else {
+        let Some(vm) = state
+            .client
+            .get_vm(config::azure_resource_group(), name)
+            .await?
+        else {
             return Ok(false);
         };
         let prov = vm
@@ -717,17 +799,35 @@ impl Provider for AzureProvider {
     ) -> Result<Option<String>, ProviderError> {
         let state = self.state().await?;
         let name = Self::parse_ref(instance_ref)?;
-        let Some(vm) = state.client.get_vm(config::azure_resource_group(), name).await? else {
+        let Some(vm) = state
+            .client
+            .get_vm(config::azure_resource_group(), name)
+            .await?
+        else {
             return Ok(None);
         };
         Ok(power_state(&vm))
+    }
+
+    /// Trait override delegating to the inherent method (kept for direct
+    /// AzureProvider callers) so `&dyn Provider` consumers — the dead-agent
+    /// reaper and `cli/instances.rs` — can reach it. Without this the base
+    /// default applied and every Azure agent VM was invisible to both.
+    /// Mirrors providers/gcp.
+    async fn list_running_instance_refs_with_age(
+        &self,
+    ) -> Result<Vec<(String, f64)>, ProviderError> {
+        AzureProvider::list_running_instance_refs_with_age(self).await
     }
 
     /// `{accel_type: count}` for all live wisent-* VMs across the
     /// resource group.
     async fn list_running_instances(&self) -> Result<BTreeMap<String, i64>, ProviderError> {
         let state = self.state().await?;
-        let vms = state.client.list_vms(config::azure_resource_group()).await?;
+        let vms = state
+            .client
+            .list_vms(config::azure_resource_group())
+            .await?;
         let mut counts: BTreeMap<String, i64> = BTreeMap::new();
         let prefix = format!("{}-", config::INSTANCE_PREFIX);
         for vm in &vms {
@@ -746,7 +846,9 @@ impl Provider for AzureProvider {
                 .and_then(|h| h.get("vmSize"))
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            let Some((accel, n)) = AZURE_VM_TO_ACCEL.get(sku) else { continue };
+            let Some((accel, n)) = AZURE_VM_TO_ACCEL.get(sku) else {
+                continue;
+            };
             *counts.entry((*accel).to_string()).or_insert(0) += n;
         }
         Ok(counts)
@@ -760,8 +862,10 @@ mod tests {
 
     /// Response with extra headers (LRO polls need Azure-AsyncOperation).
     fn response_with(status: u16, reason: &str, headers: &[(&str, &str)], body: &str) -> String {
-        let extra: String =
-            headers.iter().map(|(k, v)| format!("{k}: {v}\r\n")).collect();
+        let extra: String = headers
+            .iter()
+            .map(|(k, v)| format!("{k}: {v}\r\n"))
+            .collect();
         format!(
             "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\n\
              Content-Length: {}\r\nConnection: close\r\n{extra}\r\n{body}",
@@ -790,7 +894,10 @@ mod tests {
             })
         );
         let err = parse_image_urn("too:few").unwrap_err();
-        assert!(err.contains("AZURE_IMAGE_URN must be 'publisher:offer:sku:version'"), "{err}");
+        assert!(
+            err.contains("AZURE_IMAGE_URN must be 'publisher:offer:sku:version'"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -805,22 +912,35 @@ mod tests {
             "ssh-ed25519 AAAA",
             "#!/bin/bash\necho hi",
             "/nic/id",
+            "",
             true,
         )
         .unwrap();
         let props = &spot["properties"];
         assert_eq!(spot["location"], json!("eastus"));
         assert_eq!(spot["tags"]["wisent_managed"], json!("true"));
-        assert!(spot["tags"]["wisent_created"].as_str().unwrap().contains('+'));
+        assert!(spot["tags"]["wisent_created"]
+            .as_str()
+            .unwrap()
+            .contains('+'));
+        // No identity id configured -> no identity block at all, so the
+        // body stays byte-identical to the pre-identity shape.
+        assert!(spot.get("identity").is_none());
         // Azure caps Linux hostname at 15.
         assert_eq!(props["osProfile"]["computerName"], json!("wisent-agent-a1"));
-        assert_eq!(props["hardwareProfile"]["vmSize"], json!("Standard_NC8ads_A10_v4"));
+        assert_eq!(
+            props["hardwareProfile"]["vmSize"],
+            json!("Standard_NC8ads_A10_v4")
+        );
         assert_eq!(props["storageProfile"]["osDisk"]["diskSizeGB"], json!(200));
         assert_eq!(
             props["storageProfile"]["osDisk"]["managedDisk"]["storageAccountType"],
             json!("Premium_LRS")
         );
-        assert_eq!(props["storageProfile"]["osDisk"]["deleteOption"], json!("Delete"));
+        assert_eq!(
+            props["storageProfile"]["osDisk"]["deleteOption"],
+            json!("Delete")
+        );
         assert_eq!(
             props["storageProfile"]["imageReference"],
             json!({"publisher": "microsoft-dsvm", "offer": "ubuntu-hpc", "sku": "2204", "version": "latest"})
@@ -833,8 +953,8 @@ mod tests {
             props["osProfile"]["linuxConfiguration"]["ssh"]["publicKeys"][0]["keyData"],
             json!("ssh-ed25519 AAAA")
         );
-        let expected_custom = base64::engine::general_purpose::STANDARD
-            .encode("#!/bin/bash\necho hi".as_bytes());
+        let expected_custom =
+            base64::engine::general_purpose::STANDARD.encode("#!/bin/bash\necho hi".as_bytes());
         assert_eq!(props["osProfile"]["customData"], json!(expected_custom));
         assert_eq!(
             props["networkProfile"]["networkInterfaces"][0],
@@ -846,15 +966,55 @@ mod tests {
         assert_eq!(props["billingProfile"], json!({ "maxPrice": -1.0 }));
 
         // On-demand: no Spot fields; empty ssh key -> empty ssh object.
-        let on_demand =
-            vm_body("vm1", "westus3", "Standard_NC6", 100, "a:b:c:d", "wisent", "", "", "/nic/id2", false)
-                .unwrap();
+        let on_demand = vm_body(
+            "vm1",
+            "westus3",
+            "Standard_NC6",
+            config::DEFAULT_BOOT_DISK_GB,
+            "a:b:c:d",
+            "wisent",
+            "",
+            "",
+            "/nic/id2",
+            "",
+            false,
+        )
+        .unwrap();
         let p2 = &on_demand["properties"];
         assert!(p2.get("priority").is_none());
         assert!(p2.get("evictionPolicy").is_none());
         assert!(p2.get("billingProfile").is_none());
         assert_eq!(p2["osProfile"]["linuxConfiguration"]["ssh"], json!({}));
         assert_eq!(p2["osProfile"]["computerName"], json!("vm1"));
+    }
+
+    #[test]
+    fn vm_body_renders_user_assigned_identity_block() {
+        // One operator-provisioned identity, reused by every ephemeral agent
+        // VM; on the VM it is the only thing IMDS can hand a token for.
+        let identity = "/subscriptions/sub/resourceGroups/wisent-compute/providers/\
+                        Microsoft.ManagedIdentity/userAssignedIdentities/wisent-agent";
+        let body = vm_body(
+            "vm1",
+            "eastus",
+            "Standard_NC6",
+            config::DEFAULT_BOOT_DISK_GB,
+            "a:b:c:d",
+            "wisent",
+            "",
+            "",
+            "/nic/id",
+            identity,
+            false,
+        )
+        .unwrap();
+        // Sibling of location/properties, not nested inside either, and the
+        // identity map's value is the empty object ARM populates.
+        assert_eq!(
+            body["identity"],
+            json!({"type": "UserAssigned", "userAssignedIdentities": {identity: {}}})
+        );
+        assert!(body["properties"].get("identity").is_none());
     }
 
     #[test]
@@ -948,7 +1108,14 @@ mod tests {
         let provider = provider_for(&server);
         let result = provider
             .create_instance(
-                "vm1", "Standard_NC8ads_A10_v4", "nvidia-a10", 200, "", "", "echo hi", true,
+                "vm1",
+                "Standard_NC8ads_A10_v4",
+                "nvidia-a10",
+                200,
+                "",
+                "",
+                "echo hi",
+                true,
             )
             .await
             .unwrap();
@@ -963,7 +1130,11 @@ mod tests {
             "{}",
             requests[0]
         );
-        assert!(requests[0].contains("wisent-compute-vnet-eastus"), "{}", requests[0]);
+        assert!(
+            requests[0].contains("wisent-compute-vnet-eastus"),
+            "{}",
+            requests[0]
+        );
         assert!(
             requests[1].starts_with(
                 "PUT /subscriptions/sub-1/resourceGroups/wisent-compute/providers/Microsoft.Network/networkInterfaces/vm1-nic?api-version="
@@ -971,8 +1142,16 @@ mod tests {
             "{}",
             requests[1]
         );
-        assert!(requests[1].contains("wisent-compute-vnet-westus3"), "{}", requests[1]);
-        assert!(requests[2].starts_with("GET /operations/nic-op "), "{}", requests[2]);
+        assert!(
+            requests[1].contains("wisent-compute-vnet-westus3"),
+            "{}",
+            requests[1]
+        );
+        assert!(
+            requests[2].starts_with("GET /operations/nic-op "),
+            "{}",
+            requests[2]
+        );
         assert!(
             requests[3].starts_with(
                 "PUT /subscriptions/sub-1/resourceGroups/wisent-compute/providers/Microsoft.Compute/virtualMachines/vm1?api-version="
@@ -981,9 +1160,21 @@ mod tests {
             requests[3]
         );
         // Spot fields in the VM body.
-        assert!(requests[3].contains(r#""priority":"Spot""#), "{}", requests[3]);
-        assert!(requests[3].contains(r#""maxPrice":-1.0"#), "{}", requests[3]);
-        assert!(requests[4].starts_with("GET /operations/vm-op "), "{}", requests[4]);
+        assert!(
+            requests[3].contains(r#""priority":"Spot""#),
+            "{}",
+            requests[3]
+        );
+        assert!(
+            requests[3].contains(r#""maxPrice":-1.0"#),
+            "{}",
+            requests[3]
+        );
+        assert!(
+            requests[4].starts_with("GET /operations/vm-op "),
+            "{}",
+            requests[4]
+        );
         server.stop();
     }
 
@@ -1013,7 +1204,16 @@ mod tests {
         .await;
         let provider = provider_for(&server);
         let result = provider
-            .create_instance("vm1", "Standard_NC8ads_A10_v4", "nvidia-a10", 200, "", "", "echo hi", false)
+            .create_instance(
+                "vm1",
+                "Standard_NC8ads_A10_v4",
+                "nvidia-a10",
+                200,
+                "",
+                "",
+                "echo hi",
+                false,
+            )
             .await
             .unwrap();
         assert_eq!(result.as_deref(), Some("vm1@westus3"));
@@ -1033,10 +1233,26 @@ mod tests {
     #[tokio::test]
     async fn create_instance_all_locations_fail_returns_none() {
         let server = mock_http(vec![
-            http_response(500, "Server Error", r#"{"error": {"code": "InternalError", "message": "boom"}}"#),
-            http_response(500, "Server Error", r#"{"error": {"code": "InternalError", "message": "boom"}}"#),
-            http_response(500, "Server Error", r#"{"error": {"code": "InternalError", "message": "boom"}}"#),
-            http_response(500, "Server Error", r#"{"error": {"code": "InternalError", "message": "boom"}}"#),
+            http_response(
+                500,
+                "Server Error",
+                r#"{"error": {"code": "InternalError", "message": "boom"}}"#,
+            ),
+            http_response(
+                500,
+                "Server Error",
+                r#"{"error": {"code": "InternalError", "message": "boom"}}"#,
+            ),
+            http_response(
+                500,
+                "Server Error",
+                r#"{"error": {"code": "InternalError", "message": "boom"}}"#,
+            ),
+            http_response(
+                500,
+                "Server Error",
+                r#"{"error": {"code": "InternalError", "message": "boom"}}"#,
+            ),
         ])
         .await;
         let provider = provider_for(&server);
@@ -1051,7 +1267,11 @@ mod tests {
     #[tokio::test]
     async fn delete_instance_404_is_success_and_cleans_nic() {
         let server = mock_http(vec![
-            http_response(404, "Not Found", r#"{"error": {"code": "ResourceNotFound", "message": "gone"}}"#),
+            http_response(
+                404,
+                "Not Found",
+                r#"{"error": {"code": "ResourceNotFound", "message": "gone"}}"#,
+            ),
             http_response(200, "OK", "{}"),
         ])
         .await;
@@ -1066,7 +1286,11 @@ mod tests {
             "{}",
             requests[0]
         );
-        assert!(requests[1].contains("networkInterfaces/vm1-nic"), "{}", requests[1]);
+        assert!(
+            requests[1].contains("networkInterfaces/vm1-nic"),
+            "{}",
+            requests[1]
+        );
         server.stop();
 
         // Malformed ref is a ValueError before any API call.
@@ -1081,19 +1305,38 @@ mod tests {
             "instanceView": {"statuses": [{"code": "ProvisioningState/succeeded"}, {"code": "PowerState/running"}]}}}"#;
         let server = mock_http(vec![
             http_response(200, "OK", vm_body_running),
-            http_response(200, "OK", &vm_body_running.replace("PowerState/running", "PowerState/deallocated")),
-            http_response(404, "Not Found", r#"{"error": {"code": "ResourceNotFound"}}"#),
-            http_response(200, "OK", &vm_body_running.replace("PowerState/running", "PowerState/deallocated")),
+            http_response(
+                200,
+                "OK",
+                &vm_body_running.replace("PowerState/running", "PowerState/deallocated"),
+            ),
+            http_response(
+                404,
+                "Not Found",
+                r#"{"error": {"code": "ResourceNotFound"}}"#,
+            ),
+            http_response(
+                200,
+                "OK",
+                &vm_body_running.replace("PowerState/running", "PowerState/deallocated"),
+            ),
         ])
         .await;
         let provider = provider_for(&server);
         assert!(provider.instance_exists("vm1@eastus").await.unwrap());
         assert!(!provider.instance_exists("vm1@eastus").await.unwrap());
         assert!(!provider.instance_exists("vm1@eastus").await.unwrap()); // 404
-        let state = provider.instance_lifecycle_state("vm1@eastus").await.unwrap();
+        let state = provider
+            .instance_lifecycle_state("vm1@eastus")
+            .await
+            .unwrap();
         assert_eq!(state.as_deref(), Some("deallocated"));
         let requests = request_bodies(&server);
-        assert!(requests[0].contains("$expand=instanceView"), "{}", requests[0]);
+        assert!(
+            requests[0].contains("$expand=instanceView"),
+            "{}",
+            requests[0]
+        );
         server.stop();
     }
 
@@ -1126,7 +1369,10 @@ mod tests {
         ]}"#;
         let server = mock_http(vec![http_response(200, "OK", page)]).await;
         let provider = provider_for(&server);
-        let refs = provider.list_running_instance_refs_with_age().await.unwrap();
+        let refs = provider
+            .list_running_instance_refs_with_age()
+            .await
+            .unwrap();
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].0, "wisent-agent-a100-1-0@eastus");
         assert!(refs[0].1 > 0.0, "age should be positive: {:?}", refs[0]);

@@ -36,8 +36,13 @@ code rename alone.
 3. **Create + copy infra** (bucket, SA, topic, Azure): re-run until rsync
    reports no diffs. Idempotent, resumable:
    `CONFIRM_FLEET_DRAINED=yes deploy/migrate_to_stado.sh --execute`
-4. **Verify the copy**: object counts match
-   (`gsutil du -s gs://wisent-compute` vs `gs://stado`).
+4. **Verify the copy**: `stado storage verify --from gcs --from-bucket wisent-compute
+   --to gcs --to-bucket stado`. Per canonical prefix it compares object counts, names
+   present on only one side, and metadata keys that did not land; it is read-only and
+   exits non-zero on any divergence. (`gsutil du -s` compares BYTES, not objects, and
+   says nothing about the `gpu_mem_gb` / `priority` / `gpu_type` metadata the
+   scheduler prefilters on.) `stado storage ls` gives the same per-prefix counts for
+   one store, and reports a prefix it could not list as unreachable rather than empty.
 5. **Publish `stado` to PyPI** (step 5 of the script; needs twine creds).
 6. **Cutover config defaults** in `stado/config.py`:
    `BUCKET` default -> `stado`, `ALERTS_TOPIC` -> `stado-alerts`, SA email in

@@ -60,7 +60,10 @@ pub enum QuotaError {
 /// live API only ever emits numbers, and the overlay is operator-written).
 fn py_int(value: Option<&Value>) -> i64 {
     match value {
-        Some(Value::Number(n)) => n.as_i64().or_else(|| n.as_f64().map(|f| f as i64)).unwrap_or(0),
+        Some(Value::Number(n)) => n
+            .as_i64()
+            .or_else(|| n.as_f64().map(|f| f as i64))
+            .unwrap_or(0),
         Some(Value::String(s)) => s.trim().parse().unwrap_or(0),
         _ => 0,
     }
@@ -85,8 +88,7 @@ pub async fn fetch_quotas_gcp(
         if let Some(quotas) = region_obj.get("quotas").and_then(Value::as_array) {
             for quota in quotas {
                 let metric = quota.get("metric").and_then(Value::as_str).unwrap_or("");
-                let Some((_, accel)) =
-                    GCP_METRIC_TO_ACCEL.iter().find(|(m, _)| *m == metric)
+                let Some((_, accel)) = GCP_METRIC_TO_ACCEL.iter().find(|(m, _)| *m == metric)
                 else {
                     continue;
                 };
@@ -126,7 +128,10 @@ pub async fn fetch_quotas_azure(
     let mut out = BTreeMap::new();
     for location in locations {
         for usage in client.list_usages(location).await? {
-            let family = usage.pointer("/name/value").and_then(Value::as_str).unwrap_or("");
+            let family = usage
+                .pointer("/name/value")
+                .and_then(Value::as_str)
+                .unwrap_or("");
             let Some((accel, vcpus_per_slot)) = azure_family_slot(family) else {
                 continue;
             };
@@ -234,7 +239,9 @@ pub async fn get_available_slots_with_client(
     let running_counts = provider.list_running_instances().await?;
 
     let mut available = BTreeMap::new();
-    let Some(rows) = provider_quotas.as_object() else { return Ok(available) };
+    let Some(rows) = provider_quotas.as_object() else {
+        return Ok(available);
+    };
     for (accel_type, cfg) in rows {
         let total = py_int(cfg.get("total"));
         let reserved = py_int(cfg.get("reserved"));
@@ -315,7 +322,12 @@ pub async fn summarize_quotas_with(
             let used = running.get(accel).copied().unwrap_or(0);
             summary_rows.insert(
                 accel.clone(),
-                QuotaRow { total, reserved, used, available: (total - reserved - used).max(0) },
+                QuotaRow {
+                    total,
+                    reserved,
+                    used,
+                    available: (total - reserved - used).max(0),
+                },
             );
         }
         out.insert(provider_name.clone(), summary_rows);
@@ -407,8 +419,7 @@ mod tests {
         let requests = server.requests.lock().unwrap().clone();
         // The mock base URL replaces the whole API base (no /compute/v1).
         assert!(
-            requests[0]
-                .starts_with("GET /projects/test-project/regions/us-central1 "),
+            requests[0].starts_with("GET /projects/test-project/regions/us-central1 "),
             "{}",
             requests[0]
         );
@@ -432,7 +443,9 @@ mod tests {
             .collect();
         let server = mock_http(responses).await;
         let client = gcp_mock(&server);
-        let quotas = load_quotas_with_client(&store, "gcp", Some(&client)).await.unwrap();
+        let quotas = load_quotas_with_client(&store, "gcp", Some(&client))
+            .await
+            .unwrap();
         server.stop();
         let expected_total = 8 * config::regions().len() as i64;
         assert_eq!(
@@ -448,7 +461,10 @@ mod tests {
     async fn load_quotas_falls_back_to_overlay_when_live_is_empty() {
         let (_dir, store) = store();
         let overlay = r#"{"azure": {"nvidia-a100-80gb": {"total": 4, "reserved": 1}}}"#;
-        store.upload_text("config/quotas.json", overlay).await.unwrap();
+        store
+            .upload_text("config/quotas.json", overlay)
+            .await
+            .unwrap();
         // The Azure live path is a stub contributing zero, so the overlay
         // passes through unchanged (Python parity for offline/dev).
         let quotas = load_quotas(&store, "azure").await.unwrap();
@@ -463,7 +479,10 @@ mod tests {
     async fn missing_overlay_file_is_empty_and_corrupt_raises() {
         let (_dir, store) = store();
         assert_eq!(load_overlay(&store).await.unwrap(), json!({}));
-        store.upload_text("config/quotas.json", "{not json").await.unwrap();
+        store
+            .upload_text("config/quotas.json", "{not json")
+            .await
+            .unwrap();
         let err = load_overlay(&store).await.unwrap_err();
         assert!(matches!(err, QuotaError::Json(_)), "{err:?}");
     }
@@ -479,13 +498,18 @@ mod tests {
             .await
             .unwrap();
         let provider = FakeProvider {
-            running: BTreeMap::from([("nvidia-tesla-t4".to_string(), 5), ("nvidia-l4".to_string(), 3)]),
+            running: BTreeMap::from([
+                ("nvidia-tesla-t4".to_string(), 5),
+                ("nvidia-l4".to_string(), 3),
+            ]),
         };
-        let available = get_available_slots(&store, &provider, "azure").await.unwrap();
+        let available = get_available_slots(&store, &provider, "azure")
+            .await
+            .unwrap();
         assert_eq!(
             available,
             BTreeMap::from([
-                ("nvidia-l4".to_string(), 0), // 1 - 0 - 3 clamps at 0
+                ("nvidia-l4".to_string(), 0),       // 1 - 0 - 3 clamps at 0
                 ("nvidia-tesla-t4".to_string(), 3), // 10 - 2 - 5
             ])
         );
@@ -514,18 +538,29 @@ mod tests {
             running: BTreeMap::from([("nvidia-tesla-t4".to_string(), 2)]),
         });
         let providers = BTreeMap::from([("gcp".to_string(), fake)]);
-        let summary =
-            summarize_quotas_with(&store, Some(&client), &providers).await.unwrap();
+        let summary = summarize_quotas_with(&store, Some(&client), &providers)
+            .await
+            .unwrap();
         server.stop();
         let expected_total = 8 * config::regions().len() as i64;
         let gcp = &summary["gcp"];
         assert_eq!(
             gcp["nvidia-tesla-t4"],
-            QuotaRow { total: expected_total, reserved: 1, used: 2, available: expected_total - 3 }
+            QuotaRow {
+                total: expected_total,
+                reserved: 1,
+                used: 2,
+                available: expected_total - 3
+            }
         );
         assert_eq!(
             gcp["nvidia-tesla-a100"],
-            QuotaRow { total: 0, reserved: 0, used: 0, available: 0 }
+            QuotaRow {
+                total: 0,
+                reserved: 0,
+                used: 0,
+                available: 0
+            }
         );
     }
 }

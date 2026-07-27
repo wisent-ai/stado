@@ -134,9 +134,13 @@ pub fn remote_command(root: &str, days: &str, apply: bool) -> String {
 pub fn parse_report(stdout: &str) -> Vec<CacheEntry> {
     let mut entries = Vec::new();
     for line in stdout.lines() {
-        let Some(rest) = line.strip_prefix(STATUS_PREFIX) else { continue };
+        let Some(rest) = line.strip_prefix(STATUS_PREFIX) else {
+            continue;
+        };
         let mut fields = rest.split('\t');
-        let Some(state) = fields.next().filter(|state| !state.is_empty()) else { continue };
+        let Some(state) = fields.next().filter(|state| !state.is_empty()) else {
+            continue;
+        };
         let path = fields.next().unwrap_or_default();
         let kib = fields.next().unwrap_or_default();
         entries.push(CacheEntry {

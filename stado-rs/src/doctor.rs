@@ -1,0 +1,1133 @@
+//! Deployment preflight probes behind `stado doctor`.
+//!
+//! NO Python original: the Python CLI has no preflight. Every one of the
+//! six blockers in the 2026-07-26 GCP-billing outage surfaced as a crash
+//! loop or a silently empty UI instead of a check — an azure backend with
+//! no storage account, an all-zero quota, an unreachable release channel,
+//! a missing VM managed identity, a startup template that aborted on
+//! `set -u`, and a fleet that was simply paused. Each of those is cheap to
+//! interrogate directly; none of them was interrogated anywhere.
+//!
+//! Two properties are load-bearing:
+//!
+//! - **Fault isolation.** One probe failing must never suppress the rest,
+//!   because the useful output is the WHOLE list — the outage looked like
+//!   "quota is zero" until the release channel and the VM identity turned
+//!   out to be broken too. Every probe captures its own error into its own
+//!   [`Check`], exactly as each section of
+//!   [`crate::monitor::billing::collect_billing`] captures its own. Probes
+//!   additionally run under a shared deadline ([`PROBE_TIMEOUT`]) so a
+//!   black-holed endpoint degrades to one FAIL row instead of hanging the
+//!   command.
+//! - **Same code path as production.** The template probe renders through
+//!   [`crate::scheduler::dispatch::agent::bundled_template_for`] with
+//!   [`crate::coordinator::secrets_from_env`] and
+//!   [`crate::scheduler::dispatch::agent::deployment_substitutions`] — the
+//!   dispatcher's own text, secrets and config. A preflight that rendered
+//!   its own copy would prove nothing about what dispatch ships.
+//!
+//! Read-only except for [`check_storage_round_trip`], which is the only
+//! answer to "is the queue empty or is the store unreachable" and therefore
+//! has to actually write. It writes, reads back and deletes one
+//! self-describing object under [`PROBE_PREFIX`], and the delete runs even
+//! when the read-back fails — a doctor that litters the queue store on
+//! every bad run is worse than no doctor. [`PROBE_PREFIX`] is deliberately
+//! outside `queue::copy::CANONICAL_PREFIXES`, for the same reason
+//! `queue::copy::SENTINEL_PATH` is: a diagnostic probe is precisely what a
+//! backend migration must not carry across.
+
+use std::future::Future;
+use std::time::Duration;
+
+use chrono::{SecondsFormat, Utc};
+use serde_json::{json, Value};
+
+use crate::catalog::GPU_SIZING;
+use crate::config;
+use crate::config_file;
+use crate::coordinator;
+use crate::monitor::alerts::AlertChannels;
+use crate::providers;
+use crate::queue::{control, JobStorage};
+use crate::scheduler::dispatch::agent;
+use crate::scheduler::quota;
+use crate::self_update::{self, HttpReleaseFetcher, ReleaseFetcher};
+use crate::targets;
+
+/// Prefix the storage round-trip probe writes under. Not a queue-state
+/// prefix and deliberately absent from `queue::copy::CANONICAL_PREFIXES`,
+/// so a cutover copy never carries a diagnostic object to the new store.
+pub const PROBE_PREFIX: &str = "diagnostics/";
+
+/// Provider name of the device-local deployment, which has no cloud API to
+/// authenticate against and no agent VMs to dispatch.
+/// `crate::coordinator::resolve_providers` skips it for the same reason.
+const LOCAL_PROVIDER: &str = "local";
+
+/// Ceiling on ONE probe. Bounds the command against a black-holed endpoint
+/// — the failure mode of an unreachable release channel or a firewalled
+/// cloud API, which drop packets rather than refusing them, so the socket
+/// never returns. Derived digit-free from `u8::BITS`, the same way
+/// `crate::cli::default_mail_results` derives its page size. Probes run
+/// concurrently, so this bounds the whole command and not one row of it.
+pub const PROBE_TIMEOUT: Duration = Duration::from_secs(u8::BITS as u64);
+
+/// Verdict of one check.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Status {
+    /// Nothing to do.
+    #[default]
+    Pass,
+    /// Works, but a documented hazard is live.
+    Warn,
+    /// Blocking: the deployment cannot do its job in this state.
+    Fail,
+}
+
+impl Status {
+    /// Table rendering.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Pass => "PASS",
+            Self::Warn => "WARN",
+            Self::Fail => "FAIL",
+        }
+    }
+
+    /// `--json` rendering.
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Warn => "warn",
+            Self::Fail => "fail",
+        }
+    }
+
+    /// The more severe of two verdicts. Lets a check that inspects several
+    /// providers reach one verdict without ranking numbers.
+    pub const fn worst(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Fail, _) | (_, Self::Fail) => Self::Fail,
+            (Self::Warn, _) | (_, Self::Warn) => Self::Warn,
+            _ => Self::Pass,
+        }
+    }
+}
+
+/// One preflight result. `remedy` is populated on every check, including
+/// passing ones, so `--fix-hints` can print the knob that governs a check
+/// which currently passes; the default rendering shows it only for WARN
+/// and FAIL rows, where it is the actionable part.
+#[derive(Debug, Clone)]
+pub struct Check {
+    /// Stable machine-readable id (`config`, `storage`, ...).
+    pub id: &'static str,
+    /// Human column heading.
+    pub title: &'static str,
+    pub status: Status,
+    /// What was observed. Carries the EXACT upstream error text on
+    /// failure — never a paraphrase, never just "failed".
+    pub detail: String,
+    /// The env var or command that changes the outcome.
+    pub remedy: String,
+}
+
+impl Check {
+    fn new(
+        id: &'static str,
+        title: &'static str,
+        status: Status,
+        detail: String,
+        remedy: &str,
+    ) -> Self {
+        Self {
+            id,
+            title,
+            status,
+            detail,
+            remedy: remedy.to_string(),
+        }
+    }
+
+    fn pass(id: &'static str, title: &'static str, detail: String, remedy: &str) -> Self {
+        Self::new(id, title, Status::Pass, detail, remedy)
+    }
+
+    fn fail(id: &'static str, title: &'static str, detail: String, remedy: &str) -> Self {
+        Self::new(id, title, Status::Fail, detail, remedy)
+    }
+
+    fn to_json(&self) -> Value {
+        json!({
+            "id": self.id,
+            "title": self.title,
+            "status": self.status.key(),
+            "detail": self.detail,
+            "remedy": self.remedy,
+        })
+    }
+}
+
+/// Per-item outcomes accumulated inside one check that inspects several
+/// things (one row per configured provider, say). The check's verdict is
+/// the worst of them, so a healthy GCP arm never masks a broken Azure one.
+#[derive(Default)]
+struct Findings {
+    status: Status,
+    notes: Vec<String>,
+    remedies: Vec<String>,
+}
+
+impl Findings {
+    fn note(&mut self, status: Status, note: String) {
+        self.status = self.status.worst(status);
+        self.notes.push(note);
+    }
+
+    /// Record the fix for a specific finding, de-duplicated: several
+    /// providers failing the same way should not repeat the same remedy.
+    fn remedy(&mut self, remedy: impl Into<String>) {
+        let remedy = remedy.into();
+        if !self.remedies.contains(&remedy) {
+            self.remedies.push(remedy);
+        }
+    }
+
+    /// `base` is the knob that governs this check when nothing went wrong.
+    fn into_check(self, id: &'static str, title: &'static str, base: &str) -> Check {
+        let remedy = if self.remedies.is_empty() {
+            base.to_string()
+        } else {
+            self.remedies.join(" | ")
+        };
+        Check {
+            id,
+            title,
+            status: self.status,
+            detail: self.notes.join("; "),
+            remedy,
+        }
+    }
+}
+
+/// The full preflight outcome, in the order the checks are meant to be
+/// read: earliest blocking failure first.
+#[derive(Debug, Clone)]
+pub struct Report {
+    pub generated_at: String,
+    pub checks: Vec<Check>,
+}
+
+impl Report {
+    /// Worst verdict across every check.
+    pub fn status(&self) -> Status {
+        self.checks
+            .iter()
+            .fold(Status::Pass, |so_far, check| so_far.worst(check.status))
+    }
+
+    /// The first FAIL in preflight order — the one to fix before reading
+    /// further, because the later checks are usually downstream of it.
+    pub fn first_failure(&self) -> Option<&Check> {
+        self.checks
+            .iter()
+            .find(|check| check.status == Status::Fail)
+    }
+
+    pub fn failed(&self) -> usize {
+        self.checks
+            .iter()
+            .filter(|check| check.status == Status::Fail)
+            .count()
+    }
+
+    pub fn warned(&self) -> usize {
+        self.checks
+            .iter()
+            .filter(|check| check.status == Status::Warn)
+            .count()
+    }
+
+    pub fn to_json(&self) -> Value {
+        json!({
+            "generated_at": self.generated_at,
+            "status": self.status().key(),
+            "failed": self.failed(),
+            "warned": self.warned(),
+            "checks": self.checks.iter().map(Check::to_json).collect::<Vec<Value>>(),
+        })
+    }
+}
+
+/// Run a probe under [`PROBE_TIMEOUT`]. An elapsed probe becomes a FAIL
+/// row rather than a hung command, so the remaining probes still report.
+async fn bounded(
+    id: &'static str,
+    title: &'static str,
+    remedy: &str,
+    probe: impl Future<Output = Check>,
+) -> Check {
+    match tokio::time::timeout(PROBE_TIMEOUT, probe).await {
+        Ok(check) => check,
+        Err(_) => Check::fail(
+            id,
+            title,
+            format!("probe did not answer within {PROBE_TIMEOUT:?}"),
+            remedy,
+        ),
+    }
+}
+
+/// Run the whole preflight. Never returns an error: an unreachable
+/// dependency is a FAIL row, not an aborted command.
+pub async fn run() -> Report {
+    // One facade for every store-backed probe. Its construction failure is
+    // itself diagnostic — on the azure backend with an empty account
+    // `JobStorage::with_bucket` hard-errors — so each dependent check
+    // reports it instead of the whole command dying here.
+    let store = JobStorage::new().await;
+    let store_error = store
+        .as_ref()
+        .err()
+        .map(ToString::to_string)
+        .unwrap_or_default();
+    let store = store.as_ref().ok();
+
+    // Concurrent, like the two sections of
+    // `monitor::billing::live_snapshot`; the fixed assembly order below is
+    // what makes the report ordered.
+    let (
+        config_check,
+        storage_check,
+        providers_check,
+        quota_check,
+        release_check,
+        template_check,
+        identity_check,
+        registry_check,
+        control_check,
+        alerts_check,
+    ) = tokio::join!(
+        bounded(CONFIG_ID, CONFIG_TITLE, CONFIG_REMEDY, async {
+            check_config()
+        }),
+        bounded(
+            STORAGE_ID,
+            STORAGE_TITLE,
+            STORAGE_REMEDY,
+            check_storage_round_trip(store, &store_error)
+        ),
+        bounded(
+            PROVIDERS_ID,
+            PROVIDERS_TITLE,
+            PROVIDERS_REMEDY,
+            check_provider_auth()
+        ),
+        bounded(
+            QUOTA_ID,
+            QUOTA_TITLE,
+            QUOTA_REMEDY,
+            check_quota(store, &store_error)
+        ),
+        bounded(
+            RELEASE_ID,
+            RELEASE_TITLE,
+            RELEASE_REMEDY,
+            check_release_channel()
+        ),
+        bounded(TEMPLATE_ID, TEMPLATE_TITLE, TEMPLATE_REMEDY, async {
+            check_agent_template()
+        }),
+        bounded(IDENTITY_ID, IDENTITY_TITLE, IDENTITY_REMEDY, async {
+            check_vm_identity()
+        }),
+        bounded(
+            REGISTRY_ID,
+            REGISTRY_TITLE,
+            REGISTRY_REMEDY,
+            check_registry()
+        ),
+        bounded(
+            CONTROL_ID,
+            CONTROL_TITLE,
+            CONTROL_REMEDY,
+            check_queue_control(store, &store_error)
+        ),
+        bounded(ALERTS_ID, ALERTS_TITLE, ALERTS_REMEDY, check_alerts()),
+    );
+
+    Report {
+        generated_at: Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false),
+        // Preflight order: configuration, then the store everything else
+        // reads, then credentials, then capacity, then the two things an
+        // agent VM needs in order to exist at all, then fleet identity,
+        // then the switches that explain an idle-but-healthy deployment.
+        checks: vec![
+            config_check,
+            storage_check,
+            providers_check,
+            quota_check,
+            release_check,
+            template_check,
+            identity_check,
+            registry_check,
+            control_check,
+            alerts_check,
+        ],
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 1. Config
+// ---------------------------------------------------------------------------
+
+const CONFIG_ID: &str = "config";
+const CONFIG_TITLE: &str = "Config";
+const CONFIG_REMEDY: &str =
+    "governed by WC_STORAGE_BACKEND, WC_PROVIDERS and the storage locator vars \
+     (WC_BUCKET / WC_AZURE_STORAGE_ACCOUNT + WC_AZURE_CONTAINER / WC_S3_BUCKET / \
+     WC_LOCAL_STORAGE_PATH); `stado config show` prints the resolved set";
+
+/// Resolved backend, providers, storage locator and the config file
+/// actually in use.
+fn check_config() -> Check {
+    let backend = config::wc_storage_backend();
+    let mut findings = Findings::default();
+
+    let locator = match backend {
+        "gcs" => format!("bucket={}", config::bucket()),
+        "azure" => format!(
+            "account={:?} container={:?}",
+            config::wc_azure_storage_account(),
+            config::wc_azure_container()
+        ),
+        "s3" => format!(
+            "bucket={:?} region={}",
+            config::wc_s3_bucket(),
+            config::wc_s3_region()
+        ),
+        "local" => format!("path={}", config::wc_local_storage_path()),
+        _ => "no locator (backend is not one of gcs/azure/s3/local)".to_string(),
+    };
+    let config_file = match config_file::config_path() {
+        Ok(Some(path)) => path.display().to_string(),
+        Ok(None) => "none (env and built-in defaults only)".to_string(),
+        Err(err) => format!("unreadable: {err}"),
+    };
+    findings.note(
+        Status::Pass,
+        format!(
+            "backend={backend} {locator} providers=[{}] config_file={config_file}",
+            config::wc_providers().join(",")
+        ),
+    );
+
+    match backend {
+        "gcs" | "azure" | "s3" | "local" => {}
+        other => {
+            findings.note(
+                Status::Fail,
+                format!("WC_STORAGE_BACKEND={other:?} is not a backend this build can construct"),
+            );
+            findings.remedy("set WC_STORAGE_BACKEND to one of gcs, azure, s3, local");
+        }
+    }
+
+    if backend == "azure" {
+        if config::wc_azure_storage_account().is_empty() {
+            // `queue::azure_blob::AzureBlobBackend::new` hard-errors on
+            // this, so every store-backed command dies at construction.
+            findings.note(
+                Status::Fail,
+                "WC_AZURE_STORAGE_ACCOUNT is empty while the azure backend is selected; \
+                 AzureBlobBackend cannot be constructed, so every queue read and write \
+                 fails before it starts"
+                    .to_string(),
+            );
+            findings.remedy(
+                "export WC_AZURE_STORAGE_ACCOUNT=<storage account> (or set \
+                 storage.azure.account in the stado config file)",
+            );
+        }
+        if config::wc_azure_container() == config::DEFAULT_AZURE_CONTAINER {
+            // The default name predates the rename to `stado`; landing on
+            // it by accident reads an empty container, which is
+            // indistinguishable from an empty queue at every other command.
+            findings.note(
+                Status::Warn,
+                format!(
+                    "WC_AZURE_CONTAINER is still the compiled-in default {:?}, not {:?}; if the \
+                     queue was migrated into a differently named container this reads an empty \
+                     one and every listing looks like an empty queue",
+                    config::DEFAULT_AZURE_CONTAINER,
+                    config::bucket()
+                ),
+            );
+            findings.remedy(
+                "export WC_AZURE_CONTAINER=<container holding the queue> (or set \
+                 storage.azure.container in the stado config file)",
+            );
+        }
+    }
+
+    if config::wc_providers().is_empty() {
+        findings.note(
+            Status::Fail,
+            "WC_PROVIDERS resolved to an empty list".to_string(),
+        );
+        findings.remedy("export WC_PROVIDERS=gcp (or azure, aws, local, comma-separated)");
+    }
+
+    findings.into_check(CONFIG_ID, CONFIG_TITLE, CONFIG_REMEDY)
+}
+
+// ---------------------------------------------------------------------------
+// 2. Storage auth + round trip
+// ---------------------------------------------------------------------------
+
+const STORAGE_ID: &str = "storage";
+const STORAGE_TITLE: &str = "Storage round trip";
+const STORAGE_REMEDY: &str =
+    "the store is selected by WC_STORAGE_BACKEND and its locator vars; credentials come from \
+     the backend's own chain — application-default for gcs, Managed Identity or the current \
+     Azure CLI identity for azure, the standard AWS chain for s3; persistent application \
+     credentials belong in Azure Key Vault";
+
+/// Object name for one round trip. Unique per run, so two operators
+/// running `stado doctor` at once cannot delete each other's probe, and
+/// named so whoever finds a leaked one knows what it is without grepping.
+fn probe_blob() -> String {
+    let host = targets::normalize_hostname(&providers::vast::system_hostname());
+    format!(
+        "{PROBE_PREFIX}stado-doctor-probe-safe-to-delete-{host}-{}.json",
+        uuid::Uuid::new_v4()
+    )
+}
+
+/// Write, read back and delete one object. The only write `stado doctor`
+/// performs, and the only check anywhere that separates "the queue is
+/// empty" from "the store is unreachable".
+async fn check_storage_round_trip(store: Option<&JobStorage>, store_error: &str) -> Check {
+    let Some(store) = store else {
+        return Check::fail(
+            STORAGE_ID,
+            STORAGE_TITLE,
+            format!("storage backend could not be constructed: {store_error}"),
+            STORAGE_REMEDY,
+        );
+    };
+    let target = format!(
+        "backend={} bucket={:?}",
+        store.backend_name(),
+        store.bucket_name()
+    );
+    let path = probe_blob();
+    let payload = serde_json::to_string_pretty(&json!({
+        "written_by": "stado doctor",
+        "purpose": "storage auth + round-trip probe",
+        "note": "diagnostic only, carries no queue state; safe to delete",
+        "written_at": Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false),
+        "host": providers::vast::system_hostname(),
+    }))
+    .expect("probe document serializes");
+
+    // Cleanup is unconditional once a write was attempted: a doctor that
+    // leaks an object on every failing run is worse than no doctor. Delete
+    // is idempotent, so running it after a failed write costs nothing.
+    let written = store.upload_text(&path, &payload).await;
+    let read_back = match written {
+        Ok(()) => Some(store.download_text(&path).await),
+        Err(_) => None,
+    };
+    let cleaned = store.delete_blob(&path).await;
+
+    let mut findings = Findings::default();
+    match (written, read_back) {
+        (Err(err), _) => {
+            findings.note(
+                Status::Fail,
+                format!("write of {path} failed ({target}): {err}"),
+            );
+            findings.remedy(STORAGE_REMEDY);
+        }
+        (Ok(()), Some(Err(err))) => {
+            findings.note(
+                Status::Fail,
+                format!("read back of {path} failed ({target}): {err}"),
+            );
+            findings.remedy(STORAGE_REMEDY);
+        }
+        (Ok(()), Some(Ok(None))) => {
+            findings.note(
+                Status::Fail,
+                format!(
+                    "{path} was written without error but reads back as absent ({target}); the \
+                     credentials can write but not read, or the write landed somewhere other \
+                     than where the read looks"
+                ),
+            );
+            findings.remedy(STORAGE_REMEDY);
+        }
+        (Ok(()), Some(Ok(Some(text)))) if text != payload => {
+            findings.note(
+                Status::Fail,
+                format!(
+                    "{path} read back {} byte(s) instead of the {} written ({target}); the \
+                     backend is not returning what it stored",
+                    text.len(),
+                    payload.len()
+                ),
+            );
+            findings.remedy(STORAGE_REMEDY);
+        }
+        (Ok(()), _) => findings.note(
+            Status::Pass,
+            format!("wrote, read back and deleted {path} ({target})"),
+        ),
+    }
+    if let Err(err) = cleaned {
+        findings.note(
+            Status::Warn,
+            format!("probe object {path} could NOT be deleted and is still in the store: {err}"),
+        );
+        findings.remedy(format!("delete the leaked probe object {path} by hand"));
+    }
+    findings.into_check(STORAGE_ID, STORAGE_TITLE, STORAGE_REMEDY)
+}
+
+// ---------------------------------------------------------------------------
+// 3. Provider auth
+// ---------------------------------------------------------------------------
+
+const PROVIDERS_ID: &str = "providers";
+const PROVIDERS_TITLE: &str = "Provider auth";
+const PROVIDERS_REMEDY: &str =
+    "each provider in WC_PROVIDERS authenticates through its own chain: application-default \
+     credentials for gcp, Managed Identity or the current Azure CLI identity plus \
+     AZURE_SUBSCRIPTION_ID for azure, the standard AWS chain plus AWS_REGION for aws; \
+     persistent application credentials belong in Azure Key Vault";
+
+/// The cheapest authenticated call each provider offers: list what it is
+/// already running. Reports the exact upstream error, because "the
+/// credentials are missing" and "the subscription is disabled" read alike
+/// from a boolean and need opposite fixes.
+async fn check_provider_auth() -> Check {
+    let mut findings = Findings::default();
+    for name in config::wc_providers() {
+        if name == LOCAL_PROVIDER {
+            findings.note(
+                Status::Pass,
+                format!("{name}: device-local, no cloud API to authenticate against"),
+            );
+            continue;
+        }
+        let provider = match providers::get_provider(name) {
+            Ok(provider) => provider,
+            Err(err) => {
+                findings.note(
+                    Status::Fail,
+                    format!("{name}: cannot construct provider: {err}"),
+                );
+                findings.remedy(PROVIDERS_REMEDY);
+                continue;
+            }
+        };
+        match provider.list_running_instances().await {
+            Ok(running) => {
+                let total: i64 = running.values().sum();
+                findings.note(
+                    Status::Pass,
+                    format!("{name}: authenticated, {total} instance(s) running"),
+                );
+            }
+            Err(err) => {
+                findings.note(Status::Fail, format!("{name}: {err}"));
+                findings.remedy(PROVIDERS_REMEDY);
+            }
+        }
+    }
+    if findings.notes.is_empty() {
+        findings.note(
+            Status::Fail,
+            "WC_PROVIDERS lists no provider to check".to_string(),
+        );
+        findings.remedy("export WC_PROVIDERS=gcp (or azure, aws, local, comma-separated)");
+    }
+    findings.into_check(PROVIDERS_ID, PROVIDERS_TITLE, PROVIDERS_REMEDY)
+}
+
+// ---------------------------------------------------------------------------
+// 4. Quota
+// ---------------------------------------------------------------------------
+
+const QUOTA_ID: &str = "quota";
+const QUOTA_TITLE: &str = "Quota";
+const QUOTA_REMEDY: &str =
+    "`stado quota show` prints the live picture; raise a ceiling with `stado quota request \
+     --accel <ACCEL> --new-limit <N>`, and check the reservation overlay at config/quotas.json \
+     in the queue store";
+
+/// Live per-accelerator quota through [`quota::load_quotas`] — the same
+/// call the dispatcher's admission control makes. Nothing schedulable
+/// anywhere is a hard FAIL: no bucket can ever be dispatched, which is
+/// exactly what an all-zero Azure subscription looks like from outside.
+async fn check_quota(store: Option<&JobStorage>, store_error: &str) -> Check {
+    let Some(store) = store else {
+        return Check::fail(
+            QUOTA_ID,
+            QUOTA_TITLE,
+            format!(
+                "quota needs the reservation overlay from the queue store, which could not be \
+                 constructed: {store_error}"
+            ),
+            STORAGE_REMEDY,
+        );
+    };
+    let mut findings = Findings::default();
+    let mut any_capacity = false;
+    for name in config::wc_providers() {
+        if name == LOCAL_PROVIDER {
+            // A device-local deployment schedules on the box's own GPU, so
+            // it is real capacity even with no cloud quota anywhere.
+            findings.note(
+                Status::Pass,
+                format!("{name}: device-local, admission is by live VRAM not cloud quota"),
+            );
+            any_capacity = true;
+            continue;
+        }
+        match quota::load_quotas(store, name).await {
+            Err(err) => {
+                findings.note(Status::Fail, format!("{name}: {err}"));
+                findings.remedy(QUOTA_REMEDY);
+            }
+            Ok(document) => {
+                let rows = document.get(name).and_then(Value::as_object);
+                let Some(rows) = rows.filter(|rows| !rows.is_empty()) else {
+                    findings.note(
+                        Status::Fail,
+                        format!("{name}: the quota API reported no accelerator at all"),
+                    );
+                    findings.remedy(QUOTA_REMEDY);
+                    continue;
+                };
+                let mut totals: Vec<String> = Vec::new();
+                let mut provider_capacity = false;
+                for (accel, row) in rows {
+                    let total = row.get("total").and_then(Value::as_i64).unwrap_or_default();
+                    let reserved = row
+                        .get("reserved")
+                        .and_then(Value::as_i64)
+                        .unwrap_or_default();
+                    provider_capacity |= (total - reserved).is_positive();
+                    totals.push(format!("{accel}={total}(-{reserved} reserved)"));
+                }
+                any_capacity |= provider_capacity;
+                let status = if provider_capacity {
+                    Status::Pass
+                } else {
+                    Status::Warn
+                };
+                findings.note(status, format!("{name}: {}", totals.join(" ")));
+            }
+        }
+    }
+    if !any_capacity {
+        findings.note(
+            Status::Fail,
+            "no accelerator has a schedulable slot on any configured provider; every dispatch \
+             attempt fails admission and the fleet stays at zero VMs"
+                .to_string(),
+        );
+        findings.remedy(QUOTA_REMEDY);
+    }
+    findings.into_check(QUOTA_ID, QUOTA_TITLE, QUOTA_REMEDY)
+}
+
+// ---------------------------------------------------------------------------
+// 5. Release channel
+// ---------------------------------------------------------------------------
+
+const RELEASE_ID: &str = "release";
+const RELEASE_TITLE: &str = "Release channel";
+const RELEASE_REMEDY: &str =
+    "point WC_RELEASE_BASE_URL (config key release.base_url) at a channel that serves \
+     latest.json plus <version>/<platform>/; on azure that is \
+     https://<account>.blob.core.windows.net/<container>/releases/stado, and the container \
+     must be readable by the identity in AZURE_VM_IDENTITY_ID";
+
+/// GET `latest.json` through [`HttpReleaseFetcher`] — the same fetcher,
+/// URL and auth an agent's self-install uses. An unreachable channel is a
+/// hard FAIL: cloud-init downloads the binary from here, so the VM aborts
+/// before the agent starts while still billing for the instance.
+async fn check_release_channel() -> Check {
+    let base = config::release_base_url();
+    let fetcher = HttpReleaseFetcher::new();
+    let mut findings = Findings::default();
+    match fetcher.fetch(self_update::LATEST_JSON_NAME).await {
+        Err(err) => {
+            findings.note(Status::Fail, err.to_string());
+            findings.remedy(RELEASE_REMEDY);
+        }
+        Ok(None) => {
+            findings.note(
+                Status::Fail,
+                format!(
+                    "{base}/{} does not exist; agent VMs have nothing to install and cloud-init \
+                     aborts before the agent starts",
+                    self_update::LATEST_JSON_NAME
+                ),
+            );
+            findings.remedy(RELEASE_REMEDY);
+        }
+        Ok(Some(body)) => {
+            match std::str::from_utf8(&body)
+                .ok()
+                .and_then(self_update::parse_latest_json)
+            {
+                Some(latest) => findings.note(
+                    Status::Pass,
+                    format!(
+                        "{base}/{} -> version {} on channel {}",
+                        self_update::LATEST_JSON_NAME,
+                        latest.version,
+                        latest.channel
+                    ),
+                ),
+                None => {
+                    findings.note(
+                        Status::Fail,
+                        format!(
+                            "{base}/{} is reachable but is not a release pointer; the agent's \
+                             drift check reads an unparseable pointer as absent and never \
+                             installs",
+                            self_update::LATEST_JSON_NAME
+                        ),
+                    );
+                    findings.remedy(RELEASE_REMEDY);
+                }
+            }
+        }
+    }
+    findings.into_check(RELEASE_ID, RELEASE_TITLE, RELEASE_REMEDY)
+}
+
+// ---------------------------------------------------------------------------
+// 6. Agent template render
+// ---------------------------------------------------------------------------
+
+const TEMPLATE_ID: &str = "template";
+const TEMPLATE_TITLE: &str = "Agent template";
+const TEMPLATE_REMEDY: &str =
+    "credential placeholders come from the coordinator's environment (HF_TOKEN, \
+     SUPABASE_ACCESS_TOKEN); deployment placeholders come from \
+     scheduler::dispatch::agent::deployment_substitutions, i.e. WC_STORAGE_BACKEND, \
+     WC_AZURE_STORAGE_ACCOUNT, WC_AZURE_CONTAINER, WC_RELEASE_BASE_URL, WC_S3_BUCKET, \
+     AWS_REGION";
+
+/// A representative accelerator for `provider`: the smallest VRAM tier of
+/// its [`GPU_SIZING`] ladder. Deterministic (`BTreeMap` order) and real,
+/// and its absence doubles as "this provider dispatches no agent VMs".
+fn representative_accel(provider: &str) -> Option<&'static str> {
+    GPU_SIZING
+        .get(provider)?
+        .values()
+        .next()
+        .map(|(_machine_type, accel)| *accel)
+}
+
+/// Render each configured provider's startup script exactly as dispatch
+/// would and assert no `${PLACEHOLDER}` survives.
+///
+/// This is the check that would have caught the Azure cutover: the
+/// template exports `${WC_STORAGE_BACKEND}` and friends under `set -u`,
+/// no producer supplied them, and every dispatched VM aborted before the
+/// agent started — billing for instances that ran nothing.
+fn check_agent_template() -> Check {
+    let secrets = coordinator::secrets_from_env();
+    let deployment = agent::deployment_substitutions();
+    let mut findings = Findings::default();
+    for name in config::wc_providers() {
+        let Some(accel) = representative_accel(name) else {
+            findings.note(
+                Status::Pass,
+                format!("{name}: dispatches no agent VMs, no startup template to render"),
+            );
+            continue;
+        };
+        let template = agent::bundled_template_for(name);
+        match agent::render_startup_script(template, accel, &secrets, &deployment) {
+            Ok(script) => findings.note(
+                Status::Pass,
+                format!(
+                    "{name}: rendered {} byte(s) for {accel} with no unresolved placeholder",
+                    script.len()
+                ),
+            ),
+            Err(err) => {
+                findings.note(Status::Fail, format!("{name} ({accel}): {err}"));
+                findings.remedy(TEMPLATE_REMEDY);
+            }
+        }
+    }
+    findings.into_check(TEMPLATE_ID, TEMPLATE_TITLE, TEMPLATE_REMEDY)
+}
+
+// ---------------------------------------------------------------------------
+// 7. VM identity
+// ---------------------------------------------------------------------------
+
+const IDENTITY_ID: &str = "vm-identity";
+const IDENTITY_TITLE: &str = "Azure VM identity";
+const IDENTITY_REMEDY: &str =
+    "export AZURE_VM_IDENTITY_ID=/subscriptions/<sub>/resourceGroups/<rg>/providers/\
+     Microsoft.ManagedIdentity/userAssignedIdentities/<name> (config key \
+     azure.vm_identity_id), and grant that identity read/write on the queue container";
+
+/// Without a user-assigned identity on the VM, the on-VM half of the
+/// [`crate::azure_token`] chain resolves nothing: an agent VM carries no
+/// service-principal env vars and no `az` CLI, so IMDS is the only source
+/// left and IMDS answers only for a VM that has an identity attached. The
+/// agent can then neither read the queue nor self-delete, so it bills
+/// until an operator happens to notice.
+fn check_vm_identity() -> Check {
+    if !config::wc_providers().iter().any(|name| name == "azure") {
+        return Check::pass(
+            IDENTITY_ID,
+            IDENTITY_TITLE,
+            "azure is not in WC_PROVIDERS; no agent VM needs a managed identity".to_string(),
+            IDENTITY_REMEDY,
+        );
+    }
+    let identity = config::azure_vm_identity_id();
+    if identity.is_empty() {
+        return Check::fail(
+            IDENTITY_ID,
+            IDENTITY_TITLE,
+            "AZURE_VM_IDENTITY_ID is empty while azure is in WC_PROVIDERS; VM create emits no \
+             identity block, so the agent's IMDS token chain resolves nothing and it can \
+             neither claim jobs nor self-delete"
+                .to_string(),
+            IDENTITY_REMEDY,
+        );
+    }
+    Check::pass(
+        IDENTITY_ID,
+        IDENTITY_TITLE,
+        format!("agent VMs get user-assigned identity {identity}"),
+        IDENTITY_REMEDY,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// 8. Registry
+// ---------------------------------------------------------------------------
+
+const REGISTRY_ID: &str = "registry";
+const REGISTRY_TITLE: &str = "Registry";
+const REGISTRY_REMEDY: &str =
+    "`stado registry pull` shows what the canonical registry says and `stado registry self` \
+     resolves this host; add or rename the entry, then `stado registry validate` and \
+     `stado registry push`";
+
+/// The canonical registry must be reachable, must parse, and must know
+/// either this host or an active coordinator. An unreachable registry is
+/// an error rather than an empty one — [`targets::fetch_registry_remote`]
+/// draws that distinction because "the store is down" and "you were
+/// removed from the fleet" demand opposite responses.
+async fn check_registry() -> Check {
+    let registry = match targets::fetch_registry_remote().await {
+        Ok(registry) => registry,
+        Err(err) => {
+            return Check::fail(
+                REGISTRY_ID,
+                REGISTRY_TITLE,
+                err.to_string(),
+                REGISTRY_REMEDY,
+            )
+        }
+    };
+    let hostname = providers::vast::system_hostname();
+    let coordinators: Vec<&str> = registry
+        .coordinators
+        .iter()
+        .filter(|coordinator| coordinator.active)
+        .map(|coordinator| coordinator.name.as_str())
+        .collect();
+    let shape = format!(
+        "{} target(s), {} coordinator(s)",
+        registry.targets.len(),
+        registry.coordinators.len()
+    );
+
+    match registry.lookup_self(&hostname) {
+        Err(err) => Check::fail(
+            REGISTRY_ID,
+            REGISTRY_TITLE,
+            format!("parsed ({shape}) but this host's identity is not resolvable: {err}"),
+            REGISTRY_REMEDY,
+        ),
+        Ok(Some(target)) => Check::pass(
+            REGISTRY_ID,
+            REGISTRY_TITLE,
+            format!(
+                "reachable, parsed ({shape}); {hostname} is target {:?} of kind {}",
+                target.name, target.kind
+            ),
+            REGISTRY_REMEDY,
+        ),
+        Ok(None) if !coordinators.is_empty() => Check::pass(
+            REGISTRY_ID,
+            REGISTRY_TITLE,
+            format!(
+                "reachable, parsed ({shape}); {hostname} is not a target, active \
+                 coordinator(s): {}",
+                coordinators.join(",")
+            ),
+            REGISTRY_REMEDY,
+        ),
+        Ok(None) => Check::fail(
+            REGISTRY_ID,
+            REGISTRY_TITLE,
+            format!(
+                "reachable and parsed ({shape}) but names neither {hostname} nor any active \
+                 coordinator; a daemon started here fails its identity lookup and exits on \
+                 every respawn"
+            ),
+            REGISTRY_REMEDY,
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 9. Queue control
+// ---------------------------------------------------------------------------
+
+const CONTROL_ID: &str = "queue-control";
+const CONTROL_TITLE: &str = "Queue control";
+const CONTROL_REMEDY: &str = "`stado queue pause` / `stado queue resume` own this state";
+
+/// Whether dispatch is paused. A paused queue perfectly explains an idle
+/// fleet in front of a full queue, and is invisible everywhere else.
+async fn check_queue_control(store: Option<&JobStorage>, store_error: &str) -> Check {
+    let Some(store) = store else {
+        return Check::fail(
+            CONTROL_ID,
+            CONTROL_TITLE,
+            format!(
+                "the pause flag lives at {} in the queue store, which could not be \
+                 constructed: {store_error}",
+                control::CONTROL_BLOB
+            ),
+            STORAGE_REMEDY,
+        );
+    };
+    match control::read(store).await {
+        Err(err) => Check::fail(
+            CONTROL_ID,
+            CONTROL_TITLE,
+            format!("could not read {}: {err}", control::CONTROL_BLOB),
+            STORAGE_REMEDY,
+        ),
+        Ok(state) if state.paused => Check::new(
+            CONTROL_ID,
+            CONTROL_TITLE,
+            Status::Warn,
+            // The same one-liner the scheduler and the agent print when
+            // they refuse work, so all three say the pause the same way.
+            format!("dispatch is PAUSED — {}", state.pause_summary()),
+            "`stado queue resume` restarts dispatch",
+        ),
+        Ok(_) => Check::pass(
+            CONTROL_ID,
+            CONTROL_TITLE,
+            "dispatch is running (not paused)".to_string(),
+            CONTROL_REMEDY,
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 10. Alerts
+// ---------------------------------------------------------------------------
+
+const ALERTS_ID: &str = "alerts";
+const ALERTS_TITLE: &str = "Alerts";
+const ALERTS_REMEDY: &str =
+    "configure at least one channel that does not depend on GCP: WC_SLACK_WEBHOOK, or \
+     WC_TELEGRAM_BOT_TOKEN + WC_TELEGRAM_CHAT_ID, or WC_SENDGRID_API_KEY + WC_EMAIL_TO; clear \
+     WC_ALERTS_TOPIC on a deployment that has left GCP";
+
+/// At least one alert channel that survives the cloud going away.
+///
+/// The outage's compounding failure: the only configured channel was GCP
+/// Pub/Sub, on the very account whose billing had been disabled, so every
+/// alert about the outage failed to send because of the outage.
+async fn check_alerts() -> Check {
+    // An empty topic short-circuits the Pub/Sub arm of `from_env`, so this
+    // resolves the three non-GCP channels through the production logic
+    // without paying for (or logging) a GCP token probe.
+    let channels = AlertChannels::from_env("").await;
+    let mut configured: Vec<&str> = Vec::new();
+    if channels.slack_webhook.is_some() {
+        configured.push("slack");
+    }
+    if channels.telegram.is_some() {
+        configured.push("telegram");
+    }
+    if channels.sendgrid.is_some() {
+        configured.push("sendgrid");
+    }
+
+    let topic = config::alerts_topic();
+    // "On GCP" means there is still a GCP surface a Pub/Sub publish could
+    // plausibly authenticate against: the GCS queue store or the GCP
+    // dispatch provider. The billing outage removed both at once.
+    let on_gcp = config::wc_storage_backend() == "gcs"
+        || config::wc_providers().iter().any(|name| name == "gcp");
+    let mut findings = Findings::default();
+
+    if configured.is_empty() {
+        let detail = if topic.is_empty() {
+            "no alert channel is configured at all; nothing anywhere will page an operator"
+                .to_string()
+        } else if on_gcp {
+            format!(
+                "the only channel is GCP Pub/Sub ({topic}); an outage of that account takes the \
+                 alerts down with it, which is exactly how the last one went unnoticed"
+            )
+        } else {
+            format!(
+                "the only channel is GCP Pub/Sub ({topic}) but this deployment has no GCP \
+                 surface left (backend={}, providers=[{}]); every alert is delivered nowhere",
+                config::wc_storage_backend(),
+                config::wc_providers().join(",")
+            )
+        };
+        let status = if topic.is_empty() || !on_gcp {
+            Status::Fail
+        } else {
+            Status::Warn
+        };
+        findings.note(status, detail);
+        findings.remedy(ALERTS_REMEDY);
+    } else {
+        findings.note(
+            Status::Pass,
+            format!("non-GCP channel(s) configured: {}", configured.join(",")),
+        );
+    }
+
+    if !topic.is_empty() && !on_gcp {
+        findings.note(
+            Status::Warn,
+            format!(
+                "WC_ALERTS_TOPIC is set to {topic} on a deployment with no GCP surface; every \
+                 send_alert pays a failing gcp_auth probe before the working channels fire"
+            ),
+        );
+        findings.remedy("unset WC_ALERTS_TOPIC (config key alerts.topic) on this deployment");
+    }
+
+    findings.into_check(ALERTS_ID, ALERTS_TITLE, ALERTS_REMEDY)
+}

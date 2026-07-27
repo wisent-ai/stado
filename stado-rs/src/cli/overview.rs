@@ -389,22 +389,60 @@ fn print_human(document: &Value) {
     let azure = &billing["azure"];
     if azure.get("status").and_then(Value::as_str) == Some("ok") {
         println!(
-            "  Azure available credits: {} {}",
+            "  Azure credits: current={} estimated={} {}",
+            azure
+                .get("available_balance")
+                .map_or_else(|| "unknown".to_string(), Value::to_string),
+            azure
+                .get("estimated_balance")
+                .map_or_else(|| "unknown".to_string(), Value::to_string),
             azure
                 .get("currency")
                 .and_then(Value::as_str)
                 .unwrap_or("USD"),
-            azure
-                .get("available_balance")
-                .map_or_else(|| "unknown".to_string(), Value::to_string)
         );
+        println!(
+            "  Azure grant: amount={} used={}, valid {} — {}",
+            azure
+                .get("grant_amount")
+                .map_or_else(|| "unknown".to_string(), Value::to_string),
+            azure
+                .get("credit_used")
+                .map_or_else(|| "unknown".to_string(), Value::to_string),
+            azure
+                .get("grant_start_date")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown"),
+            azure
+                .get("grant_end_date")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown"),
+        );
+        println!(
+            "  Azure pending eligible charges={} expired={}",
+            azure
+                .get("pending_eligible_charges")
+                .map_or_else(|| "unknown".to_string(), Value::to_string),
+            azure
+                .get("expired_credit")
+                .map_or_else(|| "unknown".to_string(), Value::to_string),
+        );
+        if azure.get("overage_risk").and_then(Value::as_bool) == Some(true) {
+            println!(
+                "  Azure warning: spending limit is off; paid overage can continue after credits"
+            );
+        }
     } else {
         println!(
-            "  Azure credits: {}",
+            "  Azure credits: {} — {}",
             azure
                 .get("status")
                 .and_then(Value::as_str)
-                .unwrap_or("unavailable")
+                .unwrap_or("unavailable"),
+            azure
+                .get("detail")
+                .and_then(Value::as_str)
+                .unwrap_or("no detail"),
         );
     }
 

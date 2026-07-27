@@ -23,9 +23,17 @@
 //! daemon: hostname).
 //!
 //! Registry re-resolution is at full Python parity: every tick re-reads the
-//! GCS registry (source="gcs") via [`crate::targets::load_registry_gcs`] so
-//! an operator can kill a rogue daemon by removing its entry — GCS is the
-//! ONLY authority for the self-survival check, with no local escape hatch.
+//! canonical registry (source="gcs") via
+//! [`crate::targets::fetch_registry_remote`] so an operator can kill a rogue
+//! daemon by removing its entry. The remote registry is the ONLY authority
+//! for the self-survival check — there is no local escape hatch.
+//!
+//! DEVIATION from Python: the check exits ONLY on a registry that was
+//! successfully READ and does not list the coordinator. Python treats an
+//! unreachable store as an empty registry, so a storage outage terminates
+//! every coordinator in the fleet at once — exactly what happened when the
+//! GCP billing account was closed and every GCS call began answering
+//! `accountDisabled`. A fetch failure now logs loudly and keeps ticking.
 //!
 //! Deviations from coordinator.py (all deliberate):
 //! 1. Self-update: Python does PyPI drift-detect + `pip install --upgrade`
@@ -53,7 +61,7 @@ use crate::scheduler::dispatch::r#box::run_box_tick;
 use crate::scheduler::makespan::assign_jobs;
 use crate::scheduler::scheduler::{schedule_queued_jobs, SchedulerError};
 use crate::schedules::fire_due_schedules;
-use crate::targets::{load_registry_auto, load_registry_gcs, Coordinator};
+use crate::targets::{fetch_registry_remote, load_registry_auto, Coordinator};
 
 /// `[tick] ...` — the coordinator's log prefix (Python `_log`).
 fn log(msg: &str) {
@@ -114,7 +122,11 @@ async fn resolve_coordinator(target: Option<&str>) -> Result<Coordinator, String
         );
     }
     if active.len() > 1 {
-        let names = active.iter().map(|c| c.name.as_str()).collect::<Vec<_>>().join(", ");
+        let names = active
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
         return Err(format!(
             "multiple active coordinators ({names}); set active=true on exactly one"
         ));
@@ -159,7 +171,19 @@ fn nodename() -> String {
 /// sits idle until manually deleted. We saw 37 such orphan VMs
 /// accumulate over ~24h on 2026-05-09 -> 2026-05-10 because secrets
 /// had been an empty dict here forever.
-fn secrets_from_env() -> BTreeMap<String, String> {
+///
+/// Credentials only. The non-secret `${KEY}` substitutions the templates
+/// also need — storage backend, Azure account/container, release base URL,
+/// AWS bucket and region — are produced by
+/// [`crate::scheduler::dispatch::agent::deployment_substitutions`] from
+/// config, so a deployment setting never has to be smuggled through a
+/// secrets bag, and a missing one now aborts the bucket instead of booting
+/// a VM that dies on `set -u`.
+///
+/// Crate-visible so `crate::doctor` renders its template preflight with the
+/// exact secrets bag a real tick would supply; a preflight fed a different
+/// map could pass while dispatch still shipped an unsubstituted `${KEY}`.
+pub(crate) fn secrets_from_env() -> BTreeMap<String, String> {
     let mut secrets = BTreeMap::new();
     for key in ["HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"] {
         if let Ok(val) = std::env::var(key) {
@@ -170,7 +194,9 @@ fn secrets_from_env() -> BTreeMap<String, String> {
         }
     }
     if let Some(hf) = secrets.get("HF_TOKEN").cloned() {
-        secrets.entry("HUGGING_FACE_HUB_TOKEN".to_string()).or_insert(hf);
+        secrets
+            .entry("HUGGING_FACE_HUB_TOKEN".to_string())
+            .or_insert(hf);
     }
     // Supabase Management API token goes to a distinct placeholder
     // (WC_SUPABASE_TOKEN) so the startup template can use bash empty-
@@ -242,7 +268,9 @@ pub async fn run_tick(
     log: &dyn Fn(&str),
 ) -> Result<i64, CoordinatorError> {
     if let Err(exc) = config::refresh_model_policy(store).await {
-        log(&format!("model policy refresh failed; retaining last good policy: {exc}"));
+        log(&format!(
+            "model policy refresh failed; retaining last good policy: {exc}"
+        ));
     }
     // Fire recurring (cron) schedules FIRST so any job submitted this tick
     // is visible to the assignment + dispatch passes below, instead of
@@ -258,9 +286,13 @@ pub async fn run_tick(
     // write then preserves it. Correcting it here each tick makes the
     // coordinator the single sizing authority instead of waiting for
     // fleet-wide drift.
-    let n_sized = crate::sizing::global().normalize_queue_sizing(store, log).await?;
+    let n_sized = crate::sizing::global()
+        .normalize_queue_sizing(store, log)
+        .await?;
     if n_sized > 0 {
-        log(&format!("sizing: corrected {n_sized} stale queue gpu_mem_gb values"));
+        log(&format!(
+            "sizing: corrected {n_sized} stale queue gpu_mem_gb values"
+        ));
     }
     // Centralized makespan-minimizing matcher. Writes assigned_to back to
     // the queue blob; the agent side refuses jobs pinned to a different
@@ -268,7 +300,9 @@ pub async fn run_tick(
     // not a fleet-routing one.
     let n_assigned = assign_jobs(store, log).await?;
     if n_assigned > 0 {
-        log(&format!("assignment: matched {n_assigned} queued jobs to agents"));
+        log(&format!(
+            "assignment: matched {n_assigned} queued jobs to agents"
+        ));
     }
     let mut total: i64 = 0;
     for arm in providers {
@@ -327,8 +361,14 @@ pub async fn run(target: Option<&str>, once: bool) -> Result<i32, String> {
     }
 
     let parsed = bucket_from_state_uri(&coord.state_uri);
-    let bucket = if parsed.is_empty() { config::bucket().to_string() } else { parsed };
-    let store = JobStorage::with_bucket(&bucket).await.map_err(|exc| exc.to_string())?;
+    let bucket = if parsed.is_empty() {
+        config::bucket().to_string()
+    } else {
+        parsed
+    };
+    let store = JobStorage::with_bucket(&bucket)
+        .await
+        .map_err(|exc| exc.to_string())?;
     let interval = coord.interval_seconds.max(15) as u64;
     log(&format!(
         "coordinator '{}' runtime={} interval={interval}s state={}",
@@ -364,19 +404,32 @@ pub async fn run(target: Option<&str>, once: bool) -> Result<i32, String> {
         // already on the latest published version). Re-resolving each tick
         // means a registry change takes effect within one interval_seconds
         // without depending on a new release being published.
-        // Python reads source="gcs" — the GCS registry is the ONLY
+        // Python reads source="gcs" — the remote registry is the ONLY
         // authority for the self-survival check there, with no local
-        // escape hatch.
+        // escape hatch. Same here, but a registry we could not READ is
+        // not an authority at all.
         if let Some(target) = target {
-            let registry = load_registry_gcs().await;
-            if registry.lookup_coordinator(target).is_none() {
+            let survival = fetch_registry_remote().await;
+            // Exit ONLY when a registry we actually READ omits the entry.
+            // An unreachable store says nothing about whether the operator
+            // revoked us — see `targets::RegistryFetchError`.
+            if matches!(&survival, Ok(registry) if registry.lookup_coordinator(target).is_none()) {
                 log(&format!(
-                    "coordinator '{target}' not in GCS registry; exiting. \
+                    "coordinator '{target}' not in the canonical registry; exiting. \
                      Operator removed/renamed the entry — daemon stops here so \
                      launchd/supervisor backs off and stale code stops issuing \
                      GCE mutations."
                 ));
                 return Ok(0);
+            }
+            if let Err(exc) = survival {
+                log(&format!(
+                    "canonical registry unreachable ({exc}); SKIPPING the \
+                     self-survival check for coordinator '{target}' and \
+                     CONTINUING. A storage outage must never mass-terminate \
+                     the fleet — the kill switch fires only against a \
+                     registry that was actually read."
+                ));
             }
         }
         let providers = resolve_providers();
@@ -478,10 +531,14 @@ mod tests {
         let mut running = Job::new("runjob01", "echo train");
         running.state = job_state::RUNNING.to_string();
         running.instance_ref = Some("wisent-agent-x-1@zone-a".to_string());
-        running.started_at =
-            Some(crate::models::isoformat_utc(Utc::now() - chrono::Duration::hours(2)));
+        running.started_at = Some(crate::models::isoformat_utc(
+            Utc::now() - chrono::Duration::hours(2),
+        ));
         store.write_job("running", &running).await.unwrap();
-        store.upload_text("status/runjob01/status", "COMPLETED").await.unwrap();
+        store
+            .upload_text("status/runjob01/status", "COMPLETED")
+            .await
+            .unwrap();
         store
             .upload_text("status/runjob01/heartbeat", "RUNNING old")
             .await
@@ -506,24 +563,33 @@ mod tests {
 
         // 1. Schedule: occurrence consumed — next_due_at advanced into the
         //    future, no job submitted, fire_count untouched.
-        let after = read_schedule(&store, "sch-ticktest").await.unwrap().unwrap();
+        let after = read_schedule(&store, "sch-ticktest")
+            .await
+            .unwrap()
+            .unwrap();
         assert_ne!(after.next_due_at, past);
         assert!(after.next_due_at > crate::models::isoformat_utc(Utc::now()));
         assert_eq!(after.fire_count, 0);
 
         // 2. Running job finalized: running/ -> completed/, status dir
         //    cleaned, completed_at stamped.
-        let done = store.read_job("completed", "runjob01").await.unwrap().unwrap();
+        let done = store
+            .read_job("completed", "runjob01")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(done.state, job_state::COMPLETED);
         assert!(done.completed_at.is_some());
-        assert!(store.read_job("running", "runjob01").await.unwrap().is_none());
-        assert!(
-            store
-                .download_text("status/runjob01/status")
-                .await
-                .unwrap()
-                .is_none()
-        );
+        assert!(store
+            .read_job("running", "runjob01")
+            .await
+            .unwrap()
+            .is_none());
+        assert!(store
+            .download_text("status/runjob01/status")
+            .await
+            .unwrap()
+            .is_none());
         assert!(store
             .download_text("status/runjob01/heartbeat")
             .await
@@ -542,7 +608,11 @@ mod tests {
         );
 
         // 4. Queued job untouched (no quota -> no dispatch).
-        assert!(store.read_job("queue", "queuejob1").await.unwrap().is_some());
+        assert!(store
+            .read_job("queue", "queuejob1")
+            .await
+            .unwrap()
+            .is_some());
 
         // 5. Coordinator log lines.
         let logs = logs.lock().unwrap();

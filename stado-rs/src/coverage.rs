@@ -116,7 +116,10 @@ pub struct URIExistsVerifier {
 
 impl URIExistsVerifier {
     pub fn new(bearer_token: impl Into<String>) -> Self {
-        Self { bearer_token: bearer_token.into(), client: reqwest::Client::new() }
+        Self {
+            bearer_token: bearer_token.into(),
+            client: reqwest::Client::new(),
+        }
     }
 }
 
@@ -143,7 +146,9 @@ impl Verifier for URIExistsVerifier {
                 continue;
             }
             // Python re-raises the urllib HTTPError for other statuses.
-            return Err(CoverageError::Other(format!("HEAD {expected_uri}: HTTP {status}")));
+            return Err(CoverageError::Other(format!(
+                "HEAD {expected_uri}: HTTP {status}"
+            )));
         }
         Err(format!("HEAD {expected_uri}: retry-cap exceeded").into())
     }
@@ -171,7 +176,9 @@ impl GCSBlobExistsVerifier {
 impl Verifier for GCSBlobExistsVerifier {
     async fn check(&self, expected_uri: &str) -> Result<String, CoverageError> {
         let Some(rest) = expected_uri.strip_prefix("gs://") else {
-            return Err(format!("GCSBlobExistsVerifier expects gs:// URI, got {expected_uri}").into());
+            return Err(
+                format!("GCSBlobExistsVerifier expects gs:// URI, got {expected_uri}").into(),
+            );
         };
         let (bucket, path) = rest.split_once('/').unwrap_or((rest, ""));
         if bucket != self.store.bucket_name() {
@@ -182,7 +189,11 @@ impl Verifier for GCSBlobExistsVerifier {
             .into());
         }
         let txt = self.store.download_text(path).await?;
-        Ok(if txt.is_some() { PRESENT.to_string() } else { MISSING.to_string() })
+        Ok(if txt.is_some() {
+            PRESENT.to_string()
+        } else {
+            MISSING.to_string()
+        })
     }
 }
 
@@ -215,13 +226,21 @@ static UNIVERSES: LazyLock<Mutex<BTreeMap<String, UniverseFactory>>> =
 /// a Python `stado.coverage_universes` entry point). Later registrations
 /// with the same name replace earlier ones.
 pub fn register_universe(name: impl Into<String>, factory: UniverseFactory) {
-    UNIVERSES.lock().expect("universe registry poisoned").insert(name.into(), factory);
+    UNIVERSES
+        .lock()
+        .expect("universe registry poisoned")
+        .insert(name.into(), factory);
 }
 
 /// Registered universe ids, sorted (Python `list_universes` /
 /// `sorted(discover_universes())`).
 pub fn registered_universe_names() -> Vec<String> {
-    UNIVERSES.lock().expect("universe registry poisoned").keys().cloned().collect()
+    UNIVERSES
+        .lock()
+        .expect("universe registry poisoned")
+        .keys()
+        .cloned()
+        .collect()
 }
 
 /// Python `list_universes`.
@@ -239,7 +258,10 @@ pub fn unknown_universe_message(universe_id: &str) -> String {
         let items: Vec<String> = names.iter().map(|n| py_str_repr(n)).collect();
         format!("[{}]", items.join(", "))
     };
-    format!("unknown universe {}. Registered: {registered}", py_str_repr(universe_id))
+    format!(
+        "unknown universe {}. Registered: {registered}",
+        py_str_repr(universe_id)
+    )
 }
 
 /// Instantiate a registered universe from CLI kwargs (Python
@@ -282,7 +304,9 @@ pub async fn state_save(
     universe_id: &str,
     state: &Value,
 ) -> Result<(), CoverageError> {
-    store.upload_text(&state_path(universe_id), &json_dumps_pretty_sorted(state)).await?;
+    store
+        .upload_text(&state_path(universe_id), &json_dumps_pretty_sorted(state))
+        .await?;
     Ok(())
 }
 
@@ -293,7 +317,9 @@ fn state_slot<'a>(state: &'a mut Value, group_key: &str) -> &'a mut Map<String, 
         *state = Value::Object(Map::new());
     }
     let obj = state.as_object_mut().expect("ensured object");
-    let slot = obj.entry(group_key.to_string()).or_insert_with(|| Value::Object(Map::new()));
+    let slot = obj
+        .entry(group_key.to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
     if !slot.is_object() {
         *slot = Value::Object(Map::new());
     }
@@ -374,8 +400,10 @@ pub async fn verify(
             continue;
         }
         let slot = state.get(&entry.group_key);
-        let attempts =
-            slot.and_then(|s| s.get("attempts")).and_then(Value::as_i64).unwrap_or(0);
+        let attempts = slot
+            .and_then(|s| s.get("attempts"))
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
         if attempts >= config::COVERAGE_ATTEMPT_CAP {
             let last_err = slot
                 .and_then(|s| s.get("last_error"))
@@ -415,7 +443,11 @@ pub async fn retry_gaps(
         return Ok(0);
     }
     let batch_id = if batch_label.is_empty() {
-        format!("coverage-retry-{}-{}", universe.id(), chrono::Utc::now().timestamp())
+        format!(
+            "coverage-retry-{}-{}",
+            universe.id(),
+            chrono::Utc::now().timestamp()
+        )
     } else {
         batch_label.to_string()
     };
@@ -529,8 +561,11 @@ pub mod failures {
         threads: usize,
     ) -> Result<BTreeMap<String, Map<String, Value>>, CoverageError> {
         let infos = store.list_blobs_with_meta(FAILED_PREFIX).await?;
-        let paths: Vec<String> =
-            infos.into_iter().map(|info| info.name).filter(|name| name.ends_with(".json")).collect();
+        let paths: Vec<String> = infos
+            .into_iter()
+            .map(|info| info.name)
+            .filter(|name| name.ends_with(".json"))
+            .collect();
         let blobs: Vec<Result<Option<Value>, CoverageError>> = futures::stream::iter(paths)
             .map(|path| async move { load_failed_blob(store, &path).await })
             .buffer_unordered(threads)
@@ -539,8 +574,10 @@ pub mod failures {
         let mut out: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
         for blob in blobs {
             let Some(blob) = blob? else { continue };
-            let Some(cmd) =
-                blob.get("command").and_then(Value::as_str).filter(|cmd| !cmd.is_empty())
+            let Some(cmd) = blob
+                .get("command")
+                .and_then(Value::as_str)
+                .filter(|cmd| !cmd.is_empty())
             else {
                 continue;
             };
@@ -549,7 +586,11 @@ pub mod failures {
                     continue;
                 }
             }
-            let ts = blob.get("failed_at").and_then(Value::as_str).unwrap_or("").to_string();
+            let ts = blob
+                .get("failed_at")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
             let wins = match out.get(cmd) {
                 None => true,
                 Some(prev) => {
@@ -561,7 +602,10 @@ pub mod failures {
             }
             let error = blob.get("error").and_then(Value::as_str).unwrap_or("");
             let record = Map::from_iter([
-                ("error".to_string(), Value::from(truncate_chars(error, ERROR_PREVIEW_MAX))),
+                (
+                    "error".to_string(),
+                    Value::from(truncate_chars(error, ERROR_PREVIEW_MAX)),
+                ),
                 ("failed_at".to_string(), Value::from(ts)),
                 (
                     "job_id".to_string(),
@@ -605,7 +649,9 @@ pub mod failures {
         }
         let mut matched = 0usize;
         for entry in universe.iter_entries() {
-            let Some(rec) = failed.get(&entry.command) else { continue };
+            let Some(rec) = failed.get(&entry.command) else {
+                continue;
+            };
             let slot = state_slot(&mut state, &entry.group_key);
             slot.insert("last_error".into(), rec["error"].clone());
             slot.insert("last_failure_at".into(), rec["failed_at"].clone());
@@ -630,7 +676,10 @@ pub mod failures {
     ) -> Result<(), CoverageError> {
         let mut state = state_load(store, universe_id).await?;
         let slot = state_slot(&mut state, group_key);
-        slot.insert("last_error".into(), Value::from(truncate_chars(error_text, ERROR_PREVIEW_MAX)));
+        slot.insert(
+            "last_error".into(),
+            Value::from(truncate_chars(error_text, ERROR_PREVIEW_MAX)),
+        );
         slot.insert(
             "last_failure_at".into(),
             Value::from(chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()),
@@ -657,7 +706,10 @@ pub mod failures {
             if let Some(rec) = failed.get(&entry.command) {
                 out.insert(
                     entry.group_key.clone(),
-                    rec.get("job_id").and_then(Value::as_str).unwrap_or("").to_string(),
+                    rec.get("job_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
                 );
             }
         }
@@ -807,7 +859,10 @@ pub async fn cli_main() -> i32 {
             }
             0
         }
-        CoverageCommands::Verify { universe_id, kv_pairs } => {
+        CoverageCommands::Verify {
+            universe_id,
+            kv_pairs,
+        } => {
             let universe = match kv_to_kwargs(&kv_pairs)
                 .and_then(|kwargs| build_universe(&universe_id, kwargs))
             {
@@ -834,7 +889,11 @@ pub async fn cli_main() -> i32 {
                 Err(err) => runtime_error(&err),
             }
         }
-        CoverageCommands::Retry { universe_id, kv_pairs, execute } => {
+        CoverageCommands::Retry {
+            universe_id,
+            kv_pairs,
+            execute,
+        } => {
             let universe = match kv_to_kwargs(&kv_pairs)
                 .and_then(|kwargs| build_universe(&universe_id, kwargs))
             {
@@ -916,9 +975,13 @@ mod tests {
             "unknown universe 'nosuch'. Registered: ['alpha-uni', 'zeta-uni']"
         );
         assert_eq!(list_universes(), ["alpha-uni", "zeta-uni"]);
-        let err = build_universe("nosuch", Map::new()).err().expect("unknown universe errors");
+        let err = build_universe("nosuch", Map::new())
+            .err()
+            .expect("unknown universe errors");
         assert!(err.starts_with("unknown universe 'nosuch'"));
-        let err = build_universe("alpha-uni", Map::new()).err().expect("factory error surfaces");
+        let err = build_universe("alpha-uni", Map::new())
+            .err()
+            .expect("factory error surfaces");
         assert_eq!(err, "unused");
     }
 
@@ -938,11 +1001,12 @@ mod tests {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let port = listener.local_addr().unwrap().port();
             let hits = Arc::new(Mutex::new(Vec::new()));
-            let statuses: Arc<std::collections::HashMap<String, Arc<Mutex<Vec<u16>>>>> =
-                Arc::new(routes
+            let statuses: Arc<std::collections::HashMap<String, Arc<Mutex<Vec<u16>>>>> = Arc::new(
+                routes
                     .iter()
                     .map(|(path, seq)| (path.to_string(), Arc::new(Mutex::new(seq.clone()))))
-                    .collect());
+                    .collect(),
+            );
             let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let (hits2, statuses2, shutdown2) = (hits.clone(), statuses.clone(), shutdown.clone());
             std::thread::spawn(move || {
@@ -971,8 +1035,16 @@ mod tests {
                         }
                         headers.push_str(&line);
                     }
-                    hits2.lock().unwrap().push(format!("{}|{}", request_line.trim(), headers.trim()));
-                    let path = request_line.split_whitespace().nth(1).unwrap_or("/").to_string();
+                    hits2.lock().unwrap().push(format!(
+                        "{}|{}",
+                        request_line.trim(),
+                        headers.trim()
+                    ));
+                    let path = request_line
+                        .split_whitespace()
+                        .nth(1)
+                        .unwrap_or("/")
+                        .to_string();
                     let status = statuses2
                         .get(&path)
                         .map(|seq| {
@@ -997,7 +1069,11 @@ mod tests {
                     stream.flush().ok();
                 }
             });
-            Self { port, hits, shutdown }
+            Self {
+                port,
+                hits,
+                shutdown,
+            }
         }
 
         fn url(&self, path: &str) -> String {
@@ -1007,19 +1083,29 @@ mod tests {
 
     impl Drop for Loopback {
         fn drop(&mut self) {
-            self.shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+            self.shutdown
+                .store(true, std::sync::atomic::Ordering::Relaxed);
         }
     }
 
     #[tokio::test]
     async fn uri_verifier_classifies_statuses() {
-        let server =
-            Loopback::start(&[("/present", vec![200]), ("/gone", vec![404]), ("/broken", vec![500])]);
+        let server = Loopback::start(&[
+            ("/present", vec![200]),
+            ("/gone", vec![404]),
+            ("/broken", vec![500]),
+        ]);
         let verifier = URIExistsVerifier::new("");
-        assert_eq!(verifier.check(&server.url("/present")).await.unwrap(), PRESENT);
+        assert_eq!(
+            verifier.check(&server.url("/present")).await.unwrap(),
+            PRESENT
+        );
         assert_eq!(verifier.check(&server.url("/gone")).await.unwrap(), MISSING);
         // Unknown path on the server also 404s.
-        assert_eq!(verifier.check(&server.url("/unlisted")).await.unwrap(), MISSING);
+        assert_eq!(
+            verifier.check(&server.url("/unlisted")).await.unwrap(),
+            MISSING
+        );
         let err = verifier.check(&server.url("/broken")).await.unwrap_err();
         assert!(err.to_string().contains("HTTP 500"), "{err}");
     }
@@ -1029,12 +1115,19 @@ mod tests {
         let server = Loopback::start(&[("/flaky", vec![429, 200])]);
         let verifier = URIExistsVerifier::new("tok123");
         let started = std::time::Instant::now();
-        assert_eq!(verifier.check(&server.url("/flaky")).await.unwrap(), PRESENT);
+        assert_eq!(
+            verifier.check(&server.url("/flaky")).await.unwrap(),
+            PRESENT
+        );
         assert!(started.elapsed().as_secs() >= 1, "2**0 backoff slept");
         let hits = server.hits.lock().unwrap();
         assert_eq!(hits.len(), 2);
         assert!(hits[0].starts_with("HEAD /flaky"), "{:?}", hits[0]);
-        assert!(hits[0].contains("authorization: Bearer tok123"), "{:?}", hits[0]);
+        assert!(
+            hits[0].contains("authorization: Bearer tok123"),
+            "{:?}",
+            hits[0]
+        );
     }
 
     // --- GCSBlobExistsVerifier ----------------------------------------------
@@ -1045,12 +1138,30 @@ mod tests {
         let store = local_store(dir.path(), "mybucket");
         store.upload_text("outputs/e1.txt", "done").await.unwrap();
         let verifier = GCSBlobExistsVerifier::new(store);
-        assert_eq!(verifier.check("gs://mybucket/outputs/e1.txt").await.unwrap(), PRESENT);
-        assert_eq!(verifier.check("gs://mybucket/outputs/nope.txt").await.unwrap(), MISSING);
+        assert_eq!(
+            verifier
+                .check("gs://mybucket/outputs/e1.txt")
+                .await
+                .unwrap(),
+            PRESENT
+        );
+        assert_eq!(
+            verifier
+                .check("gs://mybucket/outputs/nope.txt")
+                .await
+                .unwrap(),
+            MISSING
+        );
         let err = verifier.check("https://example.com/x").await.unwrap_err();
-        assert_eq!(err.to_string(), "GCSBlobExistsVerifier expects gs:// URI, got https://example.com/x");
+        assert_eq!(
+            err.to_string(),
+            "GCSBlobExistsVerifier expects gs:// URI, got https://example.com/x"
+        );
         let err = verifier.check("gs://other-bucket/x").await.unwrap_err();
-        assert_eq!(err.to_string(), "verifier bound to bucket mybucket but URI is other-bucket");
+        assert_eq!(
+            err.to_string(),
+            "verifier bound to bucket mybucket but URI is other-bucket"
+        );
     }
 
     // --- verify / retry orchestration -----------------------------------------
@@ -1068,7 +1179,11 @@ mod tests {
     #[async_trait]
     impl Verifier for StaticVerifier {
         async fn check(&self, expected_uri: &str) -> Result<String, CoverageError> {
-            Ok(self.statuses.get(expected_uri).cloned().unwrap_or_else(|| MISSING.to_string()))
+            Ok(self
+                .statuses
+                .get(expected_uri)
+                .cloned()
+                .unwrap_or_else(|| MISSING.to_string()))
         }
     }
 
@@ -1080,7 +1195,9 @@ mod tests {
             self.entries.clone()
         }
         fn verifier(&self) -> Box<dyn Verifier> {
-            Box::new(StaticVerifier { statuses: self.statuses.clone() })
+            Box::new(StaticVerifier {
+                statuses: self.statuses.clone(),
+            })
         }
     }
 
@@ -1089,7 +1206,10 @@ mod tests {
             id: "test-uni".into(),
             entries,
             statuses: Arc::new(
-                statuses.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+                statuses
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
             ),
         }
     }
@@ -1112,7 +1232,10 @@ mod tests {
         assert_eq!(report.missing, 2);
         assert_eq!(report.gaps.len(), 1);
         assert_eq!(report.gaps[0].group_key, "g2");
-        assert_eq!(report.unfixable, vec![("g3".to_string(), "boom".to_string())]);
+        assert_eq!(
+            report.unfixable,
+            vec![("g3".to_string(), "boom".to_string())]
+        );
         assert_eq!(
             report.as_dict(),
             json!({
@@ -1131,14 +1254,13 @@ mod tests {
     async fn verify_and_retry_without_execute_submits_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let store = local_store(dir.path(), "mybucket");
-        let universe = static_universe(
-            vec![UniverseEntry::new("g1", "cmd1", "mem://missing")],
-            &[],
-        );
+        let universe =
+            static_universe(vec![UniverseEntry::new("g1", "cmd1", "mem://missing")], &[]);
         // Dry-run: no state file written, no submit attempted (submit would
         // fail offline), report still carries the gap.
-        let report =
-            verify_and_retry_with_store(&universe, &store, false, 4, None).await.unwrap();
+        let report = verify_and_retry_with_store(&universe, &store, false, 4, None)
+            .await
+            .unwrap();
         assert_eq!(report.gaps.len(), 1);
         assert!(store
             .download_text("coverage/test-uni/state.json")
@@ -1147,10 +1269,16 @@ mod tests {
             .is_none());
         // retry_gaps with an empty gap list is a no-op returning 0.
         let mut state = json!({});
-        let submitted =
-            retry_gaps(&universe, &report_with_no_gaps(), &mut state, &store, "", None)
-                .await
-                .unwrap();
+        let submitted = retry_gaps(
+            &universe,
+            &report_with_no_gaps(),
+            &mut state,
+            &store,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(submitted, 0);
         assert!(store
             .download_text("coverage/test-uni/state.json")
@@ -1178,8 +1306,15 @@ mod tests {
         assert_eq!(state_load(&store, "uni-x").await.unwrap(), json!({}));
         let state = json!({"b": {"attempts": 2}, "a": {"attempts": 1}});
         state_save(&store, "uni-x", &state).await.unwrap();
-        let raw = store.download_text("coverage/uni-x/state.json").await.unwrap().unwrap();
-        assert!(raw.find("\"a\"").unwrap() < raw.find("\"b\"").unwrap(), "sort_keys=True: {raw}");
+        let raw = store
+            .download_text("coverage/uni-x/state.json")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            raw.find("\"a\"").unwrap() < raw.find("\"b\"").unwrap(),
+            "sort_keys=True: {raw}"
+        );
         assert!(raw.contains("\n  \"a\": {"), "indent=2: {raw}");
         assert_eq!(state_load(&store, "uni-x").await.unwrap(), state);
     }
@@ -1188,7 +1323,10 @@ mod tests {
 
     async fn write_failed_blob(store: &JobStorage, job_id: &str, body: Value) {
         store
-            .upload_text(&format!("failed/{job_id}.json"), &serde_json::to_string(&body).unwrap())
+            .upload_text(
+                &format!("failed/{job_id}.json"),
+                &serde_json::to_string(&body).unwrap(),
+            )
             .await
             .unwrap();
     }
@@ -1197,27 +1335,47 @@ mod tests {
     async fn scan_failed_commands_indexes_most_recent() {
         let dir = tempfile::tempdir().unwrap();
         let store = local_store(dir.path(), "mybucket");
-        write_failed_blob(&store, "j1", json!({
-            "job_id": "j1", "command": "python -m a --x", "error": "first",
-            "failed_at": "2026-05-01T00:00:00+00:00", "batch_id": "b1",
-        }))
+        write_failed_blob(
+            &store,
+            "j1",
+            json!({
+                "job_id": "j1", "command": "python -m a --x", "error": "first",
+                "failed_at": "2026-05-01T00:00:00+00:00", "batch_id": "b1",
+            }),
+        )
         .await;
-        write_failed_blob(&store, "j2", json!({
-            "job_id": "j2", "command": "python -m a --x", "error": "second",
-            "failed_at": "2026-05-02T00:00:00+00:00", "batch_id": "b2",
-        }))
+        write_failed_blob(
+            &store,
+            "j2",
+            json!({
+                "job_id": "j2", "command": "python -m a --x", "error": "second",
+                "failed_at": "2026-05-02T00:00:00+00:00", "batch_id": "b2",
+            }),
+        )
         .await;
-        write_failed_blob(&store, "j3", json!({
-            "job_id": "j3", "command": "python -m b", "error": "",
-            "failed_at": "2026-05-03T00:00:00+00:00",
-        }))
+        write_failed_blob(
+            &store,
+            "j3",
+            json!({
+                "job_id": "j3", "command": "python -m b", "error": "",
+                "failed_at": "2026-05-03T00:00:00+00:00",
+            }),
+        )
         .await;
         // Corrupt + command-less + non-json blobs are skipped.
-        store.upload_text("failed/corrupt.json", "{not json").await.unwrap();
+        store
+            .upload_text("failed/corrupt.json", "{not json")
+            .await
+            .unwrap();
         write_failed_blob(&store, "nocmd", json!({"job_id": "nocmd"})).await;
-        store.upload_text("failed/note.txt", "ignored").await.unwrap();
+        store
+            .upload_text("failed/note.txt", "ignored")
+            .await
+            .unwrap();
 
-        let scanned = failures::scan_failed_commands(&store, None, 4).await.unwrap();
+        let scanned = failures::scan_failed_commands(&store, None, 4)
+            .await
+            .unwrap();
         assert_eq!(scanned.len(), 2);
         let rec = &scanned["python -m a --x"];
         assert_eq!(rec["error"], "second");
@@ -1226,8 +1384,9 @@ mod tests {
         assert_eq!(rec["failed_at"], "2026-05-02T00:00:00+00:00");
 
         // Prefix filter (startswith, on the full command).
-        let filtered =
-            failures::scan_failed_commands(&store, Some("python -m a"), 4).await.unwrap();
+        let filtered = failures::scan_failed_commands(&store, Some("python -m a"), 4)
+            .await
+            .unwrap();
         assert_eq!(filtered.len(), 1);
         assert!(filtered.contains_key("python -m a --x"));
     }
@@ -1236,10 +1395,14 @@ mod tests {
     async fn correlate_and_record_failure_update_state() {
         let dir = tempfile::tempdir().unwrap();
         let store = local_store(dir.path(), "mybucket");
-        write_failed_blob(&store, "j9", json!({
-            "job_id": "j9", "command": "cmd-b", "error": "traceback here",
-            "failed_at": "2026-05-22T01:02:03+00:00", "batch_id": "batch-9",
-        }))
+        write_failed_blob(
+            &store,
+            "j9",
+            json!({
+                "job_id": "j9", "command": "cmd-b", "error": "traceback here",
+                "failed_at": "2026-05-22T01:02:03+00:00", "batch_id": "batch-9",
+            }),
+        )
         .await;
         let universe = static_universe(
             vec![
@@ -1260,26 +1423,41 @@ mod tests {
         let persisted = state_load(&store, "test-uni").await.unwrap();
         assert_eq!(persisted["gb"]["last_failed_job_id"], "j9");
 
-        let jids =
-            failures::matched_failed_jids_for_universe(&universe, &store, None).await.unwrap();
+        let jids = failures::matched_failed_jids_for_universe(&universe, &store, None)
+            .await
+            .unwrap();
         assert_eq!(jids, BTreeMap::from([("gb".to_string(), "j9".to_string())]));
 
-        failures::record_failure("test-uni", "ga", "manual error", &store).await.unwrap();
+        failures::record_failure("test-uni", "ga", "manual error", &store)
+            .await
+            .unwrap();
         let state = state_load(&store, "test-uni").await.unwrap();
         assert_eq!(state["ga"]["last_error"], "manual error");
-        assert!(state["ga"]["last_failure_at"].as_str().unwrap().ends_with('Z'));
+        assert!(state["ga"]["last_failure_at"]
+            .as_str()
+            .unwrap()
+            .ends_with('Z'));
         // Idempotent overwrite.
-        failures::record_failure("test-uni", "ga", "newer", &store).await.unwrap();
-        assert_eq!(state_load(&store, "test-uni").await.unwrap()["ga"]["last_error"], "newer");
+        failures::record_failure("test-uni", "ga", "newer", &store)
+            .await
+            .unwrap();
+        assert_eq!(
+            state_load(&store, "test-uni").await.unwrap()["ga"]["last_error"],
+            "newer"
+        );
     }
 
     #[tokio::test]
     async fn iter_failed_commands_pairs() {
         let dir = tempfile::tempdir().unwrap();
         let store = local_store(dir.path(), "mybucket");
-        write_failed_blob(&store, "j1", json!({
-            "job_id": "j1", "command": "cmd-a", "error": "e", "failed_at": "2026-01-01",
-        }))
+        write_failed_blob(
+            &store,
+            "j1",
+            json!({
+                "job_id": "j1", "command": "cmd-a", "error": "e", "failed_at": "2026-01-01",
+            }),
+        )
         .await;
         let pairs = failures::iter_failed_commands(&store, None).await.unwrap();
         assert_eq!(pairs.len(), 1);

@@ -46,12 +46,14 @@ use reqwest::{Method, StatusCode};
 
 use super::{gcs::percent_encode, BlobBackend, BlobInfo, StorageError, VersionedText};
 
-/// Pinned Blob Storage REST API version (see module docs).
-const X_MS_VERSION: &str = "2023-11-03";
+/// Pinned Blob Storage REST API version (see module docs). Shared with
+/// the release-channel fetcher in [`crate::self_update`], which speaks the
+/// same REST surface when the release tree lives in a blob container.
+pub(crate) const X_MS_VERSION: &str = "2023-11-03";
 /// OAuth scope for the client-credentials token request.
-const STORAGE_SCOPE: &str = "https://storage.azure.com/.default";
+pub(crate) const STORAGE_SCOPE: &str = "https://storage.azure.com/.default";
 /// Resource for IMDS / az-CLI token requests (same audience).
-const STORAGE_RESOURCE: &str = "https://storage.azure.com";
+pub(crate) const STORAGE_RESOURCE: &str = "https://storage.azure.com";
 
 /// Python `_log`.
 fn log(msg: &str) {
@@ -139,7 +141,11 @@ impl AzureBlobBackend {
     /// `/{container}/{path}` with the blob name percent-encoded per segment
     /// (slash separators preserved).
     fn blob_url(&self, path: &str) -> String {
-        let encoded = path.split('/').map(percent_encode).collect::<Vec<_>>().join("/");
+        let encoded = path
+            .split('/')
+            .map(percent_encode)
+            .collect::<Vec<_>>()
+            .join("/");
         format!("{}/{}/{encoded}", self.inner.base_url, self.inner.container)
     }
 
@@ -177,14 +183,18 @@ impl AzureBlobBackend {
             .request(method, url)
             .header("x-ms-version", X_MS_VERSION)
             // RFC1123 IMF-fixdate, e.g. "Sun, 26 Jul 2026 03:44:52 GMT".
-            .header("x-ms-date", Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string());
+            .header(
+                "x-ms-date",
+                Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string(),
+            );
         if self.inner.auth {
-            let token = crate::azure_token::bearer_token(&self.inner.http, STORAGE_SCOPE, STORAGE_RESOURCE)
-                .await
-                .map_err(|err| match err {
-                    crate::azure_token::TokenError::Auth(msg) => StorageError::Auth(msg),
-                    crate::azure_token::TokenError::Http(err) => StorageError::Http(err),
-                })?;
+            let token =
+                crate::azure_token::bearer_token(&self.inner.http, STORAGE_SCOPE, STORAGE_RESOURCE)
+                    .await
+                    .map_err(|err| match err {
+                        crate::azure_token::TokenError::Auth(msg) => StorageError::Auth(msg),
+                        crate::azure_token::TokenError::Http(err) => StorageError::Http(err),
+                    })?;
             request = request.header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"));
         }
         for (name, value) in headers {
@@ -226,7 +236,10 @@ impl AzureBlobBackend {
             Some(etag) => vec![("If-Match", etag)],
             None => Vec::new(),
         };
-        let response = match self.send(Method::GET, &self.blob_url(path), &headers, None).await {
+        let response = match self
+            .send(Method::GET, &self.blob_url(path), &headers, None)
+            .await
+        {
             Ok(response) => response,
             Err(err) => return GetOutcome::Error(err),
         };
@@ -243,18 +256,18 @@ impl AzureBlobBackend {
 
     /// HEAD the blob (Get Blob Properties): (etag, last_modified, metadata)
     /// or `None` on 404.
-    async fn head(
-        &self,
-        path: &str,
-    ) -> Result<Option<BlobProps>, StorageError> {
-        let response = self.send(Method::HEAD, &self.blob_url(path), &[], None).await?;
+    async fn head(&self, path: &str) -> Result<Option<BlobProps>, StorageError> {
+        let response = self
+            .send(Method::HEAD, &self.blob_url(path), &[], None)
+            .await?;
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(None);
         }
         let response = Self::ensure_success(response, &format!("HEAD {path}")).await?;
         let etag = header_str(&response, "etag");
-        let last_modified =
-            header_str(&response, "last-modified").as_deref().and_then(parse_http_date);
+        let last_modified = header_str(&response, "last-modified")
+            .as_deref()
+            .and_then(parse_http_date);
         let metadata = response
             .headers()
             .iter()
@@ -263,7 +276,11 @@ impl AzureBlobBackend {
                 Some((key.to_string(), value.to_str().ok()?.to_string()))
             })
             .collect();
-        Ok(Some(BlobProps { etag, last_modified, metadata }))
+        Ok(Some(BlobProps {
+            etag,
+            last_modified,
+            metadata,
+        }))
     }
 
     /// Put Blob; `conditional` is `If-None-Match: *` (if-absent) or
@@ -278,7 +295,8 @@ impl AzureBlobBackend {
         if let Some((name, value)) = conditional {
             headers.push((name, value));
         }
-        self.send(Method::PUT, &self.blob_url(path), &headers, Some(bytes)).await
+        self.send(Method::PUT, &self.blob_url(path), &headers, Some(bytes))
+            .await
     }
 
     /// PUT with `If-None-Match: *`; `false` on 409 (Python
@@ -288,7 +306,9 @@ impl AzureBlobBackend {
         path: &str,
         bytes: Vec<u8>,
     ) -> Result<bool, StorageError> {
-        let response = self.put_blob(path, bytes, Some(("If-None-Match", "*"))).await?;
+        let response = self
+            .put_blob(path, bytes, Some(("If-None-Match", "*")))
+            .await?;
         if response.status() == StatusCode::CONFLICT {
             return Ok(false);
         }
@@ -297,13 +317,20 @@ impl AzureBlobBackend {
     }
 
     /// One paginated List Blobs walk, parsed into raw entries.
-    async fn list_entries(&self, prefix: &str, include_metadata: bool) -> Result<Vec<ListEntry>, StorageError> {
+    async fn list_entries(
+        &self,
+        prefix: &str,
+        include_metadata: bool,
+    ) -> Result<Vec<ListEntry>, StorageError> {
         let mut out = Vec::new();
         let mut marker: Option<String> = None;
         loop {
             let url = self.list_url(prefix, marker.as_deref(), include_metadata);
             let response = self.send(Method::GET, &url, &[], None).await?;
-            let body = Self::ensure_success(response, &format!("list {prefix}")).await?.text().await?;
+            let body = Self::ensure_success(response, &format!("list {prefix}"))
+                .await?
+                .text()
+                .await?;
             let (entries, next) = parse_list_blobs(&body);
             out.extend(entries);
             match next {
@@ -341,13 +368,20 @@ struct ListEntry {
 
 /// Read a response header as an owned string.
 fn header_str(response: &reqwest::Response, name: &str) -> Option<String> {
-    response.headers().get(name)?.to_str().ok().map(str::to_string)
+    response
+        .headers()
+        .get(name)?
+        .to_str()
+        .ok()
+        .map(str::to_string)
 }
 
 /// Parse an RFC1123 HTTP date ("Fri, 02 Jan 2026 03:04:05 GMT") — the
 /// format of Last-Modified / Creation-Time in headers and list XML.
 fn parse_http_date(raw: &str) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc2822(raw).ok().map(|dt| dt.with_timezone(&Utc))
+    DateTime::parse_from_rfc2822(raw)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
 }
 
 /// Text content of the first `<tag>...</tag>` in `xml` (plain tags only —
@@ -448,11 +482,7 @@ impl BlobBackend for AzureBlobBackend {
         }
     }
 
-    async fn download_to_filename(
-        &self,
-        path: &str,
-        dest: &Path,
-    ) -> Result<bool, StorageError> {
+    async fn download_to_filename(&self, path: &str, dest: &Path) -> Result<bool, StorageError> {
         let Some(bytes) = self.download_bytes(path).await? else {
             return Ok(false);
         };
@@ -460,12 +490,9 @@ impl BlobBackend for AzureBlobBackend {
         Ok(true)
     }
 
-    async fn upload_text_if_absent(
-        &self,
-        path: &str,
-        content: &str,
-    ) -> Result<bool, StorageError> {
-        self.upload_bytes_if_absent(path, content.as_bytes().to_vec()).await
+    async fn upload_text_if_absent(&self, path: &str, content: &str) -> Result<bool, StorageError> {
+        self.upload_bytes_if_absent(path, content.as_bytes().to_vec())
+            .await
     }
 
     async fn upload_file_if_absent(
@@ -495,7 +522,10 @@ impl BlobBackend for AzureBlobBackend {
                     })?;
                     // Python returns str(props.etag) — the HEAD ETag,
                     // verbatim (quoted).
-                    return Ok(Some(VersionedText { content, version: etag }));
+                    return Ok(Some(VersionedText {
+                        content,
+                        version: etag,
+                    }));
                 }
                 GetOutcome::NotFound => return Ok(None),
                 GetOutcome::PreconditionFailed if attempt < 2 => continue,
@@ -509,7 +539,9 @@ impl BlobBackend for AzureBlobBackend {
                 GetOutcome::Error(err) => return Err(err),
             }
         }
-        Err(StorageError::Other("unreachable versioned Azure Blob read".into()))
+        Err(StorageError::Other(
+            "unreachable versioned Azure Blob read".into(),
+        ))
     }
 
     async fn compare_and_swap_text(
@@ -519,7 +551,11 @@ impl BlobBackend for AzureBlobBackend {
         content: &str,
     ) -> Result<String, StorageError> {
         let response = self
-            .put_blob(path, content.as_bytes().to_vec(), Some(("If-Match", expected_version)))
+            .put_blob(
+                path,
+                content.as_bytes().to_vec(),
+                Some(("If-Match", expected_version)),
+            )
             .await?;
         if response.status() == StatusCode::PRECONDITION_FAILED {
             return Err(StorageError::StorageConflict(format!(
@@ -534,7 +570,9 @@ impl BlobBackend for AzureBlobBackend {
     }
 
     async fn delete(&self, path: &str) -> Result<(), StorageError> {
-        let response = self.send(Method::DELETE, &self.blob_url(path), &[], None).await?;
+        let response = self
+            .send(Method::DELETE, &self.blob_url(path), &[], None)
+            .await?;
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(());
         }
@@ -544,7 +582,10 @@ impl BlobBackend for AzureBlobBackend {
 
     async fn exists(&self, path: &str) -> Result<bool, StorageError> {
         // Python `except Exception: return False` — ANY failure is "absent".
-        match self.send(Method::HEAD, &self.blob_url(path), &[], None).await {
+        match self
+            .send(Method::HEAD, &self.blob_url(path), &[], None)
+            .await
+        {
             Ok(response) => Ok(response.status().is_success()),
             Err(_) => Ok(false),
         }
@@ -586,14 +627,18 @@ impl BlobBackend for AzureBlobBackend {
             Ok(None) | Err(_) => BTreeMap::new(),
         };
         merged.extend(
-            kv.iter().filter(|(_, v)| !v.is_empty()).map(|(k, v)| (k.clone(), v.clone())),
+            kv.iter()
+                .filter(|(_, v)| !v.is_empty())
+                .map(|(k, v)| (k.clone(), v.clone())),
         );
         let headers: Vec<(String, String)> = merged
             .iter()
             .map(|(k, v)| (format!("x-ms-meta-{k}"), v.clone()))
             .collect();
-        let header_refs: Vec<(&str, &str)> =
-            headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        let header_refs: Vec<(&str, &str)> = headers
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
         let url = format!("{}?comp=metadata", self.blob_url(path));
         let result = self.send(Method::PUT, &url, &header_refs, None).await;
         match result {
@@ -631,7 +676,10 @@ mod tests {
 
     /// HTTP response with custom headers (ETag, Last-Modified, x-ms-meta-*).
     fn response_with(status: u16, reason: &str, headers: &[(&str, &str)], body: &str) -> String {
-        let extra: String = headers.iter().map(|(k, v)| format!("{k}: {v}\r\n")).collect();
+        let extra: String = headers
+            .iter()
+            .map(|(k, v)| format!("{k}: {v}\r\n"))
+            .collect();
         format!(
             "HTTP/1.1 {status} {reason}\r\nContent-Type: application/xml\r\n\
              Content-Length: {}\r\nConnection: close\r\n{extra}\r\n{body}",
@@ -667,16 +715,31 @@ mod tests {
         .await;
         let b = backend(&server);
         b.upload_text("queue/j1.json", "hello").await.unwrap();
-        assert_eq!(b.download_text("queue/j1.json").await.unwrap().as_deref(), Some("hello"));
+        assert_eq!(
+            b.download_text("queue/j1.json").await.unwrap().as_deref(),
+            Some("hello")
+        );
         assert_eq!(b.download_text("gone").await.unwrap(), None);
         let reqs = requests(&server);
         assert_eq!(reqs.len(), 3, "{reqs:?}");
-        assert!(reqs[0].starts_with("PUT /cont/queue/j1.json"), "{}", reqs[0]);
+        assert!(
+            reqs[0].starts_with("PUT /cont/queue/j1.json"),
+            "{}",
+            reqs[0]
+        );
         assert!(reqs[0].contains("x-ms-blob-type: BlockBlob"), "{}", reqs[0]);
-        assert!(reqs[0].contains(&format!("x-ms-version: {X_MS_VERSION}")), "{}", reqs[0]);
+        assert!(
+            reqs[0].contains(&format!("x-ms-version: {X_MS_VERSION}")),
+            "{}",
+            reqs[0]
+        );
         assert!(reqs[0].contains("x-ms-date: "), "{}", reqs[0]);
         assert!(reqs[0].contains("hello"), "{}", reqs[0]);
-        assert!(reqs[1].starts_with("GET /cont/queue/j1.json"), "{}", reqs[1]);
+        assert!(
+            reqs[1].starts_with("GET /cont/queue/j1.json"),
+            "{}",
+            reqs[1]
+        );
         server.stop();
     }
 
@@ -700,7 +763,12 @@ mod tests {
     async fn upload_if_absent_maps_409_to_false() {
         let server = mock_http(vec![
             response_with(201, "Created", &[("ETag", "\"0x8D1\"")], ""),
-            response_with(409, "Conflict", &[], "<Error><Code>BlobAlreadyExists</Code></Error>"),
+            response_with(
+                409,
+                "Conflict",
+                &[],
+                "<Error><Code>BlobAlreadyExists</Code></Error>",
+            ),
         ])
         .await;
         let b = backend(&server);
@@ -788,18 +856,27 @@ mod tests {
         let b = backend(&server);
         let err = b.download_text_versioned("state/x").await.unwrap_err();
         assert!(!matches!(err, StorageError::StorageConflict(_)), "{err:?}");
-        assert!(err.to_string().contains("changed during versioned read"), "{err}");
+        assert!(
+            err.to_string().contains("changed during versioned read"),
+            "{err}"
+        );
         server.stop();
     }
 
     #[tokio::test]
     async fn cas_success_returns_response_etag() {
-        let server = mock_http(vec![
-            response_with(201, "Created", &[("ETag", "\"0x8D2\"")], ""),
-        ])
+        let server = mock_http(vec![response_with(
+            201,
+            "Created",
+            &[("ETag", "\"0x8D2\"")],
+            "",
+        )])
         .await;
         let b = backend(&server);
-        let new_version = b.compare_and_swap_text("state/x", "\"0x8D1\"", "new").await.unwrap();
+        let new_version = b
+            .compare_and_swap_text("state/x", "\"0x8D1\"", "new")
+            .await
+            .unwrap();
         // Token round-trips verbatim (quoted), matching Python.
         assert_eq!(new_version, "\"0x8D2\"");
         let reqs = requests(&server);
@@ -811,7 +888,10 @@ mod tests {
     async fn cas_conflict_maps_412_to_storage_conflict() {
         let server = mock_http(vec![response_with(412, "Precondition Failed", &[], "")]).await;
         let b = backend(&server);
-        let err = b.compare_and_swap_text("state/x", "\"0x8D1\"", "new").await.unwrap_err();
+        let err = b
+            .compare_and_swap_text("state/x", "\"0x8D1\"", "new")
+            .await
+            .unwrap_err();
         assert!(matches!(err, StorageError::StorageConflict(_)), "{err:?}");
         assert!(err.to_string().contains("changed concurrently"), "{err}");
         server.stop();
@@ -846,7 +926,10 @@ mod tests {
             response_with(
                 200,
                 "OK",
-                &[("ETag", "\"0x8D1\""), ("Last-Modified", "Fri, 02 Jan 2026 03:04:05 GMT")],
+                &[
+                    ("ETag", "\"0x8D1\""),
+                    ("Last-Modified", "Fri, 02 Jan 2026 03:04:05 GMT"),
+                ],
                 "",
             ),
             response_with(404, "Not Found", &[], ""),
@@ -898,9 +981,16 @@ mod tests {
             vec!["queue/b.json", "queue/a.json", "queue/c.json"]
         );
         // Bounded: N oldest by Creation-Time.
-        assert_eq!(b.list_paths("queue/", 2).await.unwrap(), vec!["queue/c.json", "queue/b.json"]);
+        assert_eq!(
+            b.list_paths("queue/", 2).await.unwrap(),
+            vec!["queue/c.json", "queue/b.json"]
+        );
         let reqs = requests(&server);
-        assert!(reqs[0].starts_with("GET /cont?restype=container&comp=list&prefix=queue%2F"), "{}", reqs[0]);
+        assert!(
+            reqs[0].starts_with("GET /cont?restype=container&comp=list&prefix=queue%2F"),
+            "{}",
+            reqs[0]
+        );
         assert!(reqs[1].contains("marker=marker-2%2Fx"), "{}", reqs[1]);
         server.stop();
     }
@@ -925,7 +1015,11 @@ mod tests {
         .await
         .unwrap();
         let reqs = requests(&server);
-        assert!(reqs[1].starts_with("PUT /cont/queue/j1.json?comp=metadata"), "{}", reqs[1]);
+        assert!(
+            reqs[1].starts_with("PUT /cont/queue/j1.json?comp=metadata"),
+            "{}",
+            reqs[1]
+        );
         assert!(reqs[1].contains("x-ms-meta-a: 1"), "{}", reqs[1]);
         assert!(reqs[1].contains("x-ms-meta-b: 2"), "{}", reqs[1]);
         // Empty new values are skipped (Python parity).
@@ -943,7 +1037,9 @@ mod tests {
         ])
         .await;
         let b = backend(&server);
-        b.set_metadata("gone", &BTreeMap::from([("k".into(), "v".into())])).await.unwrap();
+        b.set_metadata("gone", &BTreeMap::from([("k".into(), "v".into())]))
+            .await
+            .unwrap();
         server.stop();
     }
 
@@ -966,7 +1062,10 @@ mod tests {
         let infos = b.list_blobs_with_meta("queue/").await.unwrap();
         assert_eq!(infos.len(), 2);
         assert_eq!(infos[0].name, "queue/j1.json");
-        assert_eq!(infos[0].updated.unwrap().to_rfc3339(), "2026-01-02T03:04:05+00:00");
+        assert_eq!(
+            infos[0].updated.unwrap().to_rfc3339(),
+            "2026-01-02T03:04:05+00:00"
+        );
         assert_eq!(
             infos[0].metadata,
             BTreeMap::from([
@@ -1025,9 +1124,17 @@ mod tests {
     #[test]
     fn constructor_validation_matches_python_messages() {
         let err = AzureBlobBackend::new("", "c").unwrap_err();
-        assert!(err.to_string().contains("WC_AZURE_STORAGE_ACCOUNT env var is empty"), "{err}");
+        assert!(
+            err.to_string()
+                .contains("WC_AZURE_STORAGE_ACCOUNT env var is empty"),
+            "{err}"
+        );
         let err = AzureBlobBackend::new("a", "").unwrap_err();
-        assert!(err.to_string().contains("WC_AZURE_CONTAINER env var is empty"), "{err}");
+        assert!(
+            err.to_string()
+                .contains("WC_AZURE_CONTAINER env var is empty"),
+            "{err}"
+        );
         let ok = AzureBlobBackend::new("a", "c").unwrap();
         assert_eq!(ok.account(), "a");
         assert_eq!(ok.container(), "c");

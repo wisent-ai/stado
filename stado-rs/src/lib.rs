@@ -17,8 +17,10 @@ pub mod coordinator;
 pub mod coverage;
 pub mod dashboard;
 pub mod deploy;
+pub mod doctor;
 pub mod failure_fixer;
 pub mod machine;
+pub mod mail;
 pub mod mcp;
 pub mod models;
 pub mod monitor;
@@ -33,6 +35,7 @@ pub mod targets;
 pub mod watchdog;
 
 pub(crate) mod azure_token;
+pub(crate) mod azure_key_vault;
 pub(crate) mod procutil;
 
 #[cfg(test)]
@@ -41,6 +44,14 @@ mod testutil;
 /// Root of the crate's bundled data directory: `data/` in the source tree,
 /// holding the byte-identical copies of the Python package data (profiles,
 /// startup-script templates, the compute-target registry).
+///
+/// `CARGO_MANIFEST_DIR` is frozen at compile time, so this path resolves
+/// only on the machine that built the binary. Anything a shipped `stado`
+/// must read belongs in `include_str!` instead — see
+/// [`targets::load_bundled_registry`] and the agent startup templates in
+/// [`scheduler::dispatch::agent`]. The remaining callers are all
+/// build-tree-local: profile discovery, submit-time job templates, and the
+/// operator-facing data-dir path print.
 pub fn data_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data")
 }

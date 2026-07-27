@@ -12,9 +12,8 @@ use crate::targets::ComputeTarget;
 
 static USERNAME_RE: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"^[a-z][a-z0-9_-]{0,30}$").expect("static regex compiles"));
-static SSH_TARGET_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r"^[A-Za-z0-9_.:@\[\]-]+$").expect("static regex compiles")
-});
+static SSH_TARGET_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"^[A-Za-z0-9_.:@\[\]-]+$").expect("static regex compiles"));
 
 /// Python `_STATUS_PREFIX`.
 pub const STATUS_PREFIX: &str = "STADO_USER\t";
@@ -212,7 +211,10 @@ pub fn select_targets<'a>(
             }
         }
         if !missing.is_empty() {
-            return Err(DeployError(format!("registry target not found: {}", missing.join(", "))));
+            return Err(DeployError(format!(
+                "registry target not found: {}",
+                missing.join(", ")
+            )));
         }
         selected
     } else {
@@ -267,7 +269,10 @@ pub fn remote_command(
     let invocation = format!(
         "/bin/sh -c {} {}",
         shlex_quote(REMOTE_CREATE_SCRIPT),
-        args.iter().map(|arg| shlex_quote(arg)).collect::<Vec<_>>().join(" ")
+        args.iter()
+            .map(|arg| shlex_quote(arg))
+            .collect::<Vec<_>>()
+            .join(" ")
     );
     format!(
         "if [ \"$(/usr/bin/id -u)\" -eq 0 ]; then exec {invocation}; else exec /usr/bin/sudo -n {invocation}; fi"
@@ -298,10 +303,7 @@ pub fn parse_status(stdout: &str, username: &str) -> Result<(String, String), De
             continue;
         }
         let fields: Vec<&str> = line.split('\t').collect();
-        if fields.len() == 4
-            && matches!(fields[1], "created" | "exists")
-            && fields[3] == username
-        {
+        if fields.len() == 4 && matches!(fields[1], "created" | "exists") && fields[3] == username {
             return Ok((fields[1].to_string(), fields[2].to_string()));
         }
     }
@@ -402,8 +404,10 @@ pub async fn provision_users(
                 detail_text
             };
             let trimmed = detail_text.trim();
-            let detail: String =
-                trimmed.chars().skip(trimmed.chars().count().saturating_sub(2000)).collect();
+            let detail: String = trimmed
+                .chars()
+                .skip(trimmed.chars().count().saturating_sub(2000))
+                .collect();
             results.push(HostUserResult {
                 target: name,
                 ssh: ssh_target,
@@ -464,7 +468,10 @@ mod tests {
 
     #[test]
     fn create_script_and_remote_command_match_python_goldens() {
-        assert_eq!(REMOTE_CREATE_SCRIPT, include_str!("testdata/host_users_create_script.sh"));
+        assert_eq!(
+            REMOTE_CREATE_SCRIPT,
+            include_str!("testdata/host_users_create_script.sh")
+        );
         assert_eq!(
             remote_command("ada", "Ada Lovelace", "/bin/zsh", true, true),
             include_str!("testdata/host_users_remote_command.txt")
@@ -486,7 +493,10 @@ mod tests {
 
         assert!(validate_shell("").is_ok());
         assert!(validate_shell("/bin/zsh").is_ok());
-        assert_eq!(validate_shell("zsh").unwrap_err().0, "shell must be an absolute path");
+        assert_eq!(
+            validate_shell("zsh").unwrap_err().0,
+            "shell must be an absolute path"
+        );
         assert!(validate_shell("/bin/bad\nshell").is_err());
 
         assert!(validate_password("12345678").is_ok());
@@ -510,9 +520,15 @@ mod tests {
         let all: Vec<&ComputeTarget> = vec![&local, &no_ssh, &gcp];
 
         let err = select_targets(&all, &[], false).unwrap_err();
-        assert_eq!(err.0, "provide one or more --target values, or --all, but not both");
+        assert_eq!(
+            err.0,
+            "provide one or more --target values, or --all, but not both"
+        );
         let err = select_targets(&all, &["mini".to_string()], true).unwrap_err();
-        assert_eq!(err.0, "provide one or more --target values, or --all, but not both");
+        assert_eq!(
+            err.0,
+            "provide one or more --target values, or --all, but not both"
+        );
 
         let err = select_targets(&all, &["ghost".to_string()], false).unwrap_err();
         assert_eq!(err.0, "registry target not found: ghost");
@@ -537,15 +553,29 @@ mod tests {
     #[test]
     fn parse_status_takes_the_last_valid_marker() {
         let stdout = "noise\nSTADO_USER\texists\tDarwin\tada\nSTADO_USER\tcreated\tDarwin\tada\n";
-        assert_eq!(parse_status(stdout, "ada").unwrap(), ("created".to_string(), "Darwin".to_string()));
+        assert_eq!(
+            parse_status(stdout, "ada").unwrap(),
+            ("created".to_string(), "Darwin".to_string())
+        );
         let err = parse_status("nothing here\n", "ada").unwrap_err();
-        assert_eq!(err.0, "remote host did not return a valid account status marker");
+        assert_eq!(
+            err.0,
+            "remote host did not return a valid account status marker"
+        );
         // A marker for a different user does not count.
         let err = parse_status("STADO_USER\tcreated\tLinux\tbob\n", "ada").unwrap_err();
-        assert_eq!(err.0, "remote host did not return a valid account status marker");
+        assert_eq!(
+            err.0,
+            "remote host did not return a valid account status marker"
+        );
     }
 
-    fn opts<'a>(password: Option<&'a str>, names: &'a [String], all: bool, dry_run: bool) -> ProvisionOptions<'a> {
+    fn opts<'a>(
+        password: Option<&'a str>,
+        names: &'a [String],
+        all: bool,
+        dry_run: bool,
+    ) -> ProvisionOptions<'a> {
         ProvisionOptions {
             username: "ada",
             password,
@@ -587,7 +617,14 @@ mod tests {
         let spec = &calls[0];
         assert_eq!(
             &spec.argv[..6],
-            ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-o"]
+            [
+                "ssh",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "StrictHostKeyChecking=accept-new",
+                "-o"
+            ]
         );
         assert_eq!(spec.argv[6], "ConnectTimeout=15");
         assert_eq!(spec.argv[7], "wisent@mini");
@@ -602,18 +639,31 @@ mod tests {
         let mini = target("mini", "local", Some("wisent@mini"));
         let dead = target("dead", "local", Some("wisent@dead"));
         let queue = std::sync::Arc::new(Mutex::new(vec![
-            CommandOutput { code: 255, stdout: String::new(), stderr: "ssh: connect to host dead port 22: Connection refused".to_string() },
-            CommandOutput { code: 0, stdout: "STADO_USER\texists\tDarwin\tada\n".to_string(), stderr: String::new() },
+            CommandOutput {
+                code: 255,
+                stdout: String::new(),
+                stderr: "ssh: connect to host dead port 22: Connection refused".to_string(),
+            },
+            CommandOutput {
+                code: 0,
+                stdout: "STADO_USER\texists\tDarwin\tada\n".to_string(),
+                stderr: String::new(),
+            },
         ]));
         let runner = runner_fn(move |_spec| {
             let queue = std::sync::Arc::clone(&queue);
             async move { Ok(queue.lock().unwrap().remove(0)) }
         });
         let options = opts(Some("s3cret-pass"), &[], true, false);
-        let results = provision_users(&options, &[&dead, &mini], &runner).await.unwrap();
+        let results = provision_users(&options, &[&dead, &mini], &runner)
+            .await
+            .unwrap();
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].status, "failed");
-        assert_eq!(results[0].detail, "ssh: connect to host dead port 22: Connection refused");
+        assert_eq!(
+            results[0].detail,
+            "ssh: connect to host dead port 22: Connection refused"
+        );
         assert!(!results[0].ok());
         assert_eq!(results[1].status, "exists");
         assert!(results[1].ok());
@@ -622,9 +672,7 @@ mod tests {
     #[tokio::test]
     async fn provision_dry_run_plans_without_connecting() {
         let mini = target("mini", "local", Some("wisent@mini"));
-        let runner = runner_fn(|_spec| async move {
-            panic!("dry-run must never run a command")
-        });
+        let runner = runner_fn(|_spec| async move { panic!("dry-run must never run a command") });
         let options = opts(None, &[], true, true);
         let results = provision_users(&options, &[&mini], &runner).await.unwrap();
         assert_eq!(results.len(), 1);
@@ -638,7 +686,9 @@ mod tests {
         let mini = target("mini", "local", Some("wisent@mini"));
         let runner = runner_fn(|_spec| async move { unreachable!() });
         let options = opts(None, &[], true, false);
-        let err = provision_users(&options, &[&mini], &runner).await.unwrap_err();
+        let err = provision_users(&options, &[&mini], &runner)
+            .await
+            .unwrap_err();
         assert_eq!(err.0, "initial password is required");
     }
 }

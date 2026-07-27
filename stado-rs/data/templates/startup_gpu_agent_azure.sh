@@ -58,25 +58,62 @@ export WC_AZURE_CONTAINER="${WC_AZURE_CONTAINER}"
 huggingface-cli download cross-encoder/nli-deberta-v3-small || true
 huggingface-cli download sentence-transformers/all-MiniLM-L6-v2 || true
 
-# Install the Rust orchestration binary from the release bucket. Job
+# Install the Rust orchestration binary from the release channel. Job
 # payloads still run as Python from the venv above (exported as WC_PYTHON
 # for the agent's probes), but the control plane has no Python fallback.
-# gcloud/gsutil are not installed on this image, so the download uses the
-# public GCS HTTPS endpoint. An unavailable or invalid release aborts
-# startup. Shell-locals use $VAR (never the braced form) so the dispatcher's
-# placeholder substitution leaves them alone.
+# The channel base is substituted by the dispatcher from
+# config::release_base_url() (env WC_RELEASE_BASE_URL), so this template
+# is not tied to any one cloud's object store. No cloud CLI is installed
+# on this image, so every download is plain curl over HTTPS. An
+# unavailable or invalid release aborts startup. curl's stderr is NOT
+# discarded: a failed release download is the difference between a
+# working fleet and a silently empty one. Shell-locals use $VAR (never
+# the braced form) so the dispatcher's placeholder substitution leaves
+# them alone.
+WC_RELEASE_BASE="${WC_RELEASE_BASE_URL}"
 AGENT_BIN=/opt/wisent-agent/bin/stado
+# curl against the release channel: $1 is the URL, remaining args are
+# forwarded to curl. An Azure blob channel is not public-read, so it gets
+# a managed-identity bearer token for the storage audience -- the same
+# audience and REST API version the agent's own blob client pins. That
+# requires the VM to carry a user-assigned identity; without one the
+# token fetch fails and startup aborts rather than installing nothing.
+# Any other host (the public GCS endpoint, a CDN, a plain web server) is
+# fetched anonymously, which keeps the GCS default byte-identical.
+# Tracing is suppressed across the token's lifetime so the bearer never
+# reaches /var/log/wisent-agent.log.
+_wc_release_curl() {
+    local url="$1"
+    shift
+    case "$url" in
+        https://*.blob.core.windows.net/*) ;;
+        *)
+            curl -fsSL "$url" "$@"
+            return $?
+            ;;
+    esac
+    local token status
+    set +x
+    token="$(curl -fsSL -H 'Metadata: true' \
+        'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://storage.azure.com' \
+        | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin)["access_token"])')" || token=""
+    curl -fsSL -H "Authorization: Bearer $token" -H 'x-ms-version: 2023-11-03' "$url" "$@"
+    status=$?
+    token=""
+    set -x
+    return "$status"
+}
 _wc_install_agent_binary() {
     mkdir -p /opt/wisent-agent/bin || return 1
-    local version
-    version="$(curl -fsSL https://storage.googleapis.com/wisent-compute/releases/stado/latest.json 2>/dev/null \
+    local version rc
+    version="$(_wc_release_curl "$WC_RELEASE_BASE/latest.json" \
         | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin)["version"])')" || return 1
     [ -n "$version" ] || return 1
-    local base="https://storage.googleapis.com/wisent-compute/releases/stado/$version/linux-amd64"
+    local base="$WC_RELEASE_BASE/$version/linux-amd64"
     local tmp
     tmp="$(mktemp -d)" || return 1
-    curl -fsSL "$base/stado" -o "$tmp/stado" 2>/dev/null || { rm -rf "$tmp"; return 1; }
-    curl -fsSL "$base/SHA256SUMS" -o "$tmp/SHA256SUMS" 2>/dev/null || { rm -rf "$tmp"; return 1; }
+    _wc_release_curl "$base/stado" -o "$tmp/stado" || { rc=$?; rm -rf "$tmp"; return "$rc"; }
+    _wc_release_curl "$base/SHA256SUMS" -o "$tmp/SHA256SUMS" || { rc=$?; rm -rf "$tmp"; return "$rc"; }
     grep -E '[ *]stado$' "$tmp/SHA256SUMS" > "$tmp/stado.sha256" || { rm -rf "$tmp"; return 1; }
     (cd "$tmp" && sha256sum -c stado.sha256) || { rm -rf "$tmp"; return 1; }
     chmod 755 "$tmp/stado" || { rm -rf "$tmp"; return 1; }

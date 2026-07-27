@@ -124,7 +124,12 @@ fn expand_dow(field: &str) -> Option<String> {
     if days.is_empty() {
         return None;
     }
-    Some(days.iter().map(|day| (day + 1).to_string()).collect::<Vec<_>>().join(","))
+    Some(
+        days.iter()
+            .map(|day| (day + 1).to_string())
+            .collect::<Vec<_>>()
+            .join(","),
+    )
 }
 
 /// True when the field matches every value (croniter treats `?` as `*`).
@@ -154,8 +159,7 @@ fn compile(cron: &str) -> Result<Vec<cron::Schedule>, CronError> {
     if fields.len() != 5 {
         return Err(invalid());
     }
-    let (minute, hour, dom, month, dow) =
-        (fields[0], fields[1], fields[2], fields[3], fields[4]);
+    let (minute, hour, dom, month, dow) = (fields[0], fields[1], fields[2], fields[3], fields[4]);
     let dow_translated = if is_all(dow) {
         "*".to_string()
     } else {
@@ -170,7 +174,9 @@ fn compile(cron: &str) -> Result<Vec<cron::Schedule>, CronError> {
             parse(format!("0 {minute} {hour} * {month} {dow_translated}"))?,
         ])
     } else {
-        Ok(vec![parse(format!("0 {minute} {hour} {dom} {month} {dow_translated}"))?])
+        Ok(vec![parse(format!(
+            "0 {minute} {hour} {dom} {month} {dow_translated}"
+        ))?])
     }
 }
 
@@ -206,7 +212,9 @@ pub fn compute_next_due(
         }
     }
     best.map(|next| next.with_timezone(&Utc)).ok_or_else(|| {
-        CronError(format!("no future occurrence for cron expression: {cron:?}"))
+        CronError(format!(
+            "no future occurrence for cron expression: {cron:?}"
+        ))
     })
 }
 
@@ -330,11 +338,14 @@ impl Schedule {
     }
 
     /// `Schedule(...)` with Python dataclass defaults.
-    pub fn new(schedule_id: impl Into<String>, cron: impl Into<String>, command: impl Into<String>) -> Self {
-        let mut sched: Schedule = serde_json::from_value(serde_json::Value::Object(
-            serde_json::Map::new(),
-        ))
-        .expect("all fields have serde defaults");
+    pub fn new(
+        schedule_id: impl Into<String>,
+        cron: impl Into<String>,
+        command: impl Into<String>,
+    ) -> Self {
+        let mut sched: Schedule =
+            serde_json::from_value(serde_json::Value::Object(serde_json::Map::new()))
+                .expect("all fields have serde defaults");
         sched.schedule_id = schedule_id.into();
         sched.cron = cron.into();
         sched.command = command.into();
@@ -411,7 +422,10 @@ fn path(schedule_id: &str) -> String {
 /// gsutil/Azure paths; our local backend's versioned read is a locked
 /// content read, which is already fresh.)
 async fn read_fresh_text(store: &JobStorage, path: &str) -> Result<Option<String>, StorageError> {
-    Ok(store.read_text_versioned(path).await?.map(|versioned| versioned.content))
+    Ok(store
+        .read_text_versioned(path)
+        .await?
+        .map(|versioned| versioned.content))
 }
 
 /// Schedule ids of every `schedules/<id>.json` blob.
@@ -449,7 +463,9 @@ pub async fn list_schedules(store: &JobStorage) -> Result<Vec<Schedule>, Storage
 
 /// Unconditional overwrite of the schedule blob.
 pub async fn write_schedule(store: &JobStorage, sched: &Schedule) -> Result<(), StorageError> {
-    store.upload_text(&path(&sched.schedule_id), &sched.to_json()).await
+    store
+        .upload_text(&path(&sched.schedule_id), &sched.to_json())
+        .await
 }
 
 /// Delete the schedule blob; `false` when it did not exist.
@@ -479,7 +495,9 @@ pub async fn claim_due(
     let path = path(&sched.schedule_id);
     match store.read_text_versioned(&path).await? {
         None => store.create_text_if_absent(&path, &body).await,
-        Some(versioned) => match store.compare_and_swap_text(&path, &versioned.version, &body).await
+        Some(versioned) => match store
+            .compare_and_swap_text(&path, &versioned.version, &body)
+            .await
         {
             Ok(_) => Ok(true),
             Err(StorageError::StorageConflict(_)) => Ok(false),
@@ -516,7 +534,10 @@ async fn prev_instance_live(store: &JobStorage, sched: &Schedule) -> bool {
     let live = async {
         Ok::<bool, StorageError>(
             store.read_job("queue", &sched.last_job_id).await?.is_some()
-                || store.read_job("running", &sched.last_job_id).await?.is_some(),
+                || store
+                    .read_job("running", &sched.last_job_id)
+                    .await?
+                    .is_some(),
         )
     };
     // A read error is not proof the prior instance is gone; be
@@ -571,7 +592,9 @@ pub async fn fire_due_schedules(
 
         // Claim the occurrence before submitting (CF double-fire guard).
         if !claim_due(store, &mut sched, &next_due).await? {
-            log(&format!("schedule {schedule_id}: lost claim race; another coordinator fired it"));
+            log(&format!(
+                "schedule {schedule_id}: lost claim race; another coordinator fired it"
+            ));
             continue;
         }
 
@@ -706,30 +729,135 @@ mod tests {
     /// same call compute_next_due makes in Python). (cron, tz, base_utc,
     /// expected_utc).
     const CRONITER_BATTERY: [(&str, &str, &str, &str); 21] = [
-        ("*/5 * * * *", "UTC", "2026-01-15T10:03:27+00:00", "2026-01-15T10:05:00+00:00"),
-        ("0 2 * * *", "UTC", "2026-01-15T10:03:27+00:00", "2026-01-16T02:00:00+00:00"),
-        ("30 14 * * 1-5", "UTC", "2026-07-26T00:00:00+00:00", "2026-07-27T14:30:00+00:00"),
-        ("0 0 1 * *", "UTC", "2026-07-25T03:42:00+00:00", "2026-08-01T00:00:00+00:00"),
-        ("0 9 1,15 * *", "UTC", "2026-07-15T09:00:00+00:00", "2026-08-01T09:00:00+00:00"),
-        ("0 22 * * 0", "UTC", "2026-07-25T00:00:00+00:00", "2026-07-26T22:00:00+00:00"),
-        ("0 22 * * 7", "UTC", "2026-07-25T00:00:00+00:00", "2026-07-26T22:00:00+00:00"),
-        ("0 6 * * mon,wed,fri", "UTC", "2026-07-26T00:00:00+00:00", "2026-07-27T06:00:00+00:00"),
-        ("0 12 29 2 *", "UTC", "2026-07-25T00:00:00+00:00", "2028-02-29T12:00:00+00:00"),
-        ("0 0 13 * 5", "UTC", "2026-07-25T00:00:00+00:00", "2026-07-31T00:00:00+00:00"),
-        ("*/20 1-4 * * *", "UTC", "2026-07-25T02:41:11+00:00", "2026-07-25T03:00:00+00:00"),
-        ("0 3 15 jan,jun *", "UTC", "2026-07-25T00:00:00+00:00", "2027-01-15T03:00:00+00:00"),
-        ("15,45 8-18/3 * * *", "UTC", "2026-07-25T11:46:00+00:00", "2026-07-25T14:15:00+00:00"),
+        (
+            "*/5 * * * *",
+            "UTC",
+            "2026-01-15T10:03:27+00:00",
+            "2026-01-15T10:05:00+00:00",
+        ),
+        (
+            "0 2 * * *",
+            "UTC",
+            "2026-01-15T10:03:27+00:00",
+            "2026-01-16T02:00:00+00:00",
+        ),
+        (
+            "30 14 * * 1-5",
+            "UTC",
+            "2026-07-26T00:00:00+00:00",
+            "2026-07-27T14:30:00+00:00",
+        ),
+        (
+            "0 0 1 * *",
+            "UTC",
+            "2026-07-25T03:42:00+00:00",
+            "2026-08-01T00:00:00+00:00",
+        ),
+        (
+            "0 9 1,15 * *",
+            "UTC",
+            "2026-07-15T09:00:00+00:00",
+            "2026-08-01T09:00:00+00:00",
+        ),
+        (
+            "0 22 * * 0",
+            "UTC",
+            "2026-07-25T00:00:00+00:00",
+            "2026-07-26T22:00:00+00:00",
+        ),
+        (
+            "0 22 * * 7",
+            "UTC",
+            "2026-07-25T00:00:00+00:00",
+            "2026-07-26T22:00:00+00:00",
+        ),
+        (
+            "0 6 * * mon,wed,fri",
+            "UTC",
+            "2026-07-26T00:00:00+00:00",
+            "2026-07-27T06:00:00+00:00",
+        ),
+        (
+            "0 12 29 2 *",
+            "UTC",
+            "2026-07-25T00:00:00+00:00",
+            "2028-02-29T12:00:00+00:00",
+        ),
+        (
+            "0 0 13 * 5",
+            "UTC",
+            "2026-07-25T00:00:00+00:00",
+            "2026-07-31T00:00:00+00:00",
+        ),
+        (
+            "*/20 1-4 * * *",
+            "UTC",
+            "2026-07-25T02:41:11+00:00",
+            "2026-07-25T03:00:00+00:00",
+        ),
+        (
+            "0 3 15 jan,jun *",
+            "UTC",
+            "2026-07-25T00:00:00+00:00",
+            "2027-01-15T03:00:00+00:00",
+        ),
+        (
+            "15,45 8-18/3 * * *",
+            "UTC",
+            "2026-07-25T11:46:00+00:00",
+            "2026-07-25T14:15:00+00:00",
+        ),
         // DST fall-back (ambiguous local time): both pick the FIRST occurrence.
-        ("0 2 * * *", "Europe/Warsaw", "2026-10-24T12:00:00+00:00", "2026-10-25T00:00:00+00:00"),
-        ("30 1 * * *", "America/New_York", "2026-11-01T04:30:00+00:00", "2026-11-01T05:30:00+00:00"),
-        ("0 9 * * 1", "Asia/Tokyo", "2026-07-25T00:00:00+00:00", "2026-07-27T00:00:00+00:00"),
-        ("30 23 * * sat", "Europe/Warsaw", "2026-07-25T00:00:00+00:00", "2026-07-25T21:30:00+00:00"),
-        ("0 0 29 2 *", "UTC", "2027-03-01T00:00:00+00:00", "2028-02-29T00:00:00+00:00"),
+        (
+            "0 2 * * *",
+            "Europe/Warsaw",
+            "2026-10-24T12:00:00+00:00",
+            "2026-10-25T00:00:00+00:00",
+        ),
+        (
+            "30 1 * * *",
+            "America/New_York",
+            "2026-11-01T04:30:00+00:00",
+            "2026-11-01T05:30:00+00:00",
+        ),
+        (
+            "0 9 * * 1",
+            "Asia/Tokyo",
+            "2026-07-25T00:00:00+00:00",
+            "2026-07-27T00:00:00+00:00",
+        ),
+        (
+            "30 23 * * sat",
+            "Europe/Warsaw",
+            "2026-07-25T00:00:00+00:00",
+            "2026-07-25T21:30:00+00:00",
+        ),
+        (
+            "0 0 29 2 *",
+            "UTC",
+            "2027-03-01T00:00:00+00:00",
+            "2028-02-29T00:00:00+00:00",
+        ),
         // croniter DOW step forms normalized through the shim.
-        ("0 22 * * */2", "UTC", "2026-07-25T00:00:00+00:00", "2026-07-25T22:00:00+00:00"),
-        ("0 22 * * 1/2", "UTC", "2026-07-25T00:00:00+00:00", "2026-07-27T22:00:00+00:00"),
+        (
+            "0 22 * * */2",
+            "UTC",
+            "2026-07-25T00:00:00+00:00",
+            "2026-07-25T22:00:00+00:00",
+        ),
+        (
+            "0 22 * * 1/2",
+            "UTC",
+            "2026-07-25T00:00:00+00:00",
+            "2026-07-27T22:00:00+00:00",
+        ),
         // croniter DOW wrap-around range (Sat,Sun,Mon).
-        ("0 22 * * 6-1", "UTC", "2026-07-25T00:00:00+00:00", "2026-07-25T22:00:00+00:00"),
+        (
+            "0 22 * * 6-1",
+            "UTC",
+            "2026-07-25T00:00:00+00:00",
+            "2026-07-25T22:00:00+00:00",
+        ),
     ];
 
     #[test]
@@ -752,21 +880,37 @@ mod tests {
     #[test]
     fn spring_forward_deviation_is_pinned() {
         // croniter: 2026-03-29T01:00:00+00:00 (03:00 CEST on 03-29).
-        let actual = compute_next_due("0 2 * * *", utc("2026-03-28T12:00:00+00:00"), "Europe/Warsaw")
-            .unwrap();
-        assert_eq!(crate::models::isoformat_utc(actual), "2026-03-30T00:00:00+00:00");
+        let actual = compute_next_due(
+            "0 2 * * *",
+            utc("2026-03-28T12:00:00+00:00"),
+            "Europe/Warsaw",
+        )
+        .unwrap();
+        assert_eq!(
+            crate::models::isoformat_utc(actual),
+            "2026-03-30T00:00:00+00:00"
+        );
         // croniter: 2026-03-08T07:00:00+00:00 (03:00 EDT on 03-08).
-        let actual =
-            compute_next_due("0 2 * * *", utc("2026-03-07T12:00:00+00:00"), "America/New_York")
-                .unwrap();
-        assert_eq!(crate::models::isoformat_utc(actual), "2026-03-09T06:00:00+00:00");
+        let actual = compute_next_due(
+            "0 2 * * *",
+            utc("2026-03-07T12:00:00+00:00"),
+            "America/New_York",
+        )
+        .unwrap();
+        assert_eq!(
+            crate::models::isoformat_utc(actual),
+            "2026-03-09T06:00:00+00:00"
+        );
     }
 
     #[test]
     fn unknown_tz_falls_back_to_utc() {
-        let actual = compute_next_due("0 2 * * *", utc("2026-01-15T10:03:27+00:00"), "Not/AZone")
-            .unwrap();
-        assert_eq!(crate::models::isoformat_utc(actual), "2026-01-16T02:00:00+00:00");
+        let actual =
+            compute_next_due("0 2 * * *", utc("2026-01-15T10:03:27+00:00"), "Not/AZone").unwrap();
+        assert_eq!(
+            crate::models::isoformat_utc(actual),
+            "2026-01-16T02:00:00+00:00"
+        );
     }
 
     #[tokio::test]
@@ -774,9 +918,15 @@ mod tests {
         let (_dir, store) = store();
         let sched = Schedule::new("sch-aa11bb22", "0 2 * * *", "echo hi");
         write_schedule(&store, &sched).await.unwrap();
-        let back = read_schedule(&store, "sch-aa11bb22").await.unwrap().unwrap();
+        let back = read_schedule(&store, "sch-aa11bb22")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(back.to_json(), sched.to_json());
-        assert_eq!(list_schedule_ids(&store).await.unwrap(), vec!["sch-aa11bb22"]);
+        assert_eq!(
+            list_schedule_ids(&store).await.unwrap(),
+            vec!["sch-aa11bb22"]
+        );
         assert!(read_schedule(&store, "sch-nope").await.unwrap().is_none());
         assert!(delete_schedule(&store, "sch-aa11bb22").await.unwrap());
         assert!(!delete_schedule(&store, "sch-aa11bb22").await.unwrap());
@@ -796,12 +946,18 @@ mod tests {
         // Our claim is based on a versioned read taken NOW, so it wins —
         // matching Python, where claim_due re-reads the generation at
         // claim time.
-        assert!(claim_due(&store, &mut sched, "2026-01-16T02:00:00+00:00").await.unwrap());
+        assert!(claim_due(&store, &mut sched, "2026-01-16T02:00:00+00:00")
+            .await
+            .unwrap());
         let back = read_schedule(&store, "sch-claim01").await.unwrap().unwrap();
         assert_eq!(back.next_due_at, "2026-01-16T02:00:00+00:00");
 
         // Simulate a lost race by CAS-ing with a stale version directly.
-        let versioned = store.read_text_versioned(&path("sch-claim01")).await.unwrap().unwrap();
+        let versioned = store
+            .read_text_versioned(&path("sch-claim01"))
+            .await
+            .unwrap()
+            .unwrap();
         store
             .compare_and_swap_text(&path("sch-claim01"), &versioned.version, &raced.to_json())
             .await
@@ -815,9 +971,18 @@ mod tests {
 
     #[test]
     fn parse_iso_accepts_aware_and_naive() {
-        assert_eq!(parse_iso("2026-01-16T02:00:00+00:00").unwrap(), utc("2026-01-16T02:00:00+00:00"));
-        assert_eq!(parse_iso("2026-01-16T02:00:00").unwrap(), utc("2026-01-16T02:00:00+00:00"));
-        assert_eq!(parse_iso("2026-01-16T02:00:00Z").unwrap(), utc("2026-01-16T02:00:00+00:00"));
+        assert_eq!(
+            parse_iso("2026-01-16T02:00:00+00:00").unwrap(),
+            utc("2026-01-16T02:00:00+00:00")
+        );
+        assert_eq!(
+            parse_iso("2026-01-16T02:00:00").unwrap(),
+            utc("2026-01-16T02:00:00+00:00")
+        );
+        assert_eq!(
+            parse_iso("2026-01-16T02:00:00Z").unwrap(),
+            utc("2026-01-16T02:00:00+00:00")
+        );
         assert!(parse_iso("garbage").is_none());
     }
 }

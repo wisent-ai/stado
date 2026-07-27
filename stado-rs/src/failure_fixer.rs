@@ -81,7 +81,12 @@ async fn parse_failed_blob(
     let Ok(blob) = serde_json::from_str::<Value>(&txt) else {
         return Ok(None);
     };
-    let field = |key: &str| blob.get(key).and_then(Value::as_str).unwrap_or("").to_string();
+    let field = |key: &str| {
+        blob.get(key)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
     Ok(Some(FailureRecord {
         job_id: field("job_id"),
         batch_id: field("batch_id"),
@@ -137,7 +142,9 @@ pub async fn state_load(store: &JobStorage, job_id: &str) -> Result<Value, FixEr
 
 /// Python `state_save`: `json.dumps(state, indent=2, sort_keys=True)`.
 pub async fn state_save(store: &JobStorage, job_id: &str, state: &Value) -> Result<(), FixError> {
-    store.upload_text(&state_path(job_id), &json_dumps_pretty_sorted(state)).await?;
+    store
+        .upload_text(&state_path(job_id), &json_dumps_pretty_sorted(state))
+        .await?;
     Ok(())
 }
 
@@ -193,7 +200,9 @@ pub fn claude_bin() -> Option<String> {
 #[cfg(unix)]
 fn is_executable(path: &std::path::Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
-    path.metadata().map(|meta| meta.permissions().mode() & 0o111 != 0).unwrap_or(false)
+    path.metadata()
+        .map(|meta| meta.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
 }
 
 #[cfg(not(unix))]
@@ -237,7 +246,10 @@ pub async fn dispatch_fix(
     };
     // Python subprocess.run([claude, "-p", prompt], capture_output=True,
     // text=True) — NO timeout; a Claude session runs as long as it runs.
-    let proc = std::process::Command::new(&claude).arg("-p").arg(&prompt).output()?;
+    let proc = std::process::Command::new(&claude)
+        .arg("-p")
+        .arg(&prompt)
+        .output()?;
     let rc = proc.status.code().unwrap_or(-1);
     let stdout = String::from_utf8_lossy(&proc.stdout);
     let stderr = String::from_utf8_lossy(&proc.stderr);
@@ -251,8 +263,14 @@ pub async fn dispatch_fix(
         Value::from(chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()),
     );
     slot.insert("last_returncode".into(), Value::from(rc));
-    slot.insert("last_stdout_preview".into(), Value::from(truncate_chars(&stdout, 600)));
-    slot.insert("last_stderr_preview".into(), Value::from(truncate_chars(&stderr, 600)));
+    slot.insert(
+        "last_stdout_preview".into(),
+        Value::from(truncate_chars(&stdout, 600)),
+    );
+    slot.insert(
+        "last_stderr_preview".into(),
+        Value::from(truncate_chars(&stderr, 600)),
+    );
     slot.insert("failed_at".into(), Value::from(rec.failed_at.as_str()));
     slot.insert("batch_id".into(), Value::from(rec.batch_id.as_str()));
     slot.insert("command".into(), Value::from(rec.command.as_str()));
@@ -394,8 +412,10 @@ async fn run_inner(command: FixCommands) -> Result<i32, FixError> {
                     "command_head": truncate_chars(&rec.command, 160),
                 }));
             }
-            let undispatched =
-                summary.iter().filter(|s| s["attempts"].as_i64() == Some(0)).count();
+            let undispatched = summary
+                .iter()
+                .filter(|s| s["attempts"].as_i64() == Some(0))
+                .count();
             print_pretty(&json!({
                 "total_failures_scanned": records.len(),
                 "undispatched": undispatched,
@@ -414,7 +434,11 @@ async fn run_inner(command: FixCommands) -> Result<i32, FixError> {
             eprintln!("no failed job {} in current failed/", py_str_repr(&job_id));
             Ok(1)
         }
-        FixCommands::Dispatch { job_id, since, execute } => {
+        FixCommands::Dispatch {
+            job_id,
+            since,
+            execute,
+        } => {
             for rec in scan_new_failures(&store, since.as_deref(), None).await? {
                 if rec.job_id == job_id {
                     let result = dispatch_fix(&rec, &store, execute).await?;
@@ -425,7 +449,11 @@ async fn run_inner(command: FixCommands) -> Result<i32, FixError> {
             eprintln!("no failed job {} in current failed/", py_str_repr(&job_id));
             Ok(1)
         }
-        FixCommands::ScanDispatch { since, command_pattern, execute } => {
+        FixCommands::ScanDispatch {
+            since,
+            command_pattern,
+            execute,
+        } => {
             let results = scan_and_dispatch(
                 since.as_deref(),
                 command_pattern.as_deref(),
@@ -496,7 +524,10 @@ mod tests {
             "failed_at": record.failed_at,
         }))
         .unwrap();
-        store.upload_text(&format!("failed/{}.json", record.job_id), &body).await.unwrap();
+        store
+            .upload_text(&format!("failed/{}.json", record.job_id), &body)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -509,21 +540,29 @@ mod tests {
         older.failed_at = "2025-01-01T00:00:00+00:00".into();
         older.command = "echo unrelated".into();
         write_failed_blob(&store, &older).await;
-        store.upload_text("failed/corrupt.json", "{nope").await.unwrap();
+        store
+            .upload_text("failed/corrupt.json", "{nope")
+            .await
+            .unwrap();
 
         let all = scan_new_failures(&store, None, None).await.unwrap();
         assert_eq!(all.len(), 2);
 
-        let since = scan_new_failures(&store, Some("2026-01-01"), None).await.unwrap();
+        let since = scan_new_failures(&store, Some("2026-01-01"), None)
+            .await
+            .unwrap();
         assert_eq!(since.len(), 1);
         assert_eq!(since[0].job_id, "deadbeef");
 
-        let pattern =
-            scan_new_failures(&store, None, Some("raw.extract_and_upload")).await.unwrap();
+        let pattern = scan_new_failures(&store, None, Some("raw.extract_and_upload"))
+            .await
+            .unwrap();
         assert_eq!(pattern.len(), 1);
         assert_eq!(pattern[0].job_id, "deadbeef");
 
-        let none = scan_new_failures(&store, None, Some("lm_eval")).await.unwrap();
+        let none = scan_new_failures(&store, None, Some("lm_eval"))
+            .await
+            .unwrap();
         assert!(none.is_empty());
     }
 
@@ -575,9 +614,13 @@ mod tests {
         let mut other = rec();
         other.job_id = "cafe0001".into();
         write_failed_blob(&store, &other).await;
-        state_save(&store, "cafe0001", &json!({"attempts": 1})).await.unwrap();
+        state_save(&store, "cafe0001", &json!({"attempts": 1}))
+            .await
+            .unwrap();
 
-        let results = scan_and_dispatch(None, None, false, &store, true).await.unwrap();
+        let results = scan_and_dispatch(None, None, false, &store, true)
+            .await
+            .unwrap();
         assert_eq!(results.len(), 2);
         let by_id: std::collections::HashMap<String, &Value> = results
             .iter()
@@ -588,7 +631,9 @@ mod tests {
         assert_eq!(by_id["cafe0001"]["attempts"], 1);
 
         // skip_dispatched=false re-dispatches everything (dry-run here).
-        let results = scan_and_dispatch(None, None, false, &store, false).await.unwrap();
+        let results = scan_and_dispatch(None, None, false, &store, false)
+            .await
+            .unwrap();
         assert!(results.iter().all(|r| r["status"] == DRY_RUN));
     }
 }

@@ -26,8 +26,8 @@
 //! in the subscription, as a subprocess like Python.
 
 use std::collections::BTreeMap;
-use std::sync::LazyLock;
 use std::sync::Arc;
+use std::sync::LazyLock;
 
 use serde_json::{json, Value};
 
@@ -74,8 +74,9 @@ struct Inner {
 impl CloudQuotasClient {
     /// Bind to the public Cloud Quotas API, resolving GCP credentials.
     pub async fn new(project: &str) -> Result<Self, CatalogError> {
-        let auth =
-            gcp_auth::provider().await.map_err(|err| CatalogError::Auth(err.to_string()))?;
+        let auth = gcp_auth::provider()
+            .await
+            .map_err(|err| CatalogError::Auth(err.to_string()))?;
         Ok(Self::assemble(project, CLOUD_QUOTAS_BASE, Some(auth)))
     }
 
@@ -125,8 +126,10 @@ impl CloudQuotasClient {
                 .token(&[CLOUD_PLATFORM_SCOPE])
                 .await
                 .map_err(|err| CatalogError::Auth(err.to_string()))?;
-            request = request
-                .header(reqwest::header::AUTHORIZATION, format!("Bearer {}", token.as_str()));
+            request = request.header(
+                reqwest::header::AUTHORIZATION,
+                format!("Bearer {}", token.as_str()),
+            );
         }
         if let Some(body) = body {
             request = request
@@ -164,7 +167,13 @@ impl CloudQuotasClient {
             self.inner.project,
             crate::queue::gcs::percent_encode(quota_preference_id)
         );
-        self.send_json(reqwest::Method::POST, &url, Some(body), "create_quota_preference").await
+        self.send_json(
+            reqwest::Method::POST,
+            &url,
+            Some(body),
+            "create_quota_preference",
+        )
+        .await
     }
 
     /// UpdateQuotaPreference: PATCH `{base}/projects/{p}/locations/global/
@@ -180,7 +189,13 @@ impl CloudQuotasClient {
             self.inner.project,
             crate::queue::gcs::percent_encode(quota_preference_id)
         );
-        self.send_json(reqwest::Method::PATCH, &url, Some(body), "update_quota_preference").await
+        self.send_json(
+            reqwest::Method::PATCH,
+            &url,
+            Some(body),
+            "update_quota_preference",
+        )
+        .await
     }
 
     /// `list_quota_preferences` over REST with pageToken pagination:
@@ -222,8 +237,7 @@ impl CloudQuotasClient {
         loop {
             let mut url = format!(
                 "{}/projects/{}/locations/global/services/compute.googleapis.com/quotaInfos",
-                self.inner.base_url,
-                self.inner.project
+                self.inner.base_url, self.inner.project
             );
             if let Some(token) = &page_token {
                 url.push_str(&format!(
@@ -241,8 +255,10 @@ impl CloudQuotasClient {
                     .token(&[CLOUD_PLATFORM_SCOPE])
                     .await
                     .map_err(|err| CatalogError::Auth(err.to_string()))?;
-                request = request
-                    .header(reqwest::header::AUTHORIZATION, format!("Bearer {}", token.as_str()));
+                request = request.header(
+                    reqwest::header::AUTHORIZATION,
+                    format!("Bearer {}", token.as_str()),
+                );
             }
             let response = request.send().await?;
             if !response.status().is_success() {
@@ -328,7 +344,11 @@ pub async fn gcp_catalog(client: &CloudQuotasClient) -> Result<Vec<Value>, Catal
                 .and_then(Value::as_str)
                 .unwrap_or("");
             // Python `for loc in locs or ["global"]`.
-            let locations: Vec<&str> = if locs.is_empty() { vec!["global"] } else { locs };
+            let locations: Vec<&str> = if locs.is_empty() {
+                vec!["global"]
+            } else {
+                locs
+            };
             for loc in locations {
                 out.push(json!({
                     "provider": "gcp",
@@ -382,7 +402,14 @@ pub fn azure_rows_from_skus(skus: &[Value]) -> Vec<Value> {
 /// `{type(exc).__name__}: {exc}`).
 pub fn azure_catalog() -> Vec<Value> {
     let output = std::process::Command::new("az")
-        .args(["vm", "list-skus", "--resource-type", "virtualMachines", "-o", "json"])
+        .args([
+            "vm",
+            "list-skus",
+            "--resource-type",
+            "virtualMachines",
+            "-o",
+            "json",
+        ])
         .output();
     let output = match output {
         Ok(output) => output,
@@ -404,7 +431,11 @@ pub fn azure_catalog() -> Vec<Value> {
     };
     if !output.status.success() {
         // subprocess.CalledProcessError from check=True.
-        let code = output.status.code().map(|c| c.to_string()).unwrap_or_else(|| "?".into());
+        let code = output
+            .status
+            .code()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "?".into());
         return vec![json!({
             "provider": "azure",
             "ok": false,
@@ -471,7 +502,10 @@ pub async fn all_catalogs(
 ) -> Result<BTreeMap<String, Vec<Value>>, CatalogError> {
     let mut out = BTreeMap::new();
     for provider in providers {
-        out.insert(provider.clone(), provider_catalog(provider, gcp_client).await?);
+        out.insert(
+            provider.clone(),
+            provider_catalog(provider, gcp_client).await?,
+        );
     }
     Ok(out)
 }
@@ -488,9 +522,7 @@ fn json_i64(value: Option<&Value>) -> Option<i64> {
 /// One row per QuotaPreference (Python `gcp_request_status`). Buckets
 /// stateDetail into a state field (approved/partially_approved/denied/
 /// reconciling/unknown).
-pub async fn gcp_request_status(
-    client: &CloudQuotasClient,
-) -> Result<Vec<Value>, CatalogError> {
+pub async fn gcp_request_status(client: &CloudQuotasClient) -> Result<Vec<Value>, CatalogError> {
     let mut out = Vec::new();
     for pref in client.list_quota_preferences().await? {
         let config = pref.get("quotaConfig").cloned().unwrap_or(Value::Null);
@@ -499,7 +531,10 @@ pub async fn gcp_request_status(
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_lowercase();
-        let reconciling = pref.get("reconciling").and_then(Value::as_bool).unwrap_or(false);
+        let reconciling = pref
+            .get("reconciling")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let state = if reconciling {
             "reconciling"
         } else if sd.contains("partially approved") {
@@ -575,7 +610,10 @@ pub async fn gcp_request_all_families(
         let targets: Vec<&String> = if requested.is_empty() {
             all_regions.iter().collect()
         } else {
-            all_regions.iter().filter(|r| requested.contains(r.as_str())).collect()
+            all_regions
+                .iter()
+                .filter(|r| requested.contains(r.as_str()))
+                .collect()
         };
         for region in targets {
             match super::quota_request::gcp_request_for_family(
@@ -635,7 +673,10 @@ pub async fn azure_request_all_families(new_limit: i64, locations: &[String]) ->
     let target_locs: Vec<&String> = if requested.is_empty() {
         all_locs.iter().collect()
     } else {
-        all_locs.iter().filter(|l| requested.contains(l.as_str())).collect()
+        all_locs
+            .iter()
+            .filter(|l| requested.contains(l.as_str()))
+            .collect()
     };
     let subscription = crate::config::azure_subscription_id();
     let mut out = Vec::new();
@@ -670,7 +711,6 @@ pub async fn azure_request_all_families(new_limit: i64, locations: &[String]) ->
     }
     out
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -744,18 +784,26 @@ mod tests {
         // Two identical pages concatenate (Python paginates the same way).
         assert_eq!(rows.len(), 2 * 5, "{rows:?}");
         let first = &rows[0];
-        assert_eq!(first["quota_id"], json!("NVIDIA-T4-GPUS-per-project-region"));
+        assert_eq!(
+            first["quota_id"],
+            json!("NVIDIA-T4-GPUS-per-project-region")
+        );
         assert_eq!(first["metric"], json!("NVIDIA T4 GPUs"));
         assert_eq!(first["region"], json!("us-central1"));
         assert_eq!(first["limit"], json!(8));
         // Empty applicableLocations -> one "global" row.
-        assert!(rows.iter().any(|r| r["region"] == json!("global") && r["limit"] == json!(1)));
+        assert!(rows
+            .iter()
+            .any(|r| r["region"] == json!("global") && r["limit"] == json!(1)));
         // Empty metricDisplayName falls back to the metric path.
         let family_row = rows
             .iter()
             .find(|r| r["gpu_family"] == json!("NVIDIA_T4"))
             .expect("gpu_family row");
-        assert_eq!(family_row["metric"], json!("compute.googleapis.com/gpus_per_gpu_family"));
+        assert_eq!(
+            family_row["metric"],
+            json!("compute.googleapis.com/gpus_per_gpu_family")
+        );
         // Missing details.value -> null limit (Python None).
         let no_value = rows
             .iter()
@@ -764,14 +812,19 @@ mod tests {
         assert_eq!(no_value["limit"], json!(null));
         assert_eq!(no_value["region"], json!("europe-west4"));
         // CPUS is not GPU-related and was filtered out.
-        assert!(!rows.iter().any(|r| r["quota_id"] == json!("CPUS-per-project-region")));
+        assert!(!rows
+            .iter()
+            .any(|r| r["quota_id"] == json!("CPUS-per-project-region")));
     }
 
     #[tokio::test]
     async fn gcp_catalog_http_error_is_an_api_error() {
-        let server =
-            mock_http(vec![http_response(403, "Forbidden", r#"{"error": {"message": "denied"}}"#)])
-                .await;
+        let server = mock_http(vec![http_response(
+            403,
+            "Forbidden",
+            r#"{"error": {"message": "denied"}}"#,
+        )])
+        .await;
         let client = CloudQuotasClient::for_test(&server.base_url, "test-project");
         let err = gcp_catalog(&client).await.unwrap_err();
         assert!(err.to_string().contains("HTTP 403"), "{err}");
@@ -882,9 +935,7 @@ mod tests {
                 },
             ],
         });
-        let pref = |name: &str| {
-            http_response(200, "OK", &json!({"name": name}).to_string())
-        };
+        let pref = |name: &str| http_response(200, "OK", &json!({"name": name}).to_string());
         let server = mock_http(vec![
             http_response(200, "OK", &infos.to_string()),
             // L4: us-central1, us-east1 (sorted union; legacy-only us-west1 excluded).
@@ -896,7 +947,9 @@ mod tests {
         ])
         .await;
         let client = CloudQuotasClient::for_test(&server.base_url, "p");
-        let rows = gcp_request_all_families(&client, 16, &[], "e@x", "j").await.unwrap();
+        let rows = gcp_request_all_families(&client, 16, &[], "e@x", "j")
+            .await
+            .unwrap();
         server.stop();
         assert_eq!(rows.len(), 4, "{rows:?}");
         // families sorted: NVIDIA_L4 first; regions sorted within a family.

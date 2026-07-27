@@ -34,12 +34,18 @@ impl TempHome {
 /// seconds since epoch without following symlinks (test-only unsafe:
 /// AT_FDCWD is a valid pseudo-descriptor by definition).
 pub fn set_mtime(path: &Path, epoch_secs: i64) {
-    use std::os::fd::BorrowedFd;
     use nix::sys::time::TimeValLike;
+    use std::os::fd::BorrowedFd;
     let ts = nix::sys::time::TimeSpec::seconds(epoch_secs);
     let cwd = unsafe { BorrowedFd::borrow_raw(nix::libc::AT_FDCWD) };
-    nix::sys::stat::utimensat(cwd, path, &ts, &ts, nix::sys::stat::UtimensatFlags::NoFollowSymlink)
-        .unwrap_or_else(|e| panic!("backdate {}: {e}", path.display()));
+    nix::sys::stat::utimensat(
+        cwd,
+        path,
+        &ts,
+        &ts,
+        nix::sys::stat::UtimensatFlags::NoFollowSymlink,
+    )
+    .unwrap_or_else(|e| panic!("backdate {}: {e}", path.display()));
 }
 
 /// Recursively backdate a tree `age_secs` into the past (children first;
@@ -116,7 +122,9 @@ pub fn run_pass(
     force: bool,
 ) -> Value {
     let state_dir = super::ensure_state_dir(&th.home).expect("state dir");
-    let lock = acquire_lock(&state_dir).expect("lock io").expect("lock busy");
+    let lock = acquire_lock(&state_dir)
+        .expect("lock io")
+        .expect("lock busy");
     let report = CleanupReport::base(active_slot_count, hostname);
     let mut logs: Vec<String> = Vec::new();
     run_with_lock(
@@ -128,6 +136,7 @@ pub fn run_pass(
         std::time::Instant::now(),
         epoch_now(),
         force,
+        false,
         &mut |line| logs.push(line.to_string()),
     )
 }
@@ -162,7 +171,10 @@ pub fn make_hf_repo(home: &Path, name: &str, commit: &str, blobs: &[(&str, &[u8]
     if blobs.len() > 1 {
         std::os::unix::fs::symlink(
             format!("../../../blobs/{}", blobs[1].0),
-            repo.join("snapshots").join(commit).join("sub").join("file2.txt"),
+            repo.join("snapshots")
+                .join(commit)
+                .join("sub")
+                .join("file2.txt"),
         )
         .unwrap();
     }

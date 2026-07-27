@@ -96,7 +96,9 @@ impl GcsBackend {
             .request(method, url)
             .header(reqwest::header::AUTHORIZATION, self.token().await?);
         if let Some((content_type, bytes)) = body {
-            request = request.header(reqwest::header::CONTENT_TYPE, content_type).body(bytes);
+            request = request
+                .header(reqwest::header::CONTENT_TYPE, content_type)
+                .body(bytes);
         }
         Ok(request.send().await?)
     }
@@ -110,8 +112,12 @@ impl GcsBackend {
         if_generation_match: Option<&str>,
     ) -> Result<reqwest::Response, StorageError> {
         let url = upload_url(&self.inner.bucket, path, if_generation_match);
-        self.send(Method::POST, &url, Some(("text/plain; charset=utf-8".into(), bytes)))
-            .await
+        self.send(
+            Method::POST,
+            &url,
+            Some(("text/plain; charset=utf-8".into(), bytes)),
+        )
+        .await
     }
 
     /// GET the object resource (generation / updated / metadata).
@@ -139,7 +145,9 @@ impl GcsBackend {
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(None);
         }
-        Ok(Some(ensure_success(response).await?.bytes().await?.to_vec()))
+        Ok(Some(
+            ensure_success(response).await?.bytes().await?.to_vec(),
+        ))
     }
 }
 
@@ -157,7 +165,9 @@ async fn ensure_success(response: reqwest::Response) -> Result<reqwest::Response
 /// Parse an RFC3339 GCS timestamp ("2026-05-16T12:34:56.789Z").
 fn parse_timestamp(value: &serde_json::Value) -> Option<DateTime<Utc>> {
     let raw = value.as_str()?;
-    DateTime::parse_from_rfc3339(raw).ok().map(|dt| dt.with_timezone(&Utc))
+    DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
 }
 
 /// Percent-encode per RFC 3986: keep the unreserved set, encode everything
@@ -191,7 +201,10 @@ pub(crate) fn upload_url(bucket: &str, name: &str, if_generation_match: Option<&
 /// Object resource endpoint; the object name is a single path segment, so
 /// slashes inside the name must be encoded as %2F.
 pub(crate) fn object_url(bucket: &str, name: &str) -> String {
-    format!("{API_BASE}/storage/v1/b/{bucket}/o/{}", percent_encode(name))
+    format!(
+        "{API_BASE}/storage/v1/b/{bucket}/o/{}",
+        percent_encode(name)
+    )
 }
 
 /// Media download endpoint (`?alt=media`).
@@ -200,7 +213,12 @@ pub(crate) fn media_url(bucket: &str, name: &str) -> String {
 }
 
 /// Object listing endpoint with `fields` projection and pagination.
-pub(crate) fn list_url(bucket: &str, prefix: &str, page_token: Option<&str>, fields: &str) -> String {
+pub(crate) fn list_url(
+    bucket: &str,
+    prefix: &str,
+    page_token: Option<&str>,
+    fields: &str,
+) -> String {
     let mut url = format!(
         "{API_BASE}/storage/v1/b/{bucket}/o?prefix={}&fields={}",
         percent_encode(prefix),
@@ -239,11 +257,7 @@ impl BlobBackend for GcsBackend {
         self.get_media(path, None).await
     }
 
-    async fn download_to_filename(
-        &self,
-        path: &str,
-        dest: &Path,
-    ) -> Result<bool, StorageError> {
+    async fn download_to_filename(&self, path: &str, dest: &Path) -> Result<bool, StorageError> {
         let Some(bytes) = self.get_media(path, None).await? else {
             return Ok(false);
         };
@@ -251,12 +265,10 @@ impl BlobBackend for GcsBackend {
         Ok(true)
     }
 
-    async fn upload_text_if_absent(
-        &self,
-        path: &str,
-        content: &str,
-    ) -> Result<bool, StorageError> {
-        let response = self.upload(path, content.as_bytes().to_vec(), Some("0")).await?;
+    async fn upload_text_if_absent(&self, path: &str, content: &str) -> Result<bool, StorageError> {
+        let response = self
+            .upload(path, content.as_bytes().to_vec(), Some("0"))
+            .await?;
         if response.status() == StatusCode::PRECONDITION_FAILED {
             return Ok(false);
         }
@@ -298,7 +310,10 @@ impl BlobBackend for GcsBackend {
                     let content = String::from_utf8(bytes).map_err(|err| {
                         StorageError::Other(format!("invalid UTF-8 in {path}: {err}"))
                     })?;
-                    return Ok(Some(VersionedText { content, version: generation }));
+                    return Ok(Some(VersionedText {
+                        content,
+                        version: generation,
+                    }));
                 }
                 Ok(None) => return Ok(None),
                 Err(StorageError::Gcs { status: 412, .. }) if attempt < 2 => continue,
@@ -319,7 +334,9 @@ impl BlobBackend for GcsBackend {
         expected_version: &str,
         content: &str,
     ) -> Result<String, StorageError> {
-        let response = self.upload(path, content.as_bytes().to_vec(), Some(expected_version)).await?;
+        let response = self
+            .upload(path, content.as_bytes().to_vec(), Some(expected_version))
+            .await?;
         // Python maps PreconditionFailed AND ResourceNotFoundError (a CAS
         // against a missing object) to StorageConflict.
         if matches!(
@@ -369,9 +386,14 @@ impl BlobBackend for GcsBackend {
             let page: serde_json::Value = ensure_success(response).await?.json().await?;
             if let Some(array) = page.get("items").and_then(|i| i.as_array()) {
                 for item in array {
-                    let name = item.get("name").and_then(|n| n.as_str()).unwrap_or_default();
-                    let created =
-                        item.get("timeCreated").and_then(|t| t.as_str()).unwrap_or_default();
+                    let name = item
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or_default();
+                    let created = item
+                        .get("timeCreated")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or_default();
                     items.push((name.to_string(), created.to_string()));
                 }
             }
@@ -418,7 +440,11 @@ impl BlobBackend for GcsBackend {
         let body = serde_json::json!({ "metadata": merged });
         let url = object_url(&self.inner.bucket, path);
         let response = self
-            .send(Method::PATCH, &url, Some(("application/json".into(), body.to_string().into_bytes())))
+            .send(
+                Method::PATCH,
+                &url,
+                Some(("application/json".into(), body.to_string().into_bytes())),
+            )
             .await?;
         ensure_success(response).await?;
         Ok(())

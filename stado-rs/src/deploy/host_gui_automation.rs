@@ -130,9 +130,13 @@ pub fn remote_command(script: &str, bundle: &str) -> String {
 pub fn parse_report(stdout: &str) -> Vec<(String, String)> {
     let mut items = Vec::new();
     for line in stdout.lines() {
-        let Some(rest) = line.strip_prefix(STATUS_PREFIX) else { continue };
+        let Some(rest) = line.strip_prefix(STATUS_PREFIX) else {
+            continue;
+        };
         let mut fields = rest.split('\t');
-        let Some(item) = fields.next().filter(|item| !item.is_empty()) else { continue };
+        let Some(item) = fields.next().filter(|item| !item.is_empty()) else {
+            continue;
+        };
         let state = fields.next().unwrap_or_default();
         items.push((item.to_string(), state.to_string()));
     }

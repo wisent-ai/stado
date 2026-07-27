@@ -98,7 +98,9 @@ impl ActiveSlot {
     /// Root pid of the job's `sh -c <cmd>` process; also the process-group
     /// id (spawned with `process_group(0)`).
     pub fn pid(&self) -> i32 {
-        self.slot.pid.expect("ActiveSlot always has a pid after spawn")
+        self.slot
+            .pid
+            .expect("ActiveSlot always has a pid after spawn")
     }
 
     /// Python `slot["log_file"].flush(); slot["log_file"].close()`. The
@@ -128,8 +130,14 @@ pub enum SlotOutcome {
 
 /// Python `_write_status`. Refusal-without-backend collapsed away (see the
 /// module-docs deviation): every Rust backend can write the blob.
-pub async fn write_status(store: &JobStorage, job_id: &str, status: &str) -> Result<(), StorageError> {
-    store.upload_text(&format!("status/{job_id}/status"), status).await
+pub async fn write_status(
+    store: &JobStorage,
+    job_id: &str,
+    status: &str,
+) -> Result<(), StorageError> {
+    store
+        .upload_text(&format!("status/{job_id}/status"), status)
+        .await
 }
 
 /// Stamp a fresh `status/<job_id>/heartbeat` blob so the CF monitor sees
@@ -149,7 +157,12 @@ pub async fn write_status(store: &JobStorage, job_id: &str, status: &str) -> Res
 /// error).
 pub async fn write_heartbeat(store: &JobStorage, job_id: &str) -> Result<(), StorageError> {
     let ts = isoformat_utc(Utc::now());
-    store.upload_text(&format!("status/{job_id}/heartbeat"), &format!("RUNNING {ts}")).await
+    store
+        .upload_text(
+            &format!("status/{job_id}/heartbeat"),
+            &format!("RUNNING {ts}"),
+        )
+        .await
 }
 
 /// Stamp status/<job>/heartbeat every HEARTBEAT_INTERVAL_S for as long as
@@ -164,7 +177,11 @@ pub async fn write_heartbeat(store: &JobStorage, job_id: &str) -> Result<(), Sto
 /// heartbeat stale (orphan)') while training was actively progressing. A
 /// task keyed on pid liveness makes the heartbeat mean 'training process
 /// alive', not 'agent loop ran recently'.
-pub fn start_heartbeat_task(store: JobStorage, job_id: String, pid: i32) -> tokio::task::JoinHandle<()> {
+pub fn start_heartbeat_task(
+    store: JobStorage,
+    job_id: String,
+    pid: i32,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         while helpers::pid_alive(pid) {
             tokio::time::sleep(Duration::from_secs(HEARTBEAT_INTERVAL_S)).await;
@@ -187,7 +204,9 @@ pub fn start_heartbeat_task(store: JobStorage, job_id: String, pid: i32) -> toki
 /// order.
 fn walk_files(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else { return out };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return out;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
@@ -209,7 +228,11 @@ fn walk_files(dir: &Path) -> Vec<PathBuf> {
 /// in GCS (`gsutil cat` returned `CommandException: No URLs matched`).
 /// Backend-based upload raises on failure; the caller decides whether that
 /// is fatal (advance_slot: yes; request_yield: logged, non-fatal).
-pub async fn upload_output(store: &JobStorage, job_id: &str, output_dir: &Path) -> Result<(), StorageError> {
+pub async fn upload_output(
+    store: &JobStorage,
+    job_id: &str,
+    output_dir: &Path,
+) -> Result<(), StorageError> {
     if !output_dir.exists() {
         return Ok(());
     }
@@ -222,14 +245,18 @@ pub async fn upload_output(store: &JobStorage, job_id: &str, output_dir: &Path) 
             .collect::<Vec<_>>()
             .join("/");
         let bytes = tokio::fs::read(&path).await?;
-        store.upload_bytes(&format!("status/{job_id}/output/{rel}"), &bytes).await?;
+        store
+            .upload_bytes(&format!("status/{job_id}/output/{rel}"), &bytes)
+            .await?;
     }
     Ok(())
 }
 
 /// Last max_bytes of the per-job log; "" if missing. Python `_tail_log`.
 pub fn tail_log(path: &Path, max_bytes: u64) -> String {
-    let Ok(data) = std::fs::read(path) else { return String::new() };
+    let Ok(data) = std::fs::read(path) else {
+        return String::new();
+    };
     let start = data.len().saturating_sub(max_bytes as usize);
     String::from_utf8_lossy(&data[start..]).trim().to_string()
 }
@@ -254,7 +281,9 @@ fn env_f64(key: &str, default: f64) -> f64 {
 /// Recursively key-sorted compact JSON (Python
 /// `json.dumps(d, sort_keys=True, separators=(",", ":"))`, ensure_ascii=True).
 pub fn canonical_json(value: &Value) -> String {
-    crate::models::ensure_ascii(&serde_json::to_string(&sort_keys(value)).expect("Value serialization is infallible"))
+    crate::models::ensure_ascii(
+        &serde_json::to_string(&sort_keys(value)).expect("Value serialization is infallible"),
+    )
 }
 
 fn sort_keys(value: &Value) -> Value {
@@ -263,7 +292,10 @@ fn sort_keys(value: &Value) -> Value {
             let mut entries: Vec<(&String, &Value)> = map.iter().collect();
             entries.sort_by(|a, b| a.0.cmp(b.0));
             Value::Object(
-                entries.into_iter().map(|(k, v)| (k.clone(), sort_keys(v))).collect(),
+                entries
+                    .into_iter()
+                    .map(|(k, v)| (k.clone(), sort_keys(v)))
+                    .collect(),
             )
         }
         Value::Array(items) => Value::Array(items.iter().map(sort_keys).collect()),
@@ -295,7 +327,13 @@ fn captured_head(stderr: &[u8], stdout: &[u8], n: usize) -> String {
 
 /// Last `n` chars (Python `s[-n:]`).
 fn tail_chars(s: &str, n: usize) -> String {
-    s.chars().rev().take(n).collect::<String>().chars().rev().collect()
+    s.chars()
+        .rev()
+        .take(n)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect()
 }
 
 /// First `n` chars (Python `s[:n]`).
@@ -345,7 +383,12 @@ pub async fn hf_write_token(store: &JobStorage) -> Result<String, StorageError> 
     if let Some(cached) = HF_WRITE_TOK.lock().expect("hf token cache lock").clone() {
         return Ok(cached);
     }
-    let token = store.download_text("config/hf_token").await?.unwrap_or_default().trim().to_string();
+    let token = store
+        .download_text("config/hf_token")
+        .await?
+        .unwrap_or_default()
+        .trim()
+        .to_string();
     *HF_WRITE_TOK.lock().expect("hf token cache lock") = Some(token.clone());
     Ok(token)
 }
@@ -362,18 +405,17 @@ pub fn raw_active_disk_refusal(command: &str) -> String {
     }
     let tmpdir = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
     let root = Path::new(&tmpdir).join("wisent_raw_pending");
-    let free_gb = match std::fs::create_dir_all(&root)
-        .and_then(|()| nix::sys::statvfs::statvfs(&root).map_err(|e| std::io::Error::from_raw_os_error(e as i32)))
-    {
+    let free_gb = match std::fs::create_dir_all(&root).and_then(|()| {
+        nix::sys::statvfs::statvfs(&root).map_err(|e| std::io::Error::from_raw_os_error(e as i32))
+    }) {
         Ok(stat) => stat.blocks_available() as f64 * stat.fragment_size() as f64 / 1024f64.powi(3),
         Err(exc) => return format!("raw active root unavailable: {}: {exc}", root.display()),
     };
     let reserve = env_f64("WISENT_RAW_CLAIM_RESERVE_GB", 180.0);
     let min_free = match std::env::var("WISENT_RAW_CLAIM_MIN_FREE_GB") {
-        Ok(raw) if !raw.is_empty() => raw
-            .trim()
-            .parse()
-            .unwrap_or_else(|_| panic!("WISENT_RAW_CLAIM_MIN_FREE_GB must be a float (Python float() parity): {raw}")),
+        Ok(raw) if !raw.is_empty() => raw.trim().parse().unwrap_or_else(|_| {
+            panic!("WISENT_RAW_CLAIM_MIN_FREE_GB must be a float (Python float() parity): {raw}")
+        }),
         _ => env_f64("WISENT_RAW_HOT_FREE_TARGET_GB", 270.0),
     };
     if free_gb - reserve < min_free {
@@ -388,7 +430,11 @@ pub fn raw_active_disk_refusal(command: &str) -> String {
 /// Python's `repr(list)` for a string list: `['a', 'b']` (package names
 /// never contain quotes in practice).
 fn py_list_repr(items: &[String]) -> String {
-    let inner = items.iter().map(|i| format!("'{i}'")).collect::<Vec<_>>().join(", ");
+    let inner = items
+        .iter()
+        .map(|i| format!("'{i}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
     format!("[{inner}]")
 }
 
@@ -418,7 +464,11 @@ pub async fn install_apt_packages(job: &Job, kind: &str, log_fn: &mut dyn FnMut(
         ));
         return false;
     }
-    log_fn(&format!("apt-install for {}: {}", job.job_id, job.apt_packages.join(" ")));
+    log_fn(&format!(
+        "apt-install for {}: {}",
+        job.job_id,
+        job.apt_packages.join(" ")
+    ));
     let res = tokio::process::Command::new("sudo")
         .args(["-n", "apt-get", "install", "-y", "--no-install-recommends"])
         .args(&job.apt_packages)
@@ -436,7 +486,10 @@ pub async fn install_apt_packages(job: &Job, kind: &str, log_fn: &mut dyn FnMut(
             false
         }
         Err(exc) => {
-            log_fn(&format!("apt-install FAILED for {}: spawn error: {exc}", job.job_id));
+            log_fn(&format!(
+                "apt-install FAILED for {}: spawn error: {exc}",
+                job.job_id
+            ));
             false
         }
     }
@@ -480,7 +533,10 @@ pub async fn mirror_to_output_uri(job: &Job, log_fn: &mut dyn FnMut(&str)) {
         // DEVIATION: Python raises FileNotFoundError here (no gsutil on
         // PATH). Logged instead — the canonical output upload already ran.
         Err(exc) => {
-            log_fn(&format!("output_uri mirror failed for {} -> {uri}: spawn error: {exc}", job.job_id));
+            log_fn(&format!(
+                "output_uri mirror failed for {} -> {uri}: spawn error: {exc}",
+                job.job_id
+            ));
         }
     }
 }
@@ -507,9 +563,16 @@ pub async fn start_slot(
         job.exclusive = false;
     }
     for terminal_prefix in ["uploaded", "completed", "cancelled"] {
-        if store.read_job(terminal_prefix, &job.job_id).await?.is_some() {
+        if store
+            .read_job(terminal_prefix, &job.job_id)
+            .await?
+            .is_some()
+        {
             store.delete_job("queue", &job.job_id).await?;
-            log_fn(&format!("drop duplicate queued {}: already in {terminal_prefix}/", job.job_id));
+            log_fn(&format!(
+                "drop duplicate queued {}: already in {terminal_prefix}/",
+                job.job_id
+            ));
             return Ok(None);
         }
     }
@@ -535,7 +598,12 @@ pub async fn start_slot(
     let artifact_inputs_json = canonical_json(&Value::Object(job.resolved_input_artifacts.clone()));
     let artifact_inputs_file = format!("{work_dir}/artifacts.json");
     std::fs::write(&artifact_inputs_file, &artifact_inputs_json)?;
-    write_status(store, &job.job_id, &format!("RUNNING {}", isoformat_utc(Utc::now()))).await?;
+    write_status(
+        store,
+        &job.job_id,
+        &format!("RUNNING {}", isoformat_utc(Utc::now())),
+    )
+    .await?;
     job.state = job_state::RUNNING.to_string();
     job.started_at = Some(isoformat_utc(Utc::now()));
     job.instance_ref = Some(format!("local@{hostname}"));
@@ -548,7 +616,10 @@ pub async fn start_slot(
     // across ALL jobs as one HF commit — reduces 429 risk drastically.
     let fleet_staging = std::env::var("WISENT_FLEET_STAGING_DIR").unwrap_or_else(|_| {
         let tmpdir = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
-        Path::new(&tmpdir).join("wisent_fleet_staging").to_string_lossy().into_owned()
+        Path::new(&tmpdir)
+            .join("wisent_fleet_staging")
+            .to_string_lossy()
+            .into_owned()
     });
     std::fs::create_dir_all(&fleet_staging)?;
     let mut command = tokio::process::Command::new("/bin/sh");
@@ -576,14 +647,24 @@ pub async fn start_slot(
         .process_group(0);
     let hf = hf_write_token(store).await?;
     if !hf.is_empty() {
-        command.env("HF_TOKEN", &hf).env("HUGGING_FACE_HUB_TOKEN", &hf);
+        command
+            .env("HF_TOKEN", &hf)
+            .env("HUGGING_FACE_HUB_TOKEN", &hf);
     }
     let child = command.spawn()?;
     let pid = child.id().expect("freshly spawned child has a pid") as i32;
-    log_fn(&format!("Started job {}: {}", job.job_id, head_chars(&job.command, 60)));
+    log_fn(&format!(
+        "Started job {}: {}",
+        job.job_id,
+        head_chars(&job.command, 60)
+    ));
     write_heartbeat(store, &job.job_id).await?;
     let hb_task = start_heartbeat_task(store.clone(), job.job_id.clone(), pid);
-    let slot = Slot { job, pid: Some(pid), peak_vram_gb: 0 };
+    let slot = Slot {
+        job,
+        pid: Some(pid),
+        peak_vram_gb: 0,
+    };
     Ok(Some(ActiveSlot {
         slot,
         child,
@@ -626,14 +707,24 @@ pub async fn request_yield(
     let pgid = slot.pid();
     let mut job = slot.slot.job.clone();
     // Python `int(getattr(job, "yield_grace_seconds", 120) or 120)`: 0 -> 120.
-    let grace = if job.yield_grace_seconds != 0 { job.yield_grace_seconds } else { DEFAULT_YIELD_GRACE_S };
+    let grace = if job.yield_grace_seconds != 0 {
+        job.yield_grace_seconds
+    } else {
+        DEFAULT_YIELD_GRACE_S
+    };
     let hook = job.yield_command.trim().to_string();
     let work_dir = format!("/tmp/wc-{}", job.job_id);
     let deadline = Instant::now() + Duration::from_secs(grace.max(0) as u64);
-    log_fn(&format!("yield: requesting yield of {} (grace={grace}s, pgid={pgid})", job.job_id));
+    log_fn(&format!(
+        "yield: requesting yield of {} (grace={grace}s, pgid={pgid})",
+        job.job_id
+    ));
 
     if !hook.is_empty() {
-        let remaining = deadline.saturating_duration_since(Instant::now()).as_secs().max(1);
+        let remaining = deadline
+            .saturating_duration_since(Instant::now())
+            .as_secs()
+            .max(1);
         let mut cmd = tokio::process::Command::new("/bin/sh");
         cmd.arg("-c")
             .arg(&hook)
@@ -656,8 +747,14 @@ pub async fn request_yield(
                     ));
                 }
             }
-            Ok(Err(exc)) => log_fn(&format!("yield: on-yield hook {} raised: {exc}", job.job_id)),
-            Err(_) => log_fn(&format!("yield: on-yield hook {} exceeded grace; terminating", job.job_id)),
+            Ok(Err(exc)) => log_fn(&format!(
+                "yield: on-yield hook {} raised: {exc}",
+                job.job_id
+            )),
+            Err(_) => log_fn(&format!(
+                "yield: on-yield hook {} exceeded grace; terminating",
+                job.job_id
+            )),
         }
     }
 
@@ -671,7 +768,10 @@ pub async fn request_yield(
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
     if slot.child.try_wait()?.is_none() {
-        log_fn(&format!("yield: {} still alive after grace — SIGKILL group {pgid}", job.job_id));
+        log_fn(&format!(
+            "yield: {} still alive after grace — SIGKILL group {pgid}",
+            job.job_id
+        ));
         // ProcessLookupError parity: the group may have exited between the
         // poll and the signal.
         let _ = nix::sys::signal::killpg(Pid::from_raw(pgid), Signal::SIGKILL);
@@ -684,17 +784,28 @@ pub async fn request_yield(
     job.state = job_state::QUEUED.to_string();
     job.instance_ref = None;
     job.started_at = None;
-    write_status(store, &job.job_id, &format!("YIELDED {}", isoformat_utc(Utc::now()))).await?;
+    write_status(
+        store,
+        &job.job_id,
+        &format!("YIELDED {}", isoformat_utc(Utc::now())),
+    )
+    .await?;
     let output_dir = format!("/tmp/wc-{}/output", job.job_id);
     if Path::new(&output_dir).exists() {
         if let Err(exc) = upload_output(store, &job.job_id, Path::new(&output_dir)).await {
-            log_fn(&format!("yield: output upload {} failed (non-fatal): {exc}", job.job_id));
+            log_fn(&format!(
+                "yield: output upload {} failed (non-fatal): {exc}",
+                job.job_id
+            ));
         }
     }
     // running -> queue (NOT a terminal state, so the tracking tombstone hook
     // is a no-op and the CF monitor leaves it alone once out of running/).
     store.move_job(&job, "running", "queue").await?;
-    log_fn(&format!("yield: {} requeued (yield_count={})", job.job_id, job.yield_count));
+    log_fn(&format!(
+        "yield: {} requeued (yield_count={})",
+        job.job_id, job.yield_count
+    ));
     Ok(true)
 }
 
@@ -720,7 +831,9 @@ pub async fn advance_slot(
             let _ = nix::sys::signal::kill(Pid::from_raw(pid), Signal::SIGTERM);
             slot.close_log();
             let _ = store.delete_job("running", &job_id).await;
-            log_fn(&format!("drop duplicate running {job_id}: already in {terminal_prefix}/"));
+            log_fn(&format!(
+                "drop duplicate running {job_id}: already in {terminal_prefix}/"
+            ));
             return Ok(SlotOutcome::Done);
         }
     }
@@ -752,15 +865,25 @@ pub async fn advance_slot(
             if Path::new(&log_path).exists() {
                 let upload = async {
                     let bytes = tokio::fs::read(&log_path).await?;
-                    store.upload_bytes(&format!("status/{job_id}/output/command_output.log"), &bytes).await
+                    store
+                        .upload_bytes(
+                            &format!("status/{job_id}/output/command_output.log"),
+                            &bytes,
+                        )
+                        .await
                 };
                 match tokio::time::timeout(Duration::from_secs(10), upload).await {
                     Ok(Ok(())) => {}
                     Ok(Err(exc)) => {
-                        log_fn(&format!("heartbeat log upload failed for {job_id}: {}", head_chars(&exc.to_string(), 160)));
+                        log_fn(&format!(
+                            "heartbeat log upload failed for {job_id}: {}",
+                            head_chars(&exc.to_string(), 160)
+                        ));
                     }
                     Err(_) => {
-                        log_fn(&format!("heartbeat log upload failed for {job_id}: timed out after 10s"));
+                        log_fn(&format!(
+                            "heartbeat log upload failed for {job_id}: timed out after 10s"
+                        ));
                     }
                 }
             }
@@ -811,10 +934,18 @@ pub async fn advance_slot(
     // gpt-oss-20b "completions" had zero-byte logs despite the
     // subprocess running.
     slot.close_log();
-    let status = if ret == 0 { "COMPLETED".to_string() } else { format!("FAILED exit={ret}") };
+    let status = if ret == 0 {
+        "COMPLETED".to_string()
+    } else {
+        format!("FAILED exit={ret}")
+    };
     write_status(store, &job_id, &status).await?;
     let mut job = slot.slot.job.clone();
-    job.state = if ret == 0 { job_state::COMPLETED.to_string() } else { job_state::FAILED.to_string() };
+    job.state = if ret == 0 {
+        job_state::COMPLETED.to_string()
+    } else {
+        job_state::FAILED.to_string()
+    };
     let output_dir = format!("/tmp/wc-{job_id}/output");
     let log_path = format!("{output_dir}/command_output.log");
     let ts = isoformat_utc(Utc::now());
@@ -845,7 +976,10 @@ pub async fn advance_slot(
     if job.state == job_state::FAILED {
         let error_text = job.error.clone().unwrap_or_default();
         if sizing.escalate_on_oom(store, &mut job, &error_text).await? {
-            log_fn(&format!("Job {job_id} OOM-escalated to gpu_mem_gb={}; requeued", job.gpu_mem_gb));
+            log_fn(&format!(
+                "Job {job_id} OOM-escalated to gpu_mem_gb={}; requeued",
+                job.gpu_mem_gb
+            ));
             return Ok(SlotOutcome::Done);
         }
     }
@@ -884,7 +1018,12 @@ mod tests {
     /// Unique job id per test case: the workdir is the real /tmp/wc-<id>,
     /// so parallel tests must never collide.
     fn jid(tag: &str) -> String {
-        format!("slt{}-{}-{}", std::process::id(), tag, COUNTER.fetch_add(1, Ordering::SeqCst))
+        format!(
+            "slt{}-{}-{}",
+            std::process::id(),
+            tag,
+            COUNTER.fetch_add(1, Ordering::SeqCst)
+        )
     }
 
     fn store() -> (tempfile::TempDir, JobStorage) {
@@ -905,7 +1044,10 @@ mod tests {
         log_fn: &mut dyn FnMut(&str),
     ) {
         for _ in 0..100 {
-            match advance_slot(slot, store, sizing, false, log_fn).await.unwrap() {
+            match advance_slot(slot, store, sizing, false, log_fn)
+                .await
+                .unwrap()
+            {
                 SlotOutcome::Running(s) => {
                     slot = s;
                     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -918,8 +1060,12 @@ mod tests {
 
     #[test]
     fn canonical_json_sorts_keys_recursively_and_escapes_non_ascii() {
-        let value: Value = serde_json::from_str(r#"{"b":1,"a":{"d":[3,{"f":0,"e":2}],"c":"ż"}}"#).unwrap();
-        assert_eq!(canonical_json(&value), r#"{"a":{"c":"\u017c","d":[3,{"e":2,"f":0}]},"b":1}"#);
+        let value: Value =
+            serde_json::from_str(r#"{"b":1,"a":{"d":[3,{"f":0,"e":2}],"c":"ż"}}"#).unwrap();
+        assert_eq!(
+            canonical_json(&value),
+            r#"{"a":{"c":"\u017c","d":[3,{"e":2,"f":0}]},"b":1}"#
+        );
         assert_eq!(canonical_json(&Value::Object(Default::default())), "{}");
     }
 
@@ -937,9 +1083,15 @@ mod tests {
 
     #[test]
     fn python_returncode_maps_exit_codes_and_signals() {
-        let status = std::process::Command::new("/bin/sh").args(["-c", "exit 3"]).status().unwrap();
+        let status = std::process::Command::new("/bin/sh")
+            .args(["-c", "exit 3"])
+            .status()
+            .unwrap();
         assert_eq!(python_returncode(status), 3);
-        let status = std::process::Command::new("/bin/sh").args(["-c", "kill -TERM $$"]).status().unwrap();
+        let status = std::process::Command::new("/bin/sh")
+            .args(["-c", "kill -TERM $$"])
+            .status()
+            .unwrap();
         assert_eq!(python_returncode(status), -15);
     }
 
@@ -957,28 +1109,45 @@ mod tests {
         store.write_job("completed", &job).await.unwrap();
         let mut lines: Vec<String> = Vec::new();
         let mut log = |m: &str| lines.push(m.to_string());
-        let res = start_slot(&store, job, "testhost", &mut log, "local").await.unwrap();
+        let res = start_slot(&store, job, "testhost", &mut log, "local")
+            .await
+            .unwrap();
         assert!(res.is_none());
         assert!(store.read_job("queue", &id).await.unwrap().is_none());
-        assert_eq!(lines, vec![format!("drop duplicate queued {id}: already in completed/")]);
+        assert_eq!(
+            lines,
+            vec![format!("drop duplicate queued {id}: already in completed/")]
+        );
     }
 
     #[tokio::test]
     async fn start_slot_refuses_deprecated_activation_command() {
         let (_dir, store) = store();
         let id = jid("dep");
-        let job = Job::new(&id, "python -m wisent.scripts.activations.extract_and_upload --x");
+        let job = Job::new(
+            &id,
+            "python -m wisent.scripts.activations.extract_and_upload --x",
+        );
         store.write_job("queue", &job).await.unwrap();
         let mut lines: Vec<String> = Vec::new();
         let mut log = |m: &str| lines.push(m.to_string());
-        let res = start_slot(&store, job, "testhost", &mut log, "local").await.unwrap();
+        let res = start_slot(&store, job, "testhost", &mut log, "local")
+            .await
+            .unwrap();
         assert!(res.is_none());
         let failed = store.read_job("failed", &id).await.unwrap().unwrap();
         assert_eq!(failed.state, "failed");
         assert!(failed.failed_at.is_some());
-        assert!(failed.error.as_deref().unwrap_or("").starts_with("refusing deprecated"));
+        assert!(failed
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("refusing deprecated"));
         assert!(store.read_job("queue", &id).await.unwrap().is_none());
-        assert!(lines[0].starts_with(&format!("refuse {id}: refusing deprecated")), "{lines:?}");
+        assert!(
+            lines[0].starts_with(&format!("refuse {id}: refusing deprecated")),
+            "{lines:?}"
+        );
     }
 
     #[tokio::test]
@@ -990,7 +1159,9 @@ mod tests {
         store.write_job("queue", &job).await.unwrap();
         let mut lines: Vec<String> = Vec::new();
         let mut log = |m: &str| lines.push(m.to_string());
-        let res = start_slot(&store, job, "testhost", &mut log, "local").await.unwrap();
+        let res = start_slot(&store, job, "testhost", &mut log, "local")
+            .await
+            .unwrap();
         assert!(res.is_none());
         // The job stays queued for a cloud-kind agent to claim.
         assert!(store.read_job("queue", &id).await.unwrap().is_some());
@@ -1013,11 +1184,22 @@ mod tests {
         let mut lines: Vec<String> = Vec::new();
         let mut log = |m: &str| lines.push(m.to_string());
 
-        let slot = start_slot(&store, job, "testhost", &mut log, "local").await.unwrap().expect("slot");
+        let slot = start_slot(&store, job, "testhost", &mut log, "local")
+            .await
+            .unwrap()
+            .expect("slot");
         // RUNNING status + first heartbeat stamped at start; queue -> running.
-        let status = store.download_text(&format!("status/{id}/status")).await.unwrap().unwrap();
+        let status = store
+            .download_text(&format!("status/{id}/status"))
+            .await
+            .unwrap()
+            .unwrap();
         assert!(status.starts_with("RUNNING "), "{status}");
-        let hb = store.download_text(&format!("status/{id}/heartbeat")).await.unwrap().unwrap();
+        let hb = store
+            .download_text(&format!("status/{id}/heartbeat"))
+            .await
+            .unwrap()
+            .unwrap();
         assert!(hb.starts_with("RUNNING "), "{hb}");
         let running = store.read_job("running", &id).await.unwrap().unwrap();
         assert_eq!(running.state, "running");
@@ -1032,7 +1214,10 @@ mod tests {
         assert!(done.completed_at.is_some());
         assert!(done.peak_vram_per_gpu);
         assert!(store.read_job("running", &id).await.unwrap().is_none());
-        assert_eq!(store.read_status(&id).await.unwrap().as_deref(), Some("COMPLETED"));
+        assert_eq!(
+            store.read_status(&id).await.unwrap().as_deref(),
+            Some("COMPLETED")
+        );
         // The log upload contains the job's stdout; the local workdir copy too.
         let uploaded = store
             .download_text(&format!("status/{id}/output/command_output.log"))
@@ -1040,11 +1225,20 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(uploaded.contains("ok"), "{uploaded:?}");
-        let local = std::fs::read_to_string(format!("/tmp/wc-{id}/output/command_output.log")).unwrap();
+        let local =
+            std::fs::read_to_string(format!("/tmp/wc-{id}/output/command_output.log")).unwrap();
         assert!(local.contains("ok"), "{local:?}");
         // artifacts.json landed next to the command.
-        assert_eq!(std::fs::read_to_string(format!("/tmp/wc-{id}/artifacts.json")).unwrap(), "{}");
-        assert!(lines.iter().any(|l| l.starts_with(&format!("Started job {id}:"))), "{lines:?}");
+        assert_eq!(
+            std::fs::read_to_string(format!("/tmp/wc-{id}/artifacts.json")).unwrap(),
+            "{}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with(&format!("Started job {id}:"))),
+            "{lines:?}"
+        );
         assert!(lines.contains(&format!("Job {id} completed")), "{lines:?}");
         cleanup_workdir(&id);
     }
@@ -1059,17 +1253,32 @@ mod tests {
         let mut lines: Vec<String> = Vec::new();
         let mut log = |m: &str| lines.push(m.to_string());
 
-        let slot = start_slot(&store, job, "testhost", &mut log, "local").await.unwrap().expect("slot");
+        let slot = start_slot(&store, job, "testhost", &mut log, "local")
+            .await
+            .unwrap()
+            .expect("slot");
         advance_to_done(slot, &store, &sizing, &mut log).await;
 
         let failed = store.read_job("failed", &id).await.unwrap().unwrap();
         assert_eq!(failed.state, "failed");
         assert!(failed.failed_at.is_some());
         // No stdout/stderr captured -> the exit-code fallback error text.
-        assert_eq!(failed.error.as_deref(), Some("exit=3 (no stdout/stderr captured)"));
-        let status = store.download_text(&format!("status/{id}/status")).await.unwrap().unwrap();
+        assert_eq!(
+            failed.error.as_deref(),
+            Some("exit=3 (no stdout/stderr captured)")
+        );
+        let status = store
+            .download_text(&format!("status/{id}/status"))
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(status, "FAILED exit=3");
-        assert!(lines.iter().any(|l| l.starts_with(&format!("Job {id} failed ret=3"))), "{lines:?}");
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with(&format!("Job {id} failed ret=3"))),
+            "{lines:?}"
+        );
         cleanup_workdir(&id);
     }
 
@@ -1084,17 +1293,32 @@ mod tests {
         let mut lines: Vec<String> = Vec::new();
         let mut log = |m: &str| lines.push(m.to_string());
 
-        let slot = start_slot(&store, job, "testhost", &mut log, "local").await.unwrap().expect("slot");
+        let slot = start_slot(&store, job, "testhost", &mut log, "local")
+            .await
+            .unwrap()
+            .expect("slot");
         advance_to_done(slot, &store, &sizing, &mut log).await;
 
         // Verify rc=7 reverses the exit-0 completion into FAILED exit=1007.
         assert!(store.read_job("completed", &id).await.unwrap().is_none());
         let failed = store.read_job("failed", &id).await.unwrap().unwrap();
         assert_eq!(failed.state, "failed");
-        assert_eq!(failed.error.as_deref(), Some("exit=1007 (no stdout/stderr captured)"));
-        let status = store.download_text(&format!("status/{id}/status")).await.unwrap().unwrap();
+        assert_eq!(
+            failed.error.as_deref(),
+            Some("exit=1007 (no stdout/stderr captured)")
+        );
+        let status = store
+            .download_text(&format!("status/{id}/status"))
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(status, "FAILED exit=1007");
-        assert!(lines.iter().any(|l| l.starts_with(&format!("verify_command failed for {id}: rc=7"))), "{lines:?}");
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with(&format!("verify_command failed for {id}: rc=7"))),
+            "{lines:?}"
+        );
         cleanup_workdir(&id);
     }
 
@@ -1112,7 +1336,10 @@ mod tests {
         let mut lines: Vec<String> = Vec::new();
         let mut log = |m: &str| lines.push(m.to_string());
 
-        let slot = start_slot(&store, job, "testhost", &mut log, "local").await.unwrap().expect("slot");
+        let slot = start_slot(&store, job, "testhost", &mut log, "local")
+            .await
+            .unwrap()
+            .expect("slot");
         let pid = slot.pid();
         assert!(request_yield(slot, &store, &mut log).await.unwrap());
 
@@ -1125,7 +1352,11 @@ mod tests {
         assert_eq!(queued.yield_count, 1);
         assert!(queued.instance_ref.is_none());
         assert!(queued.started_at.is_none());
-        let status = store.download_text(&format!("status/{id}/status")).await.unwrap().unwrap();
+        let status = store
+            .download_text(&format!("status/{id}/status"))
+            .await
+            .unwrap()
+            .unwrap();
         assert!(status.starts_with("YIELDED "), "{status}");
         // The output upload still ran on the yield path.
         assert!(store
@@ -1133,8 +1364,16 @@ mod tests {
             .await
             .unwrap()
             .is_some());
-        assert!(lines.iter().any(|l| l.starts_with(&format!("yield: requesting yield of {id} (grace=30s"))), "{lines:?}");
-        assert!(lines.contains(&format!("yield: {id} requeued (yield_count=1)")), "{lines:?}");
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with(&format!("yield: requesting yield of {id} (grace=30s"))),
+            "{lines:?}"
+        );
+        assert!(
+            lines.contains(&format!("yield: {id} requeued (yield_count=1)")),
+            "{lines:?}"
+        );
         assert!(!lines.iter().any(|l| l.contains("SIGKILL")), "{lines:?}");
         // Defensive: nothing in the process group survives the test.
         let _ = nix::sys::signal::killpg(Pid::from_raw(pid), Signal::SIGKILL);
@@ -1152,7 +1391,10 @@ mod tests {
         let mut lines: Vec<String> = Vec::new();
         let mut log = |m: &str| lines.push(m.to_string());
 
-        let slot = start_slot(&store, job, "testhost", &mut log, "local").await.unwrap().expect("slot");
+        let slot = start_slot(&store, job, "testhost", &mut log, "local")
+            .await
+            .unwrap()
+            .expect("slot");
         let pid = slot.pid();
         let started = Instant::now();
         assert!(request_yield(slot, &store, &mut log).await.unwrap());
@@ -1165,7 +1407,9 @@ mod tests {
         assert_eq!(queued.state, "queued");
         assert_eq!(queued.yield_count, 1);
         assert!(
-            lines.iter().any(|l| l.contains(&format!("still alive after grace — SIGKILL group {pid}"))),
+            lines
+                .iter()
+                .any(|l| l.contains(&format!("still alive after grace — SIGKILL group {pid}"))),
             "{lines:?}"
         );
         cleanup_workdir(&id);

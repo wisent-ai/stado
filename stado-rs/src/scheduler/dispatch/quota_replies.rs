@@ -89,7 +89,11 @@ const MS_SENDER: [&str; 2] = ["techsupport.microsoft.com", "microsoft.com"];
 pub enum RepliesError {
     /// Python `subprocess.CalledProcessError` (message matches its str()).
     #[error("Command '{cmd}' returned non-zero exit status {code}.")]
-    CalledProcess { cmd: String, code: i32, stderr: String },
+    CalledProcess {
+        cmd: String,
+        code: i32,
+        stderr: String,
+    },
     /// Python `FileNotFoundError` / `OSError` spawning az.
     #[error("{0}")]
     Spawn(String),
@@ -173,11 +177,17 @@ fn last_communication(runner: &dyn AzRunner, ticket_name: &str) -> Result<Value,
             "[0]",
         ],
     )?;
-    let Some(comms) = comms.as_object() else { return Ok(json!({})) };
+    let Some(comms) = comms.as_object() else {
+        return Ok(json!({}));
+    };
     let body = comms.get("body").and_then(Value::as_str).unwrap_or("");
     let no_html = html_tag_re().replace_all(body, "");
-    let snippet: String =
-        ws_re().replace_all(&no_html, " ").trim().chars().take(240).collect();
+    let snippet: String = ws_re()
+        .replace_all(&no_html, " ")
+        .trim()
+        .chars()
+        .take(240)
+        .collect();
     Ok(json!({
         "sender": comms.get("sender").and_then(Value::as_str).unwrap_or(""),
         "createdDate": comms.get("createdDate").and_then(Value::as_str).unwrap_or(""),
@@ -192,7 +202,11 @@ pub fn last_communication_is_from_ms(
     ticket_name: &str,
 ) -> Result<bool, RepliesError> {
     let last = last_communication(runner, ticket_name)?;
-    let sender = last.get("sender").and_then(Value::as_str).unwrap_or("").to_lowercase();
+    let sender = last
+        .get("sender")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_lowercase();
     Ok(MS_SENDER.iter().any(|dom| sender.contains(dom)))
 }
 
@@ -210,12 +224,17 @@ fn open_quota_tickets(runner: &dyn AzRunner) -> Result<Vec<Value>, RepliesError>
              problem:problemClassificationDisplayName}",
         ],
     )?;
-    let Some(rows) = rows.as_array() else { return Ok(vec![]) };
+    let Some(rows) = rows.as_array() else {
+        return Ok(vec![]);
+    };
     Ok(rows
         .iter()
         .filter(|r| {
-            let problem =
-                r.get("problem").and_then(Value::as_str).unwrap_or("").to_lowercase();
+            let problem = r
+                .get("problem")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_lowercase();
             problem.contains("quota") || problem.contains("subscription limit")
         })
         .cloned()
@@ -239,7 +258,11 @@ pub fn list_open_azure_tickets(runner: &dyn AzRunner) -> Result<Vec<Value>, Repl
         let name = ticket.get("name").and_then(Value::as_str).unwrap_or("");
         let title = ticket.get("title").and_then(Value::as_str).unwrap_or("");
         let last = last_communication(runner, name)?;
-        let sender = last.get("sender").and_then(Value::as_str).unwrap_or("").to_lowercase();
+        let sender = last
+            .get("sender")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_lowercase();
         let awaiting = MS_SENDER.iter().any(|dom| sender.contains(dom));
         out.push(json!({
             "name": name,
@@ -303,9 +326,7 @@ fn subscription_quota_id(runner: &dyn AzRunner) -> Result<String, RepliesError> 
             "--method",
             "GET",
             "--uri",
-            &format!(
-                "https://management.azure.com/subscriptions/{sub}?api-version=2022-12-01"
-            ),
+            &format!("https://management.azure.com/subscriptions/{sub}?api-version=2022-12-01"),
             "--query",
             "subscriptionPolicies.quotaId",
         ],
@@ -357,7 +378,11 @@ pub fn respond_to_open_quota_tickets(
     escalate_billing: bool,
 ) -> Result<Vec<Value>, RepliesError> {
     let subscription = subscription_id(runner)?;
-    let quota_id = if escalate_billing { subscription_quota_id(runner)? } else { String::new() };
+    let quota_id = if escalate_billing {
+        subscription_quota_id(runner)?
+    } else {
+        String::new()
+    };
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -381,7 +406,10 @@ pub fn respond_to_open_quota_tickets(
             }));
             continue;
         }
-        let snippet = ticket.get("last_body_snippet").and_then(Value::as_str).unwrap_or("");
+        let snippet = ticket
+            .get("last_body_snippet")
+            .and_then(Value::as_str)
+            .unwrap_or("");
         let is_billing = billing_decline_re().is_match(snippet);
         if is_billing && !escalate_billing {
             out.push(json!({
@@ -496,18 +524,22 @@ mod tests {
 
     impl AzRunner for FakeAz {
         fn run(&self, args: &[&str]) -> Result<String, RepliesError> {
-            self.calls.lock().unwrap().push(args.iter().map(|s| s.to_string()).collect());
+            self.calls
+                .lock()
+                .unwrap()
+                .push(args.iter().map(|s| s.to_string()).collect());
             match args {
-                ["account", "show", "--query", "id"] => {
-                    Ok(json!(self.subscription).to_string())
-                }
+                ["account", "show", "--query", "id"] => Ok(json!(self.subscription).to_string()),
                 ["rest", ..] => Ok(json!(self.quota_id).to_string()),
                 ["support", "in-subscription", "tickets", "list", ..] => {
                     Ok(self.tickets.to_string())
                 }
-                ["support", "in-subscription", "communication", "list", _, name, _, _] => {
-                    Ok(self.comms.get(*name).cloned().unwrap_or(json!([])).to_string())
-                }
+                ["support", "in-subscription", "communication", "list", _, name, _, _] => Ok(self
+                    .comms
+                    .get(*name)
+                    .cloned()
+                    .unwrap_or(json!([]))
+                    .to_string()),
                 ["support", "in-subscription", "communication", "create", ..] => {
                     if let Some((code, stderr)) = &self.fail_create_with {
                         return Err(RepliesError::CalledProcess {
@@ -560,12 +592,19 @@ mod tests {
     #[test]
     fn list_open_azure_tickets_filters_and_joins_latest_communication() {
         let tickets = json!([
-            ticket("t1", "GPU quota across NC/ND/NV families (eastus)", "Compute quota increase"),
+            ticket(
+                "t1",
+                "GPU quota across NC/ND/NV families (eastus)",
+                "Compute quota increase"
+            ),
             ticket("t2", "billing question", "Billing issue"),
             ticket("t3", "Limit raise (westus3)", "Subscription limit increase"),
         ]);
         let comms = std::collections::HashMap::from([
-            ("t1".to_string(), comm("support@techsupport.microsoft.com", "<p>Please answer</p>")),
+            (
+                "t1".to_string(),
+                comm("support@techsupport.microsoft.com", "<p>Please answer</p>"),
+            ),
             ("t3".to_string(), comm("op@wisent.ai", "my reply")),
         ]);
         let az = FakeAz::new(tickets, comms);
@@ -586,7 +625,10 @@ mod tests {
             ticket("t2", "GPU quota (westus3)", "Compute quota increase"),
         ]);
         let comms = std::collections::HashMap::from([
-            ("t1".to_string(), comm("cx@microsoft.com", "Please provide the following")),
+            (
+                "t1".to_string(),
+                comm("cx@microsoft.com", "Please provide the following"),
+            ),
             ("t2".to_string(), comm("op@wisent.ai", "already answered")),
         ]);
         let az = FakeAz::new(tickets, comms);
@@ -599,13 +641,22 @@ mod tests {
         assert_eq!(creates.len(), 1, "{creates:?}");
         let args = &creates[0];
         // az support in-subscription communication create ...
-        assert_eq!(&args[..4], ["support", "in-subscription", "communication", "create"]);
+        assert_eq!(
+            &args[..4],
+            ["support", "in-subscription", "communication", "create"]
+        );
         let get = |flag: &str| {
-            args.iter().position(|a| a == flag).map(|i| args[i + 1].clone()).unwrap()
+            args.iter()
+                .position(|a| a == flag)
+                .map(|i| args[i + 1].clone())
+                .unwrap()
         };
         assert_eq!(get("--ticket-name"), "t1");
         assert!(get("--communication-name").starts_with("wc-quota-reply-eastus-"));
-        assert_eq!(get("--communication-subject"), "RE: GPU quota across NC/ND/NV families (eastus)");
+        assert_eq!(
+            get("--communication-subject"),
+            "RE: GPU quota across NC/ND/NV families (eastus)"
+        );
         let body = get("--communication-body");
         assert!(body.contains("Region to Enable: eastus"));
         assert!(body.contains("subscription sub-123"));
@@ -634,10 +685,17 @@ mod tests {
 
     #[test]
     fn billing_decline_skips_without_escalate_and_escalates_with() {
-        let tickets = json!([ticket("t9", "GPU quota (northeurope)", "Compute quota increase")]);
+        let tickets = json!([ticket(
+            "t9",
+            "GPU quota (northeurope)",
+            "Compute quota increase"
+        )]);
         let comms = std::collections::HashMap::from([(
             "t9".to_string(),
-            comm("cx@microsoft.com", "denied: insufficient payment history on the account"),
+            comm(
+                "cx@microsoft.com",
+                "denied: insufficient payment history on the account",
+            ),
         )]);
 
         // Default: routed to skip_billing_decline, no reply posted.
@@ -655,12 +713,18 @@ mod tests {
         assert_eq!(creates.len(), 1);
         let args = &creates[0];
         let get = |flag: &str| {
-            args.iter().position(|a| a == flag).map(|i| args[i + 1].clone()).unwrap()
+            args.iter()
+                .position(|a| a == flag)
+                .map(|i| args[i + 1].clone())
+                .unwrap()
         };
         assert!(get("--communication-name").starts_with("wc-quota-escalate-northeurope-"));
         assert!(get("--communication-subject").contains("sponsored subscription"));
         assert!(get("--communication-body").contains("Sponsored_2017"));
-        assert!(az.calls().iter().any(|c| c.first().map(String::as_str) == Some("rest")));
+        assert!(az
+            .calls()
+            .iter()
+            .any(|c| c.first().map(String::as_str) == Some("rest")));
     }
 
     #[test]

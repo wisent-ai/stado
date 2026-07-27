@@ -126,7 +126,9 @@ impl FromStr for LeaseState {
             "released" => LeaseState::Released,
             "failed" => LeaseState::Failed,
             other => {
-                return Err(LeaseError::Value(format!("{other:?} is not a valid LeaseState")));
+                return Err(LeaseError::Value(format!(
+                    "{other:?} is not a valid LeaseState"
+                )));
             }
         };
         Ok(state)
@@ -228,7 +230,9 @@ impl ProviderLease {
     /// owner TTL must not have lapsed.
     pub fn assert_fence(&self, owner_id: &str, fence_token: &str) -> Result<(), LeaseError> {
         if self.owner_id != owner_id || self.fence_token != fence_token || self.owner_expired()? {
-            return Err(LeaseError::conflict("provider lease fence is no longer valid"));
+            return Err(LeaseError::conflict(
+                "provider lease fence is no longer valid",
+            ));
         }
         Ok(())
     }
@@ -315,7 +319,9 @@ pub struct ProviderLeaseStore {
 
 impl ProviderLeaseStore {
     pub fn new(job_storage: JobStorage) -> Self {
-        ProviderLeaseStore { storage: job_storage }
+        ProviderLeaseStore {
+            storage: job_storage,
+        }
     }
 
     /// The wrapped facade.
@@ -354,21 +360,28 @@ impl ProviderLeaseStore {
     /// Python `_decode`.
     fn decode(raw: &str, version: &str) -> Result<ProviderLease, LeaseError> {
         if raw.len() > MAX_LEASE_BYTES {
-            return Err(LeaseError::Corrupt("provider lease exceeded size bound".to_string()));
+            return Err(LeaseError::Corrupt(
+                "provider lease exceeded size bound".to_string(),
+            ));
         }
         let value: serde_json::Value = serde_json::from_str(raw).map_err(StorageError::Json)?;
         if !value.is_object() {
-            return Err(LeaseError::Corrupt("provider lease is not an object".to_string()));
+            return Err(LeaseError::Corrupt(
+                "provider lease is not an object".to_string(),
+            ));
         }
-        let mut lease: ProviderLease =
-            serde_json::from_value(value).map_err(StorageError::Json)?;
+        let mut lease: ProviderLease = serde_json::from_value(value).map_err(StorageError::Json)?;
         lease.version = version.to_string();
         Ok(lease)
     }
 
     /// Python `load`.
     pub async fn load(&self, job_id: &str) -> Result<Option<ProviderLease>, LeaseError> {
-        let Some(value) = self.storage.read_text_versioned(&Self::path(job_id)?).await? else {
+        let Some(value) = self
+            .storage
+            .read_text_versioned(&Self::path(job_id)?)
+            .await?
+        else {
             return Ok(None);
         };
         Ok(Some(Self::decode(&value.content, &value.version)?))
@@ -376,16 +389,19 @@ impl ProviderLeaseStore {
 
     /// Python `create`: atomic create-if-absent, then re-read to confirm the
     /// blob that landed is the one we wrote.
-    pub async fn create(
-        &self,
-        mut lease: ProviderLease,
-    ) -> Result<ProviderLease, LeaseError> {
+    pub async fn create(&self, mut lease: ProviderLease) -> Result<ProviderLease, LeaseError> {
         let path = Self::path(&lease.job_id)?;
-        if !self.storage.create_text_if_absent(&path, &Self::encode(&lease)).await? {
+        if !self
+            .storage
+            .create_text_if_absent(&path, &Self::encode(&lease))
+            .await?
+        {
             return Err(LeaseError::conflict("provider lease already exists"));
         }
         let Some(created) = self.load(&lease.job_id).await? else {
-            return Err(LeaseError::conflict("provider lease disappeared after creation"));
+            return Err(LeaseError::conflict(
+                "provider lease disappeared after creation",
+            ));
         };
         if created.to_value() != lease.to_value() {
             return Err(LeaseError::conflict(
@@ -409,7 +425,11 @@ impl ProviderLeaseStore {
         }
         let new_version = match self
             .storage
-            .compare_and_swap_text(&Self::path(&lease.job_id)?, expected_version, &Self::encode(&lease))
+            .compare_and_swap_text(
+                &Self::path(&lease.job_id)?,
+                expected_version,
+                &Self::encode(&lease),
+            )
             .await
         {
             Ok(version) => version,
@@ -438,8 +458,13 @@ impl ProviderLeaseStore {
         owner_ttl_seconds: i64,
         resource_ttl_seconds: i64,
     ) -> Result<ProviderLease, LeaseError> {
-        let lease =
-            ProviderLease::new(job_id, provider, owner_id, owner_ttl_seconds, resource_ttl_seconds);
+        let lease = ProviderLease::new(
+            job_id,
+            provider,
+            owner_id,
+            owner_ttl_seconds,
+            resource_ttl_seconds,
+        );
         match self.create(lease).await {
             Ok(created) => Ok(created),
             Err(err) if err.is_conflict() => {
@@ -484,7 +509,10 @@ mod tests {
     #[tokio::test]
     async fn acquire_creates_and_full_state_machine_happy_path() {
         let (_dir, store) = lease_store();
-        let mut lease = store.acquire("job-1", "gcp", "owner-a", 3600, 7200).await.unwrap();
+        let mut lease = store
+            .acquire("job-1", "gcp", "owner-a", 3600, 7200)
+            .await
+            .unwrap();
         assert_eq!(lease.state, "allocating");
         assert!(!lease.fence_token.is_empty());
         assert!(!lease.version.is_empty());
@@ -510,46 +538,73 @@ mod tests {
 
         // The failed branch: failed -> releasing -> released.
         let (_dir2, store2) = lease_store();
-        let mut failed = store2.acquire("job-f", "gcp", "o", 3600, 7200).await.unwrap();
+        let mut failed = store2
+            .acquire("job-f", "gcp", "o", 3600, 7200)
+            .await
+            .unwrap();
         let ftoken = failed.fence_token.clone();
         failed.transition(LeaseState::Failed, "o", &ftoken).unwrap();
         failed = save(&store2, failed).await;
-        failed.transition(LeaseState::Releasing, "o", &ftoken).unwrap();
+        failed
+            .transition(LeaseState::Releasing, "o", &ftoken)
+            .unwrap();
         failed = save(&store2, failed).await;
-        failed.transition(LeaseState::Released, "o", &ftoken).unwrap();
+        failed
+            .transition(LeaseState::Released, "o", &ftoken)
+            .unwrap();
         save(&store2, failed).await;
     }
 
     #[tokio::test]
     async fn illegal_transition_is_rejected() {
         let (_dir, store) = lease_store();
-        let mut lease = store.acquire("job-2", "gcp", "owner-a", 3600, 7200).await.unwrap();
+        let mut lease = store
+            .acquire("job-2", "gcp", "owner-a", 3600, 7200)
+            .await
+            .unwrap();
         let token = lease.fence_token.clone();
-        let err = lease.transition(LeaseState::Running, "owner-a", &token).unwrap_err();
+        let err = lease
+            .transition(LeaseState::Running, "owner-a", &token)
+            .unwrap_err();
         assert!(
             matches!(err, LeaseError::Value(ref m)
                 if m == "invalid provider lease transition allocating -> running"),
             "{err:?}"
         );
         // released is terminal.
-        lease.transition(LeaseState::Failed, "owner-a", &token).unwrap();
+        lease
+            .transition(LeaseState::Failed, "owner-a", &token)
+            .unwrap();
         lease = save(&store, lease).await;
-        lease.transition(LeaseState::Releasing, "owner-a", &token).unwrap();
+        lease
+            .transition(LeaseState::Releasing, "owner-a", &token)
+            .unwrap();
         lease = save(&store, lease).await;
-        lease.transition(LeaseState::Released, "owner-a", &token).unwrap();
-        let err = lease.transition(LeaseState::Failed, "owner-a", &token).unwrap_err();
+        lease
+            .transition(LeaseState::Released, "owner-a", &token)
+            .unwrap();
+        let err = lease
+            .transition(LeaseState::Failed, "owner-a", &token)
+            .unwrap_err();
         assert!(matches!(err, LeaseError::Value(_)), "{err:?}");
     }
 
     #[tokio::test]
     async fn fence_assertion_rejects_wrong_owner_and_token() {
         let (_dir, store) = lease_store();
-        let mut lease = store.acquire("job-3", "gcp", "owner-a", 3600, 7200).await.unwrap();
+        let mut lease = store
+            .acquire("job-3", "gcp", "owner-a", 3600, 7200)
+            .await
+            .unwrap();
         let token = lease.fence_token.clone();
 
-        let err = lease.transition(LeaseState::Provisioning, "owner-b", &token).unwrap_err();
+        let err = lease
+            .transition(LeaseState::Provisioning, "owner-b", &token)
+            .unwrap_err();
         assert!(err.is_conflict(), "{err:?}");
-        let err = lease.transition(LeaseState::Provisioning, "owner-a", "wrong-token").unwrap_err();
+        let err = lease
+            .transition(LeaseState::Provisioning, "owner-a", "wrong-token")
+            .unwrap_err();
         assert!(err.is_conflict(), "{err:?}");
         let err = lease.renew_owner("owner-b", &token, 60).unwrap_err();
         assert!(err.is_conflict(), "{err:?}");
@@ -558,14 +613,19 @@ mod tests {
 
         // Relinquish expires the owner immediately; every fenced op then fails.
         lease.relinquish("owner-a", &token).unwrap();
-        let err = lease.transition(LeaseState::Provisioning, "owner-a", &token).unwrap_err();
+        let err = lease
+            .transition(LeaseState::Provisioning, "owner-a", &token)
+            .unwrap_err();
         assert!(err.is_conflict(), "{err:?}");
     }
 
     #[tokio::test]
     async fn renew_owner_and_resource_extend_expiry() {
         let (_dir, store) = lease_store();
-        let mut lease = store.acquire("job-4", "gcp", "owner-a", 10, 20).await.unwrap();
+        let mut lease = store
+            .acquire("job-4", "gcp", "owner-a", 10, 20)
+            .await
+            .unwrap();
         let token = lease.fence_token.clone();
         let old_owner_expiry = lease.owner_expires_at.clone();
         let old_resource_expiry = lease.resource_expires_at.clone();
@@ -580,38 +640,60 @@ mod tests {
     async fn takeover_only_after_owner_expiry() {
         let (_dir, store) = lease_store();
         // Live owner: a competing acquire is refused.
-        store.acquire("job-5", "gcp", "owner-a", 3600, 7200).await.unwrap();
-        let err = store.acquire("job-5", "gcp", "owner-b", 3600, 7200).await.unwrap_err();
+        store
+            .acquire("job-5", "gcp", "owner-a", 3600, 7200)
+            .await
+            .unwrap();
+        let err = store
+            .acquire("job-5", "gcp", "owner-b", 3600, 7200)
+            .await
+            .unwrap_err();
         assert!(err.is_conflict(), "{err:?}");
         assert!(err.to_string().contains("owner is still live"), "{err}");
 
         // Expired owner (ttl=0 expires at creation): takeover rotates the fence.
-        let original = store.acquire("job-6", "gcp", "owner-a", 0, 7200).await.unwrap();
+        let original = store
+            .acquire("job-6", "gcp", "owner-a", 0, 7200)
+            .await
+            .unwrap();
         assert!(original.owner_expired().unwrap());
-        let taken = store.acquire("job-6", "gcp", "owner-b", 3600, 7200).await.unwrap();
+        let taken = store
+            .acquire("job-6", "gcp", "owner-b", 3600, 7200)
+            .await
+            .unwrap();
         assert_eq!(taken.owner_id, "owner-b");
         assert_ne!(taken.fence_token, original.fence_token);
         // The old owner's fence no longer authorizes anything.
         let mut stale = original;
         let old_token = stale.fence_token.clone();
-        let err = stale.transition(LeaseState::Provisioning, "owner-a", &old_token).unwrap_err();
+        let err = stale
+            .transition(LeaseState::Provisioning, "owner-a", &old_token)
+            .unwrap_err();
         assert!(err.is_conflict(), "{err:?}");
 
         // Identity mismatch on takeover is a conflict, like Python.
-        let err = store.acquire("job-6", "azure", "owner-c", 0, 0).await.unwrap_err();
+        let err = store
+            .acquire("job-6", "azure", "owner-c", 0, 0)
+            .await
+            .unwrap_err();
         assert!(err.is_conflict(), "{err:?}");
     }
 
     #[tokio::test]
     async fn cas_conflict_maps_to_lease_conflict() {
         let (_dir, store) = lease_store();
-        let lease = store.acquire("job-7", "gcp", "owner-a", 3600, 7200).await.unwrap();
+        let lease = store
+            .acquire("job-7", "gcp", "owner-a", 3600, 7200)
+            .await
+            .unwrap();
         let mut copy1 = store.load("job-7").await.unwrap().unwrap();
         let copy2 = store.load("job-7").await.unwrap().unwrap();
         assert_eq!(copy1.version, copy2.version);
 
         let token = copy1.fence_token.clone();
-        copy1.transition(LeaseState::Provisioning, "owner-a", &token).unwrap();
+        copy1
+            .transition(LeaseState::Provisioning, "owner-a", &token)
+            .unwrap();
         let v1 = copy1.version.clone();
         store.save(copy1, &v1).await.unwrap();
 
@@ -632,12 +714,20 @@ mod tests {
     async fn size_bound_and_object_shape_are_enforced() {
         let (_dir, store) = lease_store();
         let big = "x".repeat(MAX_LEASE_BYTES + 1);
-        store.storage().upload_text("provider-leases/big.json", &big).await.unwrap();
+        store
+            .storage()
+            .upload_text("provider-leases/big.json", &big)
+            .await
+            .unwrap();
         let err = store.load("big").await.unwrap_err();
         assert!(matches!(err, LeaseError::Corrupt(_)), "{err:?}");
         assert!(err.to_string().contains("size bound"), "{err}");
 
-        store.storage().upload_text("provider-leases/arr.json", "[1,2,3]").await.unwrap();
+        store
+            .storage()
+            .upload_text("provider-leases/arr.json", "[1,2,3]")
+            .await
+            .unwrap();
         let err = store.load("arr").await.unwrap_err();
         assert!(matches!(err, LeaseError::Corrupt(_)), "{err:?}");
         assert!(err.to_string().contains("not an object"), "{err}");
@@ -657,7 +747,10 @@ mod tests {
     #[tokio::test]
     async fn encoded_blob_is_compact_sorted_json() {
         let (_dir, store) = lease_store();
-        store.acquire("job-8", "gcp", "owner-a", 60, 60).await.unwrap();
+        store
+            .acquire("job-8", "gcp", "owner-a", 60, 60)
+            .await
+            .unwrap();
         let raw = store
             .storage()
             .download_text("provider-leases/job-8.json")
@@ -667,6 +760,9 @@ mod tests {
         // Python json.dumps(separators=(",", ":"), sort_keys=True).
         assert!(raw.starts_with("{\"created_at\":"), "{raw}");
         assert!(!raw.contains("\": "), "must be compact: {raw}");
-        assert!(!raw.contains("\"version\""), "version is never serialized: {raw}");
+        assert!(
+            !raw.contains("\"version\""),
+            "version is never serialized: {raw}"
+        );
     }
 }

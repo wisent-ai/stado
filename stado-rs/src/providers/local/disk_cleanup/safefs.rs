@@ -83,8 +83,12 @@ pub fn open_path(root_fd: RawFd, parts: &[OsString]) -> io::Result<OwnedFd> {
 
 /// Python `os.stat(name, dir_fd=parent, follow_symlinks=False)`.
 pub fn fstatat_nofollow(parent: RawFd, name: &OsStr) -> io::Result<FileStat> {
-    nix::sys::stat::fstatat(borrowed(parent), name, nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW)
-        .map_err(io_err)
+    nix::sys::stat::fstatat(
+        borrowed(parent),
+        name,
+        nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
+    )
+    .map_err(io_err)
 }
 
 /// Python `os.fstat(fd)`.
@@ -99,14 +103,22 @@ pub fn mkdir_at(parent: RawFd, name: &OsStr, mode: Mode) -> io::Result<()> {
 
 /// Python `os.unlink(name, dir_fd=parent)`.
 pub fn unlink_at(parent: RawFd, name: &OsStr) -> io::Result<()> {
-    nix::unistd::unlinkat(borrowed(parent), name, nix::unistd::UnlinkatFlags::NoRemoveDir)
-        .map_err(io_err)
+    nix::unistd::unlinkat(
+        borrowed(parent),
+        name,
+        nix::unistd::UnlinkatFlags::NoRemoveDir,
+    )
+    .map_err(io_err)
 }
 
 /// Python `os.rmdir(name, dir_fd=parent)`.
 pub fn rmdir_at(parent: RawFd, name: &OsStr) -> io::Result<()> {
-    nix::unistd::unlinkat(borrowed(parent), name, nix::unistd::UnlinkatFlags::RemoveDir)
-        .map_err(io_err)
+    nix::unistd::unlinkat(
+        borrowed(parent),
+        name,
+        nix::unistd::UnlinkatFlags::RemoveDir,
+    )
+    .map_err(io_err)
 }
 
 /// Python `os.link(name, name, src_dir_fd=..., dst_dir_fd=..., follow_symlinks=False)`
@@ -166,7 +178,9 @@ impl DirEntries {
         )
         .map_err(io_err)?;
         let dir = nix::dir::Dir::from_fd(fd).map_err(io_err)?;
-        Ok(DirEntries { inner: dir.into_iter() })
+        Ok(DirEntries {
+            inner: dir.into_iter(),
+        })
     }
 }
 
@@ -218,7 +232,11 @@ pub fn rename_exchange(dirfd: RawFd, first: &OsStr, second: &OsStr) -> io::Resul
             RENAME_EXCHANGE_FLAGS,
         )
     };
-    if result != 0 { Err(io::Error::last_os_error()) } else { Ok(()) }
+    if result != 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }
 
 /// Linux spelling of [`rename_exchange`] (see its docs for the SAFETY

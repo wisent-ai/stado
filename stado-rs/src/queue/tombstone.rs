@@ -19,8 +19,8 @@
 
 use crate::models::Job;
 
-use super::storage::JobStorage;
 use super::json_str;
+use super::storage::JobStorage;
 
 /// Marker prefix per terminal destination (Python `_TERMINAL_TO_MARKER`).
 fn marker_prefix(to_prefix: &str) -> Option<&'static str> {
@@ -59,7 +59,10 @@ pub async fn on_transition(store: &JobStorage, job: &Job, to_prefix: &str) {
         json_str(&job.batch_id),
         json_str(ts),
     );
-    if let Err(exc) = store.upload_text(&format!("{marker_prefix}/{orig}.json"), &body).await {
+    if let Err(exc) = store
+        .upload_text(&format!("{marker_prefix}/{orig}.json"), &body)
+        .await
+    {
         // Never raise into the agent loop.
         eprintln!("[tombstone] write failed for {orig}: {exc:?}");
     }
@@ -93,7 +96,11 @@ mod tests {
         store.write_job("queue", &job).await.unwrap();
         store.move_job(&job, "queue", "completed").await.unwrap();
         assert_eq!(
-            store.download_text("fixed/orig9.json").await.unwrap().as_deref(),
+            store
+                .download_text("fixed/orig9.json")
+                .await
+                .unwrap()
+                .as_deref(),
             Some(
                 "{\"orig_jid\": \"orig9\", \"new_jid\": \"new1\", \"new_state\": \"completed\", \
                  \"batch_id\": \"b1\", \"ts\": \"2026-01-03T10:00:00+00:00\"}"
@@ -110,7 +117,11 @@ mod tests {
         store.write_job("queue", &job).await.unwrap();
         store.move_job(&job, "queue", "failed").await.unwrap();
         assert_eq!(
-            store.download_text("failed_again/orig9.json").await.unwrap().as_deref(),
+            store
+                .download_text("failed_again/orig9.json")
+                .await
+                .unwrap()
+                .as_deref(),
             Some(
                 "{\"orig_jid\": \"orig9\", \"new_jid\": \"new1\", \"new_state\": \"failed\", \
                  \"batch_id\": \"b1\", \"ts\": \"2026-01-03T11:00:00+00:00\"}"
@@ -125,7 +136,11 @@ mod tests {
         store.write_job("queue", &job).await.unwrap();
         store.move_job(&job, "queue", "running").await.unwrap();
         assert!(store.list_paths("fixed/", 0).await.unwrap().is_empty());
-        assert!(store.list_paths("failed_again/", 0).await.unwrap().is_empty());
+        assert!(store
+            .list_paths("failed_again/", 0)
+            .await
+            .unwrap()
+            .is_empty());
 
         // A job without re_submission_of never tombstones.
         let plain = Job::new("plain1", "echo");

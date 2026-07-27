@@ -17,9 +17,19 @@
 //! `store._azure_backend`, an attribute that never exists — the only backend
 //! handle on Python `JobStorage` is `_blob_backend`. The intended behavior
 //! is a single backend handle, which is exactly what [`JobStorage`] holds.
+//!
+//! [`control`] and [`copy`] are the exceptions: they have NO Python
+//! original. [`control`] is the fleet pause switch behind `stado queue
+//! pause`, the drain gate every storage migration already assumed existed.
+//! [`copy`] is the backend-to-backend copier the outage forced (GCS billing
+//! closed, queue state has to reach Azure Blob), a direction no Python tool
+//! covers. Application credentials belong in Azure Key Vault and are not
+//! part of queue storage or backend migration.
 
-pub mod capacity;
 pub mod azure_blob;
+pub mod capacity;
+pub mod control;
+pub mod copy;
 pub mod gcs;
 pub mod leases;
 pub mod listing;
@@ -27,6 +37,8 @@ pub mod local_file;
 pub mod migrations;
 pub mod runs;
 pub mod s3;
+#[cfg(test)]
+pub mod secrets;
 pub mod storage;
 pub mod submit;
 pub mod tombstone;
@@ -120,21 +132,24 @@ pub trait BlobBackend: Send + Sync {
     async fn download_bytes(&self, path: &str) -> Result<Option<Vec<u8>>, StorageError>;
 
     /// Download one blob to a local file; `false` when it is absent.
-    async fn download_to_filename(&self, path: &str, dest: &Path)
-        -> Result<bool, StorageError>;
+    async fn download_to_filename(&self, path: &str, dest: &Path) -> Result<bool, StorageError>;
 
     /// Atomically create a text blob; `false` if it already exists
     /// (GCS `ifGenerationMatch=0`, local `O_CREAT|O_EXCL`).
-    async fn upload_text_if_absent(&self, path: &str, content: &str)
-        -> Result<bool, StorageError>;
+    async fn upload_text_if_absent(&self, path: &str, content: &str) -> Result<bool, StorageError>;
 
     /// Atomically upload a local file; `false` if the blob exists.
-    async fn upload_file_if_absent(&self, path: &str, local_file: &Path)
-        -> Result<bool, StorageError>;
+    async fn upload_file_if_absent(
+        &self,
+        path: &str,
+        local_file: &Path,
+    ) -> Result<bool, StorageError>;
 
     /// Read text together with the backend generation/version used for CAS.
-    async fn download_text_versioned(&self, path: &str)
-        -> Result<Option<VersionedText>, StorageError>;
+    async fn download_text_versioned(
+        &self,
+        path: &str,
+    ) -> Result<Option<VersionedText>, StorageError>;
 
     /// Replace text iff the current version matches `expected_version`;
     /// returns the new version. [`StorageError::StorageConflict`] when the
@@ -156,8 +171,11 @@ pub trait BlobBackend: Send + Sync {
     /// Blob names under `prefix`. When `oldest_first > 0`, return only that
     /// many names sorted by creation time ascending — bounded listing for
     /// hot prefixes (queue/ has 14k+ blobs).
-    async fn list_paths(&self, prefix: &str, oldest_first: usize)
-        -> Result<Vec<String>, StorageError>;
+    async fn list_paths(
+        &self,
+        prefix: &str,
+        oldest_first: usize,
+    ) -> Result<Vec<String>, StorageError>;
 
     /// Last-modified time of a blob, or `None` when absent.
     async fn updated_at(&self, path: &str) -> Result<Option<DateTime<Utc>>, StorageError>;
@@ -165,8 +183,11 @@ pub trait BlobBackend: Send + Sync {
     /// Merge string metadata onto an existing blob. No-op when the blob is
     /// absent (local backend semantics; see module docs in `gcs.rs` for the
     /// GCS 404 handling).
-    async fn set_metadata(&self, path: &str, kv: &BTreeMap<String, String>)
-        -> Result<(), StorageError>;
+    async fn set_metadata(
+        &self,
+        path: &str,
+        kv: &BTreeMap<String, String>,
+    ) -> Result<(), StorageError>;
 
     /// Name, updated-ts and metadata for every blob under `prefix`, so
     /// consumers can filter on metadata before downloading the full body.
@@ -184,9 +205,7 @@ pub(crate) fn json_str(s: &str) -> String {
 /// default separators (", " between items, ": " after keys) and
 /// `ensure_ascii=True` escaping. Used for the capacity broadcasts and the
 /// migration sentinel, which Python readers parse with `json.loads`.
-pub(crate) fn python_json_dumps(
-    value: &serde_json::Value,
-) -> Result<String, serde_json::Error> {
+pub(crate) fn python_json_dumps(value: &serde_json::Value) -> Result<String, serde_json::Error> {
     use serde::Serialize;
 
     /// serde_json `Formatter` reproducing CPython's default `json.dumps`
@@ -198,7 +217,11 @@ pub(crate) fn python_json_dumps(
         where
             W: ?Sized + std::io::Write,
         {
-            if first { Ok(()) } else { writer.write_all(b", ") }
+            if first {
+                Ok(())
+            } else {
+                writer.write_all(b", ")
+            }
         }
 
         fn begin_object_value<W>(&mut self, writer: &mut W) -> std::io::Result<()>
@@ -212,7 +235,11 @@ pub(crate) fn python_json_dumps(
         where
             W: ?Sized + std::io::Write,
         {
-            if first { Ok(()) } else { writer.write_all(b", ") }
+            if first {
+                Ok(())
+            } else {
+                writer.write_all(b", ")
+            }
         }
     }
 

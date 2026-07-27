@@ -169,9 +169,12 @@ done
 # payloads still run as Python from the venv above (exported as WC_PYTHON
 # for the agent's probes), but the control plane has no Python fallback:
 # an unavailable or invalid Rust release aborts startup instead of silently
-# restoring the retired Python orchestrator. Shell-locals use $VAR (never
-# the braced form) so the dispatcher's placeholder substitution leaves them
-# alone.
+# restoring the retired Python orchestrator. This template is the one that
+# INTENTIONALLY stays on GCS instead of resolving WC_RELEASE_BASE_URL: a
+# GCE VM cannot exist without a live GCP project, so a portable release
+# URL would buy it nothing, and leaving the lines untouched keeps the
+# GCS path byte-identical. Shell-locals use $VAR (never the braced form)
+# so the dispatcher's placeholder substitution leaves them alone.
 AGENT_BIN=/opt/wisent-agent/bin/stado
 _wc_install_agent_binary() {
     mkdir -p /opt/wisent-agent/bin || return 1

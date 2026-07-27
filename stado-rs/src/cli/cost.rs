@@ -18,7 +18,10 @@ impl From<crate::scheduler::cost::Projection> for Vec<String> {
         };
         vec![
             format!("jobs_in_batch:        {}", proj.jobs_in_batch),
-            format!("samples:              {} completed jobs in queue history", proj.samples),
+            format!(
+                "samples:              {} completed jobs in queue history",
+                proj.samples
+            ),
             format!("avg_cost_usd_per_job: ${:.4}", proj.avg_cost_usd_per_job),
             format!("projected_cost_usd:   ${projected:.2}"),
         ]
@@ -68,7 +71,12 @@ mod tests {
         (dir, JobStorage::with_backend(Arc::new(backend), "local"))
     }
 
-    fn completed(job_id: &str, gpu_type: &str, preemptible: bool, command: &str) -> crate::models::Job {
+    fn completed(
+        job_id: &str,
+        gpu_type: &str,
+        preemptible: bool,
+        command: &str,
+    ) -> crate::models::Job {
         let mut job = crate::models::Job::new(job_id, command);
         job.state = "completed".into();
         job.started_at = Some("2026-05-19T00:00:00+00:00".into());
@@ -83,11 +91,17 @@ mod tests {
     async fn cost_report_lines_against_fabricated_blobs() {
         let (_dir, store) = store();
         store
-            .write_job("completed", &completed("j1", "nvidia-l4", false, "x --model org/m --task t"))
+            .write_job(
+                "completed",
+                &completed("j1", "nvidia-l4", false, "x --model org/m --task t"),
+            )
             .await
             .unwrap();
         store
-            .write_job("completed", &completed("j2", "nvidia-l4", true, "x --model org/m --task t"))
+            .write_job(
+                "completed",
+                &completed("j2", "nvidia-l4", true, "x --model org/m --task t"),
+            )
             .await
             .unwrap();
 
@@ -98,7 +112,10 @@ mod tests {
         assert_eq!(lines[2], "total_wall_hours:   2.00");
         assert_eq!(lines[3], "");
         assert_eq!(lines[4], "by target_kind:");
-        assert_eq!(lines[5], "  gcp        jobs=2     wall_h=   2.00 cost=$1.4140");
+        assert_eq!(
+            lines[5],
+            "  gcp        jobs=2     wall_h=   2.00 cost=$1.4140"
+        );
         assert_eq!(lines[6], "");
         assert_eq!(lines[7], "by model:");
         assert_eq!(
@@ -112,7 +129,10 @@ mod tests {
     async fn cost_estimate_lines_against_fabricated_blobs() {
         let (_dir, store) = store();
         store
-            .write_job("completed", &completed("j1", "nvidia-l4", false, "x --model org/m --task t"))
+            .write_job(
+                "completed",
+                &completed("j1", "nvidia-l4", false, "x --model org/m --task t"),
+            )
             .await
             .unwrap();
         let dir = tempfile::tempdir().unwrap();

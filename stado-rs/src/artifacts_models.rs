@@ -28,8 +28,7 @@ fn is_segment(value: &str) -> bool {
         Some(first) if first.is_ascii_alphanumeric() => {}
         _ => return false,
     }
-    value.len() <= 128
-        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    value.len() <= 128 && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
 /// Stable, machine-readable artifact operation failure (Python
@@ -43,7 +42,10 @@ pub struct ArtifactError {
 
 impl ArtifactError {
     pub fn new(code: &str, message: impl Into<String>) -> Self {
-        Self { code: code.to_string(), message: message.into() }
+        Self {
+            code: code.to_string(),
+            message: message.into(),
+        }
     }
 
     fn invalid_ref(message: impl Into<String>) -> Self {
@@ -106,9 +108,7 @@ impl ArtifactRef {
     /// Parse `<type>/<namespace>/<name>@<version>`.
     pub fn parse(value: &str) -> Result<Self, ArtifactError> {
         let malformed = || {
-            ArtifactError::invalid_ref(
-                "artifact ref must be <type>/<namespace>/<name>@<version>",
-            )
+            ArtifactError::invalid_ref("artifact ref must be <type>/<namespace>/<name>@<version>")
         };
         let (path, version) = value.rsplit_once('@').ok_or_else(malformed)?;
         let mut parts = path.splitn(3, '/');
@@ -171,7 +171,9 @@ impl ArtifactLocation {
             .as_object()
             .ok_or_else(|| ArtifactError::invalid_manifest("location must be an object"))?;
         let get_str = |key: &str, default: &str| {
-            map.get(key).map(py_str).unwrap_or_else(|| default.to_string())
+            map.get(key)
+                .map(py_str)
+                .unwrap_or_else(|| default.to_string())
         };
         let get_opt_int = |key: &str| match map.get(key) {
             None | Some(Value::Null) => None,
@@ -195,15 +197,20 @@ impl ArtifactLocation {
         map.insert("role".into(), Value::String(self.role.clone()));
         map.insert("uri".into(), Value::String(self.uri.clone()));
         map.insert("storage".into(), Value::String(self.storage.clone()));
-        map.insert("immutable_revision".into(), Value::String(self.immutable_revision.clone()));
+        map.insert(
+            "immutable_revision".into(),
+            Value::String(self.immutable_revision.clone()),
+        );
         map.insert("sha256".into(), Value::String(self.sha256.clone()));
         map.insert(
             "size_bytes".into(),
-            self.size_bytes.map_or(Value::Null, |n| Value::Number(n.into())),
+            self.size_bytes
+                .map_or(Value::Null, |n| Value::Number(n.into())),
         );
         map.insert(
             "file_count".into(),
-            self.file_count.map_or(Value::Null, |n| Value::Number(n.into())),
+            self.file_count
+                .map_or(Value::Null, |n| Value::Number(n.into())),
         );
         Value::Object(map)
     }
@@ -287,7 +294,10 @@ impl ArtifactVerification {
             Some(other) => vec![py_str(other)],
         };
         Ok(Self {
-            adapter: map.get("adapter").map(py_str).unwrap_or_else(|| "generic-v1".into()),
+            adapter: map
+                .get("adapter")
+                .map(py_str)
+                .unwrap_or_else(|| "generic-v1".into()),
             verified_at: get_str("verified_at"),
             result: get_str("result"),
             manifest_sha256: get_str("manifest_sha256"),
@@ -298,9 +308,15 @@ impl ArtifactVerification {
     fn to_value(&self) -> Value {
         let mut map = Map::new();
         map.insert("adapter".into(), Value::String(self.adapter.clone()));
-        map.insert("verified_at".into(), Value::String(self.verified_at.clone()));
+        map.insert(
+            "verified_at".into(),
+            Value::String(self.verified_at.clone()),
+        );
         map.insert("result".into(), Value::String(self.result.clone()));
-        map.insert("manifest_sha256".into(), Value::String(self.manifest_sha256.clone()));
+        map.insert(
+            "manifest_sha256".into(),
+            Value::String(self.manifest_sha256.clone()),
+        );
         map.insert(
             "issues".into(),
             Value::Array(self.issues.iter().cloned().map(Value::String).collect()),
@@ -384,7 +400,9 @@ impl ArtifactManifest {
                 .map(ArtifactLocation::from_value)
                 .collect::<Result<Vec<_>, _>>()?,
             Some(_) => {
-                return Err(ArtifactError::invalid_manifest("locations must be an array"))
+                return Err(ArtifactError::invalid_manifest(
+                    "locations must be an array",
+                ))
             }
         };
         let producer = match map.get("producer") {
@@ -398,7 +416,9 @@ impl ArtifactManifest {
                 .map(ArtifactRef::from_value)
                 .collect::<Result<Vec<_>, _>>()?,
             Some(_) => {
-                return Err(ArtifactError::invalid_manifest("dependencies must be an array"))
+                return Err(ArtifactError::invalid_manifest(
+                    "dependencies must be an array",
+                ))
             }
         };
         let verification = match map.get("verification") {
@@ -440,7 +460,9 @@ impl ArtifactManifest {
                 ArtifactError::invalid_manifest("schema_version must be an integer")
             })?,
             Some(_) => {
-                return Err(ArtifactError::invalid_manifest("schema_version must be an integer"))
+                return Err(ArtifactError::invalid_manifest(
+                    "schema_version must be an integer",
+                ))
             }
         };
         // Python: title=str(value.get("title") or ref.name) — a falsy title
@@ -480,21 +502,35 @@ impl ArtifactManifest {
         let mut map = Map::new();
         map.insert("ref".into(), Value::String(self.ref_.to_string()));
         map.insert("title".into(), Value::String(self.title.clone()));
-        map.insert("description".into(), Value::String(self.description.clone()));
+        map.insert(
+            "description".into(),
+            Value::String(self.description.clone()),
+        );
         map.insert("created_at".into(), Value::String(self.created_at.clone()));
         map.insert("created_by".into(), Value::String(self.created_by.clone()));
         map.insert("producer".into(), self.producer.to_value());
         map.insert(
             "locations".into(),
-            Value::Array(self.locations.iter().map(ArtifactLocation::to_value).collect()),
+            Value::Array(
+                self.locations
+                    .iter()
+                    .map(ArtifactLocation::to_value)
+                    .collect(),
+            ),
         );
-        map.insert("schemas".into(), Value::Array(self.schemas.iter().cloned().map(Value::Object).collect()));
+        map.insert(
+            "schemas".into(),
+            Value::Array(self.schemas.iter().cloned().map(Value::Object).collect()),
+        );
         map.insert("summary".into(), Value::Object(self.summary.clone()));
         map.insert("partitions".into(), Value::Object(self.partitions.clone()));
         map.insert(
             "dependencies".into(),
             Value::Array(
-                self.dependencies.iter().map(|r| Value::String(r.to_string())).collect(),
+                self.dependencies
+                    .iter()
+                    .map(|r| Value::String(r.to_string()))
+                    .collect(),
             ),
         );
         map.insert(
@@ -507,7 +543,10 @@ impl ArtifactManifest {
             ),
         );
         map.insert("verification".into(), self.verification.to_value());
-        map.insert("schema_version".into(), Value::Number(self.schema_version.into()));
+        map.insert(
+            "schema_version".into(),
+            Value::Number(self.schema_version.into()),
+        );
         Value::Object(map)
     }
 
@@ -515,7 +554,8 @@ impl ArtifactManifest {
     /// `json.dumps(to_dict(), sort_keys=True, separators=(",", ":"))`.
     pub fn to_json(&self) -> String {
         let canonical = canonicalize(&self.to_dict());
-        let compact = serde_json::to_string(&canonical).expect("manifest serialization is infallible");
+        let compact =
+            serde_json::to_string(&canonical).expect("manifest serialization is infallible");
         ensure_ascii(&compact)
     }
 
@@ -618,12 +658,22 @@ mod tests {
         assert_eq!(r.version, "v1");
         assert_eq!(r.coordinate(), "dataset/wisent/demo-artifact");
         assert_eq!(r.to_string(), "dataset/wisent/demo-artifact@v1");
-        assert_eq!(r.with_version("v2").unwrap().to_string(), "dataset/wisent/demo-artifact@v2");
+        assert_eq!(
+            r.with_version("v2").unwrap().to_string(),
+            "dataset/wisent/demo-artifact@v2"
+        );
     }
 
     #[test]
     fn ref_rejects_malformed() {
-        for bad in ["no-version", "a/b@v1", "a/b/c/d/e@v1", "/b/c@v1", "a//c@v1", "a b/c/d@v1"] {
+        for bad in [
+            "no-version",
+            "a/b@v1",
+            "a/b/c/d/e@v1",
+            "/b/c@v1",
+            "a//c@v1",
+            "a b/c/d@v1",
+        ] {
             let err = ArtifactRef::parse(bad).unwrap_err();
             assert_eq!(err.code, "ARTIFACT_INVALID_REF", "input: {bad}");
         }
@@ -651,7 +701,10 @@ mod tests {
         assert_eq!(manifest.locations[1].size_bytes, None);
         assert_eq!(manifest.locations[1].file_count, None);
         // Dict-form dependency parsed.
-        assert_eq!(manifest.dependencies[1].to_string(), "dataset/wisent/parent@v2");
+        assert_eq!(
+            manifest.dependencies[1].to_string(),
+            "dataset/wisent/parent@v2"
+        );
 
         // Falsy title falls back to the artifact name.
         let m2 = ArtifactManifest::from_json(r#"{"ref": "a/b/c@v1", "title": ""}"#).unwrap();

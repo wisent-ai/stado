@@ -35,7 +35,9 @@ impl BoxClient {
     /// Build a client with a validated transport (Python constructor
     /// defaults: `base_url=DEFAULT_BOX_API_URL`, `timeout_seconds=70`).
     pub fn new(api_key: &str, base_url: &str, timeout_seconds: f64) -> Result<Self, BoxError> {
-        Ok(BoxClient { transport: BoxHttpTransport::new(api_key, base_url, timeout_seconds)? })
+        Ok(BoxClient {
+            transport: BoxHttpTransport::new(api_key, base_url, timeout_seconds)?,
+        })
     }
 
     /// Wrap an already-built transport (tests, custom wiring).
@@ -62,7 +64,10 @@ impl BoxClient {
 
     /// GET /limits.
     pub async fn limits(&self) -> Result<BoxLimits, BoxError> {
-        let value = self.transport.request_json("GET", "/limits", None, &[], &["limits.info"]).await?;
+        let value = self
+            .transport
+            .request_json("GET", "/limits", None, &[], &["limits.info"])
+            .await?;
         Ok(BoxLimits {
             can_start: jbool(value.get("canStart")),
             active_boxes: jint_or(value.get("activeBoxes"), 0)?,
@@ -78,10 +83,16 @@ impl BoxClient {
 
     /// POST /boxes. `ttl_seconds=None` sends an explicit JSON null, like
     /// Python `{"ttlSeconds": None, "noEnv": True}`.
-    pub async fn create_box(&self, ttl_seconds: Option<i64>, no_env: bool) -> Result<BoxInfo, BoxError> {
+    pub async fn create_box(
+        &self,
+        ttl_seconds: Option<i64>,
+        no_env: bool,
+    ) -> Result<BoxInfo, BoxError> {
         let body = json!({"ttlSeconds": ttl_seconds, "noEnv": no_env});
-        let value =
-            self.transport.request_json("POST", "/boxes", Some(&body), &[], &["box.created"]).await?;
+        let value = self
+            .transport
+            .request_json("POST", "/boxes", Some(&body), &[], &["box.created"])
+            .await?;
         parse_box_info(&value)
     }
 
@@ -89,7 +100,13 @@ impl BoxClient {
     pub async fn get_box(&self, box_id: &str) -> Result<BoxInfo, BoxError> {
         let value = self
             .transport
-            .request_json("GET", &Self::box_path(box_id)?, None, &[], &["box.info", "box.get"])
+            .request_json(
+                "GET",
+                &Self::box_path(box_id)?,
+                None,
+                &[],
+                &["box.info", "box.get"],
+            )
             .await?;
         parse_box_info(&value)
     }
@@ -109,13 +126,14 @@ impl BoxClient {
                     &["box.list"],
                 )
                 .await?;
-            let rows = value.get("boxes").and_then(Value::as_array).ok_or_else(|| {
-                BoxError::transport("Box list response has invalid boxes")
-            })?;
+            let rows = value
+                .get("boxes")
+                .and_then(Value::as_array)
+                .ok_or_else(|| BoxError::transport("Box list response has invalid boxes"))?;
             for row in rows {
-                let row = row.as_object().ok_or_else(|| {
-                    BoxError::transport("Box list response has invalid boxes")
-                })?;
+                let row = row
+                    .as_object()
+                    .ok_or_else(|| BoxError::transport("Box list response has invalid boxes"))?;
                 boxes.push(parse_box_info(row)?);
             }
             let page = value.get("pageInfo").and_then(Value::as_object);
@@ -124,7 +142,9 @@ impl BoxClient {
             }
             cursor = page.map(|p| jstr(p.get("nextCursor"))).unwrap_or_default();
             if cursor.is_empty() {
-                return Err(BoxError::transport("Box list pagination omitted next cursor"));
+                return Err(BoxError::transport(
+                    "Box list pagination omitted next cursor",
+                ));
             }
         }
     }
@@ -218,7 +238,13 @@ impl BoxClient {
     pub async fn delete_box(&self, box_id: &str) -> Result<(), BoxError> {
         match self
             .transport
-            .request_json("DELETE", &Self::box_path(box_id)?, None, &[], &["box.deleted"])
+            .request_json(
+                "DELETE",
+                &Self::box_path(box_id)?,
+                None,
+                &[],
+                &["box.deleted"],
+            )
             .await
         {
             Ok(_) => Ok(()),
@@ -281,7 +307,10 @@ impl BoxClient {
                 "GET",
                 &format!("{}/files", Self::box_path(box_id)?),
                 None,
-                &[("path", path.to_string()), ("encoding", encoding.to_string())],
+                &[
+                    ("path", path.to_string()),
+                    ("encoding", encoding.to_string()),
+                ],
                 &["file.read"],
             )
             .await
@@ -352,14 +381,18 @@ impl BoxClient {
                 &["events.list"],
             )
             .await?;
-        let events_value = value.get("events").and_then(Value::as_array).ok_or_else(|| {
-            BoxError::transport("Box events response has invalid events")
-        })?;
+        let events_value = value
+            .get("events")
+            .and_then(Value::as_array)
+            .ok_or_else(|| BoxError::transport("Box events response has invalid events"))?;
         let mut events = Vec::with_capacity(events_value.len());
         for event in events_value {
-            events.push(event.as_object().cloned().ok_or_else(|| {
-                BoxError::transport("Box events response has invalid events")
-            })?);
+            events.push(
+                event
+                    .as_object()
+                    .cloned()
+                    .ok_or_else(|| BoxError::transport("Box events response has invalid events"))?,
+            );
         }
         let page = value.get("pageInfo").and_then(Value::as_object);
         Ok(BoxEventPage {
@@ -428,13 +461,19 @@ impl BoxClient {
             "",
         );
         if prompt_id.is_empty() || jstr(prompt_run.get("promptId")) != prompt_id {
-            return Err(BoxError::transport("Box prompt response has an invalid prompt id"));
+            return Err(BoxError::transport(
+                "Box prompt response has an invalid prompt id",
+            ));
         }
         Ok(BoxPromptRun {
             prompt_id,
             status: {
                 let status = jstr(prompt_run.get("status"));
-                if status.is_empty() { "queued".to_string() } else { status }
+                if status.is_empty() {
+                    "queued".to_string()
+                } else {
+                    status
+                }
             },
             done: jbool(prompt_run.get("done")),
             raw: prompt_run,
@@ -442,7 +481,11 @@ impl BoxClient {
     }
 
     /// GET /boxes/{id}/prompts/{prompt_id}.
-    pub async fn prompt_status(&self, box_id: &str, prompt_id: &str) -> Result<BoxPromptRun, BoxError> {
+    pub async fn prompt_status(
+        &self,
+        box_id: &str,
+        prompt_id: &str,
+    ) -> Result<BoxPromptRun, BoxError> {
         let value = self
             .transport
             .request_json(
@@ -546,7 +589,10 @@ mod tests {
         assert_eq!(err.to_string(), "Box command timeout is outside API bounds");
         let err = client.execute_command(BX, "ls", "", 61).await.unwrap_err();
         assert_eq!(err.to_string(), "Box command timeout is outside API bounds");
-        let err = client.update_box(BX, None, TtlUpdate::NotProvided).await.unwrap_err();
+        let err = client
+            .update_box(BX, None, TtlUpdate::NotProvided)
+            .await
+            .unwrap_err();
         assert_eq!(err.to_string(), "Box update requires at least one field");
         let err = client.download_artifact(BX, "/a", 0).await.unwrap_err();
         assert_eq!(err.to_string(), "artifact max_bytes must be positive");
@@ -606,7 +652,11 @@ mod tests {
         assert_eq!(info.box_id, BX);
         assert_eq!(info.state, "provisioning");
         let requests = server.requests.lock().unwrap().clone();
-        assert!(requests[0].ends_with(r#"{"ttlSeconds":null,"noEnv":true}"#), "{}", requests[0]);
+        assert!(
+            requests[0].ends_with(r#"{"ttlSeconds":null,"noEnv":true}"#),
+            "{}",
+            requests[0]
+        );
         server.stop();
     }
 
@@ -632,9 +682,17 @@ mod tests {
         assert_eq!(boxes[1].box_id, "bx_3bcdefgh");
         let requests = server.requests.lock().unwrap().clone();
         assert_eq!(requests.len(), 2);
-        assert!(requests[0].starts_with("GET /boxes?sort=asc "), "{}", requests[0]);
+        assert!(
+            requests[0].starts_with("GET /boxes?sort=asc "),
+            "{}",
+            requests[0]
+        );
         // Cursor is quote_plus-encoded on the wire.
-        assert!(requests[1].starts_with("GET /boxes?cursor=cur%2F2&sort=asc "), "{}", requests[1]);
+        assert!(
+            requests[1].starts_with("GET /boxes?cursor=cur%2F2&sort=asc "),
+            "{}",
+            requests[1]
+        );
         server.stop();
 
         // hasMore without a cursor is a transport failure, like Python.
@@ -688,7 +746,10 @@ mod tests {
                 "stdout": "hi\n", "stdoutTruncated": false, "timedOut": false}"#,
         )])
         .await;
-        let result = client.execute_command(BX, "echo hi", "/work", 30).await.unwrap();
+        let result = client
+            .execute_command(BX, "echo hi", "/work", 30)
+            .await
+            .unwrap();
         assert!(result.success);
         assert_eq!(result.exit_code, Some(0));
         assert_eq!(result.stdout, "hi\n");
@@ -711,7 +772,10 @@ mod tests {
             r#"{"ok": true, "type": "box.updated", "box": {"id": "bx_2abcdefg", "name": "n2"}}"#,
         )])
         .await;
-        client.update_box(BX, Some("n2"), TtlUpdate::NotProvided).await.unwrap();
+        client
+            .update_box(BX, Some("n2"), TtlUpdate::NotProvided)
+            .await
+            .unwrap();
         assert!(server.requests.lock().unwrap()[0].ends_with(r#"{"name":"n2"}"#));
         server.stop();
 
@@ -736,7 +800,10 @@ mod tests {
                 "promptRun": {"promptId": "pr-1", "status": "queued", "done": false}}"#,
         )])
         .await;
-        let run = client.prompt(BX, "do it", "claude", "opus", "high").await.unwrap();
+        let run = client
+            .prompt(BX, "do it", "claude", "opus", "high")
+            .await
+            .unwrap();
         assert_eq!(run.prompt_id, "pr-1");
         assert_eq!(run.status, "queued");
         assert!(!run.done);
@@ -820,7 +887,11 @@ mod tests {
                 r#"{"ok": true, "type": "events.list", "events": [{"kind": "start"}],
                     "pageInfo": {"hasMore": true, "nextCursor": "c9"}}"#,
             ),
-            http_response(200, "OK", r#"{"ok": true, "type": "file.read", "content": "data"}"#),
+            http_response(
+                200,
+                "OK",
+                r#"{"ok": true, "type": "file.read", "content": "data"}"#,
+            ),
             http_response(200, "OK", r#"{"ok": true, "type": "file.written"}"#),
             http_response(200, "OK", "BINARY_PAYLOAD"),
         ])
@@ -832,8 +903,14 @@ mod tests {
 
         let read = client.read_file(BX, "/tmp/x", "utf8").await.unwrap();
         assert_eq!(read["content"], json!("data"));
-        client.write_file(BX, "/tmp/x", "data", "utf8").await.unwrap();
-        let bytes = client.download_artifact(BX, "/out.tar", 1024).await.unwrap();
+        client
+            .write_file(BX, "/tmp/x", "data", "utf8")
+            .await
+            .unwrap();
+        let bytes = client
+            .download_artifact(BX, "/out.tar", 1024)
+            .await
+            .unwrap();
         assert_eq!(bytes, b"BINARY_PAYLOAD");
 
         let requests = server.requests.lock().unwrap().clone();
@@ -847,7 +924,11 @@ mod tests {
             "{}",
             requests[1]
         );
-        assert!(requests[2].starts_with("PUT /boxes/bx_2abcdefg/files "), "{}", requests[2]);
+        assert!(
+            requests[2].starts_with("PUT /boxes/bx_2abcdefg/files "),
+            "{}",
+            requests[2]
+        );
         assert!(
             requests[3].starts_with("GET /boxes/bx_2abcdefg/artifacts?path=%2Fout.tar "),
             "{}",
@@ -875,11 +956,31 @@ mod tests {
         assert_eq!(forked.box_id, "bx_9zxywvut");
         client.interrupt(BX).await.unwrap();
         let requests = server.requests.lock().unwrap().clone();
-        assert!(requests[0].starts_with("POST /boxes/bx_2abcdefg/stop "), "{}", requests[0]);
-        assert!(requests[1].starts_with("POST /boxes/bx_2abcdefg/resume "), "{}", requests[1]);
-        assert!(requests[1].ends_with(r#"{"noEnv":true}"#), "{}", requests[1]);
-        assert!(requests[2].starts_with("POST /boxes/bx_2abcdefg/fork "), "{}", requests[2]);
-        assert!(requests[3].starts_with("POST /boxes/bx_2abcdefg/interrupt "), "{}", requests[3]);
+        assert!(
+            requests[0].starts_with("POST /boxes/bx_2abcdefg/stop "),
+            "{}",
+            requests[0]
+        );
+        assert!(
+            requests[1].starts_with("POST /boxes/bx_2abcdefg/resume "),
+            "{}",
+            requests[1]
+        );
+        assert!(
+            requests[1].ends_with(r#"{"noEnv":true}"#),
+            "{}",
+            requests[1]
+        );
+        assert!(
+            requests[2].starts_with("POST /boxes/bx_2abcdefg/fork "),
+            "{}",
+            requests[2]
+        );
+        assert!(
+            requests[3].starts_with("POST /boxes/bx_2abcdefg/interrupt "),
+            "{}",
+            requests[3]
+        );
         server.stop();
     }
 
@@ -898,7 +999,10 @@ mod tests {
             ),
         ])
         .await;
-        let info = client.wait_for_state(BX, &["ready"], 5.0, 0.01).await.unwrap();
+        let info = client
+            .wait_for_state(BX, &["ready"], 5.0, 0.01)
+            .await
+            .unwrap();
         assert_eq!(info.state, "ready");
         server.stop();
 
@@ -909,8 +1013,14 @@ mod tests {
             r#"{"ok": true, "type": "box.info", "box": {"id": "bx_2abcdefg", "state": "provisioning"}}"#,
         )])
         .await;
-        let err = client.wait_for_state(BX, &["ready"], 0.0, 0.01).await.unwrap_err();
-        assert!(err.to_string().contains("timed out waiting for Box state"), "{err}");
+        let err = client
+            .wait_for_state(BX, &["ready"], 0.0, 0.01)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("timed out waiting for Box state"),
+            "{err}"
+        );
         server.stop();
     }
 }

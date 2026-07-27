@@ -21,9 +21,7 @@ use super::{ArtifactAliasCommands, ArtifactCommands, ArtifactImportCommands, Cmd
 /// (exit 1); storage failures print their bare message.
 fn artifact_error(exc: RegistryError) -> CmdError {
     match exc {
-        RegistryError::Artifact(err) => {
-            CmdError::click(format!("{}: {}", err.code, err.message))
-        }
+        RegistryError::Artifact(err) => CmdError::click(format!("{}: {}", err.code, err.message)),
         RegistryError::Storage(err) => CmdError::click(err.to_string()),
     }
 }
@@ -41,7 +39,9 @@ impl From<crate::artifacts_models::ArtifactError> for CmdError {
 }
 
 async fn registry() -> Result<ArtifactRegistry, CmdError> {
-    ArtifactRegistry::new().await.map_err(|exc| CmdError::click(exc.to_string()))
+    ArtifactRegistry::new()
+        .await
+        .map_err(|exc| CmdError::click(exc.to_string()))
 }
 
 /// Recursively sort object keys (Python `sort_keys=True`).
@@ -81,7 +81,9 @@ fn parse_labels(values: &[String]) -> Result<Vec<(String, String)>, CmdError> {
     let mut labels = Vec::new();
     for value in values {
         let Some((key, item)) = value.split_once('=') else {
-            return Err(CmdError::click(format!("label must be KEY=VALUE: '{value}'")));
+            return Err(CmdError::click(format!(
+                "label must be KEY=VALUE: '{value}'"
+            )));
         };
         if key.is_empty() {
             return Err(CmdError::click("label key cannot be empty"));
@@ -103,16 +105,36 @@ pub(super) async fn dispatch(sub: ArtifactCommands) -> Result<(), CmdError> {
             alias,
             full,
             json,
-        }) => import_activations(
-            &repo, &revision, &desired_state_dir, &run_id, &job_ids, &version, &alias, full, json,
-        )
-        .await,
-        ArtifactCommands::List { type_name, namespace, name, label, json } => {
-            list(&type_name, &namespace, &name, &label, json).await
+        }) => {
+            import_activations(
+                &repo,
+                &revision,
+                &desired_state_dir,
+                &run_id,
+                &job_ids,
+                &version,
+                &alias,
+                full,
+                json,
+            )
+            .await
         }
+        ArtifactCommands::List {
+            type_name,
+            namespace,
+            name,
+            label,
+            json,
+        } => list(&type_name, &namespace, &name, &label, json).await,
         ArtifactCommands::Show { r#ref, json } => show(&r#ref, json).await,
         ArtifactCommands::Resolve { r#ref, json } => resolve(&r#ref, json).await,
-        ArtifactCommands::Publish { manifest_path, verify: _, no_verify, full, json } => {
+        ArtifactCommands::Publish {
+            manifest_path,
+            verify: _,
+            no_verify,
+            full,
+            json,
+        } => {
             // Python default is --verify; --no-verify flips it off.
             publish(&manifest_path, !no_verify, full, json).await
         }
@@ -149,9 +171,8 @@ async fn import_activations(
             code: 2,
         });
     }
-    let manifest =
-        build_activation_manifest(repo, revision, dir, run_id, job_ids, version)
-            .map_err(CmdError::click)?;
+    let manifest = build_activation_manifest(repo, revision, dir, run_id, job_ids, version)
+        .map_err(CmdError::click)?;
     let registry = registry().await?;
     let published = registry.publish(&manifest, true, full).await?;
     let mut alias_refs = Vec::with_capacity(aliases.len());
@@ -198,7 +219,11 @@ async fn list(
     println!("{:<76} {:<20} {:<8} ALIASES", "REF", "CREATED", "VERIFY");
     for manifest in &manifests {
         let aliases = registry.aliases_for(&manifest.ref_).await?;
-        let aliases = if aliases.is_empty() { "-".to_string() } else { aliases.join(",") };
+        let aliases = if aliases.is_empty() {
+            "-".to_string()
+        } else {
+            aliases.join(",")
+        };
         let ref_str: String = manifest.ref_.to_string().chars().take(75).collect();
         let created: String = manifest.created_at.chars().take(19).collect();
         let result = if manifest.verification.result.is_empty() {
@@ -228,7 +253,14 @@ async fn show(r#ref: &str, as_json: bool) -> Result<(), CmdError> {
     }
     println!("Artifact:     {}", manifest.ref_.coordinate());
     println!("Version:      {}", manifest.ref_.version);
-    println!("Aliases:      {}", if aliases.is_empty() { "-".to_string() } else { aliases.join(", ") });
+    println!(
+        "Aliases:      {}",
+        if aliases.is_empty() {
+            "-".to_string()
+        } else {
+            aliases.join(", ")
+        }
+    );
     println!("Title:        {}", manifest.title);
     let result = if manifest.verification.result.is_empty() {
         "-"
@@ -244,7 +276,10 @@ async fn show(r#ref: &str, as_json: bool) -> Result<(), CmdError> {
     }
     if !manifest.summary.is_empty() {
         println!("Summary:");
-        println!("{}", json_pretty_sorted(&Value::Object(manifest.summary.clone())));
+        println!(
+            "{}",
+            json_pretty_sorted(&Value::Object(manifest.summary.clone()))
+        );
     }
     Ok(())
 }
@@ -330,7 +365,10 @@ async fn verify(r#ref: &str, full: bool, as_json: bool) -> Result<(), CmdError> 
             println!("- {issue}");
         }
         if !report.summary.is_empty() {
-            println!("{}", json_pretty_sorted(&Value::Object(report.summary.clone())));
+            println!(
+                "{}",
+                json_pretty_sorted(&Value::Object(report.summary.clone()))
+            );
         }
     }
     if !report.passed {
@@ -344,19 +382,34 @@ async fn lineage(r#ref: &str, as_json: bool) -> Result<(), CmdError> {
     let manifest = registry.resolve_manifest(&parse_ref(r#ref)?).await?;
     let aliases = registry.aliases_for(&manifest.ref_).await?;
     let producer = Map::from_iter([
-        ("run_id".into(), Value::from(manifest.producer.run_id.clone())),
+        (
+            "run_id".into(),
+            Value::from(manifest.producer.run_id.clone()),
+        ),
         (
             "job_ids".into(),
             Value::Array(
-                manifest.producer.job_ids.iter().cloned().map(Value::from).collect(),
+                manifest
+                    .producer
+                    .job_ids
+                    .iter()
+                    .cloned()
+                    .map(Value::from)
+                    .collect(),
             ),
         ),
         ("repo".into(), Value::from(manifest.producer.repo.clone())),
-        ("commit".into(), Value::from(manifest.producer.commit.clone())),
+        (
+            "commit".into(),
+            Value::from(manifest.producer.commit.clone()),
+        ),
         ("host".into(), Value::from(manifest.producer.host.clone())),
     ]);
-    let dependencies: Vec<Value> =
-        manifest.dependencies.iter().map(|r| Value::from(r.to_string())).collect();
+    let dependencies: Vec<Value> = manifest
+        .dependencies
+        .iter()
+        .map(|r| Value::from(r.to_string()))
+        .collect();
     let value = Value::Object(Map::from_iter([
         ("ref".into(), Value::from(manifest.ref_.to_string())),
         ("producer".into(), Value::Object(producer)),
@@ -371,17 +424,28 @@ async fn lineage(r#ref: &str, as_json: bool) -> Result<(), CmdError> {
         return Ok(());
     }
     fn or_dash(text: &str) -> &str {
-        if text.is_empty() { "-" } else { text }
+        if text.is_empty() {
+            "-"
+        } else {
+            text
+        }
     }
     println!("Artifact: {}", manifest.ref_);
     println!("Run:      {}", or_dash(&manifest.producer.run_id));
-    println!("Jobs:     {}", or_dash(&manifest.producer.job_ids.join(", ")));
+    println!(
+        "Jobs:     {}",
+        or_dash(&manifest.producer.job_ids.join(", "))
+    );
     println!(
         "Source:   {}@{}",
         or_dash(&manifest.producer.repo),
         or_dash(&manifest.producer.commit)
     );
-    let inputs: Vec<String> = manifest.dependencies.iter().map(ToString::to_string).collect();
+    let inputs: Vec<String> = manifest
+        .dependencies
+        .iter()
+        .map(ToString::to_string)
+        .collect();
     println!("Inputs:   {}", or_dash(&inputs.join(", ")));
     Ok(())
 }

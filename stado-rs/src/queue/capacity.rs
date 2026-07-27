@@ -65,6 +65,8 @@ const CAPACITY_GC_CAP_PER_TICK: usize = 200;
 ///   last_started_job_id   # most recent job_id this agent moved to running/
 ///   last_started_at       # ISO ts of last successful start_slot
 ///   last_claim_attempt_at # ISO ts of this loop iteration
+///   queue_paused          # true while `stado queue pause` is in effect
+///   queue_pause_reason    # the pause summary, only present when paused
 ///
 /// Python also broadcasts `stado_version` (importlib.metadata, the version
 /// pip actually installed) — here the crate version is the equivalent — and
@@ -92,7 +94,10 @@ pub async fn publish_capacity(
                 .collect(),
         ),
     );
-    payload.insert("published_at".into(), Value::String(Utc::now().to_rfc3339()));
+    payload.insert(
+        "published_at".into(),
+        Value::String(Utc::now().to_rfc3339()),
+    );
     if let Some(v) = free_vram_gb {
         payload.insert("free_vram_gb".into(), Value::from(v));
     }
@@ -102,9 +107,14 @@ pub async fn publish_capacity(
     if let Some(diag) = diag {
         payload.insert("diag".into(), Value::Object(diag));
     }
-    payload.insert("stado_version".into(), Value::String(env!("CARGO_PKG_VERSION").to_string()));
+    payload.insert(
+        "stado_version".into(),
+        Value::String(env!("CARGO_PKG_VERSION").to_string()),
+    );
     let body = super::python_json_dumps(&Value::Object(payload))?;
-    store.upload_text(&format!("{CAPACITY_PREFIX}{consumer_id}.json"), &body).await
+    store
+        .upload_text(&format!("{CAPACITY_PREFIX}{consumer_id}.json"), &body)
+        .await
 }
 
 /// Return {consumer_id: payload} for every live (non-stale) consumer.
@@ -142,7 +152,9 @@ async fn read_consumer_capacity_at(
         if !blob.name.ends_with(".json") {
             continue;
         }
-        let Some(updated) = blob.updated else { continue };
+        let Some(updated) = blob.updated else {
+            continue;
+        };
         if updated < cutoff_delete {
             stale_blobs.push(blob.name);
             continue;
@@ -156,7 +168,9 @@ async fn read_consumer_capacity_at(
         // missing-blob case is the only one we drop; any other error
         // propagates to the caller so transient SDK/network failures stay
         // visible.
-        let Some(raw) = store.download_text(&blob.name).await? else { continue };
+        let Some(raw) = store.download_text(&blob.name).await? else {
+            continue;
+        };
         let payload: Value = serde_json::from_str(&raw)?;
         if let Some(cid) = payload.get("consumer_id").and_then(Value::as_str) {
             out.insert(cid.to_string(), payload);
@@ -183,7 +197,9 @@ pub fn total_free_by_accel(
                 continue;
             }
         }
-        let Some(slots) = payload.get("free_slots").and_then(Value::as_object) else { continue };
+        let Some(slots) = payload.get("free_slots").and_then(Value::as_object) else {
+            continue;
+        };
         for (accel, n) in slots {
             *totals.entry(accel.clone()).or_insert(0) += n.as_i64().unwrap_or(0);
         }
@@ -211,7 +227,9 @@ pub fn consumers_by_free_vram(
         let Some(v) = v else { continue };
         // Python `payload["consumer_id"]`; read_consumer_capacity only emits
         // payloads that carry the key.
-        let Some(cid) = payload.get("consumer_id").and_then(Value::as_str) else { continue };
+        let Some(cid) = payload.get("consumer_id").and_then(Value::as_str) else {
+            continue;
+        };
         rows.push((cid.to_string(), v));
     }
     rows.sort_by(|a, b| b.1.cmp(&a.1));
@@ -252,7 +270,10 @@ mod tests {
             &store,
             "gcp-b",
             "gcp",
-            &BTreeMap::from([("nvidia-l4".to_string(), 2), ("nvidia-tesla-a100".to_string(), 1)]),
+            &BTreeMap::from([
+                ("nvidia-l4".to_string(), 2),
+                ("nvidia-tesla-a100".to_string(), 1),
+            ]),
             None,
             None,
             None,
@@ -260,7 +281,10 @@ mod tests {
         .await
         .unwrap();
         // Non-broadcast blobs under the prefix are ignored.
-        store.upload_text("capacity/README.txt", "not a broadcast").await.unwrap();
+        store
+            .upload_text("capacity/README.txt", "not a broadcast")
+            .await
+            .unwrap();
 
         let live = read_consumer_capacity(&store).await.unwrap();
         assert_eq!(live.len(), 2);
@@ -276,13 +300,19 @@ mod tests {
 
         // Aggregation helpers.
         let all = total_free_by_accel(&live, None);
-        assert_eq!(all, BTreeMap::from([
-            ("nvidia-l4".to_string(), 3),
-            ("nvidia-tesla-a100".to_string(), 1),
-        ]));
+        assert_eq!(
+            all,
+            BTreeMap::from([
+                ("nvidia-l4".to_string(), 3),
+                ("nvidia-tesla-a100".to_string(), 1),
+            ])
+        );
         let local_only = total_free_by_accel(&live, Some(&["local"]));
         assert_eq!(local_only, BTreeMap::from([("nvidia-l4".to_string(), 1)]));
-        assert_eq!(consumers_by_free_vram(&live, None), vec![("local-a".to_string(), 20)]);
+        assert_eq!(
+            consumers_by_free_vram(&live, None),
+            vec![("local-a".to_string(), 20)]
+        );
         assert!(consumers_by_free_vram(&live, Some(&["gcp"])).is_empty());
     }
 
@@ -297,7 +327,10 @@ mod tests {
         // Past the 180s staleness horizon: filtered out, but the blob is
         // retained (it is younger than the 1h GC cutoff).
         let later = Utc::now() + Duration::seconds(CAPACITY_STALE_SECONDS as i64 + 60);
-        assert!(read_consumer_capacity_at(&store, later).await.unwrap().is_empty());
+        assert!(read_consumer_capacity_at(&store, later)
+            .await
+            .unwrap()
+            .is_empty());
         assert_eq!(store.list_paths(CAPACITY_PREFIX, 0).await.unwrap().len(), 1);
     }
 
@@ -306,17 +339,33 @@ mod tests {
         let (_dir, store) = store();
         for i in 0..250 {
             store
-                .upload_text(&format!("capacity/c{i:03}.json"), "{\"consumer_id\": \"x\"}")
+                .upload_text(
+                    &format!("capacity/c{i:03}.json"),
+                    "{\"consumer_id\": \"x\"}",
+                )
                 .await
                 .unwrap();
         }
         // Every blob is >1h old from this clock -> all GC-eligible, and the
         // first 200 are swept this tick.
         let later = Utc::now() + Duration::seconds(CAPACITY_GC_AGE_SECONDS + 60);
-        assert!(read_consumer_capacity_at(&store, later).await.unwrap().is_empty());
-        assert_eq!(store.list_paths(CAPACITY_PREFIX, 0).await.unwrap().len(), 50);
+        assert!(read_consumer_capacity_at(&store, later)
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            store.list_paths(CAPACITY_PREFIX, 0).await.unwrap().len(),
+            50
+        );
         // The next tick sweeps the rest.
-        assert!(read_consumer_capacity_at(&store, later).await.unwrap().is_empty());
-        assert!(store.list_paths(CAPACITY_PREFIX, 0).await.unwrap().is_empty());
+        assert!(read_consumer_capacity_at(&store, later)
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(store
+            .list_paths(CAPACITY_PREFIX, 0)
+            .await
+            .unwrap()
+            .is_empty());
     }
 }
