@@ -1,7 +1,7 @@
 use super::{CmdError, MailCommands};
 use crate::mail::{self, GmailClient, MailAnalysis};
 
-pub async fn dispatch(command: &MailCommands) -> Result<(), CmdError> {
+pub(crate) async fn dispatch(command: &MailCommands) -> Result<(), CmdError> {
     match command {
         MailCommands::Search {
             query,

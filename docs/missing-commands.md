@@ -1,4 +1,4 @@
-# Stado — 20 missing commands (gap analysis)
+# Stado — command gap analysis
 
 Based on the 2026-07-24 control-host incident (full disk → wedged launchd →
 dead weles-api, no reboot path, no service adoption path).
@@ -70,6 +70,23 @@ trailing program) rather than copying it, so the commands cannot drift apart.
 14. **service env NAME** — show the effective environment a managed service
     runs with (from its plist), secrets redacted.
 
+All eight are shipped: `stado service list|status|restart|adopt|retire|
+deploy|logs|env`, engine in `deploy/service.rs`, surface in
+`cli/service.rs`. `list` and `status` answer from the health beacons alone,
+so the fleet-wide question costs no ssh. The managed set has two sources,
+shown in a SOURCE column: the per-target `services` array in the registry
+(what `adopt`/`retire`/`deploy` edit) and the fixed `MANAGED_AGENTS` list
+every `host recover` pass reloads — genuinely managed, so listed, but owned
+by that program, which is why `retire` refuses them.
+
+`missing` (the beacon exists and does not carry the unit) is kept distinct
+from `unknown` (no beacon at all): conflating a silent host with a vanished
+unit is precisely the failure this group exists to stop. Mutations go
+through `cli::registry::push_document`, which validates before it writes, so
+an edit that would produce an invalid registry uploads nothing. `env`
+redacts secret-shaped keys before the report is built, so no rendering path
+can print a value.
+
 ## Registry truth
 
 15. **registry doctor** — diff registry declarations against live host state:
@@ -78,6 +95,21 @@ trailing program) rather than copying it, so the commands cannot drift apart.
     canonical registry (validated).
 17. **registry beacon-age** — one table: every host and its last beacon
     timestamp (the "hasn't reported in 5 days" detector).
+
+All three shipped. `registry doctor` reports no-heartbeat, stale-beacon,
+missing-plist, unit-not-active, unmanaged-host and unmanaged-agent, sourced
+from the beacon prefix and the capacity broadcasts — never ssh — and exits
+non-zero when declaration and reality disagree. `registry host add` reuses
+`push_document`'s validation rather than a second implementation.
+`registry beacon-age` gives every registry target a row, including targets
+with no beacon at all, worst first.
+
+Related, and the reason these were reachable at all: `registry push`/`pull`
+were pinned to a hardcoded GCS bucket, so on an Azure-only deployment the
+registry the coordinator's survival check depends on could not be repaired.
+All registry readers and writers now go through `targets::RegistryStore`,
+which keeps the GCS path byte-identical and routes every other backend
+through the configured store.
 
 ## Jobs / queue
 
@@ -93,6 +125,17 @@ trailing program) rather than copying it, so the commands cannot drift apart.
     with the job's outcome.)
 20. **queue pause / queue resume** — maintenance mode: stop/start dispatching
     without cancelling queued jobs.
+    (Shipped as `stado queue pause|resume|status|drain`, state in
+    `queue/control.rs`. Pausing gates three paths, not one: scheduler
+    dispatch, the local agent's claim loop, and box admission — the third
+    was found while implementing, and without it `drain --wait` could watch
+    `running/` grow while waiting. Already-running jobs finish untouched;
+    the agent's cooperative-yield eviction is also gated, since evicting a
+    running job to free room for a claim that can never happen would
+    destroy work. `drain --wait` blocks until `running/` empties and exits
+    non-zero on timeout. This is the supported pre-migration drain that
+    `deploy/MIGRATE_TO_STADO.md` previously enforced with an
+    honour-system environment variable.)
 
 ## Blockers found while implementing
 
@@ -106,3 +149,60 @@ trailing program) rather than copying it, so the commands cannot drift apart.
   `exit 66` is rejected inside one. Write remote scripts as escaped
   `"..."` strings with `\t` / `\n`, the way `deploy/host_recovery.rs`
   already does.
+
+## Second gap set — the billing-outage incident
+
+The GCP billing account was closed and every GCS call began returning
+`accountDisabled`. Six independent defects turned that into a total outage,
+and each of them surfaced as a crash loop or a silently empty UI rather than
+as a check. The commands below close what that revealed. All are shipped.
+
+- **doctor** — `stado doctor [--json] [--fix-hints]`, probes in `doctor.rs`.
+  An ordered preflight over config, storage auth plus a real write/read/delete
+  round trip, provider auth, live quota, the release channel, agent-template
+  rendering, Azure VM identity, registry reachability, queue pause state and
+  alert channels. Every probe is fault-isolated and deadline-bounded, so one
+  black-holed endpoint is one FAIL row rather than a hung command. The
+  template check renders through the dispatcher's own code path, which is the
+  only way it can prove anything about what a real dispatch would produce.
+- **storage ls | stat | cat | verify** — the outage question was "is the queue
+  empty, or is the store unreachable?", and nothing could answer it, because
+  `BlobBackend::exists` maps every error to false. `stat` therefore probes
+  through the path that surfaces the error and reports `unreachable`
+  distinctly from `absent`. `verify` is the object-for-object comparison
+  `deploy/MIGRATE_TO_STADO.md` demanded and never provided.
+- **storage copy** — there was no way to move queue state between backends at
+  all. It carries blob metadata, not just bodies: the scheduler prefilters on
+  those stamps, so a body-only copy leaves jobs visible while degrading every
+  tick into downloading the whole queue.
+- **instances list | reap** — orphaned cloud VMs bill forever and were
+  invisible. Implementing it exposed a live bug: the Azure provider's
+  enumeration existed but was never wired to the `Provider` trait, so the
+  base default applied and Azure agent VMs were invisible to the dead-agent
+  reaper as well as to any CLI.
+- **cancel --terminate** — cancelling a job left its VM running and billing.
+  Plain `cancel` is unchanged; the instance reference is resolved from the
+  job document first and the provider lease second.
+- **secrets put | get | ls | rm** — the Azure billing service principal lived
+  in GCP Secret Manager, so GCP dying also blinded us to the Azure credit
+  balance. Values now come from Azure Key Vault; `put` reads STDIN only,
+  because argv is visible in process listings and shell history.
+- **billing watch** — the alert that should have warned us could not fire:
+  the depletion signal is computed only inside the `"status": "ok"` branch,
+  so a closed account or dead credential produced silence rather than an
+  alarm. There is now an account-health signal independent of the balance
+  threshold, alerting on transition and de-duplicated through the billing
+  blob, plus a foreground watchdog that is deliberately runnable OUTSIDE the
+  cloud it watches — a collector that dies with its provider cannot warn you
+  about that provider.
+
+## Known dead code, needs a decision
+
+`queue/secrets.rs` and `monitor::billing::{fetch_azure_sp_with,
+no_credentials_section}` are now `#[cfg(test)]`-only: production reads the
+billing service principal from Azure Key Vault and nowhere else, deliberately,
+so that no fallback can quietly recreate the cross-cloud coupling that caused
+the outage. What remains is a whole module plus a status-message builder kept
+alive by a single test asserting text production can no longer emit. Removing
+them means deleting that test, which needs the owner's approval — hence this
+note instead of a commit.
