@@ -9,13 +9,25 @@
 //!
 //! The registry is the single source of truth for every box the queue can
 //! route to: workstations, GCP zonal dispatchers, vast.ai pools. Like
-//! Python, [`fetch_registry_gcs`] fetches registry.json from GCS with a 30 s
-//! TTL in-process cache, [`load_registry_auto`] falls back to the bundled
-//! file (`source="auto"`), and [`load_registry_gcs`] consults GCS only
-//! (`source="gcs"` — the fleet-survival authority). The fetch goes through
-//! the crate's GCS JSON-API backend, never gsutil — see the Python
+//! Python, [`fetch_registry_remote`] fetches `registry.json` with a
+//! short-TTL in-process cache and is the fleet-survival authority
+//! (`source="gcs"`), while [`load_registry_auto`] adds the bundled file as
+//! a fallback (`source="auto"`). On the "gcs" backend the fetch still goes
+//! through the crate's GCS JSON-API backend, never gsutil — see the Python
 //! `_load_from_gcs` docstring: a broken gsutil install knocked the agent
 //! offline on 2026-05-08 even though the registry was in GCS.
+//!
+//! DEVIATION from Python: the fetch follows `WC_STORAGE_BACKEND` instead of
+//! hardcoding GCS. Python reads GCS unconditionally, so on an Azure-only
+//! deployment the dashboard compare-and-swaps `registry.json` into the
+//! Azure container (`dashboard/policy.rs`, the WRITE side, which already
+//! goes through the configured store) while every reader consults a GCS
+//! object nobody writes. The "gcs" read path is unchanged.
+//!
+//! [`fetch_registry_remote`] returns [`RegistryFetchError`] rather than an
+//! empty registry, because "the store is unreachable" and "the registry
+//! does not list you" drive opposite decisions in the coordinator's
+//! rogue-daemon kill switch.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -27,7 +39,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::models::Job;
-use crate::queue::BlobBackend;
+use crate::queue::{BlobBackend, JobStorage, StorageError, VersionedText};
 
 // ---------------------------------------------------------------------------
 // validation.py — hostname normalization
@@ -35,7 +47,11 @@ use crate::queue::BlobBackend;
 
 /// Return the canonical form used for host identity comparisons.
 pub fn normalize_hostname(value: &str) -> String {
-    value.trim().to_lowercase().trim_end_matches('.').to_string()
+    value
+        .trim()
+        .to_lowercase()
+        .trim_end_matches('.')
+        .to_string()
 }
 
 /// Extract and normalize a hostname from a legacy SSH destination
@@ -85,13 +101,17 @@ fn is_target_name(value: &str) -> bool {
     !bytes.is_empty()
         && alnum(bytes[0])
         && alnum(bytes[bytes.len() - 1])
-        && bytes.iter().all(|&b| alnum(b) || matches!(b, b'.' | b'_' | b'-'))
+        && bytes
+            .iter()
+            .all(|&b| alnum(b) || matches!(b, b'.' | b'_' | b'-'))
 }
 
 /// `^[a-z0-9_]+$` hand-rolled.
 fn is_action(value: &str) -> bool {
     !value.is_empty()
-        && value.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
 }
 
 fn validate_action_list(value: &Value, location: &str) -> Result<(), RegistryValidationError> {
@@ -117,7 +137,10 @@ fn validate_action_list(value: &Value, location: &str) -> Result<(), RegistryVal
             ));
         }
         if !seen.insert(action) {
-            return Err(verr(&item_location, &format!("duplicate action '{action}'")));
+            return Err(verr(
+                &item_location,
+                &format!("duplicate action '{action}'"),
+            ));
         }
     }
     if seen.contains("*") && seen.len() != 1 {
@@ -159,16 +182,36 @@ fn validate_disk_cleanup(value: &Value, location: &str) -> Result<(), RegistryVa
     ];
     let keys: HashSet<&str> = map.keys().map(String::as_str).collect();
     if keys != REQUIRED.into_iter().collect() {
-        return Err(verr(location, &format!("must contain exactly {}", py_list_repr(&REQUIRED))));
+        return Err(verr(
+            location,
+            &format!("must contain exactly {}", py_list_repr(&REQUIRED)),
+        ));
     }
     let mode_location = format!("{location}.mode");
     if !matches!(map["mode"].as_str(), Some("off" | "report" | "enforce")) {
-        return Err(verr(&mode_location, "must be one of 'off', 'report', or 'enforce'"));
+        return Err(verr(
+            &mode_location,
+            "must be one of 'off', 'report', or 'enforce'",
+        ));
     }
-    require_int(&map["check_interval_seconds"], &format!("{location}.check_interval_seconds"), 60, Some(86400))?;
-    let low = require_int(&map["low_free_gb"], &format!("{location}.low_free_gb"), 1, None)?;
-    let target =
-        require_int(&map["target_free_gb"], &format!("{location}.target_free_gb"), 1, None)?;
+    require_int(
+        &map["check_interval_seconds"],
+        &format!("{location}.check_interval_seconds"),
+        60,
+        Some(86400),
+    )?;
+    let low = require_int(
+        &map["low_free_gb"],
+        &format!("{location}.low_free_gb"),
+        1,
+        None,
+    )?;
+    let target = require_int(
+        &map["target_free_gb"],
+        &format!("{location}.target_free_gb"),
+        1,
+        None,
+    )?;
     if target <= low {
         return Err(verr(
             &format!("{location}.target_free_gb"),
@@ -181,10 +224,18 @@ fn validate_disk_cleanup(value: &Value, location: &str) -> Result<(), RegistryVa
         1024_i64.pow(2),
         Some(1024_i64.pow(4)),
     )?;
-    let max_items =
-        require_int(&map["max_items_per_pass"], &format!("{location}.max_items_per_pass"), 1, Some(10000))?;
-    let max_scan =
-        require_int(&map["max_scan_items"], &format!("{location}.max_scan_items"), 1, Some(100000))?;
+    let max_items = require_int(
+        &map["max_items_per_pass"],
+        &format!("{location}.max_items_per_pass"),
+        1,
+        Some(10000),
+    )?;
+    let max_scan = require_int(
+        &map["max_scan_items"],
+        &format!("{location}.max_scan_items"),
+        1,
+        Some(100000),
+    )?;
     if max_scan < max_items {
         return Err(verr(
             &format!("{location}.max_scan_items"),
@@ -196,8 +247,11 @@ fn validate_disk_cleanup(value: &Value, location: &str) -> Result<(), RegistryVa
         .as_object()
         .ok_or_else(|| verr(&cleaners_location, "must be an object"))?;
     const ALLOWED: [&str; 2] = ["huggingface_cache", "weles_recordings"];
-    let mut unknown: Vec<&str> =
-        cleaners.keys().map(String::as_str).filter(|k| !ALLOWED.contains(k)).collect();
+    let mut unknown: Vec<&str> = cleaners
+        .keys()
+        .map(String::as_str)
+        .filter(|k| !ALLOWED.contains(k))
+        .collect();
     unknown.sort_unstable();
     if !unknown.is_empty() {
         return Err(verr(
@@ -211,8 +265,11 @@ fn validate_disk_cleanup(value: &Value, location: &str) -> Result<(), RegistryVa
             .as_object()
             .ok_or_else(|| verr(&cleaner_location, "must be an object"))?;
         const CLEANER_KEYS: [&str; 3] = ["allow_missing_upload_proof", "min_age_seconds", "root"];
-        let mut unknown_keys: Vec<&str> =
-            cleaner.keys().map(String::as_str).filter(|k| !CLEANER_KEYS.contains(k)).collect();
+        let mut unknown_keys: Vec<&str> = cleaner
+            .keys()
+            .map(String::as_str)
+            .filter(|k| !CLEANER_KEYS.contains(k))
+            .collect();
         unknown_keys.sort_unstable();
         if !unknown_keys.is_empty() {
             return Err(verr(
@@ -223,8 +280,17 @@ fn validate_disk_cleanup(value: &Value, location: &str) -> Result<(), RegistryVa
         let min_age = cleaner
             .get("min_age_seconds")
             .ok_or_else(|| verr(&cleaner_location, "must contain 'min_age_seconds'"))?;
-        let minimum = if name == "huggingface_cache" { 3600 } else { 86400 };
-        require_int(min_age, &format!("{cleaner_location}.min_age_seconds"), minimum, None)?;
+        let minimum = if name == "huggingface_cache" {
+            3600
+        } else {
+            86400
+        };
+        require_int(
+            min_age,
+            &format!("{cleaner_location}.min_age_seconds"),
+            minimum,
+            None,
+        )?;
         if let Some(proof) = cleaner.get("allow_missing_upload_proof") {
             if !proof.is_boolean() {
                 return Err(verr(
@@ -334,10 +400,18 @@ pub fn validate_registry(data: &Value) -> Result<(), RegistryValidationError> {
         let name_location = format!("{location}.name");
         let name = match target.get("name").and_then(Value::as_str) {
             Some(name) if is_target_name(name) => name,
-            _ => return Err(verr(&name_location, "must be a lowercase target identifier")),
+            _ => {
+                return Err(verr(
+                    &name_location,
+                    "must be a lowercase target identifier",
+                ))
+            }
         };
         if !names.insert(name) {
-            return Err(verr(&name_location, &format!("duplicate target name '{name}'")));
+            return Err(verr(
+                &name_location,
+                &format!("duplicate target name '{name}'"),
+            ));
         }
 
         let kind = target.get("kind").and_then(Value::as_str).unwrap_or("");
@@ -357,8 +431,11 @@ pub fn validate_registry(data: &Value) -> Result<(), RegistryValidationError> {
                 .as_object()
                 .ok_or_else(|| verr(&weles_location, "must be an object"))?;
             const WELES_KEYS: [&str; 3] = ["actions", "enabled", "recordings_dir"];
-            let mut unknown: Vec<&str> =
-                weles.keys().map(String::as_str).filter(|k| !WELES_KEYS.contains(k)).collect();
+            let mut unknown: Vec<&str> = weles
+                .keys()
+                .map(String::as_str)
+                .filter(|k| !WELES_KEYS.contains(k))
+                .collect();
             unknown.sort_unstable();
             if !unknown.is_empty() {
                 return Err(verr(
@@ -367,10 +444,16 @@ pub fn validate_registry(data: &Value) -> Result<(), RegistryValidationError> {
                 ));
             }
             if !weles.contains_key("enabled") || !weles.contains_key("actions") {
-                return Err(verr(&weles_location, "must contain 'enabled' and 'actions'"));
+                return Err(verr(
+                    &weles_location,
+                    "must contain 'enabled' and 'actions'",
+                ));
             }
             if !weles["enabled"].is_boolean() {
-                return Err(verr(&format!("{weles_location}.enabled"), "must be a boolean"));
+                return Err(verr(
+                    &format!("{weles_location}.enabled"),
+                    "must be a boolean",
+                ));
             }
             validate_action_list(&weles["actions"], &format!("{weles_location}.actions"))?;
             if let Some(recordings_dir) = weles.get("recordings_dir") {
@@ -484,12 +567,19 @@ pub fn admit_job(job: &Job, target: &TargetCapabilities) -> AdmissionDecision {
     let required_cpu = job.cpu_cores;
     let required_memory = job.memory_gb;
     let required_disk = job.disk_gb;
-    let executor = if job.executor.is_empty() { "stado-agent" } else { job.executor.as_str() };
+    let executor = if job.executor.is_empty() {
+        "stado-agent"
+    } else {
+        job.executor.as_str()
+    };
     let gpu_mem = job.gpu_mem_gb;
     let gpu_type = job.gpu_type.as_str();
 
     if !required_os.is_empty() && required_os != target.operating_system {
-        reasons.push(format!("requires os={required_os}, target is {}", target.operating_system));
+        reasons.push(format!(
+            "requires os={required_os}, target is {}",
+            target.operating_system
+        ));
     }
     if !required_arch.is_empty() && required_arch != target.architecture {
         reasons.push(format!(
@@ -498,7 +588,10 @@ pub fn admit_job(job: &Job, target: &TargetCapabilities) -> AdmissionDecision {
         ));
     }
     if required_cpu > target.cpu_cores {
-        reasons.push(format!("requires {required_cpu} CPU cores, target has {}", target.cpu_cores));
+        reasons.push(format!(
+            "requires {required_cpu} CPU cores, target has {}",
+            target.cpu_cores
+        ));
     }
     if required_memory > target.memory_gb {
         reasons.push(format!(
@@ -507,7 +600,10 @@ pub fn admit_job(job: &Job, target: &TargetCapabilities) -> AdmissionDecision {
         ));
     }
     if required_disk > target.disk_gb {
-        reasons.push(format!("requires {required_disk} GB disk, target has {}", target.disk_gb));
+        reasons.push(format!(
+            "requires {required_disk} GB disk, target has {}",
+            target.disk_gb
+        ));
     }
     // Faithful to the Python: target.accelerator is NOT consulted here —
     // any GPU requirement rejects against a capability set (the declared
@@ -527,7 +623,10 @@ pub fn admit_job(job: &Job, target: &TargetCapabilities) -> AdmissionDecision {
     if !job.apt_packages.is_empty() && !target.supports_system_packages {
         reasons.push("target does not support provider-managed system packages".to_string());
     }
-    AdmissionDecision { accepted: reasons.is_empty(), reasons }
+    AdmissionDecision {
+        accepted: reasons.is_empty(),
+        reasons,
+    }
 }
 
 static BOX_CAPABILITIES: LazyLock<TargetCapabilities> = LazyLock::new(|| TargetCapabilities {
@@ -706,15 +805,23 @@ pub struct Coordinator {
 // __init__.py — loaders (local file, GCS fetch with TTL, source selection)
 // ---------------------------------------------------------------------------
 
-/// Canonical GCS location of the registry (Python `GCS_REGISTRY_URI`).
+/// Canonical GCS location of the registry (Python `GCS_REGISTRY_URI`). Only
+/// the "gcs" backend resolves the registry here; every other backend reads
+/// [`REGISTRY_BLOB`] from the store `config::wc_storage_backend()` selects.
 pub const GCS_REGISTRY_URI: &str = "gs://wisent-compute/registry.json";
-/// Re-fetch from GCS at most this often (Python `_GCS_TTL_SEC`).
+/// Store-relative path of the registry document, identical on every
+/// backend. `dashboard/policy.rs` compare-and-swaps this exact path through
+/// the configured store, so the read and write sides address one object.
+pub const REGISTRY_BLOB: &str = "registry.json";
+/// Re-fetch the registry at most this often (Python `_GCS_TTL_SEC`).
 pub const GCS_REGISTRY_TTL_SEC: u64 = 30;
 
 /// Path of the registry JSON shipped with the crate (byte-identical copy of
 /// `stado/targets/registry.json`).
 pub fn bundled_registry_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("data").join("registry.json")
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("registry.json")
 }
 
 /// Registry-load failure (Python raises `ValueError` /
@@ -803,7 +910,8 @@ pub fn load_registry_file(path: &Path) -> Result<Registry, RegistryError> {
     if !path.is_file() {
         return Ok(Registry::default());
     }
-    let text = std::fs::read_to_string(path).map_err(|exc| RegistryError::Io(path.to_path_buf(), exc))?;
+    let text =
+        std::fs::read_to_string(path).map_err(|exc| RegistryError::Io(path.to_path_buf(), exc))?;
     load_registry_from_str(&text)
 }
 
@@ -818,37 +926,131 @@ pub fn load_bundled_registry() -> Result<Registry, RegistryError> {
 // __init__.py — `_load_from_gcs` + source-aware loaders
 // ---------------------------------------------------------------------------
 
-/// 30s in-process cache of the GCS-hosted registry (Python `_GCS_CACHE`).
-static GCS_CACHE: LazyLock<Mutex<Option<(Instant, Registry)>>> = LazyLock::new(|| Mutex::new(None));
+/// Short-TTL in-process cache of the fetched registry (Python `_GCS_CACHE`).
+static REGISTRY_CACHE: LazyLock<Mutex<Option<(Instant, Registry)>>> =
+    LazyLock::new(|| Mutex::new(None));
 
-/// Bucket-relative `registry.json` download: `Ok(Some(text))` = fetched,
+/// Store-relative `registry.json` download: `Ok(Some(text))` = fetched,
 /// `Ok(None)` = blob absent (Python `blob.generation is None`), `Err(msg)` =
-/// fetch failure (logged to stderr, caller falls back).
+/// the store could not be reached at all.
 pub type RegistryDownloader =
     Arc<dyn Fn() -> BoxFuture<'static, Result<Option<String>, String>> + Send + Sync>;
 
-/// Test seam replacing the production GCS download (loopback mocks).
+/// Test seam replacing the production download (loopback mocks).
 static REGISTRY_DOWNLOADER: LazyLock<Mutex<Option<RegistryDownloader>>> =
     LazyLock::new(|| Mutex::new(None));
 
-/// Install a downloader in place of the production GCS fetch (tests only —
+/// Install a downloader in place of the production fetch (tests only —
 /// `#[doc(hidden)]`, not part of the crate's operational surface). Pair with
-/// [`clear_registry_gcs_cache`] so a cached document never leaks across
+/// [`clear_registry_cache`] so a cached document never leaks across
 /// tests, and serialize via `testutil::GLOBAL_STATE_LOCK`.
 #[doc(hidden)]
 pub fn set_registry_downloader_for_testing(downloader: Option<RegistryDownloader>) {
-    *REGISTRY_DOWNLOADER.lock().expect("registry downloader lock") = downloader;
+    *REGISTRY_DOWNLOADER
+        .lock()
+        .expect("registry downloader lock") = downloader;
 }
 
-/// Drop the cached GCS registry so the next [`fetch_registry_gcs`] call
+/// Drop the cached registry so the next [`fetch_registry_remote`] call
 /// re-downloads. Dashboard policy writes call this immediately after a
 /// successful CAS; tests also use it to isolate downloader seams.
-pub fn clear_registry_gcs_cache() {
-    *GCS_CACHE.lock().expect("registry cache lock") = None;
+pub fn clear_registry_cache() {
+    *REGISTRY_CACHE.lock().expect("registry cache lock") = None;
 }
 
-/// Production download of [`GCS_REGISTRY_URI`] through the crate's
-/// [`crate::queue::GcsBackend`] (the GCS JSON API — never gsutil).
+/// Read/write handle on the canonical registry document, backend-aware.
+///
+/// NO Python original: Python pins every registry call site to GCS, which
+/// is exactly the failure this type removes. On the "gcs" backend the
+/// object is the bucket/blob of [`GCS_REGISTRY_URI`], reached through the
+/// crate's GCS JSON API (never gsutil) — byte-identical to the pinned code
+/// it replaces. On every other backend it is [`REGISTRY_BLOB`] in the
+/// store `config::wc_storage_backend()` selects, which is the same object
+/// `dashboard/policy.rs` compare-and-swaps the registry through.
+///
+/// Readers that only want the parsed document use
+/// [`fetch_registry_remote`]. This type is for the WRITE side and for
+/// readers that need generation fencing: `cli/registry.rs::push`,
+/// `cli/host.rs::weles_recordings_dir` and
+/// `providers::local::disk_cleanup::fetch_canonical_registry` all fenced
+/// against a hardcoded GCS bucket before, so on an Azure-only deployment
+/// they could not repair the very registry the coordinator's survival
+/// check reads.
+pub struct RegistryStore {
+    backend: Arc<dyn BlobBackend>,
+    blob: String,
+    location: String,
+}
+
+impl RegistryStore {
+    /// Bind to the store that holds the canonical registry.
+    pub async fn open() -> Result<Self, StorageError> {
+        if crate::config::wc_storage_backend() == "gcs" {
+            let uri = GCS_REGISTRY_URI
+                .strip_prefix("gs://")
+                .unwrap_or(GCS_REGISTRY_URI);
+            let (bucket, blob) = uri.split_once('/').unwrap_or((uri, REGISTRY_BLOB));
+            let backend = crate::queue::GcsBackend::new(bucket).await?;
+            return Ok(Self {
+                backend: Arc::new(backend),
+                blob: blob.to_string(),
+                location: GCS_REGISTRY_URI.to_string(),
+            });
+        }
+        let store = JobStorage::new().await?;
+        Ok(Self {
+            backend: Arc::clone(store.backend()),
+            blob: REGISTRY_BLOB.to_string(),
+            location: registry_location(),
+        })
+    }
+
+    /// Operator-facing location of the object this handle addresses, in
+    /// the spelling [`RegistryFetchError`] reports.
+    pub fn location(&self) -> &str {
+        &self.location
+    }
+
+    /// Registry text, or `None` when the object does not exist.
+    pub async fn read_text(&self) -> Result<Option<String>, StorageError> {
+        self.backend.download_text(&self.blob).await
+    }
+
+    /// Registry text plus the generation/ETag a compare-and-swap needs.
+    pub async fn read_versioned(&self) -> Result<Option<VersionedText>, StorageError> {
+        self.backend.download_text_versioned(&self.blob).await
+    }
+
+    /// Create the registry object; `false` when one already exists.
+    pub async fn create_if_absent(&self, content: &str) -> Result<bool, StorageError> {
+        self.backend
+            .upload_text_if_absent(&self.blob, content)
+            .await
+    }
+
+    /// Replace the registry iff its generation still matches; returns the
+    /// new generation.
+    pub async fn compare_and_swap(
+        &self,
+        expected_version: &str,
+        content: &str,
+    ) -> Result<String, StorageError> {
+        self.backend
+            .compare_and_swap_text(&self.blob, expected_version, content)
+            .await
+    }
+}
+
+/// Production download of the registry document through the store
+/// `WC_STORAGE_BACKEND` selects.
+///
+/// On "gcs" this stays pinned to [`GCS_REGISTRY_URI`]'s own bucket via the
+/// crate's [`crate::queue::GcsBackend`] (the GCS JSON API — never gsutil).
+/// Every other backend reads [`REGISTRY_BLOB`] from
+/// [`crate::queue::JobStorage`]: the same store the rest of the tick uses,
+/// and the same one `dashboard/policy.rs` compare-and-swaps the registry
+/// through. Python hardcodes GCS, so on an Azure-only deployment its
+/// readers sit on a dead object while the dashboard edits the live one.
 ///
 /// Python `_load_from_gcs` uses the GCS Python SDK for the same reason:
 /// earlier this shelled out to `gsutil cat`, and on systems with a broken
@@ -859,72 +1061,131 @@ pub fn clear_registry_gcs_cache() {
 /// workstation's gsutil broke after a pip upgrade and knocked the agent
 /// offline. The GCS SDK was already a hard dependency; using it directly
 /// removes the gsutil binary as a single point of failure.
-async fn download_registry_gcs() -> Result<Option<String>, String> {
-    let uri = GCS_REGISTRY_URI.strip_prefix("gs://").unwrap_or(GCS_REGISTRY_URI);
-    let (bucket, blob) = uri.split_once('/').unwrap_or((uri, "registry.json"));
-    let backend = crate::queue::GcsBackend::new(bucket).await.map_err(|exc| exc.to_string())?;
-    backend.download_text(blob).await.map_err(|exc| exc.to_string())
+async fn download_registry_blob() -> Result<Option<String>, String> {
+    // One seam for both directions: [`RegistryStore`] resolves the same
+    // object `cli/registry.rs::push` writes and `dashboard/policy.rs`
+    // compare-and-swaps, so a reader can never sit on a dead object while
+    // the writer edits a live one.
+    let store = RegistryStore::open().await.map_err(|exc| exc.to_string())?;
+    store.read_text().await.map_err(|exc| exc.to_string())
 }
 
 async fn download_registry() -> Result<Option<String>, String> {
-    let downloader = REGISTRY_DOWNLOADER.lock().expect("registry downloader lock").clone();
+    let downloader = REGISTRY_DOWNLOADER
+        .lock()
+        .expect("registry downloader lock")
+        .clone();
     match downloader {
         Some(downloader) => downloader().await,
-        None => download_registry_gcs().await,
+        None => download_registry_blob().await,
     }
 }
 
-/// Best-effort GCS fetch of the canonical registry (Python
-/// `_load_from_gcs`). Cached for [`GCS_REGISTRY_TTL_SEC`] seconds; failures
-/// log to stderr and return `None` so the caller falls back; only
-/// successful fetches are cached (Python retries on every call after a
-/// failure).
-pub async fn fetch_registry_gcs() -> Option<Registry> {
-    if let Some((ts, registry)) = &*GCS_CACHE.lock().expect("registry cache lock") {
+/// Why the canonical registry could not be READ — as distinct from a
+/// registry that WAS read and simply does not list a given entry.
+///
+/// The split is load-bearing. The coordinator's rogue-daemon kill switch
+/// (`coordinator::run`) exits the process when a registry it successfully
+/// read omits its entry, and must keep running when it could not read one
+/// at all. Collapsing both into an empty registry is what took the fleet
+/// down when the GCP billing account was closed: every GCS call started
+/// answering `accountDisabled`, and the kill switch fired fleet-wide
+/// against a registry nobody had touched.
+#[derive(Debug, thiserror::Error)]
+pub enum RegistryFetchError {
+    /// The store refused or failed the read (auth, network, disabled
+    /// billing account, ...). Says NOTHING about the registry's contents.
+    #[error("registry store unreachable ({location}): {detail}")]
+    Unreachable {
+        /// Where the read was attempted, per `registry_location`.
+        location: String,
+        /// The underlying store error.
+        detail: String,
+    },
+    /// The store answered, but holds no registry document. Just as
+    /// non-authoritative about any single entry: a container nobody has
+    /// seeded yet looks exactly like this, and the documented kill switch
+    /// is "operator removed the ENTRY", never "operator deleted the whole
+    /// registry".
+    #[error("no registry document at {location}")]
+    Absent {
+        /// Where the read was attempted, per `registry_location`.
+        location: String,
+    },
+    /// A document came back that is not a valid registry, so its contents
+    /// cannot be trusted to revoke anything.
+    #[error("invalid registry document at {location}: {source}")]
+    Invalid {
+        /// Where the document was read from, per `registry_location`.
+        location: String,
+        /// The parse failure.
+        source: RegistryError,
+    },
+}
+
+/// Operator-facing location of the registry document: the canonical `gs://`
+/// URI on the "gcs" backend, else `<backend>:<blob>` for whichever store
+/// `WC_STORAGE_BACKEND` selects. Public so the CLI reports the object it
+/// actually wrote instead of a hardcoded bucket
+/// (`cli/registry.rs::push`).
+pub fn registry_location() -> String {
+    match crate::config::wc_storage_backend() {
+        "gcs" => GCS_REGISTRY_URI.to_string(),
+        other => format!("{other}:{REGISTRY_BLOB}"),
+    }
+}
+
+/// Fetch the canonical registry from the configured store (Python
+/// `_load_from_gcs`, `source="gcs"`): the authority for fleet-survival
+/// decisions — the coordinator's rogue-daemon kill switch and host-health
+/// target resolution. Cached for [`GCS_REGISTRY_TTL_SEC`] seconds; only
+/// successful fetches are cached, so a failure is retried on the next call
+/// (Python parity).
+///
+/// Returns [`RegistryFetchError`] rather than an empty registry: a caller
+/// MUST NOT read "the store is unreachable" as "the entry is gone". There
+/// is still no local escape hatch here — the bundled file is reachable only
+/// through [`load_registry_auto`].
+pub async fn fetch_registry_remote() -> Result<Registry, RegistryFetchError> {
+    if let Some((ts, registry)) = &*REGISTRY_CACHE.lock().expect("registry cache lock") {
         if ts.elapsed() < Duration::from_secs(GCS_REGISTRY_TTL_SEC) {
-            return Some(registry.clone());
+            return Ok(registry.clone());
         }
     }
-    let fetched = fetch_registry_gcs_uncached().await;
-    if let Some(registry) = &fetched {
-        *GCS_CACHE.lock().expect("registry cache lock") = Some((Instant::now(), registry.clone()));
+    let fetched = fetch_registry_remote_uncached().await;
+    if let Ok(registry) = &fetched {
+        *REGISTRY_CACHE.lock().expect("registry cache lock") =
+            Some((Instant::now(), registry.clone()));
     }
     fetched
 }
 
-async fn fetch_registry_gcs_uncached() -> Option<Registry> {
+async fn fetch_registry_remote_uncached() -> Result<Registry, RegistryFetchError> {
+    let location = registry_location();
     match download_registry().await {
-        Ok(Some(text)) => match load_registry_from_str(&text) {
-            Ok(registry) => Some(registry),
-            Err(exc) => {
-                eprintln!("[_load_from_gcs] failed: {exc}");
-                None
-            }
-        },
+        // The `[_load_from_gcs]` prefix is Python's function name, kept
+        // verbatim so existing operator log greps still match.
+        Ok(Some(text)) => load_registry_from_str(&text).map_err(|source| {
+            eprintln!("[_load_from_gcs] failed: {source}");
+            RegistryFetchError::Invalid { location, source }
+        }),
         // Ok(None) = blob absent (Python `blob.generation is None`).
-        Ok(None) => None,
-        Err(exc) => {
-            eprintln!("[_load_from_gcs] failed: {exc}");
-            None
+        Ok(None) => Err(RegistryFetchError::Absent { location }),
+        Err(detail) => {
+            eprintln!("[_load_from_gcs] failed: {detail}");
+            Err(RegistryFetchError::Unreachable { location, detail })
         }
     }
 }
 
-/// The registry document, GCS first with the bundled file as fallback
-/// (Python `load_targets` / `load_coordinators` with `source="auto"`).
+/// The registry document, configured store first with the bundled file as
+/// fallback (Python `load_targets` / `load_coordinators` with
+/// `source="auto"`). Every [`RegistryFetchError`] falls back.
 pub async fn load_registry_auto() -> Result<Registry, RegistryError> {
-    match fetch_registry_gcs().await {
-        Some(registry) => Ok(registry),
-        None => load_bundled_registry(),
+    match fetch_registry_remote().await {
+        Ok(registry) => Ok(registry),
+        Err(_) => load_bundled_registry(),
     }
-}
-
-/// The GCS-hosted registry ONLY (Python `source="gcs"`): the canonical
-/// authority for fleet-survival decisions — the coordinator's rogue-daemon
-/// kill switch and host-health target resolution. A fetch failure yields an
-/// EMPTY registry; there is deliberately no local escape hatch.
-pub async fn load_registry_gcs() -> Registry {
-    fetch_registry_gcs().await.unwrap_or_default()
 }
 
 impl Registry {
@@ -958,7 +1219,12 @@ impl Registry {
         for target in &self.targets {
             let mut identities: HashSet<String> = HashSet::new();
             identities.insert(normalize_hostname(&target.name));
-            identities.extend(target.hostnames.iter().map(|alias| normalize_hostname(alias)));
+            identities.extend(
+                target
+                    .hostnames
+                    .iter()
+                    .map(|alias| normalize_hostname(alias)),
+            );
             if let Some(ssh) = &target.ssh {
                 identities.insert(ssh_hostname(ssh));
             }
@@ -1017,7 +1283,10 @@ mod tests {
                 "coordinators": [{"name": "c1", "custom": true}]}"#,
         )
         .unwrap();
-        assert_eq!(registry.targets[0].extra["future_field"], serde_json::json!({"x": 1}));
+        assert_eq!(
+            registry.targets[0].extra["future_field"],
+            serde_json::json!({"x": 1})
+        );
         assert_eq!(registry.coordinators[0].extra["custom"], Value::Bool(true));
         assert_eq!(registry.coordinators[0].runtime, "daemon");
     }
@@ -1057,12 +1326,20 @@ mod tests {
     fn lookup_self_matches_all_identity_forms() {
         let registry = load_bundled_registry().unwrap();
         assert_eq!(
-            registry.lookup_self("CHARLESS-MAC-MINI").unwrap().unwrap().name,
+            registry
+                .lookup_self("CHARLESS-MAC-MINI")
+                .unwrap()
+                .unwrap()
+                .name,
             "control-host"
         );
         // Explicit hostname alias.
         assert_eq!(
-            registry.lookup_self("control-host.local").unwrap().unwrap().name,
+            registry
+                .lookup_self("control-host.local")
+                .unwrap()
+                .unwrap()
+                .name,
             "control-host"
         );
         // Host part of a legacy SSH destination.
@@ -1112,7 +1389,11 @@ mod tests {
                          "weles": {"enabled": true, "actions": ["*", "run"]}}],
         }))
         .unwrap_err();
-        assert!(err.0.contains("wildcard '*' must be the only action"), "{}", err.0);
+        assert!(
+            err.0.contains("wildcard '*' must be the only action"),
+            "{}",
+            err.0
+        );
 
         // Colliding host identities across targets are rejected.
         let err = validate_registry(&serde_json::json!({
@@ -1136,7 +1417,11 @@ mod tests {
             }}],
         }))
         .unwrap_err();
-        assert!(err.0.contains("must be greater than low_free_gb"), "{}", err.0);
+        assert!(
+            err.0.contains("must be greater than low_free_gb"),
+            "{}",
+            err.0
+        );
     }
 
     #[test]
@@ -1179,7 +1464,7 @@ mod tests {
         );
     }
 
-    // ---- GCS fetch (loopback mock; serialized via GLOBAL_STATE_LOCK) ----
+    // ---- registry fetch (loopback mock; serialized via GLOBAL_STATE_LOCK) ----
 
     /// Install `downloader`, clear the TTL cache, run `f`, restore.
     async fn with_downloader<F, T>(downloader: RegistryDownloader, f: F) -> T
@@ -1188,18 +1473,19 @@ mod tests {
     {
         let _guard = crate::testutil::GLOBAL_STATE_LOCK.lock().await;
         set_registry_downloader_for_testing(Some(downloader));
-        clear_registry_gcs_cache();
+        clear_registry_cache();
         let out = f.await;
         set_registry_downloader_for_testing(None);
-        clear_registry_gcs_cache();
+        clear_registry_cache();
         out
     }
 
     #[tokio::test]
-    async fn gcs_fetch_serves_loopback_mock_and_caches_within_ttl() {
+    async fn remote_fetch_serves_loopback_mock_and_caches_within_ttl() {
         let body = r#"{"targets": [{"name": "box1", "kind": "local"}],
                         "coordinators": [{"name": "c1", "active": true}]}"#;
-        let mock = crate::testutil::mock_http(vec![crate::testutil::http_response(200, "OK", body)]).await;
+        let mock =
+            crate::testutil::mock_http(vec![crate::testutil::http_response(200, "OK", body)]).await;
         let requests = Arc::clone(&mock.requests);
         let base_url = mock.base_url.clone();
         with_downloader(
@@ -1221,23 +1507,27 @@ mod tests {
             async {
                 // First call downloads through the loopback mock; the
                 // second call within the 30 s TTL must NOT re-download.
-                let first = fetch_registry_gcs().await.expect("fetch succeeds");
-                let second = fetch_registry_gcs().await.expect("fetch succeeds");
+                let first = fetch_registry_remote().await.expect("fetch succeeds");
+                let second = fetch_registry_remote().await.expect("fetch succeeds");
                 assert_eq!(first, second);
                 assert_eq!(first.targets[0].name, "box1");
                 assert_eq!(first.coordinators[0].name, "c1");
-                // load_registry_auto / load_registry_gcs share the cache.
+                // load_registry_auto shares the cache with the direct fetch.
                 assert_eq!(load_registry_auto().await.unwrap(), first);
-                assert_eq!(load_registry_gcs().await, first);
+                assert_eq!(fetch_registry_remote().await.unwrap(), first);
             },
         )
         .await;
-        assert_eq!(requests.lock().unwrap().len(), 1, "TTL cache hit must not re-fetch");
+        assert_eq!(
+            requests.lock().unwrap().len(),
+            1,
+            "TTL cache hit must not re-fetch"
+        );
         mock.stop();
     }
 
     #[tokio::test]
-    async fn gcs_failure_falls_back_for_auto_and_empties_for_gcs_only() {
+    async fn unreadable_registry_falls_back_for_auto_but_errors_for_survival() {
         with_downloader(
             Arc::new(|| {
                 Box::pin(async { Err("mock GCS outage".to_string()) })
@@ -1247,8 +1537,12 @@ mod tests {
                 // source="auto": GCS failure falls back to the bundled file.
                 let auto = load_registry_auto().await.unwrap();
                 assert_eq!(auto.targets.len(), 4);
-                // source="gcs": no escape hatch — empty registry.
-                assert!(load_registry_gcs().await.targets.is_empty());
+                // The fleet-survival path must see the FAILURE, never an
+                // empty registry: "unreachable" is not "you were revoked".
+                assert!(matches!(
+                    fetch_registry_remote().await,
+                    Err(RegistryFetchError::Unreachable { .. })
+                ));
             },
         )
         .await;
@@ -1257,25 +1551,32 @@ mod tests {
                 Box::pin(async { Ok(None) }) as BoxFuture<'static, Result<Option<String>, String>>
             }),
             async {
-                // Absent blob (Python `blob.generation is None`): same
-                // fallback/empty split.
+                // Absent blob (Python `blob.generation is None`): a store
+                // holding no registry document is equally non-authoritative
+                // — an un-seeded Azure container looks exactly like this.
                 let auto = load_registry_auto().await.unwrap();
                 assert_eq!(auto.targets.len(), 4);
-                assert!(load_registry_gcs().await.targets.is_empty());
+                assert!(matches!(
+                    fetch_registry_remote().await,
+                    Err(RegistryFetchError::Absent { .. })
+                ));
             },
         )
         .await;
     }
 
     #[tokio::test]
-    async fn gcs_invalid_json_is_a_fetch_failure_not_a_crash() {
+    async fn invalid_json_is_a_fetch_failure_not_a_crash() {
         with_downloader(
             Arc::new(|| {
                 Box::pin(async { Ok(Some("{broken".to_string())) })
                     as BoxFuture<'static, Result<Option<String>, String>>
             }),
             async {
-                assert!(fetch_registry_gcs().await.is_none());
+                assert!(matches!(
+                    fetch_registry_remote().await,
+                    Err(RegistryFetchError::Invalid { .. })
+                ));
                 assert_eq!(load_registry_auto().await.unwrap().targets.len(), 4);
             },
         )

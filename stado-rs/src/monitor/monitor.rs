@@ -60,7 +60,10 @@ fn py_str_list(items: &[String]) -> String {
 /// Python `list(dict.fromkeys(items))`: dedup preserving first-seen order.
 fn dedup_preserve_order(items: Vec<String>) -> Vec<String> {
     let mut seen = HashSet::new();
-    items.into_iter().filter(|i| seen.insert(i.clone())).collect()
+    items
+        .into_iter()
+        .filter(|i| seen.insert(i.clone()))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -102,12 +105,16 @@ async fn safe_delete_vm_by_hostname(
                 }
             }
             Err(e) => {
-                log(&format!("safe_delete: fresh list failed for {hostname}: {e:?}"));
+                log(&format!(
+                    "safe_delete: fresh list failed for {hostname}: {e:?}"
+                ));
                 return false;
             }
         }
     }
-    let Some(full_ref) = full_ref else { return false };
+    let Some(full_ref) = full_ref else {
+        return false;
+    };
     match provider.delete_instance(&full_ref).await {
         Ok(()) => {
             log(&format!("safe_delete: killed ghost VM {full_ref}"));
@@ -139,7 +146,10 @@ async fn requeue(store: &JobStorage, job: &mut Job, reason: &str) -> Result<(), 
     job.last_restart = Some(isoformat_utc(Utc::now()));
     store.move_job(job, "running", "queue").await?;
     store.cleanup_status(&job.job_id).await?;
-    log(&format!("{}: requeued ({reason}, restart {})", job.job_id, job.restarts));
+    log(&format!(
+        "{}: requeued ({reason}, restart {})",
+        job.job_id, job.restarts
+    ));
     Ok(())
 }
 
@@ -211,10 +221,16 @@ async fn safety_is_real_race(
         .collect();
     let now = Utc::now();
     for jid in jids {
-        let Some(job) = running.get(jid) else { continue };
-        let Some(sa) = job.started_at.as_deref().filter(|s| !s.is_empty()) else { continue };
+        let Some(job) = running.get(jid) else {
+            continue;
+        };
+        let Some(sa) = job.started_at.as_deref().filter(|s| !s.is_empty()) else {
+            continue;
+        };
         // Python: except (ValueError, TypeError) -> continue.
-        let Some(started) = hg::parse_iso_lenient(sa) else { continue };
+        let Some(started) = hg::parse_iso_lenient(sa) else {
+            continue;
+        };
         if elapsed_seconds(now, started) < 1800.0 {
             return Ok(true); // just dispatched, no heartbeat yet (real race)
         }
@@ -239,7 +255,9 @@ async fn requeue_jids_after_reap(
         .map(|j| (j.job_id.clone(), j))
         .collect();
     for jid in jids {
-        let Some(job) = running.get(jid).cloned() else { continue };
+        let Some(job) = running.get(jid).cloned() else {
+            continue;
+        };
         let mut job = job;
         requeue(store, &mut job, reason).await?;
     }
@@ -263,7 +281,10 @@ async fn requeue_preempted(
     job.last_restart = Some(isoformat_utc(Utc::now()));
     store.move_job(job, "running", "queue").await?;
     store.cleanup_status(&job.job_id).await?;
-    log(&format!("{}: requeued ({reason}, preempts={})", job.job_id, job.preempt_count));
+    log(&format!(
+        "{}: requeued ({reason}, preempts={})",
+        job.job_id, job.preempt_count
+    ));
     Ok(())
 }
 
@@ -408,9 +429,7 @@ pub async fn check_running_jobs(
                                 .list_running_instance_refs_with_age()
                                 .await?
                                 .into_iter()
-                                .map(|(r, _age)| {
-                                    (r.split('@').next().unwrap_or("").to_string(), r)
-                                })
+                                .map(|(r, _age)| (r.split('@').next().unwrap_or("").to_string(), r))
                                 .collect(),
                         );
                     }
@@ -419,30 +438,18 @@ pub async fn check_running_jobs(
                         // fresh job heartbeat = VM+agent+training alive;
                         // aggregated_list missed a transient non-RUNNING
                         // (STAGING/REPAIRING/live-migration) snapshot
-                        if hg::any_job_heartbeat_fresh(
-                            store,
-                            std::slice::from_ref(&job_id),
-                            1800.0,
-                        )
-                        .await
+                        if hg::any_job_heartbeat_fresh(store, std::slice::from_ref(&job_id), 1800.0)
+                            .await
                         {
                             continue;
                         }
                         safe_delete_vm_by_hostname(provider, hostname, cache).await;
                         if job.preemptible {
-                            requeue_preempted(
-                                store,
-                                &mut job,
-                                "Spot preempted (cloud agent gone)",
-                            )
-                            .await?;
+                            requeue_preempted(store, &mut job, "Spot preempted (cloud agent gone)")
+                                .await?;
                         } else {
-                            requeue(
-                                store,
-                                &mut job,
-                                "VM gone (cloud agent missing from fleet)",
-                            )
-                            .await?;
+                            requeue(store, &mut job, "VM gone (cloud agent missing from fleet)")
+                                .await?;
                         }
                         continue;
                     }
@@ -460,8 +467,12 @@ pub async fn check_running_jobs(
             } else if !alive {
                 // Python f-string renders a None lifecycle as "None".
                 let lifecycle_str = lifecycle.as_deref().unwrap_or("None");
-                requeue(store, &mut job, &format!("instance gone (lifecycle={lifecycle_str})"))
-                    .await?;
+                requeue(
+                    store,
+                    &mut job,
+                    &format!("instance gone (lifecycle={lifecycle_str})"),
+                )
+                .await?;
                 provider.delete_instance(&instance_ref).await?;
             }
         }
@@ -508,13 +519,14 @@ pub async fn reap_dead_agents(
     // ricocheting dispatch<->reap, confirmed 2026-05-15 02:24Z).
     const BOOT_GRACE_SECONDS: f64 = 1800.0;
     const IDLE_GRACE_SECONDS: f64 = 1800.0; // half-window grace for first completion
-    // Build the completed-refs set ONLY if any VM is old enough to need it.
-    // Iterating completed/ at fleet scale (~11k blobs) blows the 60s tick
-    // budget every time, returning 504 and pausing Cloud Scheduler. Cheap
-    // short-circuit: if no VM has crossed IDLE_GRACE_SECONDS, branch B
-    // cannot fire anyway.
-    let needs_completions_scan =
-        refs.iter().any(|(_, age_seconds)| *age_seconds > IDLE_GRACE_SECONDS);
+                                            // Build the completed-refs set ONLY if any VM is old enough to need it.
+                                            // Iterating completed/ at fleet scale (~11k blobs) blows the 60s tick
+                                            // budget every time, returning 504 and pausing Cloud Scheduler. Cheap
+                                            // short-circuit: if no VM has crossed IDLE_GRACE_SECONDS, branch B
+                                            // cannot fire anyway.
+    let needs_completions_scan = refs
+        .iter()
+        .any(|(_, age_seconds)| *age_seconds > IDLE_GRACE_SECONDS);
     let completed_refs = if needs_completions_scan {
         instance_refs_with_completions(store, kind).await?
     } else {
@@ -554,7 +566,10 @@ pub async fn reap_dead_agents(
             if age_seconds < BOOT_GRACE_SECONDS {
                 continue; // still installing, give it time
             }
-            let mut jids = ref_to_jids.get(&instance_ref_full).cloned().unwrap_or_default();
+            let mut jids = ref_to_jids
+                .get(&instance_ref_full)
+                .cloned()
+                .unwrap_or_default();
             jids.extend(ref_to_jids.get(&instance_ref).cloned().unwrap_or_default());
             if hg::any_job_heartbeat_fresh(store, &jids, HB_THRESHOLD).await
                 || hg::any_job_checkpoint_fresh_jids(store, &jids, 5400.0).await
@@ -602,7 +617,10 @@ pub async fn reap_dead_agents(
             // thread) was reaped here as "never-worked" at
             // 2026-05-15T23:14:01 (restart 8). A fresh job heartbeat is
             // proof the VM is productive — never reap.
-            let mut jids_b = ref_to_jids.get(&instance_ref_full).cloned().unwrap_or_default();
+            let mut jids_b = ref_to_jids
+                .get(&instance_ref_full)
+                .cloned()
+                .unwrap_or_default();
             jids_b.extend(ref_to_jids.get(&instance_ref).cloned().unwrap_or_default());
             if hg::any_job_heartbeat_fresh(store, &jids_b, HB_THRESHOLD).await
                 || hg::any_job_checkpoint_fresh_jids(store, &jids_b, 5400.0).await
@@ -645,8 +663,10 @@ pub async fn reap_dead_agents(
             .get("free_vram_gb")
             .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)))
             .unwrap_or(0);
-        let free_slots_empty =
-            payload.get("free_slots").and_then(Value::as_object).is_none_or(|o| o.is_empty());
+        let free_slots_empty = payload
+            .get("free_slots")
+            .and_then(Value::as_object)
+            .is_none_or(|o| o.is_empty());
         if free_vram_gb <= 0 && free_slots_empty {
             let diag = payload.get("diag").and_then(Value::as_object);
             let last = diag
@@ -670,7 +690,10 @@ pub async fn reap_dead_agents(
                 continue;
             }
             let last_str = last.unwrap_or("");
-            let mut jids_c = ref_to_jids.get(&instance_ref_full).cloned().unwrap_or_default();
+            let mut jids_c = ref_to_jids
+                .get(&instance_ref_full)
+                .cloned()
+                .unwrap_or_default();
             jids_c.extend(ref_to_jids.get(&instance_ref).cloned().unwrap_or_default());
             if hg::any_job_heartbeat_fresh(store, &jids_c, HB_THRESHOLD).await
                 || hg::any_job_checkpoint_fresh_jids(store, &jids_c, 5400.0).await
@@ -799,8 +822,14 @@ mod tests {
         let provider = FakeProvider::new();
         let job = running_job("j1", "vm1@zone-a");
         store.write_job("running", &job).await.unwrap();
-        store.upload_text("status/j1/status", "COMPLETED").await.unwrap();
-        store.upload_text("status/j1/heartbeat", "RUNNING 2026-05-13T00:26:33Z").await.unwrap();
+        store
+            .upload_text("status/j1/status", "COMPLETED")
+            .await
+            .unwrap();
+        store
+            .upload_text("status/j1/heartbeat", "RUNNING 2026-05-13T00:26:33Z")
+            .await
+            .unwrap();
 
         check_running_jobs(&store, &provider).await.unwrap();
 
@@ -818,7 +847,10 @@ mod tests {
         let provider = FakeProvider::new();
         let job = running_job("j2", "vm2@zone-a");
         store.write_job("running", &job).await.unwrap();
-        store.upload_text("status/j2/status", "FAILED exit 1").await.unwrap();
+        store
+            .upload_text("status/j2/status", "FAILED exit 1")
+            .await
+            .unwrap();
 
         check_running_jobs(&store, &provider).await.unwrap();
 
@@ -835,7 +867,9 @@ mod tests {
         let (_dir, store) = store();
         let mut provider = FakeProvider::new();
         provider.exists.insert("vm3@zone-a".into(), false);
-        provider.lifecycle.insert("vm3@zone-a".into(), Some("TERMINATED".into()));
+        provider
+            .lifecycle
+            .insert("vm3@zone-a".into(), Some("TERMINATED".into()));
         let job = running_job("j3", "vm3@zone-a");
         store.write_job("running", &job).await.unwrap();
 
@@ -855,7 +889,9 @@ mod tests {
         let (_dir, store) = store();
         let mut provider = FakeProvider::new();
         provider.exists.insert("vm4@zone-a".into(), false);
-        provider.lifecycle.insert("vm4@zone-a".into(), Some("TERMINATED".into()));
+        provider
+            .lifecycle
+            .insert("vm4@zone-a".into(), Some("TERMINATED".into()));
         let mut job = running_job("j4", "vm4@zone-a");
         job.preemptible = true;
         store.write_job("running", &job).await.unwrap();
@@ -875,7 +911,9 @@ mod tests {
         let (_dir, store) = store();
         let mut provider = FakeProvider::new();
         provider.exists.insert("vm5@zone-a".into(), false);
-        provider.lifecycle.insert("vm5@zone-a".into(), Some("TERMINATED".into()));
+        provider
+            .lifecycle
+            .insert("vm5@zone-a".into(), Some("TERMINATED".into()));
         let mut job = running_job("j5", "vm5@zone-a");
         job.restarts = 2;
         job.max_restarts = 2;
@@ -885,7 +923,11 @@ mod tests {
 
         let failed = store.read_job("failed", "j5").await.unwrap().unwrap();
         assert_eq!(failed.state, job_state::FAILED);
-        assert!(failed.error.as_deref().unwrap().contains("Exceeded 2 restarts"));
+        assert!(failed
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("Exceeded 2 restarts"));
         assert!(store.read_job("queue", "j5").await.unwrap().is_none());
     }
 
@@ -961,7 +1003,10 @@ mod tests {
         let job = running_job("jb", "wisent-agent-x2@zone-a");
         store.write_job("running", &job).await.unwrap();
         store
-            .upload_text("status/jb/heartbeat", &format!("RUNNING {}", Utc::now().to_rfc3339()))
+            .upload_text(
+                "status/jb/heartbeat",
+                &format!("RUNNING {}", Utc::now().to_rfc3339()),
+            )
             .await
             .unwrap();
 

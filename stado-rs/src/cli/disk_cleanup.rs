@@ -7,6 +7,12 @@
 //! `install_local(SimpleNamespace(name="disk-cleanup"), "disk-cleanup",
 //! False, click.echo)`, including the guard that never puts the HF write
 //! token into the disk-cleanup unit env.
+//!
+//! DEVIATION from Python: `--dry-run` has no Python original. It runs
+//! [`crate::providers::local::disk_cleanup::preview_cleanup_once`] instead
+//! of `run_cleanup_once`, and exists so `stado host cleanup TARGET
+//! --dry-run` has something to invoke on the host it is previewing —
+//! see [`crate::deploy::host_cleanup`].
 
 use std::time::Duration;
 
@@ -16,13 +22,27 @@ use super::CmdError;
 use crate::providers::local::disk_cleanup;
 
 /// `disk-cleanup` command body (Python `disk_cleanup`).
-pub async fn run(once: bool, watch: bool) -> Result<(), CmdError> {
+pub async fn run(once: bool, watch: bool, dry_run: bool) -> Result<(), CmdError> {
     if once && watch {
-        // click.UsageError: message on stderr, exit code 2.
-        return Err(CmdError {
-            message: Some("--once and --watch are mutually exclusive".to_string()),
-            code: 2,
-        });
+        return Err(CmdError::usage("--once and --watch are mutually exclusive"));
+    }
+    if dry_run && watch {
+        // A preview is a single planning pass; there is nothing for a
+        // watch loop to observe, and repeating it would just take the
+        // exclusive cleanup lock over and over.
+        return Err(CmdError::usage(
+            "--dry-run and --watch are mutually exclusive",
+        ));
+    }
+    if dry_run {
+        // The janitor's OWN planning phase: same canonical policy, same
+        // lock, same scanners, with an `enforce` policy pinned to its
+        // `report` mode and no state written. `stado host cleanup TARGET
+        // --dry-run` (`deploy::host_cleanup`) runs exactly this over ssh
+        // on the host being previewed.
+        let report = disk_cleanup::preview_cleanup_once(&mut |_message| {}).await;
+        println!("{}", disk_cleanup::canonical_json(&report));
+        return Ok(());
     }
     loop {
         let report = disk_cleanup::run_cleanup_once(0, false, &mut |_message| {}).await;
@@ -63,8 +83,11 @@ mod tests {
 
     #[tokio::test]
     async fn once_and_watch_are_mutually_exclusive() {
-        let err = run(true, true).await.unwrap_err();
-        assert_eq!(err.message.as_deref(), Some("--once and --watch are mutually exclusive"));
+        let err = run(true, true, false).await.unwrap_err();
+        assert_eq!(
+            err.message.as_deref(),
+            Some("--once and --watch are mutually exclusive")
+        );
         assert_eq!(err.code, 2);
     }
 }

@@ -29,7 +29,6 @@ use std::time::{Instant, SystemTime};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
-use crate::queue::BlobBackend;
 use crate::targets::{self, ComputeTarget, DiskCleanupPolicy};
 
 pub(crate) const GIB: i64 = 1024 * 1024 * 1024;
@@ -45,6 +44,20 @@ const STATE_NAME: &str = "disk-cleanup-state.json";
 const DEADLINE_SECONDS: f64 = 30.0;
 /// Python `_MAX_ERRORS`.
 const MAX_ERRORS: usize = 16;
+
+/// The janitor's state file relative to `$HOME` — `_STATE_DIR` joined with
+/// `_STATE_NAME` in the Python original.
+///
+/// Exported because [`crate::deploy::host_disk`] reports the cleanup state
+/// of a host it is not running on, and has to name the exact file
+/// [`ensure_state_dir`] and `write_state` maintain. A second copy of that
+/// path living in the deploy layer would be one rename away from silently
+/// reporting "never ran" for a host that runs cleanly every minute.
+pub fn state_relative_path() -> String {
+    let mut parts: Vec<&str> = STATE_DIR_PARTS.to_vec();
+    parts.push(STATE_NAME);
+    parts.join("/")
+}
 
 /// `st_mode & S_IFMT` (Python `stat.S_IFMT`); the mask value is identical
 /// on every Unix the port targets.
@@ -70,19 +83,34 @@ pub struct JanitorError {
 
 impl JanitorError {
     pub fn os(message: &str) -> Self {
-        Self { code: "OSError", message: message.to_string() }
+        Self {
+            code: "OSError",
+            message: message.to_string(),
+        }
     }
     pub fn timeout(message: &str) -> Self {
-        Self { code: "TimeoutError", message: message.to_string() }
+        Self {
+            code: "TimeoutError",
+            message: message.to_string(),
+        }
     }
     pub fn blocking(message: &str) -> Self {
-        Self { code: "BlockingIOError", message: message.to_string() }
+        Self {
+            code: "BlockingIOError",
+            message: message.to_string(),
+        }
     }
     pub fn lookup(message: &str) -> Self {
-        Self { code: "LookupError", message: message.to_string() }
+        Self {
+            code: "LookupError",
+            message: message.to_string(),
+        }
     }
     pub fn value(message: &str) -> Self {
-        Self { code: "ValueError", message: message.to_string() }
+        Self {
+            code: "ValueError",
+            message: message.to_string(),
+        }
     }
     /// Python `_error_code`: bounded diagnostics without paths, values,
     /// or credentials.
@@ -108,13 +136,19 @@ impl From<io::Error> for JanitorError {
             io::ErrorKind::WouldBlock => "BlockingIOError",
             _ => "OSError",
         };
-        Self { code, message: exc.to_string() }
+        Self {
+            code,
+            message: exc.to_string(),
+        }
     }
 }
 
 impl From<serde_json::Error> for JanitorError {
     fn from(exc: serde_json::Error) -> Self {
-        Self { code: "ValueError", message: exc.to_string() }
+        Self {
+            code: "ValueError",
+            message: exc.to_string(),
+        }
     }
 }
 
@@ -122,7 +156,10 @@ impl From<crate::queue::StorageError> for JanitorError {
     fn from(exc: crate::queue::StorageError) -> Self {
         // The Python fetches via the GCS SDK and lets its exceptions
         // propagate; the report records only the (bounded) type name.
-        Self { code: "OSError", message: exc.to_string() }
+        Self {
+            code: "OSError",
+            message: exc.to_string(),
+        }
     }
 }
 
@@ -452,13 +489,19 @@ pub fn acquire_workload_lock() -> Result<Option<WorkloadLock>, JanitorError> {
 /// would also release the flock, so the Drop below is the backstop).
 pub fn release_workload_lock(lock: WorkloadLock, log_fn: &mut dyn FnMut(&str)) {
     if let Err(exc) = fs2::FileExt::unlock(&lock.file) {
-        log_fn(&format!("disk cleanup workload lock release failed: {}", io_code(&exc)));
+        log_fn(&format!(
+            "disk cleanup workload lock release failed: {}",
+            io_code(&exc)
+        ));
     }
 }
 
 /// Map an io error to the Python `type(exc).__name__` style the agent logs.
 fn io_code(exc: &io::Error) -> &'static str {
-    JanitorError::from(io::Error::from_raw_os_error(exc.raw_os_error().unwrap_or(0))).code
+    JanitorError::from(io::Error::from_raw_os_error(
+        exc.raw_os_error().unwrap_or(0),
+    ))
+    .code
 }
 
 // ---------------------------------------------------------------------------
@@ -484,7 +527,11 @@ fn read_state(state_dir: &Path) -> Result<Value, JanitorError> {
     let mut text = String::new();
     (&file).read_to_string(&mut text)?;
     let value: Value = serde_json::from_str(&text)?;
-    Ok(if value.is_object() { value } else { Value::Object(Map::new()) })
+    Ok(if value.is_object() {
+        value
+    } else {
+        Value::Object(Map::new())
+    })
 }
 
 /// Python `_write_state`: lstat the destination (refuse symlink / foreign
@@ -494,7 +541,8 @@ fn write_state(state_dir: &Path, report: &Value, attempted_at: f64) -> Result<()
     let destination = state_dir.join(STATE_NAME);
     match std::fs::symlink_metadata(&destination) {
         Ok(existing) => {
-            if existing.file_type().is_symlink() || !existing.is_file() || existing.uid() != euid() {
+            if existing.file_type().is_symlink() || !existing.is_file() || existing.uid() != euid()
+            {
                 return Err(JanitorError::os("unsafe cleanup state"));
             }
         }
@@ -626,7 +674,12 @@ fn parse_isoformat(text: &str) -> Option<String> {
         }
         return Some(dt.format("%Y-%m-%dT%H:%M:%S%.6f%:z").to_string());
     }
-    for fmt in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"] {
+    for fmt in [
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%d %H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+    ] {
         if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(text, fmt) {
             let micros = dt.and_utc().timestamp_subsec_micros();
             if micros == 0 {
@@ -700,7 +753,9 @@ pub fn sanitize_report(value: &Value, lock_busy: bool) -> Value {
 /// Python's `area, sep, code = item.partition(":")` + the alnum checks
 /// (underscore-stripped; empty remainder is not alnum).
 fn is_safe_error(item: &str) -> bool {
-    let Some((area, code)) = item.split_once(':') else { return false };
+    let Some((area, code)) = item.split_once(':') else {
+        return false;
+    };
     let alnum = |s: &str| {
         let stripped: String = s.chars().filter(|c| *c != '_').collect();
         !stripped.is_empty() && stripped.chars().all(char::is_alphanumeric)
@@ -767,7 +822,9 @@ pub fn fixed_root(
             return Err(JanitorError::os("unsafe cleaner root"));
         }
         if info.uid() != euid() || info.dev() != home_device {
-            return Err(JanitorError::os("cleaner root ownership or device mismatch"));
+            return Err(JanitorError::os(
+                "cleaner root ownership or device mismatch",
+            ));
         }
     }
     let resolved = std::fs::canonicalize(&current)?;
@@ -779,9 +836,8 @@ pub fn fixed_root(
 
 /// Python `_free_bytes` (`shutil.disk_usage(home).free`).
 pub fn free_bytes(home: &Path) -> Result<i64, JanitorError> {
-    let stat = nix::sys::statvfs::statvfs(home).map_err(|e| {
-        JanitorError::from(io::Error::from_raw_os_error(e as i32))
-    })?;
+    let stat = nix::sys::statvfs::statvfs(home)
+        .map_err(|e| JanitorError::from(io::Error::from_raw_os_error(e as i32)))?;
     Ok((stat.blocks_available() as i64) * (stat.fragment_size() as i64))
 }
 
@@ -791,17 +847,19 @@ pub fn free_bytes(home: &Path) -> Result<i64, JanitorError> {
 
 /// Python `_fetch_canonical_registry`: fetch the canonical object
 /// directly; destructive checks never use fallback/cache. Generation-
-/// pinned via the GCS backend's versioned read (reload + pinned download,
-/// with the same 412-retry the Python SDK path relies on).
+/// pinned via the store's versioned read (reload + pinned download, with
+/// the same 412-retry the Python SDK path relies on).
+///
+/// DEVIATION from Python, matching `targets::download_registry_blob`: the
+/// object is resolved by [`targets::RegistryStore`] instead of a
+/// hardcoded GCS bucket. Pinned to GCS, the cleaner failed closed on an
+/// Azure-only deployment — it could not read the policy that authorizes
+/// deletion even though the dashboard was writing that policy to the
+/// configured store. The "gcs" path is byte-identical.
 async fn fetch_canonical_registry() -> Result<Value, JanitorError> {
-    let uri = targets::GCS_REGISTRY_URI;
-    let remainder = uri.strip_prefix("gs://").unwrap_or(uri);
-    let (bucket_name, blob_name) = remainder
-        .split_once('/')
-        .ok_or_else(|| JanitorError::value("canonical registry URI malformed"))?;
-    let backend = crate::queue::GcsBackend::new(bucket_name).await?;
-    let text = backend
-        .download_text_versioned(blob_name)
+    let store = targets::RegistryStore::open().await?;
+    let text = store
+        .read_versioned()
         .await?
         .ok_or_else(|| JanitorError::os("canonical registry generation unavailable"))?;
     let value: Value = serde_json::from_str(&text.content)?;
@@ -840,8 +898,7 @@ pub fn resolve_canonical_policy(
     data: &Value,
     hostname: &str,
 ) -> Result<(ComputeTarget, DiskCleanupPolicy, String), JanitorError> {
-    targets::validate_registry(data)
-        .map_err(|exc| JanitorError::value(&exc.to_string()))?;
+    targets::validate_registry(data).map_err(|exc| JanitorError::value(&exc.to_string()))?;
     let identity = targets::normalize_hostname(hostname);
     let targets_arr = data
         .get("targets")
@@ -853,12 +910,16 @@ pub fn resolve_canonical_policy(
         .filter(|raw| raw_identities(raw).contains(&identity))
         .collect();
     if matches.len() != 1 {
-        return Err(JanitorError::lookup("canonical host identity did not match uniquely"));
+        return Err(JanitorError::lookup(
+            "canonical host identity did not match uniquely",
+        ));
     }
     let raw = matches[0];
     if raw.get("kind").and_then(Value::as_str) != Some("local") || !raw.contains_key("disk_cleanup")
     {
-        return Err(JanitorError::lookup("matched target has no local cleanup policy"));
+        return Err(JanitorError::lookup(
+            "matched target has no local cleanup policy",
+        ));
     }
     let target: ComputeTarget = serde_json::from_value(Value::Object(raw.clone()))
         .map_err(|_| JanitorError::lookup("cleanup policy could not be parsed"))?;
@@ -882,7 +943,10 @@ pub struct ScanBudget {
 
 impl ScanBudget {
     pub fn new(max_scan_items: i64, deadline: Instant) -> Self {
-        Self { remaining: max_scan_items, deadline }
+        Self {
+            remaining: max_scan_items,
+            deadline,
+        }
     }
 
     /// Python `_hf_tick`.
@@ -948,17 +1012,45 @@ fn run_with_lock(
     started: Instant,
     attempted_at: f64,
     force: bool,
+    // Plan only: pin an `enforce` policy down to the janitor's own
+    // `report` mode for this pass, and persist nothing. See
+    // `preview_cleanup_once`.
+    preview: bool,
     log_fn: &mut dyn FnMut(&str),
 ) -> Value {
-    let (target, policy, digest) = match registry.and_then(|data| {
-        resolve_canonical_policy(&data, &report.hostname)
-    }) {
-        Ok(value) => value,
-        Err(exc) => {
-            report.add_error("policy", &exc);
-            return finish(report, started, Some(home), Some(state_dir), attempted_at, log_fn);
-        }
-    };
+    // A preview leaves no trace. The state file is the janitor's record of
+    // REAL passes: writing it would advance `last_attempt_at`, so an
+    // operator asking what a cleanup WOULD delete would have silently
+    // delayed the cleanup that does.
+    let persist = if preview { None } else { Some(state_dir) };
+    let (target, mut policy, digest) =
+        match registry.and_then(|data| resolve_canonical_policy(&data, &report.hostname)) {
+            Ok(value) => value,
+            Err(exc) => {
+                report.add_error("policy", &exc);
+                return finish(
+                    report,
+                    started,
+                    Some(home),
+                    persist,
+                    attempted_at,
+                    log_fn,
+                );
+            }
+        };
+    // `enforce` is the only mode that deletes. The janitor's own `report`
+    // mode walks the identical scan and counts every eligible item without
+    // unlinking one — `hf::run_hf` and `weles::scan_weles` both return
+    // before their removal step whenever the mode is not `"enforce"` — so
+    // a preview is this pass with that one word changed, not a second
+    // implementation of the policy.
+    //
+    // `off` and `report` policies are left exactly as the registry states
+    // them: a cleanup that is switched off would delete nothing, and the
+    // preview has to say so rather than pretend the host is armed.
+    if preview && policy.mode == "enforce" {
+        policy.mode = "report".to_string();
+    }
     report.target_name = Some(target.name);
     report.policy_digest = Some(digest.clone());
     report.mode = Some(policy.mode.clone());
@@ -970,7 +1062,14 @@ fn run_with_lock(
         Ok(value) => value,
         Err(exc) => {
             report.add_error("state_read", &exc);
-            return finish(report, started, Some(home), Some(state_dir), attempted_at, log_fn);
+            return finish(
+                report,
+                started,
+                Some(home),
+                persist,
+                attempted_at,
+                log_fn,
+            );
         }
     };
     let previous_report = previous.get("report").filter(|r| r.is_object()).cloned();
@@ -988,7 +1087,7 @@ fn run_with_lock(
             report,
             started,
             Some(home),
-            Some(state_dir),
+            persist,
             last_attempt.unwrap_or(attempted_at),
             log_fn,
         );
@@ -999,7 +1098,14 @@ fn run_with_lock(
         Err(exc) => {
             report.add_error("runtime", &exc);
             report.outcome = "invalid_or_unavailable_policy".to_string();
-            return finish(report, started, Some(home), Some(state_dir), attempted_at, log_fn);
+            return finish(
+                report,
+                started,
+                Some(home),
+                Some(state_dir),
+                attempted_at,
+                log_fn,
+            );
         }
     };
     report.free_bytes_before = Some(before);
@@ -1018,17 +1124,38 @@ fn run_with_lock(
     if policy.mode == "off" || report.pressure_active != Some(true) {
         report.outcome = "healthy_noop".to_string();
         report.last_success_at = Some(utc_now());
-        return finish(report, started, Some(home), Some(state_dir), attempted_at, log_fn);
+        return finish(
+            report,
+            started,
+            Some(home),
+            persist,
+            attempted_at,
+            log_fn,
+        );
     }
 
     let deadline = Instant::now() + std::time::Duration::from_secs_f64(DEADLINE_SECONDS);
     // Errors escaping _run_hf (a vanished cache root mid-pass, a failed
     // free-space probe) hit Python's outer `except BaseException`:
     // `runtime` error + the default outcome, state still written.
-    if let Err(exc) = hf::run_hf(home, &policy, report.active_slot_count, attempted_at, deadline, &mut report) {
+    if let Err(exc) = hf::run_hf(
+        home,
+        &policy,
+        report.active_slot_count,
+        attempted_at,
+        deadline,
+        &mut report,
+    ) {
         report.add_error("runtime", &exc);
         report.outcome = "invalid_or_unavailable_policy".to_string();
-        return finish(report, started, Some(home), Some(state_dir), attempted_at, log_fn);
+        return finish(
+            report,
+            started,
+            Some(home),
+            persist,
+            attempted_at,
+            log_fn,
+        );
     }
     let scanned = report.hf.scanned_items;
     let remaining_scan = (policy.max_scan_items - scanned).max(0);
@@ -1046,7 +1173,14 @@ fn run_with_lock(
         Err(exc) => {
             report.add_error("runtime", &exc);
             report.outcome = "invalid_or_unavailable_policy".to_string();
-            return finish(report, started, Some(home), Some(state_dir), attempted_at, log_fn);
+            return finish(
+                report,
+                started,
+                Some(home),
+                persist,
+                attempted_at,
+                log_fn,
+            );
         }
     };
     report.free_bytes_after = Some(after);
@@ -1069,7 +1203,14 @@ fn run_with_lock(
     if report.errors.is_empty() {
         report.last_success_at = Some(utc_now());
     }
-    finish(report, started, Some(home), Some(state_dir), attempted_at, log_fn)
+    finish(
+        report,
+        started,
+        Some(home),
+        persist,
+        attempted_at,
+        log_fn,
+    )
 }
 
 /// Resolve canonical policy and execute at most one bounded cleanup pass.
@@ -1078,6 +1219,40 @@ fn run_with_lock(
 pub async fn run_cleanup_once(
     active_slot_count: i64,
     force: bool,
+    log_fn: &mut dyn FnMut(&str),
+) -> Value {
+    cleanup_once(active_slot_count, force, false, log_fn).await
+}
+
+/// Resolve canonical policy, plan one bounded pass, and delete NOTHING.
+///
+/// NO Python original: `stado/providers/local/disk/cleanup.py` has no
+/// preview entry point. This is the same canonical policy, the same
+/// exclusive lock, the same scanners and the same caps as
+/// [`run_cleanup_once`] — the returned report's `eligible_items` and
+/// `expected_bytes` per cleaner are what a real pass would remove right
+/// now. Two differences, both documented at their site in
+/// [`run_with_lock`]: an `enforce` policy is pinned down to the janitor's
+/// own `report` mode for the duration, and no state is written.
+///
+/// The interval gate is bypassed, because an operator who asks what the
+/// cleanup would delete must get an answer rather than `interval_noop`,
+/// and no slots are declared, because the operator is not the agent and
+/// holds none.
+///
+/// `stado disk-cleanup --dry-run` runs this locally;
+/// `stado host cleanup TARGET --dry-run`
+/// ([`crate::deploy::host_cleanup`]) runs it over ssh on the host being
+/// previewed, which is the only place the host's filesystem exists.
+pub async fn preview_cleanup_once(log_fn: &mut dyn FnMut(&str)) -> Value {
+    cleanup_once(i64::default(), true, true, log_fn).await
+}
+
+/// The shared body of [`run_cleanup_once`] and [`preview_cleanup_once`].
+async fn cleanup_once(
+    active_slot_count: i64,
+    force: bool,
+    preview: bool,
     log_fn: &mut dyn FnMut(&str),
 ) -> Value {
     let started = Instant::now();
@@ -1103,12 +1278,20 @@ pub async fn run_cleanup_once(
             return finish(report, started, Some(&home), None, attempted_at, log_fn);
         }
     };
+    let persist = if preview { None } else { Some(state_dir.as_path()) };
     let lock = match acquire_lock(&state_dir) {
         Ok(lock) => lock,
         Err(exc) => {
             report.add_error("runtime", &exc);
             report.outcome = "invalid_or_unavailable_policy".to_string();
-            return finish(report, started, Some(&home), Some(&state_dir), attempted_at, log_fn);
+            return finish(
+                report,
+                started,
+                Some(&home),
+                persist,
+                attempted_at,
+                log_fn,
+            );
         }
     };
     let Some(lock) = lock else {
@@ -1117,7 +1300,18 @@ pub async fn run_cleanup_once(
         return finish(report, started, Some(&home), None, attempted_at, log_fn);
     };
     let registry = fetch_canonical_registry().await;
-    run_with_lock(&home, &state_dir, lock, registry, report, started, attempted_at, force, log_fn)
+    run_with_lock(
+        &home,
+        &state_dir,
+        lock,
+        registry,
+        report,
+        started,
+        attempted_at,
+        force,
+        preview,
+        log_fn,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1147,7 +1341,11 @@ pub fn validated_report_low_bytes(report: &Value) -> Option<i64> {
 /// validated canonical policy.
 pub fn persisted_disk_low_bytes_in(home: &Path) -> Option<i64> {
     let state_path = home.join(".cache").join("wisent-compute").join(STATE_NAME);
-    for directory in [home.to_path_buf(), home.join(".cache"), home.join(".cache/wisent-compute")] {
+    for directory in [
+        home.to_path_buf(),
+        home.join(".cache"),
+        home.join(".cache/wisent-compute"),
+    ] {
         let info = std::fs::symlink_metadata(&directory).ok()?;
         if info.file_type().is_symlink() || !info.is_dir() || info.uid() != euid() {
             return None;
@@ -1198,7 +1396,10 @@ mod tests {
     #[test]
     fn canonical_json_sorts_keys_and_stays_compact() {
         let value = json!({"b": 1, "a": {"z": [1, 2], "y": true}, "c": "x"});
-        assert_eq!(canonical_json(&value), r#"{"a":{"y":true,"z":[1,2]},"b":1,"c":"x"}"#);
+        assert_eq!(
+            canonical_json(&value),
+            r#"{"a":{"y":true,"z":[1,2]},"b":1,"c":"x"}"#
+        );
         // Python's ensure_ascii=True escaping.
         let value = json!({"k": "héllo"});
         assert_eq!(canonical_json(&value), r#"{"k":"h\u00e9llo"}"#);
@@ -1253,17 +1454,24 @@ mod tests {
         // are deliberately NOT public, as in Python).
         let skipped = &public["cleaners"]["huggingface_cache"]["skipped"];
         assert_eq!(skipped, &json!({"too_young": 3, "byte_cap": 1}));
-        assert_eq!(public["cleaners"]["weles_recordings"]["skipped"], json!({"upload_proof_unavailable_v1": 1}));
+        assert_eq!(
+            public["cleaners"]["weles_recordings"]["skipped"],
+            json!({"upload_proof_unavailable_v1": 1})
+        );
         // Malformed / path-carrying errors are dropped.
         assert_eq!(public["errors"], json!(["huggingface_cache:OSError"]));
         // Invalid timestamps become null; caps fill missing names with false.
         assert_eq!(public["last_success_at"], Value::Null);
-        assert_eq!(public["caps"], json!({"bytes": true, "items": false, "scan": false, "deadline": false}));
+        assert_eq!(
+            public["caps"],
+            json!({"bytes": true, "items": false, "scan": false, "deadline": false})
+        );
     }
 
     #[test]
     fn sanitize_handles_garbage_and_lock_busy() {
-        let public = sanitize_cleanup_report(&json!({"outcome": "definitely_not_real", "mode": "weird"}));
+        let public =
+            sanitize_cleanup_report(&json!({"outcome": "definitely_not_real", "mode": "weird"}));
         assert_eq!(public["outcome"], "never_run");
         assert_eq!(public["mode"], Value::Null);
         assert_eq!(public["version"], 1);
@@ -1271,7 +1479,8 @@ mod tests {
         assert_eq!(busy["outcome"], "lock_busy");
         assert_eq!(busy["lock_busy"], true);
         // A stored report's own lock_busy=true also survives.
-        let stored = sanitize_cleanup_report(&json!({"lock_busy": true, "outcome": "healthy_noop"}));
+        let stored =
+            sanitize_cleanup_report(&json!({"lock_busy": true, "outcome": "healthy_noop"}));
         assert_eq!(stored["lock_busy"], true);
     }
 
@@ -1297,21 +1506,30 @@ mod tests {
 
     #[test]
     fn resolve_policy_matches_unique_identity_and_digests() {
-        let registry = registry_json("testhost", policy_json("enforce", json!({"huggingface_cache": hf_cleaner()})));
+        let registry = registry_json(
+            "testhost",
+            policy_json("enforce", json!({"huggingface_cache": hf_cleaner()})),
+        );
         let (target, policy, digest) = resolve_canonical_policy(&registry, "TESTHOST").unwrap();
         assert_eq!(target.name, "testhost");
         assert_eq!(policy.mode, "enforce");
         assert_eq!(digest.len(), 64);
         // Digest is the sha256 of the canonical disk_cleanup JSON.
-        let expected = format!("{:x}", sha2::Sha256::digest(
-            canonical_json(&registry["targets"][0]["disk_cleanup"]).as_bytes()
-        ));
+        let expected = format!(
+            "{:x}",
+            sha2::Sha256::digest(
+                canonical_json(&registry["targets"][0]["disk_cleanup"]).as_bytes()
+            )
+        );
         assert_eq!(digest, expected);
     }
 
     #[test]
     fn resolve_policy_fails_closed() {
-        let registry = registry_json("testhost", policy_json("enforce", json!({"huggingface_cache": hf_cleaner()})));
+        let registry = registry_json(
+            "testhost",
+            policy_json("enforce", json!({"huggingface_cache": hf_cleaner()})),
+        );
         // No matching identity.
         let err = resolve_canonical_policy(&registry, "otherhost").unwrap_err();
         assert_eq!(err.code, "LookupError");
@@ -1334,7 +1552,10 @@ mod tests {
         assert_eq!(err.code, "LookupError");
         // Invalid schema.
         let bad = json!({"schema_version": 1, "targets": []});
-        assert_eq!(resolve_canonical_policy(&bad, "testhost").unwrap_err().code, "ValueError");
+        assert_eq!(
+            resolve_canonical_policy(&bad, "testhost").unwrap_err().code,
+            "ValueError"
+        );
         // Not an object at all.
         assert!(resolve_canonical_policy(&json!([1, 2]), "testhost").is_err());
     }
@@ -1498,7 +1719,10 @@ mod tests {
     #[test]
     fn pass_without_matching_policy_fails_closed() {
         let th = TempHome::new();
-        let registry = registry_json("someone-else", policy_json("enforce", json!({"huggingface_cache": hf_cleaner()})));
+        let registry = registry_json(
+            "someone-else",
+            policy_json("enforce", json!({"huggingface_cache": hf_cleaner()})),
+        );
         let report = run_pass(&th, registry, "testhost", 0, false);
         assert_eq!(report["outcome"], "invalid_or_unavailable_policy");
         assert_eq!(report["errors"], json!(["policy:LookupError"]));
@@ -1512,7 +1736,13 @@ mod tests {
         let th = TempHome::new();
         let cleaners = json!({"huggingface_cache": hf_cleaner()});
         // mode "off": even under (fabricated) pressure, never act.
-        let report = run_pass(&th, pressure_registry("off", cleaners.clone()), "testhost", 0, false);
+        let report = run_pass(
+            &th,
+            pressure_registry("off", cleaners.clone()),
+            "testhost",
+            0,
+            false,
+        );
         assert_eq!(report["outcome"], "healthy_noop");
         assert_eq!(report["pressure_active"], true);
         // A real healthy host (tiny thresholds): no pressure at all.
@@ -1547,13 +1777,23 @@ mod tests {
     #[test]
     fn report_mode_never_deletes() {
         let th = TempHome::new();
-        let repo = make_hf_repo(&th.home, "models--org--name", "abc123", &[("blobA", b"aaaa"), ("blobB", b"bb")]);
+        let repo = make_hf_repo(
+            &th.home,
+            "models--org--name",
+            "abc123",
+            &[("blobA", b"aaaa"), ("blobB", b"bb")],
+        );
         backdate_tree(&repo, 2 * 3600);
         let registry = pressure_registry("report", json!({"huggingface_cache": hf_cleaner()}));
         let report = run_pass(&th, registry, "testhost", 0, false);
         assert_eq!(report["outcome"], "report_only");
         assert_eq!(report["cleaners"]["huggingface_cache"]["deleted_items"], 0);
-        assert!(report["cleaners"]["huggingface_cache"]["expected_bytes"].as_i64().unwrap() > 0);
+        assert!(
+            report["cleaners"]["huggingface_cache"]["expected_bytes"]
+                .as_i64()
+                .unwrap()
+                > 0
+        );
         assert!(repo.join("snapshots/abc123").exists());
         assert!(repo.join("blobs/blobA").exists());
     }
@@ -1561,19 +1801,32 @@ mod tests {
     #[test]
     fn active_slots_block_hf_eviction() {
         let th = TempHome::new();
-        let repo = make_hf_repo(&th.home, "models--org--name", "abc123", &[("blobA", b"aaaa")]);
+        let repo = make_hf_repo(
+            &th.home,
+            "models--org--name",
+            "abc123",
+            &[("blobA", b"aaaa")],
+        );
         backdate_tree(&repo, 2 * 3600);
         let registry = pressure_registry("enforce", json!({"huggingface_cache": hf_cleaner()}));
         let report = run_pass(&th, registry, "testhost", 1, false);
         assert_eq!(report["outcome"], "blocked_active");
-        assert_eq!(report["cleaners"]["huggingface_cache"]["skipped"]["active_slots"], 1);
+        assert_eq!(
+            report["cleaners"]["huggingface_cache"]["skipped"]["active_slots"],
+            1
+        );
         assert!(repo.join("snapshots/abc123").exists());
     }
 
     #[test]
     fn full_enforce_pass_deletes_revision_and_exclusive_blobs() {
         let th = TempHome::new();
-        let repo = make_hf_repo(&th.home, "models--org--name", "abc123", &[("blobA", b"aaaa"), ("blobB", b"bb")]);
+        let repo = make_hf_repo(
+            &th.home,
+            "models--org--name",
+            "abc123",
+            &[("blobA", b"aaaa"), ("blobB", b"bb")],
+        );
         backdate_tree(&repo, 2 * 3600);
         let hub = th.join(".cache/huggingface/hub");
         backdate_tree(&hub.join(".locks"), 2 * 3600);
@@ -1597,7 +1850,12 @@ mod tests {
     #[test]
     fn too_young_revisions_are_never_touched() {
         let th = TempHome::new();
-        let repo = make_hf_repo(&th.home, "models--org--name", "abc123", &[("blobA", b"aaaa")]);
+        let repo = make_hf_repo(
+            &th.home,
+            "models--org--name",
+            "abc123",
+            &[("blobA", b"aaaa")],
+        );
         backdate_tree(&repo, 60); // 1 minute old, min_age is 3600
         let registry = pressure_registry("enforce", json!({"huggingface_cache": hf_cleaner()}));
         let report = run_pass(&th, registry, "testhost", 0, false);
@@ -1611,7 +1869,12 @@ mod tests {
     #[test]
     fn held_cache_lock_skips_the_pass() {
         let th = TempHome::new();
-        let repo = make_hf_repo(&th.home, "models--org--name", "abc123", &[("blobA", b"aaaa")]);
+        let repo = make_hf_repo(
+            &th.home,
+            "models--org--name",
+            "abc123",
+            &[("blobA", b"aaaa")],
+        );
         backdate_tree(&repo, 2 * 3600);
         // A live download holds the HF file lock.
         let lock_file = std::fs::OpenOptions::new()
@@ -1632,7 +1895,12 @@ mod tests {
     #[test]
     fn missing_lock_root_refuses_deletion() {
         let th = TempHome::new();
-        let repo = make_hf_repo(&th.home, "models--org--name", "abc123", &[("blobA", b"aaaa")]);
+        let repo = make_hf_repo(
+            &th.home,
+            "models--org--name",
+            "abc123",
+            &[("blobA", b"aaaa")],
+        );
         backdate_tree(&repo, 2 * 3600);
         // Remove the .locks tree entirely: enforce mode must refuse.
         std::fs::remove_dir_all(th.join(".cache/huggingface/hub/.locks")).unwrap();
@@ -1647,13 +1915,27 @@ mod tests {
     #[test]
     fn item_cap_and_byte_cap_bound_the_pass() {
         let th = TempHome::new();
-        let repo = make_hf_repo(&th.home, "models--org--name", "aaaaaa", &[("blobA", b"aaaa")]);
+        let repo = make_hf_repo(
+            &th.home,
+            "models--org--name",
+            "aaaaaa",
+            &[("blobA", b"aaaa")],
+        );
         // A second, newer revision.
         let commit2 = "bbbbbb";
         std::fs::create_dir_all(repo.join("snapshots").join(commit2)).unwrap();
         std::fs::write(repo.join("blobs").join("blobC"), b"cccc").unwrap();
-        std::os::unix::fs::symlink("../../blobs/blobC", repo.join("snapshots").join(commit2).join("f")).unwrap();
-        std::fs::write(th.join(".cache/huggingface/hub/.locks/models--org--name").join(format!("{commit2}.lock")), b"").unwrap();
+        std::os::unix::fs::symlink(
+            "../../blobs/blobC",
+            repo.join("snapshots").join(commit2).join("f"),
+        )
+        .unwrap();
+        std::fs::write(
+            th.join(".cache/huggingface/hub/.locks/models--org--name")
+                .join(format!("{commit2}.lock")),
+            b"",
+        )
+        .unwrap();
         backdate_tree(&repo, 3 * 3600);
         // Make aaaaaa strictly older than bbbbbb.
         backdate_tree(&repo.join("snapshots/aaaaaa"), 3 * 3600);
@@ -1675,7 +1957,12 @@ mod tests {
 
         // Byte cap: a pass whose byte budget can't fit the revision.
         let th2 = TempHome::new();
-        let repo2 = make_hf_repo(&th2.home, "models--org--name", "abc123", &[("blobA", &[0u8; 4096])]);
+        let repo2 = make_hf_repo(
+            &th2.home,
+            "models--org--name",
+            "abc123",
+            &[("blobA", &[0u8; 4096])],
+        );
         backdate_tree(&repo2, 2 * 3600);
         let mut policy = policy_json("enforce", json!({"huggingface_cache": hf_cleaner()}));
         policy["max_bytes_per_pass"] = json!(1024 * 1024); // registry floor (1 MiB)
@@ -1690,11 +1977,21 @@ mod tests {
     fn byte_cap_skips_oversized_candidate_without_deleting() {
         let th = TempHome::new();
         // Two revisions: one huge (over the byte cap), one small.
-        let repo = make_hf_repo(&th.home, "models--org--name", "aaaaaa", &[("bigblob", &vec![0u8; 2 * 1024 * 1024])]);
+        let repo = make_hf_repo(
+            &th.home,
+            "models--org--name",
+            "aaaaaa",
+            &[("bigblob", &vec![0u8; 2 * 1024 * 1024])],
+        );
         std::fs::create_dir_all(repo.join("snapshots").join("cccccc")).unwrap();
         std::fs::write(repo.join("blobs").join("smallblob"), b"tiny").unwrap();
-        std::os::unix::fs::symlink("../../blobs/smallblob", repo.join("snapshots/cccccc/f")).unwrap();
-        std::fs::write(th.join(".cache/huggingface/hub/.locks/models--org--name/cccccc.lock"), b"").unwrap();
+        std::os::unix::fs::symlink("../../blobs/smallblob", repo.join("snapshots/cccccc/f"))
+            .unwrap();
+        std::fs::write(
+            th.join(".cache/huggingface/hub/.locks/models--org--name/cccccc.lock"),
+            b"",
+        )
+        .unwrap();
         backdate_tree(&repo, 3 * 3600);
         backdate_tree(&repo.join("snapshots/cccccc"), 2 * 3600);
         set_mtime(&repo.join("blobs/smallblob"), now_epoch() - 2 * 3600);

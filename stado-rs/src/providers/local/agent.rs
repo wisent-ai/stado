@@ -10,8 +10,9 @@
 //!   * The per-tick `wisent...upload_worker.sweep()` call is NOT ported
 //!     (it lives in the Python `wisent` package; the fleet-flush
 //!     subprocess path in [`super::fleet_flush`] covers the same pool).
-//!   * The registry self-lookup fetches `gs://wisent-compute/registry.json`
-//!     via [`targets::fetch_registry_gcs`] (the crate's GCS JSON-API
+//!   * The registry self-lookup fetches `registry.json` from whichever
+//!     store `WC_STORAGE_BACKEND` selects, via
+//!     [`targets::fetch_registry_remote`] (on "gcs", the GCS JSON-API
 //!     backend) with the same 30s TTL and the same fall-back-to-bundled-file
 //!     semantics (Python uses the GCS SDK directly, `source="auto"`).
 //!   * A registry `gpu_type` change logs the Python
@@ -20,7 +21,7 @@
 //!     only; a gpu_type change remains an operator-restart action.
 //!   * Version drift on a local-kind agent triggers binary self-update +
 //!     re-exec ([`crate::self_update`], Python's pip_upgrade_and_exec
-//!     semantics; detection reads `gs://wisent-compute/releases/stado/latest.json`,
+//!     semantics; detection reads the release channel's `latest.json`,
 //!     not PyPI). When the update FAILS the error is logged and the agent
 //!     KEEPS CLAIMING on the old binary ([`DriftOutcome::DriftDetected`]):
 //!     wedging the agent into skip-claim forever would be a silent fleet
@@ -57,6 +58,7 @@ use crate::config::estimate_gpu_memory;
 use crate::constants;
 use crate::models::{activation_extraction_must_share_gpu, isoformat_utc};
 use crate::queue::capacity::publish_capacity;
+use crate::queue::control;
 use crate::queue::{JobStorage, StorageError};
 use crate::sizing::Sizing;
 use crate::targets::{self, ComputeTarget, Registry, RegistryError};
@@ -64,11 +66,9 @@ use crate::targets::{self, ComputeTarget, Registry, RegistryError};
 use super::disk_cleanup;
 use super::disk_gate::{self, DiskGateDiag};
 use super::fleet_flush::spawn_fleet_flush;
-use super::gcp_self::self_terminate;
 use super::helpers;
-use super::slots::{
-    advance_slot, request_yield, ActiveSlot, SlotOutcome, DEFAULT_MAX_YIELDS,
-};
+use super::self_terminate;
+use super::slots::{advance_slot, request_yield, ActiveSlot, SlotOutcome, DEFAULT_MAX_YIELDS};
 use super::version_check::{self, DriftOutcome};
 
 /// Main agent poll interval (latency vs. storage-API load trade-off).
@@ -154,7 +154,7 @@ fn env_f64_chain(primary: &str, fallback: &str, default: f64) -> f64 {
 
 /// The registry document, GCS first with the bundled file as fallback
 /// (Python `load_targets(source="auto")`). The fetch + 30 s TTL cache live
-/// in [`targets`] — see `targets::fetch_registry_gcs`.
+/// in [`targets`] — see `targets::fetch_registry_remote`.
 pub async fn load_registry_auto() -> Result<Registry, RegistryError> {
     targets::load_registry_auto().await
 }
@@ -197,8 +197,11 @@ pub async fn cuda_child_available() -> (bool, String) {
         }
     }
     let (ok, detail) = run_cuda_probe().await;
-    *CUDA_PROBE.lock().expect("cuda probe cache lock") =
-        Some(CudaProbe { checked_at: Instant::now(), ok, detail: detail.clone() });
+    *CUDA_PROBE.lock().expect("cuda probe cache lock") = Some(CudaProbe {
+        checked_at: Instant::now(),
+        ok,
+        detail: detail.clone(),
+    });
     (ok, detail)
 }
 
@@ -234,7 +237,14 @@ pub fn cuda_probe_result(rc: i32, stdout: &str, stderr: &str) -> (bool, String) 
         format!("rc={rc}")
     };
     let trimmed = raw.trim();
-    let detail: String = trimmed.chars().rev().take(300).collect::<String>().chars().rev().collect();
+    let detail: String = trimmed
+        .chars()
+        .rev()
+        .take(300)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
     (rc == 0, detail)
 }
 
@@ -278,8 +288,11 @@ pub fn choose_yield_slots(
             let s = &slots[i];
             // Python `int(getattr(job, "max_yields_before_protected", 5) or 5)`:
             // a stored 0 falls back to 5.
-            let max_yields =
-                if s.max_yields_before_protected != 0 { s.max_yields_before_protected } else { DEFAULT_MAX_YIELDS };
+            let max_yields = if s.max_yields_before_protected != 0 {
+                s.max_yields_before_protected
+            } else {
+                DEFAULT_MAX_YIELDS
+            };
             s.yieldable
                 && !s.exclusive
                 && s.priority < target_prio
@@ -334,20 +347,36 @@ pub async fn maybe_yield_for_priority(
     // Highest-priority queued job that needs MORE than current free VRAM but
     // could fit on the full GPU, and is eligible for THIS agent.
     let mut candidates = store.list_jobs_fitting("queue", total_vram_gb, 200).await?;
-    candidates.sort_by(|a, b| b.priority.cmp(&a.priority).then_with(|| a.created_at.cmp(&b.created_at)));
+    candidates.sort_by(|a, b| {
+        b.priority
+            .cmp(&a.priority)
+            .then_with(|| a.created_at.cmp(&b.created_at))
+    });
     let mut target: Option<(crate::models::Job, i64)> = None;
     for j in &candidates {
-        let need_j = j.gpu_mem_gb.max(estimate_gpu_memory(&j.command, sizing, store).await?);
+        let need_j = j
+            .gpu_mem_gb
+            .max(estimate_gpu_memory(&j.command, sizing, store).await?);
         if need_j <= free_vram_gb {
             continue; // already fits — not a VRAM-eviction case
         }
-        if !helpers::job_eligible(j, gpu_type, total_vram_gb, kind, consumer_id, slots.len(), false) {
+        if !helpers::job_eligible(
+            j,
+            gpu_type,
+            total_vram_gb,
+            kind,
+            consumer_id,
+            slots.len(),
+            false,
+        ) {
             continue;
         }
         target = Some((j.clone(), need_j));
         break;
     }
-    let Some((target, need)) = target else { return Ok(0) };
+    let Some((target, need)) = target else {
+        return Ok(0);
+    };
     let target_prio = target.priority;
 
     let now = Instant::now();
@@ -406,9 +435,18 @@ struct LastCap {
 fn diag_map(d: &DiskGateDiag) -> [(String, Value); 4] {
     [
         ("free_disk_gb".to_string(), Value::from(d.free_disk_gb)),
-        ("home_write_probe_ok".to_string(), Value::from(d.home_write_probe_ok)),
-        ("staging_free_gb".to_string(), Value::from(d.staging_free_gb)),
-        ("largest_pending_raw_dir_gb".to_string(), Value::from(d.largest_pending_raw_dir_gb)),
+        (
+            "home_write_probe_ok".to_string(),
+            Value::from(d.home_write_probe_ok),
+        ),
+        (
+            "staging_free_gb".to_string(),
+            Value::from(d.staging_free_gb),
+        ),
+        (
+            "largest_pending_raw_dir_gb".to_string(),
+            Value::from(d.largest_pending_raw_dir_gb),
+        ),
     ]
 }
 
@@ -450,15 +488,15 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
     let consumer_id = format!("{kind}-{hostname}");
     let mut slots: Vec<ActiveSlot> = Vec::new();
     let mut agent_diag: Map<String, Value> = Map::new();
-    let fleet_staging =
-        std::env::var("WISENT_FLEET_STAGING_DIR").unwrap_or_else(|_| "/tmp/wisent_fleet_staging".to_string());
+    let fleet_staging = std::env::var("WISENT_FLEET_STAGING_DIR")
+        .unwrap_or_else(|_| "/tmp/wisent_fleet_staging".to_string());
     let mut last_fleet_flush = Instant::now();
 
     let mut last_cap: Option<LastCap> = None;
     let mut pinned_only = false; // registry ComputeTarget.pinned_only, refreshed per poll
-    // Python `disk_low_bytes = _persisted_disk_low_bytes()`: reuse the last
-    // canonical low watermark from the janitor's owner-controlled state
-    // file (cleanup may be unable to reach the registry during startup).
+                                 // Python `disk_low_bytes = _persisted_disk_low_bytes()`: reuse the last
+                                 // canonical low watermark from the janitor's owner-controlled state
+                                 // file (cleanup may be unable to reach the registry during startup).
     let mut disk_low_bytes = disk_cleanup::persisted_disk_low_bytes();
     if disk_low_bytes.is_some() {
         log_fn("init: loaded validated disk low watermark from janitor state");
@@ -498,8 +536,14 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         let disk_policy_known = disk_low_bytes.is_some();
         let pressure_unresolved =
             disk_cleanup::disk_pressure_unresolved(disk_low_bytes, current_free_bytes);
-        agent_diag.insert("disk_cleanup_policy_known".into(), Value::from(disk_policy_known));
-        agent_diag.insert("disk_pressure_unresolved".into(), Value::from(pressure_unresolved));
+        agent_diag.insert(
+            "disk_cleanup_policy_known".into(),
+            Value::from(disk_policy_known),
+        );
+        agent_diag.insert(
+            "disk_pressure_unresolved".into(),
+            Value::from(pressure_unresolved),
+        );
         if pressure_unresolved {
             // Fail admission closed until both the policy threshold and
             // free space are known (Python's zero-cap gate).
@@ -562,7 +606,9 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                 }
                 if let Some(t_vram) = t.vram_gb {
                     if t_vram > 0 && t_vram != total_vram_gb {
-                        log_fn(&format!("Registry vram_gb override {total_vram_gb} -> {t_vram}"));
+                        log_fn(&format!(
+                            "Registry vram_gb override {total_vram_gb} -> {t_vram}"
+                        ));
                         total_vram_gb = t_vram;
                     }
                 }
@@ -692,7 +738,10 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             let (cuda_ok, cuda_detail) = cuda_child_available().await;
             agent_diag.insert("cuda_child_ok".into(), Value::from(cuda_ok));
             agent_diag.insert("cuda_child_detail".into(), Value::from(cuda_detail.clone()));
-            agent_diag.insert("cuda_child_checked_at".into(), Value::from(isoformat_utc(Utc::now())));
+            agent_diag.insert(
+                "cuda_child_checked_at".into(),
+                Value::from(isoformat_utc(Utc::now())),
+            );
             if !cuda_ok {
                 log_fn(&format!(
                     "CUDA child probe failed; publishing zero capacity: {}",
@@ -736,6 +785,43 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             diag: agent_diag.clone(),
         });
 
+        // Maintenance-mode gate (queue::control — read that module for the
+        // full semantics). A paused queue means this agent starts NOTHING
+        // new, so the entire admission half of the tick is skipped: no
+        // cooperative yield (evicting a running job to free VRAM for a
+        // claim that can never happen would destroy work for nothing), no
+        // queue listing, no claim. Everything above this point has already
+        // run — advance_slot drove every live slot, heartbeats went out,
+        // and capacity was published — so jobs already in running/ finish
+        // normally and `stado queue drain --wait` can terminate.
+        //
+        // Re-read every iteration, never cached: `stado queue resume` has
+        // to reach a running agent without an operator restarting it.
+        let queue_control = control::read(&store).await?;
+        agent_diag.insert("queue_paused".into(), Value::from(queue_control.paused));
+        if queue_control.paused {
+            agent_diag.insert(
+                "queue_pause_reason".into(),
+                Value::from(queue_control.pause_summary()),
+            );
+            log_fn(&format!(
+                "Queue paused ({}); claiming nothing",
+                queue_control.pause_summary()
+            ));
+            // An ephemeral cloud agent with no slots left is idle BY
+            // DEFINITION while paused — there is nothing it may claim — so
+            // let it self-delete instead of billing for the whole
+            // maintenance window. Dispatch is paused too, so nothing
+            // replaces it until resume.
+            if idle_shutdown && slots.is_empty() {
+                log_fn("idle_shutdown: no slots + queue paused; exiting");
+                self_terminate(kind, log_fn).await;
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
+            continue;
+        }
+
         // Cooperative yield: if a higher-priority queued job can't fit, evict
         // just enough lower-priority yieldable slots to make room. Runs BEFORE
         // the full-GPU early-return below because that is exactly when it's
@@ -757,8 +843,11 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             continue; // re-loop: recompute free VRAM, then claim the freed room
         }
 
-        let all_active_share_gpu =
-            |slots: &[ActiveSlot]| slots.iter().all(|s| activation_extraction_must_share_gpu(&s.slot.job.command));
+        let all_active_share_gpu = |slots: &[ActiveSlot]| {
+            slots
+                .iter()
+                .all(|s| activation_extraction_must_share_gpu(&s.slot.job.command))
+        };
         let slot_cap_reached = hard_slot_cap > 0 && slots.len() as i64 >= hard_slot_cap;
         if slot_cap_reached && !all_active_share_gpu(&slots) {
             tokio::time::sleep(Duration::from_secs(10)).await;
@@ -784,14 +873,22 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         // agent owns. The coordinator's makespan matcher already made the
         // choice; this loop executes it.
         let mut queued = store.list_jobs_fitting("queue", free_vram_gb, 2000).await?;
-        queued.sort_by(|a, b| b.priority.cmp(&a.priority).then_with(|| a.created_at.cmp(&b.created_at)));
+        queued.sort_by(|a, b| {
+            b.priority
+                .cmp(&a.priority)
+                .then_with(|| a.created_at.cmp(&b.created_at))
+        });
         let mut started = 0i64;
         let mut diag_vram_rejected = 0i64;
         let mut diag_eligibility_rejected = 0i64;
         let mut diag_eligible = 0i64;
         let max_claims = env_i64("WC_LOCAL_MAX_CLAIMS_PER_TICK", 0);
         let raw_reserve = env_f64("WISENT_RAW_CLAIM_RESERVE_GB", 180.0);
-        let raw_min_free = env_f64_chain("WISENT_RAW_CLAIM_MIN_FREE_GB", "WISENT_RAW_HOT_FREE_TARGET_GB", 270.0);
+        let raw_min_free = env_f64_chain(
+            "WISENT_RAW_CLAIM_MIN_FREE_GB",
+            "WISENT_RAW_HOT_FREE_TARGET_GB",
+            270.0,
+        );
         let tmpdir = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
         let raw_root = Path::new(&tmpdir).join("wisent_raw_pending");
         let raw_free = disk_gate::free_gb(&raw_root);
@@ -804,11 +901,19 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         for job in queued.iter() {
             let cmd = job.command.clone();
             let is_raw_share = activation_extraction_must_share_gpu(&cmd);
-            if is_raw_share && raw_free >= 0.0 && raw_free - raw_reserved - raw_reserve < raw_min_free {
+            if is_raw_share
+                && raw_free >= 0.0
+                && raw_free - raw_reserved - raw_reserve < raw_min_free
+            {
                 diag_raw_disk_rejected += 1;
-                agent_diag.insert("raw_claim_free_gb".into(), Value::from((raw_free * 10.0).round() / 10.0));
-                agent_diag
-                    .insert("raw_claim_reserved_gb".into(), Value::from((raw_reserved * 10.0).round() / 10.0));
+                agent_diag.insert(
+                    "raw_claim_free_gb".into(),
+                    Value::from((raw_free * 10.0).round() / 10.0),
+                );
+                agent_diag.insert(
+                    "raw_claim_reserved_gb".into(),
+                    Value::from((raw_reserved * 10.0).round() / 10.0),
+                );
                 continue;
             }
             let share_now = all_active_share_gpu(&slots);
@@ -816,7 +921,9 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             if cap_reached && !(share_now && is_raw_share) {
                 continue;
             }
-            let need = job.gpu_mem_gb.max(estimate_gpu_memory(&cmd, &sizing, &store).await?);
+            let need = job
+                .gpu_mem_gb
+                .max(estimate_gpu_memory(&cmd, &sizing, &store).await?);
             // Hard VRAM safety buffer: refuse if declared use after admission
             // would leave less than the dynamic VRAM safety buffer. Use live
             // free VRAM, not only slot-declared usage, so external users such
@@ -824,10 +931,19 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             let claimable_vram_gb = (free_vram_gb - vram_safety_buffer_gb(total_vram_gb)).max(0);
             if need > claimable_vram_gb {
                 diag_vram_rejected += 1;
-                agent_diag.insert("last_buffer_reject_job_id".into(), Value::from(job.job_id.clone()));
-                agent_diag.insert("last_buffer_reject_at".into(), Value::from(isoformat_utc(Utc::now())));
+                agent_diag.insert(
+                    "last_buffer_reject_job_id".into(),
+                    Value::from(job.job_id.clone()),
+                );
+                agent_diag.insert(
+                    "last_buffer_reject_at".into(),
+                    Value::from(isoformat_utc(Utc::now())),
+                );
                 agent_diag.insert("last_buffer_reject_need_gb".into(), Value::from(need));
-                agent_diag.insert("last_buffer_reject_claimable_gb".into(), Value::from(claimable_vram_gb));
+                agent_diag.insert(
+                    "last_buffer_reject_claimable_gb".into(),
+                    Value::from(claimable_vram_gb),
+                );
                 continue;
             }
             // Also retain the slot-declared projection as a backstop for
@@ -841,8 +957,14 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             }
             if need > 0 && projected_used > total_vram_gb - vram_safety_buffer_gb(total_vram_gb) {
                 diag_vram_rejected += 1;
-                agent_diag.insert("last_buffer_reject_job_id".into(), Value::from(job.job_id.clone()));
-                agent_diag.insert("last_buffer_reject_at".into(), Value::from(isoformat_utc(Utc::now())));
+                agent_diag.insert(
+                    "last_buffer_reject_job_id".into(),
+                    Value::from(job.job_id.clone()),
+                );
+                agent_diag.insert(
+                    "last_buffer_reject_at".into(),
+                    Value::from(isoformat_utc(Utc::now())),
+                );
                 continue;
             }
             if !helpers::job_eligible(
@@ -864,23 +986,36 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             let workload_lock = match disk_cleanup::acquire_workload_lock() {
                 Ok(lock) => lock,
                 Err(exc) => {
-                    log_fn(&format!("disk cleanup workload lock unavailable: {}", exc.code));
+                    log_fn(&format!(
+                        "disk cleanup workload lock unavailable: {}",
+                        exc.code
+                    ));
                     agent_diag.insert("disk_cleanup_admission".into(), Value::from("lock_error"));
                     break;
                 }
             };
             let Some(workload_lock) = workload_lock else {
-                agent_diag.insert("disk_cleanup_admission".into(), Value::from("cleanup_in_progress"));
+                agent_diag.insert(
+                    "disk_cleanup_admission".into(),
+                    Value::from("cleanup_in_progress"),
+                );
                 break;
             };
-            let new_slot =
-                match super::slots::start_slot(&store, job.clone(), &hostname, log_fn, kind).await {
-                    Ok(slot) => slot,
-                    Err(exc) => {
-                        disk_cleanup::release_workload_lock(workload_lock, log_fn);
-                        return Err(exc.into());
-                    }
-                };
+            let new_slot = match super::slots::start_slot(
+                &store,
+                job.clone(),
+                &hostname,
+                log_fn,
+                kind,
+            )
+            .await
+            {
+                Ok(slot) => slot,
+                Err(exc) => {
+                    disk_cleanup::release_workload_lock(workload_lock, log_fn);
+                    return Err(exc.into());
+                }
+            };
             let Some(mut new_slot) = new_slot else {
                 // Admission failed before spawn; do not retain a workload lock.
                 disk_cleanup::release_workload_lock(workload_lock, log_fn);
@@ -893,8 +1028,14 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                 raw_reserved += raw_reserve;
             }
             started += 1;
-            agent_diag.insert("last_started_job_id".into(), Value::from(job.job_id.clone()));
-            agent_diag.insert("last_started_at".into(), Value::from(isoformat_utc(Utc::now())));
+            agent_diag.insert(
+                "last_started_job_id".into(),
+                Value::from(job.job_id.clone()),
+            );
+            agent_diag.insert(
+                "last_started_at".into(),
+                Value::from(isoformat_utc(Utc::now())),
+            );
             if !is_raw_share {
                 break;
             }
@@ -911,11 +1052,20 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         }
         agent_diag.insert("queue_scanned".into(), Value::from(queued.len() as i64));
         agent_diag.insert("vram_rejected".into(), Value::from(diag_vram_rejected));
-        agent_diag.insert("raw_disk_rejected".into(), Value::from(diag_raw_disk_rejected));
-        agent_diag.insert("eligibility_rejected".into(), Value::from(diag_eligibility_rejected));
+        agent_diag.insert(
+            "raw_disk_rejected".into(),
+            Value::from(diag_raw_disk_rejected),
+        );
+        agent_diag.insert(
+            "eligibility_rejected".into(),
+            Value::from(diag_eligibility_rejected),
+        );
         agent_diag.insert("eligible_count".into(), Value::from(diag_eligible));
         agent_diag.insert("claimed_this_loop".into(), Value::from(started));
-        agent_diag.insert("last_claim_attempt_at".into(), Value::from(isoformat_utc(Utc::now())));
+        agent_diag.insert(
+            "last_claim_attempt_at".into(),
+            Value::from(isoformat_utc(Utc::now())),
+        );
 
         if started > 0 {
             continue;
@@ -936,7 +1086,7 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             .await?
         {
             log_fn("idle_shutdown: no slots + no eligible queued jobs; exiting");
-            self_terminate(log_fn).await;
+            self_terminate(kind, log_fn).await;
             return Ok(());
         }
         tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
@@ -947,12 +1097,7 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
 mod tests {
     use super::*;
 
-    fn slot_info(
-        job_id: &str,
-        priority: i64,
-        vram_gb: i64,
-        age_s: u64,
-    ) -> YieldSlotInfo {
+    fn slot_info(job_id: &str, priority: i64, vram_gb: i64, age_s: u64) -> YieldSlotInfo {
         YieldSlotInfo {
             job_id: job_id.to_string(),
             priority,
@@ -976,7 +1121,10 @@ mod tests {
 
     #[test]
     fn cuda_probe_result_prefers_stdout_and_truncates() {
-        assert_eq!(cuda_probe_result(0, "cuda_available=True\n", ""), (true, "cuda_available=True".to_string()));
+        assert_eq!(
+            cuda_probe_result(0, "cuda_available=True\n", ""),
+            (true, "cuda_available=True".to_string())
+        );
         assert_eq!(
             cuda_probe_result(66, "", "some torch error\n"),
             (false, "some torch error".to_string())

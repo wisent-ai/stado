@@ -37,14 +37,12 @@ pub struct BoxHttpTransport {
 impl BoxHttpTransport {
     /// Python `BoxHTTPTransport.__init__`: strip the key, require it, and
     /// pin the base URL to an HTTPS API base without query or fragment.
-    pub fn new(
-        api_key: &str,
-        base_url: &str,
-        timeout_seconds: f64,
-    ) -> Result<Self, BoxError> {
+    pub fn new(api_key: &str, base_url: &str, timeout_seconds: f64) -> Result<Self, BoxError> {
         let key = api_key.trim();
         if key.is_empty() {
-            return Err(BoxError::configuration("BOX_API_KEY is required for Box provider"));
+            return Err(BoxError::configuration(
+                "BOX_API_KEY is required for Box provider",
+            ));
         }
         let base_url = base_url.trim_end_matches('/');
         let parsed = url::Url::parse(base_url).map_err(|_| {
@@ -62,11 +60,17 @@ impl BoxHttpTransport {
             ));
         }
         if timeout_seconds <= 0.0 {
-            return Err(BoxError::configuration("Box request timeout must be positive"));
+            return Err(BoxError::configuration(
+                "Box request timeout must be positive",
+            ));
         }
         // Rebuild scheme://netloc + path without trailing slash (Python
         // urlunsplit((scheme, netloc, path.rstrip("/"), "", ""))).
-        let mut normalized = format!("{}://{}", parsed.scheme(), parsed.host_str().unwrap_or_default());
+        let mut normalized = format!(
+            "{}://{}",
+            parsed.scheme(),
+            parsed.host_str().unwrap_or_default()
+        );
         if let Some(port) = parsed.port() {
             normalized.push_str(&format!(":{port}"));
         }
@@ -109,7 +113,10 @@ impl BoxHttpTransport {
         } else {
             format!("{}/{}", self.base_url, clean.join("/"))
         };
-        let pairs: Vec<&(&str, String)> = query.iter().filter(|(_, value)| !value.is_empty()).collect();
+        let pairs: Vec<&(&str, String)> = query
+            .iter()
+            .filter(|(_, value)| !value.is_empty())
+            .collect();
         if !pairs.is_empty() {
             let encoded: Vec<String> = pairs
                 .iter()
@@ -173,12 +180,17 @@ impl BoxHttpTransport {
             .client
             .request(method, self.url(path, query))
             .timeout(self.timeout)
-            .header(reqwest::header::AUTHORIZATION, format!("Bearer {}", self.api_key))
+            .header(
+                reqwest::header::AUTHORIZATION,
+                format!("Bearer {}", self.api_key),
+            )
             .header(reqwest::header::ACCEPT, "application/json");
         if let Some(body) = body {
             // Python json.dumps(body, separators=(",", ":")) — compact.
             let data = serde_json::to_vec(body).map_err(|err| BoxError::value(err.to_string()))?;
-            request = request.header(reqwest::header::CONTENT_TYPE, "application/json").body(data);
+            request = request
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(data);
         }
         let response = request.send().await.map_err(transport_error)?;
         let status = response.status().as_u16();
@@ -212,7 +224,9 @@ async fn read_bounded(mut response: reqwest::Response, limit: usize) -> Result<V
     while let Some(chunk) = response.chunk().await.map_err(transport_error)? {
         raw.extend_from_slice(&chunk);
         if raw.len() > limit {
-            return Err(BoxError::transport("Box response exceeded configured size bound"));
+            return Err(BoxError::transport(
+                "Box response exceeded configured size bound",
+            ));
         }
     }
     Ok(raw)
@@ -224,7 +238,8 @@ fn parse_json(raw: &[u8]) -> Result<Map<String, Value>, BoxError> {
     if raw.is_empty() {
         return Ok(Map::new());
     }
-    let text = std::str::from_utf8(raw).map_err(|_| BoxError::transport("Box returned invalid JSON"))?;
+    let text =
+        std::str::from_utf8(raw).map_err(|_| BoxError::transport("Box returned invalid JSON"))?;
     let value: Value =
         serde_json::from_str(text).map_err(|_| BoxError::transport("Box returned invalid JSON"))?;
     required_dict(value, "JSON")
@@ -248,11 +263,21 @@ fn api_error(status: u16, raw: &[u8]) -> BoxError {
         "http_error",
     );
     let message = first_truthy_str(
-        &[payload.get("message"), nested.and_then(|e| e.get("message"))],
+        &[
+            payload.get("message"),
+            nested.and_then(|e| e.get("message")),
+        ],
         "Box API request failed",
     );
     let request_id = first_truthy_str(&[payload.get("requestId")], "");
-    BoxApiError::new(status, &code, &message, &request_id, TRANSIENT_HTTP.contains(&status)).into()
+    BoxApiError::new(
+        status,
+        &code,
+        &message,
+        &request_id,
+        TRANSIENT_HTTP.contains(&status),
+    )
+    .into()
 }
 
 /// Python `except (URLError, TimeoutError, socket.timeout, OSError)`:
@@ -265,7 +290,10 @@ fn transport_error(err: reqwest::Error) -> BoxError {
     } else {
         "transport_error"
     };
-    BoxError::transport(format!("Box transport failed: {}", safe_text(kind, "transport_error")))
+    BoxError::transport(format!(
+        "Box transport failed: {}",
+        safe_text(kind, "transport_error")
+    ))
 }
 
 /// Default timeout used by [`super::BoxProvider::from_env`] — re-exported
@@ -286,20 +314,34 @@ mod tests {
         assert!(err.to_string().contains("BOX_API_KEY is required"), "{err}");
 
         let err = BoxHttpTransport::new("k", "http://ascii.dev/api", 70.0).unwrap_err();
-        assert!(err.to_string().contains("must be an HTTPS API base"), "{err}");
+        assert!(
+            err.to_string().contains("must be an HTTPS API base"),
+            "{err}"
+        );
 
-        let err =
-            BoxHttpTransport::new("k", "https://ascii.dev/api?x=1", 70.0).unwrap_err();
-        assert!(err.to_string().contains("must be an HTTPS API base"), "{err}");
+        let err = BoxHttpTransport::new("k", "https://ascii.dev/api?x=1", 70.0).unwrap_err();
+        assert!(
+            err.to_string().contains("must be an HTTPS API base"),
+            "{err}"
+        );
 
         let err = BoxHttpTransport::new("k", "https://ascii.dev/api#frag", 70.0).unwrap_err();
-        assert!(err.to_string().contains("must be an HTTPS API base"), "{err}");
+        assert!(
+            err.to_string().contains("must be an HTTPS API base"),
+            "{err}"
+        );
 
         let err = BoxHttpTransport::new("k", "not a url", 70.0).unwrap_err();
-        assert!(err.to_string().contains("must be an HTTPS API base"), "{err}");
+        assert!(
+            err.to_string().contains("must be an HTTPS API base"),
+            "{err}"
+        );
 
         let err = BoxHttpTransport::new("k", DEFAULT_BOX_API_URL, 0.0).unwrap_err();
-        assert!(err.to_string().contains("timeout must be positive"), "{err}");
+        assert!(
+            err.to_string().contains("timeout must be positive"),
+            "{err}"
+        );
 
         // Trailing slashes normalize away.
         let t = BoxHttpTransport::new(" k ", "https://ascii.dev/api/box/v1/", 70.0).unwrap();
@@ -315,7 +357,10 @@ mod tests {
         // Each segment is quoted with an empty safe set; inner empty
         // segments are dropped (Python _url).
         assert_eq!(
-            t.url("/boxes/bx_2abcdefg/files", &[("path", "/tmp/a b.txt".to_string())]),
+            t.url(
+                "/boxes/bx_2abcdefg/files",
+                &[("path", "/tmp/a b.txt".to_string())]
+            ),
             "https://ascii.dev/api/box/v1/boxes/bx_2abcdefg/files?path=%2Ftmp%2Fa+b.txt"
         );
         assert_eq!(
@@ -324,7 +369,10 @@ mod tests {
         );
         // Empty query values are dropped.
         assert_eq!(
-            t.url("/boxes", &[("cursor", String::new()), ("sort", "asc".to_string())]),
+            t.url(
+                "/boxes",
+                &[("cursor", String::new()), ("sort", "asc".to_string())]
+            ),
             "https://ascii.dev/api/box/v1/boxes?sort=asc"
         );
         // Root path returns the bare base.
@@ -350,24 +398,43 @@ mod tests {
         assert_eq!(payload["canStart"], Value::Bool(true));
         let requests = server.requests.lock().unwrap().clone();
         assert_eq!(requests.len(), 1);
-        assert!(requests[0].starts_with("GET /limits HTTP/1.1\r\n"), "{}", requests[0]);
-        assert!(requests[0].contains("authorization: Bearer box_testkey"), "{}", requests[0]);
-        assert!(requests[0].contains("accept: application/json"), "{}", requests[0]);
+        assert!(
+            requests[0].starts_with("GET /limits HTTP/1.1\r\n"),
+            "{}",
+            requests[0]
+        );
+        assert!(
+            requests[0].contains("authorization: Bearer box_testkey"),
+            "{}",
+            requests[0]
+        );
+        assert!(
+            requests[0].contains("accept: application/json"),
+            "{}",
+            requests[0]
+        );
         server.stop();
     }
 
     #[tokio::test]
     async fn post_body_is_compact_json() {
-        let server =
-            mock_http(vec![http_response(200, "OK", r#"{"ok": true, "type": "box.created"}"#)])
-                .await;
+        let server = mock_http(vec![http_response(
+            200,
+            "OK",
+            r#"{"ok": true, "type": "box.created"}"#,
+        )])
+        .await;
         let body = serde_json::json!({"ttlSeconds": 7200, "noEnv": true});
         transport(&server)
             .request_json("POST", "/boxes", Some(&body), &[], &["box.created"])
             .await
             .unwrap();
         let requests = server.requests.lock().unwrap().clone();
-        assert!(requests[0].contains("content-type: application/json"), "{}", requests[0]);
+        assert!(
+            requests[0].contains("content-type: application/json"),
+            "{}",
+            requests[0]
+        );
         assert!(
             requests[0].ends_with(r#"{"ttlSeconds":7200,"noEnv":true}"#),
             "compact separators: {}",
@@ -388,8 +455,12 @@ mod tests {
         server.stop();
 
         // Wrong type.
-        let server =
-            mock_http(vec![http_response(200, "OK", r#"{"ok": true, "type": "other"}"#)]).await;
+        let server = mock_http(vec![http_response(
+            200,
+            "OK",
+            r#"{"ok": true, "type": "other"}"#,
+        )])
+        .await;
         let err = transport(&server)
             .request_json("GET", "/limits", None, &[], &["limits.info"])
             .await
@@ -412,7 +483,11 @@ mod tests {
             .request_json("GET", "/limits", None, &[], &[])
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("Box JSON response is not an object"), "{err}");
+        assert!(
+            err.to_string()
+                .contains("Box JSON response is not an object"),
+            "{err}"
+        );
         server.stop();
     }
 
@@ -428,7 +503,9 @@ mod tests {
             .request_json("GET", "/limits", None, &[], &[])
             .await
             .unwrap_err();
-        let BoxError::Api(api) = err else { panic!("expected Api error: {err:?}") };
+        let BoxError::Api(api) = err else {
+            panic!("expected Api error: {err:?}")
+        };
         assert_eq!(api.status, 429);
         assert!(api.retryable);
         assert_eq!(api.code, "rate_limited");
@@ -447,7 +524,9 @@ mod tests {
             .request_json("GET", "/boxes/bx_2abcdefg", None, &[], &[])
             .await
             .unwrap_err();
-        let BoxError::Api(api) = err else { panic!("expected Api error: {err:?}") };
+        let BoxError::Api(api) = err else {
+            panic!("expected Api error: {err:?}")
+        };
         assert_eq!(api.status, 404);
         assert!(!api.retryable);
         // "box_not_found" matches the box-key redaction pattern (Python
@@ -462,7 +541,9 @@ mod tests {
             .request_json("GET", "/limits", None, &[], &[])
             .await
             .unwrap_err();
-        let BoxError::Api(api) = err else { panic!("expected Api error: {err:?}") };
+        let BoxError::Api(api) = err else {
+            panic!("expected Api error: {err:?}")
+        };
         assert_eq!(api.code, "http_error");
         assert_eq!(api.message, "Box API request failed");
         assert!(api.retryable);
@@ -477,7 +558,10 @@ mod tests {
             .request_json("GET", "/limits", None, &[], &[])
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("exceeded configured size bound"), "{err}");
+        assert!(
+            err.to_string().contains("exceeded configured size bound"),
+            "{err}"
+        );
         server.stop();
     }
 
@@ -485,12 +569,21 @@ mod tests {
     async fn binary_requests_skip_envelope_validation() {
         let server = mock_http(vec![http_response(200, "OK", "raw-bytes-not-json")]).await;
         let bytes = transport(&server)
-            .request_binary("GET", "/boxes/bx_2abcdefg/artifacts", &[("path", "/a".to_string())], 1024)
+            .request_binary(
+                "GET",
+                "/boxes/bx_2abcdefg/artifacts",
+                &[("path", "/a".to_string())],
+                1024,
+            )
             .await
             .unwrap();
         assert_eq!(bytes, b"raw-bytes-not-json");
         let requests = server.requests.lock().unwrap().clone();
-        assert!(requests[0].starts_with("GET /boxes/bx_2abcdefg/artifacts?path=%2Fa "), "{}", requests[0]);
+        assert!(
+            requests[0].starts_with("GET /boxes/bx_2abcdefg/artifacts?path=%2Fa "),
+            "{}",
+            requests[0]
+        );
         server.stop();
     }
 
@@ -501,7 +594,13 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         drop(listener);
         let t = BoxHttpTransport::new_for_test("k", &format!("http://{addr}"), 2.0);
-        let err = t.request_json("GET", "/limits", None, &[], &[]).await.unwrap_err();
-        assert!(err.to_string().starts_with("Box transport failed: "), "{err}");
+        let err = t
+            .request_json("GET", "/limits", None, &[], &[])
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().starts_with("Box transport failed: "),
+            "{err}"
+        );
     }
 }

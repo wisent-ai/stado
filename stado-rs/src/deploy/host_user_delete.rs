@@ -22,7 +22,8 @@ pub const STATUS_PREFIX: &str = "STADO_USER_DELETE\t";
 
 /// Accounts that are never deletable through this path: the agent's own
 /// service accounts and the operator logins a managed host depends on.
-pub const PROTECTED_USERNAMES: &[&str] = &["root", "daemon", "nobody", "charles", "lukaszbartoszcze"];
+pub const PROTECTED_USERNAMES: &[&str] =
+    &["root", "daemon", "nobody", "charles", "lukaszbartoszcze"];
 
 /// Delete `$STADO_DELETE_USER`, honouring `$STADO_KEEP_HOME`.
 pub const REMOTE_DELETE_SCRIPT: &str = r#"set -eu
@@ -100,11 +101,19 @@ pub fn remote_command(username: &str, keep_home: bool) -> String {
 /// The last valid marker line wins, as in account creation.
 pub fn parse_status(stdout: &str, username: &str) -> Result<(String, String), DeployError> {
     for line in stdout.lines().rev() {
-        let Some(rest) = line.strip_prefix(STATUS_PREFIX) else { continue };
+        let Some(rest) = line.strip_prefix(STATUS_PREFIX) else {
+            continue;
+        };
         let fields: Vec<&str> = rest.split('\t').collect();
-        let Some(status) = fields.first() else { continue };
-        let Some(os_name) = fields.get(usize::from(true)) else { continue };
-        let Some(reported) = fields.get(usize::from(true) + usize::from(true)) else { continue };
+        let Some(status) = fields.first() else {
+            continue;
+        };
+        let Some(os_name) = fields.get(usize::from(true)) else {
+            continue;
+        };
+        let Some(reported) = fields.get(usize::from(true) + usize::from(true)) else {
+            continue;
+        };
         if *reported == username {
             return Ok((status.to_string(), os_name.to_string()));
         }

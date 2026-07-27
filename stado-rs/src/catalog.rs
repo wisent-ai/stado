@@ -169,22 +169,21 @@ pub static AZURE_QUOTA_FAMILY_TO_ACCEL: LazyLock<HashMap<&'static str, &'static 
 /// Therefore the live quota reader admits only families whose representative
 /// size is one of the scheduler-supported defaults, and derives vCPU/GPU from
 /// [`AZURE_VM_TO_ACCEL`] instead of pooling unrelated family limits.
-pub static AZURE_QUOTA_FAMILY_TO_MACHINE_TYPE: LazyLock<
-    HashMap<&'static str, &'static str>,
-> = LazyLock::new(|| {
-    HashMap::from([
-        ("standardNCFamily", "Standard_NC6"),
-        ("standardNCSv3Family", "Standard_NC6s_v3"),
-        ("Standard NCASv3_T4 Family", "Standard_NC4as_T4_v3"),
-        ("standardNCASv3Family", "Standard_NC4as_T4_v3"),
-        ("StandardNCADSA10v4Family", "Standard_NC8ads_A10_v4"),
-        ("StandardNCADSA100v4Family", "Standard_NC24ads_A100_v4"),
-        ("StandardNCadsH100v5Family", "Standard_NC40ads_H100_v5"),
-        ("standardNDISRH200V5Family", "Standard_ND96isr_H200_v5"),
-        ("standardNDISRGB200V6NDRFamily", "Standard_ND96isr_B200_v6"),
-        ("standardNDISv5MI300XFamily", "Standard_ND96isr_MI300X_v5"),
-    ])
-});
+pub static AZURE_QUOTA_FAMILY_TO_MACHINE_TYPE: LazyLock<HashMap<&'static str, &'static str>> =
+    LazyLock::new(|| {
+        HashMap::from([
+            ("standardNCFamily", "Standard_NC6"),
+            ("standardNCSv3Family", "Standard_NC6s_v3"),
+            ("Standard NCASv3_T4 Family", "Standard_NC4as_T4_v3"),
+            ("standardNCASv3Family", "Standard_NC4as_T4_v3"),
+            ("StandardNCADSA10v4Family", "Standard_NC8ads_A10_v4"),
+            ("StandardNCADSA100v4Family", "Standard_NC24ads_A100_v4"),
+            ("StandardNCadsH100v5Family", "Standard_NC40ads_H100_v5"),
+            ("standardNDISRH200V5Family", "Standard_ND96isr_H200_v5"),
+            ("standardNDISRGB200V6NDRFamily", "Standard_ND96isr_B200_v6"),
+            ("standardNDISv5MI300XFamily", "Standard_ND96isr_MI300X_v5"),
+        ])
+    });
 
 /// On-demand hourly rate per GPU, USD.
 ///
@@ -352,7 +351,10 @@ mod tests {
         assert_eq!(GPU_SIZING["gcp"].len(), 10);
         assert_eq!(GPU_SIZING["azure"].len(), 10);
         assert_eq!(GPU_SIZING["aws"].len(), 5);
-        assert_eq!(GPU_SIZING["gcp"][&80], ("a2-ultragpu-1g", "nvidia-a100-80gb"));
+        assert_eq!(
+            GPU_SIZING["gcp"][&80],
+            ("a2-ultragpu-1g", "nvidia-a100-80gb")
+        );
         assert_eq!(
             GPU_SIZING["azure"][&192],
             ("Standard_ND96isr_MI300X_v5", "amd-mi300x-192gb")
@@ -369,8 +371,14 @@ mod tests {
     #[test]
     fn azure_vm_tables() {
         assert_eq!(AZURE_VM_TO_ACCEL.len(), 46);
-        assert_eq!(AZURE_VM_TO_ACCEL["Standard_NC64as_T4_v3"], ("nvidia-tesla-t4", 4));
-        assert_eq!(AZURE_VM_TO_ACCEL["Standard_ND96isr_B200_v6"], ("nvidia-b200-180gb", 8));
+        assert_eq!(
+            AZURE_VM_TO_ACCEL["Standard_NC64as_T4_v3"],
+            ("nvidia-tesla-t4", 4)
+        );
+        assert_eq!(
+            AZURE_VM_TO_ACCEL["Standard_ND96isr_B200_v6"],
+            ("nvidia-b200-180gb", 8)
+        );
         assert_eq!(AZURE_QUOTA_FAMILY_TO_ACCEL.len(), 29);
         assert_eq!(
             AZURE_QUOTA_FAMILY_TO_ACCEL["standardNDISv5MI300XFamily"],
@@ -397,6 +405,9 @@ mod tests {
         assert_eq!(GPU_TYPE_TO_MACHINE_TYPE.len(), 16);
         assert_eq!(GPU_TYPE_TO_MACHINE_TYPE["nvidia-l4"], "g2-standard-4");
         assert_eq!(AZURE_VM_HOURLY_RATE_USD.len(), 34);
-        assert_eq!(AZURE_VM_HOURLY_RATE_USD["Standard_ND96isr_GB200_v6"], (220.00, 66.00));
+        assert_eq!(
+            AZURE_VM_HOURLY_RATE_USD["Standard_ND96isr_GB200_v6"],
+            (220.00, 66.00)
+        );
     }
 }

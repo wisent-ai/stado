@@ -33,14 +33,17 @@ fn parse_iso(ts: Option<&str>) -> Option<DateTime<Utc>> {
     if ts.is_empty() {
         return None;
     }
-    DateTime::parse_from_rfc3339(ts).ok().map(|dt| dt.with_timezone(&Utc))
+    DateTime::parse_from_rfc3339(ts)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
 }
 
 /// started -> (completed or failed). None if either side missing.
 /// Python `_wall_seconds`.
 fn wall_seconds(job: &Job) -> Option<f64> {
     let start = parse_iso(job.started_at.as_deref())?;
-    let end = parse_iso(job.completed_at.as_deref()).or_else(|| parse_iso(job.failed_at.as_deref()))?;
+    let end =
+        parse_iso(job.completed_at.as_deref()).or_else(|| parse_iso(job.failed_at.as_deref()))?;
     Some(((end - start).num_milliseconds() as f64 / 1000.0).max(0.0))
 }
 
@@ -57,8 +60,10 @@ fn wall_seconds(job: &Job) -> Option<f64> {
 /// Python `_hourly_rate_usd`.
 pub fn hourly_rate_usd(gpu_type: &str, preemptible: bool, machine_type: &str) -> f64 {
     if machine_type.starts_with("Standard_") {
-        let (on_demand, spot) =
-            AZURE_VM_HOURLY_RATE_USD.get(machine_type).copied().unwrap_or((0.0, 0.0));
+        let (on_demand, spot) = AZURE_VM_HOURLY_RATE_USD
+            .get(machine_type)
+            .copied()
+            .unwrap_or((0.0, 0.0));
         return if preemptible { spot } else { on_demand };
     }
     let mut gpu = GPU_HOURLY_RATE_USD.get(gpu_type).copied().unwrap_or(0.0);
@@ -66,12 +71,22 @@ pub fn hourly_rate_usd(gpu_type: &str, preemptible: bool, machine_type: &str) ->
         gpu *= SPOT_DISCOUNT.get(gpu_type).copied().unwrap_or(0.5);
     }
     let mt = if machine_type.is_empty() {
-        GPU_TYPE_TO_MACHINE_TYPE.get(gpu_type).copied().unwrap_or("")
+        GPU_TYPE_TO_MACHINE_TYPE
+            .get(gpu_type)
+            .copied()
+            .unwrap_or("")
     } else {
         machine_type
     };
-    let bundle_pair = VM_BUNDLE_HOURLY_RATE_USD.get(mt).copied().unwrap_or((0.0, 0.0));
-    let bundle = if preemptible { bundle_pair.1 } else { bundle_pair.0 };
+    let bundle_pair = VM_BUNDLE_HOURLY_RATE_USD
+        .get(mt)
+        .copied()
+        .unwrap_or((0.0, 0.0));
+    let bundle = if preemptible {
+        bundle_pair.1
+    } else {
+        bundle_pair.0
+    };
     gpu + bundle
 }
 
@@ -101,9 +116,13 @@ pub fn target_kind(job: &Job) -> String {
 /// Best-effort: extract --model 'X' out of the command line.
 /// Python `_model_from_command`.
 pub fn model_from_command(cmd: &str) -> String {
-    let Some((_, rest)) = cmd.split_once("--model") else { return String::new() };
+    let Some((_, rest)) = cmd.split_once("--model") else {
+        return String::new();
+    };
     let parts = rest.trim_start();
-    let Some(first) = parts.chars().next() else { return String::new() };
+    let Some(first) = parts.chars().next() else {
+        return String::new();
+    };
     if first == '\'' || first == '"' {
         let after = &parts[first.len_utf8()..];
         if after.contains(first) {
@@ -134,8 +153,15 @@ pub struct CostRow {
 pub fn wall_time_table(rows: &[CostRow]) -> BTreeMap<(String, String), f64> {
     let mut buckets: BTreeMap<(String, String), Vec<f64>> = BTreeMap::new();
     for r in rows {
-        let model = if r.model.is_empty() { "(unknown)".to_string() } else { r.model.clone() };
-        buckets.entry((model, r.gpu_type.clone())).or_default().push(r.wall_s);
+        let model = if r.model.is_empty() {
+            "(unknown)".to_string()
+        } else {
+            r.model.clone()
+        };
+        buckets
+            .entry((model, r.gpu_type.clone()))
+            .or_default()
+            .push(r.wall_s);
     }
     let mut out = BTreeMap::new();
     for (key, mut walls) in buckets {
@@ -166,7 +192,11 @@ pub fn estimate_wall_time(
 ) -> f64 {
     let model = {
         let m = model_from_command(job_command);
-        if m.is_empty() { "(unknown)".to_string() } else { m }
+        if m.is_empty() {
+            "(unknown)".to_string()
+        } else {
+            m
+        }
     };
     if let Some(val) = table.get(&(model, gpu_type.to_string())) {
         if *val > 0.0 {
@@ -182,13 +212,19 @@ pub async fn collect_completed(store: &JobStorage) -> Result<Vec<CostRow>, Stora
     let mut rows = Vec::new();
     for state in ["completed", "failed"] {
         for job in store.list_jobs(state, 0).await? {
-            let Some(wall) = wall_seconds(&job) else { continue };
+            let Some(wall) = wall_seconds(&job) else {
+                continue;
+            };
             let rate = hourly_rate_usd(&job.gpu_type, job.preemptible, &job.machine_type);
             let cost = (wall / 3600.0) * rate;
             rows.push(CostRow {
                 job_id: job.job_id.clone(),
                 state: state.into(),
-                gpu_type: if job.gpu_type.is_empty() { "cpu".into() } else { job.gpu_type.clone() },
+                gpu_type: if job.gpu_type.is_empty() {
+                    "cpu".into()
+                } else {
+                    job.gpu_type.clone()
+                },
                 preemptible: job.preemptible,
                 wall_s: wall,
                 rate_usd_hr: rate,
@@ -223,13 +259,20 @@ pub struct Report {
 /// Aggregate finished-job rows into per-bucket summaries. Python `report`.
 pub async fn report(store: &JobStorage) -> Result<Report, StorageError> {
     let rows = collect_completed(store).await?;
-    let mut rep = Report { total_jobs: rows.len(), ..Default::default() };
+    let mut rep = Report {
+        total_jobs: rows.len(),
+        ..Default::default()
+    };
     for r in &rows {
         for (table, key) in [
             (&mut rep.by_target, r.target_kind.clone()),
             (
                 &mut rep.by_model,
-                if r.model.is_empty() { "(unknown)".to_string() } else { r.model.clone() },
+                if r.model.is_empty() {
+                    "(unknown)".to_string()
+                } else {
+                    r.model.clone()
+                },
             ),
         ] {
             let bucket = table.entry(key).or_default();
@@ -274,11 +317,18 @@ pub async fn project_batch(
         });
     }
     let avg = rep.total_cost_usd / n_rows as f64;
-    let text = std::fs::read_to_string(batch_path)
-        .map_err(|e| StorageError::Other(format!("cannot read batch file {}: {e}", batch_path.display())))?;
+    let text = std::fs::read_to_string(batch_path).map_err(|e| {
+        StorageError::Other(format!(
+            "cannot read batch file {}: {e}",
+            batch_path.display()
+        ))
+    })?;
     // Python: `line.strip() and not line.startswith("#")` — the #-check is
     // on the RAW line, so an indented "# comment" line still counts.
-    let n = text.lines().filter(|line| !line.trim().is_empty() && !line.starts_with('#')).count();
+    let n = text
+        .lines()
+        .filter(|line| !line.trim().is_empty() && !line.starts_with('#'))
+        .count();
     Ok(Projection {
         jobs_in_batch: n,
         samples: n_rows,
@@ -294,7 +344,10 @@ pub fn format_report(rep: &Report) -> Vec<String> {
     let mut lines = Vec::new();
     lines.push(format!("jobs_with_walltime: {}", rep.total_jobs));
     lines.push(format!("total_cost_usd:     ${:.4}", rep.total_cost_usd));
-    lines.push(format!("total_wall_hours:   {:.2}", rep.total_wall_s / 3600.0));
+    lines.push(format!(
+        "total_wall_hours:   {:.2}",
+        rep.total_wall_s / 3600.0
+    ));
     lines.push(String::new());
     lines.push("by target_kind:".to_string());
     for (k, v) in &rep.by_target {
@@ -308,7 +361,10 @@ pub fn format_report(rep: &Report) -> Vec<String> {
     lines.push(String::new());
     lines.push("by model:".to_string());
     for (k, v) in &rep.by_model {
-        lines.push(format!("  {k:<48} jobs={:<5} cost=${:.4}", v.jobs, v.cost_usd));
+        lines.push(format!(
+            "  {k:<48} jobs={:<5} cost=${:.4}",
+            v.jobs, v.cost_usd
+        ));
     }
     lines
 }
@@ -363,7 +419,10 @@ mod tests {
         // L4 spot: 0.71*0.40 + 0.12 = 0.284 + 0.12 = 0.404.
         assert!((hourly_rate_usd("nvidia-l4", true, "") - 0.404).abs() < 1e-12);
         // Recorded machine_type wins over the catalog fallback.
-        assert_eq!(hourly_rate_usd("nvidia-l4", false, "g2-standard-8"), 0.71 + 0.60);
+        assert_eq!(
+            hourly_rate_usd("nvidia-l4", false, "g2-standard-8"),
+            0.71 + 0.60
+        );
         // Unknown GPU, no machine type: zero.
         assert_eq!(hourly_rate_usd("mystery-gpu", false, ""), 0.0);
         // Unknown GPU default spot discount: 0.5x of 0.0 stays 0.0; check
@@ -371,16 +430,27 @@ mod tests {
         // entry is not reachable from the catalog (all 20 entries have
         // both), so assert the A100 spot pair instead:
         // A100-80 spot: 3.67*0.54 + a2-ultragpu-1g 0.55 = 1.9818 + 0.55.
-        assert!((hourly_rate_usd("nvidia-a100-80gb", true, "") - (3.67 * 0.54 + 0.55)).abs() < 1e-9);
+        assert!(
+            (hourly_rate_usd("nvidia-a100-80gb", true, "") - (3.67 * 0.54 + 0.55)).abs() < 1e-9
+        );
     }
 
     #[test]
     fn hourly_rate_azure_single_line_item() {
         // Azure NC* SKUs bundle the GPU: no GPU+bundle sum.
-        assert_eq!(hourly_rate_usd("nvidia-a10", false, "Standard_NC8ads_A10_v4"), 0.91);
-        assert_eq!(hourly_rate_usd("nvidia-a10", true, "Standard_NC8ads_A10_v4"), 0.18);
+        assert_eq!(
+            hourly_rate_usd("nvidia-a10", false, "Standard_NC8ads_A10_v4"),
+            0.91
+        );
+        assert_eq!(
+            hourly_rate_usd("nvidia-a10", true, "Standard_NC8ads_A10_v4"),
+            0.18
+        );
         // Unknown Azure size -> 0.
-        assert_eq!(hourly_rate_usd("nvidia-a10", false, "Standard_UNKNOWN"), 0.0);
+        assert_eq!(
+            hourly_rate_usd("nvidia-a10", false, "Standard_UNKNOWN"),
+            0.0
+        );
     }
 
     #[test]
@@ -437,12 +507,21 @@ mod tests {
         ];
         let table = wall_time_table(&rows);
         assert_eq!(table[&("m".to_string(), "nvidia-l4".to_string())], 300.0);
-        assert_eq!(table[&("(unknown)".to_string(), "nvidia-l4".to_string())], 50.0);
+        assert_eq!(
+            table[&("(unknown)".to_string(), "nvidia-l4".to_string())],
+            50.0
+        );
 
         // Observed median wins when present.
-        assert_eq!(estimate_wall_time("x --model m", "nvidia-l4", 24, &table), 300.0);
+        assert_eq!(
+            estimate_wall_time("x --model m", "nvidia-l4", 24, &table),
+            300.0
+        );
         // Missing (model, gpu_type) -> heuristic: 50 + 7*(80 + 24*5) = 1450.
-        assert_eq!(estimate_wall_time("x --model other", "nvidia-l4", 24, &table), 1450.0);
+        assert_eq!(
+            estimate_wall_time("x --model other", "nvidia-l4", 24, &table),
+            1450.0
+        );
         assert_eq!(heuristic_wall_time_seconds(0), 50.0 + 7.0 * 80.0);
     }
 
@@ -493,7 +572,11 @@ mod tests {
         let rep = report(&store).await.unwrap();
         assert_eq!(rep.total_jobs, 3);
         let expected = 0.18 + (0.404 / 2.0) + (0.91 * 2.0);
-        assert!((rep.total_cost_usd - expected).abs() < 1e-9, "{} vs {expected}", rep.total_cost_usd);
+        assert!(
+            (rep.total_cost_usd - expected).abs() < 1e-9,
+            "{} vs {expected}",
+            rep.total_cost_usd
+        );
         assert!((rep.total_wall_s - (3600.0 + 1800.0 + 7200.0)).abs() < 1e-9);
 
         // by_target: local / gcp (heuristic for legacy-style ref) / azure.
@@ -518,10 +601,15 @@ mod tests {
         let lines = format_report(&rep);
         assert_eq!(lines[0], "jobs_with_walltime: 3");
         assert_eq!(lines[1], format!("total_cost_usd:     ${expected:.4}"));
-        assert_eq!(lines[2], format!("total_wall_hours:   {:.2}", 12600.0 / 3600.0));
+        assert_eq!(
+            lines[2],
+            format!("total_wall_hours:   {:.2}", 12600.0 / 3600.0)
+        );
         assert_eq!(lines[3], "");
         assert_eq!(lines[4], "by target_kind:");
-        assert!(lines.iter().any(|l| l.starts_with(&format!("  {:<10} jobs=1", "azure"))));
+        assert!(lines
+            .iter()
+            .any(|l| l.starts_with(&format!("  {:<10} jobs=1", "azure"))));
         assert!(lines.iter().any(|l| l.starts_with("  org/m1")));
     }
 

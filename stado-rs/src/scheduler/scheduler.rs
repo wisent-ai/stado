@@ -30,6 +30,7 @@ use crate::config;
 use crate::models::Job;
 use crate::providers::{Provider, ProviderError};
 use crate::queue::capacity;
+use crate::queue::control;
 use crate::queue::{JobStorage, StorageError};
 use crate::scheduler::cost;
 use crate::scheduler::dispatch::agent::{dispatch_agent_vms, AgentDispatchInputs};
@@ -64,9 +65,19 @@ pub enum SchedulerError {
     /// Provider create/list failures.
     #[error(transparent)]
     Provider(#[from] ProviderError),
-    /// Startup-script template read failures.
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
+    /// A `${KEY}` the bundled startup templates reference but that no
+    /// producer filled. Left unsubstituted the placeholder reaches the VM
+    /// verbatim and `set -u` aborts the boot before the agent starts, so
+    /// dispatch refuses to create the instance rather than pay for a VM
+    /// that can never claim a job.
+    #[error(
+        "startup-script placeholder ${{{key}}} was never substituted; supply it from \
+         scheduler::dispatch::agent::deployment_substitutions or the coordinator secrets"
+    )]
+    UnresolvedPlaceholder {
+        /// Placeholder name only, never its value — secrets stay unlogged.
+        key: String,
+    },
 }
 
 /// Python `_log`.
@@ -91,11 +102,17 @@ pub(crate) fn py_pairs_i64(pairs: &[(String, i64)]) -> String {
 /// Return $/hour for one accelerator of this type at given pricing model.
 /// Python `_accel_hourly_rate`.
 pub fn accel_hourly_rate(accel_type: &str, preemptible: bool) -> f64 {
-    let base = crate::catalog::GPU_HOURLY_RATE_USD.get(accel_type).copied().unwrap_or(0.0);
+    let base = crate::catalog::GPU_HOURLY_RATE_USD
+        .get(accel_type)
+        .copied()
+        .unwrap_or(0.0);
     if !preemptible {
         return base;
     }
-    base * crate::catalog::SPOT_DISCOUNT.get(accel_type).copied().unwrap_or(0.5)
+    base * crate::catalog::SPOT_DISCOUNT
+        .get(accel_type)
+        .copied()
+        .unwrap_or(0.5)
 }
 
 /// True if this job is past its dispatch-backoff window.
@@ -107,7 +124,9 @@ pub fn backoff_due(job: &Job, now_utc: DateTime<Utc>) -> bool {
     }
     let idx = (attempts as usize).min(DISPATCH_BACKOFF_MINUTES.len() - 1);
     let wait_minutes = DISPATCH_BACKOFF_MINUTES[idx].min(MAX_DISPATCH_BACKOFF_MINUTES);
-    let Some(last) = &job.last_dispatch_attempt else { return true };
+    let Some(last) = &job.last_dispatch_attempt else {
+        return true;
+    };
     if last.is_empty() {
         return true;
     }
@@ -155,8 +174,11 @@ pub(crate) fn prefilter_candidates(
     provider_name: &str,
     window_budget: usize,
 ) -> (Vec<String>, usize) {
-    let in_quota: BTreeSet<&str> =
-        available.iter().filter(|(_, v)| **v > 0).map(|(a, _)| a.as_str()).collect();
+    let in_quota: BTreeSet<&str> = available
+        .iter()
+        .filter(|(_, v)| **v > 0)
+        .map(|(a, _)| a.as_str())
+        .collect();
     let mut cand: Vec<(i64, i64, String)> = Vec::new(); // (-priority, updated_ts, job_id)
     let mut skipped_no_quota = 0usize;
     for info in blobs {
@@ -164,27 +186,50 @@ pub(crate) fn prefilter_candidates(
             continue;
         }
         let meta = &info.metadata;
-        let gm: i64 = meta.get("gpu_mem_gb").and_then(|s| s.parse().ok()).unwrap_or(0);
+        let gm: i64 = meta
+            .get("gpu_mem_gb")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
         let explicit_accel = meta.get("gpu_type").map(|s| s.trim()).unwrap_or("");
         // gm<=0 jobs are kept: dispatch_agent_vms re-sizes them via its own
         // observed/smallest_live_vram recovery. Only skip jobs with a
         // concrete size that maps to an accelerator with zero available
         // quota.
-        let derived = if gm > 0 { config::lookup_instance_type(provider_name, gm).1 } else { "" };
-        let accel_for_filter = if explicit_accel.is_empty() { derived } else { explicit_accel };
+        let derived = if gm > 0 {
+            config::lookup_instance_type(provider_name, gm).1
+        } else {
+            ""
+        };
+        let accel_for_filter = if explicit_accel.is_empty() {
+            derived
+        } else {
+            explicit_accel
+        };
         if !accel_for_filter.is_empty() && !in_quota.contains(accel_for_filter) {
             skipped_no_quota += 1;
             continue;
         }
-        let prio: i64 = meta.get("priority").and_then(|s| s.parse().ok()).unwrap_or(0);
+        let prio: i64 = meta
+            .get("priority")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
         let ts = info.updated.map(|u| u.timestamp()).unwrap_or(0);
-        let jid = info.name.rsplit('/').next().unwrap_or("").trim_end_matches(".json").to_string();
+        let jid = info
+            .name
+            .rsplit('/')
+            .next()
+            .unwrap_or("")
+            .trim_end_matches(".json")
+            .to_string();
         cand.push((-prio, ts, jid));
     }
     // priority desc, then oldest-first (FIFO)
     cand.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
     cand.truncate(window_budget);
-    (cand.into_iter().map(|(_, _, jid)| jid).collect(), skipped_no_quota)
+    (
+        cand.into_iter().map(|(_, _, jid)| jid).collect(),
+        skipped_no_quota,
+    )
 }
 
 /// The cost-optimal local-pack knapsack half of Python
@@ -262,6 +307,22 @@ pub async fn schedule_queued_jobs(
     provider_name: &str,
     secrets: &BTreeMap<String, String>,
 ) -> Result<i64, SchedulerError> {
+    // Maintenance-mode gate (queue::control — read that module for the
+    // full semantics). A paused queue dispatches NOTHING: no quota read,
+    // no instance created, no new cloud spend. The backlog is left exactly
+    // as it is, because pausing is not cancelling, and jobs already in
+    // running/ finish normally — which is what lets `stado queue drain
+    // --wait` terminate. Re-read every tick so `stado queue resume` takes
+    // effect on the next one.
+    let queue_control = control::read(store).await?;
+    if queue_control.paused {
+        log(&format!(
+            "Queue paused ({}); dispatching nothing",
+            queue_control.pause_summary()
+        ));
+        return Ok(i64::default());
+    }
+
     let available = get_available_slots(store, provider, provider_name).await?;
     log(&format!("Available slots: {}", py_dict_i64(&available)));
 
@@ -311,8 +372,16 @@ pub async fn schedule_queued_jobs(
     // whichever accel comes first in the sorted queue). The pass after
     // this loop fills any remaining budget without per-accel limits, so we
     // don't underuse.
-    let distinct_accels: BTreeSet<&str> =
-        queued.iter().map(|j| if j.gpu_type.is_empty() { "_cpu" } else { j.gpu_type.as_str() }).collect();
+    let distinct_accels: BTreeSet<&str> = queued
+        .iter()
+        .map(|j| {
+            if j.gpu_type.is_empty() {
+                "_cpu"
+            } else {
+                j.gpu_type.as_str()
+            }
+        })
+        .collect();
     let per_accel_share = if distinct_accels.is_empty() {
         per_tick_cap
     } else {
@@ -329,10 +398,16 @@ pub async fn schedule_queued_jobs(
     let local_free = capacity::total_free_by_accel(&consumer_caps, Some(&["local"]));
     let local_vram_pool = capacity::consumers_by_free_vram(&consumer_caps, Some(&["local"]));
     if !local_free.is_empty() {
-        log(&format!("Live local-agent slots: {}", py_dict_i64(&local_free)));
+        log(&format!(
+            "Live local-agent slots: {}",
+            py_dict_i64(&local_free)
+        ));
     }
     if !local_vram_pool.is_empty() {
-        log(&format!("Live local-agent free_vram_gb: {}", py_pairs_i64(&local_vram_pool)));
+        log(&format!(
+            "Live local-agent free_vram_gb: {}",
+            py_pairs_i64(&local_vram_pool)
+        ));
     }
 
     let mut yield_targets = HashMap::new();
@@ -416,8 +491,10 @@ mod tests {
         j.last_dispatch_attempt = Some((now - Duration::minutes(121)).to_rfc3339());
         assert!(backoff_due(&j, now));
         // Z-suffix timestamps parse (Python fromisoformat path).
-        j.last_dispatch_attempt =
-            Some(format!("{}Z", (now - Duration::minutes(200)).format("%Y-%m-%dT%H:%M:%S")));
+        j.last_dispatch_attempt = Some(format!(
+            "{}Z",
+            (now - Duration::minutes(200)).format("%Y-%m-%dT%H:%M:%S")
+        ));
         assert!(backoff_due(&j, now));
         // Missing/garbage timestamps are due (Python returns True).
         j.last_dispatch_attempt = None;
@@ -448,19 +525,31 @@ mod tests {
         let mut p5 = job("t4-prio", 16, "nvidia-tesla-t4");
         p5.priority = 5;
         store.write_job("queue", &p5).await.unwrap();
-        store.write_job("queue", &job("t4-a", 16, "nvidia-tesla-t4")).await.unwrap();
+        store
+            .write_job("queue", &job("t4-a", 16, "nvidia-tesla-t4"))
+            .await
+            .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(10));
-        store.write_job("queue", &job("t4-b", 16, "nvidia-tesla-t4")).await.unwrap();
+        store
+            .write_job("queue", &job("t4-b", 16, "nvidia-tesla-t4"))
+            .await
+            .unwrap();
         // Undispatchable: k80 (0 quota), plus a 24GB job whose derived
         // accel (nvidia-l4) has 0 quota even though the metadata gpu_type
         // was never stamped.
-        store.write_job("queue", &job("k80-stuck", 12, "nvidia-tesla-k80")).await.unwrap();
+        store
+            .write_job("queue", &job("k80-stuck", 12, "nvidia-tesla-k80"))
+            .await
+            .unwrap();
         let mut derived = job("l4-stuck", 24, "");
         derived.machine_type = String::new();
         store.write_job("queue", &derived).await.unwrap();
         // gm<=0 jobs are kept for the dispatch-side recovery path.
         let unsized_job = job("unsized", 0, "");
-        store.upload_text("queue/unsized.json", &unsized_job.to_json()).await.unwrap();
+        store
+            .upload_text("queue/unsized.json", &unsized_job.to_json())
+            .await
+            .unwrap();
 
         let available = BTreeMap::from([
             ("nvidia-tesla-t4".to_string(), 3),
@@ -478,14 +567,21 @@ mod tests {
         // Two local consumers; the 8GB admission buffer is reserved from
         // the broadcast free VRAM before packing (local-small: 12 usable,
         // local-big: 32 usable).
-        let pool = vec![("local-small".to_string(), 20i64), ("local-big".to_string(), 40i64)];
+        let pool = vec![
+            ("local-small".to_string(), 20i64),
+            ("local-big".to_string(), 40i64),
+        ];
         let wt = BTreeMap::new(); // heuristic wall-times (identical rate/need curve)
-        // Scores (heuristic wall ~ 50 + 7*(80+5*need), l4 @ $0.71/hr):
-        // need-10 > need-12 > need-31. Best-fit picks the strictly-largest
-        // free consumer first, so both smaller jobs pack into local-big
-        // and the 31GB job finds no fit (big's 32 was consumed by the
-        // first two; small only ever had 12).
-        let queued = vec![job("need-12", 12, "nvidia-l4"), job("need-10", 10, "nvidia-l4"), job("need-31", 31, "nvidia-l4")];
+                                  // Scores (heuristic wall ~ 50 + 7*(80+5*need), l4 @ $0.71/hr):
+                                  // need-10 > need-12 > need-31. Best-fit picks the strictly-largest
+                                  // free consumer first, so both smaller jobs pack into local-big
+                                  // and the 31GB job finds no fit (big's 32 was consumed by the
+                                  // first two; small only ever had 12).
+        let queued = vec![
+            job("need-12", 12, "nvidia-l4"),
+            job("need-10", 10, "nvidia-l4"),
+            job("need-31", 31, "nvidia-l4"),
+        ];
         let yields = local_pack(&queued, &pool, &wt, now);
         assert_eq!(yields.len(), 2, "{yields:?}");
         assert_eq!(yields["need-10"], "local-big");

@@ -81,7 +81,10 @@ impl VastError {
 /// The env half of `resolve_vast_api_key`, split out for tests: stripped,
 /// empty treated as missing.
 pub fn env_vast_api_key(value: Option<&str>) -> Option<String> {
-    value.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
+    value
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 /// Python `resolve_vast_api_key`: env first, then GCP Secret Manager; ""
@@ -90,7 +93,9 @@ pub async fn resolve_vast_api_key() -> String {
     if let Some(key) = env_vast_api_key(std::env::var("VAST_API_KEY").ok().as_deref()) {
         return key;
     }
-    fetch_secret_manager_key(config::project()).await.unwrap_or_default()
+    fetch_secret_manager_key(config::project())
+        .await
+        .unwrap_or_default()
 }
 
 /// Python `vast_api_key_available`.
@@ -109,7 +114,10 @@ async fn fetch_secret_manager_key(project: &str) -> Option<String> {
     );
     let response = reqwest::Client::new()
         .get(url)
-        .header(reqwest::header::AUTHORIZATION, format!("Bearer {}", token.as_str()))
+        .header(
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {}", token.as_str()),
+        )
         .send()
         .await
         .ok()?;
@@ -119,7 +127,9 @@ async fn fetch_secret_manager_key(project: &str) -> Option<String> {
     let payload: Value = response.json().await.ok()?;
     let data = payload.get("payload")?.get("data")?.as_str()?;
     use base64::Engine;
-    let bytes = base64::engine::general_purpose::STANDARD.decode(data).ok()?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .ok()?;
     String::from_utf8(bytes).ok().map(|s| s.trim().to_string())
 }
 
@@ -244,7 +254,10 @@ impl VastClient {
             .inner
             .http
             .request(verb, format!("{}{path}", self.inner.base_url))
-            .header(reqwest::header::AUTHORIZATION, format!("Bearer {}", self.inner.api_key))
+            .header(
+                reqwest::header::AUTHORIZATION,
+                format!("Bearer {}", self.inner.api_key),
+            )
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .header(reqwest::header::ACCEPT, "application/json");
         if let Some(body) = body {
@@ -263,8 +276,9 @@ impl VastClient {
         // Python: json.loads(raw or "{}") — invalid JSON raises (here as
         // VastError::Api instead of a raw JSONDecodeError).
         let raw = if text.is_empty() { "{}" } else { &text };
-        serde_json::from_str(raw)
-            .map_err(|err| VastError::Api(format!("Vast.ai {method} {path} -> invalid JSON: {err}")))
+        serde_json::from_str(raw).map_err(|err| {
+            VastError::Api(format!("Vast.ai {method} {path} -> invalid JSON: {err}"))
+        })
     }
 
     /// Python `_machine_id`: env override, else auto-discovery via
@@ -277,7 +291,9 @@ impl VastClient {
 
     /// [`VastClient::machine_id`] with the hostname passed explicitly.
     pub async fn machine_id_for_hostname(&self, hostname: &str) -> Result<i64, VastError> {
-        if let Some(mid) = parse_machine_id_env(std::env::var("WC_VAST_MACHINE_ID").ok().as_deref())? {
+        if let Some(mid) =
+            parse_machine_id_env(std::env::var("WC_VAST_MACHINE_ID").ok().as_deref())?
+        {
             return Ok(mid);
         }
         let resp = self.request("GET", "/machines/?owner=me", None).await?;
@@ -298,7 +314,13 @@ impl VastClient {
         }
         let candidates: Vec<String> = machines
             .iter()
-            .map(|m| format!("{}={}", py_value_str(m.get("id")), py_value_str(m.get("hostname"))))
+            .map(|m| {
+                format!(
+                    "{}={}",
+                    py_value_str(m.get("id")),
+                    py_value_str(m.get("hostname"))
+                )
+            })
             .collect();
         Err(VastError::config(format!(
             "Vast.ai returned {} machines and hostname '{hostname}' did not match any. \
@@ -337,7 +359,8 @@ impl VastClient {
         if let Some(duration) = params.duration {
             body["duration"] = json!(duration);
         }
-        self.request("PUT", "/machines/create_asks/", Some(&body)).await
+        self.request("PUT", "/machines/create_asks/", Some(&body))
+            .await
     }
 
     /// Python `unlist_machine`: remove every active offer from the
@@ -351,7 +374,8 @@ impl VastClient {
 
     /// [`VastClient::unlist_machine`] with the machine id resolved.
     pub async fn unlist_machine_with_id(&self, machine_id: i64) -> Result<Value, VastError> {
-        self.request("DELETE", &format!("/machines/{machine_id}/asks/"), None).await
+        self.request("DELETE", &format!("/machines/{machine_id}/asks/"), None)
+            .await
     }
 
     /// Python `machine_status`: the current Vast.ai view of our machine
@@ -455,9 +479,16 @@ pub async fn is_stado_busy(store: &JobStorage, hostname: &str) -> Result<BusySta
     let queued = store.list_paths("queue/", 2).await?.len();
     let mut running_here = 0;
     for path in store.list_paths("running/", 0).await? {
-        let Ok(Some(text)) = store.download_text(&path).await else { continue };
-        let Ok(doc) = serde_json::from_str::<Value>(&text) else { continue };
-        let instance_ref = doc.get("instance_ref").and_then(Value::as_str).unwrap_or("");
+        let Ok(Some(text)) = store.download_text(&path).await else {
+            continue;
+        };
+        let Ok(doc) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        let instance_ref = doc
+            .get("instance_ref")
+            .and_then(Value::as_str)
+            .unwrap_or("");
         if !hostname.is_empty() && instance_ref.contains(hostname) {
             running_here += 1;
         }
@@ -471,7 +502,12 @@ pub async fn is_stado_busy(store: &JobStorage, hostname: &str) -> Result<BusySta
             .and_then(|doc| doc.get("free_vram_gb").and_then(Value::as_f64)),
         _ => None,
     };
-    Ok(BusyState { queued, running_here, free_vram_gb, idle: queued == 0 && running_here == 0 })
+    Ok(BusyState {
+        queued,
+        running_here,
+        free_vram_gb,
+        idle: queued == 0 && running_here == 0,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -511,7 +547,9 @@ pub fn decide_action(
     } else if listed {
         AutoListAction::Unlist
     } else if state.queued > 0 && state.free_vram_gb.is_some_and(|free| free < 10.0) {
-        AutoListAction::WaitingForRental { free_vram_gb: state.free_vram_gb.unwrap_or(0.0) }
+        AutoListAction::WaitingForRental {
+            free_vram_gb: state.free_vram_gb.unwrap_or(0.0),
+        }
     } else {
         AutoListAction::BusyNotListed
     }
@@ -581,7 +619,10 @@ pub async fn auto_list_loop(
     let mut listed = false;
     match client.machine_status().await {
         Ok(status) => {
-            let cur_price = status.get("listed_gpu_cost").cloned().unwrap_or(Value::Null);
+            let cur_price = status
+                .get("listed_gpu_cost")
+                .cloned()
+                .unwrap_or(Value::Null);
             if let Some(current) = cur_price.as_f64().filter(|c| *c > 0.0) {
                 listed = true;
                 log(&format!(
@@ -647,7 +688,8 @@ pub async fn auto_list_loop(
                                 log(&format!(
                                     "LISTED ({idle_dur_s}s idle, ${}/h, dur={}s)",
                                     py_float(params.price_gpu),
-                                    duration_s.map_or_else(|| "None".to_string(), |d| d.to_string())
+                                    duration_s
+                                        .map_or_else(|| "None".to_string(), |d| d.to_string())
                                 ));
                             }
                             Err(exc) => log(&format!("list failed: {exc}")),
@@ -726,7 +768,12 @@ mod tests {
     use crate::testutil::{http_response, mock_http};
 
     fn busy(queued: usize, running_here: usize, free_vram_gb: Option<f64>) -> BusyState {
-        BusyState { queued, running_here, free_vram_gb, idle: queued == 0 && running_here == 0 }
+        BusyState {
+            queued,
+            running_here,
+            free_vram_gb,
+            idle: queued == 0 && running_here == 0,
+        }
     }
 
     #[test]
@@ -760,15 +807,24 @@ mod tests {
             AutoListAction::IdleCountdown { idle_dur_s: 600 }
         );
         // Busy while listed -> Unlist.
-        assert_eq!(decide_action(true, &busy(1, 0, Some(0.0)), 0, 300), AutoListAction::Unlist);
-        assert_eq!(decide_action(true, &busy(0, 1, None), 0, 300), AutoListAction::Unlist);
+        assert_eq!(
+            decide_action(true, &busy(1, 0, Some(0.0)), 0, 300),
+            AutoListAction::Unlist
+        );
+        assert_eq!(
+            decide_action(true, &busy(0, 1, None), 0, 300),
+            AutoListAction::Unlist
+        );
         // Busy, unlisted, queued work, near-zero VRAM -> waiting for renter.
         assert_eq!(
             decide_action(false, &busy(2, 0, Some(3.5)), 0, 300),
             AutoListAction::WaitingForRental { free_vram_gb: 3.5 }
         );
         // VRAM unknown or >= 10 -> plain busy.
-        assert_eq!(decide_action(false, &busy(2, 0, None), 0, 300), AutoListAction::BusyNotListed);
+        assert_eq!(
+            decide_action(false, &busy(2, 0, None), 0, 300),
+            AutoListAction::BusyNotListed
+        );
         assert_eq!(
             decide_action(false, &busy(2, 0, Some(10.0)), 0, 300),
             AutoListAction::BusyNotListed
@@ -791,17 +847,26 @@ mod tests {
 
         // A queued job breaks idleness; a corrupt running blob is skipped.
         store.upload_text("queue/j1.json", "{}").await.unwrap();
-        store.upload_text("running/broken.json", "{not json").await.unwrap();
+        store
+            .upload_text("running/broken.json", "{not json")
+            .await
+            .unwrap();
         // A running job on another host does not count; one on this host does.
         store
-            .upload_text("running/j2.json", r#"{"instance_ref": "wisent-a@us-central1-b"}"#)
+            .upload_text(
+                "running/j2.json",
+                r#"{"instance_ref": "wisent-a@us-central1-b"}"#,
+            )
             .await
             .unwrap();
         store
             .upload_text("running/j3.json", r#"{"instance_ref": "vast-99-myhost-2"}"#)
             .await
             .unwrap();
-        store.upload_text("capacity/local-myhost.json", r#"{"free_vram_gb": 3.5}"#).await.unwrap();
+        store
+            .upload_text("capacity/local-myhost.json", r#"{"free_vram_gb": 3.5}"#)
+            .await
+            .unwrap();
         let state = is_stado_busy(&store, "myhost").await.unwrap();
         assert_eq!(state, busy(1, 1, Some(3.5)));
         assert!(!state.idle);
@@ -832,8 +897,16 @@ mod tests {
         .await;
         assert_eq!(client.machine_id_for_hostname("labbox").await.unwrap(), 22);
         let requests = server.requests.lock().unwrap().clone();
-        assert!(requests[0].starts_with("GET /machines/?owner=me "), "{}", requests[0]);
-        assert!(requests[0].contains("authorization: Bearer vastkey"), "{}", requests[0]);
+        assert!(
+            requests[0].starts_with("GET /machines/?owner=me "),
+            "{}",
+            requests[0]
+        );
+        assert!(
+            requests[0].contains("authorization: Bearer vastkey"),
+            "{}",
+            requests[0]
+        );
         server.stop();
 
         // No hostname match, exactly one machine -> take it.
@@ -895,7 +968,11 @@ mod tests {
         assert_eq!(status["listed_gpu_cost"], json!(0.5));
 
         let requests = server.requests.lock().unwrap().clone();
-        assert!(requests[0].starts_with("PUT /machines/create_asks/ "), "{}", requests[0]);
+        assert!(
+            requests[0].starts_with("PUT /machines/create_asks/ "),
+            "{}",
+            requests[0]
+        );
         assert!(
             requests[0].ends_with(
                 r#"{"machine":42,"price_gpu":0.75,"price_disk":0.05,"price_inetu":0.01,"price_inetd":0.01,"min_chunk":1,"price_min_bid":0.3,"duration":3600}"#
@@ -903,14 +980,25 @@ mod tests {
             "{}",
             requests[0]
         );
-        assert!(requests[1].starts_with("DELETE /machines/42/asks/ "), "{}", requests[1]);
+        assert!(
+            requests[1].starts_with("DELETE /machines/42/asks/ "),
+            "{}",
+            requests[1]
+        );
         server.stop();
 
         // Machine absent from owner listing -> explicit not-found record.
-        let (server, client) =
-            vast_for(vec![http_response(200, "OK", r#"{"machines": [{"id": 1}]}"#)]).await;
+        let (server, client) = vast_for(vec![http_response(
+            200,
+            "OK",
+            r#"{"machines": [{"id": 1}]}"#,
+        )])
+        .await;
         let status = client.machine_status_with_id(42).await.unwrap();
-        assert_eq!(status["error"], json!("not found in /machines/?owner=me response"));
+        assert_eq!(
+            status["error"],
+            json!("not found in /machines/?owner=me response")
+        );
         server.stop();
     }
 
@@ -919,10 +1007,18 @@ mod tests {
         let body = format!("{{\"error\": \"{}\"}}", "x".repeat(400));
         let (server, client) = vast_for(vec![http_response(403, "Forbidden", &body)]).await;
         let err = client.unlist_machine_with_id(42).await.unwrap_err();
-        let VastError::Api(message) = err else { panic!("expected Api error: {err:?}") };
+        let VastError::Api(message) = err else {
+            panic!("expected Api error: {err:?}")
+        };
         // Method + path + status + 280-char body head.
-        assert!(message.starts_with("Vast.ai DELETE /machines/42/asks/ -> HTTP 403: "), "{message}");
-        assert_eq!(message.len(), "Vast.ai DELETE /machines/42/asks/ -> HTTP 403: ".len() + 280);
+        assert!(
+            message.starts_with("Vast.ai DELETE /machines/42/asks/ -> HTTP 403: "),
+            "{message}"
+        );
+        assert_eq!(
+            message.len(),
+            "Vast.ai DELETE /machines/42/asks/ -> HTTP 403: ".len() + 280
+        );
         server.stop();
     }
 
@@ -937,14 +1033,26 @@ mod tests {
         assert_eq!(cap["error"], json!("capacity/local-h1.json not found"));
 
         // Valid blob passes through.
-        store.upload_text("capacity/local-h1.json", r#"{"free_vram_gb": 0}"#).await.unwrap();
+        store
+            .upload_text("capacity/local-h1.json", r#"{"free_vram_gb": 0}"#)
+            .await
+            .unwrap();
         let cap = read_capacity_snapshot(&store, "h1").await;
         assert_eq!(cap["free_vram_gb"], json!(0));
 
         // Corrupt JSON -> error record.
-        store.upload_text("capacity/local-h2.json", "{nope").await.unwrap();
+        store
+            .upload_text("capacity/local-h2.json", "{nope")
+            .await
+            .unwrap();
         let cap = read_capacity_snapshot(&store, "h2").await;
-        assert!(cap["error"].as_str().unwrap().starts_with("JSONDecodeError: "), "{cap}");
+        assert!(
+            cap["error"]
+                .as_str()
+                .unwrap()
+                .starts_with("JSONDecodeError: "),
+            "{cap}"
+        );
     }
 
     #[test]

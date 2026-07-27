@@ -18,9 +18,10 @@ pub(super) async fn dispatch(json: bool, sub: &Option<QuotaCommands>) -> Result<
     match sub {
         None => show(json).await,
         Some(QuotaCommands::Show { json: sub_json }) => show(json || *sub_json).await,
-        Some(QuotaCommands::Catalog { provider, json: sub_json }) => {
-            catalog(provider, *sub_json).await
-        }
+        Some(QuotaCommands::Catalog {
+            provider,
+            json: sub_json,
+        }) => catalog(provider, *sub_json).await,
         Some(QuotaCommands::Request {
             accel,
             new_limit,
@@ -30,7 +31,16 @@ pub(super) async fn dispatch(json: bool, sub: &Option<QuotaCommands>) -> Result<
             email,
             json: sub_json,
         }) => {
-            request(accel, *new_limit, region, provider, justification, email, *sub_json).await
+            request(
+                accel,
+                *new_limit,
+                region,
+                provider,
+                justification,
+                email,
+                *sub_json,
+            )
+            .await
         }
         Some(QuotaCommands::RequestAll {
             new_limit,
@@ -40,11 +50,22 @@ pub(super) async fn dispatch(json: bool, sub: &Option<QuotaCommands>) -> Result<
             email,
             json: sub_json,
         }) => {
-            request_all(*new_limit, provider, region, justification, email, *sub_json).await
+            request_all(
+                *new_limit,
+                provider,
+                region,
+                justification,
+                email,
+                *sub_json,
+            )
+            .await
         }
-        Some(QuotaCommands::Requests { provider, state, awaiting_customer, json: sub_json }) => {
-            requests(provider, state, *awaiting_customer, *sub_json).await
-        }
+        Some(QuotaCommands::Requests {
+            provider,
+            state,
+            awaiting_customer,
+            json: sub_json,
+        }) => requests(provider, state, *awaiting_customer, *sub_json).await,
         Some(QuotaCommands::AzureReplies { dry_run, email }) => {
             azure_replies(*dry_run, email).await
         }
@@ -69,8 +90,9 @@ fn take(s: &str, n: usize) -> String {
 /// running per provider (or --json).
 async fn show(as_json: bool) -> Result<(), CmdError> {
     let store = JobStorage::new().await?;
-    let summary =
-        quota::summarize_quotas(&store).await.map_err(|err| CmdError::click(err.to_string()))?;
+    let summary = quota::summarize_quotas(&store)
+        .await
+        .map_err(|err| CmdError::click(err.to_string()))?;
     if as_json {
         echo_json(&serde_json::to_value(&summary)?);
         return Ok(());
@@ -102,7 +124,10 @@ async fn show(as_json: bool) -> Result<(), CmdError> {
         println!("{}", "-".repeat(70));
         for (accel, total) in &grand_total {
             let avail = grand_avail.get(accel).copied().unwrap_or(0);
-            println!("{:<10} {accel:<22} {total:>6} {:>9} {:>5} {avail:>6}", "TOTAL", "", "");
+            println!(
+                "{:<10} {accel:<22} {total:>6} {:>9} {:>5} {avail:>6}",
+                "TOTAL", "", ""
+            );
         }
     }
     Ok(())
@@ -116,8 +141,11 @@ async fn catalog(providers_arg: &str, as_json: bool) -> Result<(), CmdError> {
         .filter(|s| !s.is_empty())
         .map(str::to_string)
         .collect();
-    let providers =
-        if providers.is_empty() { crate::config::wc_providers().to_vec() } else { providers };
+    let providers = if providers.is_empty() {
+        crate::config::wc_providers().to_vec()
+    } else {
+        providers
+    };
     let cats = quota_skus::all_catalogs(&providers, None)
         .await
         .map_err(|err| CmdError::click(err.to_string()))?;
@@ -131,7 +159,10 @@ async fn catalog(providers_arg: &str, as_json: bool) -> Result<(), CmdError> {
             println!("  (empty)");
             continue;
         }
-        if rows.iter().any(|r| r.get("ok") == Some(&Value::Bool(false))) {
+        if rows
+            .iter()
+            .any(|r| r.get("ok") == Some(&Value::Bool(false)))
+        {
             for row in rows {
                 if row.get("ok") == Some(&Value::Bool(false)) {
                     let error = row.get("error").and_then(Value::as_str).unwrap_or("?");
@@ -141,12 +172,21 @@ async fn catalog(providers_arg: &str, as_json: bool) -> Result<(), CmdError> {
             continue;
         }
         if provider == "gcp" {
-            println!("  {:<52} {:<20} {:<16} {:>6}", "QUOTA_ID", "FAMILY", "REGION", "LIMIT");
+            println!(
+                "  {:<52} {:<20} {:<16} {:>6}",
+                "QUOTA_ID", "FAMILY", "REGION", "LIMIT"
+            );
             let mut sorted: Vec<&Value> = rows.iter().collect();
             sorted.sort_by_key(|r| {
                 (
-                    r.get("quota_id").and_then(Value::as_str).unwrap_or("").to_string(),
-                    r.get("region").and_then(Value::as_str).unwrap_or("").to_string(),
+                    r.get("quota_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                    r.get("region")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
                 )
             });
             for row in sorted {
@@ -169,12 +209,17 @@ async fn catalog(providers_arg: &str, as_json: bool) -> Result<(), CmdError> {
                 );
             }
         } else if provider == "azure" {
-            let mut seen_fam: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
-                Default::default();
+            let mut seen_fam: std::collections::BTreeMap<
+                String,
+                std::collections::BTreeSet<String>,
+            > = Default::default();
             for row in rows {
                 let family = row.get("family").and_then(Value::as_str).unwrap_or("");
                 let location = row.get("location").and_then(Value::as_str).unwrap_or("");
-                seen_fam.entry(family.to_string()).or_default().insert(location.to_string());
+                seen_fam
+                    .entry(family.to_string())
+                    .or_default()
+                    .insert(location.to_string());
             }
             println!("  {:<36} LOCATIONS", "FAMILY");
             for (family, locations) in &seen_fam {
@@ -205,7 +250,11 @@ fn parse_providers(arg: &str) -> Vec<String> {
         .filter(|s| !s.is_empty())
         .map(str::to_string)
         .collect();
-    if parsed.is_empty() { crate::config::wc_providers().to_vec() } else { parsed }
+    if parsed.is_empty() {
+        crate::config::wc_providers().to_vec()
+    } else {
+        parsed
+    }
 }
 
 /// Python's regions CSV parse (`... or None`).
@@ -216,7 +265,11 @@ fn parse_regions(arg: &str) -> Option<Vec<String>> {
         .filter(|s| !s.is_empty())
         .map(str::to_string)
         .collect();
-    if parsed.is_empty() { None } else { Some(parsed) }
+    if parsed.is_empty() {
+        None
+    } else {
+        Some(parsed)
+    }
 }
 
 /// `--email` or $WC_QUOTA_CONTACT_EMAIL; "" when neither is set.
@@ -224,7 +277,10 @@ fn contact_email(flag: &str) -> String {
     if !flag.is_empty() {
         return flag.to_string();
     }
-    std::env::var("WC_QUOTA_CONTACT_EMAIL").unwrap_or_default().trim().to_string()
+    std::env::var("WC_QUOTA_CONTACT_EMAIL")
+        .unwrap_or_default()
+        .trim()
+        .to_string()
 }
 
 /// Python `quota_request`: one quota-increase request per (provider,
@@ -276,12 +332,21 @@ async fn request(
             ok_count += 1;
         }
         let detail = if ok {
-            r.get("name").and_then(Value::as_str).unwrap_or("?").to_string()
+            r.get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("?")
+                .to_string()
         } else {
-            r.get("error").and_then(Value::as_str).unwrap_or("?").to_string()
+            r.get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("?")
+                .to_string()
         };
         let provider = r.get("provider").and_then(Value::as_str).unwrap_or("?");
-        println!("{provider:<8} {rkey:<18} {:<3} {detail}", if ok { "Y" } else { "N" });
+        println!(
+            "{provider:<8} {rkey:<18} {:<3} {detail}",
+            if ok { "Y" } else { "N" }
+        );
     }
     println!("\n{ok_count}/{} succeeded", results.len());
     Ok(())
@@ -345,7 +410,10 @@ async fn request_all(
         echo_json(&serde_json::to_value(&results)?);
         return Ok(());
     }
-    println!("{:<8} {:<18} {:<22} {:<3} DETAIL", "PROVIDER", "REGION/LOC", "FAMILY", "OK");
+    println!(
+        "{:<8} {:<18} {:<22} {:<3} DETAIL",
+        "PROVIDER", "REGION/LOC", "FAMILY", "OK"
+    );
     println!("{}", "-".repeat(100));
     let mut ok_count = 0;
     for r in &results {
@@ -364,9 +432,15 @@ async fn request_all(
             ok_count += 1;
         }
         let detail = if ok {
-            r.get("name").and_then(Value::as_str).unwrap_or("?").to_string()
+            r.get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("?")
+                .to_string()
         } else {
-            r.get("error").and_then(Value::as_str).unwrap_or("?").to_string()
+            r.get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("?")
+                .to_string()
         };
         let provider = r.get("provider").and_then(Value::as_str).unwrap_or("?");
         println!(
@@ -408,17 +482,14 @@ async fn requests(
                     .await
                     .map_err(|err| CmdError::click(err.to_string()))?;
                 if !state_filter.is_empty() {
-                    rows.retain(|r| {
-                        r.get("state").and_then(Value::as_str) == Some(state_filter)
-                    });
+                    rows.retain(|r| r.get("state").and_then(Value::as_str) == Some(state_filter));
                 }
                 payload.push(("gcp".to_string(), rows));
             }
             "azure" => {
-                let mut rows = quota_replies::list_open_azure_tickets(
-                    &quota_replies::SystemAzRunner,
-                )
-                .map_err(|err| CmdError::click(err.to_string()))?;
+                let mut rows =
+                    quota_replies::list_open_azure_tickets(&quota_replies::SystemAzRunner)
+                        .map_err(|err| CmdError::click(err.to_string()))?;
                 if awaiting_customer {
                     rows.retain(|r| {
                         r.get("awaiting_customer").and_then(Value::as_bool) == Some(true)
@@ -447,11 +518,18 @@ async fn requests(
             let mut buckets: std::collections::BTreeMap<String, usize> = Default::default();
             for r in rows {
                 *buckets
-                    .entry(r.get("state").and_then(Value::as_str).unwrap_or("?").to_string())
+                    .entry(
+                        r.get("state")
+                            .and_then(Value::as_str)
+                            .unwrap_or("?")
+                            .to_string(),
+                    )
                     .or_insert(0) += 1;
             }
-            let summary: Vec<String> =
-                buckets.iter().map(|(state, n)| format!("{state}={n}")).collect();
+            let summary: Vec<String> = buckets
+                .iter()
+                .map(|(state, n)| format!("{state}={n}"))
+                .collect();
             println!("  by state: {}", summary.join(", "));
             println!(
                 "  {:<20} {:<20} {:<16} {:>5} {:>8}",
@@ -460,9 +538,18 @@ async fn requests(
             let mut sorted: Vec<&Value> = rows.iter().collect();
             sorted.sort_by_key(|r| {
                 (
-                    r.get("state").and_then(Value::as_str).unwrap_or("").to_string(),
-                    r.get("gpu_family").and_then(Value::as_str).unwrap_or("").to_string(),
-                    r.get("region").and_then(Value::as_str).unwrap_or("").to_string(),
+                    r.get("state")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                    r.get("gpu_family")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                    r.get("region")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
                 )
             });
             for r in sorted {
@@ -472,7 +559,10 @@ async fn requests(
                 let family = if family.is_empty() { "-" } else { family };
                 let region = r.get("region").and_then(Value::as_str).unwrap_or("-");
                 let region = if region.is_empty() { "-" } else { region };
-                let pref = r.get("preferred_value").and_then(Value::as_i64).unwrap_or(0);
+                let pref = r
+                    .get("preferred_value")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
                 let granted = match r.get("granted_value") {
                     Some(Value::Null) | None => "-".to_string(),
                     Some(v) => v.to_string(),
@@ -489,7 +579,10 @@ async fn requests(
                 .iter()
                 .filter(|r| r.get("awaiting_customer").and_then(Value::as_bool) == Some(true))
                 .count();
-            println!("  awaiting customer: {ms_n}    awaiting Microsoft: {}", rows.len() - ms_n);
+            println!(
+                "  awaiting customer: {ms_n}    awaiting Microsoft: {}",
+                rows.len() - ms_n
+            );
             println!(
                 "  {:<22} {:<11} {:<22} LAST_BODY_SNIPPET",
                 "REGION", "AWAIT_CUST", "LAST_SENT"
@@ -498,21 +591,27 @@ async fn requests(
             sorted.sort_by_key(|r| {
                 (
                     r.get("awaiting_customer").and_then(Value::as_bool) != Some(true),
-                    r.get("region").and_then(Value::as_str).unwrap_or("").to_string(),
+                    r.get("region")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
                 )
             });
             for r in sorted {
-                let awaiting =
-                    if r.get("awaiting_customer").and_then(Value::as_bool) == Some(true) {
-                        "Y"
-                    } else {
-                        "N"
-                    };
+                let awaiting = if r.get("awaiting_customer").and_then(Value::as_bool) == Some(true)
+                {
+                    "Y"
+                } else {
+                    "N"
+                };
                 let region = r.get("region").and_then(Value::as_str).unwrap_or("?");
                 let region = if region.is_empty() { "?" } else { region };
                 let sent = r.get("last_sent").and_then(Value::as_str).unwrap_or("-");
                 let sent = if sent.is_empty() { "-" } else { sent };
-                let snippet = r.get("last_body_snippet").and_then(Value::as_str).unwrap_or("");
+                let snippet = r
+                    .get("last_body_snippet")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
                 println!(
                     "  {:<22} {awaiting:<11} {:<22} {:.60}",
                     take(region, 20),
@@ -648,7 +747,11 @@ async fn azure_escalate(dry_run: bool, email_arg: &str) -> Result<(), CmdError> 
         let name = r.get("name").and_then(Value::as_str).unwrap_or("?");
         let region = r.get("region").and_then(Value::as_str).unwrap_or("-");
         let region = if region.is_empty() { "-" } else { region };
-        let mut action = r.get("action").and_then(Value::as_str).unwrap_or("?").to_string();
+        let mut action = r
+            .get("action")
+            .and_then(Value::as_str)
+            .unwrap_or("?")
+            .to_string();
         if action == "dry_run" {
             action = "dry_run → would escalate".to_string();
         }
@@ -663,6 +766,9 @@ async fn azure_escalate(dry_run: bool, email_arg: &str) -> Result<(), CmdError> 
             if ok { "Y" } else { "N" },
         );
     }
-    println!("\n{ok_count}/{} billing-decline tickets escalated", relevant.len());
+    println!(
+        "\n{ok_count}/{} billing-decline tickets escalated",
+        relevant.len()
+    );
     Ok(())
 }

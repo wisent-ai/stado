@@ -22,13 +22,20 @@ use sha2::{Digest, Sha256};
 
 use crate::config;
 use crate::models::{job_state, Job};
+use crate::queue::leases::{LeaseError, ProviderLeaseStore};
 use crate::queue::submit::{compute_api_key, submit_job, SubmitOptions};
 use crate::queue::{JobStorage, StorageError};
 
 pub const SCHEMA_VERSION: i64 = 1;
 /// Prefixes probed by [`MachineFacade::lookup_job`], in probe order.
-pub const JOB_PREFIXES: [&str; 6] =
-    ["queue", "running", "completed", "uploaded", "failed", "cancelled"];
+pub const JOB_PREFIXES: [&str; 6] = [
+    "queue",
+    "running",
+    "completed",
+    "uploaded",
+    "failed",
+    "cancelled",
+];
 
 pub const MAX_SOURCE_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
 pub const MAX_SOURCE_EXTRACTED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -73,11 +80,19 @@ pub struct MachineError {
 
 impl MachineError {
     pub fn new(code: &str, message: impl Into<String>) -> Self {
-        Self { code: code.into(), message: message.into(), retryable: false }
+        Self {
+            code: code.into(),
+            message: message.into(),
+            retryable: false,
+        }
     }
 
     pub fn retryable(code: &str, message: impl Into<String>) -> Self {
-        Self { code: code.into(), message: message.into(), retryable: true }
+        Self {
+            code: code.into(),
+            message: message.into(),
+            retryable: true,
+        }
     }
 }
 
@@ -148,13 +163,19 @@ pub fn canonical_json(value: &Value) -> String {
 
 /// SHA-256 hex of the canonical request JSON (Python `_request_digest`).
 fn request_digest(request: &Map<String, Value>) -> String {
-    hex::encode(Sha256::digest(canonical_json(&Value::Object(request.clone())).as_bytes()))
+    hex::encode(Sha256::digest(
+        canonical_json(&Value::Object(request.clone())).as_bytes(),
+    ))
 }
 
 /// Machine-facing job view (Python `normalize_job`): the queue/ prefix reads
 /// as "queued", Option fields become null.
 pub fn normalize_job(job: &Job) -> Value {
-    let state = if job.state == "queue" { "queued" } else { job.state.as_str() };
+    let state = if job.state == "queue" {
+        "queued"
+    } else {
+        job.state.as_str()
+    };
     let mut out = Map::new();
     out.insert("job_id".into(), Value::from(job.job_id.as_str()));
     out.insert("run_id".into(), Value::from(job.run_id.as_str()));
@@ -164,23 +185,124 @@ pub fn normalize_job(job: &Job) -> Value {
     out.insert("provider".into(), Value::from(job.provider.as_str()));
     out.insert("gpu_type".into(), Value::from(job.gpu_type.as_str()));
     out.insert("gpu_mem_gb".into(), Value::from(job.gpu_mem_gb));
-    out.insert("machine_type".into(), Value::from(job.machine_type.as_str()));
+    out.insert(
+        "machine_type".into(),
+        Value::from(job.machine_type.as_str()),
+    );
     out.insert("created_at".into(), Value::from(job.created_at.as_str()));
     out.insert(
         "started_at".into(),
-        job.started_at.as_deref().map(Value::from).unwrap_or(Value::Null),
+        job.started_at
+            .as_deref()
+            .map(Value::from)
+            .unwrap_or(Value::Null),
     );
     out.insert(
         "completed_at".into(),
-        job.completed_at.as_deref().map(Value::from).unwrap_or(Value::Null),
+        job.completed_at
+            .as_deref()
+            .map(Value::from)
+            .unwrap_or(Value::Null),
     );
     out.insert(
         "failed_at".into(),
-        job.failed_at.as_deref().map(Value::from).unwrap_or(Value::Null),
+        job.failed_at
+            .as_deref()
+            .map(Value::from)
+            .unwrap_or(Value::Null),
     );
-    out.insert("error".into(), job.error.as_deref().map(Value::from).unwrap_or(Value::Null));
+    out.insert(
+        "error".into(),
+        job.error.as_deref().map(Value::from).unwrap_or(Value::Null),
+    );
     out.insert("output_uri".into(), Value::from(job.output_uri.as_str()));
     Value::Object(out)
+}
+
+/// A provider instance a job is recorded as holding, plus the blob the
+/// record came from so an operator can go look at it.
+#[derive(Debug, Clone)]
+pub struct RecordedInstance {
+    /// Provider name for [`crate::providers::get_provider`].
+    pub provider: String,
+    /// Provider-native reference, `"name@zone"` on GCE.
+    pub instance_ref: String,
+    /// Blob path the reference was read from.
+    pub source: String,
+    /// True for the `local@<host>` pseudo-refs a local agent writes. There
+    /// is no cloud instance behind those and no provider call to make.
+    pub local: bool,
+}
+
+/// The `instance_ref` prefix a local agent stamps on a job it claims. Not a
+/// cloud resource: `queue::submit` never routes it to a provider and both
+/// cancel paths skip the delete for it.
+pub const LOCAL_INSTANCE_PREFIX: &str = "local@";
+
+/// Resolve the cloud instance `job_id` is recorded as holding.
+///
+/// NO Python original. Two independent records exist and only one of them
+/// was ever consulted:
+///
+///  1. the job document's `provider` / `instance_ref` fields, written by
+///     the dispatcher once the instance is up, and
+///  2. `provider-leases/<job_id>.json`
+///     (`queue::leases::ProviderLeaseStore::load`), which records
+///     `provider_resource_id` from the moment the allocation is *attempted*.
+///
+/// The lease is written first and cleared last, so it covers the two
+/// windows the job document does not: a dispatch that created the instance
+/// but died before stamping the job, and a job whose document was already
+/// rewritten (moved to `failed/` by a partial cancel) while the instance
+/// stayed up. Both leak a running VM that nothing else reclaims — the
+/// billing gap `stado cancel --terminate` exists to close.
+///
+/// The job document wins when both carry a reference: it is what the
+/// dispatcher confirmed, whereas a lease can still name a resource whose
+/// creation call ultimately failed.
+pub async fn recorded_instance(
+    store: &JobStorage,
+    job_id: &str,
+) -> Result<Option<RecordedInstance>, LeaseError> {
+    fn found(provider: &str, instance_ref: &str, source: String) -> RecordedInstance {
+        RecordedInstance {
+            provider: provider.to_string(),
+            instance_ref: instance_ref.to_string(),
+            source,
+            local: instance_ref.starts_with(LOCAL_INSTANCE_PREFIX),
+        }
+    }
+    for prefix in JOB_PREFIXES {
+        let Some(job) = store.read_job(prefix, job_id).await? else {
+            continue;
+        };
+        let instance_ref = job.instance_ref.as_deref().unwrap_or_default();
+        if !instance_ref.is_empty() {
+            let source = format!("{prefix}/{job_id}.json");
+            return Ok(Some(found(&job.provider, instance_ref, source)));
+        }
+        break;
+    }
+    let stored = match ProviderLeaseStore::new(store.clone()).load(job_id).await {
+        Ok(stored) => stored,
+        // The lease store refuses any job id it cannot encode as a safe
+        // path, which also means it can never have written one for this
+        // job. Absence, not a failure to look.
+        Err(LeaseError::Value(_)) => None,
+        Err(exc) => return Err(exc),
+    };
+    let Some(lease) = stored else {
+        return Ok(None);
+    };
+    if lease.provider_resource_id.is_empty() {
+        return Ok(None);
+    }
+    let source = format!("provider-leases/{job_id}.json");
+    Ok(Some(found(
+        &lease.provider,
+        &lease.provider_resource_id,
+        source,
+    )))
 }
 
 /// Validate one archive entry name against the Python path rules:
@@ -189,14 +311,18 @@ fn unsafe_archive_name(name: &str) -> bool {
     name.is_empty()
         || name.contains('\\')
         || name.starts_with('/')
-        || name.split('/').any(|part| part.is_empty() || part == "." || part == "..")
+        || name
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
 }
 
 /// Python `_validate_source_archive`: local-file safety checks + a full
 /// streaming pass over the tar.gz enforcing member-count, extracted-size and
 /// path-safety limits. Returns the path and the SHA-256 of the compressed
 /// file, or `None` when no archive was requested.
-fn validate_source_archive(value: Option<&Value>) -> Result<Option<(PathBuf, String)>, MachineError> {
+fn validate_source_archive(
+    value: Option<&Value>,
+) -> Result<Option<(PathBuf, String)>, MachineError> {
     fn invalid(msg: impl Into<String>) -> MachineError {
         MachineError::new("INVALID_SOURCE_ARCHIVE", msg)
     }
@@ -253,13 +379,19 @@ fn validate_source_archive(value: Option<&Value>) -> Result<Option<(PathBuf, Str
             return Err(invalid(format!("unsafe archive entry: {}", py_repr(&name))));
         }
         if !seen.insert(name.clone()) {
-            return Err(invalid(format!("duplicate archive entry: {}", py_repr(&name))));
+            return Err(invalid(format!(
+                "duplicate archive entry: {}",
+                py_repr(&name)
+            )));
         }
         let entry_type = entry.header().entry_type();
         let is_dir = entry_type == tar::EntryType::Directory;
         let is_reg = entry_type == tar::EntryType::Regular;
         if !is_dir && !is_reg {
-            return Err(invalid(format!("non-regular archive entry: {}", py_repr(&name))));
+            return Err(invalid(format!(
+                "non-regular archive entry: {}",
+                py_repr(&name)
+            )));
         }
         if is_reg {
             total_size += entry.header().size().map_err(tar_invalid)?;
@@ -288,20 +420,31 @@ pub fn validate_request(request: &Value) -> Result<Map<String, Value>, MachineEr
         .collect();
     unknown.sort_unstable();
     if !unknown.is_empty() {
-        return Err(invalid(format!("unknown request field(s): {}", unknown.join(", "))));
+        return Err(invalid(format!(
+            "unknown request field(s): {}",
+            unknown.join(", ")
+        )));
     }
     let missing: Vec<&str> = ["client_request_id", "command"]
         .into_iter()
         .filter(|name| !map.contains_key(*name))
         .collect();
     if !missing.is_empty() {
-        return Err(invalid(format!("missing required field(s): {}", missing.join(", "))));
+        return Err(invalid(format!(
+            "missing required field(s): {}",
+            missing.join(", ")
+        )));
     }
 
     let request_id = &map["client_request_id"];
     let command = &map["command"];
-    if !request_id.as_str().is_some_and(|id| REQUEST_ID_RE.is_match(id)) {
-        return Err(invalid("client_request_id must be 1-128 path-safe ASCII characters"));
+    if !request_id
+        .as_str()
+        .is_some_and(|id| REQUEST_ID_RE.is_match(id))
+    {
+        return Err(invalid(
+            "client_request_id must be 1-128 path-safe ASCII characters",
+        ));
     }
     if command.as_str().is_none_or(|cmd| cmd.trim().is_empty()) {
         return Err(invalid("command must be a non-empty string"));
@@ -368,10 +511,14 @@ pub fn validate_request(request: &Value) -> Result<Map<String, Value>, MachineEr
     }
     let packages = &normalized["apt_packages"];
     let valid_packages = packages.as_array().is_some_and(|items| {
-        items.iter().all(|item| item.as_str().is_some_and(|s| APT_PACKAGE_RE.is_match(s)))
+        items
+            .iter()
+            .all(|item| item.as_str().is_some_and(|s| APT_PACKAGE_RE.is_match(s)))
     });
     if !valid_packages {
-        return Err(invalid("apt_packages must contain only valid apt package names"));
+        return Err(invalid(
+            "apt_packages must contain only valid apt package names",
+        ));
     }
     Ok(normalized)
 }
@@ -389,27 +536,41 @@ impl MachineFacade {
     /// Facade over the configured storage backend (Python `MachineFacade()`
     /// → `JobStorage(BUCKET)`).
     pub async fn new() -> Result<Self, MachineError> {
-        Ok(Self::with_store(JobStorage::new().await?, config::bucket().to_string()))
+        Ok(Self::with_store(
+            JobStorage::new().await?,
+            config::bucket().to_string(),
+        ))
     }
 
     /// Facade over an explicit store (tests, custom deployments). `bucket`
     /// is the name used in `gs://` URIs and passed to the submitter, exactly
     /// Python's `store.bucket_name`.
     pub fn with_store(store: JobStorage, bucket: impl Into<String>) -> Self {
-        Self { store, bucket: bucket.into() }
+        Self {
+            store,
+            bucket: bucket.into(),
+        }
     }
 
     /// Read one job by id across every lifecycle prefix, stamping the
     /// prefix-derived state (Python `MachineFacade.lookup_job`).
     pub async fn lookup_job(&self, job_id: &str) -> Result<Job, MachineError> {
-        let not_found =
-            || MachineError::new("NOT_FOUND", format!("job {} was not found", py_repr(job_id)));
+        let not_found = || {
+            MachineError::new(
+                "NOT_FOUND",
+                format!("job {} was not found", py_repr(job_id)),
+            )
+        };
         if job_id.is_empty() || job_id.contains('/') || job_id.contains('\\') {
             return Err(not_found());
         }
         for prefix in JOB_PREFIXES {
             if let Some(mut job) = self.store.read_job(prefix, job_id).await? {
-                job.state = if prefix == "queue" { "queued".into() } else { prefix.into() };
+                job.state = if prefix == "queue" {
+                    "queued".into()
+                } else {
+                    prefix.into()
+                };
                 return Ok(job);
             }
         }
@@ -422,7 +583,10 @@ impl MachineFacade {
     /// IDEMPOTENCY_CONFLICT.
     pub async fn submit_request(&self, request: &Value) -> Result<Value, MachineError> {
         let request = validate_request(request)?;
-        let request_id = request["client_request_id"].as_str().unwrap_or_default().to_string();
+        let request_id = request["client_request_id"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
         if !compute_api_key().is_empty() {
             return Err(MachineError::new(
                 "UNSUPPORTED_BACKEND",
@@ -447,7 +611,10 @@ impl MachineFacade {
                 .upload_file_if_absent(&source_blob, &archive_path)
                 .await
                 .map_err(|exc| MachineError::retryable("SOURCE_UPLOAD_FAILED", exc.to_string()))?;
-            digest_request.insert("source_archive_path".into(), Value::from(source_sha.as_str()));
+            digest_request.insert(
+                "source_archive_path".into(),
+                Value::from(source_sha.as_str()),
+            );
         }
 
         let record_path = format!("machine_requests/{request_id}.json");
@@ -459,12 +626,18 @@ impl MachineFacade {
         reservation.insert("state".into(), Value::from("submitting"));
         reservation.insert("created_at".into(), Value::from(utcnow()));
         if !source_uri.is_empty() {
-            reservation.insert("source_archive_uri".into(), Value::from(source_uri.as_str()));
+            reservation.insert(
+                "source_archive_uri".into(),
+                Value::from(source_uri.as_str()),
+            );
             reservation.insert("source_sha256".into(), Value::from(source_sha.as_str()));
         }
         let created = self
             .store
-            .create_text_if_absent(&record_path, &canonical_json(&Value::Object(reservation.clone())))
+            .create_text_if_absent(
+                &record_path,
+                &canonical_json(&Value::Object(reservation.clone())),
+            )
             .await?;
         if !created {
             let raw = self.store.download_text(&record_path).await?;
@@ -519,7 +692,9 @@ impl MachineFacade {
             provider: str_field("provider"),
             gpu_type: str_field("gpu_type"),
             vram_gb: request["vram_gb"].as_i64().unwrap_or_default(),
-            max_cost_per_hour_usd: request["max_cost_per_hour_usd"].as_f64().unwrap_or_default(),
+            max_cost_per_hour_usd: request["max_cost_per_hour_usd"]
+                .as_f64()
+                .unwrap_or_default(),
             pin_to_provider: request["pin_to_provider"].as_bool().unwrap_or_default(),
             priority: request["priority"].as_i64().unwrap_or_default(),
             repo: str_field("repo"),
@@ -529,7 +704,10 @@ impl MachineFacade {
             apt_packages: request["apt_packages"]
                 .as_array()
                 .map(|items| {
-                    items.iter().filter_map(|i| i.as_str().map(str::to_string)).collect()
+                    items
+                        .iter()
+                        .filter_map(|i| i.as_str().map(str::to_string))
+                        .collect()
                 })
                 .unwrap_or_default(),
             output_uri: str_field("output_uri"),
@@ -577,7 +755,10 @@ impl MachineFacade {
         let mut result = Map::new();
         result.insert("job".into(), normalized.clone());
         if !source_uri.is_empty() {
-            result.insert("source_archive_uri".into(), Value::from(source_uri.as_str()));
+            result.insert(
+                "source_archive_uri".into(),
+                Value::from(source_uri.as_str()),
+            );
             result.insert("source_sha256".into(), Value::from(source_sha.as_str()));
         }
         let mut completed = reservation;
@@ -618,10 +799,16 @@ impl MachineFacade {
         limit: i64,
     ) -> Result<Value, MachineError> {
         if cursor < 0 {
-            return Err(MachineError::new("INVALID_CURSOR", "cursor must not be negative"));
+            return Err(MachineError::new(
+                "INVALID_CURSOR",
+                "cursor must not be negative",
+            ));
         }
         if limit <= 0 {
-            return Err(MachineError::new("INVALID_CURSOR", "limit must be positive"));
+            return Err(MachineError::new(
+                "INVALID_CURSOR",
+                "limit must be positive",
+            ));
         }
         self.lookup_job(job_id).await?;
         let payload = self
@@ -631,7 +818,10 @@ impl MachineFacade {
             .unwrap_or_default();
         let cursor = cursor as usize;
         if cursor > payload.len() {
-            return Err(MachineError::new("INVALID_CURSOR", "cursor is beyond the end of the log"));
+            return Err(MachineError::new(
+                "INVALID_CURSOR",
+                "cursor is beyond the end of the log",
+            ));
         }
         let end = payload.len().min(cursor + limit as usize);
         let mut out = Map::new();
@@ -649,6 +839,11 @@ impl MachineFacade {
     /// Durable, idempotent cancel (Python `cancel_job`): writes the
     /// `cancellations/<job_id>.json` marker first so the coordinator reaps
     /// even if this call dies mid-transition.
+    ///
+    /// Divergence from Python, which reads `job.instance_ref` and nothing
+    /// else: the instance is resolved through [`recorded_instance`], so a
+    /// VM whose reference only ever reached the provider lease is deleted
+    /// too instead of billing forever. Every other step is unchanged.
     pub async fn cancel_job(&self, job_id: &str) -> Result<Value, MachineError> {
         let mut job = self.lookup_job(job_id).await?;
         if job_state::is_terminal(&job.state) {
@@ -662,7 +857,9 @@ impl MachineFacade {
             "job_id": job_id,
             "requested_at": utcnow(),
         }));
-        self.store.create_text_if_absent(&marker_path, &marker).await?;
+        self.store
+            .create_text_if_absent(&marker_path, &marker)
+            .await?;
 
         if job.state == job_state::QUEUED {
             job.state = job_state::CANCELLED.into();
@@ -681,17 +878,25 @@ impl MachineFacade {
         }
 
         if job.state == job_state::RUNNING {
-            if let Some(instance_ref) = job.instance_ref.as_deref() {
-                if !instance_ref.starts_with("local@") {
-                    let provider = crate::providers::get_provider(&job.provider).map_err(|exc| {
-                        MachineError::retryable("CANCEL_FAILED", exc.to_string())
-                    })?;
-                    provider.delete_instance(instance_ref).await.map_err(|exc| {
-                        MachineError::retryable(
-                            "CANCEL_FAILED",
-                            format!("failed to delete instance {instance_ref}: {exc}"),
-                        )
-                    })?;
+            if let Some(instance) = recorded_instance(&self.store, job_id)
+                .await
+                .map_err(|exc| MachineError::retryable("CANCEL_FAILED", exc.to_string()))?
+            {
+                if !instance.local {
+                    let provider = crate::providers::get_provider(&instance.provider)
+                        .map_err(|exc| MachineError::retryable("CANCEL_FAILED", exc.to_string()))?;
+                    provider
+                        .delete_instance(&instance.instance_ref)
+                        .await
+                        .map_err(|exc| {
+                            MachineError::retryable(
+                                "CANCEL_FAILED",
+                                format!(
+                                    "failed to delete instance {} recorded in {}: {exc}",
+                                    instance.instance_ref, instance.source
+                                ),
+                            )
+                        })?;
                 }
             }
             job.state = job_state::CANCELLED.into();
@@ -745,13 +950,9 @@ impl MachineFacade {
         // ITS parents (Python's trusted_system_aliases — macOS /var -> /
         // private/var would otherwise fail every tempfile-adjacent path).
         let temp_root = std::env::temp_dir();
-        let trusted: std::collections::HashSet<&Path> =
-            temp_root.ancestors().collect();
+        let trusted: std::collections::HashSet<&Path> = temp_root.ancestors().collect();
         for component in requested_root.ancestors().skip(1) {
-            if component.exists()
-                && component.is_symlink()
-                && !trusted.contains(component)
-            {
+            if component.exists() && component.is_symlink() && !trusted.contains(component) {
                 return Err(security("output path must not contain symlinks"));
             }
         }
@@ -785,7 +986,10 @@ impl MachineFacade {
             }
             let relative = &blob_path[prefix.len()..];
             if unsafe_archive_name(relative) {
-                return Err(security(format!("unsafe artifact path: {}", py_repr(relative))));
+                return Err(security(format!(
+                    "unsafe artifact path: {}",
+                    py_repr(relative)
+                )));
             }
             let parts: Vec<&str> = relative.split('/').collect();
             let mut destination = root.clone();
@@ -796,7 +1000,10 @@ impl MachineFacade {
             for part in &parts[..parts.len() - 1] {
                 current.push(part);
                 if current.exists() && (current.is_symlink() || !current.is_dir()) {
-                    return Err(security(format!("unsafe output path component: {}", py_repr(part))));
+                    return Err(security(format!(
+                        "unsafe output path component: {}",
+                        py_repr(part)
+                    )));
                 }
                 std::fs::create_dir(&current).or_else(|exc| {
                     if exc.kind() == std::io::ErrorKind::AlreadyExists {
@@ -807,7 +1014,10 @@ impl MachineFacade {
                 })?;
             }
             if destination.exists() && (destination.is_symlink() || !destination.is_file()) {
-                return Err(security(format!("unsafe artifact destination: {}", py_repr(relative))));
+                return Err(security(format!(
+                    "unsafe artifact destination: {}",
+                    py_repr(relative)
+                )));
             }
             let parent = destination.parent().unwrap_or(&root).to_path_buf();
             let temporary = tempfile::Builder::new()
@@ -863,7 +1073,10 @@ impl MachineFacade {
         }
         let mut out = Map::new();
         out.insert("job_id".into(), Value::from(job_id));
-        out.insert("output_dir".into(), Value::from(root.to_string_lossy().into_owned()));
+        out.insert(
+            "output_dir".into(),
+            Value::from(root.to_string_lossy().into_owned()),
+        );
         out.insert("artifacts".into(), Value::Array(artifacts));
         Ok(Value::Object(out))
     }
@@ -887,8 +1100,11 @@ mod tests {
         let mut job = Job::new(job_id, "echo hi");
         job.created_at = "2026-01-02T03:04:05+00:00".into();
         std::fs::create_dir_all(store_dir.join(prefix)).unwrap();
-        std::fs::write(store_dir.join(prefix).join(format!("{job_id}.json")), job.to_json())
-            .unwrap();
+        std::fs::write(
+            store_dir.join(prefix).join(format!("{job_id}.json")),
+            job.to_json(),
+        )
+        .unwrap();
         job
     }
 
@@ -900,15 +1116,20 @@ mod tests {
         assert!(err.message.contains("one JSON object"), "{err}");
         // Unknown + missing fields.
         let err = validate_request(&serde_json::json!({"bogus": 1})).unwrap_err();
-        assert!(err.message.contains("unknown request field(s): bogus"), "{err}");
+        assert!(
+            err.message.contains("unknown request field(s): bogus"),
+            "{err}"
+        );
         let err = validate_request(&serde_json::json!({"command": "x"})).unwrap_err();
         assert_eq!(err.message, "missing required field(s): client_request_id");
         // Bad client_request_id / empty command.
-        let err = validate_request(&serde_json::json!({"client_request_id": "a/b", "command": "x"}))
-            .unwrap_err();
+        let err =
+            validate_request(&serde_json::json!({"client_request_id": "a/b", "command": "x"}))
+                .unwrap_err();
         assert!(err.message.contains("path-safe ASCII"), "{err}");
-        let err = validate_request(&serde_json::json!({"client_request_id": "ok", "command": "  "}))
-            .unwrap_err();
+        let err =
+            validate_request(&serde_json::json!({"client_request_id": "ok", "command": "  "}))
+                .unwrap_err();
         assert!(err.message.contains("non-empty string"), "{err}");
         // Type rules.
         let err = validate_request(
@@ -979,8 +1200,11 @@ mod tests {
         let facade = facade(&dir);
         plant_job(dir.path(), "running", "logjob01");
         std::fs::create_dir_all(dir.path().join("status/logjob01/output")).unwrap();
-        std::fs::write(dir.path().join("status/logjob01/output/command_output.log"), b"0123456789")
-            .unwrap();
+        std::fs::write(
+            dir.path().join("status/logjob01/output/command_output.log"),
+            b"0123456789",
+        )
+        .unwrap();
 
         let page = facade.read_logs("logjob01", 0, 4).await.unwrap();
         assert_eq!(page["text"], Value::from("0123"));
@@ -1029,7 +1253,10 @@ mod tests {
         let facade = facade(&dir);
         plant_job(dir.path(), "running", "notdone1");
         let out_dir = dir.path().join("dl");
-        let err = facade.download_artifacts("notdone1", &out_dir).await.unwrap_err();
+        let err = facade
+            .download_artifacts("notdone1", &out_dir)
+            .await
+            .unwrap_err();
         assert_eq!(err.code, "NOT_TERMINAL");
     }
 
@@ -1051,7 +1278,10 @@ mod tests {
         std::fs::write(output.join("nested/blob.bin"), b"\x00\x01\x02").unwrap();
 
         let out_dir = dir.path().join("download");
-        let out = facade.download_artifacts("artjob01", &out_dir).await.unwrap();
+        let out = facade
+            .download_artifacts("artjob01", &out_dir)
+            .await
+            .unwrap();
         assert_eq!(out["job_id"], Value::from("artjob01"));
         let artifacts = out["artifacts"].as_array().unwrap();
         assert_eq!(artifacts.len(), 2);
@@ -1061,13 +1291,19 @@ mod tests {
             artifacts[0]["sha256"],
             Value::from(hex::encode(Sha256::digest(b"{\"loss\": 0.1}")))
         );
-        assert_eq!(artifacts[1]["relative_path"], Value::from("nested/blob.bin"));
+        assert_eq!(
+            artifacts[1]["relative_path"],
+            Value::from("nested/blob.bin")
+        );
         assert!(out_dir.join("metrics.json").exists());
         assert!(out_dir.join("nested/blob.bin").exists());
 
         // No artifacts -> NO_ARTIFACTS.
         plant_job(&storage, "failed", "emptyjob");
-        let err = facade.download_artifacts("emptyjob", &out_dir).await.unwrap_err();
+        let err = facade
+            .download_artifacts("emptyjob", &out_dir)
+            .await
+            .unwrap_err();
         assert_eq!(err.code, "NO_ARTIFACTS");
     }
 
@@ -1085,14 +1321,19 @@ mod tests {
             header.set_entry_type(tar::EntryType::Regular);
             header.set_mode(0o644);
             header.set_cksum();
-            builder.append_data(&mut header, "pkg/main.py", &b"pass"[..]).unwrap();
+            builder
+                .append_data(&mut header, "pkg/main.py", &b"pass"[..])
+                .unwrap();
             builder.finish().unwrap();
         }
         let ok = validate_source_archive(Some(&Value::from(src.to_string_lossy().into_owned())))
             .unwrap()
             .unwrap();
         assert_eq!(ok.0, src);
-        assert_eq!(ok.1, hex::encode(Sha256::digest(std::fs::read(&src).unwrap())));
+        assert_eq!(
+            ok.1,
+            hex::encode(Sha256::digest(std::fs::read(&src).unwrap()))
+        );
 
         // Non-string / missing file.
         let err = validate_source_archive(Some(&Value::from(42))).unwrap_err();

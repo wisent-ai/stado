@@ -42,9 +42,16 @@ async fn status_api(filter_id: Option<&str>) -> Result<(), CmdError> {
         let iid = inst.get("id").and_then(Value::as_str).unwrap_or("");
         let iid: String = iid.chars().take(36).collect();
         let st = inst.get("status").and_then(Value::as_str).unwrap_or("");
-        let img = inst.get("docker_image").and_then(Value::as_str).unwrap_or("");
+        let img = inst
+            .get("docker_image")
+            .and_then(Value::as_str)
+            .unwrap_or("");
         let img: String = img.chars().take(28).collect();
-        let cost = inst.get("total_cost_cents").and_then(Value::as_f64).unwrap_or(0.0) / 100.0;
+        let cost = inst
+            .get("total_cost_cents")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0)
+            / 100.0;
         if let Some(filter) = filter_id {
             if !iid.contains(filter) {
                 continue;
@@ -64,17 +71,31 @@ fn print_job_row(job: &Job, state: &str) {
     } else {
         cmd_one_line
     };
-    let submitted_by = if job.submitted_by.is_empty() { "?" } else { job.submitted_by.as_str() };
+    let submitted_by = if job.submitted_by.is_empty() {
+        "?"
+    } else {
+        job.submitted_by.as_str()
+    };
     let submitted_from: String = job.submitted_from.chars().take(12).collect();
-    let who: String = format!("{submitted_by}@{submitted_from}").chars().take(22).collect();
-    let gpu = if job.gpu_type.is_empty() { "cpu" } else { job.gpu_type.as_str() };
+    let who: String = format!("{submitted_by}@{submitted_from}")
+        .chars()
+        .take(22)
+        .collect();
+    let gpu = if job.gpu_type.is_empty() {
+        "cpu"
+    } else {
+        job.gpu_type.as_str()
+    };
     println!("{:<12} {state:<10} {gpu:<18} {who:<22} {cmd}", job.job_id);
 }
 
 /// Queue-storage scan mode (Python `_status_gcs`).
 async fn status_gcs(filter_id: Option<&str>) -> Result<(), CmdError> {
     let store = default_store(crate::config::bucket()).await?;
-    println!("{:<12} {:<10} {:<18} {:<22} COMMAND", "JOB ID", "STATE", "GPU", "SUBMITTED_BY");
+    println!(
+        "{:<12} {:<10} {:<18} {:<22} COMMAND",
+        "JOB ID", "STATE", "GPU", "SUBMITTED_BY"
+    );
     println!("{}", "-".repeat(110));
 
     // Fast path: filter looks like a job_id — 5 parallel direct reads, no listing.

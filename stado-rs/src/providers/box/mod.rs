@@ -68,14 +68,12 @@ impl BoxProvider {
     /// (default 70), `BOX_TTL_SECONDS` (default 7200, must be positive).
     pub fn from_env() -> Result<Self, BoxError> {
         let api_key = std::env::var("BOX_API_KEY").unwrap_or_default();
-        let base_url = std::env::var("BOX_API_URL")
-            .unwrap_or_else(|_| http::DEFAULT_BASE_URL.to_string());
+        let base_url =
+            std::env::var("BOX_API_URL").unwrap_or_else(|_| http::DEFAULT_BASE_URL.to_string());
         let timeout: f64 = std::env::var("BOX_API_TIMEOUT_SECONDS")
             .unwrap_or_else(|_| "70".to_string())
             .parse()
-            .map_err(|_| {
-                BoxError::configuration("BOX_API_TIMEOUT_SECONDS must be a number")
-            })?;
+            .map_err(|_| BoxError::configuration("BOX_API_TIMEOUT_SECONDS must be a number"))?;
         let client = BoxClient::new(&api_key, &base_url, timeout)?;
         Self::from_client_env_ttl(client)
     }
@@ -95,7 +93,10 @@ impl BoxProvider {
         if ttl_seconds <= 0 {
             return Err(BoxError::configuration("BOX_TTL_SECONDS must be positive"));
         }
-        Ok(BoxProvider { client, ttl_seconds })
+        Ok(BoxProvider {
+            client,
+            ttl_seconds,
+        })
     }
 
     /// Python `admit`: capability admission against the fixed box shape.
@@ -118,7 +119,9 @@ impl BoxProvider {
             return Err(BoxError::configuration(reason));
         }
         if limits.max_active_boxes != 0 && limits.active_boxes >= limits.max_active_boxes {
-            return Err(BoxError::configuration("Box active-box capacity is exhausted"));
+            return Err(BoxError::configuration(
+                "Box active-box capacity is exhausted",
+            ));
         }
         Ok(())
     }
@@ -127,13 +130,21 @@ impl BoxProvider {
     /// when the caller did not pin one.
     pub async fn create_box(&self, ttl_seconds: Option<i64>) -> Result<BoxInfo, BoxError> {
         self.preflight().await?;
-        self.client.create_box(Some(ttl_seconds.unwrap_or(self.ttl_seconds)), true).await
+        self.client
+            .create_box(Some(ttl_seconds.unwrap_or(self.ttl_seconds)), true)
+            .await
     }
 
     /// Python `renew_box`: PATCH the TTL forward.
-    pub async fn renew_box(&self, box_id: &str, ttl_seconds: Option<i64>) -> Result<BoxInfo, BoxError> {
+    pub async fn renew_box(
+        &self,
+        box_id: &str,
+        ttl_seconds: Option<i64>,
+    ) -> Result<BoxInfo, BoxError> {
         let ttl = ttl_seconds.unwrap_or(self.ttl_seconds);
-        self.client.update_box(box_id, None, TtlUpdate::Set(ttl)).await
+        self.client
+            .update_box(box_id, None, TtlUpdate::Set(ttl))
+            .await
     }
 
     /// Python `release_box`: archived/missing boxes are already released;
@@ -158,15 +169,15 @@ impl BoxProvider {
             "delete" => self.client.delete_box(box_id).await,
             "stop" => self.client.stop_box(box_id).await.map(|_| ()),
             _ => {
-                return Err(BoxError::configuration("BOX_RELEASE_MODE must be stop or delete"));
+                return Err(BoxError::configuration(
+                    "BOX_RELEASE_MODE must be stop or delete",
+                ));
             }
         };
         match result {
             Ok(()) => Ok(()),
             // 404 = already gone; machine_not_running = already stopped.
-            Err(BoxError::Api(api))
-                if api.status == 404 || api.code == "machine_not_running" =>
-            {
+            Err(BoxError::Api(api)) if api.status == 404 || api.code == "machine_not_running" => {
                 Ok(())
             }
             Err(err) => Err(err),
@@ -269,9 +280,11 @@ impl Provider for BoxProvider {
         let mut found: Option<crate::models::Job> = None;
         for path in store.list_paths("running/", 0).await? {
             // Strict-raise on corrupt JSON, like Python list_jobs.
-            let Some(text) = store.download_text(&path).await? else { continue };
-            let candidate = crate::models::Job::from_json(&text)
-                .map_err(crate::queue::StorageError::Json)?;
+            let Some(text) = store.download_text(&path).await? else {
+                continue;
+            };
+            let candidate =
+                crate::models::Job::from_json(&text).map_err(crate::queue::StorageError::Json)?;
             if matches!(candidate.provider.as_str(), "box" | "box-ascii")
                 && candidate.instance_ref.as_deref() == Some(instance_ref)
             {
@@ -286,9 +299,11 @@ impl Provider for BoxProvider {
         // Fenced cancel bridge: the Python path guarantees the scheduler
         // can't race a legacy delete against a live dispatch.
         let owner = format!("cli:{}", std::process::id());
-        crate::scheduler::dispatch::r#box::cancel_box_for_legacy_move(&store, self, &mut job, &owner)
-            .await
-            .map_err(box_dispatch_to_provider_error)
+        crate::scheduler::dispatch::r#box::cancel_box_for_legacy_move(
+            &store, self, &mut job, &owner,
+        )
+        .await
+        .map_err(box_dispatch_to_provider_error)
     }
 
     /// Python `instance_exists`: alive iff the box state is active; 404 is
@@ -362,13 +377,22 @@ mod tests {
         gpu_job.gpu_mem_gb = 24;
         let decision = provider.admit(&gpu_job);
         assert!(!decision.accepted);
-        assert!(decision.reasons.iter().any(|r| r.contains("no accelerator")), "{decision:?}");
+        assert!(
+            decision
+                .reasons
+                .iter()
+                .any(|r| r.contains("no accelerator")),
+            "{decision:?}"
+        );
         // Unsupported executor.
         let mut bad_exec = box_job();
         bad_exec.executor = "weird".into();
         let decision = provider.admit(&bad_exec);
         assert!(!decision.accepted);
-        assert!(decision.reasons.iter().any(|r| r.contains("unsupported")), "{decision:?}");
+        assert!(
+            decision.reasons.iter().any(|r| r.contains("unsupported")),
+            "{decision:?}"
+        );
         server.stop();
     }
 
@@ -452,7 +476,11 @@ mod tests {
         assert_eq!(info.box_id, BX);
         let requests = server.requests.lock().unwrap().clone();
         assert_eq!(requests.len(), 2);
-        assert!(requests[1].ends_with(r#"{"ttlSeconds":7200,"noEnv":true}"#), "{}", requests[1]);
+        assert!(
+            requests[1].ends_with(r#"{"ttlSeconds":7200,"noEnv":true}"#),
+            "{}",
+            requests[1]
+        );
         server.stop();
     }
 
@@ -484,7 +512,11 @@ mod tests {
         provider.release_box_with_mode(BX, "stop").await.unwrap();
         let requests = server.requests.lock().unwrap().clone();
         assert_eq!(requests.len(), 2);
-        assert!(requests[1].starts_with("POST /boxes/bx_2abcdefg/stop "), "{}", requests[1]);
+        assert!(
+            requests[1].starts_with("POST /boxes/bx_2abcdefg/stop "),
+            "{}",
+            requests[1]
+        );
         server.stop();
 
         // delete mode: GET then DELETE.
@@ -497,9 +529,16 @@ mod tests {
             http_response(200, "OK", r#"{"ok": true, "type": "box.deleted"}"#),
         ])
         .await;
-        provider.release_box_with_mode(BX, " Delete ").await.unwrap();
+        provider
+            .release_box_with_mode(BX, " Delete ")
+            .await
+            .unwrap();
         let requests = server.requests.lock().unwrap().clone();
-        assert!(requests[1].starts_with("DELETE /boxes/bx_2abcdefg "), "{}", requests[1]);
+        assert!(
+            requests[1].starts_with("DELETE /boxes/bx_2abcdefg "),
+            "{}",
+            requests[1]
+        );
         server.stop();
 
         // Invalid mode is a configuration error (after the GET).
@@ -509,7 +548,10 @@ mod tests {
             r#"{"ok": true, "type": "box.info", "box": {"id": "bx_2abcdefg", "state": "running"}}"#,
         )])
         .await;
-        let err = provider.release_box_with_mode(BX, "nuke").await.unwrap_err();
+        let err = provider
+            .release_box_with_mode(BX, "nuke")
+            .await
+            .unwrap_err();
         assert_eq!(err.to_string(), "BOX_RELEASE_MODE must be stop or delete");
         server.stop();
 
@@ -567,11 +609,18 @@ mod tests {
         server.stop();
 
         // exists: 404 -> false; lifecycle: 404 -> None.
-        let (server, provider) =
-            provider_for(vec![http_response(404, "Not Found", "{}"), http_response(404, "Not Found", "{}")])
-                .await;
+        let (server, provider) = provider_for(vec![
+            http_response(404, "Not Found", "{}"),
+            http_response(404, "Not Found", "{}"),
+        ])
+        .await;
         assert!(!Provider::instance_exists(&provider, BX).await.unwrap());
-        assert_eq!(Provider::instance_lifecycle_state(&provider, BX).await.unwrap(), None);
+        assert_eq!(
+            Provider::instance_lifecycle_state(&provider, BX)
+                .await
+                .unwrap(),
+            None
+        );
         server.stop();
 
         // lifecycle: uppercased raw state.
@@ -582,7 +631,10 @@ mod tests {
         )])
         .await;
         assert_eq!(
-            Provider::instance_lifecycle_state(&provider, BX).await.unwrap().as_deref(),
+            Provider::instance_lifecycle_state(&provider, BX)
+                .await
+                .unwrap()
+                .as_deref(),
             Some("READY")
         );
         server.stop();
@@ -614,7 +666,10 @@ mod tests {
             r#"{"ok": true, "type": "box.list", "boxes": [], "pageInfo": {"hasMore": false}}"#,
         )])
         .await;
-        assert!(Provider::list_running_instances(&provider).await.unwrap().is_empty());
+        assert!(Provider::list_running_instances(&provider)
+            .await
+            .unwrap()
+            .is_empty());
         server.stop();
     }
 

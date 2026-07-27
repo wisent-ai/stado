@@ -48,7 +48,10 @@ static MODEL_RE: LazyLock<regex::Regex> =
 /// `Err` propagation (and `error_for_status`, matching urllib's raise on
 /// HTTP errors).
 pub async fn vast_has_renter() -> Result<bool, reqwest::Error> {
-    let api_key = std::env::var("VAST_API_KEY").unwrap_or_default().trim().to_string();
+    let api_key = std::env::var("VAST_API_KEY")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
     if api_key.is_empty() {
         return Ok(false);
     }
@@ -69,15 +72,17 @@ pub fn has_running_instance(body: &serde_json::Value) -> bool {
     body.get("instances")
         .and_then(serde_json::Value::as_array)
         .is_some_and(|instances| {
-            instances
-                .iter()
-                .any(|i| i.get("actual_status").and_then(serde_json::Value::as_str) == Some("running"))
+            instances.iter().any(|i| {
+                i.get("actual_status").and_then(serde_json::Value::as_str) == Some("running")
+            })
         })
 }
 
 /// Pure: Python `name.lower().replace(" ", "-").replace("geforce-", "nvidia-")`.
 pub fn normalize_gpu_name(name: &str) -> String {
-    name.to_lowercase().replace(' ', "-").replace("geforce-", "nvidia-")
+    name.to_lowercase()
+        .replace(' ', "-")
+        .replace("geforce-", "nvidia-")
 }
 
 /// Pure: first line of a `nvidia-smi --format=csv,noheader,nounits` reply
@@ -133,7 +138,10 @@ pub async fn smi_free_vram_gb() -> i64 {
 
 async fn smi_query_mib(field: &str) -> Option<i64> {
     let out = tokio::process::Command::new("nvidia-smi")
-        .args([format!("--query-gpu={field}"), "--format=csv,noheader,nounits".to_string()])
+        .args([
+            format!("--query-gpu={field}"),
+            "--format=csv,noheader,nounits".to_string(),
+        ])
         .output()
         .await
         .ok()?;
@@ -283,8 +291,15 @@ pub fn slot_is_exclusive(slot: &Slot) -> bool {
 /// back to the declared/observed model estimate only before the job has
 /// allocated CUDA memory. This keeps admission tied to measured live usage
 /// instead of a stale pre-start estimate.
-pub async fn slot_vram(slot: &Slot, sizing: &Sizing, store: &JobStorage) -> Result<i64, StorageError> {
-    let declared = slot.job.gpu_mem_gb.max(estimate_gpu_memory(&slot.job.command, sizing, store).await?);
+pub async fn slot_vram(
+    slot: &Slot,
+    sizing: &Sizing,
+    store: &JobStorage,
+) -> Result<i64, StorageError> {
+    let declared = slot
+        .job
+        .gpu_mem_gb
+        .max(estimate_gpu_memory(&slot.job.command, sizing, store).await?);
     let live = slot_live_vram_gb(slot).await;
     Ok(declared.max(live).max(slot.peak_vram_gb))
 }
@@ -309,11 +324,16 @@ pub async fn slot_waiting_for_vram(
     sizing: &Sizing,
     store: &JobStorage,
 ) -> Result<bool, StorageError> {
-    let Some(pid) = slot.pid else { return Ok(false) };
+    let Some(pid) = slot.pid else {
+        return Ok(false);
+    };
     if !pid_alive(pid) {
         return Ok(false);
     }
-    let declared = slot.job.gpu_mem_gb.max(estimate_gpu_memory(&slot.job.command, sizing, store).await?);
+    let declared = slot
+        .job
+        .gpu_mem_gb
+        .max(estimate_gpu_memory(&slot.job.command, sizing, store).await?);
     Ok(declared > 0 && slot_live_vram_gb(slot).await <= 0)
 }
 
@@ -383,20 +403,33 @@ pub fn static_ram_reserve_gb() -> f64 {
 pub fn static_ram_reserve_gb_at(proc_root: &Path) -> f64 {
     let own = std::process::id();
     let mut total_kb: u64 = 0;
-    let Ok(entries) = std::fs::read_dir(proc_root) else { return 0.0 };
+    let Ok(entries) = std::fs::read_dir(proc_root) else {
+        return 0.0;
+    };
     for entry in entries.flatten() {
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
-        let Ok(pid) = name.parse::<u32>() else { continue };
+        let Ok(pid) = name.parse::<u32>() else {
+            continue;
+        };
         if pid == own {
             continue;
         }
-        let Ok(cmd) = std::fs::read(entry.path().join("cmdline")) else { continue };
-        let cmd: Vec<u8> = cmd.iter().map(|b| if *b == 0 { b' ' } else { *b }).collect();
-        // Skip the agent binary, extraction slots, and their upload workers.
-        if [b"wc agent".as_slice(), b"extract_and_upload", b"upload_worker"]
+        let Ok(cmd) = std::fs::read(entry.path().join("cmdline")) else {
+            continue;
+        };
+        let cmd: Vec<u8> = cmd
             .iter()
-            .any(|token| contains_subslice(&cmd, token))
+            .map(|b| if *b == 0 { b' ' } else { *b })
+            .collect();
+        // Skip the agent binary, extraction slots, and their upload workers.
+        if [
+            b"wc agent".as_slice(),
+            b"extract_and_upload",
+            b"upload_worker",
+        ]
+        .iter()
+        .any(|token| contains_subslice(&cmd, token))
         {
             continue;
         }
@@ -459,11 +492,21 @@ pub async fn no_eligible_in_queue(
 ) -> Result<bool, StorageError> {
     let queued = store.list_jobs("queue", 0).await?;
     for job in queued {
-        let need = job.gpu_mem_gb.max(estimate_gpu_memory(&job.command, sizing, store).await?);
+        let need = job
+            .gpu_mem_gb
+            .max(estimate_gpu_memory(&job.command, sizing, store).await?);
         if need > free_vram_gb {
             continue;
         }
-        if !job_eligible(&job, gpu_type, total_vram_gb, kind, consumer_id, active_slot_count, false) {
+        if !job_eligible(
+            &job,
+            gpu_type,
+            total_vram_gb,
+            kind,
+            consumer_id,
+            active_slot_count,
+            false,
+        ) {
             continue;
         }
         return Ok(false);
@@ -482,7 +525,9 @@ pub fn staging_size_gb(d: &Path) -> f64 {
 
 fn dir_size_bytes(d: &Path) -> u64 {
     let mut total = 0u64;
-    let Ok(entries) = std::fs::read_dir(d) else { return 0 };
+    let Ok(entries) = std::fs::read_dir(d) else {
+        return 0;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
@@ -504,7 +549,10 @@ mod tests {
     fn normalize_gpu_name_matches_python() {
         // Byte-faithful: the geforce- rewrite applies AFTER lower+join, so
         // "NVIDIA GeForce ..." gains a doubled prefix — Python parity.
-        assert_eq!(normalize_gpu_name("NVIDIA GeForce RTX 3090"), "nvidia-nvidia-rtx-3090");
+        assert_eq!(
+            normalize_gpu_name("NVIDIA GeForce RTX 3090"),
+            "nvidia-nvidia-rtx-3090"
+        );
         assert_eq!(normalize_gpu_name("NVIDIA L4"), "nvidia-l4");
         assert_eq!(normalize_gpu_name("Tesla T4"), "tesla-t4");
     }
@@ -519,8 +567,10 @@ mod tests {
 
     #[test]
     fn has_running_instance_parses_vast_payload() {
-        let running: serde_json::Value =
-            serde_json::from_str(r#"{"instances": [{"actual_status": "exited"}, {"actual_status": "running"}]}"#).unwrap();
+        let running: serde_json::Value = serde_json::from_str(
+            r#"{"instances": [{"actual_status": "exited"}, {"actual_status": "running"}]}"#,
+        )
+        .unwrap();
         assert!(has_running_instance(&running));
         let idle: serde_json::Value =
             serde_json::from_str(r#"{"instances": [{"actual_status": "exited"}]}"#).unwrap();
@@ -530,8 +580,14 @@ mod tests {
 
     #[test]
     fn compat_accel_types_uses_gcp_tiers() {
-        assert_eq!(compat_accel_types(24), vec!["nvidia-tesla-k80", "nvidia-tesla-t4", "nvidia-l4"]);
-        assert_eq!(compat_accel_types(16), vec!["nvidia-tesla-k80", "nvidia-tesla-t4"]);
+        assert_eq!(
+            compat_accel_types(24),
+            vec!["nvidia-tesla-k80", "nvidia-tesla-t4", "nvidia-l4"]
+        );
+        assert_eq!(
+            compat_accel_types(16),
+            vec!["nvidia-tesla-k80", "nvidia-tesla-t4"]
+        );
         assert!(compat_accel_types(0).is_empty());
     }
 
@@ -545,39 +601,135 @@ mod tests {
     fn job_eligible_pin_and_assignment_rules() {
         // No routing fields: any agent may claim.
         let job = base_job();
-        assert!(job_eligible(&job, "nvidia-l4", 24, "local", "host-a", 0, false));
+        assert!(job_eligible(
+            &job,
+            "nvidia-l4",
+            24,
+            "local",
+            "host-a",
+            0,
+            false
+        ));
 
         // pinned_host: case-insensitive, only the named consumer.
         let mut pinned = base_job();
         pinned.pinned_host = "Host-A".into();
-        assert!(job_eligible(&pinned, "nvidia-l4", 24, "local", "host-a", 0, false));
-        assert!(!job_eligible(&pinned, "nvidia-l4", 24, "local", "host-b", 0, false));
+        assert!(job_eligible(
+            &pinned,
+            "nvidia-l4",
+            24,
+            "local",
+            "host-a",
+            0,
+            false
+        ));
+        assert!(!job_eligible(
+            &pinned,
+            "nvidia-l4",
+            24,
+            "local",
+            "host-b",
+            0,
+            false
+        ));
 
         // assigned_to mismatch rejects; empty consumer_id skips the rule
         // (Python: `if assigned and consumer_id and ...`).
         let mut assigned = base_job();
         assigned.assigned_to = "agent-1".into();
-        assert!(!job_eligible(&assigned, "nvidia-l4", 24, "local", "agent-2", 0, false));
-        assert!(job_eligible(&assigned, "nvidia-l4", 24, "local", "agent-1", 0, false));
-        assert!(job_eligible(&assigned, "nvidia-l4", 24, "local", "", 0, false));
+        assert!(!job_eligible(
+            &assigned,
+            "nvidia-l4",
+            24,
+            "local",
+            "agent-2",
+            0,
+            false
+        ));
+        assert!(job_eligible(
+            &assigned,
+            "nvidia-l4",
+            24,
+            "local",
+            "agent-1",
+            0,
+            false
+        ));
+        assert!(job_eligible(
+            &assigned,
+            "nvidia-l4",
+            24,
+            "local",
+            "",
+            0,
+            false
+        ));
 
         // pinned_only: only explicitly-routed jobs are claimed.
-        assert!(!job_eligible(&job, "nvidia-l4", 24, "local", "host-a", 0, true));
-        assert!(job_eligible(&pinned, "nvidia-l4", 24, "local", "host-a", 0, true));
-        assert!(job_eligible(&assigned, "nvidia-l4", 24, "local", "agent-1", 0, true));
+        assert!(!job_eligible(
+            &job,
+            "nvidia-l4",
+            24,
+            "local",
+            "host-a",
+            0,
+            true
+        ));
+        assert!(job_eligible(
+            &pinned,
+            "nvidia-l4",
+            24,
+            "local",
+            "host-a",
+            0,
+            true
+        ));
+        assert!(job_eligible(
+            &assigned,
+            "nvidia-l4",
+            24,
+            "local",
+            "agent-1",
+            0,
+            true
+        ));
     }
 
     #[test]
     fn job_eligible_exclusive_and_pin_to_provider() {
         let mut exclusive = base_job();
         exclusive.exclusive = true;
-        assert!(job_eligible(&exclusive, "nvidia-l4", 24, "local", "c", 0, false));
-        assert!(!job_eligible(&exclusive, "nvidia-l4", 24, "local", "c", 1, false));
+        assert!(job_eligible(
+            &exclusive,
+            "nvidia-l4",
+            24,
+            "local",
+            "c",
+            0,
+            false
+        ));
+        assert!(!job_eligible(
+            &exclusive,
+            "nvidia-l4",
+            24,
+            "local",
+            "c",
+            1,
+            false
+        ));
 
         let mut pinned = base_job();
         pinned.pin_to_provider = true;
         pinned.provider = "gcp".into();
-        assert!(!job_eligible(&pinned, "nvidia-l4", 24, "local", "c", 0, false));
+        assert!(!job_eligible(
+            &pinned,
+            "nvidia-l4",
+            24,
+            "local",
+            "c",
+            0,
+            false
+        ));
         assert!(job_eligible(&pinned, "nvidia-l4", 24, "gcp", "c", 0, false));
     }
 
@@ -593,9 +745,25 @@ mod tests {
         assert!(job_eligible(&job, "nvidia-l4", 0, "gcp", "c", 0, false));
         assert!(!job_eligible(&job, "apple-mps", 0, "gcp", "c", 0, false));
         job.gpu_type = "nvidia-tesla-t4".into();
-        assert!(job_eligible(&job, "nvidia-rtx-pro-6000", 24, "gcp", "c", 0, false));
+        assert!(job_eligible(
+            &job,
+            "nvidia-rtx-pro-6000",
+            24,
+            "gcp",
+            "c",
+            0,
+            false
+        ));
         // vram_gb=0 disables the compat path.
-        assert!(!job_eligible(&job, "nvidia-rtx-pro-6000", 0, "gcp", "c", 0, false));
+        assert!(!job_eligible(
+            &job,
+            "nvidia-rtx-pro-6000",
+            0,
+            "gcp",
+            "c",
+            0,
+            false
+        ));
 
         // Empty job accel matches anything.
         job.gpu_type = String::new();
@@ -650,8 +818,7 @@ mod tests {
         slot.job.exclusive = true;
         assert!(slot_is_exclusive(&slot));
         // Activation extraction must share the GPU even when flagged.
-        slot.job.command =
-            "python -m wisent.scripts.activations.raw.extract_and_upload --x".into();
+        slot.job.command = "python -m wisent.scripts.activations.raw.extract_and_upload --x".into();
         assert!(!slot_is_exclusive(&slot));
     }
 
@@ -731,8 +898,16 @@ mod tests {
 
         store.write_job("queue", &big).await.unwrap();
         // Only an oversized job queued -> nothing eligible.
-        assert!(no_eligible_in_queue(&store, &sizing, "nvidia-l4", 24, 24, "local", "c", 0).await.unwrap());
+        assert!(
+            no_eligible_in_queue(&store, &sizing, "nvidia-l4", 24, 24, "local", "c", 0)
+                .await
+                .unwrap()
+        );
         store.write_job("queue", &fits).await.unwrap();
-        assert!(!no_eligible_in_queue(&store, &sizing, "nvidia-l4", 24, 24, "local", "c", 0).await.unwrap());
+        assert!(
+            !no_eligible_in_queue(&store, &sizing, "nvidia-l4", 24, 24, "local", "c", 0)
+                .await
+                .unwrap()
+        );
     }
 }

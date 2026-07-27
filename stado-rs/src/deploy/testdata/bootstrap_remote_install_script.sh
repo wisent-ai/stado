@@ -6,20 +6,32 @@ case "$(uname -s)-$(uname -m)" in
   Darwin-arm64) platform=darwin-arm64 ;;
   *) echo "unsupported platform: $(uname -s) $(uname -m)" >&2; exit 1 ;;
 esac
-version="$(gcloud storage cp gs://wisent-compute/releases/stado/latest.json - | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin)["version"])')"
-prefix="gs://wisent-compute/releases/stado/$version/$platform"
+release_qs=""
+case "$release_base" in
+  *\?*)
+    release_qs="${release_base#*\?}"
+    release_base="${release_base%%\?*}"
+    ;;
+esac
+release_base="${release_base%/}"
+latest="$(curl -fsSL "$release_base/latest.json${release_qs:+?$release_qs}")"
+version="${latest#*\"version\": \"}"
+version="${version%%\"*}"
+prefix="$release_base/$version/$platform"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-for name in stado wc stado-watchdog SHA256SUMS; do
-  gcloud storage cp "$prefix/$name" "$tmp/$name"
+cache_bust="$(date +%s)"
+for name in stado wc stado-fix stado-watchdog SHA256SUMS; do
+  curl -fsSL "$prefix/$name?cache_bust=$cache_bust${release_qs:+&$release_qs}" -o "$tmp/$name"
 done
 verify() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum -c -; else shasum -a 256 -c -; fi
 }
-(cd "$tmp" && for name in stado wc stado-watchdog; do grep -E "[ *]$name\$" SHA256SUMS | verify; done)
-for name in stado wc stado-watchdog; do
+(cd "$tmp" && for name in stado wc stado-fix stado-watchdog; do grep -E "[ *]$name\$" SHA256SUMS | verify; done)
+for name in stado wc stado-fix stado-watchdog; do
   chmod 755 "$tmp/$name"
   mv "$tmp/$name" "$BIN_DIR/$name"
 done
+echo "$platform"
 python3 -c 'import sys; sys.stdout.write(sys.executable + "\n")'
 echo "$BIN_DIR/stado"

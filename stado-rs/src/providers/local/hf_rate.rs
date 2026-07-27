@@ -34,7 +34,7 @@ use crate::queue::{JobStorage, StorageError};
 pub const RATE_OBJECT: &str = "hf_rate/tokens.json";
 pub const MAX_TOKENS: f64 = 1000.0;
 pub const REFILL_PER_SECOND: f64 = 200.0 / 60.0; // 200 tokens/min
-// Commit bucket: HF 128 commits / hour per repo (HF's own 429 figure).
+                                                 // Commit bucket: HF 128 commits / hour per repo (HF's own 429 figure).
 pub const COMMIT_OBJECT: &str = "hf_rate/commit_tokens.json";
 pub const COMMIT_MAX: f64 = 128.0;
 pub const COMMIT_REFILL_PER_SECOND: f64 = 128.0 / 3600.0; // 128 commits/hour
@@ -53,7 +53,10 @@ pub struct BucketState {
 }
 
 fn now() -> f64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
 }
 
 /// Python `_refill`: elapsed-time token replenishment, clamped to the cap.
@@ -70,7 +73,10 @@ fn jitter() -> f64 {
     // Python adds random.uniform(0, _POLL_BACKOFF_BASE). The port has no
     // rand crate in its dependency set; sub-second clock nanos spread
     // concurrent pollers well enough for anti-herd jitter.
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
     (nanos % 1000) as f64 / 1000.0 * POLL_BACKOFF_BASE
 }
 
@@ -97,7 +103,13 @@ async fn read_state(
     max_tokens: f64,
 ) -> Result<(Option<String>, BucketState), StorageError> {
     match store.read_text_versioned(obj).await? {
-        None => Ok((None, BucketState { tokens: max_tokens, refilled_at: now() })),
+        None => Ok((
+            None,
+            BucketState {
+                tokens: max_tokens,
+                refilled_at: now(),
+            },
+        )),
         Some(vt) => Ok((Some(vt.version), serde_json::from_str(&vt.content)?)),
     }
 }
@@ -179,15 +191,35 @@ async fn store_or_none() -> Option<JobStorage> {
 /// Python `wait_for_hf_token(n=1, timeout=600.0)` — pass
 /// [`DEFAULT_TOKEN_TIMEOUT`] for the Python default; None = block forever.
 pub async fn wait_for_hf_token(n: u32, timeout: Option<Duration>) {
-    let Some(store) = store_or_none().await else { return };
-    acquire(&store, RATE_OBJECT, MAX_TOKENS, REFILL_PER_SECOND, f64::from(n), timeout).await;
+    let Some(store) = store_or_none().await else {
+        return;
+    };
+    acquire(
+        &store,
+        RATE_OBJECT,
+        MAX_TOKENS,
+        REFILL_PER_SECOND,
+        f64::from(n),
+        timeout,
+    )
+    .await;
 }
 
 /// Block until n commit-tokens are free (HF 128 commits / hour / repo).
 /// Python `wait_for_hf_commit_token(n=1, timeout=3600.0)`.
 pub async fn wait_for_hf_commit_token(n: u32, timeout: Option<Duration>) {
-    let Some(store) = store_or_none().await else { return };
-    acquire(&store, COMMIT_OBJECT, COMMIT_MAX, COMMIT_REFILL_PER_SECOND, f64::from(n), timeout).await;
+    let Some(store) = store_or_none().await else {
+        return;
+    };
+    acquire(
+        &store,
+        COMMIT_OBJECT,
+        COMMIT_MAX,
+        COMMIT_REFILL_PER_SECOND,
+        f64::from(n),
+        timeout,
+    )
+    .await;
 }
 
 #[cfg(test)]
@@ -204,16 +236,35 @@ mod tests {
 
     #[test]
     fn refill_arithmetic() {
-        let state = BucketState { tokens: 10.0, refilled_at: 100.0 };
+        let state = BucketState {
+            tokens: 10.0,
+            refilled_at: 100.0,
+        };
         // 30s at 2 tok/s -> +60.
         let out = refill(state, 100.0, 2.0, 130.0);
         assert_eq!(out.tokens, 70.0);
         assert_eq!(out.refilled_at, 130.0);
         // Clamped at the cap.
-        let out = refill(BucketState { tokens: 90.0, refilled_at: 100.0 }, 100.0, 2.0, 130.0);
+        let out = refill(
+            BucketState {
+                tokens: 90.0,
+                refilled_at: 100.0,
+            },
+            100.0,
+            2.0,
+            130.0,
+        );
         assert_eq!(out.tokens, 100.0);
         // Clock skew backwards -> no negative refill.
-        let out = refill(BucketState { tokens: 50.0, refilled_at: 100.0 }, 100.0, 2.0, 90.0);
+        let out = refill(
+            BucketState {
+                tokens: 50.0,
+                refilled_at: 100.0,
+            },
+            100.0,
+            2.0,
+            90.0,
+        );
         assert_eq!(out.tokens, 50.0);
     }
 
@@ -235,8 +286,20 @@ mod tests {
     #[tokio::test]
     async fn acquire_initializes_full_and_deducts() {
         let (_dir, store) = store();
-        acquire(&store, RATE_OBJECT, 4.0, 0.0, 1.0, Some(Duration::from_secs(5))).await;
-        let vt = store.read_text_versioned(RATE_OBJECT).await.unwrap().unwrap();
+        acquire(
+            &store,
+            RATE_OBJECT,
+            4.0,
+            0.0,
+            1.0,
+            Some(Duration::from_secs(5)),
+        )
+        .await;
+        let vt = store
+            .read_text_versioned(RATE_OBJECT)
+            .await
+            .unwrap()
+            .unwrap();
         let state: BucketState = serde_json::from_str(&vt.content).unwrap();
         assert_eq!(state.tokens, 3.0);
     }
@@ -245,19 +308,46 @@ mod tests {
     async fn cas_conflict_retries_and_eventually_acquires() {
         let (_dir, store) = store();
         // Initialize the bucket.
-        acquire(&store, RATE_OBJECT, 4.0, 0.0, 1.0, Some(Duration::from_secs(5))).await;
+        acquire(
+            &store,
+            RATE_OBJECT,
+            4.0,
+            0.0,
+            1.0,
+            Some(Duration::from_secs(5)),
+        )
+        .await;
 
         // Lose the race deterministically: read the version, overwrite the
         // blob externally, then try to deduct against the stale version.
-        let vt = store.read_text_versioned(RATE_OBJECT).await.unwrap().unwrap();
-        store.upload_text(RATE_OBJECT, r#"{"tokens": 4.0, "refilled_at": 0.0}"#).await.unwrap();
+        let vt = store
+            .read_text_versioned(RATE_OBJECT)
+            .await
+            .unwrap()
+            .unwrap();
+        store
+            .upload_text(RATE_OBJECT, r#"{"tokens": 4.0, "refilled_at": 0.0}"#)
+            .await
+            .unwrap();
         let err = try_acquire_stale(&store, &vt.version).await.unwrap_err();
         assert!(matches!(err, StorageError::StorageConflict(_)), "{err:?}");
 
         // The retry path (fresh read) succeeds — this is what acquire's
         // loop does after a StorageConflict backoff.
-        acquire(&store, RATE_OBJECT, 4.0, 0.0, 1.0, Some(Duration::from_secs(5))).await;
-        let vt = store.read_text_versioned(RATE_OBJECT).await.unwrap().unwrap();
+        acquire(
+            &store,
+            RATE_OBJECT,
+            4.0,
+            0.0,
+            1.0,
+            Some(Duration::from_secs(5)),
+        )
+        .await;
+        let vt = store
+            .read_text_versioned(RATE_OBJECT)
+            .await
+            .unwrap()
+            .unwrap();
         let state: BucketState = serde_json::from_str(&vt.content).unwrap();
         assert_eq!(state.tokens, 3.0);
     }
@@ -265,10 +355,17 @@ mod tests {
     /// Single deduct against a caller-supplied (stale) version — the CAS
     /// half of try_acquire_once, exposed so the test can force a conflict.
     async fn try_acquire_stale(store: &JobStorage, version: &str) -> Result<(), StorageError> {
-        let mut state: BucketState =
-            serde_json::from_str(&store.read_text_versioned(RATE_OBJECT).await?.unwrap().content)?;
+        let mut state: BucketState = serde_json::from_str(
+            &store
+                .read_text_versioned(RATE_OBJECT)
+                .await?
+                .unwrap()
+                .content,
+        )?;
         state.tokens -= 1.0;
-        store.compare_and_swap_text(RATE_OBJECT, version, &serde_json::to_string(&state)?).await?;
+        store
+            .compare_and_swap_text(RATE_OBJECT, version, &serde_json::to_string(&state)?)
+            .await?;
         Ok(())
     }
 
@@ -281,13 +378,25 @@ mod tests {
             handles.push(tokio::spawn(async move {
                 // No refill: exactly 4 tokens exist for 4 competitors; any
                 // CAS conflict must retry rather than overspend.
-                acquire(&store, RATE_OBJECT, 4.0, 0.0, 1.0, Some(Duration::from_secs(30))).await;
+                acquire(
+                    &store,
+                    RATE_OBJECT,
+                    4.0,
+                    0.0,
+                    1.0,
+                    Some(Duration::from_secs(30)),
+                )
+                .await;
             }));
         }
         for handle in handles {
             handle.await.unwrap();
         }
-        let vt = store.read_text_versioned(RATE_OBJECT).await.unwrap().unwrap();
+        let vt = store
+            .read_text_versioned(RATE_OBJECT)
+            .await
+            .unwrap()
+            .unwrap();
         let state: BucketState = serde_json::from_str(&vt.content).unwrap();
         assert_eq!(state.tokens, 0.0);
     }
@@ -297,13 +406,25 @@ mod tests {
         let (_dir, store) = store();
         // Drain the bucket with a zero-refill rate so every further
         // acquire lands in the deficit branch.
-        acquire(&store, RATE_OBJECT, 1.0, 0.0, 1.0, Some(Duration::from_secs(5))).await;
+        acquire(
+            &store,
+            RATE_OBJECT,
+            1.0,
+            0.0,
+            1.0,
+            Some(Duration::from_secs(5)),
+        )
+        .await;
         // Python checks the deadline BEFORE sleeping, so a zero timeout
         // does exactly one deficit probe and falls through (the caller
         // proceeds and retries on its own 429) instead of hard-blocking
         // on infra failure.
         let start = Instant::now();
         acquire(&store, RATE_OBJECT, 1.0, 0.0, 1.0, Some(Duration::ZERO)).await;
-        assert!(start.elapsed() < Duration::from_secs(5), "{:?}", start.elapsed());
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            start.elapsed()
+        );
     }
 }

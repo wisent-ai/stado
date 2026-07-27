@@ -32,6 +32,11 @@ pub const BACKFILL_BATCH: usize = 500;
 /// Python `_DOWNLOAD_WORKERS`.
 const DOWNLOAD_WORKERS: usize = 10;
 
+/// The same bulk fan-out under a crate-visible name, so `queue::copy` can
+/// reuse this budget for its backend-to-backend pass instead of picking a
+/// second concurrency number.
+pub(crate) const BULK_WORKERS: usize = DOWNLOAD_WORKERS;
+
 /// Python sentinel dict `{"cursor": str, "done": bool}`.
 struct Sentinel {
     cursor: String,
@@ -41,10 +46,16 @@ struct Sentinel {
 /// Python `_read_sentinel`.
 async fn read_sentinel(store: &JobStorage) -> Result<Sentinel, StorageError> {
     let Some(raw) = store.download_text(SENTINEL_PATH).await? else {
-        return Ok(Sentinel { cursor: String::new(), done: false });
+        return Ok(Sentinel {
+            cursor: String::new(),
+            done: false,
+        });
     };
     if raw.is_empty() {
-        return Ok(Sentinel { cursor: String::new(), done: false });
+        return Ok(Sentinel {
+            cursor: String::new(),
+            done: false,
+        });
     }
     let value: serde_json::Value = serde_json::from_str(&raw)?;
     Ok(Sentinel {
@@ -53,7 +64,10 @@ async fn read_sentinel(store: &JobStorage) -> Result<Sentinel, StorageError> {
             .and_then(serde_json::Value::as_str)
             .unwrap_or("")
             .to_string(),
-        done: value.get("done").and_then(serde_json::Value::as_bool).unwrap_or(false),
+        done: value
+            .get("done")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
     })
 }
 
@@ -189,9 +203,15 @@ mod tests {
         // the index (uploaded raw, no marker/metadata); j6 has priority 0.
         store.write_job("queue", &job("j1", 7)).await.unwrap();
         for id in ["j2", "j3", "j4", "j5"] {
-            store.upload_text(&format!("queue/{id}.json"), &job(id, 3).to_json()).await.unwrap();
+            store
+                .upload_text(&format!("queue/{id}.json"), &job(id, 3).to_json())
+                .await
+                .unwrap();
         }
-        store.upload_text("queue/j6.json", &job("j6", 0).to_json()).await.unwrap();
+        store
+            .upload_text("queue/j6.json", &job("j6", 0).to_json())
+            .await
+            .unwrap();
 
         // Run 1: bounded to batch=2 -> not done, cursor recorded, only the
         // first chunk processed (j1 already had a marker; j2 gets one).
@@ -214,10 +234,16 @@ mod tests {
         assert!(!backfill_priority_markers(&store, 2).await.unwrap());
         // Run 4 finds nothing past the cursor -> terminal done.
         assert!(backfill_priority_markers(&store, 2).await.unwrap());
-        assert_eq!(sentinel(&store).await, serde_json::json!({"cursor": "", "done": true}));
+        assert_eq!(
+            sentinel(&store).await,
+            serde_json::json!({"cursor": "", "done": true})
+        );
 
         // j5 backfilled; priority-0 j6 never gets a marker.
-        assert_eq!(marker_job_ids(&store).await, vec!["j1", "j2", "j3", "j4", "j5"]);
+        assert_eq!(
+            marker_job_ids(&store).await,
+            vec!["j1", "j2", "j3", "j4", "j5"]
+        );
 
         // Once done, every future call returns immediately.
         assert!(backfill_priority_markers(&store, 2).await.unwrap());
@@ -234,8 +260,13 @@ mod tests {
     #[tokio::test]
     async fn backfill_on_empty_queue_completes_immediately() {
         let (_dir, store) = store();
-        assert!(backfill_priority_markers(&store, BACKFILL_BATCH).await.unwrap());
-        assert_eq!(sentinel(&store).await, serde_json::json!({"cursor": "", "done": true}));
+        assert!(backfill_priority_markers(&store, BACKFILL_BATCH)
+            .await
+            .unwrap());
+        assert_eq!(
+            sentinel(&store).await,
+            serde_json::json!({"cursor": "", "done": true})
+        );
         // Byte-compatible with Python json.dumps default separators.
         assert_eq!(
             store.download_text(SENTINEL_PATH).await.unwrap().as_deref(),

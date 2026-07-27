@@ -12,14 +12,17 @@
 //!   `if_generation_match` download.
 //!
 //! Registry parity: like Python (`lookup(..., source="gcs")`) targets are
-//! resolved from the GCS registry ONLY via [`targets::load_registry_gcs`] —
-//! a fetch failure yields an empty registry (no bundled fallback). Tests
-//! inject a downloader serving the bundled document.
+//! resolved from the canonical remote registry ONLY, via
+//! [`targets::fetch_registry_remote`] — no bundled fallback. DEVIATION: a
+//! fetch failure surfaces as [`HostHealthError::RegistryFetch`] instead of
+//! Python's empty registry, so "the store is unreachable" no longer
+//! reports as "that target does not exist". Tests inject a downloader
+//! serving the bundled document.
 
 use serde_json::{json, Map, Value};
 
 use crate::queue::{JobStorage, StorageError};
-use crate::targets::{self, ComputeTarget, RegistryError};
+use crate::targets::{self, ComputeTarget, RegistryError, RegistryFetchError};
 
 /// Beacon blob prefix (Python `HEALTH_PREFIX`).
 pub const HEALTH_PREFIX: &str = "host_health";
@@ -62,6 +65,10 @@ pub enum HostHealthError {
     /// Python `FileNotFoundError(f"no host health beacon for {name!r}; checked ...")`.
     #[error("no host health beacon for {name:?}; checked {paths}")]
     NoBeacon { name: String, paths: String },
+    /// The canonical registry could not be READ at all — distinct from a
+    /// registry that was read and does not carry the target.
+    #[error(transparent)]
+    RegistryFetch(#[from] RegistryFetchError),
     #[error(transparent)]
     Registry(#[from] RegistryError),
     #[error(transparent)]
@@ -71,7 +78,12 @@ pub enum HostHealthError {
 /// Python `_beacon_slugs`: for each identity (hostnames, name, requested
 /// identity, ssh host) the first dot-label and the full normalized form;
 /// empty / "/" containing candidates skipped; deduped preserving order.
-fn beacon_slugs(target: &ComputeTarget, requested_identity: &str) -> Vec<String> {
+///
+/// Public because a beacon slug is the only link between a registry target
+/// and its `host_health/<slug>.json` object: `cli/registry.rs`'s doctor and
+/// beacon-age walk the whole prefix and must resolve slugs back to targets
+/// with exactly the rule [`load_host_health`] resolves them forward.
+pub fn beacon_slugs(target: &ComputeTarget, requested_identity: &str) -> Vec<String> {
     let mut identities: Vec<String> = target.hostnames.clone();
     identities.push(target.name.clone());
     identities.push(requested_identity.to_string());
@@ -97,7 +109,7 @@ pub async fn load_host_health(
     store: &JobStorage,
     identity: &str,
 ) -> Result<HostHealthReport, HostHealthError> {
-    let registry = targets::load_registry_gcs().await;
+    let registry = targets::fetch_registry_remote().await?;
     let target = match registry.lookup(identity) {
         Some(target) => Some(target),
         None => registry.lookup_self(identity)?,
@@ -272,13 +284,12 @@ mod tests {
                     std::fs::read_to_string(targets::bundled_registry_path())
                         .expect("bundled registry"),
                 ))
-            })
-                as futures::future::BoxFuture<'static, Result<Option<String>, String>>
+            }) as futures::future::BoxFuture<'static, Result<Option<String>, String>>
         })));
-        targets::clear_registry_gcs_cache();
+        targets::clear_registry_cache();
         let out = f.await;
         targets::set_registry_downloader_for_testing(None);
-        targets::clear_registry_gcs_cache();
+        targets::clear_registry_cache();
         out
     }
 

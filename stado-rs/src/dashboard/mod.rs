@@ -170,7 +170,10 @@ impl Dashboard {
         if let Value::Object(full) = full {
             state.extend(full);
         }
-        state.insert("last_refresh_seconds".to_string(), json!(t0.elapsed().as_secs_f64()));
+        state.insert(
+            "last_refresh_seconds".to_string(),
+            json!(t0.elapsed().as_secs_f64()),
+        );
         state.insert("ready".to_string(), json!(true));
         Ok(())
     }
@@ -233,9 +236,7 @@ impl Dashboard {
         let response = self.route(&request).await;
         eprintln!(
             "[dashboard] \"{} {} HTTP/1.1\" {} -",
-            request.method,
-            request.path,
-            response.status
+            request.method, request.path, response.status
         );
         stream.write_all(&response.bytes).await?;
         stream.shutdown().await
@@ -294,8 +295,7 @@ impl Dashboard {
                 return Ok(empty_response(400, "Bad Request"));
             }
             let registry = ArtifactRegistry::with_store(self.store.clone());
-            let reference = ArtifactRef::parse(&ref_value)
-                .map_err(ArtifactRegistryError::from)?;
+            let reference = ArtifactRef::parse(&ref_value).map_err(ArtifactRegistryError::from)?;
             let manifest = registry.resolve_manifest(&reference).await?;
             let mut value = manifest.to_dict();
             let map = value.as_object_mut().expect("manifest object");
@@ -313,19 +313,27 @@ impl Dashboard {
             return Ok(send_json(200, &state));
         }
         if request.path == "/api/registry.json" {
-            return Ok(match policy::policy_view(self.store.backend().as_ref()).await {
-                Ok(value) => send_json(http_status("200"), &value),
-                Err(error) => send_json(error.status(), &json!({"error": error.to_string()})),
-            });
+            return Ok(
+                match policy::policy_view(self.store.backend().as_ref()).await {
+                    Ok(value) => send_json(http_status("200"), &value),
+                    Err(error) => send_json(error.status(), &json!({"error": error.to_string()})),
+                },
+            );
         }
         if request.path == "/api/cleanup.json" {
-            let report = read_cleanup_state().map_err(|exc| DashboardError::Other(exc.to_string()))?;
+            let report =
+                read_cleanup_state().map_err(|exc| DashboardError::Other(exc.to_string()))?;
             let payload = web_view::cleanup_envelope(&report);
-            let status = if payload["service"] == "busy" { 409 } else { 200 };
+            let status = if payload["service"] == "busy" {
+                409
+            } else {
+                200
+            };
             return Ok(send_json(status, &payload));
         }
         if request.path == "/" || request.path == "/index.html" {
-            let report = read_cleanup_state().map_err(|exc| DashboardError::Other(exc.to_string()))?;
+            let report =
+                read_cleanup_state().map_err(|exc| DashboardError::Other(exc.to_string()))?;
             let cleanup = web_view::cleanup_envelope(&report);
             let body = web_view::render_html(&state, &cleanup, self.refresh_seconds);
             return Ok(Response::html(200, &body));
@@ -362,7 +370,10 @@ impl Dashboard {
         if request.path != "/api/registry/policy"
             || request.header("x-stado-action") != Some("registry-policy")
         {
-            return send_json(http_status("403"), &json!({"ok": false, "error": "forbidden"}));
+            return send_json(
+                http_status("403"),
+                &json!({"ok": false, "error": "forbidden"}),
+            );
         }
         let content_type = request
             .header("content-type")
@@ -438,7 +449,11 @@ impl Dashboard {
             .map_err(|_| DashboardError::Other("cleanup pass thread died".to_string()))?;
         let report = sanitize_cleanup_report(&report);
         let payload = web_view::cleanup_envelope(&report);
-        let status = if payload["service"] == "busy" { 409 } else { 200 };
+        let status = if payload["service"] == "busy" {
+            409
+        } else {
+            200
+        };
         Ok(send_json(status, &payload))
     }
 }
@@ -447,7 +462,9 @@ impl Dashboard {
 /// Blocks until killed. Defaults from `config::dashboard_bind()` /
 /// `config::dashboard_port()`; storage from `config::bucket()`.
 pub async fn serve(host: Option<&str>, port: Option<i64>) -> Result<(), DashboardError> {
-    let host = host.map(str::to_string).unwrap_or_else(|| config::dashboard_bind().to_string());
+    let host = host
+        .map(str::to_string)
+        .unwrap_or_else(|| config::dashboard_bind().to_string());
     let port = port.unwrap_or_else(config::dashboard_port);
     let port = u16::try_from(port)
         .map_err(|_| DashboardError::Other(format!("dashboard port out of range: {port}")))?;
@@ -481,7 +498,9 @@ impl Request {
 }
 
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack.windows(needle.len()).position(|window| window == needle)
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 /// Read one request with a bounded head and body. Body framing is deliberately
@@ -551,7 +570,12 @@ async fn read_request(stream: &mut TcpStream) -> std::io::Result<Option<Request>
         stream.read_exact(&mut remainder).await?;
         body.extend_from_slice(&remainder);
     }
-    Ok(Some(Request { method, path, headers, body }))
+    Ok(Some(Request {
+        method,
+        path,
+        headers,
+        body,
+    }))
 }
 
 struct Response {
@@ -606,7 +630,10 @@ fn send_json(status: u16, payload: &Value) -> Response {
 /// Python `_cleanup_failure`.
 fn cleanup_failure(status: u16) -> Response {
     let report = sanitize_cleanup_report(&json!({"outcome": "invalid_or_unavailable_policy"}));
-    send_json(status, &json!({"ok": false, "service": "error", "report": report}))
+    send_json(
+        status,
+        &json!({"ok": false, "service": "error", "report": report}),
+    )
 }
 
 /// Python `parse_qs(urlsplit(self.path).query)`: `&`-separated `key=value`
@@ -671,8 +698,7 @@ fn trusted_request_host(value: Option<&str>, forwarded_proto: Option<&str>) -> b
     }
     // Python's ValueError escape hatch (bad bracket, bad port, non-IP DNS
     // name): allowed only behind the authenticated reverse proxy.
-    let dns_branch =
-        !config::stado_deployment_id().is_empty() && forwarded_proto == Some("https");
+    let dns_branch = !config::stado_deployment_id().is_empty() && forwarded_proto == Some("https");
 
     // authority = [userinfo@]host[:port]; path/query/fragment split off.
     let (authority, has_suffix) = match value.find(['/', '?', '#']) {
@@ -744,7 +770,10 @@ async fn authorized(request: &Request, permission: &str) -> bool {
     }
     let supabase_url = std::env::var("SUPABASE_URL").unwrap_or_default();
     let supabase_url = supabase_url.trim_end_matches('/');
-    let anon_key = std::env::var("SUPABASE_ANON_KEY").unwrap_or_default().trim().to_string();
+    let anon_key = std::env::var("SUPABASE_ANON_KEY")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
     let authorization = request.header("authorization").unwrap_or("").trim();
     if supabase_url.is_empty() || anon_key.is_empty() || !authorization.starts_with("Bearer ") {
         return false;
@@ -766,7 +795,11 @@ async fn authorized(request: &Request, permission: &str) -> bool {
     if response.status() != reqwest::StatusCode::OK {
         return false;
     }
-    response.json::<Value>().await.map(|value| value == Value::Bool(true)).unwrap_or(false)
+    response
+        .json::<Value>()
+        .await
+        .map(|value| value == Value::Bool(true))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -816,7 +849,10 @@ mod tests {
         }
 
         fn unset(vars: &[&'static str]) -> Self {
-            let saved = vars.iter().map(|key| (*key, std::env::var(key).ok())).collect();
+            let saved = vars
+                .iter()
+                .map(|key| (*key, std::env::var(key).ok()))
+                .collect();
             for key in vars {
                 std::env::remove_var(key);
             }
@@ -853,7 +889,11 @@ mod tests {
         assert_eq!(health.status(), 200);
         assert_eq!(health.json::<Value>().await.unwrap(), json!({"ok": true}));
 
-        let state = client.get(format!("{base}/api/state.json")).send().await.unwrap();
+        let state = client
+            .get(format!("{base}/api/state.json"))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(state.status(), 200);
         let state = state.json::<Value>().await.unwrap();
         assert_eq!(state["ready"], true);
@@ -897,13 +937,19 @@ mod tests {
         let base = spawn_server(&dashboard).await;
         let client = reqwest::Client::new();
 
-        let list = client.get(format!("{base}/api/artifacts.json")).send().await.unwrap();
+        let list = client
+            .get(format!("{base}/api/artifacts.json"))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(list.status(), 200);
         let list = list.json::<Value>().await.unwrap();
         assert_eq!(list[0]["ref"], "activations/wisent/acts@v1");
 
         let detail = client
-            .get(format!("{base}/api/artifact.json?ref=activations/wisent/acts@v1"))
+            .get(format!(
+                "{base}/api/artifact.json?ref=activations/wisent/acts@v1"
+            ))
             .send()
             .await
             .unwrap();
@@ -971,9 +1017,16 @@ mod tests {
         let client = reqwest::Client::new();
 
         // No bearer token -> 401.
-        let response = client.get(format!("{base}/api/state.json")).send().await.unwrap();
+        let response = client
+            .get(format!("{base}/api/state.json"))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(response.status(), 401);
-        assert_eq!(response.json::<Value>().await.unwrap(), json!({"error": "unauthorized"}));
+        assert_eq!(
+            response.json::<Value>().await.unwrap(),
+            json!({"error": "unauthorized"})
+        );
 
         // Bearer accepted by the RPC (returns true) -> 200.
         let response = client
@@ -999,9 +1052,8 @@ mod tests {
         assert!(requests[0].starts_with("POST /rest/v1/rpc/stado_can_access HTTP/1.1"));
         assert!(requests[0].contains("apikey: anon-key"));
         assert!(requests[0].contains("authorization: Bearer good-token"));
-        assert!(requests[0].contains(
-            "{\"target_deployment_id\":\"dep-1\",\"requested_permission\":\"view\"}"
-        ));
+        assert!(requests[0]
+            .contains("{\"target_deployment_id\":\"dep-1\",\"requested_permission\":\"view\"}"));
     }
 
     #[tokio::test]
@@ -1027,7 +1079,11 @@ mod tests {
         assert_eq!(response.json::<Value>().await.unwrap()["service"], "error");
 
         // Missing X-Stado-Action -> 403 cleanup envelope.
-        let response = client.post(format!("{base}/api/cleanup/run")).send().await.unwrap();
+        let response = client
+            .post(format!("{base}/api/cleanup/run"))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(response.status(), 403);
         assert_eq!(response.json::<Value>().await.unwrap()["service"], "error");
 
@@ -1068,8 +1124,14 @@ mod tests {
         let _guard = crate::testutil::GLOBAL_STATE_LOCK.blocking_lock();
         let _env = EnvGuard::set(&[("STADO_DEPLOYMENT_ID", "dep-1")]);
         // DNS names pass only with the deployment set AND https forwarding.
-        assert!(trusted_request_host(Some("dashboard.example.com"), Some("https")));
-        assert!(!trusted_request_host(Some("dashboard.example.com"), Some("http")));
+        assert!(trusted_request_host(
+            Some("dashboard.example.com"),
+            Some("https")
+        ));
+        assert!(!trusted_request_host(
+            Some("dashboard.example.com"),
+            Some("http")
+        ));
         assert!(!trusted_request_host(Some("dashboard.example.com"), None));
         // IPs still pass regardless.
         assert!(trusted_request_host(Some("10.0.0.1"), None));

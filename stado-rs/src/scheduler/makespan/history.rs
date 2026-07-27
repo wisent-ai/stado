@@ -84,15 +84,18 @@ pub async fn build_history(
         ) else {
             continue;
         };
-        let started = DateTime::parse_from_rfc3339(st)
-            .map_err(|e| StorageError::Other(format!("makespan history: bad started_at {st:?}: {e}")))?;
-        let completed = DateTime::parse_from_rfc3339(ct)
-            .map_err(|e| StorageError::Other(format!("makespan history: bad completed_at {ct:?}: {e}")))?;
+        let started = DateTime::parse_from_rfc3339(st).map_err(|e| {
+            StorageError::Other(format!("makespan history: bad started_at {st:?}: {e}"))
+        })?;
+        let completed = DateTime::parse_from_rfc3339(ct).map_err(|e| {
+            StorageError::Other(format!("makespan history: bad completed_at {ct:?}: {e}"))
+        })?;
         let elapsed = (completed - started).num_milliseconds() as f64 / 1000.0;
         if elapsed <= 0.0 {
             continue;
         }
-        let (model, task) = extract_model_task(doc.get("command").and_then(Value::as_str).unwrap_or(""));
+        let (model, task) =
+            extract_model_task(doc.get("command").and_then(Value::as_str).unwrap_or(""));
         if model.is_empty() || task.is_empty() {
             continue;
         }
@@ -126,7 +129,9 @@ impl Default for HistoryCache {
 
 impl HistoryCache {
     pub fn new() -> Self {
-        Self { inner: Mutex::new((History::new(), None)) }
+        Self {
+            inner: Mutex::new((History::new(), None)),
+        }
     }
 
     /// Python `_history`: rebuild when the cache is older than
@@ -139,8 +144,8 @@ impl HistoryCache {
     ) -> Result<History, StorageError> {
         let mut guard = self.inner.lock().await;
         let (map, built_at) = &*guard;
-        let stale =
-            built_at.is_none_or(|t| t.elapsed() > Duration::from_secs(HISTORY_TTL_S)) || map.is_empty();
+        let stale = built_at.is_none_or(|t| t.elapsed() > Duration::from_secs(HISTORY_TTL_S))
+            || map.is_empty();
         if stale {
             let rebuilt = build_history(store, log_fn).await?;
             *guard = (rebuilt, Some(Instant::now()));
@@ -190,7 +195,10 @@ mod tests {
             extract_model_task("run --model 'org/q' --task \"t q\""),
             ("org/q".to_string(), "t".to_string())
         );
-        assert_eq!(extract_model_task("nothing"), (String::new(), String::new()));
+        assert_eq!(
+            extract_model_task("nothing"),
+            (String::new(), String::new())
+        );
     }
 
     #[tokio::test]
@@ -199,21 +207,36 @@ mod tests {
         store
             .upload_text(
                 "completed/a.json",
-                &completed("a", "x --model m --task t", "2026-01-01T00:00:00+00:00", "2026-01-01T00:01:00+00:00"),
+                &completed(
+                    "a",
+                    "x --model m --task t",
+                    "2026-01-01T00:00:00+00:00",
+                    "2026-01-01T00:01:00+00:00",
+                ),
             )
             .await
             .unwrap();
         store
             .upload_text(
                 "completed/b.json",
-                &completed("b", "x --model m --task t", "2026-01-01T00:00:00+00:00", "2026-01-01T00:03:00+00:00"),
+                &completed(
+                    "b",
+                    "x --model m --task t",
+                    "2026-01-01T00:00:00+00:00",
+                    "2026-01-01T00:03:00+00:00",
+                ),
             )
             .await
             .unwrap();
         store
             .upload_text(
                 "completed/c.json",
-                &completed("c", "x --model m --task other", "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:30+00:00"),
+                &completed(
+                    "c",
+                    "x --model m --task other",
+                    "2026-01-01T00:00:00+00:00",
+                    "2026-01-01T00:00:30+00:00",
+                ),
             )
             .await
             .unwrap();
@@ -222,19 +245,32 @@ mod tests {
         store
             .upload_text(
                 "completed/d.json",
-                &completed("d", "admin --restart", "2026-01-01T00:00:00+00:00", "2026-01-01T00:01:00+00:00"),
+                &completed(
+                    "d",
+                    "admin --restart",
+                    "2026-01-01T00:00:00+00:00",
+                    "2026-01-01T00:01:00+00:00",
+                ),
             )
             .await
             .unwrap();
         store
             .upload_text(
                 "completed/e.json",
-                &completed("e", "x --model m --task t", "2026-01-01T00:01:00+00:00", "2026-01-01T00:00:00+00:00"),
+                &completed(
+                    "e",
+                    "x --model m --task t",
+                    "2026-01-01T00:01:00+00:00",
+                    "2026-01-01T00:00:00+00:00",
+                ),
             )
             .await
             .unwrap();
         store
-            .upload_text("completed/f.json", &serde_json::json!({"job_id": "f", "command": "x --model m --task t"}).to_string())
+            .upload_text(
+                "completed/f.json",
+                &serde_json::json!({"job_id": "f", "command": "x --model m --task t"}).to_string(),
+            )
             .await
             .unwrap();
 
@@ -254,7 +290,12 @@ mod tests {
         store
             .upload_text(
                 "completed/a.json",
-                &completed("a", "x --model m --task t", "2026-01-01T00:00:00+00:00", "2026-01-01T00:01:00+00:00"),
+                &completed(
+                    "a",
+                    "x --model m --task t",
+                    "2026-01-01T00:00:00+00:00",
+                    "2026-01-01T00:01:00+00:00",
+                ),
             )
             .await
             .unwrap();

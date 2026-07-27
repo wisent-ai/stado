@@ -25,34 +25,131 @@ use crate::queue::JobStorage;
 use crate::scheduler::scheduler::{accel_hourly_rate, backoff_due, log, SchedulerError};
 use crate::sizing::Sizing;
 
-/// Per-provider agent startup-script templates. Each launches
-/// `wc agent --kind <provider> --gpu-type <accel> --idle-shutdown` after
-/// installing wisent-compute, but with provider-specific bootstrap
-/// (gsutil vs azcopy, managed identity vs SA JSON, etc.).
-fn template_name_for(provider_name: &str) -> &'static str {
+/// Per-provider agent startup-script templates, baked into the binary at
+/// compile time exactly like the bundled compute-target registry
+/// ([`crate::targets::load_bundled_registry`]). `data/templates/` stays
+/// the single source of truth for the text; reading them back through
+/// `crate::data_dir()` only ever worked on the build machine, because
+/// that path is `CARGO_MANIFEST_DIR` frozen at compile time and an
+/// installed `~/.stado/bin/stado` has no `data/` directory beside it.
+///
+/// Each launches `wc agent --kind <provider> --gpu-type <accel>
+/// --idle-shutdown` after installing wisent-compute, but with
+/// provider-specific bootstrap (gsutil vs azcopy, managed identity vs SA
+/// JSON, etc.).
+///
+/// Crate-visible so `crate::doctor` renders the preflight through the
+/// identical template the dispatcher ships. A preflight that rendered its
+/// own copy would prove nothing: the failure it exists to catch is a
+/// placeholder no producer fills in THIS text.
+pub(crate) fn bundled_template_for(provider_name: &str) -> &'static str {
     match provider_name {
-        "azure" => "startup_gpu_agent_azure.sh",
-        "aws" => "startup_gpu_agent_aws.sh",
-        _ => "startup_gpu_agent.sh",
+        "azure" => include_str!("../../../data/templates/startup_gpu_agent_azure.sh"),
+        "aws" => include_str!("../../../data/templates/startup_gpu_agent_aws.sh"),
+        _ => include_str!("../../../data/templates/startup_gpu_agent.sh"),
     }
 }
 
-/// Substitute `${ACCEL_TYPE}` and every `${KEY}` secret into the template.
-/// Python does plain str.replace per key, so only keys present in
-/// `secrets` are substituted — other `${...}` shell expansions in the
-/// template are left for the VM's shell. Secrets are NEVER logged: the
-/// rendered script goes straight to create_instance and only the
-/// instance ref / accel / machine reach the log lines.
+/// Non-secret `${KEY}` substitutions the agent templates may reference,
+/// read from the process config. Deliberately NOT merged into the
+/// coordinator's secrets map: these are deployment settings, not
+/// credentials, and keeping the key set here — next to the templates that
+/// consume it — gives a new placeholder exactly one place to be
+/// registered instead of one per producer.
+///
+/// This is the Azure-cutover fix. `startup_gpu_agent_azure.sh` exports
+/// `${WC_STORAGE_BACKEND}` / `${WC_AZURE_STORAGE_ACCOUNT}` /
+/// `${WC_AZURE_CONTAINER}` and installs its binary from
+/// `${WC_RELEASE_BASE_URL}` under `set -u`; no producer supplied any of
+/// them, so every dispatched Azure VM aborted before the agent started.
+///
+/// Keys a given template never mentions are never matched, so a GCP
+/// deployment renders byte-identically to before.
+pub fn deployment_substitutions() -> BTreeMap<String, String> {
+    BTreeMap::from([
+        (
+            "WC_STORAGE_BACKEND".to_string(),
+            config::wc_storage_backend().to_string(),
+        ),
+        (
+            "WC_AZURE_STORAGE_ACCOUNT".to_string(),
+            config::wc_azure_storage_account().to_string(),
+        ),
+        (
+            "WC_AZURE_CONTAINER".to_string(),
+            config::wc_azure_container().to_string(),
+        ),
+        (
+            "WC_RELEASE_BASE_URL".to_string(),
+            config::release_base_url().to_string(),
+        ),
+        // The AWS template's bucket/region are deployment config too; they
+        // rode in the secrets map only because there was nowhere else to
+        // put them, and were absent whenever the coordinator (rather than
+        // the cloud control plane) dispatched.
+        (
+            "WC_S3_BUCKET".to_string(),
+            config::wc_s3_bucket().to_string(),
+        ),
+        ("AWS_REGION".to_string(), config::wc_s3_region().to_string()),
+    ])
+}
+
+/// Substitute `${ACCEL_TYPE}`, every `${KEY}` secret and every non-secret
+/// deployment key into the template. Python does plain str.replace per
+/// key, so only keys present in the maps are substituted — the `${...}`
+/// forms the templates keep for the VM's own shell are left alone (see
+/// [`unresolved_placeholder`]). Secrets are NEVER logged: the rendered
+/// script goes straight to create_instance, only the instance ref / accel
+/// / machine reach the log lines, and the error below carries a
+/// placeholder name, never a value.
+///
+/// Secrets win over deployment config on a duplicate key, so an operator
+/// export still overrides a config-file default.
+///
+/// Errors when a dispatcher-owned placeholder survives rendering, so a key
+/// the templates need but no producer supplies can never again reach a VM
+/// and kill its boot on `set -u`.
 pub fn render_startup_script(
     template: &str,
     accel: &str,
     secrets: &BTreeMap<String, String>,
-) -> String {
+    deployment: &BTreeMap<String, String>,
+) -> Result<String, SchedulerError> {
     let mut script = template.replace("${ACCEL_TYPE}", accel);
-    for (key, val) in secrets {
-        script = script.replace(&format!("${{{key}}}"), val);
+    for (key, val) in secrets.iter().chain(deployment.iter()) {
+        let needle = format!("${{{key}}}");
+        if script.contains(needle.as_str()) {
+            script = script.replace(needle.as_str(), val);
+        }
     }
-    script
+    match unresolved_placeholder(&script) {
+        Some(key) => Err(SchedulerError::UnresolvedPlaceholder {
+            key: key.to_string(),
+        }),
+        None => Ok(script),
+    }
+}
+
+/// First dispatcher-owned `${NAME}` still standing in a rendered script.
+///
+/// "Dispatcher-owned" is a bare SCREAMING_SNAKE name. Neither brace form
+/// the templates deliberately hand to the VM's own shell matches: locals
+/// are lowercase or underscore-prefixed (`${_WC_INST}`, `${_model}`), and
+/// empty-default expansions carry an operator (`${WC_SUPABASE_TOKEN:-}`,
+/// whose emptiness is load-bearing — an absent Supabase token must stay an
+/// empty string rather than abort startup).
+fn unresolved_placeholder(script: &str) -> Option<&str> {
+    let mut parts = script.split("${");
+    parts.next();
+    parts.find_map(|part| {
+        let (name, _) = part.split_once('}')?;
+        let dispatcher_owned = name.starts_with(|c: char| c.is_ascii_uppercase())
+            && name
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+        dispatcher_owned.then_some(name)
+    })
 }
 
 /// Inputs shared by the caller's per-tick budgets; `available` and
@@ -122,14 +219,20 @@ pub(crate) async fn bucket_jobs(
             // broadcasting at all and the job is genuinely unschedulable
             // this tick; defer to the next.
             let model = crate::sizing::model_of(&j.command);
-            let peak = if model.is_empty() { None } else { sizing.observed_vram_gb(store, &model).await? };
+            let peak = if model.is_empty() {
+                None
+            } else {
+                sizing.observed_vram_gb(store, &model).await?
+            };
             if let Some(peak) = peak {
                 if peak > 0 {
                     gpu_mem = peak;
                 }
             }
             if gpu_mem <= 0 {
-                let Some(live_small) = sizing.smallest_live_vram(store).await? else { continue };
+                let Some(live_small) = sizing.smallest_live_vram(store).await? else {
+                    continue;
+                };
                 gpu_mem = live_small;
             }
         }
@@ -141,11 +244,19 @@ pub(crate) async fn bucket_jobs(
         // empty.
         let mt = {
             let pinned = j.machine_type.trim();
-            if pinned.is_empty() { default_mt } else { pinned }
+            if pinned.is_empty() {
+                default_mt
+            } else {
+                pinned
+            }
         };
         let accel = {
             let pinned = j.gpu_type.trim();
-            if pinned.is_empty() { default_accel } else { pinned }
+            if pinned.is_empty() {
+                default_accel
+            } else {
+                pinned
+            }
         };
         let cap = j.max_cost_per_hour_usd;
         if cap > 0.0 && !accel.is_empty() {
@@ -177,11 +288,9 @@ pub async fn dispatch_agent_vms(
     secrets: &BTreeMap<String, String>,
     now_utc: DateTime<Utc>,
 ) -> Result<i64, SchedulerError> {
-    let template =
-        std::fs::read_to_string(crate::data_dir().join("templates").join(template_name_for(provider_name)))?;
     dispatch_agent_vms_with_template(
         inputs,
-        &template,
+        bundled_template_for(provider_name),
         store,
         sizing,
         provider,
@@ -193,7 +302,7 @@ pub async fn dispatch_agent_vms(
 }
 
 /// [`dispatch_agent_vms`] with the startup-script template injected
-/// (tests substitute a fixture instead of reading data/templates/).
+/// (tests substitute a fixture instead of the bundled template).
 #[allow(clippy::too_many_arguments)]
 pub async fn dispatch_agent_vms_with_template(
     inputs: AgentDispatchInputs<'_>,
@@ -214,9 +323,17 @@ pub async fn dispatch_agent_vms_with_template(
         per_tick_cap,
         scheduled_so_far,
     } = inputs;
-    let buckets =
-        bucket_jobs(&queued, &yield_targets, provider_name, sizing, store, now_utc).await?;
+    let buckets = bucket_jobs(
+        &queued,
+        &yield_targets,
+        provider_name,
+        sizing,
+        store,
+        now_utc,
+    )
+    .await?;
 
+    let deployment = deployment_substitutions();
     let tick_tag = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -243,7 +360,9 @@ pub async fn dispatch_agent_vms_with_template(
         }
         let quota_left = available.get(accel).copied().unwrap_or(0);
         if quota_left <= 0 {
-            log(&format!("Skip bucket accel={accel} machine={mt}: 0 quota slots"));
+            log(&format!(
+                "Skip bucket accel={accel} machine={mt}: 0 quota slots"
+            ));
             continue;
         }
         let share_left = per_accel_share - accel_dispatched.get(accel).copied().unwrap_or(0);
@@ -254,8 +373,10 @@ pub async fn dispatch_agent_vms_with_template(
             .min(quota_left)
             .min(share_left)
             .min(per_tick_cap - scheduled);
-        let biggest =
-            jobs.iter().max_by_key(|j| j.gpu_mem_gb).expect("bucket is non-empty");
+        let biggest = jobs
+            .iter()
+            .max_by_key(|j| j.gpu_mem_gb)
+            .expect("bucket is non-empty");
         // No-preemptible policy: per user instruction (2026-05-06), this
         // codebase is NOT to dispatch Spot/preemptible VMs even when the
         // job's `preemptible` field is True. Repeated Spot reclaims of
@@ -266,12 +387,29 @@ pub async fn dispatch_agent_vms_with_template(
         // but the underlying preemption noise persists). Override the
         // job-level flag and force every dispatch to STANDARD.
         let preemptible_for_call = false;
-        for i in 0..n_to_dispatch {
-            if start.elapsed().as_secs() > DISPATCH_BUDGET_S {
-                log(&format!("dispatch budget exhausted mid-bucket {accel}; deferring"));
+        // Render once per bucket: the script depends only on the template,
+        // the bucket's accel and the substitution maps, never on the
+        // instance index. A template whose placeholders cannot all be
+        // filled stops dispatch here — before any create_instance — rather
+        // than booting VMs that `set -u` kills on their first export.
+        let script = match render_startup_script(template, accel, secrets, &deployment) {
+            Ok(script) => script,
+            Err(exc) => {
+                log(&format!(
+                    "REFUSING to dispatch agent VMs for accel={accel} machine={mt}: {exc}. \
+                     No instance was created; fix the coordinator env/config and the next \
+                     tick retries."
+                ));
                 break 'buckets;
             }
-            let script = render_startup_script(template, accel, secrets);
+        };
+        for i in 0..n_to_dispatch {
+            if start.elapsed().as_secs() > DISPATCH_BUDGET_S {
+                log(&format!(
+                    "dispatch budget exhausted mid-bucket {accel}; deferring"
+                ));
+                break 'buckets;
+            }
             let instance_name = format!(
                 "{}-agent-{}-{tick_tag}-{i}",
                 config::INSTANCE_PREFIX,
@@ -291,7 +429,9 @@ pub async fn dispatch_agent_vms_with_template(
                 )
                 .await?;
             if ref_opt.is_none() {
-                log(&format!("Agent VM create failed accel={accel} machine={mt}"));
+                log(&format!(
+                    "Agent VM create failed accel={accel} machine={mt}"
+                ));
                 // Stockout-aware escalation: when create_instance returns
                 // None (zone STOCKOUTs across all configured zones for
                 // this accel), try the next-larger tier from GPU_SIZING.
@@ -421,12 +561,13 @@ mod tests {
     #[test]
     fn render_startup_script_substitutes_secrets_without_placeholder_leakage() {
         let template = "#!/bin/bash\nexport HF_TOKEN=${HF_TOKEN}\nexport WANDB=${WANDB_API_KEY}\n\
-                        echo ${ACCEL_TYPE} $HOME ${NOT_A_SECRET}\n";
+                        echo ${ACCEL_TYPE} $HOME ${NOT_A_SECRET:-}\n";
         let secrets = BTreeMap::from([
             ("HF_TOKEN".to_string(), "hf_zzz".to_string()),
             ("WANDB_API_KEY".to_string(), "wb-secret".to_string()),
         ]);
-        let script = render_startup_script(template, "nvidia-l4", &secrets);
+        let script =
+            render_startup_script(template, "nvidia-l4", &secrets, &BTreeMap::new()).unwrap();
         assert!(script.contains("export HF_TOKEN=hf_zzz"), "{script}");
         assert!(script.contains("export WANDB=wb-secret"), "{script}");
         assert!(script.contains("echo nvidia-l4"), "{script}");
@@ -434,7 +575,7 @@ mod tests {
         // expansions survive for the VM's shell.
         assert!(!script.contains("${HF_TOKEN}"), "{script}");
         assert!(!script.contains("${ACCEL_TYPE}"), "{script}");
-        assert!(script.contains("${NOT_A_SECRET}"), "{script}");
+        assert!(script.contains("${NOT_A_SECRET:-}"), "{script}");
         assert!(script.contains("$HOME"), "{script}");
     }
 
@@ -450,8 +591,16 @@ mod tests {
             job("yielded", 16, "", ""),
             job("l4-pinned", 24, "nvidia-l4", "g2-standard-8"),
         ];
-        let buckets =
-            bucket_jobs(&queued, &yields, "gcp", crate::sizing::global(), &store, now).await.unwrap();
+        let buckets = bucket_jobs(
+            &queued,
+            &yields,
+            "gcp",
+            crate::sizing::global(),
+            &store,
+            now,
+        )
+        .await
+        .unwrap();
         let keys: Vec<&(String, String)> = buckets.iter().map(|(k, _)| k).collect();
         assert_eq!(
             keys,
@@ -511,7 +660,7 @@ mod tests {
         }
     }
 
-    const TEMPLATE: &str = "#!/bin/bash\n# ${ACCEL_TYPE} ${HF_TOKEN}\n";
+    const TEMPLATE: &str = "#!/bin/bash\n# ${ACCEL_TYPE}\n";
 
     #[tokio::test]
     async fn dispatch_creates_min_of_jobs_quota_and_cap_per_bucket() {
@@ -520,7 +669,11 @@ mod tests {
         let secrets = BTreeMap::from([("HF_TOKEN".to_string(), "hf_zzz".to_string())]);
         let mut available = BTreeMap::from([("nvidia-tesla-t4".to_string(), 2)]);
         let mut dispatched = BTreeMap::new();
-        let queued = vec![job("a", 16, "", ""), job("b", 16, "", ""), job("c", 16, "", "")];
+        let queued = vec![
+            job("a", 16, "", ""),
+            job("b", 16, "", ""),
+            job("c", 16, "", ""),
+        ];
         let created = dispatch_agent_vms_with_template(
             dispatch_inputs(queued, &mut available, &mut dispatched),
             TEMPLATE,
@@ -650,6 +803,9 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(buckets.len(), 1);
-        assert_eq!(buckets[0].0, ("nvidia-tesla-t4".to_string(), "n1-standard-4".to_string()));
+        assert_eq!(
+            buckets[0].0,
+            ("nvidia-tesla-t4".to_string(), "n1-standard-4".to_string())
+        );
     }
 }

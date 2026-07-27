@@ -38,7 +38,9 @@ pub fn http_response(status: u16, reason: &str, body: &str) -> String {
 }
 
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack.windows(needle.len()).position(|window| window == needle)
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 /// Bind a loopback port and serve exactly `responses.len()` requests, one
@@ -46,17 +48,23 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 /// reuses a connection simply opens a new one, which reqwest does when the
 /// previous response carried `Connection: close`).
 pub async fn mock_http(responses: Vec<String>) -> MockHttp {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind loopback");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind loopback");
     let addr = listener.local_addr().expect("local addr");
     let requests: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let recorded = Arc::clone(&requests);
     let handle = tokio::spawn(async move {
         for response in responses {
-            let Ok((mut socket, _)) = listener.accept().await else { return };
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
             let mut buf: Vec<u8> = Vec::new();
             let mut tmp = [0u8; 8192];
             let request = loop {
-                let Ok(n) = socket.read(&mut tmp).await else { return };
+                let Ok(n) = socket.read(&mut tmp).await else {
+                    return;
+                };
                 if n == 0 {
                     break String::from_utf8_lossy(&buf).into_owned();
                 }
@@ -82,5 +90,9 @@ pub async fn mock_http(responses: Vec<String>) -> MockHttp {
             let _ = socket.shutdown().await;
         }
     });
-    MockHttp { base_url: format!("http://{addr}"), requests, handle }
+    MockHttp {
+        base_url: format!("http://{addr}"),
+        requests,
+        handle,
+    }
 }

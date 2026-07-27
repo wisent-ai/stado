@@ -3,7 +3,8 @@
 //! Port of `stado/deploy/bootstrap.py`, cut over to the Rust release
 //! binaries. For each kind=local registry entry with an ssh field,
 //! downloads the platform-appropriate release binaries (stado + wc +
-//! stado-watchdog) from `gs://wisent-compute/releases/stado/` into
+//! stado-fix + stado-watchdog) from the release channel
+//! ([`crate::config::release_base_url`]) into
 //! `~/.stado/bin/` on the remote host (platform picked by remote uname:
 //! Linux x86_64 -> linux-amd64, Darwin arm64 -> darwin-arm64), writes a
 //! systemd unit that runs `stado agent` with the configured WC_LOCAL_SLOTS
@@ -16,8 +17,8 @@
 //! enablement. The existing capacity broadcast loop continues
 //! uninterrupted because the unit's ExecStart is identical.
 
-use std::sync::Arc;
 use base64::Engine as _;
+use std::sync::Arc;
 
 use futures::future::BoxFuture;
 
@@ -25,10 +26,17 @@ use super::local_install::{self, TokenFetcher};
 use super::{shlex_quote, CommandSpec, DeployError, Runner};
 use crate::targets::{ComputeTarget, Registry};
 
-/// Remote install script (fed as the remote command argument, not stdin).
-/// Downloads public release artifacts over HTTPS, checksum-verifies them,
-/// then prints the job-runtime Python path and installed Stado path as the
-/// final two stdout lines. Public HTTPS keeps bootstrap independent of gcloud.
+/// Remote install script BODY (fed as the remote command argument, not
+/// stdin). Downloads release artifacts over HTTPS, checksum-verifies them,
+/// then prints the platform, the job-runtime Python path and the installed
+/// Stado path as the final three stdout lines. Plain HTTPS keeps bootstrap
+/// independent of gcloud AND of any one object store.
+///
+/// `release_base` is bound by [`remote_install_script`]. The remote host
+/// has no Azure identity to mint a bearer token with, so an Azure blob
+/// channel must be public-read or carry a container SAS; that query string
+/// is split off the base and re-appended after each object path, which is
+/// also where the existing cache-bust parameter lives.
 pub const REMOTE_INSTALL_SCRIPT: &str = r#"set -euo pipefail
 BIN_DIR="$HOME/.stado/bin"
 mkdir -p "$BIN_DIR"
@@ -37,15 +45,23 @@ case "$(uname -s)-$(uname -m)" in
   Darwin-arm64) platform=darwin-arm64 ;;
   *) echo "unsupported platform: $(uname -s) $(uname -m)" >&2; exit 1 ;;
 esac
-latest="$(curl -fsSL https://storage.googleapis.com/wisent-compute/releases/stado/latest.json)"
+release_qs=""
+case "$release_base" in
+  *\?*)
+    release_qs="${release_base#*\?}"
+    release_base="${release_base%%\?*}"
+    ;;
+esac
+release_base="${release_base%/}"
+latest="$(curl -fsSL "$release_base/latest.json${release_qs:+?$release_qs}")"
 version="${latest#*\"version\": \"}"
 version="${version%%\"*}"
-prefix="https://storage.googleapis.com/wisent-compute/releases/stado/$version/$platform"
+prefix="$release_base/$version/$platform"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 cache_bust="$(date +%s)"
 for name in stado wc stado-fix stado-watchdog SHA256SUMS; do
-  curl -fsSL "$prefix/$name?cache_bust=$cache_bust" -o "$tmp/$name"
+  curl -fsSL "$prefix/$name?cache_bust=$cache_bust${release_qs:+&$release_qs}" -o "$tmp/$name"
 done
 verify() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum -c -; else shasum -a 256 -c -; fi
@@ -60,6 +76,15 @@ python3 -c 'import sys; sys.stdout.write(sys.executable + "\n")'
 echo "$BIN_DIR/stado"
 "#;
 
+/// [`REMOTE_INSTALL_SCRIPT`] with the release channel bound in. The base
+/// URL is shell-quoted, so a SAS query string survives intact.
+pub fn remote_install_script(base_url: &str) -> String {
+    format!(
+        "release_base={}\n{REMOTE_INSTALL_SCRIPT}",
+        shlex_quote(base_url)
+    )
+}
+
 /// Fallback stado path used when the remote install prints nothing, and
 /// as the dry-run placeholder.
 pub const WC_BIN_FALLBACK: &str = "$HOME/.stado/bin/stado";
@@ -70,7 +95,13 @@ pub const WC_BIN_FALLBACK: &str = "$HOME/.stado/bin/stado";
 pub const WC_PYTHON_FALLBACK: &str = "python3";
 
 /// The remote agent systemd unit.
-pub fn agent_unit_text(name: &str, slots: i64, stado_bin: &str, wc_python: &str, user: &str) -> String {
+pub fn agent_unit_text(
+    name: &str,
+    slots: i64,
+    stado_bin: &str,
+    wc_python: &str,
+    user: &str,
+) -> String {
     format!(
         "[Unit]\n\
          Description=Wisent Compute local GPU agent ({name})\n\
@@ -129,7 +160,10 @@ pub fn ssh_argv(ssh_target: &str, command: &str) -> Vec<String> {
 
 /// The release-binary download + path-resolution command.
 pub fn install_spec(ssh_target: &str) -> CommandSpec {
-    CommandSpec::new(ssh_argv(ssh_target, REMOTE_INSTALL_SCRIPT))
+    CommandSpec::new(ssh_argv(
+        ssh_target,
+        &remote_install_script(crate::config::release_base_url()),
+    ))
 }
 
 /// Parse the remote install script's trailing output: platform, job-runtime
@@ -171,8 +205,11 @@ pub fn unit_installs(
     let ssh_target = target.ssh.as_deref().unwrap_or("");
     let user = remote_user(ssh_target);
     let agent_text = agent_unit_text(&target.name, target.slots, stado_bin, wc_python, &user);
-    let watchdog_text =
-        watchdog_unit_text(&target.name, &sibling_bin(stado_bin, "stado-watchdog"), &user);
+    let watchdog_text = watchdog_unit_text(
+        &target.name,
+        &sibling_bin(stado_bin, "stado-watchdog"),
+        &user,
+    );
     [
         ("wisent-compute-agent.service", agent_text),
         ("wisent-compute-watchdog.service", watchdog_text),
@@ -180,7 +217,11 @@ pub fn unit_installs(
     .into_iter()
     .map(|(unit_name, unit_text)| {
         let command = write_unit_command(unit_name, &unit_text);
-        (unit_name.to_string(), unit_text, CommandSpec::new(ssh_argv(ssh_target, &command)))
+        (
+            unit_name.to_string(),
+            unit_text,
+            CommandSpec::new(ssh_argv(ssh_target, &command)),
+        )
     })
     .collect()
 }
@@ -205,7 +246,10 @@ pub async fn provision_target(
 ) -> Result<(), DeployError> {
     let ssh_target = target.ssh.clone().unwrap_or_default();
     if ssh_target.is_empty() {
-        echo(&format!("[skip] {}: ssh=null (no host configured)", target.name));
+        echo(&format!(
+            "[skip] {}: ssh=null (no host configured)",
+            target.name
+        ));
         return Ok(());
     }
 
@@ -220,32 +264,67 @@ pub async fn provision_target(
             "[install] {}: download stado release binaries on {ssh_target}",
             target.name
         ));
-        let output = runner(install_spec(&ssh_target)).await.map_err(DeployError)?;
+        let output = runner(install_spec(&ssh_target))
+            .await
+            .map_err(DeployError)?;
         if !output.ok() {
             return Err(DeployError(format!("install failed: {}", output.detail())));
         }
         let (platform, python, bin) = parse_remote_install(&output.stdout);
-        let python = if python.is_empty() { WC_PYTHON_FALLBACK.to_string() } else { python };
-        let bin = if bin.is_empty() { WC_BIN_FALLBACK.to_string() } else { bin };
+        let python = if python.is_empty() {
+            WC_PYTHON_FALLBACK.to_string()
+        } else {
+            python
+        };
+        let bin = if bin.is_empty() {
+            WC_BIN_FALLBACK.to_string()
+        } else {
+            bin
+        };
         (platform, python, bin)
     };
 
     if platform == "darwin-arm64" {
         let hf_token = local_install::fetch_hf_write_token().await?;
         let token = shlex_quote(hf_token.trim());
-        let local_home = crate::config_file::expand_tilde("~");
-        let local_adc = local_install::adc_path(&local_home);
-        if local_adc.is_empty() {
-            return Err(DeployError(
-                "Darwin bootstrap needs local ADC credentials to provision the remote agent".to_string(),
-            ));
-        }
-        let adc = std::fs::read(&local_adc)
-            .map_err(|exc| DeployError(format!("cannot read local ADC credentials: {exc}")))?;
-        let adc = base64::engine::general_purpose::STANDARD.encode(adc);
+        // ADC is pushed only for the GCS backend, the only one that reads
+        // it. An Azure-only or S3-only install must not be blocked on GCP
+        // credentials the box no longer has; the remote stado resolves its
+        // own backend credentials from its environment.
+        let adc_prefix = if crate::config::wc_storage_backend() == "gcs" {
+            let local_home = crate::config_file::expand_tilde("~");
+            let local_adc = local_install::adc_path(&local_home);
+            if local_adc.is_empty() {
+                return Err(DeployError(
+                    "Darwin bootstrap needs local ADC credentials to provision the remote agent"
+                        .to_string(),
+                ));
+            }
+            let adc = std::fs::read(&local_adc)
+                .map_err(|exc| DeployError(format!("cannot read local ADC credentials: {exc}")))?;
+            let adc = base64::engine::general_purpose::STANDARD.encode(adc);
+            format!(
+                "umask u=rwx,go=; mkdir -p \"$HOME/.config/gcloud\"; printf %s {} | /usr/bin/base64 -D > \"$HOME/.config/gcloud/application_default_credentials.json\"; GOOGLE_APPLICATION_CREDENTIALS=\"$HOME/.config/gcloud/application_default_credentials.json\" ",
+                shlex_quote(&adc)
+            )
+        } else {
+            String::new()
+        };
+        // Forward a CONFIGURED channel so the remote `bootstrap --local`
+        // populates ~/.stado/bin from the same place this host installed
+        // from. The compiled-in default stays implicit, which keeps the
+        // default command byte-identical.
+        let channel_prefix =
+            if crate::config::release_base_url() == crate::config::DEFAULT_RELEASE_BASE_URL {
+                String::new()
+            } else {
+                format!(
+                    "WC_RELEASE_BASE_URL={} ",
+                    shlex_quote(crate::config::release_base_url())
+                )
+            };
         let command = format!(
-            "umask u=rwx,go=; mkdir -p \"$HOME/.config/gcloud\"; printf %s {} | /usr/bin/base64 -D > \"$HOME/.config/gcloud/application_default_credentials.json\"; GOOGLE_APPLICATION_CREDENTIALS=\"$HOME/.config/gcloud/application_default_credentials.json\" HF_TOKEN={token} HUGGING_FACE_HUB_TOKEN={token} {} bootstrap --local --target {}",
-            shlex_quote(&adc),
+            "{adc_prefix}{channel_prefix}HF_TOKEN={token} HUGGING_FACE_HUB_TOKEN={token} {} bootstrap --local --target {}",
             shlex_quote(&stado_bin),
             shlex_quote(&target.name)
         );
@@ -309,7 +388,10 @@ pub async fn provision_target(
 async fn run_unit_install(spec: &CommandSpec, runner: &Runner) -> Result<(), DeployError> {
     let output = runner(spec.clone()).await.map_err(DeployError)?;
     if !output.ok() {
-        return Err(DeployError(format!("unit install failed: {}", output.detail())));
+        return Err(DeployError(format!(
+            "unit install failed: {}",
+            output.detail()
+        )));
     }
     Ok(())
 }
@@ -352,21 +434,41 @@ pub async fn run_bootstrap(
         // ExecArgs come from the bash-loop branch in
         // local_install.exec_args_for.
         if target == "failure-fixer" {
-            return local_install::install_local("failure-fixer", "failure-fixer", dry_run, runner, hf_fetch, echo)
-                .await;
+            return local_install::install_local(
+                "failure-fixer",
+                "failure-fixer",
+                dry_run,
+                runner,
+                hf_fetch,
+                echo,
+            )
+            .await;
         }
         if target == "watchdog" {
-            return local_install::install_local("watchdog", "watchdog", dry_run, runner, hf_fetch, echo).await;
+            return local_install::install_local(
+                "watchdog", "watchdog", dry_run, runner, hf_fetch, echo,
+            )
+            .await;
         }
         if let Some(t) = registry.lookup(target) {
             if t.kind == "local" {
-                return local_install::install_local(&t.name, "agent", dry_run, runner, hf_fetch, echo).await;
+                return local_install::install_local(
+                    &t.name, "agent", dry_run, runner, hf_fetch, echo,
+                )
+                .await;
             }
         }
         if let Some(c) = registry.lookup_coordinator(target) {
             if c.runtime == "daemon" || c.runtime == "cron" {
-                return local_install::install_local(&c.name, "coordinator", dry_run, runner, hf_fetch, echo)
-                    .await;
+                return local_install::install_local(
+                    &c.name,
+                    "coordinator",
+                    dry_run,
+                    runner,
+                    hf_fetch,
+                    echo,
+                )
+                .await;
             }
             if c.runtime == "gcp_cloud_function" {
                 return Err(format!(
@@ -428,9 +530,7 @@ mod tests {
     }
 
     /// Fake runner: records specs, replies from the queued outputs.
-    fn fake_runner(
-        outputs: Vec<CommandOutput>,
-    ) -> (Runner, Arc<Mutex<Vec<CommandSpec>>>) {
+    fn fake_runner(outputs: Vec<CommandOutput>) -> (Runner, Arc<Mutex<Vec<CommandSpec>>>) {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let queue = Arc::new(Mutex::new(outputs));
         let calls2 = Arc::clone(&calls);
@@ -446,21 +546,43 @@ mod tests {
     }
 
     fn out(code: i32, stdout: &str, stderr: &str) -> CommandOutput {
-        CommandOutput { code, stdout: stdout.to_string(), stderr: stderr.to_string() }
+        CommandOutput {
+            code,
+            stdout: stdout.to_string(),
+            stderr: stderr.to_string(),
+        }
     }
 
     #[test]
     fn unit_templates_match_goldens() {
-        let agent = agent_unit_text("box-a", 2, "/home/u/.stado/bin/stado", "/usr/bin/python3", "u");
+        let agent = agent_unit_text(
+            "box-a",
+            2,
+            "/home/u/.stado/bin/stado",
+            "/usr/bin/python3",
+            "u",
+        );
         assert_eq!(agent, include_str!("testdata/bootstrap_agent_unit.service"));
         let watchdog = watchdog_unit_text("box-a", "/home/u/.stado/bin/stado-watchdog", "u");
-        assert_eq!(watchdog, include_str!("testdata/bootstrap_watchdog_unit.service"));
-        assert_eq!(REMOTE_INSTALL_SCRIPT, include_str!("testdata/bootstrap_remote_install_script.sh"));
+        assert_eq!(
+            watchdog,
+            include_str!("testdata/bootstrap_watchdog_unit.service")
+        );
+        assert_eq!(
+            REMOTE_INSTALL_SCRIPT,
+            include_str!("testdata/bootstrap_remote_install_script.sh")
+        );
     }
 
     #[test]
     fn write_unit_command_matches_golden() {
-        let unit = agent_unit_text("box-a", 2, "/home/u/.stado/bin/stado", "/usr/bin/python3", "u");
+        let unit = agent_unit_text(
+            "box-a",
+            2,
+            "/home/u/.stado/bin/stado",
+            "/usr/bin/python3",
+            "u",
+        );
         assert_eq!(
             write_unit_command("wisent-compute-agent.service", &unit),
             include_str!("testdata/bootstrap_write_unit_command.txt")
@@ -471,23 +593,47 @@ mod tests {
     fn ssh_argv_and_parse_and_sibling() {
         assert_eq!(
             ssh_argv("u@h", "echo hi"),
-            vec!["ssh", "-o", "StrictHostKeyChecking=accept-new", "u@h", "echo hi"]
+            vec![
+                "ssh",
+                "-o",
+                "StrictHostKeyChecking=accept-new",
+                "u@h",
+                "echo hi"
+            ]
         );
+        // Leading install chatter is ignored; the last three lines are
+        // platform, job-runtime Python, installed Stado path.
         assert_eq!(
-            parse_remote_install("install log\n/usr/bin/python3\n/home/u/.stado/bin/stado\n"),
-            ("/usr/bin/python3".to_string(), "/home/u/.stado/bin/stado".to_string())
+            parse_remote_install(
+                "install log\nlinux-amd64\n/usr/bin/python3\n/home/u/.stado/bin/stado\n"
+            ),
+            (
+                "linux-amd64".to_string(),
+                "/usr/bin/python3".to_string(),
+                "/home/u/.stado/bin/stado".to_string()
+            )
         );
         assert_eq!(
             parse_remote_install("/home/u/.stado/bin/stado\n"),
-            (String::new(), "/home/u/.stado/bin/stado".to_string())
+            (
+                String::new(),
+                String::new(),
+                "/home/u/.stado/bin/stado".to_string()
+            )
         );
-        assert_eq!(parse_remote_install("  \n"), (String::new(), String::new()));
+        assert_eq!(
+            parse_remote_install("  \n"),
+            (String::new(), String::new(), String::new())
+        );
         assert_eq!(
             sibling_bin("/home/u/.stado/bin/stado", "stado-watchdog"),
             "/home/u/.stado/bin/stado-watchdog"
         );
         assert_eq!(sibling_bin("stado", "stado-watchdog"), "stado-watchdog");
-        assert_eq!(sibling_bin(WC_BIN_FALLBACK, "stado-watchdog"), "$HOME/.stado/bin/stado-watchdog");
+        assert_eq!(
+            sibling_bin(WC_BIN_FALLBACK, "stado-watchdog"),
+            "$HOME/.stado/bin/stado-watchdog"
+        );
     }
 
     #[tokio::test]
@@ -505,7 +651,8 @@ mod tests {
         expected.extend(agent.lines().map(|l| format!("  {l}")));
         expected.push("--- box-a watchdog systemd unit ---".to_string());
         expected.extend(watchdog.lines().map(|l| format!("  {l}")));
-        expected.push("--- ssh command (would run): ssh u@box-a 'install + enable' ---".to_string());
+        expected
+            .push("--- ssh command (would run): ssh u@box-a 'install + enable' ---".to_string());
         assert_eq!(lines, expected);
     }
 
@@ -537,7 +684,9 @@ mod tests {
         let installs = unit_installs(&t, "/home/u/.stado/bin/stado", "/usr/bin/python3");
         assert_eq!(calls[1], installs[0].2);
         assert_eq!(calls[2], installs[1].2);
-        assert!(calls[1].argv[4].contains("sudo tee /etc/systemd/system/wisent-compute-agent.service"));
+        assert!(
+            calls[1].argv[4].contains("sudo tee /etc/systemd/system/wisent-compute-agent.service")
+        );
         assert!(calls[2].argv[4].contains("ExecStart=/home/u/.stado/bin/stado-watchdog"));
     }
 
@@ -549,12 +698,14 @@ mod tests {
         let (runner, _calls) = fake_runner(vec![
             out(1, "", "gcloud exploded"), // bad install
             out(0, "/usr/bin/python3\n/home/u/.stado/bin/stado\n", ""), // good install
-            out(0, "", ""),              // good agent unit
-            out(0, "", ""),              // good watchdog unit
+            out(0, "", ""),                // good agent unit
+            out(0, "", ""),                // good watchdog unit
         ]);
         let mut lines: Vec<String> = Vec::new();
-        run(&[&bad, &skipped, &good], false, &runner, &mut |line| lines.push(line.to_string()))
-            .await;
+        run(&[&bad, &skipped, &good], false, &runner, &mut |line| {
+            lines.push(line.to_string())
+        })
+        .await;
         assert_eq!(
             lines,
             vec![
@@ -575,15 +726,9 @@ mod tests {
         let (runner, _calls) = fake_runner(vec![]);
         let fetch = empty_hf_fetcher();
         let mut lines: Vec<String> = Vec::new();
-        let err = run_bootstrap(
-            &registry,
-            None,
-            false,
-            true,
-            &runner,
-            &fetch,
-            &mut |line| lines.push(line.to_string()),
-        )
+        let err = run_bootstrap(&registry, None, false, true, &runner, &fetch, &mut |line| {
+            lines.push(line.to_string())
+        })
         .await
         .unwrap_err();
         assert_eq!(err.0, "--local requires --target NAME");
@@ -610,6 +755,9 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert_eq!(err.0, "'nope' not found in registry (or wrong kind/runtime)");
+        assert_eq!(
+            err.0,
+            "'nope' not found in registry (or wrong kind/runtime)"
+        );
     }
 }

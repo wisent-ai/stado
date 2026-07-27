@@ -36,7 +36,11 @@ pub async fn write_marker(store: &JobStorage, job: &Job) -> Result<(), StorageEr
     let name = format!("queue_priority/{}-{}.json", priority_key(job), job.job_id);
     // Python `json.dumps({"job_id": ..., "priority": int(...)})` with
     // default separators.
-    let body = format!("{{\"job_id\": {}, \"priority\": {}}}", json_str(&job.job_id), job.priority);
+    let body = format!(
+        "{{\"job_id\": {}, \"priority\": {}}}",
+        json_str(&job.job_id),
+        job.priority
+    );
     store.upload_text(&name, &body).await
 }
 
@@ -154,8 +158,10 @@ pub async fn list_top_n(
             continue;
         }
 
-        let job_paths: Vec<String> =
-            job_ids.iter().map(|(_, jid)| format!("{prefix}/{jid}.json")).collect();
+        let job_paths: Vec<String> = job_ids
+            .iter()
+            .map(|(_, jid)| format!("{prefix}/{jid}.json"))
+            .collect();
         let blobs = download_many_or_none(store, &job_paths, 10.min(job_paths.len())).await;
         for ((_marker_path, _jid), data) in job_ids.iter().zip(blobs) {
             if let Some(data) = data {
@@ -305,12 +311,27 @@ mod tests {
     async fn list_top_n_is_priority_desc_then_fifo_and_skips_stale_markers() {
         let (_dir, store) = store();
         // Same priority -> FIFO by created_at; higher priority first.
-        store.write_job("queue", &job("p10-old", 10, 8, "2026-01-01T00:00:00+00:00")).await.unwrap();
-        store.write_job("queue", &job("p10-new", 10, 8, "2026-01-02T00:00:00+00:00")).await.unwrap();
-        store.write_job("queue", &job("p5", 5, 8, "2025-12-31T00:00:00+00:00")).await.unwrap();
-        store.write_job("queue", &job("p0", 0, 8, "2025-01-01T00:00:00+00:00")).await.unwrap();
+        store
+            .write_job("queue", &job("p10-old", 10, 8, "2026-01-01T00:00:00+00:00"))
+            .await
+            .unwrap();
+        store
+            .write_job("queue", &job("p10-new", 10, 8, "2026-01-02T00:00:00+00:00"))
+            .await
+            .unwrap();
+        store
+            .write_job("queue", &job("p5", 5, 8, "2025-12-31T00:00:00+00:00"))
+            .await
+            .unwrap();
+        store
+            .write_job("queue", &job("p0", 0, 8, "2025-01-01T00:00:00+00:00"))
+            .await
+            .unwrap();
         // Stale marker: outranks everything but the queue blob is gone.
-        store.write_job("queue", &job("ghost", 100, 8, "2024-01-01T00:00:00+00:00")).await.unwrap();
+        store
+            .write_job("queue", &job("ghost", 100, 8, "2024-01-01T00:00:00+00:00"))
+            .await
+            .unwrap();
         store.delete_blob("queue/ghost.json").await.unwrap();
 
         let top = list_top_n(&store, "queue", 3).await.unwrap();
@@ -324,11 +345,20 @@ mod tests {
     async fn list_priority_first_puts_markers_ahead_of_fifo_and_dedupes() {
         let (_dir, store) = store();
         // FIFO order comes from blob creation time (local backend ctime).
-        store.write_job("queue", &job("fifo-a", 0, 8, "2026-01-01T00:00:00+00:00")).await.unwrap();
+        store
+            .write_job("queue", &job("fifo-a", 0, 8, "2026-01-01T00:00:00+00:00"))
+            .await
+            .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(10));
-        store.write_job("queue", &job("fifo-b", 0, 8, "2026-01-02T00:00:00+00:00")).await.unwrap();
+        store
+            .write_job("queue", &job("fifo-b", 0, 8, "2026-01-02T00:00:00+00:00"))
+            .await
+            .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(10));
-        store.write_job("queue", &job("prio", 5, 8, "2026-01-03T00:00:00+00:00")).await.unwrap();
+        store
+            .write_job("queue", &job("prio", 5, 8, "2026-01-03T00:00:00+00:00"))
+            .await
+            .unwrap();
 
         let jobs = list_priority_first(&store, "queue", 10).await.unwrap();
         assert_eq!(ids(&jobs), vec!["prio", "fifo-a", "fifo-b"]);
@@ -337,13 +367,28 @@ mod tests {
     #[tokio::test]
     async fn list_fitting_filters_on_vram_with_metadata_prefilter() {
         let (_dir, store) = store();
-        store.write_job("queue", &job("fit-lo", 0, 8, "2026-01-01T00:00:00+00:00")).await.unwrap();
-        store.write_job("queue", &job("fit-prio", 5, 24, "2026-01-02T00:00:00+00:00")).await.unwrap();
-        store.write_job("queue", &job("too-big", 9, 80, "2026-01-03T00:00:00+00:00")).await.unwrap();
+        store
+            .write_job("queue", &job("fit-lo", 0, 8, "2026-01-01T00:00:00+00:00"))
+            .await
+            .unwrap();
+        store
+            .write_job(
+                "queue",
+                &job("fit-prio", 5, 24, "2026-01-02T00:00:00+00:00"),
+            )
+            .await
+            .unwrap();
+        store
+            .write_job("queue", &job("too-big", 9, 80, "2026-01-03T00:00:00+00:00"))
+            .await
+            .unwrap();
         // Pre-metadata-stamp blob (uploaded raw): treated as eligible, then
         // filtered on the downloaded body (16 <= 24 fits).
         let raw = job("no-meta", 0, 16, "2026-01-04T00:00:00+00:00");
-        store.upload_text("queue/no-meta.json", &raw.to_json()).await.unwrap();
+        store
+            .upload_text("queue/no-meta.json", &raw.to_json())
+            .await
+            .unwrap();
 
         let fitting = list_fitting(&store, "queue", 24, 4000).await.unwrap();
         let mut got = ids(&fitting);
@@ -353,6 +398,9 @@ mod tests {
         assert_eq!(fitting.iter().filter(|j| j.job_id == "fit-prio").count(), 1);
 
         // Nothing fits a 4 GB card.
-        assert!(list_fitting(&store, "queue", 4, 4000).await.unwrap().is_empty());
+        assert!(list_fitting(&store, "queue", 4, 4000)
+            .await
+            .unwrap()
+            .is_empty());
     }
 }

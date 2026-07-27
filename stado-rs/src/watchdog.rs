@@ -40,8 +40,15 @@ const STDOUT_TAIL_CHARS: usize = 12000;
 /// `TimeoutExpired` after the child was killed).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunOutcome {
-    Completed { rc: i32, stdout: String, stderr: String },
-    TimedOut { stdout: String, stderr: String },
+    Completed {
+        rc: i32,
+        stdout: String,
+        stderr: String,
+    },
+    TimedOut {
+        stdout: String,
+        stderr: String,
+    },
 }
 
 /// Fault-isolation seam: how a diagnostic command is executed. Tests inject
@@ -60,7 +67,9 @@ pub struct SystemRunner;
 impl CommandRunner for SystemRunner {
     fn run(&self, argv: &[String], timeout_s: u64) -> std::io::Result<RunOutcome> {
         Ok(match run_capture(argv, Duration::from_secs(timeout_s))? {
-            Capture::Completed { rc, stdout, stderr } => RunOutcome::Completed { rc, stdout, stderr },
+            Capture::Completed { rc, stdout, stderr } => {
+                RunOutcome::Completed { rc, stdout, stderr }
+            }
             Capture::TimedOut { stdout, stderr } => RunOutcome::TimedOut { stdout, stderr },
         })
     }
@@ -86,12 +95,16 @@ pub(crate) fn hostname() -> String {
 /// Python `round(x, 2)` — round-half-even on the binary value, which is
 /// exactly what Rust's `{:.2}` float formatting does.
 fn round2(x: f64) -> f64 {
-    format!("{x:.2}").parse().expect("{:.2} of a finite f64 parses")
+    format!("{x:.2}")
+        .parse()
+        .expect("{:.2} of a finite f64 parses")
 }
 
 /// Python `round(x, 3)`.
 fn round3(x: f64) -> f64 {
-    format!("{x:.3}").parse().expect("{:.3} of a finite f64 parses")
+    format!("{x:.3}")
+        .parse()
+        .expect("{:.3} of a finite f64 parses")
 }
 
 /// Python `s[-n:]` on a `str` (character-based, not byte-based).
@@ -109,15 +122,76 @@ fn tail_chars(s: &str, n: usize) -> String {
 fn commands(bucket: &str) -> Vec<(&'static str, Vec<String>, u64)> {
     let argv = |parts: &[&str]| parts.iter().map(|s| s.to_string()).collect();
     vec![
-        ("systemctl-agent", argv(&["systemctl", "status", "wisent-agent.service", "--no-pager", "-l"]), 12),
-        ("systemctl-health", argv(&["systemctl", "status", "wisent-host-health.timer", "--no-pager", "-l"]), 12),
-        ("journal-agent", argv(&["journalctl", "-u", "wisent-agent.service", "-n", "240", "--no-pager"]), 20),
-        ("journal-health", argv(&["journalctl", "-u", "wisent-host-health.service", "-n", "120", "--no-pager"]), 20),
-        ("ps", argv(&["ps", "-eo", "pid,ppid,stat,pcpu,pmem,comm,args", "--sort=-%cpu"]), 12),
+        (
+            "systemctl-agent",
+            argv(&[
+                "systemctl",
+                "status",
+                "wisent-agent.service",
+                "--no-pager",
+                "-l",
+            ]),
+            12,
+        ),
+        (
+            "systemctl-health",
+            argv(&[
+                "systemctl",
+                "status",
+                "wisent-host-health.timer",
+                "--no-pager",
+                "-l",
+            ]),
+            12,
+        ),
+        (
+            "journal-agent",
+            argv(&[
+                "journalctl",
+                "-u",
+                "wisent-agent.service",
+                "-n",
+                "240",
+                "--no-pager",
+            ]),
+            20,
+        ),
+        (
+            "journal-health",
+            argv(&[
+                "journalctl",
+                "-u",
+                "wisent-host-health.service",
+                "-n",
+                "120",
+                "--no-pager",
+            ]),
+            20,
+        ),
+        (
+            "ps",
+            argv(&[
+                "ps",
+                "-eo",
+                "pid,ppid,stat,pcpu,pmem,comm,args",
+                "--sort=-%cpu",
+            ]),
+            12,
+        ),
         ("nvidia-smi", argv(&["nvidia-smi"]), 12),
         ("df", argv(&["df", "-h"]), 12),
         ("memory", argv(&["free", "-h"]), 12),
-        ("capacity-list", vec!["gcloud".into(), "--quiet".into(), "storage".into(), "ls".into(), format!("gs://{bucket}/capacity/")], 20),
+        (
+            "capacity-list",
+            vec![
+                "gcloud".into(),
+                "--quiet".into(),
+                "storage".into(),
+                "ls".into(),
+                format!("gs://{bucket}/capacity/"),
+            ],
+            20,
+        ),
     ]
 }
 
@@ -181,7 +255,11 @@ fn disk(path: &str) -> Value {
             let total = st.blocks() as f64 * frsize;
             let used = (st.blocks() - st.blocks_free()) as f64 * frsize;
             let free = st.blocks_available() as f64 * frsize;
-            let used_pct = if st.blocks() > 0 { round2(used / total * 100.0) } else { 0.0 };
+            let used_pct = if st.blocks() > 0 {
+                round2(used / total * 100.0)
+            } else {
+                0.0
+            };
             json!({
                 "path": path,
                 "total_gb": round2(total / GIB),
@@ -192,7 +270,10 @@ fn disk(path: &str) -> Value {
         }
         Err(err) => {
             let message = if err == nix::errno::Errno::ENOENT {
-                format!("FileNotFoundError: [Errno 2] No such file or directory: {}", py_str_repr(path))
+                format!(
+                    "FileNotFoundError: [Errno 2] No such file or directory: {}",
+                    py_str_repr(path)
+                )
             } else {
                 format!("OSError: {err}")
             };
@@ -230,10 +311,17 @@ fn write_local(payload: &Value) {
 
 /// Upload the payload through an explicit store (test seam).
 pub async fn upload_with(store: &JobStorage, payload: &Value) -> Result<(), StorageError> {
-    let host = payload.get("host").and_then(Value::as_str).unwrap_or_default();
+    let host = payload
+        .get("host")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let text = json_dumps_pretty_sorted(payload);
-    store.upload_text(&format!("{OUT_PREFIX}/{host}.json"), &text).await?;
-    store.upload_text(&format!("{OUT_PREFIX}/{host}/latest.json"), &text).await?;
+    store
+        .upload_text(&format!("{OUT_PREFIX}/{host}.json"), &text)
+        .await?;
+    store
+        .upload_text(&format!("{OUT_PREFIX}/{host}/latest.json"), &text)
+        .await?;
     Ok(())
 }
 
@@ -254,9 +342,16 @@ pub async fn once_with(
     store: Option<&JobStorage>,
 ) -> i32 {
     let mut payload = collect(bucket, runner);
-    let reported_at =
-        payload.get("reported_at").and_then(Value::as_str).unwrap_or_default().to_string();
-    let host = payload.get("host").and_then(Value::as_str).unwrap_or_default().to_string();
+    let reported_at = payload
+        .get("reported_at")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let host = payload
+        .get("host")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
     let result = match store {
         Some(store) => upload_with(store, &payload).await,
         None => upload(bucket, &payload).await,
@@ -340,7 +435,10 @@ fn parse_python_int(raw: &str) -> Option<i64> {
 /// argparse-style long-option resolution with unambiguous prefix
 /// abbreviation (`--buck` -> `--bucket`).
 fn resolve_long(name: &str) -> Option<&'static str> {
-    let matches: Vec<&&str> = LONG_OPTIONS.iter().filter(|opt| opt.starts_with(name)).collect();
+    let matches: Vec<&&str> = LONG_OPTIONS
+        .iter()
+        .filter(|opt| opt.starts_with(name))
+        .collect();
     match matches.as_slice() {
         [one] => Some(*one),
         _ => None,
@@ -352,7 +450,11 @@ fn resolve_long(name: &str) -> Option<&'static str> {
 /// [`ParseOutcome`].
 pub fn parse_args(_prog: &str, args: &[String]) -> Result<ParsedArgs, ParseOutcome> {
     let default_bucket = std::env::var("WC_BUCKET").unwrap_or_else(|_| DEFAULT_BUCKET.to_string());
-    let mut parsed = ParsedArgs { bucket: default_bucket, interval_s: DEFAULT_INTERVAL_S, once: false };
+    let mut parsed = ParsedArgs {
+        bucket: default_bucket,
+        interval_s: DEFAULT_INTERVAL_S,
+        once: false,
+    };
     let mut extras: Vec<String> = Vec::new();
     let mut positional_only = false;
     let mut index = 0;
@@ -421,7 +523,10 @@ pub fn parse_args(_prog: &str, args: &[String]) -> Result<ParsedArgs, ParseOutco
         extras.push(arg.clone());
     }
     if !extras.is_empty() {
-        return Err(ParseOutcome::Error(format!("unrecognized arguments: {}", extras.join(" "))));
+        return Err(ParseOutcome::Error(format!(
+            "unrecognized arguments: {}",
+            extras.join(" ")
+        )));
     }
     Ok(parsed)
 }
@@ -484,12 +589,22 @@ mod tests {
         fn run(&self, argv: &[String], _timeout_s: u64) -> std::io::Result<RunOutcome> {
             let program = &argv[0];
             if program == "missing-program" {
-                return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no such file"));
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "no such file",
+                ));
             }
             if program == "timeout-program" {
-                return Ok(RunOutcome::TimedOut { stdout: "partial".into(), stderr: String::new() });
+                return Ok(RunOutcome::TimedOut {
+                    stdout: "partial".into(),
+                    stderr: String::new(),
+                });
             }
-            let (rc, stdout, stderr) = self.outputs.get(program).cloned().unwrap_or((0, String::new(), String::new()));
+            let (rc, stdout, stderr) =
+                self.outputs
+                    .get(program)
+                    .cloned()
+                    .unwrap_or((0, String::new(), String::new()));
             Ok(RunOutcome::Completed { rc, stdout, stderr })
         }
     }
@@ -497,13 +612,28 @@ mod tests {
     fn fake_runner() -> FakeRunner {
         FakeRunner {
             outputs: HashMap::from([
-                ("systemctl".to_string(), (3, "agent active".to_string(), String::new())),
-                ("journalctl".to_string(), (0, "journal tail".to_string(), String::new())),
+                (
+                    "systemctl".to_string(),
+                    (3, "agent active".to_string(), String::new()),
+                ),
+                (
+                    "journalctl".to_string(),
+                    (0, "journal tail".to_string(), String::new()),
+                ),
                 ("ps".to_string(), (0, "PID CMD".to_string(), String::new())),
-                ("nvidia-smi".to_string(), (0, "GPU 0".to_string(), String::new())),
+                (
+                    "nvidia-smi".to_string(),
+                    (0, "GPU 0".to_string(), String::new()),
+                ),
                 ("df".to_string(), (0, "df out".to_string(), String::new())),
-                ("free".to_string(), (0, "free out".to_string(), String::new())),
-                ("gcloud".to_string(), (0, "gs://bucket/capacity/x".to_string(), String::new())),
+                (
+                    "free".to_string(),
+                    (0, "free out".to_string(), String::new()),
+                ),
+                (
+                    "gcloud".to_string(),
+                    (0, "gs://bucket/capacity/x".to_string(), String::new()),
+                ),
             ]),
         }
     }
@@ -515,30 +645,67 @@ mod tests {
         let by_name: HashMap<_, _> = cmds.iter().map(|(n, a, t)| (*n, (a.clone(), *t))).collect();
         assert_eq!(
             by_name["systemctl-agent"].0,
-            vec!["systemctl", "status", "wisent-agent.service", "--no-pager", "-l"]
+            vec![
+                "systemctl",
+                "status",
+                "wisent-agent.service",
+                "--no-pager",
+                "-l"
+            ]
         );
         assert_eq!(
             by_name["systemctl-health"].0,
-            vec!["systemctl", "status", "wisent-host-health.timer", "--no-pager", "-l"]
+            vec![
+                "systemctl",
+                "status",
+                "wisent-host-health.timer",
+                "--no-pager",
+                "-l"
+            ]
         );
         assert_eq!(
             by_name["journal-agent"].0,
-            vec!["journalctl", "-u", "wisent-agent.service", "-n", "240", "--no-pager"]
+            vec![
+                "journalctl",
+                "-u",
+                "wisent-agent.service",
+                "-n",
+                "240",
+                "--no-pager"
+            ]
         );
         assert_eq!(
             by_name["journal-health"].0,
-            vec!["journalctl", "-u", "wisent-host-health.service", "-n", "120", "--no-pager"]
+            vec![
+                "journalctl",
+                "-u",
+                "wisent-host-health.service",
+                "-n",
+                "120",
+                "--no-pager"
+            ]
         );
         assert_eq!(
             by_name["ps"].0,
-            vec!["ps", "-eo", "pid,ppid,stat,pcpu,pmem,comm,args", "--sort=-%cpu"]
+            vec![
+                "ps",
+                "-eo",
+                "pid,ppid,stat,pcpu,pmem,comm,args",
+                "--sort=-%cpu"
+            ]
         );
         assert_eq!(by_name["nvidia-smi"].0, vec!["nvidia-smi"]);
         assert_eq!(by_name["df"].0, vec!["df", "-h"]);
         assert_eq!(by_name["memory"].0, vec!["free", "-h"]);
         assert_eq!(
             by_name["capacity-list"].0,
-            vec!["gcloud", "--quiet", "storage", "ls", "gs://mybucket/capacity/"]
+            vec![
+                "gcloud",
+                "--quiet",
+                "storage",
+                "ls",
+                "gs://mybucket/capacity/"
+            ]
         );
         assert_eq!(by_name["journal-agent"].1, 20);
         assert_eq!(by_name["ps"].1, 12);
@@ -564,7 +731,10 @@ mod tests {
         assert_eq!(commands["systemctl-agent"]["rc"], 3);
         assert_eq!(commands["systemctl-agent"]["stdout_tail"], "agent active");
         assert_eq!(commands["journal-agent"]["stdout_tail"], "journal tail");
-        assert_eq!(commands["capacity-list"]["stdout_tail"], "gs://bucket/capacity/x");
+        assert_eq!(
+            commands["capacity-list"]["stdout_tail"],
+            "gs://bucket/capacity/x"
+        );
         assert!(commands["nvidia-smi"].get("timed_out").is_none());
     }
 
@@ -594,7 +764,10 @@ mod tests {
         assert_eq!(root["path"], "/");
         assert!(root["total_gb"].as_f64().unwrap() > 0.0);
         let missing = disk("/definitely/not/a/real/path/xyz");
-        assert!(missing["error"].as_str().unwrap().starts_with("FileNotFoundError: [Errno 2]"));
+        assert!(missing["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("FileNotFoundError: [Errno 2]"));
     }
 
     #[tokio::test]
@@ -618,10 +791,16 @@ mod tests {
         // Python json.dumps(indent=2, sort_keys=True): keys sorted.
         let bucket_pos = flat.find("\"bucket\"").unwrap();
         let commands_pos = flat.find("\"commands\"").unwrap();
-        assert!(bucket_pos < commands_pos, "upload is sort_keys=True: {flat}");
+        assert!(
+            bucket_pos < commands_pos,
+            "upload is sort_keys=True: {flat}"
+        );
         let parsed: Value = serde_json::from_str(&flat).unwrap();
         assert_eq!(parsed["schema"], "wisent-box-diagnostics-v1");
-        assert_eq!(parsed["commands"]["capacity-list"]["cmd"][4], "gs://mybucket/capacity/");
+        assert_eq!(
+            parsed["commands"]["capacity-list"]["cmd"][4],
+            "gs://mybucket/capacity/"
+        );
     }
 
     #[test]
@@ -643,17 +822,39 @@ mod tests {
         let parsed = parse_args("stado-watchdog", &[]).unwrap();
         assert_eq!(
             parsed,
-            ParsedArgs { bucket: DEFAULT_BUCKET.into(), interval_s: 60, once: false }
+            ParsedArgs {
+                bucket: DEFAULT_BUCKET.into(),
+                interval_s: 60,
+                once: false
+            }
         );
-        let args: Vec<String> =
-            ["--bucket", "b1", "--interval-s", "30", "--once"].iter().map(|s| s.to_string()).collect();
+        let args: Vec<String> = ["--bucket", "b1", "--interval-s", "30", "--once"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         let parsed = parse_args("stado-watchdog", &args).unwrap();
-        assert_eq!(parsed, ParsedArgs { bucket: "b1".into(), interval_s: 30, once: true });
+        assert_eq!(
+            parsed,
+            ParsedArgs {
+                bucket: "b1".into(),
+                interval_s: 30,
+                once: true
+            }
+        );
         // --opt=value form, prefix abbreviation, signs and underscores.
-        let args: Vec<String> =
-            ["--buck=b2", "--interval-s=1_5", "--on"].iter().map(|s| s.to_string()).collect();
+        let args: Vec<String> = ["--buck=b2", "--interval-s=1_5", "--on"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         let parsed = parse_args("stado-watchdog", &args).unwrap();
-        assert_eq!(parsed, ParsedArgs { bucket: "b2".into(), interval_s: 15, once: true });
+        assert_eq!(
+            parsed,
+            ParsedArgs {
+                bucket: "b2".into(),
+                interval_s: 15,
+                once: true
+            }
+        );
         let args = vec!["--interval-s".to_string(), "-5".to_string()];
         assert_eq!(parse_args("stado-watchdog", &args).unwrap().interval_s, -5);
     }
@@ -661,7 +862,10 @@ mod tests {
     #[test]
     fn parse_args_errors_match_argparse() {
         let err = parse_args("stado-watchdog", &["--bogus".to_string()]).unwrap_err();
-        assert_eq!(err, ParseOutcome::Error("unrecognized arguments: --bogus".into()));
+        assert_eq!(
+            err,
+            ParseOutcome::Error("unrecognized arguments: --bogus".into())
+        );
         let err = parse_args(
             "stado-watchdog",
             &["--interval-s".to_string(), "abc".to_string()],
@@ -672,9 +876,19 @@ mod tests {
             ParseOutcome::Error("argument --interval-s: invalid int value: 'abc'".into())
         );
         let err = parse_args("stado-watchdog", &["--bucket".to_string()]).unwrap_err();
-        assert_eq!(err, ParseOutcome::Error("argument --bucket: expected one argument".into()));
-        let err = parse_args("stado-watchdog", &["pos1".to_string(), "--bad".to_string()]).unwrap_err();
-        assert_eq!(err, ParseOutcome::Error("unrecognized arguments: pos1 --bad".into()));
-        assert_eq!(parse_args("stado-watchdog", &["--help".to_string()]), Err(ParseOutcome::Help));
+        assert_eq!(
+            err,
+            ParseOutcome::Error("argument --bucket: expected one argument".into())
+        );
+        let err =
+            parse_args("stado-watchdog", &["pos1".to_string(), "--bad".to_string()]).unwrap_err();
+        assert_eq!(
+            err,
+            ParseOutcome::Error("unrecognized arguments: pos1 --bad".into())
+        );
+        assert_eq!(
+            parse_args("stado-watchdog", &["--help".to_string()]),
+            Err(ParseOutcome::Help)
+        );
     }
 }

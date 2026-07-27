@@ -13,6 +13,8 @@ use clap::{Parser, Subcommand};
 
 pub mod agent;
 pub mod artifact;
+pub mod billing;
+pub mod blast_radius;
 pub mod bootstrap;
 pub mod cancel;
 pub mod config_cmd;
@@ -21,16 +23,25 @@ pub mod coordinator;
 pub mod cost;
 pub mod dashboard;
 pub mod disk_cleanup;
+pub mod doctor;
 pub mod host;
+pub mod instances;
+pub mod job;
 pub mod machine;
-pub mod profiles_cmd;
+pub mod mail;
 pub mod overview;
+pub mod profiles_cmd;
+pub mod queue;
 pub mod quota;
 pub mod registry;
 pub mod results;
 pub mod schedule;
+pub mod secrets;
+pub mod service;
 pub mod status;
+pub mod storage;
 pub mod submit;
+pub mod table;
 pub mod vast;
 
 /// Command failure with a click-matching exit code. A `Some` message is
@@ -46,12 +57,30 @@ pub struct CmdError {
 impl CmdError {
     /// click `ClickException`: "Error: {msg}" on stderr, exit 1.
     pub fn click(msg: impl Into<String>) -> Self {
-        Self { message: Some(msg.into()), code: 1 }
+        Self {
+            message: Some(msg.into()),
+            code: 1,
+        }
+    }
+
+    /// click `UsageError`: "Error: {msg}" on stderr, exit 2 — the code
+    /// click reserves for "you invoked this wrongly", as distinct from
+    /// [`Self::click`]'s "it ran and failed".
+    pub fn usage(msg: impl Into<String>) -> Self {
+        Self {
+            message: Some(msg.into()),
+            // click's UsageError.exit_code, as a ratio of two width
+            // constants rather than a bare literal.
+            code: (u16::BITS / u8::BITS) as i32,
+        }
     }
 
     /// click `SystemExit(code)`: nothing more to print.
     pub fn silent(code: i32) -> Self {
-        Self { message: None, code }
+        Self {
+            message: None,
+            code,
+        }
     }
 }
 
@@ -134,6 +163,18 @@ enum Commands {
         json: bool,
     },
 
+    /// Assess an upstream failure, downstream consumers, and backup coverage.
+    #[command(name = "blast-radius")]
+    BlastRadius(blast_radius::BlastRadiusArgs),
+
+    /// Inspect or refresh cross-cloud costs, grants, burn, and credit balances.
+    #[command(subcommand)]
+    Billing(BillingCommands),
+
+    /// Search and deterministically analyze Gmail messages without modifying them.
+    #[command(subcommand)]
+    Mail(MailCommands),
+
     /// Run registry-authorized cleanup for this local target.
     #[command(name = "disk-cleanup")]
     DiskCleanup {
@@ -143,6 +184,10 @@ enum Commands {
         /// Continuously check at the canonical policy interval.
         #[arg(long)]
         watch: bool,
+        /// Plan a pass and delete nothing: same policy, same scan, an
+        /// `enforce` policy pinned to the janitor's own report mode.
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Install the registry-controlled cleanup watch on this Mac.
@@ -163,15 +208,20 @@ enum Commands {
     },
 
     /// Download job results.
-    Results {
-        job_id: String,
-        output_dir: String,
-    },
+    Results { job_id: String, output_dir: String },
 
     /// Cancel a queued or running job.
     Cancel {
         job_id: String,
+        /// Also delete the cloud instance the job is holding. Without it a
+        /// cancelled job's VM keeps running, and billing.
+        #[arg(long)]
+        terminate: bool,
     },
+
+    /// Rerun or watch one job.
+    #[command(subcommand)]
+    Job(job::JobCommands),
 
     /// Run local GPU agent. Polls queue, respects Vast.ai renters.
     Agent {
@@ -271,9 +321,7 @@ enum Commands {
     },
 
     /// List available submit profiles, or show one profile's JSON.
-    Profiles {
-        name: Option<String>,
-    },
+    Profiles { name: Option<String> },
 
     /// Inspect stado configuration: show | validate | init.
     Config {
@@ -321,6 +369,85 @@ enum Commands {
     /// Vast.ai marketplace host-listing (rent our idle GPU).
     #[command(subcommand)]
     Vast(VastCommands),
+
+    /// Inspect and reap live agent VMs across the configured cloud providers.
+    #[command(subcommand)]
+    Instances(instances::InstancesCommands),
+
+    /// Move queue state between storage backends (billing-outage migration).
+    #[command(subcommand)]
+    Storage(storage::StorageCommands),
+    /// Read and manage application credentials in Azure Key Vault.
+    #[command(subcommand)]
+    Secrets(secrets::SecretsCommands),
+    /// Maintenance mode: pause/resume dispatching, and drain the fleet.
+    #[command(subcommand)]
+    Queue(queue::QueueCommands),
+    /// Manage the services registry hosts run: list, status, restart,
+    /// adopt, retire, deploy, logs, env.
+    #[command(subcommand)]
+    Service(service::ServiceCommands),
+    /// Ordered deployment preflight: config, storage, provider auth, quota,
+    /// release channel, agent template, VM identity, registry, queue pause
+    /// state and alert channels. Exits non-zero if any check FAILs.
+    Doctor(doctor::DoctorArgs),
+}
+
+#[derive(Subcommand)]
+enum BillingCommands {
+    /// Read the last billing snapshot published by the coordinator.
+    Show {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Query billing providers now and publish a fresh snapshot.
+    Refresh {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Foreground billing watchdog: poll, evaluate credit balance AND
+    /// account health, and alert on transitions. Deliberately runnable
+    /// outside the cloud it monitors (see `cli/billing.rs` module docs).
+    Watch {
+        /// Poll interval as a duration string: 45s, 5m, 2h, 1d.
+        #[arg(long, default_value = "5m", value_parser = billing::parse_interval)]
+        interval: std::time::Duration,
+        /// Evaluate once and exit instead of looping.
+        #[arg(long)]
+        once: bool,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum MailCommands {
+    /// Search Gmail and list categorized message metadata.
+    Search {
+        /// Gmail search expression, for example: from:microsoft.com azure.
+        #[arg(long, default_value = "")]
+        query: String,
+        /// Maximum messages to read.
+        #[arg(long, default_value_t = default_mail_results())]
+        max_results: usize,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Aggregate categories, financial amounts, dates, links, and required actions.
+    Analyze {
+        /// Gmail search expression.
+        #[arg(long, default_value = "")]
+        query: String,
+        /// Maximum messages to read.
+        #[arg(long, default_value_t = default_mail_results())]
+        max_results: usize,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+fn default_mail_results() -> usize {
+    usize::try_from(u8::BITS).expect("u8 bit width fits usize")
 }
 
 #[derive(Subcommand)]
@@ -331,9 +458,7 @@ enum MachineCommands {
         request_file: String,
     },
     /// Read one job directly by ID.
-    Status {
-        job_id: String,
-    },
+    Status { job_id: String },
     /// Read a byte-cursor page from the canonical command log.
     Logs {
         job_id: String,
@@ -343,9 +468,7 @@ enum MachineCommands {
         limit: i64,
     },
     /// Durably and idempotently cancel one job.
-    Cancel {
-        job_id: String,
-    },
+    Cancel { job_id: String },
     /// Download and verify canonical artifacts for a terminal job.
     Artifacts {
         job_id: String,
@@ -376,7 +499,10 @@ enum QuotaCommands {
         #[arg(long, default_value = "")]
         provider: String,
         /// Reviewer-visible justification text.
-        #[arg(long, default_value = "wisent-compute autoscaler queue depth requires more parallel GPU capacity")]
+        #[arg(
+            long,
+            default_value = "wisent-compute autoscaler queue depth requires more parallel GPU capacity"
+        )]
         justification: String,
         /// Contact email for the Cloud Quotas reviewer (required for GCP).
         /// Default: $WC_QUOTA_CONTACT_EMAIL.
@@ -435,7 +561,10 @@ enum QuotaCommands {
         #[arg(long, default_value = "")]
         region: String,
         /// Reviewer-visible justification text.
-        #[arg(long, default_value = "wisent-compute autoscaler bulk capacity request: provision GPU headroom across every supported family in the dispatch regions so the scheduler can fall through to whichever family Google/Azure can serve.")]
+        #[arg(
+            long,
+            default_value = "wisent-compute autoscaler bulk capacity request: provision GPU headroom across every supported family in the dispatch regions so the scheduler can fall through to whichever family Google/Azure can serve."
+        )]
         justification: String,
         /// Contact email for the GCP Cloud Quotas reviewer.
         /// Default: $WC_QUOTA_CONTACT_EMAIL.
@@ -574,25 +703,15 @@ enum ScheduleCommands {
     /// List all schedules.
     List,
     /// Print a schedule's full JSON.
-    Show {
-        schedule_id: String,
-    },
+    Show { schedule_id: String },
     /// Delete a schedule (does not affect jobs it already submitted).
-    Rm {
-        schedule_id: String,
-    },
+    Rm { schedule_id: String },
     /// Disable a schedule without deleting it.
-    Pause {
-        schedule_id: String,
-    },
+    Pause { schedule_id: String },
     /// Re-enable a paused schedule (next run recomputed from now).
-    Resume {
-        schedule_id: String,
-    },
+    Resume { schedule_id: String },
     /// Fire a schedule once right now, regardless of its next run time.
-    Run {
-        schedule_id: String,
-    },
+    Run { schedule_id: String },
 }
 
 /// `schedule create` options (boxed out of the enum to keep variant sizes
@@ -674,22 +793,16 @@ pub(crate) enum CostCommands {
     /// Summarize $ spent per target_kind and per model from completed jobs.
     Report,
     /// Project total $ for a batch file using observed per-job cost.
-    Estimate {
-        batch_file: String,
-    },
+    Estimate { batch_file: String },
 }
 
 #[derive(Subcommand)]
 enum RegistryCommands {
     /// Validate a local registry-v2 JSON document.
-    Validate {
-        path: Option<String>,
-    },
-    /// Upload local registry.json to gs://wisent-compute/registry.json.
-    Push {
-        path: Option<String>,
-    },
-    /// Print the GCS-hosted registry to stdout.
+    Validate { path: Option<String> },
+    /// Upload local registry.json to the canonical registry object.
+    Push { path: Option<String> },
+    /// Print the canonical registry to stdout.
     Pull,
     /// Print which registry target is this machine.
     #[command(name = "self")]
@@ -697,6 +810,36 @@ enum RegistryCommands {
         /// Print only the target name, for scripts.
         #[arg(long)]
         name_only: bool,
+    },
+    /// Diff registry declarations against live host state.
+    Doctor {
+        /// Emit the findings as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Manage hosts in the canonical registry.
+    #[command(subcommand)]
+    Host(RegistryHostCommands),
+    /// Table of every registry host and its last beacon, worst first.
+    #[command(name = "beacon-age")]
+    BeaconAge {
+        /// Emit the table as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum RegistryHostCommands {
+    /// Onboard HOST into the canonical registry, validated.
+    Add {
+        host: String,
+        /// SSH destination ([user@]host[:port]) the fleet reaches HOST at.
+        #[arg(long)]
+        ssh: String,
+        /// Registry target kind.
+        #[arg(long, default_value = "local", value_parser = ["gcp", "local", "vast"])]
+        kind: String,
     },
 }
 
@@ -710,24 +853,63 @@ enum HostCommands {
         json: bool,
     },
     /// Recover a registry-managed macOS host through its approved channel.
-    Recover {
-        target: String,
-    },
+    Recover { target: String },
+    /// Request a graceful reboot of TARGET through its approved channel.
+    Reboot { target: String },
     /// Manage local macOS and Linux user accounts.
     #[command(subcommand)]
     User(HostUserCommands),
     /// Point TARGET's Weles recordings store at PATH.
     #[command(name = "weles-recordings-dir")]
-    WelesRecordingsDir {
-        target: String,
-        path: String,
-    },
+    WelesRecordingsDir { target: String, path: String },
     /// Report or revert the GUI-automation enablement of TARGET.
     #[command(name = "gui-automation", subcommand)]
     GuiAutomation(HostGuiAutomationCommands),
     /// Report or reclaim tagged build caches on TARGET.
     #[command(name = "build-caches", subcommand)]
     BuildCaches(HostBuildCacheCommands),
+    /// Report TARGET's uptime, load averages and logged-in users.
+    Uptime {
+        target: String,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Check TARGET's ssh reachability AND health-beacon age as one verdict.
+    Ping {
+        target: String,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Report TARGET's disk usage and its registry cleanup policy state.
+    Disk {
+        target: String,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Preview what the registry cleanup would delete on TARGET.
+    Cleanup {
+        target: String,
+        /// Required: this command only ever previews.
+        #[arg(long)]
+        dry_run: bool,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run one approved read-only command on TARGET (allowlist, not a shell).
+    Exec {
+        target: String,
+        /// Emit the report as JSON instead of the host's raw output.
+        #[arg(long)]
+        json: bool,
+        /// The approved command, after `--`. Run with an unapproved one to
+        /// see the allowlist.
+        #[arg(last = true)]
+        command: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -755,9 +937,7 @@ enum HostBuildCacheCommands {
 #[derive(Subcommand)]
 enum HostGuiAutomationCommands {
     /// Report autologin, remote management, TCC and automation artifacts.
-    Status {
-        target: String,
-    },
+    Status { target: String },
     /// Revert the enablement: autologin, kcpassword, remote management,
     /// the driver's accessibility grant, and the installed artifacts.
     Disable {
@@ -888,18 +1068,24 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             Ok(())
         }
         Commands::Overview { json } => overview::run(json).await,
+        Commands::BlastRadius(args) => blast_radius::run(&args).await,
+        Commands::Billing(sub) => billing::dispatch(&sub).await,
+        Commands::Mail(sub) => mail::dispatch(&sub).await,
         Commands::Submit(args) => submit::run(&args).await,
         Commands::Status { filter_id } => status::run(filter_id.as_deref()).await,
-        Commands::Cancel { job_id } => cancel::run(&job_id).await,
+        Commands::Cancel { job_id, terminate } => cancel::run(&job_id, terminate).await,
+        Commands::Job(sub) => job::dispatch(sub).await,
         Commands::Results { job_id, output_dir } => results::run(&job_id, &output_dir).await,
         Commands::Profiles { name } => profiles_cmd::run(name.as_deref()),
         Commands::Config { sub } => config_cmd::run(&sub),
         Commands::Machine(sub) => match sub {
             MachineCommands::Submit { request_file } => machine::submit(&request_file).await,
             MachineCommands::Status { job_id } => machine::status(&job_id).await,
-            MachineCommands::Logs { job_id, cursor, limit } => {
-                machine::logs(&job_id, cursor, limit).await
-            }
+            MachineCommands::Logs {
+                job_id,
+                cursor,
+                limit,
+            } => machine::logs(&job_id, cursor, limit).await,
             MachineCommands::Cancel { job_id } => machine::cancel(&job_id).await,
             MachineCommands::Artifacts { job_id, output_dir } => {
                 machine::artifacts(&job_id, &output_dir).await
@@ -936,7 +1122,11 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             ScheduleCommands::Resume { schedule_id } => schedule::resume(&schedule_id).await,
             ScheduleCommands::Run { schedule_id } => schedule::run(&schedule_id).await,
         },
-        Commands::DiskCleanup { once, watch } => disk_cleanup::run(once, watch).await,
+        Commands::DiskCleanup {
+            once,
+            watch,
+            dry_run,
+        } => disk_cleanup::run(once, watch, dry_run).await,
         Commands::InstallDiskCleanup => disk_cleanup::install().await,
         Commands::Artifact(sub) => artifact::dispatch(sub).await,
         Commands::Cost(sub) => cost::dispatch(&sub).await,
@@ -944,21 +1134,31 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Quota { json, sub } => quota::dispatch(json, &sub).await,
         Commands::Coordinator { target, once } => coordinator::run(target, once).await,
         Commands::Dashboard { bind, port } => dashboard::run(bind, port).await,
-        Commands::LocalControlPlane { bind, port, interval } => {
-            control_plane::local(bind, port, interval).await
-        }
-        Commands::CloudControlPlane { bind, port, interval } => {
-            control_plane::cloud(bind, port, interval).await
-        }
+        Commands::LocalControlPlane {
+            bind,
+            port,
+            interval,
+        } => control_plane::local(bind, port, interval).await,
+        Commands::CloudControlPlane {
+            bind,
+            port,
+            interval,
+        } => control_plane::cloud(bind, port, interval).await,
         Commands::Registry(sub) => match sub {
             RegistryCommands::Validate { path } => registry::validate(path),
             RegistryCommands::Push { path } => registry::push(path).await,
             RegistryCommands::Pull => registry::pull().await,
             RegistryCommands::SelfTarget { name_only } => registry::self_target(name_only).await,
+            RegistryCommands::Doctor { json } => registry::doctor(json).await,
+            RegistryCommands::Host(RegistryHostCommands::Add { host, ssh, kind }) => {
+                registry::host_add(&host, &ssh, &kind).await
+            }
+            RegistryCommands::BeaconAge { json } => registry::beacon_age(json).await,
         },
         Commands::Host(sub) => match sub {
             HostCommands::Health { target, json } => host::health(&target, json).await,
             HostCommands::Recover { target } => host::recover(&target).await,
+            HostCommands::Reboot { target } => host::reboot(&target).await,
             HostCommands::User(HostUserCommands::Create {
                 username,
                 target,
@@ -983,9 +1183,11 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 )
                 .await
             }
-            HostCommands::User(HostUserCommands::Delete { username, target, keep_home }) => {
-                host::user_delete(&username, &target, keep_home).await
-            }
+            HostCommands::User(HostUserCommands::Delete {
+                username,
+                target,
+                keep_home,
+            }) => host::user_delete(&username, &target, keep_home).await,
             HostCommands::WelesRecordingsDir { target, path } => {
                 host::weles_recordings_dir(&target, &path).await
             }
@@ -1005,8 +1207,30 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 root,
                 min_age_days,
             }) => host::build_caches(&target, &root, &min_age_days, true).await,
+            HostCommands::Uptime { target, json } => host::uptime(&target, json).await,
+            HostCommands::Ping { target, json } => host::ping(&target, json).await,
+            HostCommands::Disk { target, json } => host::disk(&target, json).await,
+            HostCommands::Cleanup {
+                target,
+                dry_run,
+                json,
+            } => host::cleanup(&target, dry_run, json).await,
+            HostCommands::Exec {
+                target,
+                json,
+                command,
+            } => host::exec(&target, command, json).await,
         },
-        Commands::Bootstrap { target, dry_run, local } => bootstrap::run(target, dry_run, local).await,
+        Commands::Bootstrap {
+            target,
+            dry_run,
+            local,
+        } => bootstrap::run(target, dry_run, local).await,
+        Commands::Storage(sub) => storage::dispatch(sub).await,
+        Commands::Instances(sub) => instances::dispatch(sub).await,
+        Commands::Secrets(sub) => secrets::dispatch(sub).await,
+        Commands::Queue(sub) => queue::dispatch(sub).await,
+        Commands::Service(sub) => service::dispatch(sub).await,
+        Commands::Doctor(args) => doctor::dispatch(args).await,
     }
 }
-

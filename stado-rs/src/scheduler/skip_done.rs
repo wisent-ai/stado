@@ -77,11 +77,18 @@ static MODEL_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// Pull (model, task) out of an extract_and_upload command line.
 /// Python `_parse_command`.
 pub fn parse_command(cmd: &str) -> (String, String) {
-    let task = TASK_RE.captures(cmd).map(|c| c[1].to_string()).unwrap_or_default();
+    let task = TASK_RE
+        .captures(cmd)
+        .map(|c| c[1].to_string())
+        .unwrap_or_default();
     let model = MODEL_RE
         .captures(cmd)
         .map(|c| {
-            c.get(1).or_else(|| c.get(2)).or_else(|| c.get(3)).map(|m| m.as_str()).unwrap_or("")
+            c.get(1)
+                .or_else(|| c.get(2))
+                .or_else(|| c.get(3))
+                .map(|m| m.as_str())
+                .unwrap_or("")
         })
         .unwrap_or("")
         .to_string();
@@ -162,7 +169,9 @@ impl RepoFileLister for HfApiLister {
 fn next_link(header: &str) -> Option<String> {
     for part in header.split(',') {
         let mut segments = part.split(';');
-        let Some(target) = segments.next() else { continue };
+        let Some(target) = segments.next() else {
+            continue;
+        };
         let target = target.trim();
         if !target.starts_with('<') || !target.ends_with('>') {
             continue;
@@ -182,7 +191,10 @@ pub fn prefixes_from_files(files: &[String]) -> HashSet<String> {
     for f in files {
         let parts: Vec<&str> = f.split('/').collect();
         if parts.len() >= 4 && parts[0] == "activations" {
-            prefixes.insert(format!("{}/{}/{}/{}/", parts[0], parts[1], parts[2], parts[3]));
+            prefixes.insert(format!(
+                "{}/{}/{}/{}/",
+                parts[0], parts[1], parts[2], parts[3]
+            ));
         }
     }
     prefixes
@@ -237,7 +249,9 @@ pub async fn filter_already_done(
         }
     }
     if skipped > 0 {
-        log_fn(&format!("Skipped {skipped} jobs already complete on HF (no VM spawn)"));
+        log_fn(&format!(
+            "Skipped {skipped} jobs already complete on HF (no VM spawn)"
+        ));
     }
     Ok(survivors)
 }
@@ -269,14 +283,24 @@ mod tests {
     fn all_strategy_files(safe_model: &str, task: &str) -> Vec<String> {
         DEFAULT_STRATEGIES
             .iter()
-            .map(|s| format!("activations/{safe_model}/{task}/{s}/{DEFAULT_COMPONENT}/layer_0.safetensors"))
+            .map(|s| {
+                format!(
+                    "activations/{safe_model}/{task}/{s}/{DEFAULT_COMPONENT}/layer_0.safetensors"
+                )
+            })
             .collect()
     }
 
     #[test]
     fn model_to_safe_name_mirrors_hf_config() {
-        assert_eq!(model_to_safe_name("meta-llama/Llama-3.1-8B"), "meta-llama__Llama-3.1-8B");
-        assert_eq!(model_to_safe_name("org/name:revision"), "org__name_revision");
+        assert_eq!(
+            model_to_safe_name("meta-llama/Llama-3.1-8B"),
+            "meta-llama__Llama-3.1-8B"
+        );
+        assert_eq!(
+            model_to_safe_name("org/name:revision"),
+            "org__name_revision"
+        );
     }
 
     #[test]
@@ -293,7 +317,10 @@ mod tests {
             parse_command("x --model \"org/dq\" --task t2"),
             ("org/dq".to_string(), "t2".to_string())
         );
-        assert_eq!(parse_command("nothing here"), (String::new(), String::new()));
+        assert_eq!(
+            parse_command("nothing here"),
+            (String::new(), String::new())
+        );
     }
 
     #[test]
@@ -317,17 +344,25 @@ mod tests {
 
     #[test]
     fn is_job_already_done_set_diff_logic() {
-        let prefixes: HashSet<String> =
-            prefixes_from_files(&all_strategy_files("org__m", "task1"));
+        let prefixes: HashSet<String> = prefixes_from_files(&all_strategy_files("org__m", "task1"));
         // All 7 default strategies present -> done.
-        assert!(is_job_already_done("x --model org/m --task task1", &prefixes));
+        assert!(is_job_already_done(
+            "x --model org/m --task task1",
+            &prefixes
+        ));
         // One strategy missing -> not done.
         let mut partial: Vec<String> = all_strategy_files("org__m", "task1");
         partial.retain(|f| !f.contains("role_play"));
         let partial = prefixes_from_files(&partial);
-        assert!(!is_job_already_done("x --model org/m --task task1", &partial));
+        assert!(!is_job_already_done(
+            "x --model org/m --task task1",
+            &partial
+        ));
         // Different task -> not done.
-        assert!(!is_job_already_done("x --model org/m --task task2", &prefixes));
+        assert!(!is_job_already_done(
+            "x --model org/m --task task2",
+            &prefixes
+        ));
         // Unparseable command -> not done (never skip what we can't check).
         assert!(!is_job_already_done("admin --restart", &prefixes));
     }
@@ -335,7 +370,9 @@ mod tests {
     #[tokio::test]
     async fn filter_moves_done_jobs_straight_to_completed() {
         let (_dir, store) = store();
-        let lister = StaticLister { files: all_strategy_files("org__m", "task1") };
+        let lister = StaticLister {
+            files: all_strategy_files("org__m", "task1"),
+        };
         let done = Job::new("j-done", "x --model org/m --task task1");
         let pending = Job::new("j-pending", "x --model org/m --task task2");
         store.write_job("queue", &done).await.unwrap();
@@ -345,22 +382,38 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let logs: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
-        let survivors =
-            filter_already_done(vec![done, pending], &store, now, &|m| logs.lock().unwrap().push(m.into()), &lister)
-                .await
-                .unwrap();
+        let survivors = filter_already_done(
+            vec![done, pending],
+            &store,
+            now,
+            &|m| logs.lock().unwrap().push(m.into()),
+            &lister,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(survivors.len(), 1);
         assert_eq!(survivors[0].job_id, "j-pending");
         assert!(store.read_job("queue", "j-done").await.unwrap().is_none());
-        let moved = store.read_job("completed", "j-done").await.unwrap().unwrap();
+        let moved = store
+            .read_job("completed", "j-done")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(moved.state, "completed");
-        assert_eq!(moved.completed_at.as_deref(), Some("2026-05-19T12:00:00+00:00"));
+        assert_eq!(
+            moved.completed_at.as_deref(),
+            Some("2026-05-19T12:00:00+00:00")
+        );
         assert_eq!(
             moved.error.as_deref(),
             Some("skipped: all strategies present on wisent-ai/activations")
         );
-        assert!(store.read_job("queue", "j-pending").await.unwrap().is_some());
+        assert!(store
+            .read_job("queue", "j-pending")
+            .await
+            .unwrap()
+            .is_some());
         assert_eq!(
             logs.lock().unwrap().as_slice(),
             &["Skipped 1 jobs already complete on HF (no VM spawn)".to_string()]
@@ -370,7 +423,9 @@ mod tests {
     #[tokio::test]
     async fn empty_prefix_set_short_circuits_without_moves() {
         let (_dir, store) = store();
-        let lister = StaticLister { files: vec!["README.md".to_string()] };
+        let lister = StaticLister {
+            files: vec!["README.md".to_string()],
+        };
         let done = Job::new("j-x", "x --model org/m --task task1");
         store.write_job("queue", &done).await.unwrap();
         let survivors = filter_already_done(
@@ -418,7 +473,9 @@ mod tests {
                 use tokio::io::{AsyncReadExt, AsyncWriteExt};
                 let mut buf = vec![0u8; 8192];
                 let n = socket.read(&mut buf).await.unwrap();
-                rec.lock().unwrap().push(String::from_utf8_lossy(&buf[..n]).into_owned());
+                rec.lock()
+                    .unwrap()
+                    .push(String::from_utf8_lossy(&buf[..n]).into_owned());
                 let link = if i == 0 {
                     format!("Link: <{base2}/api/datasets/wisent-ai/activations/tree/main?p=1>; rel=\"next\"\r\n")
                 } else {
@@ -450,7 +507,13 @@ mod tests {
         );
         let requests = recorded.lock().unwrap();
         assert_eq!(requests.len(), 2, "two pages fetched");
-        assert!(requests[0].to_lowercase().contains("authorization: bearer hf_test_token"), "{}", requests[0]);
+        assert!(
+            requests[0]
+                .to_lowercase()
+                .contains("authorization: bearer hf_test_token"),
+            "{}",
+            requests[0]
+        );
         assert!(requests[0].contains("recursive=true"), "{}", requests[0]);
         assert!(requests[1].contains("p=1"), "{}", requests[1]);
     }

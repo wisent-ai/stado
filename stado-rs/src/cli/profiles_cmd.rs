@@ -27,7 +27,10 @@ pub fn run(name: Option<&str>) -> Result<(), CmdError> {
     for name in names {
         match profiles::load_profile(&name) {
             Ok(profile) => {
-                let description = profile.get("description").and_then(Value::as_str).unwrap_or("");
+                let description = profile
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
                 let first_sentence = description.split('.').next().unwrap_or("");
                 let first_sentence: String = first_sentence.chars().take(90).collect();
                 println!("{name:<24} {first_sentence}");

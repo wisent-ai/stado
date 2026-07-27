@@ -29,11 +29,26 @@ pub const WC_CANDIDATES: [&str; 3] = [
 
 /// Python `_MANAGED_AGENTS` (label, plist path) pairs, in order.
 pub const MANAGED_AGENTS: [(&str, &str); 5] = [
-    ("com.wisent.compute.auto-deployer", "$HOME/Library/LaunchAgents/com.wisent.compute.auto-deployer.plist"),
-    ("com.wisent.weles-auto-deploy", "$HOME/Library/LaunchAgents/com.wisent.weles-auto-deploy.plist"),
-    ("com.wisent.weles-worker", "$HOME/Library/LaunchAgents/com.wisent.weles-worker.plist"),
-    ("com.wisent.weles-keyword-planner-api", "$HOME/Library/LaunchAgents/com.wisent.weles-keyword-planner-api.plist"),
-    ("com.wisent.host-health-beacon", "$HOME/Library/LaunchAgents/com.wisent.host-health-beacon.plist"),
+    (
+        "com.wisent.compute.auto-deployer",
+        "$HOME/Library/LaunchAgents/com.wisent.compute.auto-deployer.plist",
+    ),
+    (
+        "com.wisent.weles-auto-deploy",
+        "$HOME/Library/LaunchAgents/com.wisent.weles-auto-deploy.plist",
+    ),
+    (
+        "com.wisent.weles-worker",
+        "$HOME/Library/LaunchAgents/com.wisent.weles-worker.plist",
+    ),
+    (
+        "com.wisent.weles-keyword-planner-api",
+        "$HOME/Library/LaunchAgents/com.wisent.weles-keyword-planner-api.plist",
+    ),
+    (
+        "com.wisent.host-health-beacon",
+        "$HOME/Library/LaunchAgents/com.wisent.host-health-beacon.plist",
+    ),
 ];
 
 /// The fixed remote program with `@IDENTITY_WORDS@` / `@WC_WORDS@` /
@@ -211,7 +226,10 @@ pub fn parse_output(stdout: &str, target: &ComputeTarget) -> Result<Value, Deplo
         } else if fields.first() == Some(&"STADO_RECOVER") {
             report.insert(
                 "remote_error".to_string(),
-                json!(fields[1..].iter().map(|f| f.to_string()).collect::<Vec<_>>()),
+                json!(fields[1..]
+                    .iter()
+                    .map(|f| f.to_string())
+                    .collect::<Vec<_>>()),
             );
         }
     }
@@ -220,13 +238,19 @@ pub fn parse_output(stdout: &str, target: &ComputeTarget) -> Result<Value, Deplo
 
 /// Python `int(fields[i])` with the CPython ValueError message.
 fn parse_int_field(field: &str) -> Result<i64, DeployError> {
-    field
-        .parse::<i64>()
-        .map_err(|_| DeployError(format!("invalid literal for int() with base 10: {}", py_str_repr(field))))
+    field.parse::<i64>().map_err(|_| {
+        DeployError(format!(
+            "invalid literal for int() with base 10: {}",
+            py_str_repr(field)
+        ))
+    })
 }
 
 /// Python `_target`: resolve a canonical kind=local registry host.
-fn resolve_target<'a>(registry: &'a Registry, target_name: &str) -> Result<&'a ComputeTarget, DeployError> {
+fn resolve_target<'a>(
+    registry: &'a Registry,
+    target_name: &str,
+) -> Result<&'a ComputeTarget, DeployError> {
     let Some(target) = registry.lookup(target_name) else {
         return Err(DeployError(format!(
             "target {} is not in the canonical registry",
@@ -277,10 +301,13 @@ pub async fn recover_host_with_registry(
 }
 
 /// Python `recover_host`: run the fixed recovery procedure on one
-/// canonical registry host (registry from GCS only — the fleet-survival
-/// authority, same as the Python `source="gcs"` lookup).
+/// canonical registry host (the remote registry only — the fleet-survival
+/// authority, same as the Python `source="gcs"` lookup; an unreachable
+/// store is an error, never an empty registry).
 pub async fn recover_host(target_name: &str, runner: &Runner) -> Result<Value, DeployError> {
-    let registry = crate::targets::load_registry_gcs().await;
+    let registry = crate::targets::fetch_registry_remote()
+        .await
+        .map_err(|exc| DeployError(exc.to_string()))?;
     recover_host_with_registry(&registry, target_name, runner).await
 }
 
@@ -334,7 +361,10 @@ mod tests {
 
     #[test]
     fn identity_values_are_normalized_and_sorted() {
-        assert_eq!(identity_values(&target()), vec!["mini-one", "mini-one.lan", "mini-one.local"]);
+        assert_eq!(
+            identity_values(&target()),
+            vec!["mini-one", "mini-one.lan", "mini-one.local"]
+        );
     }
 
     #[test]
@@ -377,7 +407,10 @@ mod tests {
         assert_eq!(report["disk_free_kb_before"], 1024);
         assert_eq!(report["disk_free_kb_after"], 2048);
         assert_eq!(report["cleanup_status"], "ok");
-        assert_eq!(report["launchd_domain"], json!({"name": "gui/501", "status": "available"}));
+        assert_eq!(
+            report["launchd_domain"],
+            json!({"name": "gui/501", "status": "available"})
+        );
         assert_eq!(
             report["agents"],
             json!({
@@ -385,7 +418,10 @@ mod tests {
                 "com.wisent.host-health-beacon": "missing_plist",
             })
         );
-        assert_eq!(report["cleanup"], json!({"outcome": "cleaned", "freed_bytes": 10}));
+        assert_eq!(
+            report["cleanup"],
+            json!({"outcome": "cleaned", "freed_bytes": 10})
+        );
         assert!(report.get("remote_error").is_none());
     }
 
@@ -394,7 +430,10 @@ mod tests {
         let stdout = "STADO_RECOVER\tidentity_mismatch\tother-host\n";
         let report = parse_output(stdout, &target()).unwrap();
         assert_eq!(report["status"], "failed");
-        assert_eq!(report["remote_error"], json!(["identity_mismatch", "other-host"]));
+        assert_eq!(
+            report["remote_error"],
+            json!(["identity_mismatch", "other-host"])
+        );
 
         let stdout = "STADO_CLEANUP\tnot json\n";
         let report = parse_output(stdout, &target()).unwrap();
@@ -426,7 +465,10 @@ mod tests {
         nossh.ssh = None;
         registry.targets.push(nossh);
         let err = super::resolve_target(&registry, "no-ssh").unwrap_err();
-        assert_eq!(err.0, "target 'no-ssh' has no registry-managed ssh destination");
+        assert_eq!(
+            err.0,
+            "target 'no-ssh' has no registry-managed ssh destination"
+        );
     }
 
     #[tokio::test]
@@ -442,7 +484,9 @@ mod tests {
                 stderr: String::new(),
             })
         });
-        let report = recover_host_with_registry(&registry, "mini-one", &runner).await.unwrap();
+        let report = recover_host_with_registry(&registry, "mini-one", &runner)
+            .await
+            .unwrap();
         assert_eq!(report["status"], "ok");
         assert_eq!(report["exit_code"], 0);
         assert_eq!(report["launchd_domain"]["status"], "fallback");
@@ -460,15 +504,23 @@ mod tests {
                 stderr: "line one\nidentity mismatch detail\n".to_string(),
             })
         });
-        let report = recover_host_with_registry(&registry, "mini-one", &runner).await.unwrap();
+        let report = recover_host_with_registry(&registry, "mini-one", &runner)
+            .await
+            .unwrap();
         assert_eq!(report["status"], "failed");
         assert_eq!(report["exit_code"], 64);
         assert_eq!(report["error"], "identity mismatch detail");
 
         let runner = runner_fn(|_spec| async move {
-            Ok(CommandOutput { code: 1, stdout: String::new(), stderr: String::new() })
+            Ok(CommandOutput {
+                code: 1,
+                stdout: String::new(),
+                stderr: String::new(),
+            })
         });
-        let report = recover_host_with_registry(&registry, "mini-one", &runner).await.unwrap();
+        let report = recover_host_with_registry(&registry, "mini-one", &runner)
+            .await
+            .unwrap();
         assert_eq!(report["error"], "remote recovery failed");
     }
 

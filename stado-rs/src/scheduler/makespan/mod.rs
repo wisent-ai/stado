@@ -40,7 +40,11 @@ static INSTANCE_HOST_RE: LazyLock<Regex> =
 /// to complete and seed history; the matcher refuses to guess.
 /// Python `_estimate_runtime` (factored onto primitives so both the
 /// queued-job path and the running-blob seed path share it).
-fn estimate_runtime(command: &str, runtime_seconds_estimate: f64, history: &History) -> Option<f64> {
+fn estimate_runtime(
+    command: &str,
+    runtime_seconds_estimate: f64,
+    history: &History,
+) -> Option<f64> {
     if runtime_seconds_estimate > 0.0 {
         return Some(runtime_seconds_estimate);
     }
@@ -78,11 +82,20 @@ async fn live_agents(
     let mut agents: BTreeMap<String, AgentInfo> = BTreeMap::new();
     for text in texts.into_iter().flatten() {
         let doc: Value = serde_json::from_str(&text)?;
-        let cid = doc.get("consumer_id").and_then(Value::as_str).unwrap_or("").to_string();
-        let pub_at = doc.get("published_at").and_then(Value::as_str).unwrap_or("");
+        let cid = doc
+            .get("consumer_id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let pub_at = doc
+            .get("published_at")
+            .and_then(Value::as_str)
+            .unwrap_or("");
         // Python lets a malformed published_at crash the tick (no try).
         let published = DateTime::parse_from_rfc3339(pub_at).map_err(|e| {
-            StorageError::Other(format!("makespan: capacity blob has malformed published_at {pub_at:?}: {e}"))
+            StorageError::Other(format!(
+                "makespan: capacity blob has malformed published_at {pub_at:?}: {e}"
+            ))
         })?;
         let age = (now - published.with_timezone(&Utc)).num_seconds();
         if age > HEARTBEAT_TTL_S {
@@ -113,7 +126,15 @@ async fn live_agents(
             .get("total_vram_gb")
             .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)))
             .unwrap_or(0);
-        agents.insert(cid, AgentInfo { kind, free_slots, total_vram_gb, active_slots: vec![] });
+        agents.insert(
+            cid,
+            AgentInfo {
+                kind,
+                free_slots,
+                total_vram_gb,
+                active_slots: vec![],
+            },
+        );
     }
     Ok(agents)
 }
@@ -142,7 +163,10 @@ async fn seed_running_jobs(
     for (path, text) in paths.iter().zip(&texts) {
         let Some(text) = text else { continue }; // moved to completed/failed mid-tick
         let doc: Value = serde_json::from_str(text)?;
-        let iref = doc.get("instance_ref").and_then(Value::as_str).unwrap_or("");
+        let iref = doc
+            .get("instance_ref")
+            .and_then(Value::as_str)
+            .unwrap_or("");
         let Some(caps) = INSTANCE_HOST_RE.captures(iref) else {
             return Err(StorageError::Other(format!(
                 "makespan: running blob {path} has malformed instance_ref {iref:?}; \
@@ -161,10 +185,14 @@ async fn seed_running_jobs(
             continue;
         };
         let Some(st) = doc.get("started_at").and_then(Value::as_str) else {
-            return Err(StorageError::Other(format!("makespan: running blob {path} has no started_at")));
+            return Err(StorageError::Other(format!(
+                "makespan: running blob {path} has no started_at"
+            )));
         };
         let started = DateTime::parse_from_rfc3339(st).map_err(|e| {
-            StorageError::Other(format!("makespan: running blob {path} bad started_at {st:?}: {e}"))
+            StorageError::Other(format!(
+                "makespan: running blob {path} bad started_at {st:?}: {e}"
+            ))
         })?;
         let elapsed = (now - started.with_timezone(&Utc)).num_milliseconds() as f64 / 1000.0;
         let command = doc.get("command").and_then(Value::as_str).unwrap_or("");
@@ -221,7 +249,9 @@ fn earliest_start(slots: &[(f64, i64)], new_vram: i64, total_vram: i64) -> f64 {
 /// eligibility without pulling in the local-provider module.
 fn compat_accel_types(local_vram_gb: i64) -> Vec<&'static str> {
     let mut accels: Vec<&'static str> = Vec::new();
-    let Some(sizing) = GPU_SIZING.get("gcp") else { return accels };
+    let Some(sizing) = GPU_SIZING.get("gcp") else {
+        return accels;
+    };
     for (tier, (_, accel)) in sizing {
         if local_vram_gb >= *tier && !accel.is_empty() && !accels.contains(accel) {
             accels.push(accel);
@@ -273,17 +303,17 @@ fn assign_one(
     }
     let best_cid = best_cid?;
     let best_finish = best_finish?;
-    agents.get_mut(&best_cid)?.active_slots.push((best_finish, vram));
+    agents
+        .get_mut(&best_cid)?
+        .active_slots
+        .push((best_finish, vram));
     Some(best_cid)
 }
 
 /// One pass of makespan-minimizing assignment, reading the clock and the
 /// (TTL-cached) runtime history like Python `assign_jobs`. Returns the
 /// number of queue blobs whose assigned_to changed this tick.
-pub async fn assign_jobs(
-    store: &JobStorage,
-    log_fn: &dyn Fn(&str),
-) -> Result<usize, StorageError> {
+pub async fn assign_jobs(store: &JobStorage, log_fn: &dyn Fn(&str)) -> Result<usize, StorageError> {
     let history = history::global().history(store, log_fn).await?;
     assign_jobs_at(store, Utc::now(), &history, log_fn).await
 }
@@ -355,7 +385,8 @@ pub async fn assign_jobs_at(
         schedulable.push((-job.priority, -rt, job));
     }
     schedulable.sort_by(|a, b| {
-        a.0.cmp(&b.0).then_with(|| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        a.0.cmp(&b.0)
+            .then_with(|| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
     });
     let mut unassigned = 0usize;
     for (_, neg_rt, mut job) in schedulable {
@@ -409,12 +440,20 @@ pub async fn assign_jobs_at(
         // Python `sorted(..., key=lambda kv: -kv[1])` — stable, so ties keep
         // first-seen order.
         top.sort_by(|a, b| b.1.cmp(&a.1));
-        let top: Vec<String> =
-            top.into_iter().take(5).map(|((m, t), n)| format!("({m},{t}):{n}")).collect();
-        log_fn(&format!("makespan: {skipped} skipped; top: {}", top.join(", ")));
+        let top: Vec<String> = top
+            .into_iter()
+            .take(5)
+            .map(|((m, t), n)| format!("({m},{t}):{n}"))
+            .collect();
+        log_fn(&format!(
+            "makespan: {skipped} skipped; top: {}",
+            top.join(", ")
+        ));
     }
     if unassigned > 0 {
-        log_fn(&format!("makespan: {unassigned} unassigned (no eligible agent)"));
+        log_fn(&format!(
+            "makespan: {unassigned} unassigned (no eligible agent)"
+        ));
     }
     Ok(to_write.len())
 }
@@ -453,7 +492,9 @@ mod tests {
     const NOW: &str = "2026-05-19T12:00:00+00:00";
 
     fn now() -> DateTime<Utc> {
-        DateTime::parse_from_rfc3339(NOW).unwrap().with_timezone(&Utc)
+        DateTime::parse_from_rfc3339(NOW)
+            .unwrap()
+            .with_timezone(&Utc)
     }
 
     async fn publish(store: &JobStorage, cid: &str, kind: &str, total_vram: i64, published: &str) {
@@ -466,7 +507,10 @@ mod tests {
             "total_vram_gb": total_vram,
         })
         .to_string();
-        store.upload_text(&format!("capacity/{cid}.json"), &body).await.unwrap();
+        store
+            .upload_text(&format!("capacity/{cid}.json"), &body)
+            .await
+            .unwrap();
     }
 
     fn job(job_id: &str, command: &str, vram: i64) -> Job {
@@ -499,8 +543,14 @@ mod tests {
     #[test]
     fn estimate_runtime_prefers_explicit_over_history() {
         let h = history_with(&[("m", "t", 120.0)]);
-        assert_eq!(estimate_runtime("x --model m --task t", 42.0, &h), Some(42.0));
-        assert_eq!(estimate_runtime("x --model m --task t", 0.0, &h), Some(120.0));
+        assert_eq!(
+            estimate_runtime("x --model m --task t", 42.0, &h),
+            Some(42.0)
+        );
+        assert_eq!(
+            estimate_runtime("x --model m --task t", 0.0, &h),
+            Some(120.0)
+        );
         // No explicit + no matching history -> None (refuses to guess).
         assert_eq!(estimate_runtime("x --model m --task other", 0.0, &h), None);
         assert_eq!(estimate_runtime("admin --restart", 0.0, &h), None);
@@ -538,9 +588,19 @@ mod tests {
         let written = assign_jobs_at(&store, now(), &h, &|m| logs.lock().unwrap().push(m.into()))
             .await
             .unwrap();
-        assert!(store.read_job("queue", "j-big").await.unwrap().unwrap().assigned_to.is_empty());
+        assert!(store
+            .read_job("queue", "j-big")
+            .await
+            .unwrap()
+            .unwrap()
+            .assigned_to
+            .is_empty());
         assert!(written >= 1);
-        assert!(logs.lock().unwrap().iter().any(|l| l.contains("1 unassigned")));
+        assert!(logs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|l| l.contains("1 unassigned")));
     }
 
     #[tokio::test]
@@ -559,7 +619,10 @@ mod tests {
             "runtime_seconds_estimate": 600,
         })
         .to_string();
-        store.upload_text("running/r1.json", &running).await.unwrap();
+        store
+            .upload_text("running/r1.json", &running)
+            .await
+            .unwrap();
 
         let h = history_with(&[("m", "t", 100.0)]);
         let candidate = job("j-c", "x --model m --task t", 40);
@@ -568,7 +631,12 @@ mod tests {
         assert_eq!(written, 1);
         // The idle agent finishes at +100s; local-busy at +700s.
         assert_eq!(
-            store.read_job("queue", "j-c").await.unwrap().unwrap().assigned_to,
+            store
+                .read_job("queue", "j-c")
+                .await
+                .unwrap()
+                .unwrap()
+                .assigned_to,
             "local-idle"
         );
     }
@@ -607,9 +675,19 @@ mod tests {
         .unwrap();
         assert_eq!(written, 1);
         // Stale pin cleared; job left for any eligible agent, skip logged.
-        assert!(store.read_job("queue", "j-stale").await.unwrap().unwrap().assigned_to.is_empty());
+        assert!(store
+            .read_job("queue", "j-stale")
+            .await
+            .unwrap()
+            .unwrap()
+            .assigned_to
+            .is_empty());
         let logs = logs.lock().unwrap();
-        assert!(logs.iter().any(|l| l.contains("1 skipped; top: (m-new,t-new):1")), "{logs:?}");
+        assert!(
+            logs.iter()
+                .any(|l| l.contains("1 skipped; top: (m-new,t-new):1")),
+            "{logs:?}"
+        );
     }
 
     #[tokio::test]
@@ -620,10 +698,17 @@ mod tests {
         prio.priority = 999999;
         store.write_job("queue", &prio).await.unwrap();
 
-        let written = assign_jobs_at(&store, now(), &History::new(), &|_| ()).await.unwrap();
+        let written = assign_jobs_at(&store, now(), &History::new(), &|_| ())
+            .await
+            .unwrap();
         assert_eq!(written, 1);
         assert_eq!(
-            store.read_job("queue", "j-prio").await.unwrap().unwrap().assigned_to,
+            store
+                .read_job("queue", "j-prio")
+                .await
+                .unwrap()
+                .unwrap()
+                .assigned_to,
             "local-host-a"
         );
     }
@@ -642,10 +727,28 @@ mod tests {
 
         let h = history_with(&[("m", "t", 100.0)]);
         let logs: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
-        assign_jobs_at(&store, now(), &h, &|m| logs.lock().unwrap().push(m.into())).await.unwrap();
-        assert!(store.read_job("queue", "j-excl").await.unwrap().unwrap().assigned_to.is_empty());
-        assert!(store.read_job("queue", "j-prov").await.unwrap().unwrap().assigned_to.is_empty());
-        assert!(logs.lock().unwrap().iter().any(|l| l.contains("2 unassigned")));
+        assign_jobs_at(&store, now(), &h, &|m| logs.lock().unwrap().push(m.into()))
+            .await
+            .unwrap();
+        assert!(store
+            .read_job("queue", "j-excl")
+            .await
+            .unwrap()
+            .unwrap()
+            .assigned_to
+            .is_empty());
+        assert!(store
+            .read_job("queue", "j-prov")
+            .await
+            .unwrap()
+            .unwrap()
+            .assigned_to
+            .is_empty());
+        assert!(logs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|l| l.contains("2 unassigned")));
     }
 
     #[tokio::test]
@@ -660,7 +763,10 @@ mod tests {
             "published_at": NOW,
         })
         .to_string();
-        store.upload_text("capacity/local-wedged.json", &wedged).await.unwrap();
+        store
+            .upload_text("capacity/local-wedged.json", &wedged)
+            .await
+            .unwrap();
 
         let h = history_with(&[("m", "t", 100.0)]);
         let candidate = job("j-c", "x --model m --task t", 40);
@@ -668,7 +774,13 @@ mod tests {
         // No live agents at all -> 0 writes, job untouched.
         let written = assign_jobs_at(&store, now(), &h, &|_| ()).await.unwrap();
         assert_eq!(written, 0);
-        assert!(store.read_job("queue", "j-c").await.unwrap().unwrap().assigned_to.is_empty());
+        assert!(store
+            .read_job("queue", "j-c")
+            .await
+            .unwrap()
+            .unwrap()
+            .assigned_to
+            .is_empty());
     }
 
     #[tokio::test]
@@ -680,11 +792,20 @@ mod tests {
             "instance_ref": "agent@vanished-host", "started_at": NOW, "gpu_mem_gb": 40,
         })
         .to_string();
-        store.upload_text("running/r-ghost.json", &running).await.unwrap();
+        store
+            .upload_text("running/r-ghost.json", &running)
+            .await
+            .unwrap();
         let h = history_with(&[("m", "t", 100.0)]);
         let logs: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
-        assign_jobs_at(&store, now(), &h, &|m| logs.lock().unwrap().push(m.into())).await.unwrap();
-        assert!(logs.lock().unwrap().iter().any(|l| l.contains("dead host vanished-host")));
+        assign_jobs_at(&store, now(), &h, &|m| logs.lock().unwrap().push(m.into()))
+            .await
+            .unwrap();
+        assert!(logs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|l| l.contains("dead host vanished-host")));
     }
 
     #[tokio::test]
@@ -704,6 +825,9 @@ mod tests {
         assert_eq!(written, 1);
         let back = store.read_job("queue", "j-c").await.unwrap().unwrap();
         assert_eq!(back.assigned_to, "local-host-a");
-        assert_eq!(back.gpu_mem_gb, 71, "assigned_to rewrite must not resurrect the stale size");
+        assert_eq!(
+            back.gpu_mem_gb, 71,
+            "assigned_to rewrite must not resurrect the stale size"
+        );
     }
 }

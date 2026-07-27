@@ -80,7 +80,9 @@ fn py_int(value: &Value) -> Result<i64, StorageError> {
             .trim()
             .parse::<i64>()
             .map_err(|exc| StorageError::Other(format!("invalid free_slots value {s:?}: {exc}"))),
-        other => Err(StorageError::Other(format!("invalid free_slots value {other}"))),
+        other => Err(StorageError::Other(format!(
+            "invalid free_slots value {other}"
+        ))),
     }
 }
 
@@ -108,7 +110,9 @@ async fn read_capacity_blobs(store: &JobStorage) -> Result<Vec<Value>, StorageEr
         map.insert("_blob_name".to_string(), json!(info.name));
         map.insert(
             "_blob_updated".to_string(),
-            info.updated.map(isoformat_utc).map_or(Value::Null, Value::String),
+            info.updated
+                .map(isoformat_utc)
+                .map_or(Value::Null, Value::String),
         );
         blobs.push(data);
     }
@@ -149,9 +153,9 @@ pub async fn summarize(store: &JobStorage) -> Result<Value, StorageError> {
     for (state, jobs) in &all_jobs {
         for job in jobs {
             let model = model_of(&job.command);
-            let row = by_model_state.entry(model.clone()).or_insert_with(|| {
-                json!({"queue": 0, "running": 0, "completed": 0, "failed": 0})
-            });
+            let row = by_model_state
+                .entry(model.clone())
+                .or_insert_with(|| json!({"queue": 0, "running": 0, "completed": 0, "failed": 0}));
             if let Some(counter) = row.get_mut(state.as_str()) {
                 *counter = json!(counter.as_i64().unwrap_or(0) + 1);
             }
@@ -261,8 +265,7 @@ mod tests {
     pub(crate) fn store() -> (tempfile::TempDir, JobStorage) {
         let dir = tempfile::tempdir().expect("tempdir");
         let backend = LocalBackend::new(dir.path().to_str().expect("utf8 path")).expect("backend");
-        let store =
-            JobStorage::with_backend_and_bucket(Arc::new(backend), "local", "test-bucket");
+        let store = JobStorage::with_backend_and_bucket(Arc::new(backend), "local", "test-bucket");
         (dir, store)
     }
 
@@ -284,7 +287,13 @@ mod tests {
         store.write_job("queue", &q3).await.unwrap();
 
         store
-            .write_job("running", &job("running001", "python run.py --model llama-8b --task extract"))
+            .write_job(
+                "running",
+                &job(
+                    "running001",
+                    "python run.py --model llama-8b --task extract",
+                ),
+            )
             .await
             .unwrap();
 
@@ -293,7 +302,10 @@ mod tests {
         done.completed_at = Some("2026-07-01T00:10:00+00:00".into());
         store.write_job("completed", &done).await.unwrap();
 
-        let mut failed = job("failed0001", "python run.py --model llama-8b --task extract");
+        let mut failed = job(
+            "failed0001",
+            "python run.py --model llama-8b --task extract",
+        );
         failed.error = Some(format!("{}TAIL", "x".repeat(300)));
         store.write_job("failed", &failed).await.unwrap();
 
@@ -339,10 +351,16 @@ mod tests {
             models["llama-8b"],
             json!({"queue": 2, "running": 1, "completed": 0, "failed": 1})
         );
-        assert_eq!(models["qwen-7b"], json!({"queue": 1, "running": 0, "completed": 1, "failed": 0}));
+        assert_eq!(
+            models["qwen-7b"],
+            json!({"queue": 1, "running": 0, "completed": 1, "failed": 0})
+        );
 
         assert_eq!(summary["recent_failed"][0]["job_id"], "failed0001");
-        assert_eq!(summary["recent_failed"][0]["error"].as_str().unwrap().len(), 240);
+        assert_eq!(
+            summary["recent_failed"][0]["error"].as_str().unwrap().len(),
+            240
+        );
         assert_eq!(summary["completed_recent"][0]["job_id"], "done00001");
         assert_eq!(summary["completed_recent"][0]["wall_seconds"], 600.0);
 
@@ -353,13 +371,19 @@ mod tests {
         assert_eq!(summary["stale_agents"][0]["consumer_id"], "local-stale");
 
         // avg wall 600s * queue depth 3 / 2 live slots = 900s projected.
-        assert_eq!(summary["throughput"]["avg_wall_seconds_per_completed_job"], 600.0);
+        assert_eq!(
+            summary["throughput"]["avg_wall_seconds_per_completed_job"],
+            600.0
+        );
         assert_eq!(summary["throughput"]["samples"], 1);
         assert_eq!(summary["throughput"]["live_total_free_slots"], 2);
         assert_eq!(summary["throughput"]["projected_remaining_seconds"], 900.0);
 
         // Fast prefix counts agree (and ignore non-JSON blobs).
-        store.upload_text("queue/notes.txt", "not a job").await.unwrap();
+        store
+            .upload_text("queue/notes.txt", "not a job")
+            .await
+            .unwrap();
         let counts = fast_counts(&store).await.unwrap();
         assert_eq!(counts["queue"], 3);
         assert_eq!(counts["running"], 1);
@@ -381,7 +405,10 @@ mod tests {
         assert_eq!(model_of("run --model \"qwen-7b\" --task x"), "qwen-7b");
         assert_eq!(model_of("run --model plain --task x"), "plain");
         assert_eq!(model_of("no model here"), "(unknown)");
-        assert_eq!(task_of("run --task extract_activations"), "extract_activations");
+        assert_eq!(
+            task_of("run --task extract_activations"),
+            "extract_activations"
+        );
         assert_eq!(task_of("no task"), "(unknown)");
     }
 }

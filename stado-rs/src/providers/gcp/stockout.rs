@@ -155,7 +155,9 @@ async fn recently(
     key: &str,
 ) -> Result<bool, StorageError> {
     let map = load(store, cache, blob).await?;
-    let Some(ts) = map.get(key) else { return Ok(false) };
+    let Some(ts) = map.get(key) else {
+        return Ok(false);
+    };
     Ok(now_epoch() - ts < ttl_s)
 }
 
@@ -227,8 +229,14 @@ mod tests {
     async fn empty_store_reports_no_stockout_and_no_quota() {
         let _guard = test_lock().await;
         let (_dir, store) = store();
-        assert!(!zone_recently_stocked_out(&store, "zz-test-a").await.unwrap());
-        assert!(!region_recently_quota_exceeded(&store, "zz-test", "nvidia-tesla-t4").await.unwrap());
+        assert!(!zone_recently_stocked_out(&store, "zz-test-a")
+            .await
+            .unwrap());
+        assert!(
+            !region_recently_quota_exceeded(&store, "zz-test", "nvidia-tesla-t4")
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
@@ -236,8 +244,12 @@ mod tests {
         let _guard = test_lock().await;
         let (_dir, store) = store();
         mark_zone_stockout(&store, "zz-test-b").await.unwrap();
-        assert!(zone_recently_stocked_out(&store, "zz-test-b").await.unwrap());
-        assert!(!zone_recently_stocked_out(&store, "zz-test-c").await.unwrap());
+        assert!(zone_recently_stocked_out(&store, "zz-test-b")
+            .await
+            .unwrap());
+        assert!(!zone_recently_stocked_out(&store, "zz-test-c")
+            .await
+            .unwrap());
 
         // The blob carries the marker as a JSON float timestamp.
         let text = store.download_text(STOCKOUT_BLOB).await.unwrap().unwrap();
@@ -248,7 +260,9 @@ mod tests {
         // In-process cache: delete the blob — within LOCAL_CACHE_TTL_S the
         // marker is still served from memory without a re-read.
         store.delete_blob(STOCKOUT_BLOB).await.unwrap();
-        assert!(zone_recently_stocked_out(&store, "zz-test-b").await.unwrap());
+        assert!(zone_recently_stocked_out(&store, "zz-test-b")
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -279,8 +293,16 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(!region_recently_quota_exceeded(&store, "zz-reg", "nvidia-tesla-t4").await.unwrap());
-        assert!(region_recently_quota_exceeded(&store, "zz-reg", "nvidia-l4").await.unwrap());
+        assert!(
+            !region_recently_quota_exceeded(&store, "zz-reg", "nvidia-tesla-t4")
+                .await
+                .unwrap()
+        );
+        assert!(
+            region_recently_quota_exceeded(&store, "zz-reg", "nvidia-l4")
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
@@ -311,7 +333,9 @@ mod tests {
             )
             .await
             .unwrap();
-        mark_region_quota_exceeded(&store, "zz-r", "nvidia-a100").await.unwrap();
+        mark_region_quota_exceeded(&store, "zz-r", "nvidia-a100")
+            .await
+            .unwrap();
         let text = store.download_text(QUOTA_BLOB).await.unwrap().unwrap();
         let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
         let obj = doc.as_object().unwrap();
@@ -324,12 +348,27 @@ mod tests {
     async fn quota_key_is_region_colon_accel() {
         let _guard = test_lock().await;
         let (_dir, store) = store();
-        mark_region_quota_exceeded(&store, "us-central1", "nvidia-tesla-a100").await.unwrap();
+        mark_region_quota_exceeded(&store, "us-central1", "nvidia-tesla-a100")
+            .await
+            .unwrap();
         let text = store.download_text(QUOTA_BLOB).await.unwrap().unwrap();
         let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert!(doc.as_object().unwrap().contains_key("us-central1:nvidia-tesla-a100"), "{text}");
+        assert!(
+            doc.as_object()
+                .unwrap()
+                .contains_key("us-central1:nvidia-tesla-a100"),
+            "{text}"
+        );
         // A different accel in the same region caches independently.
-        assert!(!region_recently_quota_exceeded(&store, "us-central1", "nvidia-l4").await.unwrap());
-        assert!(region_recently_quota_exceeded(&store, "us-central1", "nvidia-tesla-a100").await.unwrap());
+        assert!(
+            !region_recently_quota_exceeded(&store, "us-central1", "nvidia-l4")
+                .await
+                .unwrap()
+        );
+        assert!(
+            region_recently_quota_exceeded(&store, "us-central1", "nvidia-tesla-a100")
+                .await
+                .unwrap()
+        );
     }
 }
