@@ -3,6 +3,16 @@
 All commands accept `--help` for the canonical option list. The package
 installs a `wc` entry point.
 
+## `stado overview [--json]`
+
+Single operator snapshot for the whole control plane: queue counts, fresh
+worker heartbeats, registered/offline local targets, provider quota, the latest
+GCP/Azure billing-health record, live GCP Billing budgets, seven-day credit
+burn, and cumulative promotional credits applied. Human-readable output is the
+default; `--json` returns the complete source document. GCP does not expose a
+promotional grant ceiling, so remaining promotional credit is reported as
+unavailable rather than inferred.
+
 ## `wc submit`
 
 Submit a job (or a batch) to the GCS-backed queue.

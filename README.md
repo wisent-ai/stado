@@ -45,6 +45,9 @@ wc agent --auto
 
 # 6. Run a one-shot scheduling tick locally
 wc coordinator --once
+
+# 7. One operational snapshot: jobs, fleet, quota, budgets and credit burn
+stado overview
 ```
 
 ## Registry-controlled disk cleanup
