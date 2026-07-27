@@ -91,14 +91,26 @@ pub async fn run(
     vast_price_gpu: f64,
     vast_max_duration_s: i64,
 ) -> Result<(), CmdError> {
+    if crate::capabilities::configurable_variant(
+        crate::capabilities::CapabilityKind::Execution,
+        &kind,
+    )
+    .is_none()
+    {
+        let choices =
+            crate::capabilities::configurable_ids(crate::capabilities::CapabilityKind::Execution)
+                .collect::<Vec<_>>()
+                .join(", ");
+        return Err(CmdError::usage(format!(
+            "unknown agent kind {kind:?}; use one of: {choices}"
+        )));
+    }
     let gpu_type = apply_registry_target(gpu_type, target.as_deref(), auto).await?;
 
-    // Auto-enable the Vast bridge when the box has VAST_API_KEY set
-    // and is running as a local consumer — that combination is the
-    // strong signal "this is a Vast-registered host", and the
-    // defensive vast_has_renter helper already runs here today,
-    // so the API key has to be in env anyway. Operator opt-out:
-    // WC_VAST_AUTO_LIST=0.
+    // Auto-enable the Vast bridge when stado-vast/api_key exists in
+    // Skarbiec and this is a local consumer. The defensive helper performs
+    // the authoritative lookup below. WC_VAST_AUTO_LIST remains an explicit
+    // non-secret operator override.
     let auto_list_env = std::env::var("WC_VAST_AUTO_LIST")
         .unwrap_or_default()
         .trim()

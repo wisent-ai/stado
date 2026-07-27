@@ -1,9 +1,9 @@
 //! Read-only Gmail search and deterministic billing/operations analysis.
 //!
-//! Authentication is deliberately token-only: `WC_GMAIL_ACCESS_TOKEN` (or
-//! `GOOGLE_OAUTH_ACCESS_TOKEN`) wins; otherwise the local gcloud ADC helper is
-//! asked for the `gmail.readonly` scope. Stado never stores refresh tokens or
-//! modifies, labels, archives, or sends messages.
+//! Authentication is resolved only from the `stado-gmail` Skarbiec item:
+//! either a short-lived access token or centrally stored OAuth refresh
+//! credentials. Stado never shells out to a cloud CLI and never modifies,
+//! labels, archives, or sends messages.
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::LazyLock;
@@ -14,7 +14,6 @@ use serde::Serialize;
 use serde_json::Value;
 
 const GMAIL_BASE: &str = "https://gmail.googleapis.com/gmail/v1";
-const GMAIL_READONLY_SCOPE: &str = "https://www.googleapis.com/auth/gmail.readonly";
 
 static TAG_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?s)<[^>]*>").expect("static HTML regex"));
@@ -175,42 +174,48 @@ pub fn summarize(query: &str, messages: Vec<MailAnalysis>) -> MailAnalysisReport
 }
 
 async fn gmail_token() -> Result<String, MailError> {
-    for name in ["WC_GMAIL_ACCESS_TOKEN", "GOOGLE_OAUTH_ACCESS_TOKEN"] {
-        if let Ok(token) = std::env::var(name) {
-            let token = token.trim();
-            if !token.is_empty() {
-                return Ok(token.to_string());
-            }
-        }
-    }
-
-    let output = tokio::process::Command::new("gcloud")
-        .args([
-            "auth",
-            "application-default",
-            "print-access-token",
-            &format!("--scopes={GMAIL_READONLY_SCOPE}"),
-        ])
-        .output()
+    let item = crate::skarbiec::Client::configured_item("stado-gmail")
         .await
-        .map_err(|err| {
-            MailError::Auth(format!(
-                "set WC_GMAIL_ACCESS_TOKEN or install gcloud ADC with gmail.readonly access ({err})"
-            ))
-        })?;
-    if !output.status.success() {
+        .map_err(|err| MailError::Auth(err.to_string()))?;
+    if let Some(token) = item
+        .get("access_token")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    {
+        return Ok(token.trim().to_string());
+    }
+    let field = |name: &str| {
+        item.get(name)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                MailError::Auth(format!(
+                    "Skarbiec item stado-gmail needs access_token or field {name}"
+                ))
+            })
+    };
+    let response = reqwest::Client::new()
+        .post("https://oauth2.googleapis.com/token")
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("client_id", field("client_id")?),
+            ("client_secret", field("client_secret")?),
+            ("refresh_token", field("refresh_token")?),
+        ])
+        .send()
+        .await?;
+    let status = response.status();
+    let body: Value = response.json().await.unwrap_or(Value::Null);
+    if !status.is_success() {
         return Err(MailError::Auth(format!(
-            "set WC_GMAIL_ACCESS_TOKEN or authorize gcloud ADC for {GMAIL_READONLY_SCOPE}: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            "Google OAuth refresh failed with HTTP {status}: {body}"
         )));
     }
-    let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if token.is_empty() {
-        return Err(MailError::Auth(
-            "gcloud returned an empty access token".into(),
-        ));
-    }
-    Ok(token)
+    body.get("access_token")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| MailError::Auth("Google OAuth refresh response has no access_token".into()))
 }
 
 async fn response_json(response: reqwest::Response) -> Result<Value, MailError> {

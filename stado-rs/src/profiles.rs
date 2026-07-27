@@ -71,7 +71,7 @@ fn kwarg_defaults() -> Vec<(&'static str, Value)> {
         ("priority", Value::from(0)),
         ("preemptible", Value::from(false)),
         ("max_cost_per_hour_usd", Value::from(0.0)),
-        ("provider", Value::from("gcp")),
+        ("provider", Value::from("")),
         ("pin_to_provider", Value::from(false)),
     ]
 }

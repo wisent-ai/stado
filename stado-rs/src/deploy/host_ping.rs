@@ -197,7 +197,11 @@ pub async fn ping_host(
     let target = host_channel::canonical_target(target_name).await?;
     let output = host_channel::run_program(&target, REMOTE_PROGRAM, runner).await?;
 
-    let ssh_verdict = if output.ok() { Verdict::Ok } else { Verdict::Down };
+    let ssh_verdict = if output.ok() {
+        Verdict::Ok
+    } else {
+        Verdict::Down
+    };
     let beacon = beacon_signal(store, &target.name, Utc::now()).await;
     let verdict = ssh_verdict.max(beacon.verdict);
 

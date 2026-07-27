@@ -57,14 +57,14 @@ pub(crate) fn bundled_template_for(provider_name: &str) -> &'static str {
 /// consume it — gives a new placeholder exactly one place to be
 /// registered instead of one per producer.
 ///
-/// This is the Azure-cutover fix. `startup_gpu_agent_azure.sh` exports
-/// `${WC_STORAGE_BACKEND}` / `${WC_AZURE_STORAGE_ACCOUNT}` /
-/// `${WC_AZURE_CONTAINER}` and installs its binary from
-/// `${WC_RELEASE_BASE_URL}` under `set -u`; no producer supplied any of
-/// them, so every dispatched Azure VM aborted before the agent started.
+/// Azure cloud-init receives every non-secret locator needed to construct
+/// the Azure primary and S3 read-failover store, plus routing metadata for
+/// its dedicated agent consumer. The opaque grant is supplied by
+/// [`crate::coordinator::secrets_from_skarbiec`]; raw provider and workload
+/// values never enter this map.
 ///
-/// Keys a given template never mentions are never matched, so a GCP
-/// deployment renders byte-identically to before.
+/// Keys a given template never mentions are never matched, so isolated GCP
+/// provider tooling remains byte-identical.
 pub fn deployment_substitutions() -> BTreeMap<String, String> {
     BTreeMap::from([
         (
@@ -78,6 +78,26 @@ pub fn deployment_substitutions() -> BTreeMap<String, String> {
         (
             "WC_AZURE_CONTAINER".to_string(),
             config::wc_azure_container().to_string(),
+        ),
+        (
+            "WC_BACKUP_STORAGE_BACKEND".to_string(),
+            config::wc_backup_storage_backend().to_string(),
+        ),
+        (
+            "WC_BACKUP_BUCKET".to_string(),
+            config::wc_backup_bucket().to_string(),
+        ),
+        (
+            "WC_BACKUP_S3_REGION".to_string(),
+            config::wc_backup_s3_region().to_string(),
+        ),
+        (
+            "WC_AGENT_SKARBIEC_URL".to_string(),
+            config::agent_skarbiec_url().to_string(),
+        ),
+        (
+            "WC_AGENT_SKARBIEC_CONSUMER".to_string(),
+            config::agent_skarbiec_consumer().to_string(),
         ),
         (
             "WC_RELEASE_BASE_URL".to_string(),
@@ -132,13 +152,9 @@ pub fn render_startup_script(
 }
 
 /// First dispatcher-owned `${NAME}` still standing in a rendered script.
-///
-/// "Dispatcher-owned" is a bare SCREAMING_SNAKE name. Neither brace form
-/// the templates deliberately hand to the VM's own shell matches: locals
-/// are lowercase or underscore-prefixed (`${_WC_INST}`, `${_model}`), and
-/// empty-default expansions carry an operator (`${WC_SUPABASE_TOKEN:-}`,
-/// whose emptiness is load-bearing — an absent Supabase token must stay an
-/// empty string rather than abort startup).
+/// Bare SCREAMING_SNAKE placeholders belong to dispatch; shell locals,
+/// underscore-prefixed names, and parameter-expansion operators remain for
+/// the VM's own shell.
 fn unresolved_placeholder(script: &str) -> Option<&str> {
     let mut parts = script.split("${");
     parts.next();

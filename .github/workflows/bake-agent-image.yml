@@ -1,15 +1,8 @@
 name: bake-agent-image
 
-# Re-bakes the wisent-agent GCE image when the install stack changes.
-# Manual: workflow_dispatch.
-
+# OPTIONAL GCP-PROVIDER TOOL ONLY. This workflow is manual and is not part of
+# the Azure control-plane or agent release path.
 on:
-  push:
-    branches: [main]
-    paths:
-      - "stado-rs/data/templates/startup_gpu_agent.sh"
-      - "deploy/bake_agent_image.sh"
-      - ".github/workflows/bake-agent-image.yml"
   workflow_dispatch:
 
 concurrency:

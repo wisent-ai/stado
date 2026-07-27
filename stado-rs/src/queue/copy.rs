@@ -17,8 +17,9 @@
 //!
 //! What this guarantees:
 //!
-//! - **Nothing is ever deleted**, at either end. The copier only reads the
-//!   source and writes the destination.
+//! - [`copy`] itself never deletes at either end. The coordinator-only
+//!   [`replicate_configured_backup`] reconciliation prunes stale objects from
+//!   the designated backup after a fully clean copy; it never deletes source.
 //! - **Metadata travels with the body.** `JobStorage::write_job` stamps
 //!   `gpu_mem_gb` / `priority` / `gpu_type` on every queue blob in a
 //!   separate `set_metadata` round trip, and
@@ -40,7 +41,7 @@
 //! only name, timestamp and metadata — so the "same size" test reads the
 //! body at both ends. Re-runs are therefore cheap in WRITES, not in READS.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use futures::StreamExt;
@@ -64,6 +65,9 @@ use super::{
 ///   `queue::migrations` alongside the priority markers. It is copied with
 ///   the rest of the prefix so the destination inherits the completed
 ///   backfill instead of re-running it.
+/// - `ecosystem/` is the provider-neutral product object data plane. Queue
+///   migration and disaster-recovery backup must carry it with scheduler
+///   state or migrated jobs would point at objects left in the failed store.
 ///
 /// `registry.json` is a root object, not a directory; it is listed as a
 /// prefix because every [`BlobBackend`] listing is a plain string-prefix
@@ -95,6 +99,7 @@ pub const CANONICAL_PREFIXES: &[&str] = &[
     "billing_health/",
     "hf_rate/",
     "artifacts/",
+    "ecosystem/",
     "registry.json",
 ];
 
@@ -132,7 +137,12 @@ impl Endpoint {
     /// lookup, so a source and a destination of different kinds coexist in
     /// one process.
     pub async fn build(&self) -> Result<Arc<dyn BlobBackend>, StorageError> {
-        let backend: Arc<dyn BlobBackend> = match self.kind.as_str() {
+        let kind = crate::capabilities::constructible_variant(
+            crate::capabilities::CapabilityKind::Storage,
+            &self.kind,
+        )
+        .map_or(self.kind.as_str(), |variant| variant.id);
+        let backend: Arc<dyn BlobBackend> = match kind {
             "gcs" => {
                 if self.bucket.is_empty() {
                     return Err(StorageError::Other(
@@ -147,10 +157,14 @@ impl Endpoint {
             "s3" => Arc::new(S3Backend::new(&self.bucket, &self.region).await?),
             "local" => Arc::new(LocalBackend::new(&self.path)?),
             other => {
+                let choices = crate::capabilities::configurable_ids(
+                    crate::capabilities::CapabilityKind::Storage,
+                )
+                .collect::<Vec<_>>()
+                .join("\", \"");
                 return Err(StorageError::Other(format!(
-                    "unknown storage backend {other:?} (use \"gcs\", \"azure\", \"s3\" \
-                     or \"local\")"
-                )))
+                    "unknown storage backend {other:?} (use \"{choices}\")"
+                )));
             }
         };
         Ok(backend)
@@ -633,6 +647,67 @@ async fn verify_metadata(
             Some(_) => {}
         }
     }
+}
+
+/// Replicate the configured primary store to its disaster-recovery endpoint.
+///
+/// The coordinator calls this after every dispatch tick. Writes stay
+/// single-primary; the backup is never promoted automatically, which avoids
+/// split-brain when primary health is uncertain.
+/// After a clean copy, stale objects are pruned from canonical backup
+/// prefixes so lifecycle moves and deletes remain exact during read failover.
+pub async fn replicate_configured_backup() -> Result<Option<CopyReport>, StorageError> {
+    let Some(destination_endpoint) = Endpoint::configured_backup() else {
+        return Ok(None);
+    };
+    let source_endpoint = Endpoint::configured_primary();
+    if source_endpoint.describe() == destination_endpoint.describe() {
+        return Err(StorageError::Other(format!(
+            "primary and backup resolve to the same store ({})",
+            source_endpoint.describe()
+        )));
+    }
+    let source = source_endpoint.build().await?;
+    let destination = destination_endpoint.build().await?;
+    let report = copy(
+        &source,
+        &destination,
+        &CopyOptions {
+            prefixes: Vec::new(),
+            concurrency: DEFAULT_CONCURRENCY,
+        },
+    )
+    .await?;
+    if report.is_clean() {
+        prune_backup_extras(&source, &destination).await?;
+    }
+    Ok(Some(report))
+}
+
+async fn prune_backup_extras(
+    source: &Arc<dyn BlobBackend>,
+    destination: &Arc<dyn BlobBackend>,
+) -> Result<(), StorageError> {
+    for prefix in CANONICAL_PREFIXES {
+        let source_names = source
+            .list_blobs_with_meta(prefix)
+            .await?
+            .into_iter()
+            .map(|blob| blob.name)
+            .collect::<BTreeSet<_>>();
+        let destination_names = destination
+            .list_blobs_with_meta(prefix)
+            .await?
+            .into_iter()
+            .map(|blob| blob.name)
+            .collect::<BTreeSet<_>>();
+        for stale in destination_names.difference(&source_names) {
+            if !source.exists(stale).await? {
+                destination.delete(stale).await?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Plan a copy without writing anything: per-prefix source counts and how

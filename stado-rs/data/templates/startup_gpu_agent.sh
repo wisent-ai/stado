@@ -91,19 +91,6 @@ else
     pip install --force-reinstall 'datasets>=2.18,<3.0' 'huggingface-hub>=0.34.0,<1.0'
 fi
 
-export HF_TOKEN="${HF_TOKEN}"
-export HUGGING_FACE_HUB_TOKEN="${HF_TOKEN}"
-# Supabase Management API token so wisent-tools extract_and_upload can
-# write Activation rows to the Wisent App project after each per-strategy
-# HF upload. Without it the post-extraction supabase write step logs a
-# skip message and the activation->pair mapping stays unpopulated.
-# Coordinator-provided token. The placeholder is substituted by
-# dispatch_agent_vms when the mac-mini env has SUPABASE_ACCESS_TOKEN set
-# in the coordinator secrets dict. When unsubstituted (literal text
-# remains), bash empty-default substitution keeps it empty so set -u
-# does not crash; the post-extraction supabase write step then exits
-# early when the token is empty.
-export SUPABASE_ACCESS_TOKEN="${WC_SUPABASE_TOKEN:-}"
 export WISENT_DTYPE=auto
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export PYTHONUNBUFFERED=1
@@ -119,13 +106,6 @@ export NUMBA_NUM_THREADS=1
 export HF_HUB_DOWNLOAD_TIMEOUT=120
 # Kill telemetry/analytics pings — they count against the 1000/5min ceiling.
 export HF_HUB_DISABLE_TELEMETRY=1
-# NOTE: do NOT set HF_HUB_DISABLE_IMPLICIT_TOKEN here. Despite its name, that
-# flag disables BOTH the on-disk HfFolder lookup AND the HF_TOKEN env-var
-# resolution path inside huggingface_hub. We rely on env-var auth for gated
-# meta-llama repos, so leaving it unset (or =0) is the correct setting.
-# Confirmed live on 2026-04-30: setting this to 1 caused 49 of last 50
-# failures to be GatedRepoError 401 on Llama-2-7b-chat-hf and
-# Llama-3.2-1B-Instruct.
 # When a file IS present in cache, transformers/huggingface_hub still issues
 # a HEAD to refresh the etag and re-validate. With cache-first loading in
 # wisent>=0.11.20 this normally won't fire, but if some path still bypasses

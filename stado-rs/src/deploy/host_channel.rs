@@ -187,7 +187,11 @@ pub fn finish_report(
     report.insert("exit_code".to_string(), json!(output.code));
     report.insert(
         "status".to_string(),
-        json!(if output.ok() { ok_status } else { FAILED_STATUS }),
+        json!(if output.ok() {
+            ok_status
+        } else {
+            FAILED_STATUS
+        }),
     );
     if !output.ok() {
         report.insert(

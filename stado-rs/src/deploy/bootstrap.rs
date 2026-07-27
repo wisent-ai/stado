@@ -17,7 +17,6 @@
 //! enablement. The existing capacity broadcast loop continues
 //! uninterrupted because the unit's ExecStart is identical.
 
-use base64::Engine as _;
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
@@ -285,35 +284,51 @@ pub async fn provision_target(
     };
 
     if platform == "darwin-arm64" {
-        let hf_token = local_install::fetch_hf_write_token().await?;
-        let token = shlex_quote(hf_token.trim());
-        // ADC is pushed only for the GCS backend, the only one that reads
-        // it. An Azure-only or S3-only install must not be blocked on GCP
-        // credentials the box no longer has; the remote stado resolves its
-        // own backend credentials from its environment.
-        let adc_prefix = if crate::config::wc_storage_backend() == "gcs" {
-            let local_home = crate::config_file::expand_tilde("~");
-            let local_adc = local_install::adc_path(&local_home);
-            if local_adc.is_empty() {
-                return Err(DeployError(
-                    "Darwin bootstrap needs local ADC credentials to provision the remote agent"
-                        .to_string(),
-                ));
-            }
-            let adc = std::fs::read(&local_adc)
-                .map_err(|exc| DeployError(format!("cannot read local ADC credentials: {exc}")))?;
-            let adc = base64::engine::general_purpose::STANDARD.encode(adc);
-            format!(
-                "umask u=rwx,go=; mkdir -p \"$HOME/.config/gcloud\"; printf %s {} | /usr/bin/base64 -D > \"$HOME/.config/gcloud/application_default_credentials.json\"; GOOGLE_APPLICATION_CREDENTIALS=\"$HOME/.config/gcloud/application_default_credentials.json\" ",
-                shlex_quote(&adc)
-            )
-        } else {
-            String::new()
-        };
         // Forward a CONFIGURED channel so the remote `bootstrap --local`
         // populates ~/.stado/bin from the same place this host installed
         // from. The compiled-in default stays implicit, which keeps the
         // default command byte-identical.
+        // Provision only the scoped Skarbiec consumer grant. Application
+        // credential values never leave Skarbiec.
+        let grant_path = crate::config::skarbiec_token_file();
+        let prepare = runner(CommandSpec::new(ssh_argv(
+            &ssh_target,
+            "umask u=rwx,go=; mkdir -p \"$HOME/.stado\"",
+        )))
+        .await
+        .map_err(DeployError)?;
+        if !prepare.ok() {
+            return Err(DeployError(format!(
+                "cannot prepare remote Skarbiec grant directory: {}",
+                prepare.detail()
+            )));
+        }
+        let copy = runner(CommandSpec::new(vec![
+            "scp".to_string(),
+            "-q".to_string(),
+            grant_path.to_string(),
+            format!("{ssh_target}:.stado/skarbiec-token"),
+        ]))
+        .await
+        .map_err(DeployError)?;
+        if !copy.ok() {
+            return Err(DeployError(format!(
+                "cannot provision remote Skarbiec consumer grant: {}",
+                copy.detail()
+            )));
+        }
+        let secure = runner(CommandSpec::new(ssh_argv(
+            &ssh_target,
+            "chmod u=rw,go= \"$HOME/.stado/skarbiec-token\"",
+        )))
+        .await
+        .map_err(DeployError)?;
+        if !secure.ok() {
+            return Err(DeployError(format!(
+                "cannot secure remote Skarbiec consumer grant: {}",
+                secure.detail()
+            )));
+        }
         let channel_prefix =
             if crate::config::release_base_url() == crate::config::DEFAULT_RELEASE_BASE_URL {
                 String::new()
@@ -323,8 +338,13 @@ pub async fn provision_target(
                     shlex_quote(crate::config::release_base_url())
                 )
             };
+        let skarbiec_prefix = format!(
+            "WC_SKARBIEC_URL={} WC_SKARBIEC_CONSUMER={} WC_SKARBIEC_TOKEN_FILE=\"$HOME/.stado/skarbiec-token\" ",
+            shlex_quote(crate::config::skarbiec_url()),
+            shlex_quote(crate::config::skarbiec_consumer()),
+        );
         let command = format!(
-            "{adc_prefix}{channel_prefix}HF_TOKEN={token} HUGGING_FACE_HUB_TOKEN={token} {} bootstrap --local --target {}",
+            "{channel_prefix}{skarbiec_prefix}{} bootstrap --local --target {}",
             shlex_quote(&stado_bin),
             shlex_quote(&target.name)
         );

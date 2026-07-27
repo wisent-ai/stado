@@ -185,8 +185,8 @@ as a check. The commands below close what that revealed. All are shipped.
   job document first and the provider lease second.
 - **secrets put | get | ls | rm** — the Azure billing service principal lived
   in GCP Secret Manager, so GCP dying also blinded us to the Azure credit
-  balance. Values now come from Azure Key Vault; `put` reads STDIN only,
-  because argv is visible in process listings and shell history.
+  balance. Values now come from the separate Skarbiec service; `put` reads
+  STDIN only because argv is visible in process listings and shell history.
 - **billing watch** — the alert that should have warned us could not fire:
   the depletion signal is computed only inside the `"status": "ok"` branch,
   so a closed account or dead credential produced silence rather than an
@@ -200,9 +200,9 @@ as a check. The commands below close what that revealed. All are shipped.
 
 `queue/secrets.rs` and `monitor::billing::{fetch_azure_sp_with,
 no_credentials_section}` are now `#[cfg(test)]`-only: production reads the
-billing service principal from Azure Key Vault and nowhere else, deliberately,
-so that no fallback can quietly recreate the cross-cloud coupling that caused
-the outage. What remains is a whole module plus a status-message builder kept
+billing service principal from Skarbiec and nowhere else, deliberately, so no
+fallback can quietly recreate the cross-cloud coupling that caused the outage.
+What remains is a whole module plus a status-message builder kept
 alive by a single test asserting text production can no longer emit. Removing
 them means deleting that test, which needs the owner's approval — hence this
 note instead of a commit.

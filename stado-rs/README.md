@@ -22,7 +22,7 @@ the file concerned (see "Deviations" below).
 | `src/queue/s3.rs` | `queue/s3.py::S3Backend` (aws-sdk-s3) |
 | `src/queue/azure_blob.rs` | `queue/azure_blob.py::AzureBlobBackend` (hand-rolled Blob REST) |
 | `src/queue/{submit,runs,tombstone,listing,leases,capacity,migrations}.rs` | `queue/submit.py`, `queue/runs/`, `queue/tracking/tombstone.py`, `queue/listing/`, `queue/leases/`, `queue/capacity.py`, `queue/migrations.py` |
-| `src/azure_token.rs` | AAD token chain shared by the Azure provider and the Azure Blob backend (DefaultAzureCredential equivalent) |
+| `src/azure_token.rs`, `src/skarbiec.rs` | Workload-identity token acquisition and the centralized Skarbiec credential-service client |
 | `src/config.rs`, `src/config_file.rs` | `stado/config.py`, `stado/config_file.py` |
 | `src/models.rs`, `src/constants.rs` | `stado/models.py`, `stado/constants.py` |
 | `src/scheduler/` | `stado/scheduler/` (scheduler, dispatch, makespan, quota, cost, skip_done) |

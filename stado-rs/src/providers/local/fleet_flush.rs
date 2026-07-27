@@ -17,11 +17,6 @@ import os, shutil, sys
 
 flush_dir, lock_path = sys.argv[-2:]
 try:
-    if not (os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")):
-        from huggingface_hub import get_token
-        token = get_token()
-        if token:
-            os.environ["HF_TOKEN"] = token
     try:
         from wisent.core.reading.modules.utilities.data.sources.hf.hf_writers import flush_staging_dir
     except ImportError:
@@ -90,25 +85,36 @@ pub(crate) fn pick_or_rotate(
     Ok(Some(flush_dir))
 }
 
-/// Rotate a staging dir and flush it in a background process.
-/// Python `spawn_fleet_flush`.
-///
-/// Returns Ok(true) when a background flush is active or was started. The
-/// caller can keep admitting GPU jobs because new jobs write to a freshly
-/// recreated fleet_staging directory while the rotated directory uploads.
-pub fn spawn_fleet_flush(
+/// Rotate a staging dir and flush it in a background process. The upload
+/// credential is resolved from Skarbiec and passed only to the child.
+pub async fn spawn_fleet_flush(
     fleet_staging: &Path,
     log_fn: &mut dyn FnMut(&str),
 ) -> std::io::Result<bool> {
-    spawn_fleet_flush_with(&super::python_bin(), fleet_staging, log_fn)
+    let token = crate::skarbiec::read_string("stado-huggingface", "write_token")
+        .await
+        .map_err(std::io::Error::other)?
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            std::io::Error::other("Skarbiec item stado-huggingface field write_token is required")
+        })?;
+    spawn_fleet_flush_with_token(&super::python_bin(), fleet_staging, log_fn, &token)
 }
 
-/// [`spawn_fleet_flush`] with an explicit interpreter (tests pass `true`,
-/// which ignores the child-program arguments).
+/// Explicit-interpreter seam retained for deterministic callers.
 pub fn spawn_fleet_flush_with(
     python: &str,
     fleet_staging: &Path,
     log_fn: &mut dyn FnMut(&str),
+) -> std::io::Result<bool> {
+    spawn_fleet_flush_with_token(python, fleet_staging, log_fn, "")
+}
+
+fn spawn_fleet_flush_with_token(
+    python: &str,
+    fleet_staging: &Path,
+    log_fn: &mut dyn FnMut(&str),
+    token: &str,
 ) -> std::io::Result<bool> {
     let staging = fleet_staging;
     let name = staging
@@ -136,16 +142,21 @@ pub fn spawn_fleet_flush_with(
         .append(true)
         .open(log_root.join(format!("{log_name}.log")))?;
     let err_file = log_file.try_clone()?;
-    let child = std::process::Command::new(python)
+    let mut command = std::process::Command::new(python);
+    command
         .args(["-c", FLUSH_RUNNER])
         .arg(&flush_dir)
         .arg(&lock_path)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(log_file))
         .stderr(std::process::Stdio::from(err_file))
-        // start_new_session=True: the flush survives the agent.
-        .process_group(0)
-        .spawn()?;
+        .process_group(i32::default());
+    if !token.is_empty() {
+        command
+            .env("HF_TOKEN", token)
+            .env("HUGGING_FACE_HUB_TOKEN", token);
+    }
+    let child = command.spawn()?;
     let pid = child.id();
     std::fs::write(&lock_path, pid.to_string())?;
     log_fn(&format!(

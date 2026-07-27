@@ -80,7 +80,7 @@ done
 cleanup_status=\"unavailable\"
 cleanup_json=\"\"
 if [ -n \"$wc_bin\" ]; then
-  cleanup_json=$(GOOGLE_APPLICATION_CREDENTIALS=\"${GOOGLE_APPLICATION_CREDENTIALS:-$HOME/.config/gcloud/application_default_credentials.json}\" \"$wc_bin\" disk-cleanup --once 2>/dev/null)
+  cleanup_json=$(\"$wc_bin\" disk-cleanup --once)
   cleanup_rc=$?
   if [ \"$cleanup_rc\" -eq 0 ]; then cleanup_status=\"ok\"; else cleanup_status=\"failed:$cleanup_rc\"; fi
 fi

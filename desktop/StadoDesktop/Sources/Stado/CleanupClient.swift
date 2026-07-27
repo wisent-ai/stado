@@ -7,7 +7,6 @@ private enum DashboardTransport: String {
 }
 
 struct DashboardAddress: Equatable, Sendable {
-    static let defaultString = "http://127.0.0.1:8765"
     private static func isLoopback(host: String) -> Bool {
         if let address = IPv4Address(host) {
             return address.rawValue.first == 127
@@ -96,28 +95,48 @@ struct CleanupClient: Sendable {
         self.session = URLSession(configuration: configuration)
     }
 
-    func currentReport(at address: DashboardAddress) async throws -> CleanupResponse {
-        try await perform(currentReportRequest(at: address))
+    func currentReport(
+        at address: DashboardAddress,
+        authorizationToken: String? = nil
+    ) async throws -> CleanupResponse {
+        try await perform(currentReportRequest(at: address, authorizationToken: authorizationToken))
     }
 
-    func runCleanup(at address: DashboardAddress) async throws -> CleanupResponse {
-        try await perform(runCleanupRequest(at: address))
+    func runCleanup(
+        at address: DashboardAddress,
+        authorizationToken: String? = nil
+    ) async throws -> CleanupResponse {
+        try await perform(runCleanupRequest(at: address, authorizationToken: authorizationToken))
     }
 
-    func currentReportRequest(at address: DashboardAddress) -> URLRequest {
+    func currentReportRequest(
+        at address: DashboardAddress,
+        authorizationToken: String? = nil
+    ) -> URLRequest {
         var request = URLRequest(url: address.endpoint("api/cleanup.json"))
         request.httpMethod = "GET"
         request.cachePolicy = .reloadIgnoringLocalCacheData
+        applyAuthorization(authorizationToken, to: &request)
         return request
     }
 
-    func runCleanupRequest(at address: DashboardAddress) -> URLRequest {
+    func runCleanupRequest(
+        at address: DashboardAddress,
+        authorizationToken: String? = nil
+    ) -> URLRequest {
         var request = URLRequest(url: address.endpoint("api/cleanup/run"))
         request.httpMethod = "POST"
         request.setValue("cleanup", forHTTPHeaderField: "X-Stado-Action")
         request.httpBody = nil
         request.setValue("0", forHTTPHeaderField: "Content-Length")
+        applyAuthorization(authorizationToken, to: &request)
         return request
+    }
+
+    private func applyAuthorization(_ token: String?, to request: inout URLRequest) {
+        if let token, !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
     }
 
     private func perform(_ request: URLRequest) async throws -> CleanupResponse {

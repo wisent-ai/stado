@@ -11,10 +11,8 @@
 //! list_machine vast.py:8092 -> PUT /machines/create_asks/;
 //! unlist__machine vast.py:8991 -> DELETE /machines/{id}/asks/.
 //!
-//! Auth: VAST_API_KEY env var, else the GCP Secret Manager secret
-//! `vast-api-key` in the config project (via the REST API + gcp_auth, the
-//! same pattern as `queue::gcs`). Target machine: WC_VAST_MACHINE_ID (or
-//! auto-discovered via /machines/?owner=me + hostname).
+//! Auth: the `stado-vast` Skarbiec item, field `api_key`. Target machine:
+//! WC_VAST_MACHINE_ID (or auto-discovered via /machines/?owner=me + hostname).
 //!
 //! The auto-list loop polls the wisent-compute queue + local-{hostname}
 //! capacity blob; lists when idle, unlists when work appears. Existing
@@ -26,14 +24,13 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use crate::config;
 use crate::queue::{JobStorage, StorageError};
 
 /// Python `_VAST_BASE`.
 pub const VAST_BASE: &str = "https://console.vast.ai/api/v0";
-/// Secret Manager secret holding the Vast API key (Python `_SECRET_NAME`).
+#[cfg(test)]
 pub const SECRET_NAME: &str = "vast-api-key";
-/// OAuth scope for the Secret Manager REST read.
+#[cfg(test)]
 const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 
 /// Python `_AUTO_LIST_THREAD_RUNNING` — set true when the auto-list loop
@@ -75,7 +72,7 @@ impl VastError {
 }
 
 // ---------------------------------------------------------------------------
-// _auth.py — VAST_API_KEY resolution
+// Credential resolution
 // ---------------------------------------------------------------------------
 
 /// The env half of `resolve_vast_api_key`, split out for tests: stripped,
@@ -87,15 +84,17 @@ pub fn env_vast_api_key(value: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Python `resolve_vast_api_key`: env first, then GCP Secret Manager; ""
-/// when neither has it (Python swallows every exception).
+/// Resolve the Vast API key only from Skarbiec. A missing item means that the
+/// provider is unavailable; authorization and transport failures are logged
+/// rather than mistaken for an absent credential.
 pub async fn resolve_vast_api_key() -> String {
-    if let Some(key) = env_vast_api_key(std::env::var("VAST_API_KEY").ok().as_deref()) {
-        return key;
+    match crate::skarbiec::read_string("stado-vast", "api_key").await {
+        Ok(value) => value.unwrap_or_default(),
+        Err(err) => {
+            eprintln!("[vast] cannot read stado-vast/api_key from Skarbiec: {err}");
+            String::new()
+        }
     }
-    fetch_secret_manager_key(config::project())
-        .await
-        .unwrap_or_default()
 }
 
 /// Python `vast_api_key_available`.
@@ -103,6 +102,7 @@ pub async fn vast_api_key_available() -> bool {
     !resolve_vast_api_key().await.is_empty()
 }
 
+#[cfg(test)]
 /// Secret Manager `projects/{p}/secrets/vast-api-key/versions/latest:access`
 /// over REST, authenticated like [`crate::queue::gcs::GcsBackend`]. Any
 /// failure maps to None (Python's blanket `except Exception: return ""`).
@@ -228,13 +228,12 @@ impl VastClient {
         }
     }
 
-    /// Resolve the key from env/Secret Manager (Python `_api_key`): missing
-    /// key is a VastConfigError.
+    /// Resolve the key from `stado-vast/api_key` in Skarbiec.
     pub async fn from_env() -> Result<Self, VastError> {
         let key = resolve_vast_api_key().await;
         if key.is_empty() {
             return Err(VastError::config(
-                "VAST_API_KEY missing in env and GCP Secret Manager vast-api-key",
+                "Skarbiec item stado-vast field api_key is required",
             ));
         }
         Ok(Self::new(key))
@@ -281,10 +280,8 @@ impl VastClient {
         })
     }
 
-    /// Python `_machine_id`: env override, else auto-discovery via
-    /// /machines/?owner=me + hostname match. VAST_API_KEY alone is enough
-    /// to enumerate our own machines, so the lab box doesn't need the
-    /// explicit env var.
+    /// Resolve the machine id from the non-secret env override, else
+    /// auto-discover it via `/machines/?owner=me` and hostname.
     pub async fn machine_id(&self) -> Result<i64, VastError> {
         self.machine_id_for_hostname(&system_hostname()).await
     }

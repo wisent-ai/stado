@@ -1,58 +1,55 @@
-//! `stado secrets` — operator surface for Azure Key Vault.
+//! `stado secrets` — operator surface for the separate Skarbiec service.
 //!
-//! Values are never stored in queue blobs, local files, process arguments, or
-//! another cloud's secret manager. Vault authentication uses Managed Identity
-//! or the current Azure CLI identity. `get` is the only command that renders a
-//! value; `ls` reads metadata only.
+//! Secret values travel in request bodies, never argv. Skarbiec performs
+//! encryption, authorization, versioning, recovery-recipient handling, and
+//! audit logging. Stado retains no local or cloud-secret-manager fallback.
 
 use std::io::Read;
 
 use clap::Subcommand;
-
-use crate::azure_key_vault;
+use serde_json::{json, Value};
 
 use super::{table, CmdError};
 
 #[derive(Subcommand)]
 pub enum SecretsCommands {
-    /// Store a secret in Azure Key Vault, reading the value from STDIN.
-    ///
-    /// There is no --value flag: argv is visible in process listings and shell
-    /// history. Pipe the value instead: `stado secrets put NAME < file`.
+    /// Store an item in Skarbiec, reading its value from STDIN.
     Put {
-        /// Key Vault secret name; letters, digits, and '-' only.
+        /// Skarbiec item id.
         name: String,
     },
-    /// Print one Azure Key Vault secret value to stdout.
+    /// Print one Skarbiec item value or one exact string field to stdout.
     Get {
-        /// Secret name.
+        /// Skarbiec item id.
         name: String,
+        /// Print only this string field. The item id and field remain separate.
+        #[arg(long)]
+        field: Option<String>,
     },
-    /// List Azure Key Vault secret metadata without downloading values.
+    /// List metadata for items authorized by the current grant.
     Ls {
         /// Emit JSON instead of a table.
         #[arg(long)]
         json: bool,
     },
-    /// Soft-delete an Azure Key Vault secret.
+    /// Soft-delete a Skarbiec item.
     Rm {
-        /// Secret name.
+        /// Skarbiec item id.
         name: String,
     },
 }
 
 pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
-    let client = reqwest::Client::new();
-    let vault_url = crate::config::azure_key_vault_url();
+    let vault =
+        crate::skarbiec::Client::configured().map_err(|err| CmdError::click(err.to_string()))?;
     match command {
-        SecretsCommands::Put { name } => put(&client, vault_url, &name).await,
-        SecretsCommands::Get { name } => get(&client, vault_url, &name).await,
-        SecretsCommands::Ls { json } => ls(&client, vault_url, json).await,
-        SecretsCommands::Rm { name } => rm(&client, vault_url, &name).await,
+        SecretsCommands::Put { name } => put(&vault, &name).await,
+        SecretsCommands::Get { name, field } => get(&vault, &name, field.as_deref()).await,
+        SecretsCommands::Ls { json } => ls(&vault, json).await,
+        SecretsCommands::Rm { name } => rm(&vault, &name).await,
     }
 }
 
-/// Read stdin as the secret value, dropping exactly one trailing line ending.
 fn read_value_from_stdin() -> Result<String, CmdError> {
     let mut value = String::new();
     std::io::stdin().read_to_string(&mut value)?;
@@ -60,31 +57,60 @@ fn read_value_from_stdin() -> Result<String, CmdError> {
     Ok(value.strip_suffix('\r').unwrap_or(value).to_string())
 }
 
-async fn put(client: &reqwest::Client, vault_url: &str, name: &str) -> Result<(), CmdError> {
-    let value = read_value_from_stdin()?;
-    if value.is_empty() {
+async fn put(vault: &crate::skarbiec::Client, name: &str) -> Result<(), CmdError> {
+    let input = read_value_from_stdin()?;
+    if input.is_empty() {
         return Err(CmdError::click(
-            "stdin was empty; pipe the secret in (stado secrets put NAME < file)",
+            "stdin was empty; pipe the value in (stado secrets put NAME < file)",
         ));
     }
-    azure_key_vault::write_secret(client, vault_url, name, &value)
+    let value = serde_json::from_str(&input).unwrap_or_else(|_| json!({"value": input}));
+    vault
+        .write_item(name, "stado-secret", &value)
         .await
         .map_err(|err| CmdError::click(err.to_string()))?;
-    println!("stored secret {name:?} in Azure Key Vault {vault_url}");
+    println!("stored Skarbiec item {name:?}");
     Ok(())
 }
 
-async fn get(client: &reqwest::Client, vault_url: &str, name: &str) -> Result<(), CmdError> {
-    let value = azure_key_vault::read_secret(client, vault_url, name)
+async fn get(
+    vault: &crate::skarbiec::Client,
+    name: &str,
+    field: Option<&str>,
+) -> Result<(), CmdError> {
+    let value = vault
+        .read_item(name)
         .await
-        .map_err(|err| CmdError::click(err.to_string()))?
-        .ok_or_else(|| CmdError::click(format!("no Key Vault secret named {name:?}")))?;
-    println!("{value}");
+        .map_err(|err| CmdError::click(err.to_string()))?;
+    if let Some(field) = field {
+        let raw = value
+            .as_object()
+            .and_then(|object| object.get(field))
+            .and_then(Value::as_str)
+            .filter(|raw| !raw.is_empty())
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "Skarbiec item {name:?} has no non-empty string field {field:?}"
+                ))
+            })?;
+        println!("{raw}");
+        return Ok(());
+    }
+    if let Some(object) = value.as_object() {
+        if object.len() == usize::from(true) {
+            if let Some(raw) = object.get("value").and_then(Value::as_str) {
+                println!("{raw}");
+                return Ok(());
+            }
+        }
+    }
+    println!("{}", serde_json::to_string_pretty(&value)?);
     Ok(())
 }
 
-async fn ls(client: &reqwest::Client, vault_url: &str, as_json: bool) -> Result<(), CmdError> {
-    let stored = azure_key_vault::list_secrets(client, vault_url)
+async fn ls(vault: &crate::skarbiec::Client, as_json: bool) -> Result<(), CmdError> {
+    let stored = vault
+        .list_items()
         .await
         .map_err(|err| CmdError::click(err.to_string()))?;
     if as_json {
@@ -92,26 +118,25 @@ async fn ls(client: &reqwest::Client, vault_url: &str, as_json: bool) -> Result<
         return Ok(());
     }
     if stored.is_empty() {
-        println!("No secrets stored in Azure Key Vault {vault_url}.");
+        println!("No Skarbiec items are visible to this grant.");
         return Ok(());
     }
     let rows: Vec<Vec<String>> = stored
         .iter()
-        .map(|secret| {
+        .map(|item| {
             vec![
-                secret.name.clone(),
-                secret
-                    .updated
+                item.id.clone(),
+                item.item_type.clone().unwrap_or_else(unknown),
+                item.updated_at
                     .map(|at| at.to_rfc3339())
                     .unwrap_or_else(unknown),
-                secret
-                    .enabled
-                    .map(|enabled| enabled.to_string())
+                item.versions
+                    .map(|versions| versions.to_string())
                     .unwrap_or_else(unknown),
             ]
         })
         .collect();
-    table::print(&["NAME", "UPDATED", "ENABLED"], &rows);
+    table::print(&["NAME", "TYPE", "UPDATED", "VERSIONS"], &rows);
     Ok(())
 }
 
@@ -119,15 +144,11 @@ fn unknown() -> String {
     "-".to_string()
 }
 
-async fn rm(client: &reqwest::Client, vault_url: &str, name: &str) -> Result<(), CmdError> {
-    if !azure_key_vault::delete_secret(client, vault_url, name)
+async fn rm(vault: &crate::skarbiec::Client, name: &str) -> Result<(), CmdError> {
+    vault
+        .delete_item(name)
         .await
-        .map_err(|err| CmdError::click(err.to_string()))?
-    {
-        return Err(CmdError::click(format!(
-            "no Key Vault secret named {name:?}"
-        )));
-    }
-    println!("soft-deleted secret {name:?} from Azure Key Vault {vault_url}");
+        .map_err(|err| CmdError::click(err.to_string()))?;
+    println!("soft-deleted Skarbiec item {name:?}");
     Ok(())
 }

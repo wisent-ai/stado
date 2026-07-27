@@ -43,26 +43,6 @@ enum Termination {
 }
 
 pub async fn run(job_id: &str, terminate: bool) -> Result<(), CmdError> {
-    if !super::api_key().is_empty() {
-        // API mode (Python: DELETE {COMPUTE_API}/api/v1/instances/<id>).
-        // The server owns the instance behind that id, so its delete is
-        // already a termination and --terminate has nothing to add.
-        let response = reqwest::Client::new()
-            .delete(format!(
-                "{}/api/v1/instances/{job_id}",
-                crate::config::compute_api()
-            ))
-            .header("X-API-Key", super::api_key())
-            .send()
-            .await?;
-        if response.status().is_success() {
-            println!("Cancelled {job_id}");
-        } else {
-            println!("Failed: {}", response.status().as_u16());
-        }
-        return Ok(());
-    }
-
     let store = default_store(crate::config::bucket()).await?;
 
     // Terminate BEFORE the state transition. The transition rewrites the

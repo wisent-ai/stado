@@ -1,5 +1,9 @@
 # Migration runbook: wisent-compute -> stado (live infra, category B)
 
+> **Optional legacy GCP-provider migration only.** This runbook is not part of
+> the active Azure control-plane cutover. Use `deploy/azure/CUTOVER.md`; none
+> of the Azure workflows invokes these commands.
+
 The code rename (Python package `wisent_compute` -> `stado`, CLI `wc*` ->
 `stado*`, entry-point group `stado.coverage_universes`, all import sites in
 wisent-tools + wisent-open-source + .work scripts) is DONE in the repos. This

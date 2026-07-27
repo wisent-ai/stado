@@ -33,8 +33,6 @@ pip install --upgrade --force-reinstall 'transformers>=4.55,<5.0' 'tokenizers>=0
 pip install --upgrade --force-reinstall 'datasets>=2.18,<3.0' 'huggingface-hub>=0.34.0,<1.0'
 pip uninstall -y hf-xet || true
 
-export HF_TOKEN="${HF_TOKEN}"
-export HUGGING_FACE_HUB_TOKEN="${HF_TOKEN}"
 export WISENT_DTYPE=auto
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export PYTHONUNBUFFERED=1
@@ -44,15 +42,64 @@ export HF_HUB_DOWNLOAD_TIMEOUT=120
 export HF_HUB_DISABLE_TELEMETRY=1
 export HF_HUB_ETAG_TIMEOUT=1
 
-# Storage backend selection. Set on the dispatcher's render path; see
-# config.WC_STORAGE_BACKEND. When unset/"gcs" the agent writes to GCS via
-# the gsutil/SDK path (requires GCP service-account JSON; not configured
-# in this template by default). When "azure" the agent writes to Azure
-# Blob via DefaultAzureCredential (managed identity on the VM is the
-# natural fit; granted Storage Blob Data Contributor on the container).
+# Azure is the only primary in this template. Blob access comes from the
+# user-assigned managed identity attached by providers/azure/mod.rs; no cloud
+# CLI, service-principal environment or GCP credential is installed.
 export WC_STORAGE_BACKEND="${WC_STORAGE_BACKEND}"
 export WC_AZURE_STORAGE_ACCOUNT="${WC_AZURE_STORAGE_ACCOUNT}"
 export WC_AZURE_CONTAINER="${WC_AZURE_CONTAINER}"
+[ "$WC_STORAGE_BACKEND" = "azure" ] || {
+    echo "FATAL: Azure agent rendered with WC_STORAGE_BACKEND=$WC_STORAGE_BACKEND (expected azure)" | tee /dev/stderr
+    false
+}
+[ -n "$WC_AZURE_STORAGE_ACCOUNT" ] || {
+    echo "FATAL: WC_AZURE_STORAGE_ACCOUNT is unresolved; provision the Azure account and set storage.azure.account" | tee /dev/stderr
+    false
+}
+
+# S3 is read failover and a synchronous replica, never an alternate writer.
+# The VM gets only the stado-azure-agent grant whose exact item allowlist was
+# verified by the coordinator. A single-read FIFO transfers it into the Rust
+# agent's in-memory cache; the path then disappears. Raw values are never
+# rendered into cloud-init or inherited by workload processes.
+export WC_BACKUP_STORAGE_BACKEND="${WC_BACKUP_STORAGE_BACKEND}"
+export WC_BACKUP_BUCKET="${WC_BACKUP_BUCKET}"
+export WC_BACKUP_S3_REGION="${WC_BACKUP_S3_REGION}"
+export WC_SKARBIEC_URL="${WC_AGENT_SKARBIEC_URL}"
+export WC_SKARBIEC_CONSUMER="${WC_AGENT_SKARBIEC_CONSUMER}"
+_wc_agent_grant_dir=/run/stado-agent-credentials
+_wc_agent_grant_fifo="$_wc_agent_grant_dir/skarbiec-token"
+export WC_SKARBIEC_TOKEN_FILE="$_wc_agent_grant_fifo"
+[ "$WC_BACKUP_STORAGE_BACKEND" = "s3" ] || {
+    echo "FATAL: Azure agent requires WC_BACKUP_STORAGE_BACKEND=s3 for read failover" | tee /dev/stderr
+    false
+}
+[ -n "$WC_BACKUP_BUCKET" ] && [ -n "$WC_BACKUP_S3_REGION" ] || {
+    echo "FATAL: S3 backup bucket/region unresolved; set WC_BACKUP_BUCKET and WC_BACKUP_S3_REGION" | tee /dev/stderr
+    false
+}
+case "$WC_SKARBIEC_URL" in
+    https://*) ;;
+    *)
+        echo "FATAL: WC_AGENT_SKARBIEC_URL must be an HTTPS endpoint reachable from this VM" | tee /dev/stderr
+        false
+        ;;
+esac
+mkdir -p "$_wc_agent_grant_dir"
+chmod u=rwx,go= "$_wc_agent_grant_dir"
+rm -f "$_wc_agent_grant_fifo"
+mkfifo "$_wc_agent_grant_fifo"
+chmod u=rw,go= "$_wc_agent_grant_fifo"
+set +x
+_wc_agent_grant="${WC_AGENT_SKARBIEC_TOKEN}"
+(
+    set +x
+    printf '%s' "$_wc_agent_grant" > "$_wc_agent_grant_fifo"
+    rm -f "$_wc_agent_grant_fifo"
+    rmdir "$_wc_agent_grant_dir" || true
+) &
+unset _wc_agent_grant
+set -x
 
 # Pre-warm the small auxiliary models so each claimed job skips the download.
 huggingface-cli download cross-encoder/nli-deberta-v3-small || true
@@ -78,8 +125,8 @@ AGENT_BIN=/opt/wisent-agent/bin/stado
 # audience and REST API version the agent's own blob client pins. That
 # requires the VM to carry a user-assigned identity; without one the
 # token fetch fails and startup aborts rather than installing nothing.
-# Any other host (the public GCS endpoint, a CDN, a plain web server) is
-# fetched anonymously, which keeps the GCS default byte-identical.
+# Non-Azure hosts are fetched anonymously only when an explicitly configured
+# provider-neutral HTTP channel is used; this Azure path has no GCS fallback.
 # Tracing is suppressed across the token's lifetime so the bearer never
 # reaches /var/log/wisent-agent.log.
 _wc_release_curl() {

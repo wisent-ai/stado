@@ -90,6 +90,15 @@ async fn coordinator_loop(
             Ok(scheduled) => log(&format!("tick scheduled={scheduled}")),
             Err(exc) => log(&format!("tick failed: {exc}")),
         }
+        match crate::queue::copy::replicate_configured_backup().await {
+            Ok(Some(report)) if report.is_clean() => log("disaster-recovery replication clean"),
+            Ok(Some(report)) => log(&format!(
+                "disaster-recovery replication incomplete: {} object(s) failed",
+                report.failed()
+            )),
+            Ok(None) => {}
+            Err(exc) => log(&format!("disaster-recovery replication failed: {exc}")),
+        }
         tokio::time::sleep(Duration::from_secs(sleep_seconds)).await;
     }
 }
@@ -133,21 +142,9 @@ pub async fn run_local(host: &str, port: i64, interval: i64) -> Result<(), Contr
 /// `deploy.cloud_control_plane.run`).
 pub async fn run_cloud(host: &str, port: i64, interval: i64) -> Result<(), ControlPlaneError> {
     let store = JobStorage::new().await?;
-    let mut secrets = BTreeMap::new();
-    // Credentials only. The non-secret `${KEY}` substitutions the startup
-    // templates also need — storage backend, Azure account/container,
-    // release base URL, AWS bucket and region — come from
-    // `scheduler::dispatch::agent::deployment_substitutions`, which reads
-    // them from config for every dispatcher instead of depending on this
-    // one process's environment.
-    for key in ["HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "WC_SUPABASE_TOKEN"] {
-        if let Ok(value) = std::env::var(key) {
-            let value = value.trim();
-            if !value.is_empty() {
-                secrets.insert(key.to_string(), value.to_string());
-            }
-        }
-    }
+    let secrets = crate::coordinator::secrets_from_skarbiec()
+        .await
+        .map_err(|err| ControlPlaneError::Other(err.to_string()))?;
     let tick_store = store.clone();
     spawn_daemon("stado-cloud-coordinator", move || {
         coordinator_loop(

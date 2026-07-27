@@ -3,8 +3,8 @@
 //! Port of `stado/cli.py` (click) to clap derive. The full command tree is
 //! declared and every branch dispatches to its Rust implementation.
 //!
-//! Implemented and wired to the library: `package-root`, `submit`,
-//! `status`, `cancel`, `results`, `profiles`, `config`, `schedule`,
+//! Implemented and wired to the library: `package-root`, `capabilities`,
+//! `submit`, `status`, `cancel`, `results`, `profiles`, `config`, `schedule`,
 //! `artifact`, `cost`, `vast`, `agent`, `disk-cleanup`,
 //! `install-disk-cleanup`, `bootstrap`, the complete `host`, `registry`,
 //! and `quota` groups, plus coordinator and dashboard control planes.
@@ -13,10 +13,12 @@ use clap::{Parser, Subcommand};
 
 pub mod agent;
 pub mod artifact;
+pub mod azure;
 pub mod billing;
 pub mod blast_radius;
 pub mod bootstrap;
 pub mod cancel;
+pub mod capabilities;
 pub mod config_cmd;
 pub mod control_plane;
 pub mod coordinator;
@@ -138,11 +140,6 @@ impl From<reqwest::Error> for CmdError {
     }
 }
 
-/// COMPUTE_API_KEY env var, stripped (Python `_api_key()`).
-pub(crate) fn api_key() -> String {
-    crate::queue::submit::compute_api_key()
-}
-
 #[derive(Parser)]
 #[command(about = "Wisent Compute — GPU job queue management.")]
 pub struct Cli {
@@ -156,6 +153,15 @@ enum Commands {
     #[command(name = "package-root", hide = true)]
     PackageRoot,
 
+    /// List Stado capability families, variants, providers and active selections.
+    Capabilities {
+        /// Restrict output to one capability family.
+        capability: Option<String>,
+        /// Emit the versioned machine-readable catalog.
+        #[arg(long)]
+        json: bool,
+    },
+
     /// One operator snapshot: jobs, active workers, quota, budgets, burn and credits.
     Overview {
         /// Emit the complete machine-readable snapshot.
@@ -163,13 +169,17 @@ enum Commands {
         json: bool,
     },
 
-    /// Assess an upstream failure, downstream consumers, and backup coverage.
+    /// Inventory a dependency's live resources, auth, consumers, storage, and DR coverage.
     #[command(name = "blast-radius")]
     BlastRadius(blast_radius::BlastRadiusArgs),
 
     /// Inspect or refresh cross-cloud costs, grants, burn, and credit balances.
     #[command(subcommand)]
     Billing(BillingCommands),
+
+    /// Authenticate an Azure operator and repair the Stado RBAC contract.
+    #[command(subcommand)]
+    Azure(azure::AzureCommands),
 
     /// Search and deterministically analyze Gmail messages without modifying them.
     #[command(subcommand)]
@@ -242,9 +252,9 @@ enum Commands {
         /// default), "gcp" / "azure" / "aws" / "vast" (ephemeral cloud-agent VM).
         #[arg(long, default_value = "local")]
         kind: String,
-        /// When the wisent-compute queue is empty, list this box on
-        /// Vast.ai so external renters use the otherwise-idle GPU.
-        /// Requires VAST_API_KEY + WC_VAST_MACHINE_ID in env.
+        /// When the wisent-compute queue is empty, list this box on Vast.ai.
+        /// Requires stado-vast/api_key in Skarbiec and WC_VAST_MACHINE_ID
+        /// unless the machine can be discovered automatically.
         #[arg(long)]
         vast_auto_list: bool,
         /// Per-GPU-hour rental price USD when --vast-auto-list lists
@@ -257,12 +267,11 @@ enum Commands {
         vast_max_duration_s: i64,
     },
 
-    /// Run the scheduling tick locally instead of the GCP Cloud Function.
+    /// Run the provider-neutral scheduling tick locally.
     ///
-    /// Reads the named coordinator entry from the registry, loops on its
-    /// interval_seconds, runs the same monitor_jobs/schedule_queued_jobs
-    /// chain the Cloud Function does. State stays in the registry-declared
-    /// state_uri so all consumers (cloud + local) keep seeing the same queue.
+    /// Reads cadence and identity from the named coordinator entry. Queue,
+    /// registry, capacity, and schedule state use the configured Stado
+    /// storage backend.
     Coordinator {
         /// Coordinator name in registry (default: the one with active=true).
         #[arg(long)]
@@ -335,9 +344,9 @@ enum Commands {
 
     /// Manage recurring (cron) jobs — submit a command on a cron schedule.
     ///
-    /// A schedule is evaluated every coordinator tick; when it comes due the
-    /// coordinator submits a fresh job (resolving the same routing/sizing
-    /// flags as `submit`). Schedules live in gs://<bucket>/schedules/.
+    /// A schedule is evaluated every coordinator tick; when due, the
+    /// coordinator submits a fresh job with the same routing/sizing and
+    /// secret-reference contract. Schedules live in configured Stado storage.
     #[command(subcommand)]
     Schedule(ScheduleCommands),
 
@@ -345,7 +354,7 @@ enum Commands {
     #[command(subcommand)]
     Cost(CostCommands),
 
-    /// Manage the canonical compute-target registry hosted in GCS.
+    /// Manage the canonical compute-target registry in configured Stado storage.
     #[command(subcommand)]
     Registry(RegistryCommands),
 
@@ -725,8 +734,8 @@ pub struct ScheduleCreateArgs {
     /// IANA timezone the cron is interpreted in (default UTC).
     #[arg(long, default_value = "UTC")]
     tz: String,
-    /// Preferred provider.
-    #[arg(long, default_value = "gcp")]
+    /// Optional provider constraint; Stado chooses when omitted.
+    #[arg(long, default_value = "")]
     provider: String,
     /// Pin to --provider, or let any consumer claim (default).
     #[arg(long = "pin-provider", overrides_with = "any_provider")]
@@ -770,7 +779,7 @@ pub struct ScheduleCreateArgs {
     /// Comma-separated apt packages.
     #[arg(long, default_value = "")]
     apt: String,
-    /// Extra gs:// output destination.
+    /// Additional provider-neutral `stado://` output destination.
     #[arg(long, default_value = "")]
     output_uri: String,
     /// Command that must exit 0 after success (reverses to FAILED otherwise).
@@ -779,6 +788,9 @@ pub struct ScheduleCreateArgs {
     /// Claim the whole GPU.
     #[arg(long)]
     exclusive: bool,
+    /// Scoped workload secret as ENV_NAME=SKARBIEC_ITEM#FIELD.
+    #[arg(long = "secret-env")]
+    secret_env: Vec<String>,
     /// skip (default): don't fire while the prior instance is
     /// still queued/running. allow: fire regardless.
     #[arg(long, default_value = "skip", value_parser = ["skip", "allow"])]
@@ -992,8 +1004,8 @@ enum HostUserCommands {
 #[derive(Subcommand)]
 enum VastCommands {
     /// List the configured Vast.ai machine on the marketplace.
-    ///
-    /// Requires VAST_API_KEY and WC_VAST_MACHINE_ID env vars.
+    /// Requires stado-vast/api_key in Skarbiec and WC_VAST_MACHINE_ID unless
+    /// the machine can be discovered automatically.
     List {
         /// Per-GPU-hour rental price USD (default 0.50).
         #[arg(long, default_value_t = 0.50)]
@@ -1005,16 +1017,15 @@ enum VastCommands {
         #[arg(long)]
         price_min_bid: Option<f64>,
     },
-    /// Remove every offer for our Vast.ai machine.
-    ///
-    /// Existing rentals are NOT terminated — only NEW renters are
-    /// blocked. Requires VAST_API_KEY and WC_VAST_MACHINE_ID.
+    /// Remove every offer for our Vast.ai machine, blocking new renters.
+    /// Existing rentals are not terminated. Requires stado-vast/api_key in
+    /// Skarbiec and a resolvable machine id.
     Unlist,
     /// Show Vast.ai's current view of our machine (rentals, listed).
     Status,
     /// One-shot snapshot of the Vast bridge + wisent-compute state.
     Monitor {
-        /// GCS bucket holding the wisent-compute state (default wisent-compute).
+        /// Logical Stado queue namespace (default wisent-compute).
         #[arg(long, default_value = "wisent-compute")]
         bucket: String,
     },
@@ -1024,8 +1035,7 @@ enum VastCommands {
         /// Wisent-compute must be idle this many seconds before listing.
         #[arg(long, default_value_t = 300)]
         idle_window_s: i64,
-        /// Polling interval against the wisent-compute bucket
-        /// (default 10s — short enough to catch transient queue states).
+        /// Polling interval against configured Stado queue storage.
         #[arg(long, default_value_t = 10)]
         poll_interval_s: i64,
         /// Per-GPU-hour rental price USD when we list.
@@ -1067,9 +1077,13 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             println!("{}", crate::data_dir().display());
             Ok(())
         }
+        Commands::Capabilities { capability, json } => {
+            capabilities::run(capability.as_deref(), json)
+        }
         Commands::Overview { json } => overview::run(json).await,
         Commands::BlastRadius(args) => blast_radius::run(&args).await,
         Commands::Billing(sub) => billing::dispatch(&sub).await,
+        Commands::Azure(sub) => azure::dispatch(sub).await,
         Commands::Mail(sub) => mail::dispatch(&sub).await,
         Commands::Submit(args) => submit::run(&args).await,
         Commands::Status { filter_id } => status::run(filter_id.as_deref()).await,

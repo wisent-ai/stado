@@ -208,21 +208,79 @@ pub fn resolve_list(env_name: &str, dotted: &str, default: &[&str]) -> Vec<Strin
     default.iter().map(|s| s.to_string()).collect()
 }
 
+fn unresolved_placeholders(value: &Value, path: &str, problems: &mut Vec<String>) {
+    match value {
+        Value::Object(fields) => {
+            for (key, value) in fields {
+                if key.starts_with('_') {
+                    continue;
+                }
+                let child = if path.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{path}.{key}")
+                };
+                unresolved_placeholders(value, &child, problems);
+            }
+        }
+        Value::Array(items) => {
+            for (index, value) in items.iter().enumerate() {
+                unresolved_placeholders(value, &format!("{path}[{index}]"), problems);
+            }
+        }
+        Value::String(value) if value.contains('<') && value.contains('>') => {
+            problems.push(format!(
+                "{path} contains unresolved placeholder {value:?}; replace it before deployment"
+            ));
+        }
+        _ => {}
+    }
+}
+
 /// Structural validation of a config dict; returns a list of problems.
 pub fn validate(data: &Value) -> Vec<String> {
     let mut problems = Vec::new();
     let empty = Map::new();
     let root = data.as_object().unwrap_or(&empty);
+    unresolved_placeholders(data, "", &mut problems);
     let storage = root.get("storage").and_then(Value::as_object);
     let backend = storage.and_then(|s| s.get("backend"));
     if let Some(backend) = backend.filter(|b| !b.is_null()) {
-        let ok = backend
-            .as_str()
-            .is_some_and(|b| matches!(b, "gcs" | "azure" | "s3" | "local"));
+        let ok = backend.as_str().is_some_and(|name| {
+            crate::capabilities::configurable_variant(
+                crate::capabilities::CapabilityKind::Storage,
+                name,
+            )
+            .is_some()
+        });
         if !ok {
+            let choices =
+                crate::capabilities::configurable_ids(crate::capabilities::CapabilityKind::Storage)
+                    .collect::<Vec<_>>()
+                    .join("|");
             problems.push(format!(
-                "storage.backend must be gcs|azure|s3|local, got {backend:?}"
+                "storage.backend must be {choices}, got {backend:?}"
             ));
+        }
+    }
+    if backend.and_then(Value::as_str) == Some("azure") {
+        let account = storage
+            .and_then(|s| s.get("azure"))
+            .and_then(Value::as_object)
+            .and_then(|azure| azure.get("account"));
+        let container = storage
+            .and_then(|s| s.get("azure"))
+            .and_then(Value::as_object)
+            .and_then(|azure| azure.get("container"));
+        if !account.is_some_and(py_truthy) {
+            problems.push(
+                "storage.backend=azure needs storage.azure.account; provision the Azure storage \
+                 account before cutover"
+                    .to_string(),
+            );
+        }
+        if !container.is_some_and(py_truthy) {
+            problems.push("storage.backend=azure needs storage.azure.container".to_string());
         }
     }
     if backend.and_then(Value::as_str) == Some("gcs") {
@@ -244,19 +302,220 @@ pub fn validate(data: &Value) -> Vec<String> {
             problems.push("storage.backend=s3 needs storage.s3.bucket".to_string());
         }
     }
+    let backup = storage
+        .and_then(|s| s.get("backup"))
+        .and_then(Value::as_object);
+    let backup_backend = backup
+        .and_then(|value| value.get("backend"))
+        .and_then(Value::as_str);
+    if let Some(kind) = backup_backend {
+        if crate::capabilities::configurable_variant(
+            crate::capabilities::CapabilityKind::Storage,
+            kind,
+        )
+        .is_none()
+        {
+            let choices =
+                crate::capabilities::configurable_ids(crate::capabilities::CapabilityKind::Storage)
+                    .collect::<Vec<_>>()
+                    .join("|");
+            problems.push(format!(
+                "storage.backup.backend must be {choices}, got {kind:?}"
+            ));
+        }
+    }
+    if backend.and_then(Value::as_str) == Some("azure") && backup_backend != Some("s3") {
+        problems.push(
+            "Azure cutover requires storage.backup.backend=s3; the replica is read fallback only \
+             and is never promoted automatically"
+                .to_string(),
+        );
+    }
+    if backup_backend == Some("s3") {
+        let bucket = backup.and_then(|value| value.get("bucket"));
+        let region = backup
+            .and_then(|value| value.get("s3"))
+            .and_then(Value::as_object)
+            .and_then(|value| value.get("region"));
+        if !bucket.is_some_and(py_truthy) {
+            problems.push(
+                "storage.backup.backend=s3 needs storage.backup.bucket; provision the bucket \
+                 before deployment"
+                    .to_string(),
+            );
+        }
+        if !region.is_some_and(py_truthy) {
+            problems.push("storage.backup.backend=s3 needs storage.backup.s3.region".to_string());
+        }
+    }
     if let Some(providers) = root.get("providers").filter(|p| !p.is_null()) {
         match providers.as_array() {
             Some(list) if !list.is_empty() => {
                 for provider in list {
-                    let ok = provider
-                        .as_str()
-                        .is_some_and(|p| matches!(p, "gcp" | "azure" | "aws" | "local"));
+                    let ok = provider.as_str().is_some_and(|name| {
+                        crate::capabilities::configurable_variant(
+                            crate::capabilities::CapabilityKind::Compute,
+                            name,
+                        )
+                        .is_some()
+                    });
                     if !ok {
                         problems.push(format!("unknown provider: {provider:?}"));
                     }
                 }
             }
             _ => problems.push("providers must be a non-empty list".to_string()),
+        }
+    }
+    let configured_providers = root
+        .get("providers")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let disabled_providers = root
+        .get("providers_disabled")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    for disabled in disabled_providers {
+        let Some(name) = disabled.as_str() else {
+            problems.push("providers_disabled entries must be provider names".to_string());
+            continue;
+        };
+        if !configured_providers
+            .iter()
+            .any(|provider| provider.as_str() == Some(name))
+        {
+            problems.push(format!(
+                "providers_disabled contains {name:?}, but providers does not"
+            ));
+        }
+    }
+    if !configured_providers.is_empty()
+        && configured_providers.iter().all(|provider| {
+            disabled_providers
+                .iter()
+                .any(|disabled| disabled == provider)
+        })
+    {
+        problems.push("providers_disabled fences every configured provider".to_string());
+    }
+    let azure_provider = configured_providers
+        .iter()
+        .any(|provider| provider.as_str() == Some("azure"))
+        && !disabled_providers
+            .iter()
+            .any(|provider| provider.as_str() == Some("azure"));
+    if azure_provider {
+        for (key, remedy) in [
+            (
+                "azure.subscription_id",
+                "azure provider needs azure.subscription_id for ARM",
+            ),
+            (
+                "azure.vm_identity_id",
+                "azure provider needs azure.vm_identity_id; provision a user-assigned identity \
+                 with Blob Data Contributor and VM self-delete rights",
+            ),
+            (
+                "azure.ssh_public_key",
+                "azure provider needs azure.ssh_public_key for VM creation",
+            ),
+        ] {
+            if !get_in(root, key).is_some_and(py_truthy) {
+                problems.push(remedy.to_string());
+            }
+        }
+        if !get_in(root, "deployment.id").is_some_and(py_truthy) {
+            problems.push(
+                "Azure control plane needs deployment.id for dashboard RLS and trusted-proxy \
+                 deployment binding"
+                    .to_string(),
+            );
+        }
+        let release_base = get_in(root, "release.base_url")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if release_base.is_empty() {
+            problems.push(
+                "Azure control plane needs explicit release.base_url; publish the Rust release \
+                 tree before cutover"
+                    .to_string(),
+            );
+        } else if !release_base.starts_with("https://") {
+            problems.push("release.base_url must be HTTPS for Azure cutover".to_string());
+        }
+        for (key, remedy) in [
+            (
+                "secrets.skarbiec.url",
+                "Azure control plane needs secrets.skarbiec.url to resolve service credentials",
+            ),
+            (
+                "secrets.skarbiec.consumer",
+                "Azure control plane needs a dedicated secrets.skarbiec.consumer",
+            ),
+            (
+                "secrets.skarbiec.token_file",
+                "Azure control plane needs an owner-only secrets.skarbiec.token_file",
+            ),
+        ] {
+            if !get_in(root, key).is_some_and(py_truthy) {
+                problems.push(remedy.to_string());
+            }
+        }
+    }
+    if azure_provider
+        && get_in(root, "secrets.skarbiec.consumer").and_then(Value::as_str)
+            != Some("stado-control-plane")
+    {
+        problems.push(
+            "Azure coordinator/dashboard must use the dedicated read-only \
+             secrets.skarbiec.consumer stado-control-plane"
+                .to_string(),
+        );
+    }
+    if azure_provider {
+        let agent_url = get_in(root, "agent.skarbiec.url")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let agent_consumer = get_in(root, "agent.skarbiec.consumer")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !agent_url.starts_with("https://") {
+            problems.push(
+                "agent.skarbiec.url must be an HTTPS Skarbiec endpoint reachable from Azure VMs"
+                    .to_string(),
+            );
+        }
+        if agent_consumer != "stado-azure-agent" {
+            problems.push(
+                "agent.skarbiec.consumer must be stado-azure-agent with exact read scopes \
+                 matching agent.skarbiec.items"
+                    .to_string(),
+            );
+        }
+        if !get_in(root, "agent.skarbiec.token_file").is_some_and(py_truthy) {
+            problems.push(
+                "agent.skarbiec.token_file is required; Stado cannot dispatch Azure VMs \
+                 without the operator-provided owner-only grant"
+                    .to_string(),
+            );
+        }
+        let agent_items = get_in(root, "agent.skarbiec.items")
+            .and_then(Value::as_array)
+            .filter(|items| !items.is_empty());
+        if !agent_items.is_some_and(|items| {
+            items
+                .iter()
+                .all(|item| item.as_str().is_some_and(|name| !name.is_empty()))
+                && (backup_backend != Some("s3")
+                    || items.iter().any(|item| item.as_str() == Some("stado-aws")))
+        }) {
+            problems.push(
+                "agent.skarbiec.items must be a non-empty string array and include stado-aws \
+                 when S3 backup is enabled; mint stado-azure-agent with exactly these scopes"
+                    .to_string(),
+            );
         }
     }
     let port = root
@@ -275,16 +534,17 @@ pub fn validate(data: &Value) -> Vec<String> {
 /// A commented starting-point config, mirroring Python `template()`.
 pub fn template() -> Value {
     serde_json::json!({
-        "project": "wisent-480400",
-        "regions": ["us-central1"],
+        "providers": ["azure", "aws", "gcp"],
+        "providers_disabled": ["aws", "gcp"],
         "storage": {
-            "backend": "gcs",
-            "gcs": {"bucket": "stado"},
-            "azure": {"account": "", "container": "wisent-compute"},
-            "s3": {"bucket": "", "region": "us-east-1"},
-            "local": {"path": "~/.stado/local-storage"},
+            "backend": "azure",
+            "azure": {"account": "<storage-account>", "container": "stado"},
+            "backup": {
+                "backend": "s3",
+                "bucket": "<backup-bucket>",
+                "s3": {"region": "<backup-region>"}
+            },
         },
-        "providers": ["gcp"],
         "azure": {
             "subscription_id": "",
             "resource_group": "wisent-compute",
@@ -295,6 +555,33 @@ pub fn template() -> Value {
             "image_urn": "microsoft-dsvm:ubuntu-hpc:2204:latest",
             "vm_username": "wisent",
             "ssh_public_key": "",
+            "vm_identity_id": "<managed-identity-resource-id>",
+        },
+        "deployment": {"id": "azure-control-plane"},
+        "release": {
+            "base_url": "https://<storage-account>.blob.core.windows.net/stado/releases/stado"
+        },
+        "secrets": {
+            "skarbiec": {
+                "url": "<control-plane-skarbiec-url>",
+                "consumer": "stado-control-plane",
+                "token_file": "~/.stado/control-plane-skarbiec-token"
+            }
+        },
+        "agent": {
+            "skarbiec": {
+                "url": "https://<skarbiec-host>",
+                "consumer": "stado-azure-agent",
+                "token_file": "~/.stado/azure-agent-skarbiec-token",
+                "items": [
+                    "compute-marketplace-agent",
+                    "stado-aws",
+                    "stado-huggingface",
+                    "stado-model-router",
+                    "stado-wandb",
+                    "trading-autonomy-web-runtime"
+                ]
+            }
         },
         "dashboard": {"bind": "127.0.0.1", "port": 8765, "refresh_seconds": 10},
         "alerts": {"topic": ""},

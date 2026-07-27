@@ -9,7 +9,10 @@ use serde_json::{json, Map, Value};
 use super::{py_str_repr, CommandSpec, DeployError, Runner};
 use crate::targets::{ComputeTarget, Registry};
 
-fn resolve_target<'a>(registry: &'a Registry, target_name: &str) -> Result<&'a ComputeTarget, DeployError> {
+fn resolve_target<'a>(
+    registry: &'a Registry,
+    target_name: &str,
+) -> Result<&'a ComputeTarget, DeployError> {
     let Some(target) = registry.lookup(target_name) else {
         return Err(DeployError(format!(
             "target {} is not in the canonical registry",
@@ -72,7 +75,11 @@ pub async fn reboot_host(target_name: &str, runner: &Runner) -> Result<Value, De
     report.insert("exit_code".to_string(), json!(output.code));
     report.insert(
         "status".to_string(),
-        json!(if output.ok() { "reboot_requested" } else { "failed" }),
+        json!(if output.ok() {
+            "reboot_requested"
+        } else {
+            "failed"
+        }),
     );
     if !output.ok() {
         // The common failure is sudo requiring a password; surface the last
