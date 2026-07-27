@@ -13,19 +13,20 @@ use std::time::Instant;
 use crate::catalog::GPU_SIZING;
 use crate::config_file::{expand_tilde, resolve as cfg, resolve_list as cfg_list};
 
-static PROJECT: LazyLock<String> = LazyLock::new(|| cfg("GCP_PROJECT", "project", "wisent-480400"));
-static BUCKET: LazyLock<String> = LazyLock::new(|| cfg("WC_BUCKET", "storage.gcs.bucket", "stado"));
+static PROJECT: LazyLock<String> = LazyLock::new(|| cfg("GCP_PROJECT", "project", ""));
+static BUCKET: LazyLock<String> = LazyLock::new(|| cfg("WC_BUCKET", "storage.gcs.bucket", ""));
 static REGION: LazyLock<String> = LazyLock::new(|| cfg("GCP_REGION", "region", "us-central1"));
 static ALERTS_TOPIC: LazyLock<String> = LazyLock::new(|| {
     std::env::var("WC_ALERTS_TOPIC")
         .ok()
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| {
-            cfg(
-                "",
-                "alerts.topic",
-                &format!("projects/{}/topics/stado-alerts", project()),
-            )
+            let default = if project().is_empty() {
+                String::new()
+            } else {
+                format!("projects/{}/topics/stado-alerts", project())
+            };
+            cfg("", "alerts.topic", &default)
         })
 });
 
@@ -254,9 +255,9 @@ static DASHBOARD_AGENT_FRESH_SECONDS: LazyLock<i64> = LazyLock::new(|| {
     )
 });
 
-/// Dashboard HTTP server bind address (env `WC_DASHBOARD_BIND`). Bind to
-/// all interfaces so a tailscale serve front-end can reach it; the host is
-/// firewalled to the tailnet anyway.
+/// Dashboard HTTP server bind address (env `WC_DASHBOARD_BIND`). Azure
+/// cutover keeps this on loopback behind the TLS reverse proxy; never bind a
+/// private dashboard route directly to a public interface.
 pub fn dashboard_bind() -> &'static str {
     DASHBOARD_BIND.as_str()
 }
@@ -277,14 +278,13 @@ pub fn dashboard_agent_fresh_seconds() -> i64 {
     *DASHBOARD_AGENT_FRESH_SECONDS
 }
 
-/// Deployment gate for the dashboard (env `STADO_DEPLOYMENT_ID`), trimmed.
-/// When set, the dashboard requires Supabase RLS Bearer auth and relaxes
-/// the Host-header DNS-rebinding guard for authenticated HTTPS reverse
-/// proxies. Read per call (Python reads `os.environ` at request time), not
-/// cached in a `LazyLock`.
+/// Deployment gate for the dashboard and object gateway (env
+/// `STADO_DEPLOYMENT_ID`, config key `deployment.id`), trimmed.
+///
+/// Read per call so a process-level override remains dynamic; the config
+/// file itself is cached by [`crate::config_file`].
 pub fn stado_deployment_id() -> String {
-    std::env::var("STADO_DEPLOYMENT_ID")
-        .unwrap_or_default()
+    cfg("STADO_DEPLOYMENT_ID", "deployment.id", "")
         .trim()
         .to_string()
 }
@@ -443,29 +443,39 @@ pub fn aws_ami_id() -> &'static str {
     AWS_AMI_ID.as_str()
 }
 
-static WC_PROVIDERS: LazyLock<Vec<String>> =
-    LazyLock::new(|| cfg_list("WC_PROVIDERS", "providers", &["gcp"]));
+static WC_DISABLED_PROVIDERS: LazyLock<Vec<String>> =
+    LazyLock::new(|| cfg_list("WC_DISABLED_PROVIDERS", "providers_disabled", &[]));
+static WC_PROVIDERS: LazyLock<Vec<String>> = LazyLock::new(|| {
+    let mut providers = cfg_list("WC_PROVIDERS", "providers", &[]);
+    providers.retain(|provider| !WC_DISABLED_PROVIDERS.contains(provider));
+    providers
+});
 
 /// Multi-provider dispatch (env `WC_PROVIDERS`, comma-separated).
-/// Coordinator and Cloud Function tick iterate this list, calling
+/// Coordinator and Cloud Function ticks iterate this list, calling
 /// check_running_jobs / reap_dead_agents / schedule_queued_jobs per
 /// provider. A provider whose constructor throws (creds missing) is logged
-/// and skipped. Default keeps single-cloud GCP behavior.
+/// and skipped. An unconfigured deployment has no provider rather than a
+/// hidden GCP dependency.
 pub fn wc_providers() -> &'static [String] {
     &WC_PROVIDERS
 }
 
+/// Explicitly disabled entries from the configured provider preference order.
+/// Keeping this separate from [`wc_providers`] lets deployment config explain
+/// why a provisioned provider is fenced without letting the scheduler call it.
+pub fn wc_disabled_providers() -> &'static [String] {
+    &WC_DISABLED_PROVIDERS
+}
+
 static WC_STORAGE_BACKEND: LazyLock<String> =
-    LazyLock::new(|| cfg("WC_STORAGE_BACKEND", "storage.backend", "gcs"));
+    LazyLock::new(|| cfg("WC_STORAGE_BACKEND", "storage.backend", ""));
 static WC_AZURE_STORAGE_ACCOUNT: LazyLock<String> =
     LazyLock::new(|| cfg("WC_AZURE_STORAGE_ACCOUNT", "storage.azure.account", ""));
-/// Compiled-in default for [`wc_azure_container`]. Exported for the same
-/// reason as [`DEFAULT_RELEASE_BASE_URL`]: a caller has to be able to tell
-/// a configured container from the default one. The name predates the
-/// rename to `stado`, so on an azure deployment the default silently reads
-/// an empty container rather than the queue — which is exactly what
-/// `crate::doctor` warns about.
-pub const DEFAULT_AZURE_CONTAINER: &str = "wisent-compute";
+/// An Azure deployment must name its container explicitly. Exported so
+/// doctor/deploy preflight can distinguish configured state from the
+/// provider-neutral empty default.
+pub const DEFAULT_AZURE_CONTAINER: &str = "";
 static WC_AZURE_CONTAINER: LazyLock<String> = LazyLock::new(|| {
     cfg(
         "WC_AZURE_CONTAINER",
@@ -552,10 +562,10 @@ pub fn wc_local_storage_path() -> &'static str {
 
 /// Disaster-recovery storage backend. Empty means no backup is configured.
 ///
-/// This is intentionally not an automatic read fallback: queue state is
-/// mutable and transparent fallback can dispatch the same job from two
-/// divergent stores. `stado blast-radius` uses this endpoint to report
-/// backup coverage before an explicit, fenced promotion.
+/// Queue mutations commit to the configured primary and are then mirrored
+/// best-effort to this endpoint. Reads consult it only when the primary
+/// returns an error; an authoritative primary `absent` result never falls
+/// through, so the backup cannot become a second writer or dispatch queue.
 pub fn wc_backup_storage_backend() -> &'static str {
     WC_BACKUP_STORAGE_BACKEND.as_str()
 }
@@ -585,13 +595,10 @@ pub fn wc_backup_local_storage_path() -> &'static str {
     WC_BACKUP_LOCAL_STORAGE_PATH.as_str()
 }
 
-/// Compiled-in default for [`release_base_url`]: the public GCS endpoint
-/// the release pipeline has always published to. Exported so callers that
-/// PROPAGATE the channel to another machine (`deploy::bootstrap`,
-/// `deploy/stado-up.sh`) can tell a configured channel from the default
-/// and forward only the former, keeping a default install byte-identical.
-pub const DEFAULT_RELEASE_BASE_URL: &str =
-    "https://storage.googleapis.com/wisent-compute/releases/stado";
+/// No compiled or provider-derived release origin. An active deployment must
+/// configure one explicitly so a typo in its storage locator cannot silently
+/// install from a different container or cloud.
+pub const DEFAULT_RELEASE_BASE_URL: &str = "";
 
 static RELEASE_BASE_URL: LazyLock<String> = LazyLock::new(|| {
     cfg(
@@ -606,20 +613,14 @@ static RELEASE_BASE_URL: LazyLock<String> = LazyLock::new(|| {
 /// Base URL of the binary release channel (env `WC_RELEASE_BASE_URL`,
 /// config key `release.base_url`, trailing slash stripped).
 ///
-/// Deliberately NOT derived from [`wc_storage_backend`] or [`bucket`]:
-/// the release tree is published independently of the queue, and the
-/// layout underneath is fixed and backend-agnostic — a `latest.json`
-/// pointer plus a per-version, per-platform directory holding the
-/// binaries and their checksum manifest. Anything that can serve those
-/// paths over HTTPS is a valid channel.
+/// The release tree is independent of the queue layout: any HTTPS origin
+/// serving `latest.json` and `<version>/<platform>/` is valid. Azure cutover
+/// config points explicitly at its release container; [`crate::self_update`]
+/// authenticates Azure Blob with the shared token chain and dispatched VMs
+/// use their managed identity.
 ///
-/// The default is the public GCS endpoint the release pipeline has always
-/// published to, so an unconfigured install is unchanged. An Azure
-/// deployment points this at
-/// `https://<account>.blob.core.windows.net/<container>/releases/stado`,
-/// which [`crate::self_update`] fetches with a storage-scoped bearer
-/// token and the agent startup templates fetch with the VM's managed
-/// identity.
+/// An empty result is intentionally invalid and is reported by doctor/deploy
+/// preflight rather than silently selecting a cloud provider.
 pub fn release_base_url() -> &'static str {
     RELEASE_BASE_URL.as_str()
 }
@@ -641,8 +642,79 @@ static AZURE_BILLING_SECRET: LazyLock<String> = LazyLock::new(|| {
     std::env::var("WC_AZURE_BILLING_SECRET")
         .unwrap_or_else(|_| "wisent-azure-billing-sp".to_string())
 });
-static AZURE_KEY_VAULT_URL: LazyLock<String> =
-    LazyLock::new(|| std::env::var("WC_AZURE_KEY_VAULT_URL").unwrap_or_default());
+static SKARBIEC_URL: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "WC_SKARBIEC_URL",
+        "secrets.skarbiec.url",
+        "http://127.0.0.1:8787",
+    )
+});
+static SKARBIEC_CONSUMER: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "WC_SKARBIEC_CONSUMER",
+        "secrets.skarbiec.consumer",
+        "stado-control-plane",
+    )
+});
+static SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
+    let default = std::env::var("HOME")
+        .map(|home| {
+            std::path::Path::new(&home)
+                .join(".stado")
+                .join("control-plane-skarbiec-token")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .unwrap_or_default();
+    expand_tilde(&cfg(
+        "WC_SKARBIEC_TOKEN_FILE",
+        "secrets.skarbiec.token_file",
+        &default,
+    ))
+    .to_string_lossy()
+    .into_owned()
+});
+static AGENT_SKARBIEC_URL: LazyLock<String> =
+    LazyLock::new(|| cfg("WC_AGENT_SKARBIEC_URL", "agent.skarbiec.url", ""));
+static AGENT_SKARBIEC_CONSUMER: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "WC_AGENT_SKARBIEC_CONSUMER",
+        "agent.skarbiec.consumer",
+        "stado-azure-agent",
+    )
+});
+static AGENT_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
+    let default = std::env::var("HOME")
+        .map(|home| {
+            std::path::Path::new(&home)
+                .join(".stado")
+                .join("azure-agent-skarbiec-token")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .unwrap_or_default();
+    expand_tilde(&cfg(
+        "WC_AGENT_SKARBIEC_TOKEN_FILE",
+        "agent.skarbiec.token_file",
+        &default,
+    ))
+    .to_string_lossy()
+    .into_owned()
+});
+static AGENT_SKARBIEC_ITEMS: LazyLock<Vec<String>> = LazyLock::new(|| {
+    cfg_list(
+        "WC_AGENT_SKARBIEC_ITEMS",
+        "agent.skarbiec.items",
+        &[
+            "compute-marketplace-agent",
+            "stado-aws",
+            "stado-huggingface",
+            "stado-model-router",
+            "stado-wandb",
+            "trading-autonomy-web-runtime",
+        ],
+    )
+});
 
 /// BigQuery billing export dataset (env `WC_BILLING_DATASET`).
 ///
@@ -672,20 +744,50 @@ pub fn billing_net_alert_usd() -> f64 {
     *BILLING_NET_ALERT_USD
 }
 
-/// Azure Key Vault secret holding the Azure billing service principal as
-/// JSON {"tenant_id","client_id","client_secret", and one of
-/// "billing_account"/"billing_profile" or "subscription_id"} (secret name
-/// env `WC_AZURE_BILLING_SECRET`). The value is never read from a file,
-/// process environment, queue blob, or another cloud's secret manager.
+/// Skarbiec item holding the Azure billing service principal as
+/// `{"tenant_id","client_id","client_secret", ...}`. The item name is selected
+/// by `WC_AZURE_BILLING_SECRET`; its value has no alternative source.
 pub fn azure_billing_secret() -> &'static str {
     AZURE_BILLING_SECRET.as_str()
 }
 
-/// Azure Key Vault data-plane URL (env `WC_AZURE_KEY_VAULT_URL`), for
-/// example `https://wisent-stado-kv.vault.azure.net`. Authentication uses a
-/// managed identity or the current Azure CLI identity, never a client secret.
-pub fn azure_key_vault_url() -> &'static str {
-    AZURE_KEY_VAULT_URL.as_str()
+/// Loopback URL of the separate Skarbiec service.
+pub fn skarbiec_url() -> &'static str {
+    SKARBIEC_URL.as_str()
+}
+
+/// Scoped Skarbiec grant consumer name.
+pub fn skarbiec_consumer() -> &'static str {
+    SKARBIEC_CONSUMER.as_str()
+}
+
+/// Owner-only file containing the scoped Skarbiec grant.
+pub fn skarbiec_token_file() -> &'static str {
+    SKARBIEC_TOKEN_FILE.as_str()
+}
+
+/// Skarbiec endpoint reachable by workload agents. Cloud agents require HTTPS;
+/// a device-local agent may leave this empty and use [`skarbiec_url`].
+pub fn agent_skarbiec_url() -> &'static str {
+    AGENT_SKARBIEC_URL.as_str()
+}
+
+/// Consumer name of the dedicated workload-agent grant. Its exact read scopes
+/// are minted from the workloads this deployment is allowed to execute.
+pub fn agent_skarbiec_consumer() -> &'static str {
+    AGENT_SKARBIEC_CONSUMER.as_str()
+}
+
+/// Owner-only file containing the workload-agent grant. Cloud deployment
+/// delivers the token to VM tmpfs; the local control plane uses a separate
+/// device grant rather than reusing its coordinator grant.
+pub fn agent_skarbiec_token_file() -> &'static str {
+    AGENT_SKARBIEC_TOKEN_FILE.as_str()
+}
+/// Exact Skarbiec items visible to workload agents. The coordinator verifies
+/// that the scoped grant can list neither fewer nor more items before dispatch.
+pub fn agent_skarbiec_items() -> &'static [String] {
+    &AGENT_SKARBIEC_ITEMS
 }
 
 /// In-process cache TTL for the GCS-fetched model policy (Python

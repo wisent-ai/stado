@@ -1,6 +1,33 @@
 import Combine
 import Foundation
 
+enum DashboardEndpointPreference {
+    static let key = "dashboardBaseURL"
+
+    private static let migrationKey = "dashboardEndpointSelectionMigrated"
+    private static let legacyLocalDefaults = [
+        "http://127.0.0.1:8765",
+        "http://127.0.0.1:8765/",
+    ]
+
+    static func load(from defaults: UserDefaults) -> String {
+        let stored = defaults.string(forKey: key) ?? ""
+        guard !defaults.bool(forKey: migrationKey) else { return stored }
+
+        defaults.set(true, forKey: migrationKey)
+        if legacyLocalDefaults.contains(stored) {
+            defaults.removeObject(forKey: key)
+            return ""
+        }
+        return stored
+    }
+
+    static func save(_ value: String, to defaults: UserDefaults) {
+        defaults.set(value, forKey: key)
+        defaults.set(true, forKey: migrationKey)
+    }
+}
+
 @MainActor
 final class OperationsStore: ObservableObject {
     @Published private(set) var snapshot: DashboardSnapshot?
@@ -9,30 +36,37 @@ final class OperationsStore: ObservableObject {
     @Published private(set) var lastUpdated: Date?
     @Published private(set) var dashboardURLString: String
 
-    private static let dashboardURLKey = "dashboardBaseURL"
-
     private let defaults: UserDefaults
     private let client: OperationsClient
     private var requestGeneration = 0
+    private var authorizationToken: String?
 
     init(defaults: UserDefaults = .standard, client: OperationsClient = OperationsClient()) {
         self.defaults = defaults
         self.client = client
-        dashboardURLString = defaults.string(forKey: Self.dashboardURLKey) ?? OperationsDashboardAddress.localDefault
+        dashboardURLString = DashboardEndpointPreference.load(from: defaults)
     }
 
     var dashboardAddress: OperationsDashboardAddress? {
         try? OperationsDashboardAddress(dashboardURLString)
     }
 
+    var isConfigured: Bool {
+        dashboardAddress != nil
+    }
+
     var isShowingStaleSnapshot: Bool {
         snapshot != nil && errorMessage != nil
+    }
+
+    func configureAuthorization(token: String?) {
+        authorizationToken = token
     }
 
     func refresh() async {
         guard !isRefreshing else { return }
         guard let address = dashboardAddress else {
-            errorMessage = OperationsClientError.invalidDashboardURL.localizedDescription
+            errorMessage = nil
             return
         }
         let generation = requestGeneration
@@ -44,7 +78,10 @@ final class OperationsStore: ObservableObject {
         }
 
         do {
-            let newSnapshot = try await client.fetchState(from: address)
+            let newSnapshot = try await client.fetchState(
+                from: address,
+                authorizationToken: authorizationToken
+            )
             guard requestGeneration == generation, !Task.isCancelled else { return }
             snapshot = newSnapshot
             lastUpdated = Date()
@@ -59,11 +96,17 @@ final class OperationsStore: ObservableObject {
         }
     }
 
+    func testDashboardURL(_ value: String) async throws -> String {
+        let address = try OperationsDashboardAddress(value)
+        _ = try await client.fetchState(from: address, authorizationToken: authorizationToken)
+        return address.displayString
+    }
+
     func saveDashboardURL(_ value: String) throws {
         let address = try OperationsDashboardAddress(value)
         requestGeneration &+= 1
         dashboardURLString = address.displayString
-        defaults.set(address.displayString, forKey: Self.dashboardURLKey)
+        DashboardEndpointPreference.save(address.displayString, to: defaults)
         snapshot = nil
         lastUpdated = nil
         errorMessage = nil

@@ -1,5 +1,7 @@
 //! `stado submit` — port of the `submit` command in `stado/cli.py`.
 
+use std::collections::BTreeMap;
+
 use clap::Args;
 use serde_json::{Map, Value};
 
@@ -13,8 +15,8 @@ pub struct SubmitArgs {
     /// Shell command the job runs.
     command: String,
 
-    /// Preferred provider (gcp/azure/aws/local). With --any-provider this is just a hint.
-    #[arg(long, default_value = "gcp")]
+    /// Optional provider constraint (gcp/azure/aws/local); Stado chooses when omitted.
+    #[arg(long, default_value = "")]
     provider: String,
     /// File with commands
     #[arg(long)]
@@ -102,6 +104,9 @@ pub struct SubmitArgs {
     /// Pinned artifact input as NAME=TYPE/NAMESPACE/NAME@VERSION_OR_ALIAS.
     #[arg(long = "input-artifact")]
     input_artifacts: Vec<String>,
+    /// Scoped workload secret as ENV_NAME=SKARBIEC_ITEM#FIELD.
+    #[arg(long = "secret-env")]
+    secret_env: Vec<String>,
     /// Apply a named profile from the bundled profiles dir (or
     /// $WC_PROFILES_DIR). CLI flags override profile fields.
     /// Run `stado profiles` to list available profiles.
@@ -184,6 +189,46 @@ async fn resolve_input_artifacts(
         );
     }
     Ok((requested, resolved))
+}
+pub(crate) fn parse_secret_env(
+    values: &[String],
+) -> Result<BTreeMap<String, crate::models::JobSecretRef>, CmdError> {
+    let env_re = regex::Regex::new(r"^[A-Za-z_][A-Za-z0-9_]*$").expect("static regex compiles");
+    let part_re =
+        regex::Regex::new(r"^[A-Za-z0-9][A-Za-z0-9._-]*$").expect("static regex compiles");
+    let mut parsed = BTreeMap::new();
+    for value in values {
+        let Some((env_name, reference)) = value.split_once('=') else {
+            return Err(CmdError::click(format!(
+                "--secret-env must be ENV_NAME=SKARBIEC_ITEM#FIELD: {value:?}"
+            )));
+        };
+        let Some((item, field)) = reference.split_once('#') else {
+            return Err(CmdError::click(format!(
+                "--secret-env must be ENV_NAME=SKARBIEC_ITEM#FIELD: {value:?}"
+            )));
+        };
+        if !env_re.is_match(env_name) || !part_re.is_match(item) || !part_re.is_match(field) {
+            return Err(CmdError::click(format!(
+                "--secret-env contains an unsafe environment, item, or field name: {value:?}"
+            )));
+        }
+        if parsed
+            .insert(
+                env_name.to_string(),
+                crate::models::JobSecretRef {
+                    item: item.to_string(),
+                    field: field.to_string(),
+                },
+            )
+            .is_some()
+        {
+            return Err(CmdError::click(format!(
+                "duplicate --secret-env variable: {env_name}"
+            )));
+        }
+    }
+    Ok(parsed)
 }
 
 /// The submit kwargs the CLI passes, as a JSON map keyed by the Python
@@ -274,6 +319,7 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
         .collect();
     let (requested_artifacts, resolved_artifacts) =
         resolve_input_artifacts(&args.input_artifacts).await?;
+    let secret_env = parse_secret_env(&args.secret_env)?;
 
     let mut provider = args.provider.clone();
     let mut gpu_type = args.gpu_type.clone();
@@ -376,6 +422,7 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
         yield_command: args.on_yield.clone(),
         yield_grace_seconds: args.yield_grace,
         pinned_host,
+        secret_env,
         input_artifacts: requested_artifacts,
         resolved_input_artifacts: resolved_artifacts,
         ..Default::default()
@@ -389,11 +436,7 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
         println!("Job ID: {}", jobs[0].job_id);
     }
     println!("  submitted {}/{} jobs", n, commands.len());
-    let mode = if super::api_key().is_empty() {
-        "GCS"
-    } else {
-        "API"
-    };
+    let mode = "Stado";
     let mut flags: Vec<String> = Vec::new();
     if options.preemptible {
         flags.push("spot".into());
@@ -421,6 +464,9 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
     }
     if !options.pre_command.is_empty() {
         flags.push("pre_cmd".into());
+    }
+    if !options.secret_env.is_empty() {
+        flags.push(format!("secrets={}", options.secret_env.len()));
     }
     if !output_uri.is_empty() {
         flags.push(format!("out={output_uri}"));

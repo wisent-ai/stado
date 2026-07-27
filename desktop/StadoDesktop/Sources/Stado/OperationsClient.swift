@@ -2,8 +2,6 @@ import Foundation
 import Network
 
 struct OperationsDashboardAddress: Equatable, Sendable {
-    static let localDefault = "http://127.0.0.1:8765"
-
     let baseURL: URL
 
     init(_ value: String) throws {
@@ -92,11 +90,17 @@ actor OperationsClient {
         session = URLSession(configuration: configuration)
     }
 
-    func fetchState(from address: OperationsDashboardAddress) async throws -> DashboardSnapshot {
+    func fetchState(
+        from address: OperationsDashboardAddress,
+        authorizationToken: String? = nil
+    ) async throws -> DashboardSnapshot {
         var request = URLRequest(url: address.stateURL)
         request.httpMethod = "GET"
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let authorizationToken, !authorizationToken.isEmpty {
+            request.setValue("Bearer \(authorizationToken)", forHTTPHeaderField: "Authorization")
+        }
 
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {

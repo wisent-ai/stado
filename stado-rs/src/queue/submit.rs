@@ -1,21 +1,19 @@
-//! Job submission: via compute.wisent.com API or direct queue storage.
+//! Job submission through compute.wisent.com or direct queue storage.
 //!
-//! Port of `stado/queue/submit.py`. The API path (COMPUTE_API_KEY set)
-//! POSTs to `{COMPUTE_API}/api/v1/instances`; the queue path renders the
-//! startup script from the bundled templates, writes `scripts/<id>.sh` +
-//! `queue/<id>.json` and (for batches) the immutable `runs/<run_id>.json`
-//! manifest.
+//! The compute API key and repository/provider tokens are resolved from
+//! Skarbiec. The API path posts to `{COMPUTE_API}/api/v1/instances`; the queue
+//! path renders the startup script, writes it to internal queue storage and
+//! the provider-neutral object namespace, then writes the queued job record.
 
 use std::collections::BTreeMap;
 
-use base64::Engine;
 use futures::StreamExt;
 use serde_json::{Map, Value};
 
 use crate::catalog::GPU_SIZING;
 use crate::config;
 use crate::models::{
-    activation_extraction_must_share_gpu, deprecated_activation_command_reason, Job,
+    activation_extraction_must_share_gpu, deprecated_activation_command_reason, Job, JobSecretRef,
 };
 use crate::queue::runs::{generate_run_id, write_run_manifest, RunManifest};
 use crate::queue::storage::JobStorage;
@@ -23,26 +21,18 @@ use crate::queue::StorageError;
 
 /// Directory the startup-script templates ship in (Python `TEMPLATE_DIR` =
 /// `stado/templates/`).
+#[cfg(test)]
 fn template_dir() -> std::path::PathBuf {
     crate::data_dir().join("templates")
 }
 
-/// Submission failure. [`SubmitError::Validation`] maps to Python
-/// `ValueError` (yieldable contract, deprecated entrypoint),
-/// [`SubmitError::Api`] to the `RuntimeError` raised for non-2xx API
-/// responses.
+/// Submission failure from validation, queue storage, or local rendering.
 #[derive(Debug, thiserror::Error)]
 pub enum SubmitError {
     #[error("{0}")]
     Validation(String),
-    #[error("{0}")]
-    Api(String),
     #[error(transparent)]
     Storage(#[from] StorageError),
-    #[error(transparent)]
-    Http(#[from] reqwest::Error),
-    #[error(transparent)]
-    Json(#[from] serde_json::Error),
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -77,16 +67,17 @@ pub struct SubmitOptions {
     pub yield_command: String,
     pub yield_grace_seconds: i64,
     pub pinned_host: String,
+    pub secret_env: BTreeMap<String, JobSecretRef>,
     pub input_artifacts: Map<String, Value>,
     pub resolved_input_artifacts: Map<String, Value>,
 }
 
 impl Default for SubmitOptions {
-    /// Python `submit_job` defaults (`provider="gcp"`, `repo_extras="train"`,
-    /// `yield_grace_seconds=120`, everything else empty/zero/false).
+    /// Stado defaults: no provider pin, `repo_extras="train"`,
+    /// `yield_grace_seconds=120`, everything else empty/zero/false.
     fn default() -> Self {
         Self {
-            provider: "gcp".into(),
+            provider: String::new(),
             batch_id: String::new(),
             bucket: String::new(),
             preemptible: false,
@@ -111,13 +102,14 @@ impl Default for SubmitOptions {
             yield_command: String::new(),
             yield_grace_seconds: 120,
             pinned_host: String::new(),
+            secret_env: BTreeMap::new(),
             input_artifacts: Map::new(),
             resolved_input_artifacts: Map::new(),
         }
     }
 }
 
-/// The SKU the CPU branch of [`submit_via_gcs`] writes: no accelerator was
+/// The SKU the CPU branch of [`submit_to_queue`] writes: no accelerator was
 /// asked for and the command sized to nothing. Named because it is also a
 /// *readback* marker — `cli::job` recognizes a job that came out of that
 /// branch by this machine_type, and must then resubmit with the routing
@@ -130,19 +122,11 @@ pub fn generate_job_id() -> String {
     hex::encode(&uuid::Uuid::new_v4().as_bytes()[..4])
 }
 
-/// COMPUTE_API_KEY env var, stripped (Python `_api_key()` in cli.py and the
-/// inline reads in submit.py).
-pub fn compute_api_key() -> String {
-    std::env::var("COMPUTE_API_KEY")
-        .unwrap_or_default()
-        .trim()
-        .to_string()
-}
-
 /// Render a startup-script template: naive sequential `${KEY}` replacement,
 /// exactly Python `str.replace(f"${{{key}}}", str(value))` per variable.
 /// Variables not present in the template are ignored; `${...}` placeholders
 /// with no matching variable are left untouched (Python parity).
+#[cfg(test)]
 fn render_template(
     template_name: &str,
     variables: &[(String, String)],
@@ -157,6 +141,7 @@ fn render_template(
 /// Bash that clones repo into $WORK/{workdir} and pip-installs its extras
 /// so the user's command can `cd {workdir} && python -m foo` directly.
 /// Returns empty string when no repo was requested.
+#[cfg(test)]
 fn render_repo_block(repo: &str, workdir: &str, extras: &str) -> String {
     if repo.is_empty() {
         return String::new();
@@ -229,8 +214,8 @@ fn submitter() -> String {
 ///
 /// Generates one run_id for the whole invocation, threads it onto every
 /// job, then writes the immutable runs/<run_id>.json manifest with all
-/// member job_ids. The API path (COMPUTE_API_KEY set) skips the manifest
-/// since it has no queue storage to track against.
+/// member job_ids. The compute-API path skips the manifest since it has no
+/// queue storage to track against.
 ///
 /// Batches of more than 4 commands fan out 64 ways (Python
 /// `ThreadPoolExecutor(max_workers=64)` → `buffer_unordered(64)`); smaller
@@ -262,35 +247,32 @@ pub async fn submit_batch(
         results.into_iter().collect::<Result<Vec<_>, _>>()?
     };
 
-    if compute_api_key().is_empty() {
-        let bucket = if options.bucket.is_empty() {
-            config::bucket()
-        } else {
-            options.bucket.as_str()
-        };
-        let store = JobStorage::with_bucket(bucket).await?;
-        write_run_manifest(
-            &store,
-            &RunManifest {
-                run_id: &run_id,
-                name: Some(&std::env::var("WC_RUN_NAME").unwrap_or_default()),
-                submitter_app: Some(&std::env::var("WC_SUBMITTER_APP").unwrap_or_default()),
-                submitted_by: &submitter(),
-                submitted_from: &hostname(),
-                commands,
-                job_ids: &jobs
-                    .iter()
-                    .map(|job| job.job_id.clone())
-                    .collect::<Vec<_>>(),
-            },
-        )
-        .await?;
-    }
+    let bucket = if options.bucket.is_empty() {
+        config::bucket()
+    } else {
+        options.bucket.as_str()
+    };
+    let store = JobStorage::with_bucket(bucket).await?;
+    write_run_manifest(
+        &store,
+        &RunManifest {
+            run_id: &run_id,
+            name: Some(&std::env::var("WC_RUN_NAME").unwrap_or_default()),
+            submitter_app: Some(&std::env::var("WC_SUBMITTER_APP").unwrap_or_default()),
+            submitted_by: &submitter(),
+            submitted_from: &hostname(),
+            commands,
+            job_ids: &jobs
+                .iter()
+                .map(|job| job.job_id.clone())
+                .collect::<Vec<_>>(),
+        },
+    )
+    .await?;
     Ok(jobs)
 }
 
-/// Submit a job. Uses compute.wisent.com API if available, queue storage
-/// otherwise.
+/// Submit a job through Stado's provider-neutral queue.
 pub async fn submit_job(command: &str, options: &SubmitOptions) -> Result<Job, SubmitError> {
     // Cooperative-yield contract: a yieldable job MUST declare how to save
     // and step aside. No silent kill-and-lose-progress path — refuse here so
@@ -306,15 +288,18 @@ pub async fn submit_job(command: &str, options: &SubmitOptions) -> Result<Job, S
     if !reason.is_empty() {
         return Err(SubmitError::Validation(reason.into()));
     }
+    if !options.output_uri.trim().is_empty() {
+        crate::object_store::ObjectRef::parse(&options.output_uri).map_err(|error| {
+            SubmitError::Validation(format!(
+                "output_uri must be a provider-neutral stado:// object URI: {error}"
+            ))
+        })?;
+    }
     let options = SubmitOptions {
         exclusive: options.exclusive && !activation_extraction_must_share_gpu(command),
         ..options.clone()
     };
-    let api_key = compute_api_key();
-    if !api_key.is_empty() {
-        return submit_via_api(command, &api_key, &options).await;
-    }
-    submit_via_gcs(command, &options).await
+    submit_to_queue(command, &options).await
 }
 
 /// config::estimate_gpu_memory against the configured queue bucket
@@ -331,87 +316,7 @@ async fn estimate_gpu_mem(command: &str) -> Result<i64, SubmitError> {
     Ok(config::estimate_gpu_memory(command, crate::sizing::global(), &store).await?)
 }
 
-/// API-path submit (Python `_submit_via_api`): POST
-/// `{COMPUTE_API}/api/v1/instances` with the X-API-Key header. Python used
-/// stdlib urllib; here reqwest.
-async fn submit_via_api(
-    command: &str,
-    api_key: &str,
-    options: &SubmitOptions,
-) -> Result<Job, SubmitError> {
-    let gpu_mem = estimate_gpu_mem(command).await?;
-    let mut env_vars = Map::new();
-    let hf_token = std::env::var("HF_TOKEN").unwrap_or_default();
-    if !hf_token.is_empty() {
-        env_vars.insert("HF_TOKEN".into(), Value::from(hf_token.as_str()));
-        env_vars.insert(
-            "HUGGING_FACE_HUB_TOKEN".into(),
-            Value::from(hf_token.as_str()),
-        );
-    }
-    if !options.resolved_input_artifacts.is_empty() {
-        env_vars.insert(
-            "WC_ARTIFACT_INPUTS_JSON".into(),
-            Value::from(json_dumps_sorted_compact(&Value::Object(
-                options.resolved_input_artifacts.clone(),
-            ))),
-        );
-    }
-
-    let generated = generate_job_id();
-    // Key order matches the Python dict literal.
-    let mut payload = Map::new();
-    payload.insert(
-        "docker_image".into(),
-        Value::from("pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime"),
-    );
-    payload.insert("docker_cmd".into(), Value::from(command));
-    payload.insert("docker_env".into(), Value::Object(env_vars));
-    payload.insert("disk_gb".into(), Value::from(50));
-    payload.insert("ssh_public_key".into(), Value::from(""));
-    payload.insert("label".into(), Value::from(format!("wc-{generated}")));
-
-    let response = reqwest::Client::new()
-        .post(format!("{}/api/v1/instances", config::compute_api()))
-        .header("Content-Type", "application/json")
-        .header("X-API-Key", api_key)
-        .body(serde_json::to_string(&Value::Object(payload))?)
-        .send()
-        .await?;
-    let status = response.status();
-    let body = response.text().await?;
-    if !status.is_success() {
-        return Err(SubmitError::Api(format!(
-            "API error {}: {}",
-            status.as_u16(),
-            body
-        )));
-    }
-    let data: Value = serde_json::from_str(&body)?;
-    let instance_id = data
-        .get("id")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    let mut job = Job::new(
-        if instance_id.is_empty() {
-            generated
-        } else {
-            instance_id.clone()
-        },
-        command,
-    );
-    job.gpu_mem_gb = gpu_mem;
-    job.provider = options.provider.clone();
-    job.state = "running".into();
-    job.instance_ref = Some(instance_id);
-    job.input_artifacts = options.input_artifacts.clone();
-    job.resolved_input_artifacts = options.resolved_input_artifacts.clone();
-    Ok(job)
-}
-
-/// Submit directly to the queue storage (no API server needed). Python
-/// `_submit_via_gcs`.
+/// Submit directly to Stado queue storage (no API server needed).
 ///
 /// Sizing precedence (each layer overrides the previous):
 ///   1. estimate_gpu_memory(command) — model-name regex on the command,
@@ -423,7 +328,7 @@ async fn submit_via_api(
 ///      GPU_SIZING when machine_type is not also explicit.
 ///   4. machine_type argument — caller-pinned GCE machine type, taken
 ///      verbatim. Use this for non-cataloged SKUs.
-async fn submit_via_gcs(command: &str, options: &SubmitOptions) -> Result<Job, SubmitError> {
+async fn submit_to_queue(command: &str, options: &SubmitOptions) -> Result<Job, SubmitError> {
     let bucket = if options.bucket.is_empty() {
         config::bucket().to_string()
     } else {
@@ -478,41 +383,6 @@ async fn submit_via_gcs(command: &str, options: &SubmitOptions) -> Result<Job, S
         }
     }
 
-    let hf_token = std::env::var("HF_TOKEN").unwrap_or_default();
-    let gh_token = std::env::var("GH_TOKEN").unwrap_or_default();
-
-    let template = if gpu_mem > 0 {
-        "startup_gpu.sh"
-    } else {
-        "startup_cpu.sh"
-    };
-    let script = render_template(
-        template,
-        &[
-            ("JOB_ID".into(), job_id.clone()),
-            ("COMMAND".into(), command.to_string()),
-            ("HF_TOKEN".into(), hf_token),
-            ("GH_TOKEN".into(), gh_token),
-            (
-                "WISENT_VERSION".into(),
-                std::env::var("WISENT_VERSION").unwrap_or_else(|_| "latest".into()),
-            ),
-            (
-                "REPO_BLOCK".into(),
-                render_repo_block(&options.repo, &options.repo_workdir, &options.repo_extras),
-            ),
-            ("PRE_COMMAND".into(), options.pre_command.clone()),
-            ("APT_PACKAGES".into(), options.apt_packages.join(" ")),
-            (
-                "ARTIFACT_INPUTS_B64".into(),
-                base64::engine::general_purpose::STANDARD.encode(json_dumps_sorted_compact(
-                    &Value::Object(options.resolved_input_artifacts.clone()),
-                )),
-            ),
-            ("OUTPUT_URI".into(), options.output_uri.clone()),
-        ],
-    )?;
-
     // priority stays user-controlled. Makespan-optimization happens in
     // the coordinator's centralized matcher (see _assign_jobs_to_agents
     // in coordinator.py), not by mutating the priority field at submit
@@ -523,7 +393,6 @@ async fn submit_via_gcs(command: &str, options: &SubmitOptions) -> Result<Job, S
     job.machine_type = machine_type;
     job.provider = options.provider.clone();
     job.batch_id = options.batch_id.clone();
-    job.startup_script_uri = format!("gs://{bucket}/scripts/{job_id}.sh");
     job.preemptible = options.preemptible;
     job.max_cost_per_hour_usd = options.max_cost_per_hour_usd;
     job.pin_to_provider = options.pin_to_provider;
@@ -547,11 +416,11 @@ async fn submit_via_gcs(command: &str, options: &SubmitOptions) -> Result<Job, S
     job.yield_command = options.yield_command.clone();
     job.yield_grace_seconds = options.yield_grace_seconds;
     job.pinned_host = options.pinned_host.clone();
+    job.secret_env = options.secret_env.clone();
     job.input_artifacts = options.input_artifacts.clone();
     job.resolved_input_artifacts = options.resolved_input_artifacts.clone();
 
     let store = JobStorage::with_bucket(&bucket).await?;
-    store.upload_script(&job_id, &script).await?;
     store.write_job("queue", &job).await?;
     Ok(job)
 }

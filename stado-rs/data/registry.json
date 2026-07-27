@@ -2,12 +2,12 @@
   "coordinators": [
     {
       "active": true,
-      "host": "https://stado-coordinator-d6ubffhi6q-uc.a.run.app",
+      "host": "https://stado.wisent.com",
       "interval_seconds": 180,
-      "name": "rust-cloud-run",
-      "notes": "Sole coordinator. Rust stado control-plane on Cloud Run in us-central1; scheduler probes /livez every three minutes. Deployed via deploy/deploy_stado_rust.sh.",
+      "name": "azure-control-plane",
+      "notes": "Sole Rust Stado control plane. Runs as a long-lived daemon with Azure primary storage and S3 read fallback.",
       "runtime": "daemon",
-      "state_uri": "gs://stado"
+      "state_uri": "stado://system/registry"
     }
   ],
   "schema_version": 2,

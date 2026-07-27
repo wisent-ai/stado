@@ -86,6 +86,15 @@ fn show() -> Result<(), CmdError> {
         ),
     );
     resolved.insert(
+        "wc_disabled_providers".into(),
+        Value::Array(
+            config::wc_disabled_providers()
+                .iter()
+                .map(|p| Value::from(p.as_str()))
+                .collect(),
+        ),
+    );
+    resolved.insert(
         "wc_storage_backend".into(),
         Value::from(config::wc_storage_backend()),
     );
@@ -120,6 +129,30 @@ fn show() -> Result<(), CmdError> {
     resolved.insert(
         "azure_subscription_id".into(),
         Value::from(config::azure_subscription_id()),
+    );
+    resolved.insert(
+        "azure_vm_identity_id".into(),
+        Value::from(config::azure_vm_identity_id()),
+    );
+    resolved.insert(
+        "release_base_url".into(),
+        Value::from(config::release_base_url()),
+    );
+    resolved.insert(
+        "stado_deployment_id".into(),
+        Value::from(config::stado_deployment_id()),
+    );
+    resolved.insert(
+        "agent_skarbiec_url".into(),
+        Value::from(config::agent_skarbiec_url()),
+    );
+    resolved.insert(
+        "agent_skarbiec_consumer".into(),
+        Value::from(config::agent_skarbiec_consumer()),
+    );
+    resolved.insert(
+        "agent_skarbiec_token_file".into(),
+        Value::from(config::agent_skarbiec_token_file()),
     );
     resolved.insert(
         "azure_resource_group".into(),

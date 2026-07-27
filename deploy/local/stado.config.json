@@ -1,0 +1,38 @@
+{
+  "_comment": "Concrete outage-safe Mac profile. Azure, AWS and GCP remain visible in preference order but are explicitly fenced; only the local provider and local storage are active.",
+  "providers": ["local", "azure", "aws", "gcp"],
+  "providers_disabled": ["azure", "aws", "gcp"],
+  "storage": {
+    "backend": "local",
+    "local": {
+      "path": "~/.stado/local-storage"
+    },
+    "backup": {
+      "_comment": "Temporary same-disk mirror/read fallback only. This is not cross-provider disaster recovery and must not replace the fenced Azure-primary plus S3 production profile.",
+      "backend": "local",
+      "local": {
+        "path": "~/.stado/local-backup"
+      }
+    }
+  },
+  "dashboard": {
+    "_comment": "Loopback-only object/control API for immediate Mac operation. Object and machine routes still require their separate Skarbiec service tokens.",
+    "bind": "localhost"
+  },
+  "secrets": {
+    "_comment": "Uses the built-in loopback Skarbiec URL; the consumer and owner-only grant are explicit and must allow the exact stado-object-api/token and stado-machine-api/token fields.",
+    "skarbiec": {
+      "consumer": "stado-control-plane",
+      "token_file": "~/.stado/control-plane-skarbiec-token"
+    }
+  },
+  "agent": {
+    "skarbiec": {
+      "consumer": "stado-local-agent",
+      "token_file": "~/.stado/local-agent-skarbiec-token"
+    }
+  },
+  "alerts": {
+    "topic": ""
+  }
+}

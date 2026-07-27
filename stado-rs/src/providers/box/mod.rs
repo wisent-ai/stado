@@ -63,18 +63,16 @@ pub struct BoxProvider {
 }
 
 impl BoxProvider {
-    /// Python `BoxProvider.__init__` with the env-driven client:
-    /// `BOX_API_KEY` (required), `BOX_API_URL`, `BOX_API_TIMEOUT_SECONDS`
-    /// (default 70), `BOX_TTL_SECONDS` (default 7200, must be positive).
+    /// Build an environment-configured client whose API key is resolved from
+    /// `stado-box/api_key` in Skarbiec at request time.
     pub fn from_env() -> Result<Self, BoxError> {
-        let api_key = std::env::var("BOX_API_KEY").unwrap_or_default();
         let base_url =
             std::env::var("BOX_API_URL").unwrap_or_else(|_| http::DEFAULT_BASE_URL.to_string());
         let timeout: f64 = std::env::var("BOX_API_TIMEOUT_SECONDS")
             .unwrap_or_else(|_| "70".to_string())
             .parse()
             .map_err(|_| BoxError::configuration("BOX_API_TIMEOUT_SECONDS must be a number"))?;
-        let client = BoxClient::new(&api_key, &base_url, timeout)?;
+        let client = BoxClient::from_skarbiec(&base_url, timeout)?;
         Self::from_client_env_ttl(client)
     }
 

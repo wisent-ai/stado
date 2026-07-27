@@ -554,6 +554,12 @@ impl BoxClient {
                 .await;
         }
     }
+    /// Build a client whose API key is read from Skarbiec by the transport.
+    pub fn from_skarbiec(base_url: &str, timeout_seconds: f64) -> Result<Self, BoxError> {
+        Ok(BoxClient {
+            transport: BoxHttpTransport::from_skarbiec(base_url, timeout_seconds)?,
+        })
+    }
 }
 
 #[cfg(test)]

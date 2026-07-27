@@ -8,6 +8,12 @@
 //! GET /api/registry.json - policy-safe canonical registry projection
 //! POST /api/cleanup/run  - one parameterless registry-controlled cleanup pass
 //! POST /api/registry/policy - whitelisted generation-checked policy mutation
+//! GET/PUT/DELETE /api/object?uri=stado://... - product object data plane
+//! GET /api/object/list?namespace=...&prefix=... - product object listing
+//! GET /api/object/stat?uri=stado://... - product object metadata
+//! POST /api/machine/submit - submit a canonical machine request
+//! GET /api/machine/status?job_id=... - read canonical machine status
+//! POST /api/machine/cancel?job_id=... - durably cancel a machine job
 //! GET /healthz           - liveness (before auth, after the Host guard)
 //! GET /livez             - Cloud Run liveness alias
 //!
@@ -29,16 +35,19 @@ pub mod policy;
 pub mod summary;
 pub mod web_view;
 
+use std::io::Write;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::artifacts::registry::{ArtifactRegistry, RegistryError as ArtifactRegistryError};
 use crate::artifacts_models::ArtifactRef;
 use crate::config;
+use crate::machine::{MachineError, MachineFacade};
 use crate::models::isoformat_utc;
 use crate::providers::local::disk_cleanup::{
     read_cleanup_state, run_cleanup_once, sanitize_cleanup_report,
@@ -230,9 +239,21 @@ impl Dashboard {
     }
 
     async fn handle_connection(&self, mut stream: TcpStream) -> std::io::Result<()> {
-        let Some(request) = read_request(&mut stream).await? else {
+        let Some(mut request) = read_request(&mut stream).await? else {
             return Ok(());
         };
+        let is_object_put = request.method == "PUT" && request.path.starts_with("/api/object?");
+        if is_object_put {
+            if let Some(response) = self.object_put_preflight(&request).await {
+                stream.write_all(&response.bytes).await?;
+                return stream.shutdown().await;
+            }
+        }
+        if request.body.len() < request.content_length {
+            let received = request.body.len();
+            request.body.resize(request.content_length, u8::default());
+            stream.read_exact(&mut request.body[received..]).await?;
+        }
         let response = self.route(&request).await;
         eprintln!(
             "[dashboard] \"{} {} HTTP/1.1\" {} -",
@@ -247,28 +268,72 @@ impl Dashboard {
             "" => empty_response(400, "Bad Request"),
             "GET" => self.do_get(request).await,
             "POST" => self.do_post(request).await,
+            "PUT" => self.do_put(request).await,
+            "DELETE" => self.do_delete(request).await,
             // Python BaseHTTPRequestHandler: 501 Unsupported method.
             _ => empty_response(501, "Not Implemented"),
         }
     }
+    async fn object_put_preflight(&self, request: &Request) -> Option<Response> {
+        if !trusted_request_host(request.header("host"), request.header("x-forwarded-proto")) {
+            return Some(send_json(
+                http_status("403"),
+                &json!({"error": "forbidden"}),
+            ));
+        }
+        let path = request.path.split('?').next().unwrap_or("");
+        if path != "/api/object" {
+            return Some(empty_response(http_status("404"), "Not Found"));
+        }
+        if !authorized(request, "object:write").await {
+            return Some(send_json(
+                http_status("401"),
+                &json!({"error": "unauthorized"}),
+            ));
+        }
+        None
+    }
 
     async fn do_get(&self, request: &Request) -> Response {
-        if !trusted_request_host(request.header("host"), request.header("x-forwarded-proto")) {
-            return cleanup_failure(403);
-        }
         let path_no_query = request.path.split('?').next().unwrap_or("");
-        if path_no_query == "/healthz" || path_no_query == "/livez" {
-            return send_json(200, &json!({"ok": true}));
+        if !trusted_request_host(request.header("host"), request.header("x-forwarded-proto")) {
+            return if path_no_query == "/api/machine/status" {
+                send_json(http_status("403"), &json!({"error": "forbidden"}))
+            } else {
+                cleanup_failure(http_status("403"))
+            };
         }
-        if !authorized(request, "view").await {
-            return send_json(401, &json!({"error": "unauthorized"}));
+        if path_no_query == "/healthz" || path_no_query == "/livez" {
+            return send_json(http_status("200"), &json!({"ok": true}));
+        }
+        let public_object_route = path_no_query == "/api/public/object";
+        let object_route = path_no_query == "/api/object"
+            || path_no_query == "/api/object/list"
+            || path_no_query == "/api/object/stat";
+        if !public_object_route {
+            let permission = if path_no_query == "/api/machine/status" {
+                "machine:status"
+            } else if object_route {
+                "object:read"
+            } else {
+                "view"
+            };
+            if !authorized(request, permission).await {
+                return send_json(http_status("401"), &json!({"error": "unauthorized"}));
+            }
         }
         match self.get_routes(request).await {
             Ok(response) => response,
             // Python: a failing /api/cleanup.json answers the safe cleanup
             // envelope; every other route answers 500 "dashboard error".
-            Err(_) if request.path == "/api/cleanup.json" => cleanup_failure(500),
-            Err(_) => Response::text(500, "Internal Server Error", "dashboard error"),
+            Err(_) if request.path == "/api/cleanup.json" => {
+                cleanup_failure(http_status("500"))
+            }
+            Err(_) => Response::text(
+                http_status("500"),
+                "Internal Server Error",
+                "dashboard error",
+            ),
         }
     }
 
@@ -278,6 +343,31 @@ impl Dashboard {
             Some((path, query)) => (path, query),
             None => (request.path.as_str(), ""),
         };
+        if path == "/api/public/object" {
+            let object = match object_from_query(query) {
+                Ok(object) => object,
+                Err(response) => return Ok(response),
+            };
+            if object.namespace() != "public" {
+                return Ok(send_json(
+                    http_status("403"),
+                    &json!({"error": "only stado://public objects are publicly readable"}),
+                ));
+            }
+            return self.get_object(request, query).await;
+        }
+        if path == "/api/object" {
+            return self.get_object(request, query).await;
+        }
+        if path == "/api/object/list" {
+            return self.list_objects(query).await;
+        }
+        if path == "/api/object/stat" {
+            return self.stat_object(query).await;
+        }
+        if path == "/api/machine/status" {
+            return Ok(self.get_machine_status(request, query).await);
+        }
         if path == "/api/artifacts.json" {
             let artifacts = state.get("artifacts").cloned().unwrap_or_else(|| json!([]));
             let body = python_json_dumps(&artifacts)
@@ -341,28 +431,338 @@ impl Dashboard {
         Ok(empty_response(404, "Not Found"))
     }
 
+    async fn get_object(&self, request: &Request, query: &str) -> Result<Response, DashboardError> {
+        let object = match object_from_query(query) {
+            Ok(object) => object,
+            Err(response) => return Ok(response),
+        };
+        let path = object.storage_path();
+        let Some(bytes) = self.store.read_bytes(&path).await? else {
+            return Ok(send_json(
+                http_status("404"),
+                &json!({"state": "absent", "uri": object.to_string()}),
+            ));
+        };
+        let metadata = self
+            .store
+            .backend()
+            .list_blobs_with_meta(&path)
+            .await?
+            .into_iter()
+            .find(|blob| blob.name == path)
+            .map(|blob| blob.metadata)
+            .unwrap_or_default();
+        let content_type = metadata
+            .get("content-type")
+            .map(String::as_str)
+            .unwrap_or("application/octet-stream");
+        if let Some(value) = request.header("range") {
+            let Some((start, end)) = parse_byte_range(value, bytes.len()) else {
+                return Ok(Response::new_with_headers(
+                    http_status("416"),
+                    "Range Not Satisfiable",
+                    content_type,
+                    b"",
+                    &[("Content-Range", format!("bytes */{}", bytes.len()))],
+                ));
+            };
+            return Ok(Response::new_with_headers(
+                http_status("206"),
+                "Partial Content",
+                content_type,
+                &bytes[start..=end],
+                &[
+                    ("Accept-Ranges", "bytes".to_string()),
+                    (
+                        "Content-Range",
+                        format!("bytes {start}-{end}/{}", bytes.len()),
+                    ),
+                ],
+            ));
+        }
+        Ok(Response::new_with_headers(
+            http_status("200"),
+            "OK",
+            content_type,
+            &bytes,
+            &[("Accept-Ranges", "bytes".to_string())],
+        ))
+    }
+
+    async fn list_objects(&self, query: &str) -> Result<Response, DashboardError> {
+        let values = parse_qs(query);
+        let namespace = query_value(&values, "namespace").unwrap_or_default();
+        let prefix = query_value(&values, "prefix").unwrap_or_default();
+        if namespace.is_empty() {
+            return Ok(send_json(
+                http_status("400"),
+                &json!({"error": "namespace is required"}),
+            ));
+        }
+        let storage_prefix = crate::object_store::ObjectRef::namespace_prefix(&namespace, &prefix)?;
+        let objects = self
+            .store
+            .backend()
+            .list_blobs_with_meta(&storage_prefix)
+            .await?;
+        let mut response = Vec::with_capacity(objects.len());
+        for blob in objects {
+            let object = crate::object_store::ObjectRef::from_storage_path(&blob.name)?;
+            response.push(json!({
+                "uri": object.to_string(),
+                "namespace": object.namespace(),
+                "key": object.key(),
+                "size": blob.size,
+                "updated_at": blob.updated.map(isoformat_utc),
+                "metadata": blob.metadata,
+            }));
+        }
+        Ok(send_json(http_status("200"), &json!({"objects": response})))
+    }
+
+    async fn stat_object(&self, query: &str) -> Result<Response, DashboardError> {
+        let object = match object_from_query(query) {
+            Ok(object) => object,
+            Err(response) => return Ok(response),
+        };
+        let path = object.storage_path();
+        let blob = self
+            .store
+            .backend()
+            .list_blobs_with_meta(&path)
+            .await?
+            .into_iter()
+            .find(|blob| blob.name == path);
+        Ok(match blob {
+            Some(blob) => send_json(
+                http_status("200"),
+                &json!({
+                    "state": "present",
+                    "uri": object.to_string(),
+                    "size": blob.size,
+                    "updated_at": blob.updated.map(isoformat_utc),
+                    "metadata": blob.metadata,
+                }),
+            ),
+            None => send_json(
+                http_status("404"),
+                &json!({"state": "absent", "uri": object.to_string()}),
+            ),
+        })
+    }
+
+    fn machine_facade(&self) -> MachineFacade {
+        MachineFacade::with_store(
+            self.store.clone(),
+            self.store.bucket_name().to_string(),
+        )
+    }
+
+    async fn get_machine_status(&self, request: &Request, query: &str) -> Response {
+        if request.content_length != usize::default() || !request.body.is_empty() {
+            return invalid_machine_request("machine status does not accept a request body");
+        }
+        let job_id = match machine_job_id(query) {
+            Ok(job_id) => job_id,
+            Err(response) => return response,
+        };
+        machine_result_response(self.machine_facade().status(job_id).await)
+    }
+
+    async fn post_machine_submit(&self, request: &Request) -> Response {
+        let content_type = request
+            .header("content-type")
+            .unwrap_or("")
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim();
+        if request.path != "/api/machine/submit"
+            || content_type != "application/json"
+            || request.header("transfer-encoding").is_some()
+            || request.header("content-length").is_none()
+            || request.content_length != request.body.len()
+            || request.body.len() > MAX_HEAD_BYTES
+        {
+            return invalid_machine_request("invalid JSON request framing");
+        }
+        let payload: Value = match serde_json::from_slice(&request.body) {
+            Ok(payload) => payload,
+            Err(error) => {
+                return invalid_machine_request(format!("cannot read request JSON: {error}"))
+            }
+        };
+        if let Err(error) = validate_remote_machine_request(&payload) {
+            return machine_result_response(Err(error));
+        }
+        machine_result_response(self.machine_facade().submit_request(&payload).await)
+    }
+
+    async fn post_machine_cancel(&self, request: &Request, query: &str) -> Response {
+        if request.header("transfer-encoding").is_some()
+            || request.content_length != usize::default()
+            || !request.body.is_empty()
+        {
+            return invalid_machine_request("machine cancel does not accept a request body");
+        }
+        let job_id = match machine_job_id(query) {
+            Ok(job_id) => job_id,
+            Err(response) => return response,
+        };
+        machine_result_response(self.machine_facade().cancel_job(job_id).await)
+    }
+
+    async fn put_object(&self, request: &Request, query: &str) -> Result<Response, DashboardError> {
+        let object = match object_from_query(query) {
+            Ok(object) => object,
+            Err(response) => return Ok(response),
+        };
+        let values = parse_qs(query);
+        let if_absent = query_value(&values, "if_absent").as_deref() == Some("true");
+        let path = object.storage_path();
+        if if_absent {
+            let mut source = tempfile::NamedTempFile::new()?;
+            source.write_all(&request.body)?;
+            if !self
+                .store
+                .upload_file_if_absent(&path, source.path())
+                .await?
+            {
+                return Ok(send_json(
+                    http_status("409"),
+                    &json!({"error": "object exists", "uri": object.to_string()}),
+                ));
+            }
+        } else {
+            self.store.upload_bytes(&path, &request.body).await?;
+        }
+        let content_type = request
+            .header("content-type")
+            .unwrap_or("application/octet-stream")
+            .to_string();
+        let metadata = crate::object_store::metadata(&object, &content_type);
+        self.store.backend().set_metadata(&path, &metadata).await?;
+        let landed = self.store.backend().list_blobs_with_meta(&path).await?;
+        let Some(blob) = landed.into_iter().find(|blob| blob.name == path) else {
+            return Err(DashboardError::Other(format!(
+                "object metadata verification could not find {object}"
+            )));
+        };
+        if metadata
+            .iter()
+            .filter(|(_, value)| !value.is_empty())
+            .any(|(key, value)| blob.metadata.get(key) != Some(value))
+        {
+            return Err(DashboardError::Other(format!(
+                "object metadata verification failed for {object}"
+            )));
+        }
+        Ok(send_json(
+            http_status("200"),
+            &json!({
+                "state": "stored",
+                "uri": object.to_string(),
+                "content_type": content_type,
+            }),
+        ))
+    }
+
     async fn do_post(&self, request: &Request) -> Response {
+        let (path, query) = request
+            .path
+            .split_once('?')
+            .unwrap_or((request.path.as_str(), ""));
+        let machine_route =
+            path == "/api/machine/submit" || path == "/api/machine/cancel";
         if !trusted_request_host(request.header("host"), request.header("x-forwarded-proto")) {
-            return cleanup_failure(403);
+            return if machine_route {
+                send_json(http_status("403"), &json!({"error": "forbidden"}))
+            } else {
+                cleanup_failure(http_status("403"))
+            };
+        }
+        if machine_route {
+            let permission = if path == "/api/machine/submit" {
+                "machine:submit"
+            } else {
+                "machine:cancel"
+            };
+            if !authorized(request, permission).await {
+                return send_json(http_status("401"), &json!({"error": "unauthorized"}));
+            }
+            return if path == "/api/machine/submit" {
+                self.post_machine_submit(request).await
+            } else {
+                self.post_machine_cancel(request, query).await
+            };
         }
         if !authorized(request, "operate").await {
-            return send_json(401, &json!({"error": "unauthorized"}));
+            return send_json(http_status("401"), &json!({"error": "unauthorized"}));
         }
-        let path_no_query = request.path.split('?').next().unwrap_or("");
-        if path_no_query == "/api/registry/policy" {
+        if path == "/api/registry/policy" {
             return self.post_registry_policy(request).await;
         }
         if request.path != "/api/cleanup/run" {
-            let path_no_query = request.path.split('?').next().unwrap_or("");
-            return if path_no_query == "/api/cleanup/run" {
-                cleanup_failure(400)
+            return if path == "/api/cleanup/run" {
+                cleanup_failure(http_status("400"))
             } else {
-                empty_response(404, "Not Found")
+                empty_response(http_status("404"), "Not Found")
             };
         }
         match self.post_cleanup_run(request).await {
             Ok(response) => response,
-            Err(_) => cleanup_failure(500),
+            Err(_) => cleanup_failure(http_status("500")),
+        }
+    }
+
+    async fn do_put(&self, request: &Request) -> Response {
+        if !trusted_request_host(request.header("host"), request.header("x-forwarded-proto")) {
+            return send_json(http_status("403"), &json!({"error": "forbidden"}));
+        }
+        let (path, query) = request
+            .path
+            .split_once('?')
+            .unwrap_or((request.path.as_str(), ""));
+        if path != "/api/object" {
+            return empty_response(http_status("404"), "Not Found");
+        }
+        if !authorized(request, "object:write").await {
+            return send_json(http_status("401"), &json!({"error": "unauthorized"}));
+        }
+        match self.put_object(request, query).await {
+            Ok(response) => response,
+            Err(error) => send_json(http_status("500"), &json!({"error": error.to_string()})),
+        }
+    }
+
+    async fn do_delete(&self, request: &Request) -> Response {
+        if !trusted_request_host(request.header("host"), request.header("x-forwarded-proto")) {
+            return send_json(http_status("403"), &json!({"error": "forbidden"}));
+        }
+        let (path, query) = request
+            .path
+            .split_once('?')
+            .unwrap_or((request.path.as_str(), ""));
+        if path != "/api/object" {
+            return empty_response(http_status("404"), "Not Found");
+        }
+        if !authorized(request, "object:write").await {
+            return send_json(http_status("401"), &json!({"error": "unauthorized"}));
+        }
+        match object_from_query(query) {
+            Ok(object) => {
+                let result = self.store.delete_blob(&object.storage_path()).await;
+                match result {
+                    Ok(()) => send_json(
+                        http_status("200"),
+                        &json!({"state": "absent", "uri": object.to_string()}),
+                    ),
+                    Err(error) => {
+                        send_json(http_status("500"), &json!({"error": error.to_string()}))
+                    }
+                }
+            }
+            Err(response) => response,
         }
     }
 
@@ -479,12 +879,18 @@ pub async fn serve(host: Option<&str>, port: Option<i64>) -> Result<(), Dashboar
 /// Request head cap (Python's http.server parses a similar 64 KiB budget).
 const MAX_HEAD_BYTES: usize = 65536;
 
+static MACHINE_JOB_ID_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+        .expect("static machine job ID regex compiles")
+});
+
 struct Request {
     method: String,
     /// Raw request target including the query string (Python `self.path`).
     path: String,
-    /// (lowercased name, trimmed value), first occurrence wins.
+    /// Lowercased names with trimmed values.
     headers: Vec<(String, String)>,
+    content_length: usize,
     body: Vec<u8>,
 }
 
@@ -544,36 +950,58 @@ async fn read_request(stream: &mut TcpStream) -> std::io::Result<Option<Request>
     for line in lines {
         if let Some((name, value)) = line.split_once(':') {
             let name = name.trim().to_ascii_lowercase();
-            if !headers.iter().any(|(key, _)| *key == name) {
-                headers.push((name, value.trim().to_string()));
+            if name == "transfer-encoding" {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Transfer-Encoding is unsupported",
+                ));
             }
+            if name == "content-length" && headers.iter().any(|(key, _)| key == &name) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "duplicate Content-Length",
+                ));
+            }
+            headers.push((name, value.trim().to_string()));
         }
     }
     let body_start = head_end + b"\r\n\r\n".len();
-    let content_length = headers
+    let content_length_header = headers
         .iter()
         .find(|(name, _)| name == "content-length")
-        .and_then(|(_, value)| value.parse::<usize>().ok())
-        .unwrap_or_default();
-    if content_length > MAX_HEAD_BYTES {
+        .map(|(_, value)| value.as_str());
+    let object_put = method == "PUT" && path.starts_with("/api/object?");
+    let content_length = match content_length_header {
+        Some(value) => value.parse::<usize>().map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid Content-Length")
+        })?,
+        None if object_put => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "object PUT requires Content-Length",
+            ));
+        }
+        None => usize::default(),
+    };
+    let max_body_bytes = if object_put {
+        crate::object_store::max_object_bytes()
+    } else {
+        MAX_HEAD_BYTES
+    };
+    if content_length > max_body_bytes {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "HTTP request body too large",
         ));
     }
     let available = buf.len().saturating_sub(body_start).min(content_length);
-    let mut body = Vec::with_capacity(content_length);
+    let mut body = Vec::with_capacity(available);
     body.extend_from_slice(&buf[body_start..body_start + available]);
-    if body.len() < content_length {
-        let missing = content_length - body.len();
-        let mut remainder = vec![u8::default(); missing];
-        stream.read_exact(&mut remainder).await?;
-        body.extend_from_slice(&remainder);
-    }
     Ok(Some(Request {
         method,
         path,
         headers,
+        content_length,
         body,
     }))
 }
@@ -585,10 +1013,27 @@ struct Response {
 
 impl Response {
     fn new(status: u16, reason: &str, content_type: &str, body: &[u8]) -> Self {
-        let head = format!(
-            "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        Self::new_with_headers(status, reason, content_type, body, &[])
+    }
+
+    fn new_with_headers(
+        status: u16,
+        reason: &str,
+        content_type: &str,
+        body: &[u8],
+        headers: &[(&str, String)],
+    ) -> Self {
+        let mut head = format!(
+            "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n",
             body.len()
         );
+        for (name, value) in headers {
+            head.push_str(name);
+            head.push_str(": ");
+            head.push_str(value);
+            head.push_str("\r\n");
+        }
+        head.push_str("Connection: close\r\n\r\n");
         let mut bytes = head.into_bytes();
         bytes.extend_from_slice(body);
         Self { status, bytes }
@@ -613,6 +1058,28 @@ impl Response {
     }
 }
 
+fn parse_byte_range(value: &str, length: usize) -> Option<(usize, usize)> {
+    if length == usize::default() {
+        return None;
+    }
+    let value = value.strip_prefix("bytes=")?;
+    if value.contains(',') {
+        return None;
+    }
+    let (start, end) = value.split_once('-')?;
+    let start = start.parse::<usize>().ok()?;
+    if start >= length {
+        return None;
+    }
+    let last = length.saturating_sub(usize::from(true));
+    let end = if end.is_empty() {
+        last
+    } else {
+        end.parse::<usize>().ok()?.min(last)
+    };
+    (start <= end).then_some((start, end))
+}
+
 fn http_status(value: &str) -> u16 {
     value.parse().expect("static HTTP status is valid")
 }
@@ -625,6 +1092,84 @@ fn empty_response(status: u16, reason: &str) -> Response {
 /// `json.dumps(payload, default=str, sort_keys=True, separators=(",", ":"))`.
 fn send_json(status: u16, payload: &Value) -> Response {
     Response::json(status, &json_dumps_sorted_compact(payload))
+}
+
+fn machine_result_response(result: Result<Value, MachineError>) -> Response {
+    match result {
+        Ok(result) => send_json(http_status("200"), &json!({"ok": true, "result": result})),
+        Err(error) => {
+            let status = match error.code.as_str() {
+                "INVALID_REQUEST" | "INVALID_SOURCE_ARCHIVE" => http_status("400"),
+                "NOT_FOUND" => http_status("404"),
+                "IDEMPOTENCY_CONFLICT" => http_status("409"),
+                _ if error.retryable => http_status("503"),
+                _ => http_status("500"),
+            };
+            send_json(
+                status,
+                &json!({
+                    "ok": false,
+                    "error": {
+                        "code": error.code,
+                        "message": error.message,
+                        "retryable": error.retryable,
+                    },
+                }),
+            )
+        }
+    }
+}
+
+fn invalid_machine_request(message: impl Into<String>) -> Response {
+    machine_result_response(Err(MachineError::new("INVALID_REQUEST", message)))
+}
+
+fn machine_job_id(query: &str) -> Result<&str, Response> {
+    let invalid = || {
+        invalid_machine_request(
+            "query must contain exactly one path-safe job_id parameter",
+        )
+    };
+    if query.is_empty() || query.contains('&') {
+        return Err(invalid());
+    }
+    let Some((name, job_id)) = query.split_once('=') else {
+        return Err(invalid());
+    };
+    if name != "job_id" || !MACHINE_JOB_ID_RE.is_match(job_id) {
+        return Err(invalid());
+    }
+    Ok(job_id)
+}
+
+fn validate_remote_machine_request(request: &Value) -> Result<(), MachineError> {
+    let Some(request) = request.as_object() else {
+        return Ok(());
+    };
+    if request.contains_key("source_archive_path") {
+        return Err(MachineError::new(
+            "INVALID_REQUEST",
+            "source_archive_path is not accepted by the remote machine API; upload through the object API and declare a stado:// input_object",
+        ));
+    }
+    let Some(inputs) = request.get("input_objects").and_then(Value::as_object) else {
+        return Ok(());
+    };
+    for value in inputs.values() {
+        let Some(spec) = value.as_object() else {
+            continue;
+        };
+        if spec
+            .keys()
+            .any(|key| !matches!(key.as_str(), "stado_uri" | "relative_path" | "sha256"))
+        {
+            return Err(MachineError::new(
+                "INVALID_REQUEST",
+                "input_objects entries accept only stado_uri, relative_path, and sha256",
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Python `_cleanup_failure`.
@@ -647,6 +1192,26 @@ fn parse_qs(query: &str) -> Vec<(String, String)> {
             (url_decode(key), url_decode(value))
         })
         .collect()
+}
+
+fn query_value(values: &[(String, String)], name: &str) -> Option<String> {
+    values
+        .iter()
+        .find(|(key, _)| key == name)
+        .map(|(_, value)| value.clone())
+}
+
+fn object_from_query(query: &str) -> Result<crate::object_store::ObjectRef, Response> {
+    let values = parse_qs(query);
+    let uri = query_value(&values, "uri").unwrap_or_default();
+    if uri.is_empty() {
+        return Err(send_json(
+            http_status("400"),
+            &json!({"error": "uri is required"}),
+        ));
+    }
+    crate::object_store::ObjectRef::parse(&uri)
+        .map_err(|error| send_json(http_status("400"), &json!({"error": error.to_string()})))
 }
 
 fn url_decode(input: &str) -> String {
@@ -760,20 +1325,52 @@ fn trusted_request_host(value: Option<&str>, forwarded_proto: Option<&str>) -> b
     dns_branch
 }
 
-/// Python `_authorized`: validate the Wisent session and deployment grant
-/// through Supabase RLS. No deployment configured = open (local dashboard);
-/// otherwise fail CLOSED on any error.
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    let left = Sha256::digest(left);
+    let right = Sha256::digest(right);
+    let mut difference = u8::default();
+    for (left, right) in left.iter().zip(right) {
+        difference |= left ^ right;
+    }
+    difference == u8::default()
+}
+
+/// Validate the route-specific service token or the Wisent
+/// session/deployment grant through Supabase RLS. Machine and object service
+/// tokens are isolated. Machine routes always fail closed and never fall back
+/// to the object token or Supabase.
 async fn authorized(request: &Request, permission: &str) -> bool {
+    if permission.starts_with("machine:") {
+        let expected = match crate::skarbiec::read_string("stado-machine-api", "token").await {
+            Ok(Some(value)) => value,
+            Ok(None) | Err(_) => String::new(),
+        };
+        let authorization = request.header("authorization").unwrap_or("").trim();
+        let supplied = authorization.strip_prefix("Bearer ").unwrap_or_default();
+        return !expected.is_empty()
+            && constant_time_eq(expected.as_bytes(), supplied.as_bytes());
+    }
     let deployment_id = config::stado_deployment_id();
+    if permission.starts_with("object:") {
+        let expected = match crate::skarbiec::read_string("stado-object-api", "token").await {
+            Ok(Some(value)) => value,
+            Ok(None) | Err(_) => String::new(),
+        };
+        let authorization = request.header("authorization").unwrap_or("").trim();
+        let supplied = authorization.strip_prefix("Bearer ").unwrap_or_default();
+        if !expected.is_empty() && constant_time_eq(expected.as_bytes(), supplied.as_bytes()) {
+            return true;
+        }
+    }
     if deployment_id.is_empty() {
-        return true;
+        return !permission.starts_with("object:");
     }
     let supabase_url = std::env::var("SUPABASE_URL").unwrap_or_default();
     let supabase_url = supabase_url.trim_end_matches('/');
-    let anon_key = std::env::var("SUPABASE_ANON_KEY")
-        .unwrap_or_default()
-        .trim()
-        .to_string();
+    let anon_key = match crate::skarbiec::read_string("stado-supabase", "anon_key").await {
+        Ok(Some(value)) => value,
+        Ok(None) | Err(_) => return false,
+    };
     let authorization = request.header("authorization").unwrap_or("").trim();
     if supabase_url.is_empty() || anon_key.is_empty() || !authorization.starts_with("Bearer ") {
         return false;

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# OPTIONAL LEGACY GCP-PROVIDER TOOL ONLY. The active Azure cutover never calls
+# this script, gcloud, gsutil, Cloud Functions or the GCS release channel.
 # migrate_to_stado.sh -- live-infra migration for the wisent-compute -> stado
 # rename. The Python package/CLI rename is already done in the repo; this
 # handles the CATEGORY-B resources that carry live state and cannot be renamed

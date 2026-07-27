@@ -1,69 +1,39 @@
 import SwiftUI
 
 struct SettingsView: View {
-    @ObservedObject var operationsStore: OperationsStore
-    @ObservedObject var cleanupStore: CleanupStore
-    @Environment(\.dismiss) private var dismiss
-    @State private var draftURL = ""
-    @State private var validationMessage: String?
+    @ObservedObject var deploymentStore: DeploymentStore
 
     var body: some View {
         Form {
-            Section("Dashboard state source") {
-                TextField("Base URL", text: $draftURL, prompt: Text(OperationsDashboardAddress.localDefault))
-                    .textFieldStyle(.roundedBorder)
-                    .accessibilityLabel("Stado dashboard base URL")
-                    .onSubmit(save)
-
-                Text("Stado reads the existing /api/state.json interface. Plain HTTP is accepted only for IPv4 and IPv6 loopback addresses; remote sources require HTTPS. URLs containing credentials, query parameters, or fragments are rejected.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                if let validationMessage {
-                    Label(validationMessage, systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .accessibilityLabel("Invalid dashboard URL: \(validationMessage)")
+            Section("Selected deployment") {
+                if let deployment = deploymentStore.selectedDeployment {
+                    LabeledContent("Name", value: deployment.name)
+                    LabeledContent("Provider", value: deployment.provider.title)
+                    LabeledContent("Status", value: deployment.status.rawValue.capitalized)
+                    if let endpoint = deployment.endpoint {
+                        LabeledContent("Endpoint") {
+                            Text(endpoint)
+                                .font(.caption.monospaced())
+                                .textSelection(.enabled)
+                        }
+                    }
+                } else {
+                    Text("Create or select a deployment in the Stado console.")
+                        .foregroundStyle(.secondary)
                 }
             }
 
-            Section("Privacy") {
-                Label("The app uses an ephemeral URL session and does not request or persist dashboard credentials.", systemImage: "lock.shield")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            HStack {
-                Button("Use Local Default") {
-                    draftURL = OperationsDashboardAddress.localDefault
-                    validationMessage = nil
-                }
-                Spacer()
-                Button("Cancel") {
-                    dismiss()
-                }
-                Button("Save") {
-                    save()
-                }
-                .buttonStyle(.borderedProminent)
+            Section("Configuration ownership") {
+                Label(
+                    "Deployment endpoints and team access are managed by the Wisent deployment registry. Cloud account identifiers come from Skarbiec; credentials remain in their native keychains and CLIs.",
+                    systemImage: "lock.shield"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
-        .frame(width: 520)
+        .frame(width: 560)
         .fixedSize(horizontal: false, vertical: true)
-        .onAppear {
-            draftURL = operationsStore.dashboardURLString
-        }
-    }
-
-    private func save() {
-        do {
-            try operationsStore.saveDashboardURL(draftURL)
-            try cleanupStore.saveDashboardURL(draftURL)
-            validationMessage = nil
-            dismiss()
-        } catch {
-            validationMessage = (error as? LocalizedError)?.errorDescription ?? "Enter a valid dashboard URL."
-        }
     }
 }

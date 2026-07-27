@@ -24,8 +24,11 @@ fn write_failed_blob(storage: &Path) {
         "error": "Traceback line 1\nTraceback line 2",
         "failed_at": FAILED_AT,
     });
-    std::fs::write(failed.join(format!("{JOB_ID}.json")), serde_json::to_string(&body).unwrap())
-        .unwrap();
+    std::fs::write(
+        failed.join(format!("{JOB_ID}.json")),
+        serde_json::to_string(&body).unwrap(),
+    )
+    .unwrap();
 }
 
 fn write_state(storage: &Path, job_id: &str, attempts: i64) {
@@ -100,7 +103,10 @@ fn prompt_is_byte_exact_vs_python() {
 
     let out = fix(storage, &["prompt", "zzz00000"], None);
     assert_eq!(out.status.code(), Some(1));
-    assert_eq!(stderr(&out), "no failed job 'zzz00000' in current failed/\n");
+    assert_eq!(
+        stderr(&out),
+        "no failed job 'zzz00000' in current failed/\n"
+    );
 }
 
 #[test]
@@ -124,7 +130,10 @@ fn dispatch_dry_run_and_exhausted_cap() {
     write_state(storage, JOB_ID, 3);
     let out = fix(storage, &["dispatch", JOB_ID, "--execute"], None);
     let result: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
-    assert_eq!(result, serde_json::json!({"job_id": JOB_ID, "status": "exhausted", "attempts": 3}));
+    assert_eq!(
+        result,
+        serde_json::json!({"job_id": JOB_ID, "status": "exhausted", "attempts": 3})
+    );
 }
 
 #[test]
@@ -134,14 +143,22 @@ fn scan_dispatch_filters_and_skips_dispatched() {
     write_failed_blob(storage);
 
     // Pattern mismatch -> nothing dispatched.
-    let out = fix(storage, &["scan-dispatch", "--command-pattern", "lm_eval"], None);
+    let out = fix(
+        storage,
+        &["scan-dispatch", "--command-pattern", "lm_eval"],
+        None,
+    );
     let report: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
     assert_eq!(report, serde_json::json!({"results": [], "count": 0}));
 
     // Pattern match -> one dry-run record.
     let out = fix(
         storage,
-        &["scan-dispatch", "--command-pattern", "raw.extract_and_upload"],
+        &[
+            "scan-dispatch",
+            "--command-pattern",
+            "raw.extract_and_upload",
+        ],
         None,
     );
     let report: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
@@ -198,7 +215,10 @@ fn execute_dispatches_via_local_claude_cli() {
     assert_eq!(result["returncode"], 0);
     assert_eq!(result["stdout_preview"], "fixed it\n");
     // The prompt was passed as `claude -p PROMPT`.
-    assert_eq!(std::fs::read_to_string(dir.path().join("argv.txt")).unwrap(), "-p\n");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("argv.txt")).unwrap(),
+        "-p\n"
+    );
 
     // Per-job state landed at failure_fixes/<jid>.json.
     let state: serde_json::Value = serde_json::from_str(

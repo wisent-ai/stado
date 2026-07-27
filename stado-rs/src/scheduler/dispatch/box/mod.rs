@@ -159,6 +159,15 @@ pub async fn dispatch_box_jobs(
         if !matches!(job.provider.as_str(), "box" | "box-ascii") {
             continue;
         }
+        if !job.secret_env.is_empty() {
+            fail_queued(
+                store,
+                &mut job,
+                "Box jobs do not support workload secret references",
+            )
+            .await?;
+            continue;
+        }
         if !job.pin_to_provider {
             fail_queued(store, &mut job, "Box jobs must set pin_to_provider=true").await?;
             continue;

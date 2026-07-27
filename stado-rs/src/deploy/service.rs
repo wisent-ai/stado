@@ -286,7 +286,13 @@ pub fn declared_services(target: &ComputeTarget) -> Vec<ManagedService> {
         if services.iter().any(|service| service.matches(label)) {
             continue;
         }
-        services.push(launchd_service(&target.name, label, plist, SOURCE_RECOVERY, ""));
+        services.push(launchd_service(
+            &target.name,
+            label,
+            plist,
+            SOURCE_RECOVERY,
+            "",
+        ));
     }
     services
 }
@@ -544,7 +550,10 @@ pub fn split_marker_body<'a>(stdout: &'a str, marker: &str) -> Option<(&'a str, 
     let mut rest = stdout;
     loop {
         let (line, tail) = rest.split_once('\n').unwrap_or((rest, ""));
-        if let Some(field) = line.strip_prefix(marker).and_then(|head| head.strip_prefix('\t')) {
+        if let Some(field) = line
+            .strip_prefix(marker)
+            .and_then(|head| head.strip_prefix('\t'))
+        {
             return Some((field, tail));
         }
         if tail.is_empty() {
@@ -626,7 +635,10 @@ fn validate_program(program: &str) -> Result<(), DeployError> {
             py_str_repr(program)
         )));
     }
-    if program.chars().any(|ch| ch.is_control() || "<>&\"'".contains(ch)) {
+    if program
+        .chars()
+        .any(|ch| ch.is_control() || "<>&\"'".contains(ch))
+    {
         return Err(DeployError(format!(
             "--from {} contains characters that cannot be rendered into a unit file",
             py_str_repr(program)
@@ -948,9 +960,21 @@ pub fn record_from_report(
     managed_since: &str,
 ) -> ManagedService {
     let mut service = if report.kind() == KIND_LAUNCHD {
-        launchd_service(host, &report.unit, &report.path, SOURCE_REGISTRY, managed_since)
+        launchd_service(
+            host,
+            &report.unit,
+            &report.path,
+            SOURCE_REGISTRY,
+            managed_since,
+        )
     } else {
-        systemd_service(host, &report.unit, &report.path, SOURCE_REGISTRY, managed_since)
+        systemd_service(
+            host,
+            &report.unit,
+            &report.path,
+            SOURCE_REGISTRY,
+            managed_since,
+        )
     };
     service.name = name.to_string();
     service
@@ -1119,7 +1143,10 @@ pub fn remove_service(
         .get_mut(SERVICES_KEY)
         .and_then(Value::as_array_mut)
         .ok_or_else(|| {
-            DeployError(format!("{} declares no managed services", py_str_repr(host)))
+            DeployError(format!(
+                "{} declares no managed services",
+                py_str_repr(host)
+            ))
         })?;
     // Position over the array itself, not over a filtered view: a record
     // that is not an object still occupies a slot, and an index taken from
@@ -1308,7 +1335,9 @@ fn tokenize(text: &str) -> Result<Vec<Token<'_>>, DeployError> {
         } else if let Some(name) = tag.strip_suffix('/') {
             tokens.push(Token::Empty(name.trim()));
         } else {
-            tokens.push(Token::Open(tag.split_whitespace().next().unwrap_or_default()));
+            tokens.push(Token::Open(
+                tag.split_whitespace().next().unwrap_or_default(),
+            ));
         }
     }
 }
@@ -1370,7 +1399,10 @@ fn decode_entities(text: &str) -> String {
 /// A decimal (`#NN`) or hexadecimal (`#xHH`) character reference.
 fn numeric_entity(entity: &str) -> Option<char> {
     let digits = entity.strip_prefix('#')?;
-    let code = match digits.strip_prefix('x').or_else(|| digits.strip_prefix('X')) {
+    let code = match digits
+        .strip_prefix('x')
+        .or_else(|| digits.strip_prefix('X'))
+    {
         Some(hex) => u32::from_str_radix(hex, HEX_RADIX).ok()?,
         None => digits.parse::<u32>().ok()?,
     };
@@ -1430,8 +1462,9 @@ pub fn parse_plist(text: &str) -> Result<Value, DeployError> {
             Token::Close(name) => {
                 match *name {
                     "dict" | "array" => {
-                        let frame =
-                            stack.pop().ok_or_else(|| malformed("unbalanced container"))?;
+                        let frame = stack
+                            .pop()
+                            .ok_or_else(|| malformed("unbalanced container"))?;
                         let value = match frame {
                             Frame::Dict(map, _) => Value::Object(map),
                             Frame::Array(items) => Value::Array(items),
@@ -1510,7 +1543,10 @@ pub fn parse_systemd_unit(text: &str) -> SystemdUnit {
         if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
             continue;
         }
-        if let Some(name) = line.strip_prefix('[').and_then(|rest| rest.strip_suffix(']')) {
+        if let Some(name) = line
+            .strip_prefix('[')
+            .and_then(|rest| rest.strip_suffix(']'))
+        {
             section = name.trim().to_string();
             continue;
         }

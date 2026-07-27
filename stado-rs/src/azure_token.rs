@@ -9,11 +9,10 @@
 //! - Blob:    scope `https://storage.azure.com/.default`,
 //!   resource `https://storage.azure.com`
 //!
-//! Sources, in order: (a) Azure IMDS managed identity, then (b) the current
-//! `az account get-access-token` operator session. Persistent application
-//! credentials are not accepted from process environment; those belong in
-//! Azure Key Vault. Tokens are cached per scope with their expiry and
-//! refreshed 5 min early.
+//! Sources, in order: (a) Azure IMDS managed identity, then (b) the
+//! `stado-azure` service principal in Skarbiec. Process-environment secrets,
+//! local credential files and Azure CLI sessions are not credential sources.
+//! Tokens are cached per scope with their expiry and refreshed early.
 
 use std::collections::HashMap;
 use std::sync::{LazyLock, RwLock};
@@ -96,9 +95,8 @@ fn json_i64(value: Option<&Value>) -> Option<i64> {
     }
 }
 
-
-/// IMDS managed identity. Short timeout: off-Azure this endpoint hangs, and
-/// the chain must fall through to the CLI.
+/// IMDS managed identity. Short timeout: off-Azure this endpoint hangs, then
+/// the chain falls through to Skarbiec.
 async fn imds_token(http: &reqwest::Client, resource: &str) -> Result<TokenGrant, TokenError> {
     let response = http
         .get("http://169.254.169.254/metadata/identity/oauth2/token")
@@ -133,70 +131,78 @@ async fn imds_token(http: &reqwest::Client, resource: &str) -> Result<TokenGrant
 /// Seconds until an `expiresOn` value from `az account get-access-token`
 /// ("2026-07-25 21:02:38.000000", local time — the same interpretation
 /// azure-identity's AzureCliCredential uses). Split out pure for tests.
+#[cfg(test)]
 fn az_cli_expires_in(expires_on: &str, now_unix: i64) -> Option<i64> {
     let naive = chrono::NaiveDateTime::parse_from_str(expires_on, "%Y-%m-%d %H:%M:%S%.f").ok()?;
     let local = naive.and_local_timezone(chrono::Local).single()?;
     Some(local.timestamp() - now_unix)
 }
 
-/// (c) Azure CLI (Python AzureCliCredential).
-async fn cli_token(resource: &str) -> Result<TokenGrant, TokenError> {
-    let output = tokio::process::Command::new("az")
-        .args([
-            "account",
-            "get-access-token",
-            "--resource",
-            resource,
-            "--output",
-            "json",
-        ])
-        .output()
+/// Managed identity first; an off-platform service principal comes only from
+/// the `stado-azure` Skarbiec item.
+async fn fetch_token(
+    http: &reqwest::Client,
+    scope: &str,
+    resource: &str,
+) -> Result<TokenGrant, TokenError> {
+    if let Ok(grant) = imds_token(http, resource).await {
+        return Ok(grant);
+    }
+    let value = crate::skarbiec::Client::configured_item("stado-azure")
         .await
-        .map_err(|err| TokenError::Auth(format!("az CLI not runnable: {err}")))?;
-    if !output.status.success() {
+        .map_err(|err| TokenError::Auth(err.to_string()))?;
+    let field = |name: &str| {
+        value
+            .get(name)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                TokenError::Auth(format!(
+                    "Skarbiec item stado-azure field {name} is required"
+                ))
+            })
+    };
+    let tenant_id = field("tenant_id")?;
+    let client_id = field("client_id")?;
+    let client_secret = field("client_secret")?;
+    let response = http
+        .post(format!(
+            "https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+        ))
+        .form(&[
+            ("grant_type", "client_credentials"),
+            ("client_id", client_id),
+            ("client_secret", client_secret),
+            ("scope", scope),
+        ])
+        .send()
+        .await?;
+    let status = response.status();
+    let body: Value = response.json().await.unwrap_or(Value::Null);
+    if !status.is_success() {
         return Err(TokenError::Auth(format!(
-            "az account get-access-token -> {}",
-            String::from_utf8_lossy(&output.stderr)
+            "Azure OAuth token exchange failed with HTTP {status}: {}",
+            body.to_string()
                 .chars()
-                .take(280)
+                .take(usize::from(u8::MAX))
                 .collect::<String>()
         )));
     }
-    let body: Value = serde_json::from_slice(&output.stdout)
-        .map_err(|err| TokenError::Auth(format!("az CLI output is not JSON: {err}")))?;
     let access_token = body
-        .get("accessToken")
+        .get("access_token")
         .and_then(Value::as_str)
-        .unwrap_or_default()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| TokenError::Auth("Azure OAuth response has no access_token".into()))?
         .to_string();
-    if access_token.is_empty() {
-        return Err(TokenError::Auth("az CLI output has no accessToken".into()));
-    }
-    let now = chrono::Utc::now().timestamp();
-    let expires_in = body
-        .get("expiresOn")
-        .and_then(Value::as_str)
-        .and_then(|expires_on| az_cli_expires_in(expires_on, now))
-        .unwrap_or(3600);
+    let expires_in = json_i64(body.get("expires_in")).unwrap_or_else(|| i64::from(u16::MAX));
     Ok(TokenGrant {
         access_token,
         expires_in,
     })
 }
 
-/// Workload/operator identity sources, in order.
-async fn fetch_token(
-    http: &reqwest::Client,
-    resource: &str,
-) -> Result<TokenGrant, TokenError> {
-    if let Ok(grant) = imds_token(http, resource).await {
-        return Ok(grant);
-    }
-    cli_token(resource).await
-}
-
-/// Fresh bearer token for `scope` (OAuth) / `resource` (IMDS + az CLI
-/// naming for the same audience), from cache or the chain.
+/// Fresh bearer token for `scope` (OAuth) / `resource` (IMDS naming for the
+/// same audience), from cache or the managed-identity/Skarbiec chain.
 pub(crate) async fn bearer_token(
     http: &reqwest::Client,
     scope: &str,
@@ -206,7 +212,7 @@ pub(crate) async fn bearer_token(
     if let Some(token) = cached_token(scope, now) {
         return Ok(token);
     }
-    let grant = fetch_token(http, resource).await?;
+    let grant = fetch_token(http, scope, resource).await?;
     cache_token(scope, &grant, now);
     Ok(grant.access_token)
 }

@@ -101,9 +101,9 @@ fn next_link(header: &str) -> String {
     String::new()
 }
 
-/// List every file at one immutable Hugging Face dataset revision
-/// (Python `fetch_hf_tree`). Follows the `Link: rel="next"` pagination;
-/// sends `Authorization: Bearer $HF_TOKEN` when the env var is set.
+/// List every file at one immutable Hugging Face dataset revision. Follows
+/// `rel="next"` pagination and uses `stado-huggingface/token` from Skarbiec
+/// when present.
 pub async fn fetch_hf_tree(repo: &str, revision: &str) -> Result<Vec<String>, TreeFetchError> {
     let encoded_repo = quote(repo, true);
     let encoded_revision = quote(revision, false);
@@ -119,10 +119,13 @@ pub async fn fetch_hf_tree(repo: &str, revision: &str) -> Result<Vec<String>, Tr
             kind: "RequestError",
             message: exc.to_string(),
         })?;
-    let token = std::env::var("HF_TOKEN")
-        .unwrap_or_default()
-        .trim()
-        .to_string();
+    let token = crate::skarbiec::read_string("stado-huggingface", "token")
+        .await
+        .map_err(|exc| TreeFetchError {
+            kind: "AuthenticationError",
+            message: exc.to_string(),
+        })?
+        .unwrap_or_default();
 
     let mut paths: Vec<String> = Vec::new();
     while !url.is_empty() {

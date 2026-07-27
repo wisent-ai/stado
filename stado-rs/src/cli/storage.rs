@@ -31,7 +31,7 @@
 //! - `verify` treats an unreadable side as unknown, never as empty.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
@@ -63,6 +63,16 @@ pub enum StorageCommands {
     Cat(StorageCatArgs),
     /// Compare two stores object-for-object. Read-only; copies nothing.
     Verify(Box<StorageVerifyArgs>),
+    /// Upload a product object through the provider-neutral Stado namespace.
+    Put(StoragePutArgs),
+    /// Download a product object through the provider-neutral Stado namespace.
+    Get(StorageGetArgs),
+    /// List product objects in one provider-neutral Stado namespace.
+    Objects(StorageObjectsArgs),
+    /// Delete a product object through the provider-neutral Stado namespace.
+    Rm(StorageRmArgs),
+    /// Print the stable Stado gateway URL for a product object.
+    Url(StorageUrlArgs),
 }
 
 /// The locator flags shared by `copy` and `verify`, so both commands
@@ -195,6 +205,57 @@ pub struct StorageCatArgs {
 }
 
 #[derive(Args, Debug)]
+pub struct StoragePutArgs {
+    /// stado://<namespace>/<key>.
+    uri: String,
+    /// Local source file, or '-' for stdin.
+    source: String,
+    /// Refuse to replace an existing object.
+    #[arg(long)]
+    if_absent: bool,
+    /// Media type retained as provider-neutral object metadata.
+    #[arg(long, default_value = "application/octet-stream")]
+    content_type: String,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct StorageGetArgs {
+    /// stado://<namespace>/<key>.
+    uri: String,
+    /// Local destination file, or '-' for stdout.
+    destination: String,
+}
+
+#[derive(Args, Debug)]
+pub struct StorageObjectsArgs {
+    /// Logical namespace, for example `images` or `checkpoints`.
+    namespace: String,
+    /// Optional key prefix inside the namespace.
+    #[arg(default_value = "")]
+    prefix: String,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct StorageRmArgs {
+    /// stado://<namespace>/<key>.
+    uri: String,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct StorageUrlArgs {
+    /// stado://<namespace>/<key>.
+    uri: String,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
 pub struct StorageVerifyArgs {
     #[command(flatten)]
     ends: EndpointArgs,
@@ -229,6 +290,11 @@ pub async fn dispatch(command: StorageCommands) -> Result<(), CmdError> {
         StorageCommands::Stat(args) => stat(&args).await,
         StorageCommands::Cat(args) => cat(&args).await,
         StorageCommands::Verify(args) => verify(&args).await,
+        StorageCommands::Put(args) => put(&args).await,
+        StorageCommands::Get(args) => get(&args).await,
+        StorageCommands::Objects(args) => objects(&args).await,
+        StorageCommands::Rm(args) => rm(&args).await,
+        StorageCommands::Url(args) => object_url(&args),
     }
 }
 
@@ -797,6 +863,518 @@ async fn cat(args: &StorageCatArgs) -> Result<(), CmdError> {
     let mut out = std::io::stdout().lock();
     out.write_all(&bytes)?;
     out.flush()?;
+    Ok(())
+}
+
+// ---- provider-neutral product objects ----
+
+fn max_object_api_error_body() -> usize {
+    usize::from(u16::MAX)
+}
+
+fn max_object_api_json_body() -> usize {
+    max_object_api_error_body() * u8::BITS as usize * u8::BITS as usize * u16::BITS as usize
+}
+
+fn max_object_api_download_body() -> usize {
+    crate::object_store::max_object_bytes()
+}
+
+struct RemoteObjectApi {
+    http: reqwest::Client,
+    base_url: url::Url,
+    token: String,
+}
+
+#[derive(serde::Deserialize)]
+struct RemotePutResponse {
+    state: String,
+    uri: String,
+    content_type: String,
+}
+
+#[derive(serde::Deserialize)]
+struct RemoteDeleteResponse {
+    state: String,
+    uri: String,
+}
+
+#[derive(serde::Deserialize)]
+struct RemoteObjectListResponse {
+    objects: Vec<RemoteObjectListItem>,
+}
+
+#[derive(serde::Deserialize)]
+struct RemoteObjectListItem {
+    uri: String,
+    namespace: String,
+    key: String,
+    size: Option<u64>,
+    updated_at: Option<String>,
+    #[serde(default)]
+    metadata: BTreeMap<String, String>,
+}
+
+impl RemoteObjectApi {
+    fn configured() -> Result<Option<Self>, CmdError> {
+        let Some(base_url) = configured_object_base_url("STADO_API_URL")? else {
+            return Ok(None);
+        };
+        let token = match std::env::var("STADO_API_TOKEN") {
+            Ok(value) if !value.trim().is_empty() => value.trim().to_string(),
+            Ok(_) | Err(std::env::VarError::NotPresent) => {
+                return Err(CmdError::click(
+                    "STADO_API_TOKEN is required when STADO_API_URL is configured",
+                ));
+            }
+            Err(std::env::VarError::NotUnicode(_)) => {
+                return Err(CmdError::click(
+                    "STADO_API_TOKEN must be valid Unicode when STADO_API_URL is configured",
+                ));
+            }
+        };
+        let http = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?;
+        Ok(Some(Self {
+            http,
+            base_url,
+            token,
+        }))
+    }
+
+    fn endpoint(&self, route: &str, query: &[(&str, &str)]) -> Result<url::Url, CmdError> {
+        object_api_endpoint(&self.base_url, route, query)
+    }
+
+    fn request(&self, method: reqwest::Method, endpoint: url::Url) -> reqwest::RequestBuilder {
+        self.http.request(method, endpoint).bearer_auth(&self.token)
+    }
+
+    async fn put(
+        &self,
+        uri: &str,
+        content_type: &str,
+        if_absent: bool,
+        bytes: Vec<u8>,
+    ) -> Result<(), CmdError> {
+        let if_absent = if if_absent { "true" } else { "false" };
+        let endpoint = self.endpoint("/api/object", &[("uri", uri), ("if_absent", if_absent)])?;
+        let response = self
+            .request(reqwest::Method::PUT, endpoint)
+            .header(reqwest::header::CONTENT_TYPE, content_type)
+            .body(bytes)
+            .send()
+            .await?;
+        let payload: RemotePutResponse = self.response_json(response, "object PUT").await?;
+        if payload.state != "stored" || payload.uri != uri || payload.content_type != content_type {
+            return Err(CmdError::click(
+                "Stado object API returned an inconsistent object PUT response",
+            ));
+        }
+        Ok(())
+    }
+
+    async fn get(&self, uri: &str) -> Result<Vec<u8>, CmdError> {
+        let endpoint = self.endpoint("/api/object", &[("uri", uri)])?;
+        let response = self.request(reqwest::Method::GET, endpoint).send().await?;
+        self.success_body(response, max_object_api_download_body(), "object GET")
+            .await
+    }
+
+    async fn list(&self, namespace: &str, prefix: &str) -> Result<Vec<Value>, CmdError> {
+        let endpoint = self.endpoint(
+            "/api/object/list",
+            &[("namespace", namespace), ("prefix", prefix)],
+        )?;
+        let response = self.request(reqwest::Method::GET, endpoint).send().await?;
+        let payload: RemoteObjectListResponse = self.response_json(response, "object list").await?;
+        let mut values = Vec::with_capacity(payload.objects.len());
+        for item in payload.objects {
+            let object = crate::object_store::ObjectRef::parse(&item.uri).map_err(|error| {
+                CmdError::click(format!(
+                    "Stado object API returned an invalid object-list URI: {error}"
+                ))
+            })?;
+            if object.namespace() != namespace
+                || !object.key().starts_with(prefix)
+                || item.namespace.as_str() != object.namespace()
+                || item.key.as_str() != object.key()
+            {
+                return Err(CmdError::click(
+                    "Stado object API returned an inconsistent object-list item",
+                ));
+            }
+            values.push(json!({
+                "uri": item.uri,
+                "namespace": item.namespace,
+                "key": item.key,
+                "size": item.size,
+                "updated_at": item.updated_at,
+                "metadata": item.metadata,
+            }));
+        }
+        Ok(values)
+    }
+
+    async fn delete(&self, uri: &str) -> Result<(), CmdError> {
+        let endpoint = self.endpoint("/api/object", &[("uri", uri)])?;
+        let response = self
+            .request(reqwest::Method::DELETE, endpoint)
+            .send()
+            .await?;
+        let payload: RemoteDeleteResponse = self.response_json(response, "object DELETE").await?;
+        if payload.state != "absent" || payload.uri != uri {
+            return Err(CmdError::click(
+                "Stado object API returned an inconsistent object DELETE response",
+            ));
+        }
+        Ok(())
+    }
+
+    async fn response_json<T>(
+        &self,
+        response: reqwest::Response,
+        operation: &str,
+    ) -> Result<T, CmdError>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        let status = response.status();
+        let body = self
+            .success_body(response, max_object_api_json_body(), operation)
+            .await?;
+        serde_json::from_slice(&body).map_err(|error| {
+            CmdError::click(format!(
+                "Stado object API returned invalid JSON for {operation} (HTTP {status}): {error}"
+            ))
+        })
+    }
+
+    async fn success_body(
+        &self,
+        mut response: reqwest::Response,
+        limit: usize,
+        operation: &str,
+    ) -> Result<Vec<u8>, CmdError> {
+        if !response.status().is_success() {
+            return Err(self.response_error(response).await);
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > limit as u64)
+        {
+            return Err(CmdError::click(format!(
+                "Stado object API {operation} response exceeds the {limit}-byte limit"
+            )));
+        }
+        let capacity = response
+            .content_length()
+            .and_then(|length| usize::try_from(length).ok())
+            .unwrap_or_default();
+        let mut body = Vec::with_capacity(capacity);
+        while let Some(chunk) = response.chunk().await? {
+            if chunk.len() > limit.saturating_sub(body.len()) {
+                return Err(CmdError::click(format!(
+                    "Stado object API {operation} response exceeds the {limit}-byte limit"
+                )));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok(body)
+    }
+
+    async fn response_error(&self, mut response: reqwest::Response) -> CmdError {
+        let status = response.status();
+        let declared_length = response.content_length();
+        let max_body = max_object_api_error_body();
+        let mut body = Vec::new();
+        let mut truncated = false;
+        while body.len() < max_body {
+            let chunk = match response.chunk().await {
+                Ok(Some(chunk)) => chunk,
+                Ok(None) => break,
+                Err(error) => {
+                    let detail = response_body_detail(&body, &self.token);
+                    return CmdError::click(format!(
+                        "Stado object API returned HTTP {status}; partial response body: \
+                         {detail}; body read failed: {error}"
+                    ));
+                }
+            };
+            let remaining = max_body - body.len();
+            if chunk.len() > remaining {
+                body.extend_from_slice(&chunk[..remaining]);
+                truncated = true;
+                break;
+            }
+            body.extend_from_slice(&chunk);
+        }
+        if body.len() == max_body
+            && declared_length
+                .map(|length| length > max_body as u64)
+                .unwrap_or(true)
+        {
+            truncated = true;
+        }
+        let detail = response_body_detail(&body, &self.token);
+        let suffix = if truncated {
+            " [response body truncated]"
+        } else {
+            ""
+        };
+        CmdError::click(format!(
+            "Stado object API returned HTTP {status}: {detail}{suffix}"
+        ))
+    }
+}
+
+fn configured_object_base_url(variable: &str) -> Result<Option<url::Url>, CmdError> {
+    let value = match std::env::var(variable) {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => return Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err(CmdError::click(format!("{variable} must be valid Unicode")));
+        }
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    let url = url::Url::parse(value)
+        .map_err(|error| CmdError::click(format!("invalid {variable}: {error}")))?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err(CmdError::click(format!(
+            "{variable} must be an absolute HTTP or HTTPS URL"
+        )));
+    }
+    let host = url.host_str().unwrap_or_default();
+    let loopback = host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback());
+    if url.scheme() != "https" && !loopback {
+        return Err(CmdError::click(format!(
+            "{variable} must use HTTPS unless its host is loopback"
+        )));
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(CmdError::click(format!(
+            "{variable} must not contain embedded credentials"
+        )));
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(CmdError::click(format!(
+            "{variable} must not contain a query string or fragment"
+        )));
+    }
+    Ok(Some(url))
+}
+
+fn object_api_endpoint(
+    base_url: &url::Url,
+    route: &str,
+    query: &[(&str, &str)],
+) -> Result<url::Url, CmdError> {
+    let mut endpoint = base_url.clone();
+    {
+        let mut segments = endpoint.path_segments_mut().map_err(|()| {
+            CmdError::click("configured object base URL cannot be used as an HTTP API base URL")
+        })?;
+        segments.pop_if_empty();
+        for segment in route.trim_start_matches('/').split('/') {
+            segments.push(segment);
+        }
+    }
+    if !query.is_empty() {
+        let mut pairs = endpoint.query_pairs_mut();
+        for &(name, value) in query {
+            pairs.append_pair(name, value);
+        }
+    }
+    Ok(endpoint)
+}
+
+fn response_body_detail(body: &[u8], secret: &str) -> String {
+    let detail = String::from_utf8_lossy(body);
+    let detail = detail.trim();
+    if detail.is_empty() {
+        "<empty response body>".to_string()
+    } else {
+        detail.replace(secret, "[REDACTED]")
+    }
+}
+
+fn read_object_source(source: &str) -> Result<Vec<u8>, CmdError> {
+    if source == "-" {
+        let mut bytes = Vec::new();
+        std::io::stdin().lock().read_to_end(&mut bytes)?;
+        Ok(bytes)
+    } else {
+        Ok(std::fs::read(source)?)
+    }
+}
+
+async fn put(args: &StoragePutArgs) -> Result<(), CmdError> {
+    let object = crate::object_store::ObjectRef::parse(&args.uri)?;
+    let uri = object.to_string();
+    if let Some(remote) = RemoteObjectApi::configured()? {
+        let bytes = read_object_source(&args.source)?;
+        remote
+            .put(&uri, &args.content_type, args.if_absent, bytes)
+            .await?;
+    } else {
+        let path = object.storage_path();
+        let store = JobStorage::new().await?;
+        let uploaded = if args.if_absent {
+            if args.source == "-" {
+                let bytes = read_object_source(&args.source)?;
+                let mut source = tempfile::NamedTempFile::new()?;
+                source.write_all(&bytes)?;
+                store.upload_file_if_absent(&path, source.path()).await?
+            } else {
+                store
+                    .upload_file_if_absent(&path, std::path::Path::new(&args.source))
+                    .await?
+            }
+        } else {
+            let bytes = read_object_source(&args.source)?;
+            store.upload_bytes(&path, &bytes).await?;
+            true
+        };
+
+        if !uploaded {
+            return Err(CmdError::click(format!(
+                "{object} already exists; --if-absent refused to replace it"
+            )));
+        }
+
+        let metadata = crate::object_store::metadata(&object, &args.content_type);
+        store.backend().set_metadata(&path, &metadata).await?;
+    }
+
+    if args.json {
+        echo_json(&json!({
+            "state": "stored",
+            "uri": uri,
+            "content_type": args.content_type,
+        }))?;
+    } else {
+        println!("{uri}");
+    }
+    Ok(())
+}
+
+async fn get(args: &StorageGetArgs) -> Result<(), CmdError> {
+    let object = crate::object_store::ObjectRef::parse(&args.uri)?;
+    let uri = object.to_string();
+    let bytes = if let Some(remote) = RemoteObjectApi::configured()? {
+        remote.get(&uri).await?
+    } else {
+        let store = JobStorage::new().await?;
+        let Some(bytes) = store.read_bytes(&object.storage_path()).await? else {
+            return Err(CmdError::click(format!("{object}: absent")));
+        };
+        bytes
+    };
+    if args.destination == "-" {
+        let mut out = std::io::stdout().lock();
+        out.write_all(&bytes)?;
+        out.flush()?;
+    } else {
+        std::fs::write(&args.destination, bytes)?;
+    }
+    Ok(())
+}
+
+async fn objects(args: &StorageObjectsArgs) -> Result<(), CmdError> {
+    let storage_prefix =
+        crate::object_store::ObjectRef::namespace_prefix(&args.namespace, &args.prefix)?;
+    let values = if let Some(remote) = RemoteObjectApi::configured()? {
+        remote.list(&args.namespace, &args.prefix).await?
+    } else {
+        let store = JobStorage::new().await?;
+        let blobs = store
+            .backend()
+            .list_blobs_with_meta(&storage_prefix)
+            .await?;
+        let mut values = Vec::with_capacity(blobs.len());
+        for blob in blobs {
+            let object = crate::object_store::ObjectRef::from_storage_path(&blob.name)?;
+            values.push(json!({
+                "uri": object.to_string(),
+                "namespace": object.namespace(),
+                "key": object.key(),
+                "size": blob.size,
+                "updated_at": render_optional_stamp(blob.updated),
+                "metadata": blob.metadata,
+            }));
+        }
+        values
+    };
+    if args.json {
+        echo_json(&json!({"objects": values}))?;
+    } else {
+        let rows = values
+            .iter()
+            .map(|value| {
+                vec![
+                    value["uri"].as_str().unwrap_or_default().to_string(),
+                    value
+                        .get("size")
+                        .and_then(Value::as_u64)
+                        .map_or_else(|| "?".to_string(), |size| size.to_string()),
+                    value["updated_at"].as_str().unwrap_or_default().to_string(),
+                ]
+            })
+            .collect::<Vec<_>>();
+        print_table(&["URI", "BYTES", "UPDATED"], &rows);
+    }
+    Ok(())
+}
+
+async fn rm(args: &StorageRmArgs) -> Result<(), CmdError> {
+    let object = crate::object_store::ObjectRef::parse(&args.uri)?;
+    let uri = object.to_string();
+    if let Some(remote) = RemoteObjectApi::configured()? {
+        remote.delete(&uri).await?;
+    } else {
+        let store = JobStorage::new().await?;
+        store.delete_blob(&object.storage_path()).await?;
+    }
+    if args.json {
+        echo_json(&json!({"state": "absent", "uri": uri}))?;
+    } else {
+        println!("{uri}");
+    }
+    Ok(())
+}
+
+fn object_url(args: &StorageUrlArgs) -> Result<(), CmdError> {
+    let object = crate::object_store::ObjectRef::parse(&args.uri)?;
+    let (base_url, route) = if object.namespace() == "public" {
+        let base_url = match configured_object_base_url("STADO_PUBLIC_BASE_URL")? {
+            Some(base_url) => base_url,
+            None => configured_object_base_url("STADO_API_URL")?.ok_or_else(|| {
+                CmdError::click(
+                    "STADO_PUBLIC_BASE_URL or STADO_API_URL is required to render a public object URL",
+                )
+            })?,
+        };
+        (base_url, "/api/public/object")
+    } else {
+        let remote = RemoteObjectApi::configured()?.ok_or_else(|| {
+            CmdError::click("STADO_API_URL is required to render a private object URL")
+        })?;
+        (remote.base_url, "/api/object")
+    };
+    let uri = object.to_string();
+    let url = object_api_endpoint(&base_url, route, &[("uri", &uri)])?;
+    if args.json {
+        echo_json(&json!({"uri": uri, "url": url.as_str()}))?;
+    } else {
+        println!("{url}");
+    }
     Ok(())
 }
 

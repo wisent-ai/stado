@@ -64,7 +64,7 @@ if [ -z \"$wc_bin\" ]; then
   exit 66
 fi
 printf 'STADO_PREVIEW_BIN\\t%s\\n' \"$wc_bin\"
-plan=$(GOOGLE_APPLICATION_CREDENTIALS=\"${GOOGLE_APPLICATION_CREDENTIALS:-$HOME/.config/gcloud/application_default_credentials.json}\" \"$wc_bin\" disk-cleanup --once --dry-run)
+plan=$(\"$wc_bin\" disk-cleanup --once --dry-run)
 plan_rc=$?
 if [ \"$plan_rc\" -ne 0 ]; then
   printf 'STADO_PREVIEW\\tunavailable\\t%s\\n' \"disk-cleanup --dry-run exited $plan_rc\"
@@ -141,9 +141,8 @@ pub fn cleaner_plans(plan: &Value) -> Vec<CleanerPlan> {
     let Some(cleaners) = plan.get("cleaners").and_then(Value::as_object) else {
         return Vec::new();
     };
-    let count = |section: &Value, key: &str| {
-        section.get(key).and_then(Value::as_i64).unwrap_or_default()
-    };
+    let count =
+        |section: &Value, key: &str| section.get(key).and_then(Value::as_i64).unwrap_or_default();
     cleaners
         .iter()
         .map(|(name, section)| CleanerPlan {
