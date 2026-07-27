@@ -1,0 +1,738 @@
+//! GPU detection, eligibility, capacity helpers for the local agent loop.
+//!
+//! Port of `stado/providers/local/helpers/__init__.py`.
+//!
+//! Extracted from providers/local_agent.py in Python to keep the parent
+//! file under the 300-line cap. The 0.4.100 cut adds consumer_id +
+//! assigned_to enforcement to _job_eligible so the coordinator's
+//! centralized matcher (_assign_jobs_to_agents in coordinator.py) can pin
+//! queued jobs to specific agents instead of every agent racing to claim
+//! from a global FIFO. Without this enforcement, fleet-aware LPT
+//! scheduling collapses to greedy first-come-first-served and the makespan
+//! grows.
+
+use std::collections::BTreeMap;
+use std::path::Path;
+use std::sync::LazyLock;
+
+use crate::catalog::GPU_SIZING;
+use crate::config::{self, estimate_gpu_memory};
+use crate::constants;
+use crate::models::{activation_extraction_must_share_gpu, Job};
+use crate::queue::{JobStorage, StorageError};
+use crate::sizing::Sizing;
+
+// `_accel_hourly_rate` is NOT re-implemented here: the Python docstring
+// says it "mirrors scheduler._accel_hourly_rate so both consumers apply the
+// same cost-cap rule" — the Rust port shares the single implementation in
+// `scheduler::scheduler::accel_hourly_rate` (re-exported for callers that
+// imported it from helpers in Python).
+pub use crate::scheduler::scheduler::accel_hourly_rate;
+
+use super::gpu_probe;
+use super::Slot;
+
+/// Python `VAST_API`.
+pub const VAST_API: &str = "https://console.vast.ai/api/v0";
+
+static MODEL_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"--model\s+(\S+)").expect("static regex compiles"));
+
+/// Check if any Vast.ai instance is currently rented on this machine.
+/// Python `_vast_has_renter`.
+///
+/// No exception swallow: a failed API call would otherwise be silently
+/// treated as 'no renter' and the agent would claim jobs on top of a paid
+/// Vast.ai renter, wasting both the renter's GPU time and ours. Caller
+/// must crash visibly so the operator notices Vast.ai outage — hence the
+/// `Err` propagation (and `error_for_status`, matching urllib's raise on
+/// HTTP errors).
+pub async fn vast_has_renter() -> Result<bool, reqwest::Error> {
+    let api_key = std::env::var("VAST_API_KEY").unwrap_or_default().trim().to_string();
+    if api_key.is_empty() {
+        return Ok(false);
+    }
+    let body: serde_json::Value = reqwest::Client::new()
+        .get(format!("{VAST_API}/instances?owner=me"))
+        .bearer_auth(api_key)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    Ok(has_running_instance(&body))
+}
+
+/// Pure: any instance in the Vast.ai /instances payload with
+/// `actual_status == "running"`.
+pub fn has_running_instance(body: &serde_json::Value) -> bool {
+    body.get("instances")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|instances| {
+            instances
+                .iter()
+                .any(|i| i.get("actual_status").and_then(serde_json::Value::as_str) == Some("running"))
+        })
+}
+
+/// Pure: Python `name.lower().replace(" ", "-").replace("geforce-", "nvidia-")`.
+pub fn normalize_gpu_name(name: &str) -> String {
+    name.to_lowercase().replace(' ', "-").replace("geforce-", "nvidia-")
+}
+
+/// Pure: first line of a `nvidia-smi --format=csv,noheader,nounits` reply
+/// as an integer MiB count. None when unparsable (Python ValueError path).
+pub fn parse_smi_mib_first(stdout: &str) -> Option<i64> {
+    stdout.trim().lines().next()?.trim().parse().ok()
+}
+
+/// Python `_detect_gpu_type`: nvidia-smi on Linux, sysctl brand string on
+/// macOS, else "cpu".
+pub async fn detect_gpu_type() -> String {
+    if let Ok(out) = tokio::process::Command::new("nvidia-smi")
+        .args(["--query-gpu=name", "--format=csv,noheader"])
+        .output()
+        .await
+    {
+        if out.status.success() {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            // Python: r.stdout.strip().split("\n")[0] — an empty result is
+            // returned verbatim (""), not treated as "no GPU".
+            return normalize_gpu_name(stdout.trim().lines().next().unwrap_or(""));
+        }
+    }
+    if let Ok(out) = tokio::process::Command::new("sysctl")
+        .args(["-n", "machdep.cpu.brand_string"])
+        .output()
+        .await
+    {
+        if String::from_utf8_lossy(&out.stdout).contains("Apple") {
+            return "apple-mps".to_string();
+        }
+    }
+    "cpu".to_string()
+}
+
+/// Python `_detect_local_vram_gb`: total VRAM in GB on the first detected
+/// GPU, 0 if none.
+pub async fn detect_local_vram_gb() -> i64 {
+    match smi_query_mib("memory.total").await {
+        Some(mib) => mib / 1024,
+        None => 0,
+    }
+}
+
+/// Python `_smi_free_vram_gb`: live nvidia-smi free VRAM in GB on the first
+/// GPU, -1 if unreadable.
+pub async fn smi_free_vram_gb() -> i64 {
+    match smi_query_mib("memory.free").await {
+        Some(mib) => mib / 1024,
+        None => -1,
+    }
+}
+
+async fn smi_query_mib(field: &str) -> Option<i64> {
+    let out = tokio::process::Command::new("nvidia-smi")
+        .args([format!("--query-gpu={field}"), "--format=csv,noheader,nounits".to_string()])
+        .output()
+        .await
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_smi_mib_first(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Every GCP gpu_type whose required VRAM tier <= local VRAM.
+/// Python `_compat_accel_types`.
+pub fn compat_accel_types(local_vram_gb: i64) -> Vec<String> {
+    let mut accels: Vec<String> = Vec::new();
+    if let Some(sizing) = GPU_SIZING.get("gcp") {
+        // BTreeMap iterates tiers ascending, matching Python's sorted(...).
+        for (tier, (_, accel)) in sizing {
+            if local_vram_gb >= *tier && !accel.is_empty() && !accels.iter().any(|a| a == accel) {
+                accels.push((*accel).to_string());
+            }
+        }
+    }
+    accels
+}
+
+/// Local-agent claim rules. Python `_job_eligible`.
+///
+/// NEW (0.4.100): if job.assigned_to was set by the centralized
+/// coordinator matcher, only the agent whose consumer_id matches may
+/// claim. Empty assigned_to means unassigned and any-eligible-agent may
+/// claim (pre-0.4.100 back-compat).
+///
+/// NEW (0.4.131): job.exclusive=True is only eligible on an agent with
+/// zero active slots. Caller passes its current slot count via
+/// active_slot_count so this filter runs at the agent-side claim loop
+/// without needing the slot dict here.
+///
+/// NEW (0.4.379): job.pinned_host is an operator hard-pin from submit
+/// time; only the named consumer may ever claim it. pinned_only=True
+/// (registry target flag) reverses the default: this agent then claims
+/// ONLY jobs explicitly routed to it (pinned_host or assigned_to), so a
+/// shared workstation never picks up stray queue backlog. Pin matching is
+/// case-insensitive: registry hostnames are stored normalized while
+/// consumer_id carries the machine's verbatim gethostname() casing.
+#[allow(clippy::too_many_arguments)]
+pub fn job_eligible(
+    job: &Job,
+    gpu_type: &str,
+    vram_gb: i64,
+    kind: &str,
+    consumer_id: &str,
+    active_slot_count: usize,
+    pinned_only: bool,
+) -> bool {
+    let pinned_host = job.pinned_host.to_lowercase();
+    let cid = consumer_id.to_lowercase();
+    if !pinned_host.is_empty() && pinned_host != cid {
+        return false;
+    }
+    let assigned = job.assigned_to.as_str();
+    if !assigned.is_empty() && !consumer_id.is_empty() && assigned != consumer_id {
+        return false;
+    }
+    if pinned_only && pinned_host != cid && assigned != consumer_id {
+        return false;
+    }
+    if job.exclusive && active_slot_count > 0 {
+        return false;
+    }
+    if kind != "local" {
+        if let Some(caps) = MODEL_RE.captures(&job.command) {
+            if config::is_local_only_model(caps[1].trim_matches(['\'', '"'])) {
+                return false;
+            }
+        }
+    }
+    if job.pin_to_provider && job.provider != kind {
+        return false;
+    }
+    let job_accel = job.gpu_type.as_str();
+    let matches = job.provider == "local"
+        || job_accel.is_empty()
+        || job_accel == gpu_type
+        || (vram_gb > 0 && compat_accel_types(vram_gb).iter().any(|a| a == job_accel));
+    if !matches {
+        return false;
+    }
+    let cap = job.max_cost_per_hour_usd;
+    if cap > 0.0 && !job_accel.is_empty() {
+        let rate = accel_hourly_rate(job_accel, job.preemptible);
+        if rate > 0.0 && rate > cap {
+            return false;
+        }
+    }
+    true
+}
+
+/// Slot-shaped capacity broadcast for back-compat schedulers.
+/// Python `_build_capacity_dict`.
+pub fn build_capacity_dict(
+    gpu_type: &str,
+    free_vram_gb: i64,
+    total_vram_gb: i64,
+) -> BTreeMap<String, i64> {
+    let mut out: BTreeMap<String, i64> = BTreeMap::new();
+    if gpu_type.is_empty() || gpu_type == "cpu" || free_vram_gb <= 0 {
+        return out;
+    }
+    if let Some(sizing) = GPU_SIZING.get("gcp") {
+        for (tier, (_, accel)) in sizing {
+            if total_vram_gb >= *tier && !accel.is_empty() {
+                let n = (free_vram_gb / (*tier).max(1)).max(0);
+                if n > 0 {
+                    let entry = out.entry((*accel).to_string()).or_insert(0);
+                    *entry = (*entry).max(n);
+                }
+            }
+        }
+    }
+    if !out.contains_key(gpu_type) {
+        out.insert(gpu_type.to_string(), 1);
+    }
+    out
+}
+
+/// Python `_slot_is_exclusive`.
+pub fn slot_is_exclusive(slot: &Slot) -> bool {
+    if activation_extraction_must_share_gpu(&slot.job.command) {
+        return false;
+    }
+    // Per-job opt-in: Job.exclusive=True takes precedence over the
+    // regex-on-command path. Used for workloads (e.g. Z-Image LoRA
+    // training, SDXL full finetune) whose peak VRAM is hard to bound from
+    // the command string alone, but which the submitter has tagged
+    // exclusive at submit time.
+    if slot.job.exclusive {
+        return true;
+    }
+    match MODEL_RE.captures(&slot.job.command) {
+        Some(caps) => config::is_exclusive_model(caps[1].trim_matches(['\'', '"'])),
+        None => false,
+    }
+}
+
+/// Best known VRAM footprint for a running slot. Python `_slot_vram`.
+///
+/// Prefer live per-process nvidia-smi attribution when available. Fall
+/// back to the declared/observed model estimate only before the job has
+/// allocated CUDA memory. This keeps admission tied to measured live usage
+/// instead of a stale pre-start estimate.
+pub async fn slot_vram(slot: &Slot, sizing: &Sizing, store: &JobStorage) -> Result<i64, StorageError> {
+    let declared = slot.job.gpu_mem_gb.max(estimate_gpu_memory(&slot.job.command, sizing, store).await?);
+    let live = slot_live_vram_gb(slot).await;
+    Ok(declared.max(live).max(slot.peak_vram_gb))
+}
+
+/// Python `_slot_live_vram_gb`: 0 when the slot has no pid or the probe is
+/// unreadable (Python's broad `except Exception` / `max(0, ...)`).
+pub async fn slot_live_vram_gb(slot: &Slot) -> i64 {
+    let Some(pid) = slot.pid else { return 0 };
+    gpu_probe::smi_job_used_gb(pid).await.max(0)
+}
+
+/// `kill(pid, 0)` liveness check, standing in for Python's
+/// `proc.poll() is None`.
+pub(crate) fn pid_alive(pid: i32) -> bool {
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok()
+}
+
+/// True when a GPU slot is live but CUDA allocation is not visible yet.
+/// Python `_slot_waiting_for_vram`.
+pub async fn slot_waiting_for_vram(
+    slot: &Slot,
+    sizing: &Sizing,
+    store: &JobStorage,
+) -> Result<bool, StorageError> {
+    let Some(pid) = slot.pid else { return Ok(false) };
+    if !pid_alive(pid) {
+        return Ok(false);
+    }
+    let declared = slot.job.gpu_mem_gb.max(estimate_gpu_memory(&slot.job.command, sizing, store).await?);
+    Ok(declared > 0 && slot_live_vram_gb(slot).await <= 0)
+}
+
+/// Pure parser for /proc/meminfo: value of `key` (e.g. "MemAvailable:")
+/// in GB. None when the key is absent or unparsable.
+pub fn parse_meminfo_gb(text: &str, key: &str) -> Option<f64> {
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix(key) {
+            let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
+            return Some(kb as f64 / (1024.0 * 1024.0));
+        }
+    }
+    None
+}
+
+fn meminfo_gb(key: &str) -> f64 {
+    std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|text| parse_meminfo_gb(&text, key))
+        .unwrap_or(-1.0)
+}
+
+/// Free host RAM (GB) from /proc/meminfo MemAvailable; -1.0 if unreadable
+/// (e.g. non-Linux) — caller treats <0 as 'unknown, do not gate'.
+/// Python `_free_ram_gb`.
+pub fn free_ram_gb() -> f64 {
+    meminfo_gb("MemAvailable:")
+}
+
+/// Total host RAM (GB) from /proc/meminfo MemTotal; -1.0 if unreadable.
+/// The sum-based admission gate bounds anonymous slot RSS against THIS,
+/// not MemAvailable — MemAvailable counts reclaimable staging page-cache
+/// as free, so it masked the real footprint and the agent over-admitted to
+/// a status=1 OOM at ~100G on a 123G box. Python `_total_ram_gb`.
+pub fn total_ram_gb() -> f64 {
+    meminfo_gb("MemTotal:")
+}
+
+/// Pure parser for /proc/<pid>/status: first VmRSS value in kB.
+pub fn parse_status_vmrss_kb(text: &str) -> Option<u64> {
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("VmRSS:") {
+            return rest.split_whitespace().next()?.parse().ok();
+        }
+    }
+    None
+}
+
+fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
+    needle.is_empty() || haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+/// Sum of non-wisent, non-slot resident RAM (GB). Python
+/// `_static_ram_reserve_gb`.
+///
+/// Walks /proc/*/status and adds VmRSS for every process that is NOT the
+/// agent itself and does not look like an extraction slot
+/// (extract_and_upload, upload_worker) or the agent binary. This captures
+/// ComfyUI, system daemons, and any other baseline load without hardcoding
+/// a reserve number.
+pub fn static_ram_reserve_gb() -> f64 {
+    static_ram_reserve_gb_at(Path::new("/proc"))
+}
+
+/// [`static_ram_reserve_gb`] with an injectable procfs root (tests use a
+/// fabricated tree under a TempDir).
+pub fn static_ram_reserve_gb_at(proc_root: &Path) -> f64 {
+    let own = std::process::id();
+    let mut total_kb: u64 = 0;
+    let Ok(entries) = std::fs::read_dir(proc_root) else { return 0.0 };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Ok(pid) = name.parse::<u32>() else { continue };
+        if pid == own {
+            continue;
+        }
+        let Ok(cmd) = std::fs::read(entry.path().join("cmdline")) else { continue };
+        let cmd: Vec<u8> = cmd.iter().map(|b| if *b == 0 { b' ' } else { *b }).collect();
+        // Skip the agent binary, extraction slots, and their upload workers.
+        if [b"wc agent".as_slice(), b"extract_and_upload", b"upload_worker"]
+            .iter()
+            .any(|token| contains_subslice(&cmd, token))
+        {
+            continue;
+        }
+        if let Some(kb) = std::fs::read_to_string(entry.path().join("status"))
+            .ok()
+            .and_then(|text| parse_status_vmrss_kb(&text))
+        {
+            total_kb += kb;
+        }
+    }
+    total_kb as f64 / (1024.0 * 1024.0)
+}
+
+/// Dynamic RAM headroom: 5% of total RAM with a 4 GiB floor.
+/// Python `_ram_safety_buffer_gb`.
+pub fn ram_safety_buffer_gb() -> f64 {
+    let total = total_ram_gb();
+    if total <= 0.0 {
+        return constants::RAM_SAFETY_BUFFER_MIN_GB as f64;
+    }
+    (constants::RAM_SAFETY_BUFFER_MIN_GB as f64).max(total * constants::RAM_SAFETY_BUFFER_FRACTION)
+}
+
+/// Pure: summed VmRSS of `pids` under `proc_root`, in GB.
+pub fn sum_rss_gb(proc_root: &Path, pids: &std::collections::HashSet<i32>) -> f64 {
+    let mut total_kb: u64 = 0;
+    for p in pids {
+        if let Some(kb) = std::fs::read_to_string(proc_root.join(p.to_string()).join("status"))
+            .ok()
+            .and_then(|text| parse_status_vmrss_kb(&text))
+        {
+            total_kb += kb;
+        }
+    }
+    total_kb as f64 / (1024.0 * 1024.0)
+}
+
+/// Measured resident host RAM (GB) of a running slot's whole process tree
+/// (bash + python + upload workers), summed from /proc/<pid>/status VmRSS.
+/// This is the OBSERVED per-job footprint used to decide if another job
+/// fits — no hardcoded estimate. Python `_slot_rss`.
+pub async fn slot_rss(slot: &Slot) -> f64 {
+    let Some(pid) = slot.pid else { return 0.0 };
+    let pids = gpu_probe::proc_tree_pids(pid).await;
+    sum_rss_gb(Path::new("/proc"), &pids)
+}
+
+/// True when no queued job fits + is eligible for this consumer.
+/// Python `_no_eligible_in_queue`.
+#[allow(clippy::too_many_arguments)]
+pub async fn no_eligible_in_queue(
+    store: &JobStorage,
+    sizing: &Sizing,
+    gpu_type: &str,
+    total_vram_gb: i64,
+    free_vram_gb: i64,
+    kind: &str,
+    consumer_id: &str,
+    active_slot_count: usize,
+) -> Result<bool, StorageError> {
+    let queued = store.list_jobs("queue", 0).await?;
+    for job in queued {
+        let need = job.gpu_mem_gb.max(estimate_gpu_memory(&job.command, sizing, store).await?);
+        if need > free_vram_gb {
+            continue;
+        }
+        if !job_eligible(&job, gpu_type, total_vram_gb, kind, consumer_id, active_slot_count, false) {
+            continue;
+        }
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+/// Total size of files under d in GB. 0 if dir missing.
+/// Python `_staging_size_gb`.
+pub fn staging_size_gb(d: &Path) -> f64 {
+    if !d.is_dir() {
+        return 0.0;
+    }
+    dir_size_bytes(d) as f64 / 1024f64.powi(3)
+}
+
+fn dir_size_bytes(d: &Path) -> u64 {
+    let mut total = 0u64;
+    let Ok(entries) = std::fs::read_dir(d) else { return 0 };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            total += dir_size_bytes(&path);
+        } else if let Ok(md) = path.metadata() {
+            total += md.len();
+        }
+    }
+    total
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::queue::local_file::LocalBackend;
+    use std::sync::Arc;
+
+    #[test]
+    fn normalize_gpu_name_matches_python() {
+        // Byte-faithful: the geforce- rewrite applies AFTER lower+join, so
+        // "NVIDIA GeForce ..." gains a doubled prefix — Python parity.
+        assert_eq!(normalize_gpu_name("NVIDIA GeForce RTX 3090"), "nvidia-nvidia-rtx-3090");
+        assert_eq!(normalize_gpu_name("NVIDIA L4"), "nvidia-l4");
+        assert_eq!(normalize_gpu_name("Tesla T4"), "tesla-t4");
+    }
+
+    #[test]
+    fn parse_smi_mib_first_line_only() {
+        assert_eq!(parse_smi_mib_first("24576\n24576\n"), Some(24576));
+        assert_eq!(parse_smi_mib_first("  8192 \n"), Some(8192));
+        assert_eq!(parse_smi_mib_first("garbage"), None);
+        assert_eq!(parse_smi_mib_first(""), None);
+    }
+
+    #[test]
+    fn has_running_instance_parses_vast_payload() {
+        let running: serde_json::Value =
+            serde_json::from_str(r#"{"instances": [{"actual_status": "exited"}, {"actual_status": "running"}]}"#).unwrap();
+        assert!(has_running_instance(&running));
+        let idle: serde_json::Value =
+            serde_json::from_str(r#"{"instances": [{"actual_status": "exited"}]}"#).unwrap();
+        assert!(!has_running_instance(&idle));
+        assert!(!has_running_instance(&serde_json::json!({})));
+    }
+
+    #[test]
+    fn compat_accel_types_uses_gcp_tiers() {
+        assert_eq!(compat_accel_types(24), vec!["nvidia-tesla-k80", "nvidia-tesla-t4", "nvidia-l4"]);
+        assert_eq!(compat_accel_types(16), vec!["nvidia-tesla-k80", "nvidia-tesla-t4"]);
+        assert!(compat_accel_types(0).is_empty());
+    }
+
+    fn base_job() -> Job {
+        let mut job = Job::new("j", "python -m train");
+        job.provider = "local".into();
+        job
+    }
+
+    #[test]
+    fn job_eligible_pin_and_assignment_rules() {
+        // No routing fields: any agent may claim.
+        let job = base_job();
+        assert!(job_eligible(&job, "nvidia-l4", 24, "local", "host-a", 0, false));
+
+        // pinned_host: case-insensitive, only the named consumer.
+        let mut pinned = base_job();
+        pinned.pinned_host = "Host-A".into();
+        assert!(job_eligible(&pinned, "nvidia-l4", 24, "local", "host-a", 0, false));
+        assert!(!job_eligible(&pinned, "nvidia-l4", 24, "local", "host-b", 0, false));
+
+        // assigned_to mismatch rejects; empty consumer_id skips the rule
+        // (Python: `if assigned and consumer_id and ...`).
+        let mut assigned = base_job();
+        assigned.assigned_to = "agent-1".into();
+        assert!(!job_eligible(&assigned, "nvidia-l4", 24, "local", "agent-2", 0, false));
+        assert!(job_eligible(&assigned, "nvidia-l4", 24, "local", "agent-1", 0, false));
+        assert!(job_eligible(&assigned, "nvidia-l4", 24, "local", "", 0, false));
+
+        // pinned_only: only explicitly-routed jobs are claimed.
+        assert!(!job_eligible(&job, "nvidia-l4", 24, "local", "host-a", 0, true));
+        assert!(job_eligible(&pinned, "nvidia-l4", 24, "local", "host-a", 0, true));
+        assert!(job_eligible(&assigned, "nvidia-l4", 24, "local", "agent-1", 0, true));
+    }
+
+    #[test]
+    fn job_eligible_exclusive_and_pin_to_provider() {
+        let mut exclusive = base_job();
+        exclusive.exclusive = true;
+        assert!(job_eligible(&exclusive, "nvidia-l4", 24, "local", "c", 0, false));
+        assert!(!job_eligible(&exclusive, "nvidia-l4", 24, "local", "c", 1, false));
+
+        let mut pinned = base_job();
+        pinned.pin_to_provider = true;
+        pinned.provider = "gcp".into();
+        assert!(!job_eligible(&pinned, "nvidia-l4", 24, "local", "c", 0, false));
+        assert!(job_eligible(&pinned, "nvidia-l4", 24, "gcp", "c", 0, false));
+    }
+
+    #[test]
+    fn job_eligible_accel_matching() {
+        // provider "local" short-circuits accel matching entirely.
+        let mut job = base_job();
+        job.gpu_type = "nvidia-l4".into();
+        assert!(job_eligible(&job, "apple-mps", 0, "local", "c", 0, false));
+
+        // Cloud provider: exact accel match or a compatible VRAM tier.
+        job.provider = "gcp".into();
+        assert!(job_eligible(&job, "nvidia-l4", 0, "gcp", "c", 0, false));
+        assert!(!job_eligible(&job, "apple-mps", 0, "gcp", "c", 0, false));
+        job.gpu_type = "nvidia-tesla-t4".into();
+        assert!(job_eligible(&job, "nvidia-rtx-pro-6000", 24, "gcp", "c", 0, false));
+        // vram_gb=0 disables the compat path.
+        assert!(!job_eligible(&job, "nvidia-rtx-pro-6000", 0, "gcp", "c", 0, false));
+
+        // Empty job accel matches anything.
+        job.gpu_type = String::new();
+        assert!(job_eligible(&job, "apple-mps", 0, "gcp", "c", 0, false));
+    }
+
+    #[test]
+    fn job_eligible_cost_cap() {
+        let mut job = base_job();
+        job.provider = "gcp".into();
+        job.gpu_type = "nvidia-l4".into(); // $0.71/h on-demand
+        job.max_cost_per_hour_usd = 0.5;
+        assert!(!job_eligible(&job, "nvidia-l4", 0, "gcp", "c", 0, false));
+        // Spot discount: 0.71 * 0.40 = 0.284 < 0.5.
+        job.preemptible = true;
+        assert!(job_eligible(&job, "nvidia-l4", 0, "gcp", "c", 0, false));
+        // Unknown accel has rate 0 -> cap not enforced (Python `rate > 0`).
+        job.gpu_type = "mystery-gpu".into();
+        job.provider = "local".into();
+        assert!(job_eligible(&job, "nvidia-l4", 0, "local", "c", 0, false));
+    }
+
+    #[test]
+    fn build_capacity_dict_shape() {
+        let cap = build_capacity_dict("nvidia-rtx-pro-6000", 48, 96);
+        assert_eq!(
+            cap,
+            BTreeMap::from([
+                ("nvidia-tesla-k80".to_string(), 4), // 48 // 12
+                ("nvidia-tesla-t4".to_string(), 3),  // 48 // 16
+                ("nvidia-l4".to_string(), 2),        // 48 // 24
+                ("nvidia-tesla-v100".to_string(), 1),
+                ("nvidia-tesla-a100".to_string(), 1),
+                ("nvidia-rtx-pro-6000".to_string(), 1), // the local card itself
+            ])
+        );
+        assert!(build_capacity_dict("nvidia-l4", 0, 24).is_empty());
+        assert!(build_capacity_dict("cpu", 48, 96).is_empty());
+        assert!(build_capacity_dict("", 48, 96).is_empty());
+        // Same accel on two tiers keeps the max (azure ladder shares
+        // nvidia-a100-80gb across 40/80 but gcp tiers are unique; verify
+        // max-wins via the gcp 80 GB tier where only a100-80gb fits).
+        let cap80 = build_capacity_dict("nvidia-a100-80gb", 80, 80);
+        assert_eq!(cap80["nvidia-tesla-k80"], 6); // 80 // 12
+        assert_eq!(cap80["nvidia-a100-80gb"], 1);
+    }
+
+    #[test]
+    fn slot_exclusivity_rules() {
+        let mut slot = Slot::new(Job::new("j", "echo hi"), None);
+        assert!(!slot_is_exclusive(&slot));
+        slot.job.exclusive = true;
+        assert!(slot_is_exclusive(&slot));
+        // Activation extraction must share the GPU even when flagged.
+        slot.job.command =
+            "python -m wisent.scripts.activations.raw.extract_and_upload --x".into();
+        assert!(!slot_is_exclusive(&slot));
+    }
+
+    #[test]
+    fn meminfo_and_status_parsers() {
+        let meminfo = "MemTotal:       129022132 kB\nMemFree:         1000000 kB\nMemAvailable:   64000000 kB\n";
+        let total = parse_meminfo_gb(meminfo, "MemTotal:").unwrap();
+        assert!((total - 129022132.0 / 1048576.0).abs() < 1e-9);
+        assert_eq!(parse_meminfo_gb("MemFree: 1 kB\n", "MemAvailable:"), None);
+        let status = "Name:\tpython\nVmRSS:\t  12345 kB\nVmRSS:\t99999 kB\n";
+        // First VmRSS line wins (Python `break`).
+        assert_eq!(parse_status_vmrss_kb(status), Some(12345));
+        assert_eq!(parse_status_vmrss_kb("Name:\tpython\n"), None);
+    }
+
+    #[test]
+    fn static_ram_reserve_skips_agent_and_slot_processes() {
+        let dir = tempfile::tempdir().unwrap();
+        let proc = dir.path();
+        // An agent-like process: skipped by cmdline token.
+        std::fs::create_dir(proc.join("111")).unwrap();
+        std::fs::write(proc.join("111/cmdline"), b"bash\0wc agent\0").unwrap();
+        std::fs::write(proc.join("111/status"), "VmRSS:\t1024 kB\n").unwrap();
+        // An extraction slot: skipped.
+        std::fs::create_dir(proc.join("222")).unwrap();
+        std::fs::write(proc.join("222/cmdline"), b"python\0extract_and_upload\0").unwrap();
+        std::fs::write(proc.join("222/status"), "VmRSS:\t2048 kB\n").unwrap();
+        // Baseline load (e.g. ComfyUI): counted.
+        std::fs::create_dir(proc.join("333")).unwrap();
+        std::fs::write(proc.join("333/cmdline"), b"python\0comfyui\0").unwrap();
+        std::fs::write(proc.join("333/status"), "VmRSS:\t4096 kB\n").unwrap();
+        // Unreadable cmdline: skipped; non-numeric dir: skipped.
+        std::fs::create_dir(proc.join("444")).unwrap();
+        std::fs::write(proc.join("444/status"), "VmRSS:\t8192 kB\n").unwrap();
+        std::fs::create_dir(proc.join("self")).unwrap();
+        assert_eq!(static_ram_reserve_gb_at(proc), 4096.0 / 1048576.0);
+    }
+
+    #[test]
+    fn sum_rss_gb_sums_pid_status_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("10")).unwrap();
+        std::fs::write(dir.path().join("10/status"), "VmRSS:\t1024 kB\n").unwrap();
+        std::fs::create_dir(dir.path().join("11")).unwrap();
+        std::fs::write(dir.path().join("11/status"), "VmRSS:\t2048 kB\n").unwrap();
+        let pids = std::collections::HashSet::from([10, 11, 12]); // 12 missing: skipped
+        assert_eq!(sum_rss_gb(dir.path(), &pids), 3072.0 / 1048576.0);
+    }
+
+    #[tokio::test]
+    async fn slot_vram_prefers_max_of_declared_live_peak() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = LocalBackend::new(dir.path().to_str().unwrap()).unwrap();
+        let store = JobStorage::with_backend(Arc::new(backend), "local");
+        let sizing = Sizing::new();
+        let mut slot = Slot::new(Job::new("j", "echo hi"), None);
+        slot.job.gpu_mem_gb = 10;
+        slot.peak_vram_gb = 12;
+        assert_eq!(slot_vram(&slot, &sizing, &store).await.unwrap(), 12);
+        slot.peak_vram_gb = 4;
+        assert_eq!(slot_vram(&slot, &sizing, &store).await.unwrap(), 10);
+    }
+
+    #[tokio::test]
+    async fn no_eligible_in_queue_scans_fit_and_eligibility() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = LocalBackend::new(dir.path().to_str().unwrap()).unwrap();
+        let store = JobStorage::with_backend(Arc::new(backend), "local");
+        let sizing = Sizing::new();
+
+        let mut fits = Job::new("fits", "echo hi");
+        fits.provider = "local".into();
+        fits.gpu_mem_gb = 8;
+        let mut big = Job::new("big", "echo hi");
+        big.provider = "local".into();
+        big.gpu_mem_gb = 80;
+
+        store.write_job("queue", &big).await.unwrap();
+        // Only an oversized job queued -> nothing eligible.
+        assert!(no_eligible_in_queue(&store, &sizing, "nvidia-l4", 24, 24, "local", "c", 0).await.unwrap());
+        store.write_job("queue", &fits).await.unwrap();
+        assert!(!no_eligible_in_queue(&store, &sizing, "nvidia-l4", 24, 24, "local", "c", 0).await.unwrap());
+    }
+}

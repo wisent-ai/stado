@@ -8,3 +8,4 @@ build/
 agent.log
 wisent_compute/targets/registry.json
 .alert-watcher-*
+stado-rs/target/

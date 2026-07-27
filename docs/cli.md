@@ -166,3 +166,26 @@ unavailable.
 | `wc bootstrap [--target NAME]` | SSH into the registry-named host and install + enable the agent as a systemd unit. |
 | `wc bootstrap --local` | Install on this machine via launchd (macOS) or systemd-user (Linux) instead of via SSH. |
 | `wc bootstrap --dry-run` | Print the unit/plist; do not enable. |
+
+## `wc host user create`
+
+Creates an idempotent local account on SSH-managed `kind=local` registry
+targets. The command supports macOS and Linux, creates a standard account by
+default, and requires either one or more explicit `--target` values or `--all`.
+The initial password is prompted without echo and sent only through SSH stdin;
+it is never included in the local SSH argument list or registry.
+
+```bash
+# Inspect the selected hosts without connecting.
+wc host user create controlyourai-relay --all --dry-run
+
+# Create a standard GUI-capable account on one host.
+wc host user create controlyourai-relay \
+  --target charles-mac \
+  --full-name "ControlYourAI Relay"
+```
+
+Use `--admin` only when the account requires administrator privileges.
+`--require-password-change` expires the initial password at first login.
+Remote SSH users must be root or have non-interactive `sudo`; an existing
+account is reported as `exists` and is not modified.

@@ -2,23 +2,25 @@
 
 Job queue and compute management for Wisent GPU workloads.
 
-`wisent-compute` runs a fleet of GPU workers — a long-lived workstation
-("local agent") plus an auto-scaling pool of GCE Spot VMs ("cloud agents")
-— against a single GCS-backed job queue. A Cloud Function tick picks
-queued jobs, dispatches agent VMs sized for the work, and the agents
-multi-tenant by VRAM. Includes priority queues, per-accelerator zone
-rotation, HF pair-text caching, cost-aware dispatch, and a
-condition-driven idle-shutdown for cloud VMs.
+`wisent-compute` runs a fleet of GPU workers — long-lived local agents plus
+auto-scaling cloud agents — against a single GCS-backed job queue. The Rust
+Cloud Run control plane schedules work continuously; Rust agents claim jobs
+that fit their available VRAM. The system includes priority queues,
+per-accelerator zone rotation, pair-text caching, cost-aware dispatch, and
+condition-driven idle shutdown for cloud VMs.
 
 ## Install
 
+Released Rust binaries are published to
+`gs://wisent-compute/releases/stado/`. Install or refresh a registered host
+with:
+
 ```bash
-pip install wisent-compute
+./deploy/stado-up.sh <target>
 ```
 
-The package installs a `wc` CLI plus the `stado` Python
-package. Cloud Function code lives at
-`stado/cloud_function/main.py`.
+The primary binaries are `stado` and its compatible `wc` entry point. The
+coordinator runs as the authenticated `stado-coordinator` Cloud Run service.
 
 ## Quick start
 
@@ -41,7 +43,7 @@ wc results <job_id> ./out/
 #    fit in nvidia-smi-detected VRAM)
 wc agent --auto
 
-# 6. Run a one-shot scheduling tick locally instead of the Cloud Function
+# 6. Run a one-shot scheduling tick locally
 wc coordinator --once
 ```
 
@@ -75,37 +77,26 @@ Local targets can opt into bounded cleanup through their canonical GCS registry 
 
 ## Project layout
 
-```
-stado/
-  cli.py                              # `wc` Click entry points
-  config.py                           # GCP_PROJECT, ZONE_ROTATION, MACHINE_TYPE_ZONES, ...
-  models.py                           # Job dataclass, GPU_SIZING, GPU_HOURLY_RATE_USD, SPOT_DISCOUNT
-  queue/                              # GCS read/write, parallel list_jobs, capacity broadcasts
-  scheduler/                          # tick body, live-quota, cost projector, agent dispatcher
-  providers/                          # GCP/AWS/Azure + fenced Box sandbox + local agent
-  templates/                          # startup scripts (gpu_agent, gpu, cpu)
-  cloud_function/                     # `monitor_jobs` HTTP entry point
-  deploy/                             # `wc bootstrap` SSH+systemd installer
-  monitor/                            # alert sinks (Slack/Telegram/SendGrid)
-  targets/                            # ComputeTarget, registry.example.json
+```text
+stado-rs/
+  src/                                # Rust CLI, queue, scheduler, agents, providers
+  data/                               # registry, profiles, startup templates
+  cloudbuild.yaml                     # release binaries and coordinator image
 deploy/
-  gcp_setup.sh                        # one-time bootstrap (SA, bucket, topic, IAM)
-  redeploy_function.sh                # CI-friendly redeploy (just the Cloud Function)
+  deploy_stado_rust.sh                # Cloud Run production deployment
+  stado-up.sh                         # binary installer for registered hosts
+  gcp_setup.sh                        # one-time GCP bootstrap
 .github/workflows/
-  deploy.yml                          # push-to-main → redeploy CF
-  registry-bootstrap.yml              # registry.json edits → SSH-install agents
+  deploy.yml                          # push-to-main Rust release and deployment
+  registry-bootstrap.yml              # registry changes install Rust agents
 ```
 
 ## Contributing
 
-Issues and PRs welcome. The repo has no test runner today — we rely on
-the existing live deployment for integration testing and direct
-inspection of `gs://$WC_BUCKET/{queue,running,completed,failed}/` for
-correctness.
-
-For a release: bump the version in `pyproject.toml`, commit, push to
-`main`. CI redeploys the Cloud Function. PyPI publishing is currently
-manual (`python -m build && twine upload dist/stado-*`).
+Build and release from `stado-rs/`. The Cloud Build pipeline publishes the
+Linux binaries, checksum manifest, stable release pointer, and coordinator
+container image. Production deployment is handled by
+`deploy/deploy_stado_rust.sh`.
 
 ## License
 

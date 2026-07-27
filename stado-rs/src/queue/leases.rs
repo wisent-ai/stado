@@ -1,0 +1,672 @@
+//! Fenced provider-resource leases stored with backend compare-and-swap.
+//!
+//! Port of `stado/queue/leases/__init__.py`. A lease is a single JSON blob at
+//! `provider-leases/{job_id}.json` guarded by an (owner_id, fence_token) pair
+//! plus owner/resource TTLs; all mutations go through the backend's
+//! conditional-write primitives so a stale owner loses the race.
+//!
+//! Known Python bug (ported as INTENDED, not as written):
+//! `leases/__init__.py:143` gates every store operation on
+//! `_require_conditional_backend()`, which checks
+//! `getattr(storage, "_azure_backend", None)` — an attribute that never
+//! exists on Python `JobStorage` (the backend handle is `_blob_backend`), so
+//! the check always raises unless the GCS SDK path is present. The intended
+//! behavior is "the backend supports conditional writes", which is true for
+//! every Rust [`BlobBackend`] (CAS is part of the trait contract), so the
+//! gate is a no-op here.
+
+use std::collections::BTreeMap;
+use std::str::FromStr;
+use std::sync::LazyLock;
+
+use chrono::{DateTime, Duration, Utc};
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+use super::storage::JobStorage;
+use super::StorageError;
+
+/// Python `_MAX_LEASE_BYTES`.
+const MAX_LEASE_BYTES: usize = 65536;
+
+/// Python `_SAFE_JOB_ID`.
+static SAFE_JOB_ID: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[A-Za-z0-9._-]+$").expect("static regex compiles"));
+
+/// Lease-layer error. Python raises `LeaseConflict` (a `RuntimeError`
+/// subclass) for lost races and invalid fences, `ValueError` for illegal
+/// transitions / unsafe job ids / bad timestamps, and `RuntimeError` for
+/// size and shape violations of the stored blob.
+#[derive(Debug, thiserror::Error)]
+pub enum LeaseError {
+    /// Python `LeaseConflict`.
+    #[error("{0}")]
+    Conflict(String),
+    /// Python `ValueError`.
+    #[error("{0}")]
+    Value(String),
+    /// Python `RuntimeError` for a corrupt/oversized stored lease.
+    #[error("{0}")]
+    Corrupt(String),
+    #[error(transparent)]
+    Storage(#[from] StorageError),
+}
+
+impl LeaseError {
+    fn conflict(message: &str) -> Self {
+        LeaseError::Conflict(message.to_string())
+    }
+
+    /// Whether this is a `LeaseConflict` (Python `except LeaseConflict`).
+    pub fn is_conflict(&self) -> bool {
+        matches!(self, LeaseError::Conflict(_))
+    }
+}
+
+/// Python `LeaseState` (str Enum).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeaseState {
+    Allocating,
+    Provisioning,
+    Ready,
+    Starting,
+    Running,
+    Collecting,
+    Releasing,
+    Released,
+    Failed,
+}
+
+impl LeaseState {
+    /// The serialized value (Python `.value`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LeaseState::Allocating => "allocating",
+            LeaseState::Provisioning => "provisioning",
+            LeaseState::Ready => "ready",
+            LeaseState::Starting => "starting",
+            LeaseState::Running => "running",
+            LeaseState::Collecting => "collecting",
+            LeaseState::Releasing => "releasing",
+            LeaseState::Released => "released",
+            LeaseState::Failed => "failed",
+        }
+    }
+
+    /// Python `_ALLOWED_TRANSITIONS`.
+    fn allowed_transitions(self) -> &'static [LeaseState] {
+        match self {
+            LeaseState::Allocating => &[LeaseState::Provisioning, LeaseState::Failed],
+            LeaseState::Provisioning => &[LeaseState::Ready, LeaseState::Failed],
+            LeaseState::Ready => &[LeaseState::Starting, LeaseState::Failed],
+            LeaseState::Starting => &[LeaseState::Running, LeaseState::Failed],
+            LeaseState::Running => &[LeaseState::Collecting, LeaseState::Failed],
+            LeaseState::Collecting => &[LeaseState::Releasing, LeaseState::Failed],
+            LeaseState::Releasing => &[LeaseState::Released, LeaseState::Failed],
+            LeaseState::Failed => &[LeaseState::Releasing, LeaseState::Released],
+            LeaseState::Released => &[],
+        }
+    }
+}
+
+impl FromStr for LeaseState {
+    type Err = LeaseError;
+
+    /// Python `LeaseState(value)` (raises `ValueError` on unknown states).
+    fn from_str(value: &str) -> Result<Self, LeaseError> {
+        let state = match value {
+            "allocating" => LeaseState::Allocating,
+            "provisioning" => LeaseState::Provisioning,
+            "ready" => LeaseState::Ready,
+            "starting" => LeaseState::Starting,
+            "running" => LeaseState::Running,
+            "collecting" => LeaseState::Collecting,
+            "releasing" => LeaseState::Releasing,
+            "released" => LeaseState::Released,
+            "failed" => LeaseState::Failed,
+            other => {
+                return Err(LeaseError::Value(format!("{other:?} is not a valid LeaseState")));
+            }
+        };
+        Ok(state)
+    }
+}
+
+/// Python `ProviderLease` dataclass. `version` is the backend CAS token:
+/// serialized nowhere (Python `field(default="", repr=False, compare=False)`
+/// plus `to_dict()` popping it).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProviderLease {
+    #[serde(default)]
+    pub job_id: String,
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub owner_id: String,
+    #[serde(default)]
+    pub fence_token: String,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub owner_expires_at: String,
+    #[serde(default)]
+    pub resource_expires_at: String,
+    #[serde(default)]
+    pub provider_resource_id: String,
+    #[serde(default)]
+    pub operation_id: String,
+    #[serde(default)]
+    pub operation_started_at: String,
+    #[serde(default)]
+    pub prompt_id: String,
+    #[serde(default)]
+    pub last_error: String,
+    #[serde(default)]
+    pub result_state: String,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub updated_at: String,
+    #[serde(skip)]
+    pub version: String,
+}
+
+/// Python `datetime.fromisoformat(value.replace("Z", "+00:00"))`.
+fn parse_timestamp(value: &str) -> Result<DateTime<Utc>, LeaseError> {
+    DateTime::parse_from_rfc3339(&value.replace('Z', "+00:00"))
+        .map(|dt| dt.with_timezone(&Utc))
+        .map_err(|err| LeaseError::Value(format!("invalid lease timestamp {value:?}: {err}")))
+}
+
+/// Python `datetime.now(timezone.utc).isoformat()`.
+fn now_iso() -> String {
+    Utc::now().to_rfc3339()
+}
+
+impl ProviderLease {
+    /// Python `ProviderLease.new`.
+    pub fn new(
+        job_id: &str,
+        provider: &str,
+        owner_id: &str,
+        owner_ttl_seconds: i64,
+        resource_ttl_seconds: i64,
+    ) -> Self {
+        let now = Utc::now();
+        let now_iso = now.to_rfc3339();
+        ProviderLease {
+            job_id: job_id.to_string(),
+            provider: provider.to_string(),
+            owner_id: owner_id.to_string(),
+            fence_token: Uuid::new_v4().simple().to_string(),
+            state: LeaseState::Allocating.as_str().to_string(),
+            owner_expires_at: (now + Duration::seconds(owner_ttl_seconds)).to_rfc3339(),
+            resource_expires_at: (now + Duration::seconds(resource_ttl_seconds)).to_rfc3339(),
+            created_at: now_iso.clone(),
+            updated_at: now_iso,
+            ..Default::default()
+        }
+    }
+
+    /// Python `to_dict()`: every field except `version`.
+    fn to_value(&self) -> serde_json::Value {
+        serde_json::to_value(self).expect("lease serialization is infallible")
+    }
+
+    /// Python `owner_expired()` (now = current time).
+    pub fn owner_expired(&self) -> Result<bool, LeaseError> {
+        self.owner_expired_at(Utc::now())
+    }
+
+    /// Python `owner_expired(now=...)`.
+    pub fn owner_expired_at(&self, now: DateTime<Utc>) -> Result<bool, LeaseError> {
+        Ok(now >= parse_timestamp(&self.owner_expires_at)?)
+    }
+
+    /// Python `assert_fence`: owner_id + fence_token must match and the
+    /// owner TTL must not have lapsed.
+    pub fn assert_fence(&self, owner_id: &str, fence_token: &str) -> Result<(), LeaseError> {
+        if self.owner_id != owner_id || self.fence_token != fence_token || self.owner_expired()? {
+            return Err(LeaseError::conflict("provider lease fence is no longer valid"));
+        }
+        Ok(())
+    }
+
+    /// Python `renew_owner`.
+    pub fn renew_owner(
+        &mut self,
+        owner_id: &str,
+        fence_token: &str,
+        ttl_seconds: i64,
+    ) -> Result<(), LeaseError> {
+        self.assert_fence(owner_id, fence_token)?;
+        let now = Utc::now();
+        self.owner_expires_at = (now + Duration::seconds(ttl_seconds)).to_rfc3339();
+        self.updated_at = now.to_rfc3339();
+        Ok(())
+    }
+
+    /// Python `renew_resource`.
+    pub fn renew_resource(
+        &mut self,
+        owner_id: &str,
+        fence_token: &str,
+        ttl_seconds: i64,
+    ) -> Result<(), LeaseError> {
+        self.assert_fence(owner_id, fence_token)?;
+        let now = Utc::now();
+        self.resource_expires_at = (now + Duration::seconds(ttl_seconds)).to_rfc3339();
+        self.updated_at = now.to_rfc3339();
+        Ok(())
+    }
+
+    /// Python `transition`: fence-gated state-machine step through
+    /// `_ALLOWED_TRANSITIONS`.
+    pub fn transition(
+        &mut self,
+        state: LeaseState,
+        owner_id: &str,
+        fence_token: &str,
+    ) -> Result<(), LeaseError> {
+        self.assert_fence(owner_id, fence_token)?;
+        let current = LeaseState::from_str(&self.state)?;
+        if !current.allowed_transitions().contains(&state) {
+            return Err(LeaseError::Value(format!(
+                "invalid provider lease transition {} -> {}",
+                current.as_str(),
+                state.as_str()
+            )));
+        }
+        self.state = state.as_str().to_string();
+        self.updated_at = now_iso();
+        Ok(())
+    }
+
+    /// Python `takeover`: re-owner a lease whose owner TTL has lapsed,
+    /// rotating the fence token.
+    pub fn takeover(&mut self, owner_id: &str, owner_ttl_seconds: i64) -> Result<(), LeaseError> {
+        if !self.owner_expired()? {
+            return Err(LeaseError::conflict("provider lease owner is still live"));
+        }
+        let now = Utc::now();
+        self.owner_id = owner_id.to_string();
+        self.fence_token = Uuid::new_v4().simple().to_string();
+        self.owner_expires_at = (now + Duration::seconds(owner_ttl_seconds)).to_rfc3339();
+        self.updated_at = now.to_rfc3339();
+        Ok(())
+    }
+
+    /// Python `relinquish`: fence-gated immediate owner expiry.
+    pub fn relinquish(&mut self, owner_id: &str, fence_token: &str) -> Result<(), LeaseError> {
+        self.assert_fence(owner_id, fence_token)?;
+        let now = now_iso();
+        self.owner_expires_at = now.clone();
+        self.updated_at = now;
+        Ok(())
+    }
+}
+
+/// Python `ProviderLeaseStore`: conditional persistence over the configured
+/// JobStorage backend.
+pub struct ProviderLeaseStore {
+    storage: JobStorage,
+}
+
+impl ProviderLeaseStore {
+    pub fn new(job_storage: JobStorage) -> Self {
+        ProviderLeaseStore { storage: job_storage }
+    }
+
+    /// The wrapped facade.
+    pub fn storage(&self) -> &JobStorage {
+        &self.storage
+    }
+
+    // Python `_require_conditional_backend` is NOT ported as a runtime gate:
+    // it reads `storage._azure_backend`, which never exists (the Python bug
+    // noted in the module docs). The intended precondition — the backend
+    // supports create-if-absent and compare-and-swap — holds for every Rust
+    // `BlobBackend` by construction.
+
+    /// Python `_path`.
+    fn path(job_id: &str) -> Result<String, LeaseError> {
+        if !SAFE_JOB_ID.is_match(job_id) {
+            return Err(LeaseError::Value(
+                "job id is unsafe for provider lease storage".to_string(),
+            ));
+        }
+        Ok(format!("provider-leases/{job_id}.json"))
+    }
+
+    /// Python `_encode`: `json.dumps(to_dict(), separators=(",", ":"),
+    /// sort_keys=True)`.
+    fn encode(lease: &ProviderLease) -> String {
+        let serde_json::Value::Object(map) = lease.to_value() else {
+            unreachable!("ProviderLease serializes to an object");
+        };
+        let sorted: BTreeMap<String, serde_json::Value> = map.into_iter().collect();
+        crate::models::ensure_ascii(
+            &serde_json::to_string(&sorted).expect("lease serialization is infallible"),
+        )
+    }
+
+    /// Python `_decode`.
+    fn decode(raw: &str, version: &str) -> Result<ProviderLease, LeaseError> {
+        if raw.len() > MAX_LEASE_BYTES {
+            return Err(LeaseError::Corrupt("provider lease exceeded size bound".to_string()));
+        }
+        let value: serde_json::Value = serde_json::from_str(raw).map_err(StorageError::Json)?;
+        if !value.is_object() {
+            return Err(LeaseError::Corrupt("provider lease is not an object".to_string()));
+        }
+        let mut lease: ProviderLease =
+            serde_json::from_value(value).map_err(StorageError::Json)?;
+        lease.version = version.to_string();
+        Ok(lease)
+    }
+
+    /// Python `load`.
+    pub async fn load(&self, job_id: &str) -> Result<Option<ProviderLease>, LeaseError> {
+        let Some(value) = self.storage.read_text_versioned(&Self::path(job_id)?).await? else {
+            return Ok(None);
+        };
+        Ok(Some(Self::decode(&value.content, &value.version)?))
+    }
+
+    /// Python `create`: atomic create-if-absent, then re-read to confirm the
+    /// blob that landed is the one we wrote.
+    pub async fn create(
+        &self,
+        mut lease: ProviderLease,
+    ) -> Result<ProviderLease, LeaseError> {
+        let path = Self::path(&lease.job_id)?;
+        if !self.storage.create_text_if_absent(&path, &Self::encode(&lease)).await? {
+            return Err(LeaseError::conflict("provider lease already exists"));
+        }
+        let Some(created) = self.load(&lease.job_id).await? else {
+            return Err(LeaseError::conflict("provider lease disappeared after creation"));
+        };
+        if created.to_value() != lease.to_value() {
+            return Err(LeaseError::conflict(
+                "provider lease changed before creation was confirmed",
+            ));
+        }
+        lease.version = created.version;
+        Ok(lease)
+    }
+
+    /// Python `save`: compare-and-swap against the version this owner read.
+    pub async fn save(
+        &self,
+        mut lease: ProviderLease,
+        expected_version: &str,
+    ) -> Result<ProviderLease, LeaseError> {
+        if expected_version.is_empty() || lease.version != expected_version {
+            return Err(LeaseError::conflict(
+                "provider lease version was not read by this owner",
+            ));
+        }
+        let new_version = match self
+            .storage
+            .compare_and_swap_text(&Self::path(&lease.job_id)?, expected_version, &Self::encode(&lease))
+            .await
+        {
+            Ok(version) => version,
+            // Python `except StorageConflict: raise LeaseConflict(...)`.
+            Err(StorageError::StorageConflict(_)) => {
+                return Err(LeaseError::conflict("provider lease changed concurrently"));
+            }
+            Err(err) => return Err(err.into()),
+        };
+        if new_version.is_empty() {
+            return Err(LeaseError::Corrupt(
+                "conditional lease write did not return a version".to_string(),
+            ));
+        }
+        lease.version = new_version;
+        Ok(lease)
+    }
+
+    /// Python `acquire`: create the lease, or — when it already exists and
+    /// the recorded owner TTL has lapsed — take it over via CAS.
+    pub async fn acquire(
+        &self,
+        job_id: &str,
+        provider: &str,
+        owner_id: &str,
+        owner_ttl_seconds: i64,
+        resource_ttl_seconds: i64,
+    ) -> Result<ProviderLease, LeaseError> {
+        let lease =
+            ProviderLease::new(job_id, provider, owner_id, owner_ttl_seconds, resource_ttl_seconds);
+        match self.create(lease).await {
+            Ok(created) => Ok(created),
+            Err(err) if err.is_conflict() => {
+                let Some(mut current) = self.load(job_id).await? else {
+                    return Err(LeaseError::conflict(
+                        "provider lease disappeared during acquisition",
+                    ));
+                };
+                if current.job_id != job_id || current.provider != provider {
+                    return Err(LeaseError::conflict("provider lease identity mismatch"));
+                }
+                if !current.owner_expired()? {
+                    return Err(LeaseError::conflict("provider lease owner is still live"));
+                }
+                let version = current.version.clone();
+                current.takeover(owner_id, owner_ttl_seconds)?;
+                self.save(current, &version).await
+            }
+            Err(err) => Err(err),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::queue::local_file::LocalBackend;
+    use std::sync::Arc;
+
+    fn lease_store() -> (tempfile::TempDir, ProviderLeaseStore) {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = LocalBackend::new(dir.path().to_str().unwrap()).unwrap();
+        let storage = JobStorage::with_backend(Arc::new(backend), "local");
+        (dir, ProviderLeaseStore::new(storage))
+    }
+
+    async fn save(store: &ProviderLeaseStore, lease: ProviderLease) -> ProviderLease {
+        let version = lease.version.clone();
+        store.save(lease, &version).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn acquire_creates_and_full_state_machine_happy_path() {
+        let (_dir, store) = lease_store();
+        let mut lease = store.acquire("job-1", "gcp", "owner-a", 3600, 7200).await.unwrap();
+        assert_eq!(lease.state, "allocating");
+        assert!(!lease.fence_token.is_empty());
+        assert!(!lease.version.is_empty());
+
+        let token = lease.fence_token.clone();
+        for state in [
+            LeaseState::Provisioning,
+            LeaseState::Ready,
+            LeaseState::Starting,
+            LeaseState::Running,
+            LeaseState::Collecting,
+            LeaseState::Releasing,
+            LeaseState::Released,
+        ] {
+            lease.transition(state, "owner-a", &token).unwrap();
+            lease = save(&store, lease).await;
+            assert_eq!(lease.state, state.as_str());
+        }
+
+        let reloaded = store.load("job-1").await.unwrap().unwrap();
+        assert_eq!(reloaded.state, "released");
+        assert_eq!(reloaded.version, lease.version);
+
+        // The failed branch: failed -> releasing -> released.
+        let (_dir2, store2) = lease_store();
+        let mut failed = store2.acquire("job-f", "gcp", "o", 3600, 7200).await.unwrap();
+        let ftoken = failed.fence_token.clone();
+        failed.transition(LeaseState::Failed, "o", &ftoken).unwrap();
+        failed = save(&store2, failed).await;
+        failed.transition(LeaseState::Releasing, "o", &ftoken).unwrap();
+        failed = save(&store2, failed).await;
+        failed.transition(LeaseState::Released, "o", &ftoken).unwrap();
+        save(&store2, failed).await;
+    }
+
+    #[tokio::test]
+    async fn illegal_transition_is_rejected() {
+        let (_dir, store) = lease_store();
+        let mut lease = store.acquire("job-2", "gcp", "owner-a", 3600, 7200).await.unwrap();
+        let token = lease.fence_token.clone();
+        let err = lease.transition(LeaseState::Running, "owner-a", &token).unwrap_err();
+        assert!(
+            matches!(err, LeaseError::Value(ref m)
+                if m == "invalid provider lease transition allocating -> running"),
+            "{err:?}"
+        );
+        // released is terminal.
+        lease.transition(LeaseState::Failed, "owner-a", &token).unwrap();
+        lease = save(&store, lease).await;
+        lease.transition(LeaseState::Releasing, "owner-a", &token).unwrap();
+        lease = save(&store, lease).await;
+        lease.transition(LeaseState::Released, "owner-a", &token).unwrap();
+        let err = lease.transition(LeaseState::Failed, "owner-a", &token).unwrap_err();
+        assert!(matches!(err, LeaseError::Value(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn fence_assertion_rejects_wrong_owner_and_token() {
+        let (_dir, store) = lease_store();
+        let mut lease = store.acquire("job-3", "gcp", "owner-a", 3600, 7200).await.unwrap();
+        let token = lease.fence_token.clone();
+
+        let err = lease.transition(LeaseState::Provisioning, "owner-b", &token).unwrap_err();
+        assert!(err.is_conflict(), "{err:?}");
+        let err = lease.transition(LeaseState::Provisioning, "owner-a", "wrong-token").unwrap_err();
+        assert!(err.is_conflict(), "{err:?}");
+        let err = lease.renew_owner("owner-b", &token, 60).unwrap_err();
+        assert!(err.is_conflict(), "{err:?}");
+        let err = lease.renew_resource("owner-a", "nope", 60).unwrap_err();
+        assert!(err.is_conflict(), "{err:?}");
+
+        // Relinquish expires the owner immediately; every fenced op then fails.
+        lease.relinquish("owner-a", &token).unwrap();
+        let err = lease.transition(LeaseState::Provisioning, "owner-a", &token).unwrap_err();
+        assert!(err.is_conflict(), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn renew_owner_and_resource_extend_expiry() {
+        let (_dir, store) = lease_store();
+        let mut lease = store.acquire("job-4", "gcp", "owner-a", 10, 20).await.unwrap();
+        let token = lease.fence_token.clone();
+        let old_owner_expiry = lease.owner_expires_at.clone();
+        let old_resource_expiry = lease.resource_expires_at.clone();
+        lease.renew_owner("owner-a", &token, 3600).unwrap();
+        lease.renew_resource("owner-a", &token, 7200).unwrap();
+        assert!(lease.owner_expires_at > old_owner_expiry);
+        assert!(lease.resource_expires_at > old_resource_expiry);
+        assert!(!lease.owner_expired().unwrap());
+    }
+
+    #[tokio::test]
+    async fn takeover_only_after_owner_expiry() {
+        let (_dir, store) = lease_store();
+        // Live owner: a competing acquire is refused.
+        store.acquire("job-5", "gcp", "owner-a", 3600, 7200).await.unwrap();
+        let err = store.acquire("job-5", "gcp", "owner-b", 3600, 7200).await.unwrap_err();
+        assert!(err.is_conflict(), "{err:?}");
+        assert!(err.to_string().contains("owner is still live"), "{err}");
+
+        // Expired owner (ttl=0 expires at creation): takeover rotates the fence.
+        let original = store.acquire("job-6", "gcp", "owner-a", 0, 7200).await.unwrap();
+        assert!(original.owner_expired().unwrap());
+        let taken = store.acquire("job-6", "gcp", "owner-b", 3600, 7200).await.unwrap();
+        assert_eq!(taken.owner_id, "owner-b");
+        assert_ne!(taken.fence_token, original.fence_token);
+        // The old owner's fence no longer authorizes anything.
+        let mut stale = original;
+        let old_token = stale.fence_token.clone();
+        let err = stale.transition(LeaseState::Provisioning, "owner-a", &old_token).unwrap_err();
+        assert!(err.is_conflict(), "{err:?}");
+
+        // Identity mismatch on takeover is a conflict, like Python.
+        let err = store.acquire("job-6", "azure", "owner-c", 0, 0).await.unwrap_err();
+        assert!(err.is_conflict(), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn cas_conflict_maps_to_lease_conflict() {
+        let (_dir, store) = lease_store();
+        let lease = store.acquire("job-7", "gcp", "owner-a", 3600, 7200).await.unwrap();
+        let mut copy1 = store.load("job-7").await.unwrap().unwrap();
+        let copy2 = store.load("job-7").await.unwrap().unwrap();
+        assert_eq!(copy1.version, copy2.version);
+
+        let token = copy1.fence_token.clone();
+        copy1.transition(LeaseState::Provisioning, "owner-a", &token).unwrap();
+        let v1 = copy1.version.clone();
+        store.save(copy1, &v1).await.unwrap();
+
+        // copy2 saves against the version it read, which no longer matches.
+        let v2 = copy2.version.clone();
+        let err = store.save(copy2, &v2).await.unwrap_err();
+        assert!(err.is_conflict(), "{err:?}");
+        assert_eq!(err.to_string(), "provider lease changed concurrently");
+
+        // Empty or foreign expected_version is rejected before any backend call.
+        let err = store.save(lease.clone(), "").await.unwrap_err();
+        assert!(err.is_conflict(), "{err:?}");
+        let err = store.save(lease, "not-the-version").await.unwrap_err();
+        assert!(err.is_conflict(), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn size_bound_and_object_shape_are_enforced() {
+        let (_dir, store) = lease_store();
+        let big = "x".repeat(MAX_LEASE_BYTES + 1);
+        store.storage().upload_text("provider-leases/big.json", &big).await.unwrap();
+        let err = store.load("big").await.unwrap_err();
+        assert!(matches!(err, LeaseError::Corrupt(_)), "{err:?}");
+        assert!(err.to_string().contains("size bound"), "{err}");
+
+        store.storage().upload_text("provider-leases/arr.json", "[1,2,3]").await.unwrap();
+        let err = store.load("arr").await.unwrap_err();
+        assert!(matches!(err, LeaseError::Corrupt(_)), "{err:?}");
+        assert!(err.to_string().contains("not an object"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn unsafe_job_id_is_rejected() {
+        let (_dir, store) = lease_store();
+        let err = store.load("../escape").await.unwrap_err();
+        assert!(matches!(err, LeaseError::Value(_)), "{err:?}");
+        assert!(err.to_string().contains("unsafe"), "{err}");
+        let lease = ProviderLease::new("bad/id", "gcp", "o", 1, 1);
+        let err = store.create(lease).await.unwrap_err();
+        assert!(matches!(err, LeaseError::Value(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn encoded_blob_is_compact_sorted_json() {
+        let (_dir, store) = lease_store();
+        store.acquire("job-8", "gcp", "owner-a", 60, 60).await.unwrap();
+        let raw = store
+            .storage()
+            .download_text("provider-leases/job-8.json")
+            .await
+            .unwrap()
+            .unwrap();
+        // Python json.dumps(separators=(",", ":"), sort_keys=True).
+        assert!(raw.starts_with("{\"created_at\":"), "{raw}");
+        assert!(!raw.contains("\": "), "must be compact: {raw}");
+        assert!(!raw.contains("\"version\""), "version is never serialized: {raw}");
+    }
+}
