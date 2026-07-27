@@ -1,7 +1,9 @@
 {
-  "_comment": "Azure-only Stado deployment. Install at ~/.config/stado/config.json (or point $STADO_CONFIG at it). Resolution order is env > this file > built-in default, so deploy/azure/env.example still overrides anything here. Replace every <placeholder> before use; empty strings are treated as unset and fall through to the built-in default, which is GCP-shaped.",
+  "_comment": "Azure-primary Stado deployment. Install at ~/.stado/config.json (or point $STADO_CONFIG at it). Replace every <placeholder> before use. Provider preference, explicit fences and both storage locators live only in this file.",
 
-  "providers": ["azure"],
+  "providers": ["azure", "aws", "gcp"],
+  "providers_disabled": ["aws", "gcp"],
+  "_providers_comment": "GCP is fenced while billing is disabled. AWS is fenced until its network and AMI settings are provisioned; remove a provider from providers_disabled only when doctor can authenticate and schedule it.",
 
   "storage": {
     "backend": "azure",
@@ -9,9 +11,13 @@
       "account": "<storage-account>",
       "container": "stado"
     },
-    "gcs": {
-      "_comment": "Not used for routing under the azure backend, but queue/storage.rs keeps it as bucket_name and it leaks into gs:// URIs (machine.rs) and the coverage verifier. Keep it matching the container name.",
-      "bucket": "stado"
+    "backup": {
+      "_comment": "Cross-provider replica. The coordinator refreshes it after every dispatch tick; product object writes mirror synchronously. Promotion is manual and fenced.",
+      "backend": "s3",
+      "bucket": "<backup-bucket>",
+      "s3": {
+        "region": "<backup-region>"
+      }
     }
   },
 
@@ -25,16 +31,52 @@
     "_network_comment": "The provider does NOT create networking. vnet and nsg must already exist per region, named <vnet>-<location> and <nsg>-<location> (providers/azure/network.rs). The subnet is a child of the region vnet so it carries no suffix.",
     "_image_comment": "image_urn is omitted so the built-in default applies: the microsoft-dsvm ubuntu-hpc image, which ships the NVIDIA driver and CUDA preinstalled. Override here only to pin a different publisher:offer:sku:version.",
     "vm_username": "wisent",
-    "ssh_public_key": "<contents of ~/.weles/azure_vm_key.pub>"
+    "ssh_public_key": "<contents of ~/.weles/azure_vm_key.pub>",
+    "vm_identity_id": "<managed-identity-resource-id>"
+  },
+
+  "deployment": {
+    "id": "azure-control-plane"
+  },
+
+  "dashboard": {
+    "_comment": "Keep the Rust listener loopback-only. Caddy terminates TLS and forwards the public object route plus authenticated private routes.",
+    "bind": "localhost"
+  },
+
+  "secrets": {
+    "_comment": "Coordinator/dashboard read-only grant for central service items. Each code path reads only the item and exact field it needs; object routes require `stado secrets get stado-object-api --field token`, while machine submit/status/cancel independently require `stado secrets get stado-machine-api --field token`. Both fail closed. No application token belongs in env or this file.",
+    "skarbiec": {
+      "url": "https://<control-plane-skarbiec-host>",
+      "consumer": "stado-control-plane",
+      "token_file": "~/.stado/control-plane-skarbiec-token"
+    }
+  },
+
+  "agent": {
+    "_comment": "Dedicated Azure VM grant. Its visible items must equal this allowlist exactly; raw values are resolved agent-side and never enter cloud-init.",
+    "skarbiec": {
+      "url": "https://<agent-reachable-skarbiec-host>",
+      "consumer": "stado-azure-agent",
+      "token_file": "~/.stado/azure-agent-skarbiec-token",
+      "items": [
+        "compute-marketplace-agent",
+        "stado-aws",
+        "stado-huggingface",
+        "stado-model-router",
+        "stado-wandb",
+        "trading-autonomy-web-runtime"
+      ]
+    }
   },
 
   "release": {
-    "_comment": "Binary release channel for self-update and for the agent VM bootstrap. The built-in default is the GCS releases bucket, which is dead with GCP billing off. Mirror releases/stado/** into the Azure container and point this at it, or no agent VM can install itself.",
+    "_comment": "Required binary channel for Rust self-update and Azure VM bootstrap. Publish the release layout into this private Azure container; Stado authenticates with the coordinator or VM managed identity. There is no built-in cloud release origin.",
     "base_url": "https://<storage-account>.blob.core.windows.net/stado/releases/stado"
   },
 
   "alerts": {
-    "_comment": "Empty topic disables the GCP Pub/Sub channel; left at its default it is non-empty, so every alert pays a failing ADC probe before falling through. Slack/Telegram/SendGrid are unaffected — configure at least one or alerting is silently gone.",
+    "_comment": "Empty disables the isolated optional GCP Pub/Sub channel. Configure a provider-neutral alert sink separately.",
     "topic": ""
   }
 }

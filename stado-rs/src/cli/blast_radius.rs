@@ -1,10 +1,10 @@
 //! `stado blast-radius` — side-effect-free incident scope and DR readiness.
 //!
-//! The command answers four separate questions instead of collapsing them
-//! into "the queue is empty": whether the configured primary store can be
-//! listed, which state domains and consumers depend on the failed service,
-//! whether a separately configured backup can be read, and how closely that
-//! backup covers the primary namespace when both ends are reachable.
+//! The command keeps failure domains separate instead of collapsing them into
+//! "the queue is empty": primary and backup stores, Skarbiec credentials,
+//! live cloud resources and caller/runtime IAM, downstream consumers, and
+//! backup namespace coverage. Provider probes are independent and paginated,
+//! so one disabled API cannot hide the remaining project inventory.
 //!
 //! A backup is never selected automatically here. Queue state contains CAS
 //! locks, leases and moving job records; transparent read fallback can make
@@ -18,6 +18,9 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use clap::Args;
 use serde::Serialize;
 
+use crate::providers::gcp::inventory::{
+    self as gcp_inventory, GcpInventoryReport, GcsObjectAsset, InventoryOptions,
+};
 use crate::queue::copy::{Endpoint, CANONICAL_PREFIXES};
 use crate::queue::BlobBackend;
 
@@ -91,12 +94,27 @@ struct FailoverPolicy {
 }
 
 #[derive(Debug, Serialize)]
+struct CredentialStoreReport {
+    state: String,
+    locator: String,
+    consumer: String,
+    item_count: Option<usize>,
+    items: Vec<crate::skarbiec::ItemInfo>,
+    missing_required: Vec<String>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
 struct Summary {
     state: String,
     affected_components: usize,
     primary_objects_in_scope: Option<usize>,
     backup_objects_in_scope: Option<usize>,
     scale_source: String,
+    infrastructure_state: Option<String>,
+    infrastructure_checks: usize,
+    infrastructure_failures: usize,
+    credential_store_state: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -111,6 +129,8 @@ struct BlastRadiusReport {
     data_domains: Vec<DomainReport>,
     downstream: Vec<DownstreamImpact>,
     failover: FailoverPolicy,
+    infrastructure: Option<GcpInventoryReport>,
+    credential_store: CredentialStoreReport,
     recovery_order: Vec<String>,
 }
 
@@ -138,18 +158,30 @@ const SCHEDULER_CONTROL: &[&str] = &[
 const FLEET_OBSERVABILITY: &[&str] = &["status/", "capacity/", "host_health/", "billing_health/"];
 const AUTOMATION: &[&str] = &["machine_requests/", "machine_inputs/"];
 const PAYLOADS: &[&str] = &["runs/", "scripts/", "artifacts/"];
-const CONTROL_AND_SECRETS: &[&str] = &["registry.json", "secrets/"];
+const REGISTRY: &[&str] = &["registry.json"];
 
 pub async fn run(args: &BlastRadiusArgs) -> Result<(), CmdError> {
     validate_dependency(&args.dependency)?;
 
     let primary_endpoint = Endpoint::configured_primary();
-    let primary = inspect_storage("primary", Some(&primary_endpoint)).await;
     let backup_endpoint = Endpoint::configured_backup();
+    let inventory_options = gcp_inventory_options(&primary_endpoint, backup_endpoint.as_ref());
+    let inventory_probe = async {
+        if args.dependency == "gcp" {
+            Some(gcp_inventory::inspect(inventory_options).await)
+        } else {
+            None
+        }
+    };
+    let (primary, backup, infrastructure, credential_store) = tokio::join!(
+        inspect_storage_bounded("primary", Some(&primary_endpoint)),
+        inspect_storage_bounded("backup", backup_endpoint.as_ref()),
+        inventory_probe,
+        inspect_credential_store(),
+    );
     let backup_matches_primary = backup_endpoint
         .as_ref()
         .is_some_and(|endpoint| endpoint.describe() == primary_endpoint.describe());
-    let backup = inspect_storage("backup", backup_endpoint.as_ref()).await;
     let coverage = compare_coverage(
         &primary,
         &backup,
@@ -165,7 +197,14 @@ pub async fn run(args: &BlastRadiusArgs) -> Result<(), CmdError> {
     let primary_unavailable = primary.report.state != "reachable";
     let dependency_owns_primary =
         dependency_owns_backend(&args.dependency, config::wc_storage_backend());
-    let state = if dependency_owns_primary && primary_unavailable {
+    let infrastructure_critical = infrastructure
+        .as_ref()
+        .is_some_and(|report| report.summary.critical_failures != usize::default());
+    let credential_store_critical = credential_store.state != "reachable";
+    let state = if infrastructure_critical
+        || credential_store_critical
+        || (dependency_owns_primary && primary_unavailable)
+    {
         "critical_outage"
     } else if dependency_owns_primary {
         "primary_at_risk"
@@ -190,6 +229,21 @@ pub async fn run(args: &BlastRadiusArgs) -> Result<(), CmdError> {
         ("no_readable_store".to_string(), None, None)
     };
 
+    let infrastructure_state = infrastructure
+        .as_ref()
+        .map(|report| report.summary.state.clone());
+    let infrastructure_checks = infrastructure
+        .as_ref()
+        .map_or(usize::default(), |report| report.summary.probes);
+    let infrastructure_failures = infrastructure.as_ref().map_or(usize::default(), |report| {
+        report
+            .probes
+            .iter()
+            .filter(|probe| probe.state != "ok")
+            .count()
+    });
+    let credential_store_state = credential_store.state.clone();
+
     let report = BlastRadiusReport {
         dependency: args.dependency.clone(),
         configured_storage_backend: config::wc_storage_backend().to_string(),
@@ -200,6 +254,10 @@ pub async fn run(args: &BlastRadiusArgs) -> Result<(), CmdError> {
             primary_objects_in_scope: primary_scope,
             backup_objects_in_scope: backup_scope,
             scale_source,
+            infrastructure_state,
+            infrastructure_checks,
+            infrastructure_failures,
+            credential_store_state,
         },
         primary_storage: primary.report,
         backup_storage: backup.report,
@@ -211,12 +269,14 @@ pub async fn run(args: &BlastRadiusArgs) -> Result<(), CmdError> {
             safe_mode: "fence_writers_then_explicitly_promote_one_backend".to_string(),
             reason: "queue records, provider leases and compare-and-swap state are mutable; transparent fallback risks duplicate dispatch and split brain".to_string(),
         },
+        infrastructure,
+        credential_store,
         recovery_order: [
             "establish one readable authoritative store",
             "fence every scheduler and worker writer",
             "verify backup namespace and metadata",
             "promote the selected backend to every participant",
-            "restore registry, secrets and release distribution",
+            "restore registry and release distribution",
             "resume coordinators and workers",
             "verify queue lifecycle and user-facing consumers",
         ]
@@ -237,12 +297,172 @@ pub async fn run(args: &BlastRadiusArgs) -> Result<(), CmdError> {
     Ok(())
 }
 
+async fn inspect_credential_store() -> CredentialStoreReport {
+    const REQUIRED_ITEMS: &[&str] = &["stado-huggingface"];
+    let locator = config::skarbiec_url().to_string();
+    let consumer = config::skarbiec_consumer().to_string();
+    let client = match crate::skarbiec::Client::configured() {
+        Ok(client) => client,
+        Err(error) => {
+            return CredentialStoreReport {
+                state: "unreachable".to_string(),
+                locator,
+                consumer,
+                item_count: None,
+                items: Vec::new(),
+                missing_required: REQUIRED_ITEMS
+                    .iter()
+                    .map(|item| (*item).to_string())
+                    .collect(),
+                error: Some(error.to_string()),
+            }
+        }
+    };
+    let listed = match tokio::time::timeout(crate::doctor::PROBE_TIMEOUT, client.list_items()).await
+    {
+        Ok(result) => result.map_err(|error| error.to_string()),
+        Err(_) => Err(format!(
+            "credential store inspection exceeded {:?}",
+            crate::doctor::PROBE_TIMEOUT
+        )),
+    };
+    match listed {
+        Ok(mut items) => {
+            items.retain(|item| item.deleted != Some(true));
+            items.sort_by(|left, right| left.id.cmp(&right.id));
+            let present: BTreeSet<&str> = items.iter().map(|item| item.id.as_str()).collect();
+            let missing_required: Vec<String> = REQUIRED_ITEMS
+                .iter()
+                .copied()
+                .filter(|item| !present.contains(item))
+                .map(str::to_string)
+                .collect();
+            CredentialStoreReport {
+                state: if missing_required.is_empty() {
+                    "reachable"
+                } else {
+                    "degraded"
+                }
+                .to_string(),
+                locator,
+                consumer,
+                item_count: Some(items.len()),
+                items,
+                missing_required,
+                error: None,
+            }
+        }
+        Err(error) => CredentialStoreReport {
+            state: "unreachable".to_string(),
+            locator,
+            consumer,
+            item_count: None,
+            items: Vec::new(),
+            missing_required: REQUIRED_ITEMS
+                .iter()
+                .map(|item| (*item).to_string())
+                .collect(),
+            error: Some(error.to_string()),
+        },
+    }
+}
+
+fn gcp_inventory_options(primary: &Endpoint, backup: Option<&Endpoint>) -> InventoryOptions {
+    let mut buckets = BTreeSet::new();
+    for endpoint in [Some(primary), backup].into_iter().flatten() {
+        if endpoint.kind == "gcs" && !endpoint.bucket.is_empty() {
+            buckets.insert(endpoint.bucket.clone());
+        }
+    }
+
+    let mut objects = Vec::new();
+    if let Some((bucket, object)) = parse_gs_locator(&crate::targets::registry_location()) {
+        buckets.insert(bucket.clone());
+        objects.push(GcsObjectAsset {
+            name: "registry_object".to_string(),
+            bucket,
+            object,
+            severity: "critical".to_string(),
+        });
+    }
+    if let Some((bucket, object)) = release_pointer(config::release_base_url()) {
+        buckets.insert(bucket.clone());
+        objects.push(GcsObjectAsset {
+            name: "release_channel_pointer".to_string(),
+            bucket,
+            object,
+            severity: "high".to_string(),
+        });
+    }
+
+    InventoryOptions {
+        project: config::project().to_string(),
+        region: config::region().to_string(),
+        regions: config::regions().to_vec(),
+        buckets: buckets.into_iter().collect(),
+        objects,
+        alerts_topic: config::alerts_topic().to_string(),
+        billing_dataset: config::billing_dataset().to_string(),
+        billing_table: config::billing_table().to_string(),
+    }
+}
+
+fn parse_gs_locator(locator: &str) -> Option<(String, String)> {
+    let path = locator.strip_prefix("gs://")?;
+    let (bucket, object) = path.split_once('/')?;
+    Some((bucket.to_string(), object.to_string()))
+}
+
+fn release_pointer(base: &str) -> Option<(String, String)> {
+    let parsed = url::Url::parse(base).ok()?;
+    let host = parsed.host_str()?;
+    let path = parsed.path().trim_matches('/');
+    if host == "storage.googleapis.com" {
+        let (bucket, prefix) = path.split_once('/')?;
+        return Some((
+            bucket.to_string(),
+            format!("{}/latest.json", prefix.trim_end_matches('/')),
+        ));
+    }
+    let bucket = host.strip_suffix(".storage.googleapis.com")?;
+    Some((
+        bucket.to_string(),
+        format!("{}/latest.json", path.trim_end_matches('/')),
+    ))
+}
+
 fn validate_dependency(dependency: &str) -> Result<(), CmdError> {
     match dependency {
         "gcp" | "azure" | "aws" | "local" => Ok(()),
         other => Err(CmdError::click(format!(
             "unknown dependency {other:?}; use gcp, azure, aws or local"
         ))),
+    }
+}
+
+async fn inspect_storage_bounded(role: &str, endpoint: Option<&Endpoint>) -> StorageInspection {
+    match tokio::time::timeout(
+        crate::doctor::PROBE_TIMEOUT,
+        inspect_storage(role, endpoint),
+    )
+    .await
+    {
+        Ok(inspection) => inspection,
+        Err(_) => StorageInspection {
+            report: StorageReport {
+                role: role.to_string(),
+                locator: endpoint.map(Endpoint::describe),
+                state: "unreachable".to_string(),
+                object_count: None,
+                newest_object_at: None,
+                error: Some(format!(
+                    "storage inspection exceeded {:?}",
+                    crate::doctor::PROBE_TIMEOUT
+                )),
+                prefixes: Vec::new(),
+            },
+            names: BTreeMap::new(),
+        },
     }
 }
 
@@ -472,14 +692,9 @@ fn data_domains(primary: &StorageInspection) -> Vec<DomainReport> {
             primary,
         ),
         domain(
-            "registry_and_secrets",
-            CONTROL_AND_SECRETS,
-            &[
-                "coordinators",
-                "host commands",
-                "billing collectors",
-                "provider credentials",
-            ],
+            "registry",
+            REGISTRY,
+            &["coordinators", "host commands"],
             primary,
         ),
     ]
@@ -528,8 +743,7 @@ fn downstream_impacts(
         "blocked_no_readable_backup"
     };
 
-    let mut impacts =
-        vec![
+    let mut impacts = vec![
         impact(
             "queue_store",
             "critical",
@@ -547,12 +761,12 @@ fn downstream_impacts(
             "the mutable queue and every lifecycle transition use the configured storage backend",
         ),
         impact(
-            "registry_and_secrets",
+            "registry",
             "critical",
             storage_state,
-            CONTROL_AND_SECRETS,
-            &["coordinators", "host management", "provider and billing authentication"],
-            "registry.json and Stado-managed secrets live in the same primary store",
+            REGISTRY,
+            &["coordinators", "host management"],
+            "registry.json lives in the configured primary store; credentials live in Skarbiec",
         ),
     ];
 
@@ -694,6 +908,59 @@ fn print_human(report: &BlastRadiusReport) {
         optional_count(report.summary.backup_objects_in_scope)
     );
     println!();
+    println!(
+        "Credential store: {} ({}, consumer={}, items={})",
+        report.credential_store.state,
+        report.credential_store.locator,
+        report.credential_store.consumer,
+        optional_count(report.credential_store.item_count),
+    );
+    if !report.credential_store.items.is_empty() {
+        println!(
+            "  item ids: {}",
+            report
+                .credential_store
+                .items
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    if !report.credential_store.missing_required.is_empty() {
+        println!(
+            "  missing required items: {}",
+            report.credential_store.missing_required.join(", ")
+        );
+    }
+    if let Some(error) = &report.credential_store.error {
+        println!("  error: {}", error.lines().next().unwrap_or(error));
+    }
+    if let Some(infrastructure) = &report.infrastructure {
+        println!();
+        println!(
+            "GCP infrastructure: {} (checks={}, healthy={}, critical_failures={})",
+            infrastructure.summary.state,
+            infrastructure.summary.probes,
+            infrastructure.summary.healthy,
+            infrastructure.summary.critical_failures,
+        );
+        for probe in &infrastructure.probes {
+            let count = probe
+                .count
+                .map_or_else(String::new, |count| format!(", count={count}"));
+            println!(
+                "- [{}] {} / {}: {}{} — {}",
+                probe.severity, probe.service, probe.name, probe.state, count, probe.resource,
+            );
+            if let Some(error) = &probe.error {
+                println!("  error: {}", error.lines().next().unwrap_or(error));
+            }
+            print_probe_highlights(probe);
+        }
+    }
+
+    println!();
     println!("Downstream consumers:");
     for impact in &report.downstream {
         println!(
@@ -720,6 +987,111 @@ fn print_human(report: &BlastRadiusReport) {
     println!("Recovery order:");
     for step in &report.recovery_order {
         println!("- {step}");
+    }
+}
+
+fn print_probe_highlights(probe: &crate::providers::gcp::inventory::ProbeReport) {
+    match probe.name.as_str() {
+        "billing_account" => {
+            if let Some(enabled) = probe.detail.get("billing_enabled") {
+                println!("  billing_enabled: {enabled}");
+            }
+        }
+        "caller_permissions" => {
+            if let Some(missing) = probe
+                .detail
+                .get("missing")
+                .and_then(serde_json::Value::as_array)
+            {
+                if !missing.is_empty() {
+                    println!(
+                        "  missing permissions: {}",
+                        missing
+                            .iter()
+                            .filter_map(serde_json::Value::as_str)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                }
+            }
+        }
+        "service_account_roles" => {
+            if let Some(missing) = probe.detail.get("missing_by_service_account") {
+                println!("  missing runtime roles by account: {missing}");
+            }
+        }
+        "compute_instances" => {
+            if let Some(statuses) = probe.detail.get("by_status") {
+                println!("  statuses: {statuses}");
+            }
+            if let Some(instances) = probe
+                .detail
+                .get("instances")
+                .and_then(serde_json::Value::as_array)
+            {
+                for instance in instances.iter().filter(|instance| {
+                    instance
+                        .get("status")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|status| {
+                            matches!(
+                                status,
+                                "RUNNING"
+                                    | "STAGING"
+                                    | "PROVISIONING"
+                                    | "REPAIRING"
+                                    | "STOPPING"
+                                    | "SUSPENDING"
+                            )
+                        })
+                }) {
+                    println!(
+                        "  active VM: name={}, zone={}, status={}, machine={}, accelerators={}",
+                        instance.get("name").unwrap_or(&serde_json::Value::Null),
+                        instance.get("zone").unwrap_or(&serde_json::Value::Null),
+                        instance.get("status").unwrap_or(&serde_json::Value::Null),
+                        instance
+                            .get("machine_type")
+                            .unwrap_or(&serde_json::Value::Null),
+                        instance
+                            .get("accelerators")
+                            .unwrap_or(&serde_json::Value::Null),
+                    );
+                }
+            }
+        }
+        "compute_disks" => {
+            println!(
+                "  disk_gb={}, unattached={}",
+                probe
+                    .detail
+                    .get("total_gb")
+                    .unwrap_or(&serde_json::Value::Null),
+                probe
+                    .detail
+                    .get("unattached")
+                    .unwrap_or(&serde_json::Value::Null),
+            );
+        }
+        "managed_instance_groups" => {
+            if let Some(target) = probe.detail.get("target_instances") {
+                println!("  desired instances across MIGs: {target}");
+            }
+        }
+        "cloud_run_service" => {
+            if let Some(revision) = probe.detail.get("latest_ready_revision") {
+                println!("  latest ready revision: {revision}");
+            }
+            if let Some(environment) = probe.detail.get("environment") {
+                println!("  non-secret runtime config: {environment}");
+            }
+        }
+        _ if probe.name.starts_with("compute_region_quota_") => {
+            if let Some(exhausted) = probe.detail.get("exhausted") {
+                println!("  exhausted quota: {exhausted}");
+            }
+        }
+        _ => {}
     }
 }
 

@@ -47,11 +47,10 @@ static MODEL_RE: LazyLock<regex::Regex> =
 /// must crash visibly so the operator notices Vast.ai outage — hence the
 /// `Err` propagation (and `error_for_status`, matching urllib's raise on
 /// HTTP errors).
-pub async fn vast_has_renter() -> Result<bool, reqwest::Error> {
-    let api_key = std::env::var("VAST_API_KEY")
-        .unwrap_or_default()
-        .trim()
-        .to_string();
+pub async fn vast_has_renter() -> anyhow::Result<bool> {
+    let api_key = crate::skarbiec::read_string("stado-vast", "api_key")
+        .await?
+        .unwrap_or_default();
     if api_key.is_empty() {
         return Ok(false);
     }

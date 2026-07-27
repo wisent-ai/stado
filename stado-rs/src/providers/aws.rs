@@ -1,15 +1,13 @@
 //! AWS provider: EC2 instance lifecycle.
 //!
 //! Port of `stado/providers/aws.py`. Python uses boto3; this port uses
-//! aws-sdk-ec2 + aws-config. `aws_config::defaults` resolves the default
-//! credential chain (env -> shared config -> IMDS), the boto3 default
-//! chain equivalent; the region comes from the `AWS_REGION` config
-//! accessor.
+//! aws-sdk-ec2 + aws-config. Static AWS credentials are read from the
+//! `stado-aws` Skarbiec item; region and non-secret resource settings remain
+//! ordinary Stado configuration.
 //!
 //! Like [`super::gcp::GcpProvider`], the SDK client is resolved lazily on
 //! the first API call so `get_provider("aws")` stays a cheap, sync
-//! factory (Python's `boto3.client("ec2", ...)` constructor is likewise
-//! network-free).
+//! factory.
 //!
 //! Deviation: the instance_ref is the raw EC2 instance id (Python
 //! returns `iid` and `delete_instance`/`instance_exists` pass it back to
@@ -101,16 +99,70 @@ pub struct Ec2Client {
 }
 
 impl Ec2Client {
-    /// Build the SDK client: default credential chain + AWS_REGION.
-    pub async fn new() -> Self {
-        let sdk_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
-            .region(aws_config::Region::new(config::aws_region().to_string()))
-            .load()
-            .await;
-        Ec2Client {
+    /// Build the SDK client with credentials from Skarbiec.
+    pub async fn new() -> Result<Self, ProviderError> {
+        let sdk_config = sdk_config(config::aws_region())
+            .await
+            .map_err(|err| ProviderError::Aws(err.to_string()))?;
+        Ok(Ec2Client {
             client: aws_sdk_ec2::Client::new(&sdk_config),
-        }
+        })
     }
+}
+
+/// AWS SDK configuration. Prefer an EC2 IMDSv2 instance profile; off AWS,
+/// static application credentials come only from the `stado-aws` Skarbiec
+/// item.
+pub(crate) async fn sdk_config(
+    region: &str,
+) -> Result<aws_config::SdkConfig, crate::skarbiec::SkarbiecError> {
+    let imds = aws_config::imds::credentials::ImdsCredentialsProvider::builder().build();
+    if aws_sdk_ec2::config::ProvideCredentials::provide_credentials(&imds)
+        .await
+        .is_ok()
+    {
+        let mut loader =
+            aws_config::defaults(aws_config::BehaviorVersion::latest()).credentials_provider(imds);
+        if !region.is_empty() {
+            loader = loader.region(aws_config::Region::new(region.to_string()));
+        }
+        return Ok(loader.load().await);
+    }
+    let value = crate::skarbiec::Client::configured()?
+        .read_item("stado-aws")
+        .await?;
+    let access_key_id = value
+        .get("access_key_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            crate::skarbiec::SkarbiecError::MissingValue("stado-aws/access_key_id".into())
+        })?;
+    let secret_access_key = value
+        .get("secret_access_key")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            crate::skarbiec::SkarbiecError::MissingValue("stado-aws/secret_access_key".into())
+        })?;
+    let session_token = value
+        .get("session_token")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let credentials = aws_sdk_ec2::config::Credentials::new(
+        access_key_id,
+        secret_access_key,
+        session_token,
+        None,
+        "Skarbiec",
+    );
+    let mut loader = aws_config::defaults(aws_config::BehaviorVersion::latest())
+        .credentials_provider(credentials);
+    if !region.is_empty() {
+        loader = loader.region(aws_config::Region::new(region.to_string()));
+    }
+    Ok(loader.load().await)
 }
 
 #[async_trait]
@@ -314,9 +366,9 @@ impl AwsProvider {
         }
     }
 
-    async fn api(&self) -> &Arc<dyn Ec2Api> {
+    async fn api(&self) -> Result<&Arc<dyn Ec2Api>, ProviderError> {
         self.api
-            .get_or_init(|| async { Arc::new(Ec2Client::new().await) as Arc<dyn Ec2Api> })
+            .get_or_try_init(|| async { Ok(Arc::new(Ec2Client::new().await?) as Arc<dyn Ec2Api>) })
             .await
     }
 }
@@ -352,7 +404,7 @@ impl Provider for AwsProvider {
                 "AWS_SECURITY_GROUP and AWS_AMI_ID are required".to_string(),
             ));
         }
-        let api = self.api().await;
+        let api = self.api().await?;
         let vpc_id = api.security_group_vpc(sg).await?;
 
         for az in az_order(&self.settings.region) {
@@ -393,7 +445,7 @@ impl Provider for AwsProvider {
     }
 
     async fn delete_instance(&self, instance_ref: &str) -> Result<(), ProviderError> {
-        match self.api().await.terminate_instance(instance_ref).await {
+        match self.api().await?.terminate_instance(instance_ref).await {
             Ok(()) => Ok(()),
             // InvalidInstanceID.NotFound is the desired terminal state.
             // Anything else propagates.
@@ -403,7 +455,7 @@ impl Provider for AwsProvider {
     }
 
     async fn instance_exists(&self, instance_ref: &str) -> Result<bool, ProviderError> {
-        match self.api().await.instance_state(instance_ref).await {
+        match self.api().await?.instance_state(instance_ref).await {
             Ok(state) => Ok(matches!(state.as_deref(), Some("running" | "pending"))),
             Err(err) if err.to_string().contains("InvalidInstanceID.NotFound") => Ok(false),
             Err(err) => Err(err),
@@ -411,7 +463,7 @@ impl Provider for AwsProvider {
     }
 
     async fn list_running_instances(&self) -> Result<BTreeMap<String, i64>, ProviderError> {
-        let types = self.api().await.running_instance_types().await?;
+        let types = self.api().await?.running_instance_types().await?;
         let mut counts: BTreeMap<String, i64> = BTreeMap::new();
         for instance_type in types {
             if let Some(accel) = AWS_INSTANCE_TO_ACCEL.get(instance_type.as_str()) {

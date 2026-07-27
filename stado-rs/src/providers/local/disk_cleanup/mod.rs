@@ -1028,14 +1028,7 @@ fn run_with_lock(
             Ok(value) => value,
             Err(exc) => {
                 report.add_error("policy", &exc);
-                return finish(
-                    report,
-                    started,
-                    Some(home),
-                    persist,
-                    attempted_at,
-                    log_fn,
-                );
+                return finish(report, started, Some(home), persist, attempted_at, log_fn);
             }
         };
     // `enforce` is the only mode that deletes. The janitor's own `report`
@@ -1062,14 +1055,7 @@ fn run_with_lock(
         Ok(value) => value,
         Err(exc) => {
             report.add_error("state_read", &exc);
-            return finish(
-                report,
-                started,
-                Some(home),
-                persist,
-                attempted_at,
-                log_fn,
-            );
+            return finish(report, started, Some(home), persist, attempted_at, log_fn);
         }
     };
     let previous_report = previous.get("report").filter(|r| r.is_object()).cloned();
@@ -1124,14 +1110,7 @@ fn run_with_lock(
     if policy.mode == "off" || report.pressure_active != Some(true) {
         report.outcome = "healthy_noop".to_string();
         report.last_success_at = Some(utc_now());
-        return finish(
-            report,
-            started,
-            Some(home),
-            persist,
-            attempted_at,
-            log_fn,
-        );
+        return finish(report, started, Some(home), persist, attempted_at, log_fn);
     }
 
     let deadline = Instant::now() + std::time::Duration::from_secs_f64(DEADLINE_SECONDS);
@@ -1148,14 +1127,7 @@ fn run_with_lock(
     ) {
         report.add_error("runtime", &exc);
         report.outcome = "invalid_or_unavailable_policy".to_string();
-        return finish(
-            report,
-            started,
-            Some(home),
-            persist,
-            attempted_at,
-            log_fn,
-        );
+        return finish(report, started, Some(home), persist, attempted_at, log_fn);
     }
     let scanned = report.hf.scanned_items;
     let remaining_scan = (policy.max_scan_items - scanned).max(0);
@@ -1173,14 +1145,7 @@ fn run_with_lock(
         Err(exc) => {
             report.add_error("runtime", &exc);
             report.outcome = "invalid_or_unavailable_policy".to_string();
-            return finish(
-                report,
-                started,
-                Some(home),
-                persist,
-                attempted_at,
-                log_fn,
-            );
+            return finish(report, started, Some(home), persist, attempted_at, log_fn);
         }
     };
     report.free_bytes_after = Some(after);
@@ -1203,14 +1168,7 @@ fn run_with_lock(
     if report.errors.is_empty() {
         report.last_success_at = Some(utc_now());
     }
-    finish(
-        report,
-        started,
-        Some(home),
-        persist,
-        attempted_at,
-        log_fn,
-    )
+    finish(report, started, Some(home), persist, attempted_at, log_fn)
 }
 
 /// Resolve canonical policy and execute at most one bounded cleanup pass.
@@ -1278,20 +1236,17 @@ async fn cleanup_once(
             return finish(report, started, Some(&home), None, attempted_at, log_fn);
         }
     };
-    let persist = if preview { None } else { Some(state_dir.as_path()) };
+    let persist = if preview {
+        None
+    } else {
+        Some(state_dir.as_path())
+    };
     let lock = match acquire_lock(&state_dir) {
         Ok(lock) => lock,
         Err(exc) => {
             report.add_error("runtime", &exc);
             report.outcome = "invalid_or_unavailable_policy".to_string();
-            return finish(
-                report,
-                started,
-                Some(&home),
-                persist,
-                attempted_at,
-                log_fn,
-            );
+            return finish(report, started, Some(&home), persist, attempted_at, log_fn);
         }
     };
     let Some(lock) = lock else {

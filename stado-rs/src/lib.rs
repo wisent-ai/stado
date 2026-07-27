@@ -7,6 +7,7 @@
 
 pub mod artifacts;
 pub mod artifacts_models;
+pub mod capabilities;
 pub mod catalog;
 pub mod cli;
 pub mod config;
@@ -24,6 +25,7 @@ pub mod mail;
 pub mod mcp;
 pub mod models;
 pub mod monitor;
+pub mod object_store;
 pub mod profiles;
 pub mod providers;
 pub mod queue;
@@ -31,11 +33,11 @@ pub mod scheduler;
 pub mod schedules;
 pub mod self_update;
 pub mod sizing;
+pub mod skarbiec;
 pub mod targets;
 pub mod watchdog;
 
 pub(crate) mod azure_token;
-pub(crate) mod azure_key_vault;
 pub(crate) mod procutil;
 
 #[cfg(test)]

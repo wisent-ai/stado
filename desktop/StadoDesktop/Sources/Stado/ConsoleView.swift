@@ -1,4 +1,5 @@
 import SwiftUI
+import WisentAuth
 
 enum ConsoleSection: String, CaseIterable, Identifiable {
     case overview
@@ -29,7 +30,12 @@ enum ConsoleSection: String, CaseIterable, Identifiable {
 
 struct ConsoleView: View {
     @ObservedObject var store: OperationsStore
+    @ObservedObject var cleanupStore: CleanupStore
+    @ObservedObject var deploymentStore: DeploymentStore
+    @ObservedObject var auth: WisentAuthStore
     @State private var selection: ConsoleSection? = .overview
+    @State private var showsDeploymentOnboarding = false
+    @State private var showsDeploymentAccess = false
 
     var body: some View {
         NavigationSplitView {
@@ -71,7 +77,7 @@ struct ConsoleView: View {
                         }
                         .help("Refresh Stado state")
                         .keyboardShortcut("r", modifiers: .command)
-                        .disabled(store.isRefreshing)
+                        .disabled(store.isRefreshing || !store.isConfigured)
                     }
                 }
         }
@@ -79,53 +85,118 @@ struct ConsoleView: View {
             minWidth: StadoTheme.Layout.windowMinimumWidth,
             minHeight: StadoTheme.Layout.windowMinimumHeight
         )
-        .task {
-            if store.snapshot == nil {
+        .task(id: auth.identity?.organization.id) {
+            configureAuthorization()
+            await deploymentStore.load(identity: auth.identity)
+            configureSelectedDeployment()
+        }
+        .onChange(of: auth.session?.accessToken) { _, _ in
+            configureAuthorization()
+            Task {
                 await store.refresh()
+                await cleanupStore.refresh()
             }
+        }
+        .onChange(of: deploymentStore.selectedDeploymentID) { _, _ in
+            configureSelectedDeployment()
+        }
+        .sheet(
+            isPresented: Binding(
+                get: {
+                    auth.identity != nil
+                        && !deploymentStore.isLoading
+                        && (
+                            showsDeploymentOnboarding
+                                || deploymentStore.selectedDeployment?.status != .ready
+                        )
+                },
+                set: { showsDeploymentOnboarding = $0 }
+            )
+        ) {
+            DeploymentOnboardingView(
+                operationsStore: store,
+                cleanupStore: cleanupStore,
+                deploymentStore: deploymentStore,
+                identity: auth.identity,
+                onComplete: { showsDeploymentOnboarding = false }
+            )
+            .interactiveDismissDisabled()
+        }
+        .sheet(isPresented: $showsDeploymentAccess) {
+            if let deployment = deploymentStore.selectedDeployment {
+                DeploymentAccessView(
+                    deployment: deployment,
+                    store: deploymentStore,
+                    homeOrganization: auth.identity?.organization
+                )
+            }
+        }
+    }
+    private func configureAuthorization() {
+        store.configureAuthorization(token: auth.session?.accessToken)
+        cleanupStore.configureAuthorization(token: auth.session?.accessToken)
+    }
+
+
+    private func configureSelectedDeployment() {
+        guard let endpoint = deploymentStore.selectedDeployment?.endpoint else { return }
+        do {
+            try store.saveDashboardURL(endpoint)
+            try cleanupStore.saveDashboardURL(endpoint)
+        } catch {
+            return
         }
     }
 
     @ViewBuilder
     private var detail: some View {
         VStack(spacing: 0) {
-            if let error = store.errorMessage {
-                ErrorBanner(message: error, isStale: store.isShowingStaleSnapshot)
-                    .padding(.horizontal, StadoTheme.Space.lg)
-                    .padding(.top, StadoTheme.Space.md)
-            }
+            if !store.isConfigured {
+                ContentUnavailableView {
+                    Label("Connect to Stado", systemImage: "network")
+                } description: {
+                    Text("Choose the backend that provides fleet-wide workers, jobs, events, and cleanup state.")
+                }
+                .frame(minHeight: StadoTheme.Layout.emptyStateMinimumHeight)
+            } else {
+                if let error = store.errorMessage {
+                    ErrorBanner(message: error, isStale: store.isShowingStaleSnapshot)
+                        .padding(.horizontal, StadoTheme.Space.lg)
+                        .padding(.top, StadoTheme.Space.md)
+                }
 
-            if let snapshot = store.snapshot {
-                if snapshot.ready {
-                    selectedContent(snapshot)
+                if let snapshot = store.snapshot {
+                    if snapshot.ready {
+                        selectedContent(snapshot)
+                    } else {
+                        ContentUnavailableView {
+                            Label("Dashboard is preparing state", systemImage: "hourglass")
+                        } description: {
+                            Text("The endpoint is reachable, but its first queue snapshot is not ready yet. Refresh after the dashboard completes its background scan.")
+                        }
+                        .frame(minHeight: StadoTheme.Layout.emptyStateMinimumHeight)
+                    }
+                } else if store.isRefreshing {
+                    VStack(spacing: StadoTheme.Space.sm) {
+                        ProgressView()
+                            .controlSize(.large)
+                        Text("Loading Stado state…")
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityElement(children: .combine)
                 } else {
                     ContentUnavailableView {
-                        Label("Dashboard is preparing state", systemImage: "hourglass")
+                        Label("Stado state unavailable", systemImage: "network.slash")
                     } description: {
-                        Text("The endpoint is reachable, but its first queue snapshot is not ready yet. Refresh after the dashboard completes its background scan.")
+                        Text("Check the configured endpoint in Settings. No operational data is fabricated while the source is unavailable.")
+                    } actions: {
+                        Button("Refresh") {
+                            Task { await store.refresh() }
+                        }
                     }
                     .frame(minHeight: StadoTheme.Layout.emptyStateMinimumHeight)
                 }
-            } else if store.isRefreshing {
-                VStack(spacing: StadoTheme.Space.sm) {
-                    ProgressView()
-                        .controlSize(.large)
-                    Text("Loading local Stado state…")
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .accessibilityElement(children: .combine)
-            } else {
-                ContentUnavailableView {
-                    Label("Stado state unavailable", systemImage: "network.slash")
-                } description: {
-                    Text("Start the Stado dashboard or configure its HTTPS endpoint in Settings. No operational data is fabricated while the source is unavailable.")
-                } actions: {
-                    Button("Refresh") {
-                        Task { await store.refresh() }
-                    }
-                }
-                .frame(minHeight: StadoTheme.Layout.emptyStateMinimumHeight)
             }
         }
     }
@@ -152,16 +223,51 @@ struct ConsoleView: View {
                     .fill(sourceTone.color)
                     .frame(width: StadoTheme.Layout.statusDot, height: StadoTheme.Layout.statusDot)
                     .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: StadoTheme.Space.xxs) {
-                    Text(sourceLabel)
-                        .font(.caption.weight(.semibold))
-                    Text(store.dashboardAddress?.baseURL.host() ?? "Endpoint unavailable")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                Menu {
+                    ForEach(deploymentStore.deployments) { deployment in
+                        Button {
+                            deploymentStore.select(deployment)
+                            Task {
+                                await store.refresh()
+                                await cleanupStore.refresh()
+                            }
+                        } label: {
+                            Label(
+                                deployment.name,
+                                systemImage: deployment.id == deploymentStore.selectedDeploymentID
+                                    ? "checkmark"
+                                    : deployment.provider.symbol
+                            )
+                        }
+                    }
+                    if !deploymentStore.deployments.isEmpty {
+                        Divider()
+                    }
+                    Button {
+                        showsDeploymentOnboarding = true
+                    } label: {
+                        Label("New Deployment…", systemImage: "plus")
+                    }
+                    Button {
+                        showsDeploymentAccess = true
+                    } label: {
+                        Label("Manage Access…", systemImage: "person.2")
+                    }
+                    .disabled(deploymentStore.selectedDeployment == nil)
+                } label: {
+                    VStack(alignment: .leading, spacing: StadoTheme.Space.xxs) {
+                        Text(deploymentStore.selectedDeployment?.name ?? sourceLabel)
+                            .font(.caption.weight(.semibold))
+                        Text(sourceLabel)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .menuStyle(.borderlessButton)
             }
-            .accessibilityElement(children: .combine)
+            .accessibilityElement(children: .contain)
         }
         .padding(StadoTheme.Space.sm)
         .background(.bar)
@@ -174,11 +280,13 @@ struct ConsoleView: View {
     }
 
     private var sourceLabel: String {
+        if !store.isConfigured { return "Endpoint not configured" }
         if store.errorMessage != nil { return store.snapshot == nil ? "Disconnected" : "Refresh failed" }
         if store.snapshot?.ready == true { return "Dashboard connected" }
         return "Waiting for dashboard"
     }
 }
+
 
 private struct ErrorBanner: View {
     let message: String

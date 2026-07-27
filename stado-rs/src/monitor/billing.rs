@@ -16,11 +16,10 @@
 //!
 //! Azure section: available credit balance via the ARM REST API,
 //! authenticated with a service principal whose JSON value is read only from
-//! Azure Key Vault. Vault access itself uses a non-secret workload/operator
-//! identity (Managed Identity or the current Azure CLI session). Local files,
-//! process-environment secrets, queue blobs, and GCP Secret Manager are not
-//! credential sources. A missing vault or secret is explicit in the provider
-//! section; there is no fallback that can silently bypass the vault policy.
+//! the separate Skarbiec service. Local files, process-environment secrets,
+//! queue blobs, Azure Key Vault, and GCP Secret Manager are not credential
+//! sources. A missing service, grant, or item is explicit in the provider
+//! section; there is no fallback that can silently re-couple clouds.
 //!
 //! Transport deviations from Python (same on-the-wire data):
 //! - Python uses the google-cloud-bigquery library; here the queries run
@@ -28,8 +27,8 @@
 //!   REST `rows[].f[].v` shape (all values string-typed) instead of the
 //!   library's typed Row objects. The three SQL strings are byte-identical.
 //! - The Python implementation's GCP Secret Manager credential lookup is
-//!   replaced by an Azure Key Vault data-plane request. This removes the
-//!   cross-cloud credential dependency.
+//!   replaced by an action-scoped request to the separate Skarbiec service.
+//!   This removes the cross-cloud credential dependency.
 //! - Python's `ClientSecretCredential` is the literal OAuth2 client-
 //!   credentials POST to login.microsoftonline.com.
 //! - Python records exception detail as `{type(e).__name__}: {e}`; Rust has
@@ -65,9 +64,9 @@ use serde_json::{json, Value};
 
 use super::alerts::send_alert;
 use crate::config;
-use crate::queue::{JobStorage, StorageError};
 #[cfg(test)]
 use crate::queue::secrets;
+use crate::queue::{JobStorage, StorageError};
 
 /// Blob written every tick (Python `_BLOB`).
 pub const BLOB: &str = "billing_health/credits.json";
@@ -123,7 +122,9 @@ fn py_f64(value: f64) -> String {
 }
 
 async fn gcp_token() -> Result<String, String> {
-    let auth = gcp_auth::provider().await.map_err(|e| e.to_string())?;
+    let auth = crate::skarbiec::gcp_provider()
+        .await
+        .map_err(|e| e.to_string())?;
     let token = auth
         .token(&[CLOUD_PLATFORM_SCOPE])
         .await
@@ -312,7 +313,7 @@ async fn gcp_section_with(
 }
 
 // ---------------------------------------------------------------------------
-// Azure section — Key Vault SP + ARM available balance
+// Azure section — Skarbiec SP + ARM available balance
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -356,7 +357,6 @@ async fn fetch_azure_sp_with(
     Ok(Some(sp))
 }
 
-
 #[cfg(test)]
 /// Both credential locations, named in the order they were checked, so the
 /// status says where to put the secret rather than only that it is missing.
@@ -379,36 +379,29 @@ fn no_credentials_section(store: &JobStorage) -> Value {
     })
 }
 
-
-/// Available credit balance via ARM. The service-principal JSON is read from
-/// Azure Key Vault and nowhere else. A vault/auth/request failure is terminal
-/// for this source: silently falling through would bypass the credential
-/// policy and recreate cross-cloud coupling.
+/// Available credit balance via ARM. The service-principal object is read from
+/// the separate Skarbiec repository/service and nowhere else. A
+/// vault/auth/request failure is terminal for this source: silently falling
+/// through would bypass the credential policy.
 async fn azure_section(_store: &JobStorage) -> Value {
-    let client = reqwest::Client::new();
-    let vault_url = config::azure_key_vault_url();
     let secret_name = config::azure_billing_secret();
-    let encoded = match crate::azure_key_vault::read_secret(&client, vault_url, secret_name).await {
-        Ok(Some(encoded)) => encoded,
-        Ok(None) => {
+    let vault = match crate::skarbiec::Client::configured() {
+        Ok(vault) => vault,
+        Err(err) => return azure_error("skarbiec_error", err.to_string()),
+    };
+    let sp = match vault.read_item(secret_name).await {
+        Ok(sp) => sp,
+        Err(crate::skarbiec::SkarbiecError::Response { status, .. })
+            if status == reqwest::StatusCode::NOT_FOUND.as_u16() =>
+        {
             return json!({
                 "status": "no_credentials",
-                "detail": format!(
-                    "Azure Key Vault secret {secret_name:?} does not exist in {vault_url}"
-                ),
+                "detail": format!("Skarbiec item {secret_name:?} does not exist"),
             })
         }
-        Err(err) => return azure_error("vault_error", err.to_string()),
+        Err(err) => return azure_error("skarbiec_error", err.to_string()),
     };
-    let sp: Value = match serde_json::from_str(&encoded) {
-        Ok(sp) => sp,
-        Err(err) => {
-            return azure_error(
-                "config_error",
-                format!("invalid JSON in Azure Key Vault secret {secret_name:?}: {err}"),
-            )
-        }
-    };
+    let client = reqwest::Client::new();
     azure_section_with(&client, &sp, AZURE_LOGIN_BASE, ARM_BASE).await
 }
 

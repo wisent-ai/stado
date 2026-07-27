@@ -117,8 +117,13 @@ pub trait Provider: Send + Sync {
 /// clients resolve on the first API call, so the factory itself stays
 /// cheap and infallible (see the gcp/aws/azure module docs).
 pub fn get_provider(name: &str) -> Result<Arc<dyn Provider>, ProviderError> {
-    match name {
-        "box" | "box-ascii" => Ok(Arc::new(BoxProvider::from_env()?)),
+    let variant = crate::capabilities::constructible_variant(
+        crate::capabilities::CapabilityKind::Compute,
+        name,
+    )
+    .ok_or_else(|| ProviderError::Value(format!("Unknown provider: {name}")))?;
+    match variant.id {
+        "box" => Ok(Arc::new(BoxProvider::from_env()?)),
         // Lazy: credentials + storage resolve on the first API call, so the
         // factory itself stays cheap and infallible (see gcp module docs).
         "gcp" => Ok(Arc::new(gcp::GcpProvider::from_env())),

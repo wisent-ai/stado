@@ -21,9 +21,9 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::config;
-use crate::models::{job_state, Job};
+use crate::models::{job_state, Job, JobSecretRef};
 use crate::queue::leases::{LeaseError, ProviderLeaseStore};
-use crate::queue::submit::{compute_api_key, submit_job, SubmitOptions};
+use crate::queue::submit::{submit_job, SubmitOptions};
 use crate::queue::{JobStorage, StorageError};
 
 pub const SCHEMA_VERSION: i64 = 1;
@@ -42,7 +42,7 @@ pub const MAX_SOURCE_EXTRACTED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 pub const MAX_SOURCE_MEMBERS: u64 = 100_000;
 
 /// Request fields accepted by `machine submit` (Python `REQUEST_FIELDS`).
-const REQUEST_FIELDS: [&str; 17] = [
+const REQUEST_FIELDS: &[&str] = &[
     "client_request_id",
     "command",
     "provider",
@@ -60,6 +60,8 @@ const REQUEST_FIELDS: [&str; 17] = [
     "verify_command",
     "exclusive",
     "source_archive_path",
+    "input_objects",
+    "secret_env",
 ];
 
 static REQUEST_ID_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
@@ -67,6 +69,12 @@ static REQUEST_ID_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
 });
 static APT_PACKAGE_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(r"^[A-Za-z0-9][A-Za-z0-9+._:-]*$").expect("static regex compiles")
+});
+static ENV_NAME_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"^[A-Za-z_][A-Za-z0-9_]*$").expect("static regex compiles")
+});
+static SECRET_PART_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"^[A-Za-z0-9][A-Za-z0-9._-]*$").expect("static regex compiles")
 });
 
 /// Structured failure emitted by every facade operation. Serialized by the
@@ -451,8 +459,8 @@ pub fn validate_request(request: &Value) -> Result<Map<String, Value>, MachineEr
     }
 
     let mut normalized = Map::new();
-    // Python `defaults` dict, merged under the request.
-    normalized.insert("provider".into(), Value::from("gcp"));
+    // Stado owns provider selection unless the caller supplies a constraint.
+    normalized.insert("provider".into(), Value::from(""));
     normalized.insert("gpu_type".into(), Value::from(""));
     normalized.insert("vram_gb".into(), Value::from(0));
     normalized.insert("max_cost_per_hour_usd".into(), Value::from(0.0));
@@ -467,6 +475,8 @@ pub fn validate_request(request: &Value) -> Result<Map<String, Value>, MachineEr
     normalized.insert("verify_command".into(), Value::from(""));
     normalized.insert("exclusive".into(), Value::from(false));
     normalized.insert("source_archive_path".into(), Value::from(""));
+    normalized.insert("input_objects".into(), Value::Object(Map::new()));
+    normalized.insert("secret_env".into(), Value::Object(Map::new()));
     for (key, value) in map {
         normalized.insert(key.clone(), value.clone());
     }
@@ -520,13 +530,74 @@ pub fn validate_request(request: &Value) -> Result<Map<String, Value>, MachineEr
             "apt_packages must contain only valid apt package names",
         ));
     }
+    let Some(secret_env) = normalized["secret_env"].as_object() else {
+        return Err(invalid("secret_env must be an object"));
+    };
+    for (env_name, value) in secret_env {
+        if !ENV_NAME_RE.is_match(env_name) {
+            return Err(invalid(format!(
+                "secret_env variable name is unsafe: {env_name:?}"
+            )));
+        }
+        let Some(spec) = value.as_object() else {
+            return Err(invalid(format!("secret_env.{env_name} must be an object")));
+        };
+        if spec.keys().any(|key| key != "item" && key != "field") {
+            return Err(invalid(format!(
+                "secret_env.{env_name} accepts only item and field"
+            )));
+        }
+        let item = spec.get("item").and_then(Value::as_str).unwrap_or_default();
+        let field = spec
+            .get("field")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !SECRET_PART_RE.is_match(item) || !SECRET_PART_RE.is_match(field) {
+            return Err(invalid(format!(
+                "secret_env.{env_name} requires path-safe item and field strings"
+            )));
+        }
+    }
+    let Some(inputs) = normalized["input_objects"].as_object() else {
+        return Err(invalid("input_objects must be an object"));
+    };
+    for (name, value) in inputs {
+        let Some(spec) = value.as_object() else {
+            return Err(invalid(format!("input_objects.{name} must be an object")));
+        };
+        let Some(uri) = spec.get("stado_uri").and_then(Value::as_str) else {
+            return Err(invalid(format!(
+                "input_objects.{name}.stado_uri is required"
+            )));
+        };
+        crate::object_store::ObjectRef::parse(uri).map_err(|error| {
+            invalid(format!(
+                "input_objects.{name}.stado_uri is invalid: {error}"
+            ))
+        })?;
+        let Some(relative) = spec.get("relative_path").and_then(Value::as_str) else {
+            return Err(invalid(format!(
+                "input_objects.{name}.relative_path is required"
+            )));
+        };
+        let relative_path = Path::new(relative);
+        if relative_path.as_os_str().is_empty()
+            || relative_path
+                .components()
+                .any(|part| !matches!(part, std::path::Component::Normal(_)))
+        {
+            return Err(invalid(format!(
+                "input_objects.{name}.relative_path must stay inside the job work directory"
+            )));
+        }
+    }
     Ok(normalized)
 }
 
 /// The automation facade. Python `MachineFacade(store, submitter)`; the
-/// submitter is always [`submit_job`] here (the COMPUTE_API_KEY guard in
-/// `submit_request` covers the one case Python special-cased on the
-/// submitter identity).
+/// submitter is always [`submit_job`] here and the Skarbiec-backed compute
+/// API key guard covers the one case Python special-cased on submitter
+/// identity.
 pub struct MachineFacade {
     store: JobStorage,
     bucket: String,
@@ -543,8 +614,8 @@ impl MachineFacade {
     }
 
     /// Facade over an explicit store (tests, custom deployments). `bucket`
-    /// is the name used in `gs://` URIs and passed to the submitter, exactly
-    /// Python's `store.bucket_name`.
+    /// remains the queue facade label passed to the submitter; product object
+    /// locators are always provider-neutral `stado://` URIs.
     pub fn with_store(store: JobStorage, bucket: impl Into<String>) -> Self {
         Self {
             store,
@@ -587,26 +658,18 @@ impl MachineFacade {
             .as_str()
             .unwrap_or_default()
             .to_string();
-        if !compute_api_key().is_empty() {
-            return Err(MachineError::new(
-                "UNSUPPORTED_BACKEND",
-                "machine submission requires direct durable storage; the legacy compute API drops lifecycle fields",
-            ));
-        }
         let archive = validate_source_archive(request.get("source_archive_path"))?;
         let mut source_uri = String::new();
         let mut source_sha = String::new();
         let mut digest_request = request.clone();
         if let Some((archive_path, sha)) = archive {
-            if self.store.backend_name() != "gcs" {
-                return Err(MachineError::new(
-                    "SOURCE_ARCHIVE_UNSUPPORTED",
-                    "source archive bootstrap currently requires the GCS storage backend",
-                ));
-            }
             source_sha = sha;
-            let source_blob = format!("machine_inputs/{request_id}/{source_sha}.tar.gz");
-            source_uri = format!("gs://{}/{source_blob}", self.bucket);
+            let source_object = crate::object_store::ObjectRef::new(
+                "machine-inputs",
+                &format!("{request_id}/{source_sha}.tar.gz"),
+            )?;
+            let source_blob = source_object.storage_path();
+            source_uri = source_object.to_string();
             self.store
                 .upload_file_if_absent(&source_blob, &archive_path)
                 .await
@@ -713,21 +776,55 @@ impl MachineFacade {
             output_uri: str_field("output_uri"),
             verify_command: str_field("verify_command"),
             exclusive: request["exclusive"].as_bool().unwrap_or_default(),
+            secret_env: request["secret_env"]
+                .as_object()
+                .map(|items| {
+                    items
+                        .iter()
+                        .map(|(env_name, value)| {
+                            let spec = value.as_object().expect("validated secret_env object");
+                            (
+                                env_name.clone(),
+                                JobSecretRef {
+                                    item: spec["item"]
+                                        .as_str()
+                                        .expect("validated secret item")
+                                        .to_string(),
+                                    field: spec["field"]
+                                        .as_str()
+                                        .expect("validated secret field")
+                                        .to_string(),
+                                },
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            resolved_input_artifacts: request["input_objects"]
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
             ..Default::default()
         };
         if !source_uri.is_empty() {
-            // Bootstrap: fetch + extract the uploaded source archive on the
-            // worker before the caller's pre_command (Python block verbatim).
+            // The trusted Stado agent materializes this object before spawning
+            // the untrusted job. The child never receives storage credentials.
+            options.resolved_input_artifacts.insert(
+                "machine_source".into(),
+                serde_json::json!({
+                    "stado_uri": source_uri,
+                    "relative_path": "machine-input.tar.gz",
+                    "sha256": source_sha,
+                }),
+            );
             let workdir = format!("/tmp/stado-machine-source/{request_id}-{source_sha}");
-            let local_archive = format!("/tmp/stado-machine-source/{source_sha}.tar.gz");
             let bootstrap = [
                 "set -e".to_string(),
                 "mkdir -p /tmp/stado-machine-source".to_string(),
                 format!("rm -rf {workdir}"),
                 format!("mkdir -p {workdir}"),
-                format!("gsutil cp {source_uri} {local_archive}"),
                 format!(
-                    "tar --extract --gzip --file={local_archive} --directory={workdir} --no-same-owner --no-same-permissions"
+                    "tar --extract --gzip --file=\"$PWD/machine-input.tar.gz\" --directory={workdir} --no-same-owner --no-same-permissions"
                 ),
                 format!("cd {workdir}"),
             ]

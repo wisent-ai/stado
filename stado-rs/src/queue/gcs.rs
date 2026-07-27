@@ -1,15 +1,14 @@
 //! GCS backend: Google Cloud Storage JSON API v1 via reqwest + gcp_auth.
 //!
 //! Port of the SDK path of the inline backend in `stado/queue/storage.py`.
-//! **The gsutil subprocess fallback is deliberately DROPPED**: when ADC /
-//! gcloud credentials are unavailable, [`GcsBackend::new`] fails with a
-//! clear error instead of shelling out.
+//! **The gsutil subprocess fallback is deliberately DROPPED**: when neither a
+//! GCP workload identity nor the `stado-gcp` Skarbiec item is available,
+//! [`GcsBackend::new`] fails clearly instead of shelling out.
 //!
 //! Auth note: the task brief mentions `gcp_auth::AuthenticationManager`,
-//! but gcp_auth 0.12 removed that type; the equivalent entry point is
-//! [`gcp_auth::provider()`], which returns a cached `Arc<dyn TokenProvider>`
-//! covering env credentials, well-known ADC files, the metadata server and
-//! `gcloud auth` — a superset of the Python `_has_adc()` probe.
+//! Authentication accepts only a GCP managed identity or the `stado-gcp`
+//! service-account item in Skarbiec; ADC files, environment credentials and
+//! gcloud sessions are not credential sources.
 //!
 //! Conditional writes use GCS generations: `ifGenerationMatch=0` for
 //! atomic create, `ifGenerationMatch=<generation>` for CAS. HTTP 412 maps
@@ -51,7 +50,7 @@ impl GcsBackend {
     /// Build a backend for `bucket`, resolving GCP credentials. No gsutil
     /// fallback: an auth failure is a hard error.
     pub async fn new(bucket: &str) -> Result<Self, StorageError> {
-        let auth = gcp_auth::provider().await.map_err(|err| {
+        let auth = crate::skarbiec::gcp_provider().await.map_err(|err| {
             StorageError::Auth(format!(
                 "no GCP credentials found for the GCS backend \
                  (the gsutil subprocess fallback of the Python implementation \
@@ -451,7 +450,7 @@ impl BlobBackend for GcsBackend {
     }
 
     async fn list_blobs_with_meta(&self, prefix: &str) -> Result<Vec<BlobInfo>, StorageError> {
-        let fields = "items(name,updated,metadata),nextPageToken";
+        let fields = "items(name,updated,size,metadata),nextPageToken";
         let mut out = Vec::new();
         let mut page_token: Option<String> = None;
         loop {
@@ -476,6 +475,10 @@ impl BlobBackend for GcsBackend {
                             .unwrap_or_default()
                             .to_string(),
                         updated: item.get("updated").and_then(parse_timestamp),
+                        size: item
+                            .get("size")
+                            .and_then(serde_json::Value::as_str)
+                            .and_then(|value| value.parse::<u64>().ok()),
                         metadata,
                     });
                 }

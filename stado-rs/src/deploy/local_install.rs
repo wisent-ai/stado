@@ -226,19 +226,22 @@ pub fn label(kind: &str, name: &str) -> String {
 }
 
 /// Python `_exec_args_for(entry, kind)`.
-pub fn exec_args_for(bins: &Bins, kind: &str, name: &str) -> Result<Vec<String>, DeployError> {
+pub fn exec_args_for(bins: &Bins, kind: &str, _name: &str) -> Result<Vec<String>, DeployError> {
     match kind {
         "agent" => Ok(vec![
             bins.stado.clone(),
             "agent".to_string(),
             "--auto".to_string(),
         ]),
-        "coordinator" => Ok(vec![
-            bins.stado.clone(),
-            "coordinator".to_string(),
-            "--target".to_string(),
-            name.to_string(),
-        ]),
+        "coordinator"
+            if crate::config::wc_storage_backend() == "local"
+                && crate::config::wc_providers()
+                    .iter()
+                    .all(|provider| provider == "local") =>
+        {
+            Ok(vec![bins.stado.clone(), "local-control-plane".to_string()])
+        }
+        "coordinator" => Ok(vec![bins.stado.clone(), "cloud-control-plane".to_string()]),
         "disk-cleanup" => Ok(vec![
             bins.stado.clone(),
             "disk-cleanup".to_string(),
@@ -292,60 +295,27 @@ pub fn default_wc_python() -> String {
     "python3".to_string()
 }
 
-/// Python `_adc_path`: the ADC path the agent / coordinator should export,
-/// if any.
+/// Path of the Skarbiec-materialized service-account transport file, if one
+/// exists. GCP managed-identity hosts intentionally have no such file.
 pub fn adc_path(home: &Path) -> String {
-    if let Ok(explicit) = std::env::var("GOOGLE_APPLICATION_CREDENTIALS") {
-        if !explicit.is_empty() && Path::new(&explicit).is_file() {
-            return explicit;
-        }
-    }
-    let standard = home.join(".config/gcloud/application_default_credentials.json");
-    if standard.is_file() {
-        return standard.to_string_lossy().into_owned();
-    }
-    let legacy = home.join(".config/gcloud/legacy_credentials");
-    if let Ok(Some(path)) = std::fs::read_dir(&legacy).map(|mut dirs| {
-        dirs.find_map(|entry| {
-            let path = entry.ok()?.path().join("adc.json");
-            path.is_file().then_some(path)
-        })
-    }) {
-        return path.to_string_lossy().into_owned();
-    }
-    String::new()
+    let path = home.join(".config/gcloud/application_default_credentials.json");
+    path.is_file()
+        .then(|| path.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
-/// Central write-scoped HF token from gs://<WC_BUCKET>/config/hf_token.
-/// Baked into the agent/coordinator/failure-fixer unit env so extraction
-/// jobs upload to wisent-ai/* with write perms instead of inheriting the
-/// box's read-only ambient token (the observed 403 'write token' failure).
-///
-/// Python `_hf_write_token` passes `GOOGLE_CLOUD_PROJECT`/`GCP_PROJECT` to
-/// `storage.Client(project=...)`; here project resolution is delegated to
-/// the crate's GCS backend (gcp_auth + ADC), as everywhere else in the
-/// port. A missing blob yields "".
+/// Central write-scoped Hugging Face token from
+/// `stado-huggingface/write_token` in Skarbiec. Missing credentials,
+/// authorization and transport failures are explicit; there is no alternate
+/// credential source.
 pub async fn fetch_hf_write_token() -> Result<String, DeployError> {
-    if let Some(token) = std::env::var("HF_TOKEN")
-        .ok()
-        .filter(|token| !token.trim().is_empty())
-        .or_else(|| {
-            std::env::var("HUGGING_FACE_HUB_TOKEN")
-                .ok()
-                .filter(|token| !token.trim().is_empty())
+    crate::skarbiec::read_string("stado-huggingface", "write_token")
+        .await
+        .map_err(|exc| DeployError(exc.to_string()))?
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            DeployError("Skarbiec item stado-huggingface field write_token is required".into())
         })
-    {
-        return Ok(token);
-    }
-    use crate::queue::BlobBackend;
-    let backend = crate::queue::GcsBackend::new(crate::config::bucket())
-        .await
-        .map_err(|exc| DeployError(exc.to_string()))?;
-    let text = backend
-        .download_text("config/hf_token")
-        .await
-        .map_err(|exc| DeployError(exc.to_string()))?;
-    Ok(text.map(|t| t.trim().to_string()).unwrap_or_default())
 }
 
 /// Production [`TokenFetcher`] over [`fetch_hf_write_token`].
@@ -374,18 +344,35 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
 /// renderers iterate this order byte-exactly).
 pub fn build_env(kind: &str, inputs: &EnvInputs) -> Vec<(String, String)> {
     let mut env: Vec<(String, String)> = vec![("PYTHONUNBUFFERED".to_string(), "1".to_string())];
-    if !inputs.adc.is_empty() {
-        env.push((
-            "GOOGLE_APPLICATION_CREDENTIALS".to_string(),
-            inputs.adc.to_string(),
-        ));
-    }
-    // Only the agent kind needs the job-environment interpreter: it runs
-    // the Python probes (smoketest, CUDA probe, fleet flush) and spawns
-    // the job payloads, which still run as Python. Coordinator /
-    // failure-fixer / watchdog / disk-cleanup are pure-Rust loops.
-    if kind == "agent" && !inputs.wc_python.is_empty() {
-        env.push(("WC_PYTHON".to_string(), inputs.wc_python.to_string()));
+    env.push((
+        "WC_SKARBIEC_URL".to_string(),
+        crate::config::skarbiec_url().to_string(),
+    ));
+    env.push((
+        "WC_SKARBIEC_CONSUMER".to_string(),
+        crate::config::skarbiec_consumer().to_string(),
+    ));
+    env.push((
+        "WC_SKARBIEC_TOKEN_FILE".to_string(),
+        crate::config::skarbiec_token_file().to_string(),
+    ));
+    // The standalone agent and the outage-safe local control plane both
+    // execute Python probes and job payloads. Preserve the operator PATH so
+    // child jobs see the same toolchain as an interactive Stado invocation.
+    let runs_local_agent = kind == "agent"
+        || (kind == "coordinator"
+            && crate::config::wc_storage_backend() == "local"
+            && crate::config::wc_providers()
+                .iter()
+                .all(|provider| provider == "local"));
+    if runs_local_agent {
+        if !inputs.wc_python.is_empty() {
+            env.push(("WC_PYTHON".to_string(), inputs.wc_python.to_string()));
+        }
+        let path = inputs
+            .path
+            .unwrap_or("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin");
+        env.push(("PATH".to_string(), path.to_string()));
     }
     if kind == "disk-cleanup" {
         let project = non_empty(inputs.google_cloud_project)
@@ -393,29 +380,9 @@ pub fn build_env(kind: &str, inputs: &EnvInputs) -> Vec<(String, String)> {
             .unwrap_or_else(|| crate::config::project());
         env.push(("GOOGLE_CLOUD_PROJECT".to_string(), project.to_string()));
     }
-    // Every kind needs the central write token: the agent spawns extraction
-    // jobs that upload to wisent-ai/* (inherits this env), the coordinator
-    // renders it into GCE agent startup, the failure-fixer's verify curl uses
-    // it. Sourced from GCS config so it's correct regardless of the box's
-    // ambient HF_TOKEN (which was read-only -> 403 on upload).
-    if kind != "disk-cleanup" && !inputs.hf_token.is_empty() {
-        env.push(("HF_TOKEN".to_string(), inputs.hf_token.to_string()));
-        env.push((
-            "HUGGING_FACE_HUB_TOKEN".to_string(),
-            inputs.hf_token.to_string(),
-        ));
-    }
-    // failure-fixer authenticates via the local `claude` CLI's OAuth
-    // session (maintained by wisent-claude-reauth on the mac mini), not
-    // via env-var HMAC creds. PATH is forwarded so the LaunchAgent's
-    // subshell can find `claude` in /opt/homebrew/bin or wherever the
-    // CLI was installed. GCP project env vars are forwarded too,
-    // otherwise google-cloud-storage `Client()` raises 'Project was not
-    // passed and could not be determined from the environment.' and
-    // the JobStorage SDK falls into a silent-skip code path that
-    // returns 0 failed/ blobs every tick (confirmed 2026-05-22, 273
-    // quota-burn ticks all emitted {"results": [], "count": 0}). HF
-    // token is forwarded so the verify_command's curl HEAD works.
+    // Failure-fixer receives its Anthropic credential directly from Skarbiec
+    // when spawning Claude. PATH locates the executable; project and bucket
+    // values are non-secret routing configuration used by maintenance jobs.
     if kind == "failure-fixer" || kind == "watchdog" {
         let path = inputs
             .path
@@ -436,11 +403,9 @@ pub fn build_env(kind: &str, inputs: &EnvInputs) -> Vec<(String, String)> {
 /// [`build_env`] with inputs probed from the process environment and the
 /// filesystem (Python's direct `os.environ` / `Path.home()` reads).
 ///
-/// The ADC probe is skipped unless the queue storage backend is GCS.
-/// [`build_env`] omits GOOGLE_APPLICATION_CREDENTIALS for an empty `adc`,
-/// so an Azure-only or S3-only install no longer bakes a demand for GCP
-/// credentials that the box may not have. A `gcs` backend (the default)
-/// probes exactly as before.
+/// Skarbiec routing metadata is included in every installed service.
+/// `adc` remains an input only for renderer compatibility and is never
+/// exported as a credential source.
 pub fn install_env(
     home: &Path,
     kind: &str,
@@ -465,7 +430,18 @@ pub fn install_env(
         gcp_project: gcp_project.as_deref(),
         wc_bucket: wc_bucket.as_deref(),
     };
-    build_env(kind, &inputs)
+    let mut env = build_env(kind, &inputs);
+    if let Ok(Some(path)) = crate::config_file::config_path() {
+        env.push((
+            "STADO_CONFIG".to_string(),
+            path.to_string_lossy().into_owned(),
+        ));
+    }
+    let deployment_id = crate::config::stado_deployment_id();
+    if !deployment_id.is_empty() {
+        env.push(("STADO_DEPLOYMENT_ID".to_string(), deployment_id));
+    }
+    env
 }
 
 /// Python `_plist_text` (raw interpolation, exactly like the Python — no
@@ -849,28 +825,22 @@ pub async fn execute_plan(
     Ok(())
 }
 
-/// Python `install_local(entry, kind, dry_run, echo)`: install the service
-/// persistently on the current machine. The HF write token is fetched
-/// through `hf_fetch` — never for the disk-cleanup kind (the Python
-/// `kind != "disk-cleanup"` guard).
+/// Install a persistent local service. Credentials remain in Skarbiec; the
+/// service unit receives only Skarbiec connection metadata and non-secret
+/// runtime configuration.
 pub async fn install_local(
     name: &str,
     kind: &str,
     dry_run: bool,
     runner: &Runner,
-    hf_fetch: &TokenFetcher,
+    _hf_fetch: &TokenFetcher,
     echo: &mut dyn FnMut(&str),
 ) -> Result<(), DeployError> {
     let os = LocalOs::detect()?;
     let home = crate::config_file::expand_tilde("~");
     let bins = Bins::resolve(&home);
     let wc_python = default_wc_python();
-    let hf_token = if kind == "disk-cleanup" {
-        String::new()
-    } else {
-        hf_fetch().await.map_err(DeployError)?
-    };
-    let install_plan = plan(name, kind, os, &home, &bins, &hf_token, &wc_python)?;
+    let install_plan = plan(name, kind, os, &home, &bins, "", &wc_python)?;
     if dry_run {
         for line in install_plan.dry_run_lines() {
             echo(&line);

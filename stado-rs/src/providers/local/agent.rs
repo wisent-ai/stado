@@ -583,7 +583,7 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         if last_fleet_flush.elapsed() > Duration::from_secs(constants::FLEET_FLUSH_INTERVAL_S)
             && slots.is_empty()
         {
-            if spawn_fleet_flush(Path::new(&fleet_staging), log_fn)? {
+            if spawn_fleet_flush(Path::new(&fleet_staging), log_fn).await? {
                 log_fn("fleet staging flush running asynchronously");
             }
             last_fleet_flush = Instant::now();

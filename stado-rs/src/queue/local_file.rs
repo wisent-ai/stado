@@ -377,9 +377,13 @@ impl BlobBackend for LocalBackend {
                 .ok()
                 .and_then(|raw| serde_json::from_str(&raw).ok())
                 .unwrap_or_default();
+            let size = fs::metadata(self.path(&path)?)
+                .ok()
+                .map(|entry| entry.len());
             out.push(BlobInfo {
                 updated: self.updated_at(&path).await?,
                 name: path,
+                size,
                 metadata,
             });
         }

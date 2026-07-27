@@ -40,11 +40,6 @@ pip uninstall -y hf-xet || true
 # caller passed --repo URL. Empty (no-op) when no repo was requested.
 ${REPO_BLOCK}
 
-export HF_TOKEN="${HF_TOKEN}"
-export HUGGING_FACE_HUB_TOKEN="${HF_TOKEN}"
-huggingface-cli download meta-llama/Llama-3.2-1B-Instruct || true
-huggingface-cli download cross-encoder/nli-deberta-v3-small || true
-huggingface-cli download sentence-transformers/all-MiniLM-L6-v2 || true
 
 mkdir -p /home/ubuntu/output
 printf '%s' '${ARTIFACT_INPUTS_B64}' | base64 --decode > /home/ubuntu/artifacts.json

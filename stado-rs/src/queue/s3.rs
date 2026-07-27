@@ -48,23 +48,19 @@ pub struct S3Backend {
 }
 
 impl S3Backend {
-    /// Build a backend for `bucket`, resolving AWS credentials/region from
-    /// the default chain (Python `boto3.client("s3", region_name=region or
-    /// None)`). Empty `bucket` is the Python RuntimeError
-    /// ("WC_S3_BUCKET is required for S3 storage"). Empty `region` defers
-    /// to the chain, then us-east-1 (Python `client.meta.region_name or
-    /// "us-east-1"`).
+    /// Build a backend for `bucket`, resolving static AWS credentials from the
+    /// `stado-aws` Skarbiec item. Empty `bucket` is the Python RuntimeError
+    /// ("WC_S3_BUCKET is required for S3 storage"). Empty `region` lets the SDK
+    /// choose its default region.
     pub async fn new(bucket: &str, region: &str) -> Result<Self, StorageError> {
         if bucket.is_empty() {
             return Err(StorageError::Other(
                 "WC_S3_BUCKET is required for S3 storage".into(),
             ));
         }
-        let mut loader = aws_config::defaults(aws_config::BehaviorVersion::latest());
-        if !region.is_empty() {
-            loader = loader.region(aws_sdk_s3::config::Region::new(region.to_string()));
-        }
-        let shared = loader.load().await;
+        let shared = crate::providers::aws::sdk_config(region)
+            .await
+            .map_err(|err| StorageError::Other(err.to_string()))?;
         let resolved = shared
             .region()
             .map(|r| r.as_ref().to_string())
@@ -438,6 +434,9 @@ impl BlobBackend for S3Backend {
                     .unwrap_or_default(),
                 name: key,
                 updated: modified.and_then(|dt| to_utc(&dt)),
+                size: head
+                    .content_length()
+                    .and_then(|value| u64::try_from(value).ok()),
             });
         }
         Ok(out)

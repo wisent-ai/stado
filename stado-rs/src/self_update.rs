@@ -10,13 +10,12 @@
 //! implementation, whose version numbers no longer describe the running
 //! Rust binary.
 //!
-//! The channel is a base URL — [`crate::config::release_base_url`], env
-//! `WC_RELEASE_BASE_URL` — NOT a bucket. Everything below is fetched with
-//! plain HTTPS GETs, so one code path serves the public GCS endpoint (the
-//! default, unchanged), an Azure blob container, a CDN or a plain web
-//! server. Only the Azure case needs credentials, and it reuses the
-//! shared [`crate::azure_token`] chain plus the REST API version pinned
-//! by `queue::azure_blob` rather than a second token implementation.
+//! The channel is an explicitly configured base URL —
+//! [`crate::config::release_base_url`], env `WC_RELEASE_BASE_URL` — not a
+//! bucket and never a compiled cloud fallback. Provider-neutral HTTPS
+//! origins are fetched directly. Private Azure Blob channels reuse the
+//! shared [`crate::azure_token`] chain plus the REST API version pinned by
+//! `queue::azure_blob`, rather than a second token implementation.
 //!
 //! Release layout (written by the release pipeline; identical on every
 //! backend, which is what makes the channel portable):
@@ -178,9 +177,9 @@ pub trait ReleaseFetcher: Send + Sync {
 }
 
 /// Host suffix that marks a release channel as Azure Blob Storage. Those
-/// URLs get a storage-scoped bearer token; every other host (the public
-/// GCS endpoint, a CDN, a plain web server) is fetched anonymously, which
-/// is what keeps an unconfigured install byte-identical to before.
+/// URLs get a storage-scoped bearer token; every other explicitly configured
+/// provider-neutral origin is fetched anonymously. Azure deployments reject
+/// a GCS channel before making a request.
 const AZURE_BLOB_HOST_SUFFIX: &str = ".blob.core.windows.net";
 
 /// True when the HOST of `base_url` is an Azure Blob endpoint. Matches on
@@ -197,6 +196,46 @@ fn is_azure_blob_url(base_url: &str) -> bool {
     host.to_ascii_lowercase().ends_with(AZURE_BLOB_HOST_SUFFIX)
 }
 
+fn release_base_error(base_url: &str) -> Option<String> {
+    if base_url.trim().is_empty() {
+        return Some(
+            "release channel is unresolved; set WC_RELEASE_BASE_URL or release.base_url to an \
+             HTTPS origin serving latest.json and <version>/<platform>/"
+                .to_string(),
+        );
+    }
+    if base_url.contains('<') && base_url.contains('>') {
+        return Some(format!(
+            "release channel {base_url:?} contains an unresolved placeholder; replace it with \
+             the provisioned Azure Blob URL"
+        ));
+    }
+    let parsed = match url::Url::parse(base_url) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return Some(format!(
+                "release channel {base_url:?} is not an absolute URL: {error}"
+            ))
+        }
+    };
+    if !matches!(parsed.scheme(), "https" | "http") || parsed.host_str().is_none() {
+        return Some(format!(
+            "release channel {base_url:?} must be an absolute HTTP(S) URL"
+        ));
+    }
+    if crate::config::wc_storage_backend() == "azure"
+        && parsed
+            .host_str()
+            .is_some_and(|host| host.ends_with("storage.googleapis.com"))
+    {
+        return Some(format!(
+            "Azure storage is active but release channel {base_url:?} still points at GCS; \
+             publish releases/stado to Azure Blob and set WC_RELEASE_BASE_URL"
+        ));
+    }
+    None
+}
+
 /// [`ReleaseFetcher`] over plain HTTPS against [`release_base_url`].
 ///
 /// Backend-agnostic by construction: the release layout is a fixed set of
@@ -211,18 +250,22 @@ pub struct HttpReleaseFetcher {
     base_url: &'static str,
     /// True when [`Self::base_url`] is an Azure blob endpoint.
     azure_auth: bool,
+    /// Configuration failure captured at construction so every fetch reports
+    /// the same operator-readable remedy without attempting a network call.
+    configuration_error: Option<String>,
 }
 
 impl HttpReleaseFetcher {
     /// Bind to the configured release channel ([`release_base_url`]).
-    /// Infallible: credentials, when needed at all, are resolved lazily
-    /// per fetch by the shared token chain.
+    /// Credentials and channel reachability are resolved lazily; malformed or
+    /// provider-conflicting channel configuration is captured for [`fetch`].
     pub fn new() -> Self {
         let base_url = release_base_url();
         Self {
             http: reqwest::Client::new(),
             base_url,
             azure_auth: is_azure_blob_url(base_url),
+            configuration_error: release_base_error(base_url),
         }
     }
 }
@@ -236,6 +279,9 @@ impl Default for HttpReleaseFetcher {
 #[async_trait]
 impl ReleaseFetcher for HttpReleaseFetcher {
     async fn fetch(&self, object_path: &str) -> Result<Option<Vec<u8>>, SelfUpdateError> {
+        if let Some(error) = &self.configuration_error {
+            return Err(SelfUpdateError::Fetch(error.clone()));
+        }
         let url = format!("{}/{object_path}", self.base_url);
         let mut request = self.http.get(&url);
         if self.azure_auth {

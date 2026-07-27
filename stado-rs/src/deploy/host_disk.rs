@@ -145,8 +145,7 @@ pub fn parse_output(stdout: &str, policy_interval_seconds: Option<i64>) -> DiskR
 
 /// Epoch seconds as the ISO-8601 spelling the rest of the fleet uses.
 fn iso_from_epoch(epoch: f64) -> Option<String> {
-    DateTime::from_timestamp(epoch.trunc() as i64, u32::default())
-        .map(crate::models::isoformat_utc)
+    DateTime::from_timestamp(epoch.trunc() as i64, u32::default()).map(crate::models::isoformat_utc)
 }
 
 /// Read the janitor's state document.

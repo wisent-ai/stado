@@ -1,18 +1,15 @@
-//! Multi-channel alert dispatch: Slack, Telegram, Email (SendGrid), Pub/Sub.
-//!
-//! Port of `stado/monitor/alerts.py`. Python uses a Pub/Sub publisher client;
-//! here Pub/Sub goes over REST (`POST /v1/{topic}:publish`) with a gcp_auth
-//! token, matching the crate's SDK-free GCP transport pattern (see
-//! `providers/vast.rs::fetch_secret_manager_key`).
+//! Alert delivery: Slack webhook, Telegram Bot API, SendGrid mail, and GCP
+//! Pub/Sub. Non-GCP channel credentials are resolved from the `stado-alerts`
+//! Skarbiec item. Pub/Sub uses workload identity through `gcp_auth`.
 //!
 //! DEVIATION from Python (deliberate): Python lets a channel exception
 //! propagate out of `send_alert`, suppressing every later channel. Here each
 //! channel is fault-isolated — on error it logs `[alert] <channel> failed:
-//! {err}` and the remaining channels still fire, and channels whose env
-//! config is absent are skipped. A gcp_auth failure for Pub/Sub likewise
-//! logs and skips.
+//! {err}` and the remaining channels still fire. Missing Skarbiec items or
+//! non-secret routing config disable only their channel. A gcp_auth failure for
+//! Pub/Sub likewise logs and skips.
 
-use serde_json::json;
+use serde_json::{json, Value};
 
 /// GCP OAuth scope for the Pub/Sub publish call.
 const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
@@ -29,7 +26,7 @@ fn log(msg: &str) {
     eprintln!("[alert] {msg}");
 }
 
-/// Telegram channel config (env `WC_TELEGRAM_BOT_TOKEN` + `WC_TELEGRAM_CHAT_ID`).
+/// Telegram channel config (Skarbiec bot token + configured chat id).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TelegramChannel {
     pub token: String,
@@ -38,8 +35,8 @@ pub struct TelegramChannel {
     pub api_base: String,
 }
 
-/// SendGrid channel config (env `WC_SENDGRID_API_KEY` + `WC_EMAIL_TO` [+
-/// `WC_EMAIL_FROM`]).
+/// SendGrid channel config (`sendgrid_api_key` from Skarbiec plus non-secret
+/// recipient/sender configuration).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SendgridChannel {
     pub api_key: String,
@@ -63,7 +60,7 @@ pub struct PubSubChannel {
 /// parallel tests would race on process env).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AlertChannels {
-    /// Slack webhook URL (env `WC_SLACK_WEBHOOK`).
+    /// Slack webhook URL from `stado-alerts/slack_webhook` in Skarbiec.
     pub slack_webhook: Option<String>,
     pub telegram: Option<TelegramChannel>,
     pub sendgrid: Option<SendgridChannel>,
@@ -71,44 +68,54 @@ pub struct AlertChannels {
 }
 
 impl AlertChannels {
-    /// Resolve channel config from the process environment. `topic` is the
-    /// Pub/Sub topic path (from `config::alerts_topic()`); its OAuth token is
-    /// fetched via gcp_auth here — on failure the channel is logged and
-    /// skipped (None) so a cred-less box still gets Slack/Telegram/Email.
+    /// Resolve secret-bearing channel configuration from the `stado-alerts`
+    /// Skarbiec item. Non-secret routing fields remain ordinary configuration.
+    /// Pub/Sub uses workload identity through `gcp_auth`.
     pub async fn from_env(topic: &str) -> Self {
-        let slack_webhook = std::env::var("WC_SLACK_WEBHOOK")
-            .ok()
-            .filter(|v| !v.is_empty());
-
-        let telegram = match (
-            std::env::var("WC_TELEGRAM_BOT_TOKEN"),
-            std::env::var("WC_TELEGRAM_CHAT_ID"),
-        ) {
-            (Ok(token), Ok(chat_id)) if !token.is_empty() && !chat_id.is_empty() => {
-                Some(TelegramChannel {
-                    token,
-                    chat_id,
-                    api_base: TELEGRAM_API_BASE.to_string(),
-                })
+        let stored = match crate::skarbiec::Client::configured() {
+            Ok(vault) => match vault.read_item("stado-alerts").await {
+                Ok(value) => value,
+                Err(err) => {
+                    log(&format!("Skarbiec alert credentials unavailable: {err}"));
+                    Value::Null
+                }
+            },
+            Err(err) => {
+                log(&format!("Skarbiec alert credentials unavailable: {err}"));
+                Value::Null
             }
+        };
+        let secret = |field: &str| {
+            stored
+                .get(field)
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        };
+        let slack_webhook = secret("slack_webhook");
+
+        let telegram = match (secret("telegram_bot_token"), secret("telegram_chat_id")) {
+            (Some(token), Some(chat_id)) if !chat_id.is_empty() => Some(TelegramChannel {
+                token,
+                chat_id,
+                api_base: TELEGRAM_API_BASE.to_string(),
+            }),
             _ => None,
         };
 
         let sendgrid = match (
-            std::env::var("WC_SENDGRID_API_KEY"),
-            std::env::var("WC_EMAIL_TO"),
+            secret("sendgrid_api_key"),
+            std::env::var("WC_EMAIL_TO").ok(),
         ) {
-            (Ok(api_key), Ok(to)) if !api_key.is_empty() && !to.is_empty() => {
-                Some(SendgridChannel {
-                    api_key,
-                    to,
-                    from: std::env::var("WC_EMAIL_FROM")
-                        .ok()
-                        .filter(|v| !v.is_empty())
-                        .unwrap_or_else(|| DEFAULT_EMAIL_FROM.to_string()),
-                    url: SENDGRID_URL.to_string(),
-                })
-            }
+            (Some(api_key), Some(to)) if !to.is_empty() => Some(SendgridChannel {
+                api_key,
+                to,
+                from: std::env::var("WC_EMAIL_FROM")
+                    .ok()
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| DEFAULT_EMAIL_FROM.to_string()),
+                url: SENDGRID_URL.to_string(),
+            }),
             _ => None,
         };
 
@@ -138,7 +145,9 @@ impl AlertChannels {
 }
 
 async fn gcp_token() -> Result<String, String> {
-    let auth = gcp_auth::provider().await.map_err(|e| e.to_string())?;
+    let auth = crate::skarbiec::gcp_provider()
+        .await
+        .map_err(|e| e.to_string())?;
     let token = auth
         .token(&[CLOUD_PLATFORM_SCOPE])
         .await

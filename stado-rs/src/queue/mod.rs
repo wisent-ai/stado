@@ -23,13 +23,14 @@
 //! pause`, the drain gate every storage migration already assumed existed.
 //! [`copy`] is the backend-to-backend copier the outage forced (GCS billing
 //! closed, queue state has to reach Azure Blob), a direction no Python tool
-//! covers. Application credentials belong in Azure Key Vault and are not
-//! part of queue storage or backend migration.
+//! covers. Application credentials belong in the separate Skarbiec service and
+//! are not part of queue storage or backend migration.
 
 pub mod azure_blob;
 pub mod capacity;
 pub mod control;
 pub mod copy;
+pub(crate) mod failover;
 pub mod gcs;
 pub mod leases;
 pub mod listing;
@@ -74,6 +75,7 @@ pub struct VersionedText {
 pub struct BlobInfo {
     pub name: String,
     pub updated: Option<DateTime<Utc>>,
+    pub size: Option<u64>,
     pub metadata: BTreeMap<String, String>,
 }
 
