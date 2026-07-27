@@ -610,7 +610,7 @@ fn guard_heredoc(content: &str) -> Result<(), DeployError> {
 /// the name becomes part of a launchd label, part of a systemd unit name,
 /// and a field of the canonical document. Mirrors the check
 /// `targets.rs::validate_registry` runs on `registry.targets[].name`.
-fn validate_service_name(name: &str) -> Result<(), DeployError> {
+pub(crate) fn validate_service_name(name: &str) -> Result<(), DeployError> {
     let inner = |ch: char| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ".-_".contains(ch);
     let edge = |ch: char| ch.is_ascii_lowercase() || ch.is_ascii_digit();
     let head_ok = name.chars().next().is_some_and(edge);

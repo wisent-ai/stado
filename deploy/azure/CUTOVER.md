@@ -18,10 +18,14 @@ Unless repository variable `STADO_ENABLE_AZURE_DEPLOY` is exactly `true`, the
 deployment workflow skips every Azure upload/login and installs this local
 profile. It creates both owner-local directories and seeds the canonical
 registry only when absent. Rust `stado bootstrap --local` installs the combined
-local coordinator, agent, dashboard, object API and machine API behind Caddy.
-The object API still fails closed unless the `stado-control-plane` grant can
-read field `token` from item `stado-object-api`; the machine API independently
-requires field `token` from item `stado-machine-api`.
+local coordinator, agent, dashboard, object API, machine API and managed-service
+control API behind Caddy. The local profile fixes `deployment.id` to
+`local-control-plane`: loopback hosts remain accepted, but dashboard view and
+operate requests still require deployment-bound Supabase authorization and fail
+closed when that authorization is unavailable. Object calls require
+`stado-object-api/token`, machine submit/status/cancel requires
+`stado-machine-api/token`, and managed-service status/restart independently
+requires `stado-service-api/token`.
 
 Do not enable `STADO_ENABLE_AZURE_DEPLOY` or point the Mac at the production
 template until every resource below exists and `stado doctor` reports it ready.
@@ -51,46 +55,60 @@ into this repository, GitHub variables, cloud secret managers or
 
 The coordinator/dashboard uses consumer `stado-control-plane` and owner-only
 grant file `~/.stado/control-plane-skarbiec-token`. Individual code paths read
-only their own fields: item `stado-azure` for off-Azure ARM and Blob access,
-item `stado-aws` for coordinator-side S3 replication, field `token` from item
-`stado-object-api` for object API calls, and field `token` from item
-`stado-machine-api` for machine submit/status/cancel. Inspect a field only with
-`stado secrets get ITEM --field FIELD`; never parse a whole-item JSON response.
-Workload-specific items are read only when their dispatch path needs them.
+only their own items and fields: `stado-azure` for off-Azure ARM and Blob
+access, `stado-aws` for coordinator-side S3 replication,
+`stado-object-api/token` for object calls, `stado-machine-api/token` for machine
+submit/status/cancel, and `stado-service-api/token` for managed-service
+status/restart. The grant therefore has the three exact API item scopes
+`read:stado-object-api`, `read:stado-machine-api`, and
+`read:stado-service-api` in addition to its other required coordinator items.
+Secret fields must move through non-rendering owner-only projections; never
+print or parse a whole item. Workload-specific items are read only when their
+dispatch path needs them.
 
 The Azure agent grant is a different consumer, `stado-azure-agent`. Its exact
-`item:read` allowlist is `agent.skarbiec.items`: `stado-aws` plus every item
-referenced by an allowed workload's `secret_env`. Its owner-only grant lives
-at `~/.stado/azure-agent-skarbiec-token`. Before dispatch, Stado requires the
-grant's visible item set to equal that configuration exactly, then delivers
-the opaque grant through a single-read FIFO into the Rust agent's in-memory
-cache. The FIFO disappears; workload processes inherit neither the grant nor
-unrequested secret values.
+`read:<item>` allowlist is `agent.skarbiec.items`: `stado-aws` plus the dedicated
+single-purpose workload items. `agent.skarbiec.secret_fields` is a second,
+field-exact allowlist applied at machine admission and again by the agent;
+`stado-aws` is deliberately absent, so no job can select storage credentials.
+The owner-only grant lives at `~/.stado/azure-agent-skarbiec-token`. Before
+dispatch, Stado requires the visible item set to equal configuration exactly.
+The token is never rendered into VM `customData`: after VM creation the Azure
+provider sends a self-erasing Custom Script solely in encrypted
+`protectedSettings`, waits for its atomic root-only tmpfs handoff, then deletes
+the extension. Azure omits protected settings from metadata/resource reads.
+The Rust agent caches the grant on first use, overwrites/unlinks the handoff,
+and workload processes inherit neither the grant nor unrequested values.
 
-`STADO_API_TOKEN` is the object API token for trusted publisher services only.
-Read it with `stado secrets get stado-object-api --field token` under that
-service's scoped grant. `STADO_MACHINE_API_TOKEN` is the separate machine API
-token; read only field `token` from item `stado-machine-api`. Neither token can
-authorize the other's routes, and machine authorization never falls through to
-the dashboard Supabase grant. A model-router service instead reads field
-`token` from item `stado-model-router`; all three tokens are distinct,
-server-side credentials.
+`STADO_API_TOKEN` is the object token for trusted publishers and server-side
+product services, projected from `stado-object-api/token`.
+`STADO_MACHINE_API_TOKEN` is projected only from `stado-machine-api/token` and
+authorizes machine submit/status/cancel. `STADO_SERVICE_API_TOKEN` is projected
+only from `stado-service-api/token` and authorizes managed-service
+status/restart. Wisent App uses separate consumers: `wisent-app-machine` has
+only `read:stado-machine-api`, while `wisent-app-service` has only
+`read:stado-service-api`. Neither may reuse the coordinator or an agent grant.
+A model-router service instead receives `stado-model-router/token`. Every token
+is distinct and server-only; no control-token family or failed token check falls
+through to another token or to dashboard Supabase authorization.
 
 Submitted machine-job processes receive none of `STADO_CONFIG`,
-`STADO_API_TOKEN`, `STADO_MACHINE_API_TOKEN`, Skarbiec routing, Azure/AWS
-credentials or provider storage locators. Submitters declare provider-neutral
+`STADO_API_TOKEN`, `STADO_MACHINE_API_TOKEN`, `STADO_SERVICE_API_TOKEN`,
+Skarbiec routing, Azure/AWS credentials or provider storage locators. Submitters
+declare provider-neutral
 `input_objects`; jobs write under `output/`; the trusted Rust agent alone stages
 inputs and publishes canonical output.
 
-## Trusted machine API
+## Trusted machine and managed-service APIs
 
-Trusted services use `STADO_API_URL=https://stado.wisent.com` and send
-`Authorization: Bearer $STADO_MACHINE_API_TOKEN`. Remote DNS hosts are accepted
-only through the configured HTTPS reverse proxy, which must preserve `Host` and
-supply `X-Forwarded-Proto: https`. Missing or unreadable credentials, an
-untrusted host/protocol, and failed authorization are closed failures.
+Trusted services use `STADO_API_URL=https://stado.wisent.com`. Machine routes
+send `Authorization: Bearer $STADO_MACHINE_API_TOKEN`; managed-service routes
+send `Authorization: Bearer $STADO_SERVICE_API_TOKEN`. Remote DNS hosts are
+accepted only through the configured HTTPS reverse proxy, which must preserve
+`Host` and supply `X-Forwarded-Proto: https`. Missing or unreadable credentials,
+an untrusted host/protocol, and failed authorization are closed failures.
 
-The authenticated interface has exactly three routes:
+The authenticated interface has exactly five routes:
 
 - `POST /api/machine/submit` with `Content-Type: application/json`, an exact
   `Content-Length`, and at most 64 KiB of canonical machine-request JSON.
@@ -102,11 +120,23 @@ The authenticated interface has exactly three routes:
   request body.
 - `POST /api/machine/cancel?job_id=ID` with exactly one path-safe `job_id` and
   no request body.
+- `GET /api/service/status?name=NAME` with exactly one lowercase managed-service
+  `name` and no request body. The response preserves the existing
+  `deploy::service` beacon-status JSON array.
+- `POST /api/service/restart?name=NAME` with exactly one lowercase
+  managed-service `name` and no request body. It preserves the existing
+  `deploy::service` restart semantics across every host declaring that name.
+
+The machine bearer is rejected on both service routes, and the service bearer
+is rejected on all three machine routes. Possession of one control credential
+therefore grants no operation in the other family.
 
 Successful calls return `{"ok":true,"result":...}` around the canonical
-`MachineFacade` result. Facade failures retain their stable
+`MachineFacade` result or the existing service status/restart result array.
+Failures retain the stable
 `{"ok":false,"error":{"code":...,"message":...,"retryable":...}}` shape.
-Malformed JSON, framing, or query data is rejected before any machine action.
+Malformed JSON, framing, or query data is rejected before any machine or
+service action.
 The request and response contain no cloud credentials or provider-native object
 locators; object bytes continue to move through the `stado://` object API.
 
@@ -128,8 +158,14 @@ The load-bearing values are:
 - `azure.vm_identity_id` names the user-assigned managed identity.
 - `release.base_url` explicitly names the Azure Blob release tree. There is
   no built-in or provider-derived release origin.
-- `deployment.id` is stable for dashboard RLS and trusted-proxy binding.
+- `deployment.id` is stable for dashboard RLS and trusted-proxy binding. The
+  local profile also sets one explicitly; an absent id never opens dashboard
+  view or operate access.
 - Both coordinator and agent Skarbiec routes name their separate consumers.
+- Remote Darwin registry targets require their own `stado-local-agent`
+  consumer/token plus an HTTPS agent Skarbiec endpoint. Bootstrap refuses a
+  control-plane consumer or token path, copies only the dedicated agent grant,
+  and preserves the same item/field allowlists in the launchd environment.
 
 Queue and product-object mutations always target Azure. S3 replication is
 synchronous for product objects and refreshed by every coordinator tick for
@@ -160,21 +196,20 @@ pre-authenticated Azure Blob URL, such as a narrowly scoped container SAS,
 and run `deploy/stado-up.sh <target>`. The shell installer exists only to
 obtain Rust Stado; Rust owns the persistent service after preflight.
 
-## Public object route
+## Software release route
 
-Set `STADO_PUBLIC_BASE_URL=https://stado.wisent.com` in browser/read-only
-client deployments. Public immutable objects use
-`stado://public/<product>/...` and resolve through:
+The generic public object namespace does not exist. Public updater artifacts
+live only under `stado://releases/<product>/...` and resolve through:
 
 ```text
-${STADO_PUBLIC_BASE_URL}/api/public/object?uri=<urlencoded-stado-uri>
+https://stado.wisent.com/api/release/object?uri=<urlencoded-stado-uri>
 ```
 
-The reverse proxy must forward that exact path unchanged. The Rust handler
-allows unauthenticated GET only in the `public` namespace; it exposes no
-list, stat, mutation or private read. Never ship `STADO_API_TOKEN` to a
-browser. Trusted publisher services use `STADO_API_URL` plus their
-server-side `STADO_API_TOKEN`.
+The reverse proxy forwards that path unchanged. The Rust handler allows
+unauthenticated GET only in the `releases` namespace; it exposes no list, stat,
+mutation, or product-object read. Release publishers use `STADO_API_URL` plus
+their server-side `STADO_API_TOKEN`. All user/product objects remain on the
+authenticated `/api/object` API or behind a product-owned signed proxy.
 
 ## Preflight and cutover
 
@@ -189,6 +224,11 @@ Preflight fails with explicit remedies when the Azure account/container,
 managed identity, S3 bucket/region or credentials, restricted agent grant,
 object API token or release channel is unresolved. It checks actual Blob and
 S3 access and fetches the same release pointer agents use.
+
+Cutover separately requires non-empty, mutually distinct values in
+`stado-object-api/token`, `stado-machine-api/token`, and
+`stado-service-api/token`, plus the exact consumer scopes documented above.
+Do not render those values during preflight.
 
 Drain any old writer before seeding Azure. If GCP billing is temporarily
 restored and retained data must be copied, the explicitly GCP-named
@@ -208,16 +248,20 @@ Deployment is blocked until the operator confirms:
 - Azure account, private container and data-plane role assignments.
 - Agent managed identity, networking and GPU quota in every configured
   region.
-- S3 bucket, migrated `stado-aws` fields and separate control-plane/agent
-  grants at the configured owner-only paths.
+- S3 bucket, migrated `stado-aws` fields, distinct control-plane,
+  `stado-azure-agent`, and `stado-local-agent` grants, and the item-exact
+  `wisent-app-machine` and `wisent-app-service` grants at owner-only paths.
+- Dedicated single-purpose workload items matching every configured
+  `agent.skarbiec.secret_fields` entry. Never place deployment-wide objects in
+  that field allowlist.
 - Azure release publisher federation and an initially populated release
   channel.
 - Self-hosted control-plane runner with Docker, Rust, Skarbiec reachability and
   a running Caddy service. Azure CLI is required only after explicitly enabling
   Azure publishing. The workflow otherwise derives the loopback dashboard
   upstream from resolved Stado config.
-- DNS/TLS for `stado.wisent.com`; read-only clients set
-  `STADO_PUBLIC_BASE_URL=https://stado.wisent.com`.
+- DNS/TLS for `stado.wisent.com`; updater clients use only dedicated
+  `stado://releases/...` URLs rendered through `/api/release/object`.
 
 These are deliberately never auto-created by the coordinator; a missing item
 must fail deployment rather than selecting GCP or creating a second writer.

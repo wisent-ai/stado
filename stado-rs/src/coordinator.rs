@@ -142,10 +142,17 @@ fn nodename() -> String {
         .unwrap_or_default()
 }
 
+/// Internal scheduler-map key for the Azure agent grant. This deliberately is
+/// not an environment-variable name and is never eligible for startup-script
+/// substitution; the Azure provider consumes it only as protected settings.
+pub(crate) const AZURE_AGENT_PROTECTED_GRANT: &str =
+    "stado.protected-settings.azure-agent-grant";
+
 /// Validate the dedicated Azure-agent grant and return its opaque token.
 ///
 /// The grant exposes only the configured S3 failover credential and explicit
-/// workload-secret items. Values are resolved agent-side for explicit jobs.
+/// workload-secret items. The token is delivered separately from customData
+/// through an encrypted Azure VM extension.
 /// `None` means this deployment does not dispatch Azure agents.
 pub(crate) async fn agent_backup_grant() -> Result<Option<String>, crate::skarbiec::SkarbiecError> {
     use crate::skarbiec::SkarbiecError;
@@ -206,6 +213,21 @@ pub(crate) async fn agent_backup_grant() -> Result<Option<String>, crate::skarbi
     let mut expected = config::agent_skarbiec_items().to_vec();
     expected.sort();
     expected.dedup();
+    for reference in config::agent_skarbiec_secret_fields() {
+        let Some((item, field)) = reference.split_once('#') else {
+            return Err(SkarbiecError::Deployment(format!(
+                "agent.skarbiec.secret_fields entry {reference:?} must be item#field"
+            )));
+        };
+        if item.is_empty()
+            || field.is_empty()
+            || !expected.iter().any(|configured| configured == item)
+        {
+            return Err(SkarbiecError::Deployment(format!(
+                "agent.skarbiec.secret_fields entry {reference:?} is not covered by agent.skarbiec.items"
+            )));
+        }
+    }
     if config::wc_backup_storage_backend() == "s3"
         && !expected.iter().any(|item| item == "stado-aws")
     {
@@ -222,15 +244,16 @@ pub(crate) async fn agent_backup_grant() -> Result<Option<String>, crate::skarbi
     Ok(Some(agent_token))
 }
 
-/// Resolve the one scoped consumer grant injected into Azure VM cloud-init.
+/// Resolve credentials needed by provider dispatch.
 ///
-/// Workload values are never rendered into startup scripts. The agent uses
-/// this grant to resolve only each job's explicit `secret_env` references.
+/// The Azure grant is stored under an internal, non-shell key. The renderer
+/// excludes it, and only `Provider::create_agent_instance` may consume it via
+/// Azure encrypted protected settings.
 pub(crate) async fn secrets_from_skarbiec(
 ) -> Result<BTreeMap<String, String>, crate::skarbiec::SkarbiecError> {
     let mut secrets = BTreeMap::new();
     if let Some(agent_token) = agent_backup_grant().await? {
-        secrets.insert("WC_AGENT_SKARBIEC_TOKEN".to_string(), agent_token);
+        secrets.insert(AZURE_AGENT_PROTECTED_GRANT.to_string(), agent_token);
     }
     Ok(secrets)
 }

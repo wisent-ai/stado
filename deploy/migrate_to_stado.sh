@@ -5,7 +5,7 @@
 # rename. The Python package/CLI rename is already done in the repo; this
 # handles the CATEGORY-B resources that carry live state and cannot be renamed
 # by a code edit: GCS bucket, GCP service account, Pub/Sub topic, Azure RG/net,
-# PyPI publish, Cloud Function + baked image redeploy, and the config-default
+# PyPI publish, Stado release/service redeploy, and the config-default
 # flip.
 #
 # IDEMPOTENT + GATED. Dry-run by default; each destructive step needs an

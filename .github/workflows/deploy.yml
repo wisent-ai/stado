@@ -106,8 +106,7 @@ jobs:
       AZURE_CLIENT_ID: ${{ secrets.STADO_AZURE_PUBLISHER_CLIENT_ID }}
       AZURE_TENANT_ID: ${{ secrets.STADO_AZURE_TENANT_ID }}
       AZURE_SUBSCRIPTION_ID: ${{ secrets.STADO_AZURE_SUBSCRIPTION_ID }}
-      STADO_PUBLIC_BASE_URL: https://stado.wisent.com
-      STADO_PUBLIC_HOST: stado.wisent.com
+      STADO_API_HOST: stado.wisent.com
       STADO_DASHBOARD_UPSTREAM: ${{ vars.STADO_DASHBOARD_UPSTREAM }}
     steps:
       - name: Check out exact source revision

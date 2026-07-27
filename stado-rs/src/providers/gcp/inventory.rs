@@ -15,7 +15,6 @@ use serde_json::{json, Value};
 const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 const COORDINATOR_SERVICE: &str = "stado-coordinator";
 const COORDINATOR_SCHEDULER: &str = "wisent-compute-cron";
-const REQUIRED_SECRET: &str = "wisent-hf-token";
 const ARTIFACT_REPOSITORY: &str = "stado";
 
 const REQUIRED_PERMISSIONS: &[&str] = &[
@@ -57,9 +56,6 @@ const REQUIRED_PERMISSIONS: &[&str] = &[
     "run.revisions.list",
     "run.services.get",
     "run.services.getIamPolicy",
-    "secretmanager.secrets.get",
-    "secretmanager.secrets.list",
-    "secretmanager.versions.access",
     "storage.buckets.get",
     "storage.buckets.list",
     "storage.objects.get",
@@ -74,7 +70,6 @@ const REQUIRED_RUNTIME_ROLES: &[&str] = &[
     "roles/bigquery.jobUser",
     "roles/compute.admin",
     "roles/pubsub.publisher",
-    "roles/secretmanager.secretAccessor",
     "roles/storage.admin",
 ];
 
@@ -170,7 +165,6 @@ enum ProbeKind {
     Scheduler,
     Functions,
     ServiceAccounts,
-    Secrets,
     Builds,
 }
 
@@ -427,14 +421,6 @@ fn probe_specs(options: &InventoryOptions) -> Vec<ProbeSpec> {
             ProbeKind::Reservations,
         ),
         get(
-            "agent_image_family",
-            "Compute Engine",
-            "global/images/family/wisent-agent",
-            "critical",
-            format!("https://compute.googleapis.com/compute/v1/projects/{encoded_project}/global/images/family/wisent-agent"),
-            ProbeKind::Plain,
-        ),
-        get(
             "default_network",
             "Compute Engine",
             "global/networks/default",
@@ -513,14 +499,6 @@ fn probe_specs(options: &InventoryOptions) -> Vec<ProbeSpec> {
             "critical",
             format!("https://iam.googleapis.com/v1/projects/{encoded_project}/serviceAccounts?pageSize=100"),
             ProbeKind::ServiceAccounts,
-        ),
-        get(
-            "secrets",
-            "Secret Manager",
-            project,
-            "critical",
-            format!("https://secretmanager.googleapis.com/v1/projects/{encoded_project}/secrets?pageSize=100"),
-            ProbeKind::Secrets,
         ),
         get(
             "billing_export_dataset",
@@ -689,7 +667,6 @@ fn successful(spec: ProbeSpec, value: Value) -> ProbeReport {
         ProbeKind::Scheduler => scheduler_detail(&value),
         ProbeKind::Functions => named_list_detail(&value, "functions"),
         ProbeKind::ServiceAccounts => service_accounts_detail(&value),
-        ProbeKind::Secrets => secrets_detail(&value),
         ProbeKind::Builds => builds_detail(&value),
     };
     ProbeReport {
@@ -926,14 +903,22 @@ fn disks_detail(value: &Value) -> (&'static str, Option<usize>, Value) {
                 .map_or(usize::default(), Vec::len);
             json!({
                 "name": disk.get("name"),
+                "id": disk.get("id"),
                 "zone": tail(text(disk.get("zone"))),
                 "region": tail(text(disk.get("region"))),
                 "status": disk.get("status"),
                 "size_gb": disk.get("sizeGb"),
+                    "type_url": disk.get("type"),
                 "type": tail(text(disk.get("type"))),
                 "users": users,
                 "unattached": users == usize::default(),
                 "creation_timestamp": disk.get("creationTimestamp"),
+                "fingerprint": disk.get("labelFingerprint"),
+                "labels": disk.get("labels"),
+                "description": disk.get("description"),
+                "replica_zones": disk.get("replicaZones"),
+                "resource_policies": disk.get("resourcePolicies"),
+                "physical_block_size_bytes": disk.get("physicalBlockSizeBytes"),
             })
         })
         .collect();
@@ -959,6 +944,7 @@ fn instance_groups_detail(value: &Value) -> (&'static str, Option<usize>, Value)
         .map(|group| {
             json!({
                 "name": group.get("name"),
+                "id": group.get("id"),
                 "zone": tail(text(group.get("zone"))),
                 "region": tail(text(group.get("region"))),
                 "target_size": group.get("targetSize"),
@@ -966,6 +952,7 @@ fn instance_groups_detail(value: &Value) -> (&'static str, Option<usize>, Value)
                 "stable": group.pointer("/status/isStable"),
                 "version_target_reached": group.pointer("/status/versionTarget/isReached"),
                 "creation_timestamp": group.get("creationTimestamp"),
+                "fingerprint": group.get("fingerprint"),
             })
         })
         .collect();
@@ -987,11 +974,16 @@ fn reservations_detail(value: &Value) -> (&'static str, Option<usize>, Value) {
         .map(|reservation| {
             json!({
                 "name": reservation.get("name"),
+                "id": reservation.get("id"),
                 "zone": tail(text(reservation.get("zone"))),
                 "status": reservation.get("status"),
                 "specific_reservation": reservation.get("specificReservation"),
+                "in_use_count": reservation
+                    .pointer("/specificReservation/inUseCount")
+                    .and_then(number_u64),
                 "specific_reservation_required": reservation.get("specificReservationRequired"),
                 "creation_timestamp": reservation.get("creationTimestamp"),
+                "self_link": reservation.get("selfLink"),
             })
         })
         .collect();
@@ -1052,6 +1044,7 @@ fn addresses_detail(value: &Value) -> (&'static str, Option<usize>, Value) {
         .map(|address| {
             json!({
                 "name": address.get("name"),
+                "id": address.get("id"),
                 "region": tail(text(address.get("region"))),
                 "status": address.get("status"),
                 "address_type": address.get("addressType"),
@@ -1059,6 +1052,7 @@ fn addresses_detail(value: &Value) -> (&'static str, Option<usize>, Value) {
                 "purpose": address.get("purpose"),
                 "users": address.get("users"),
                 "creation_timestamp": address.get("creationTimestamp"),
+                "self_link": address.get("selfLink"),
             })
         })
         .collect();
@@ -1260,23 +1254,6 @@ fn service_accounts_detail(value: &Value) -> (&'static str, Option<usize>, Value
         if required_present { "ok" } else { "degraded" },
         Some(count),
         json!({"required_service_account_present_and_enabled": required_present, "accounts": accounts}),
-    )
-}
-
-fn secrets_detail(value: &Value) -> (&'static str, Option<usize>, Value) {
-    let names: Vec<String> = value
-        .get("secrets")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|secret| secret.get("name").and_then(Value::as_str).map(tail))
-        .collect();
-    let required_present = names.iter().any(|name| name == REQUIRED_SECRET);
-    let count = names.len();
-    (
-        if required_present { "ok" } else { "degraded" },
-        Some(count),
-        json!({"required": REQUIRED_SECRET, "required_present": required_present, "names": names}),
     )
 }
 

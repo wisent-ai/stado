@@ -52,11 +52,6 @@ trap '_wc_shutdown_log_shipper' EXIT
 ( set +x; while true; do _wc_ship_log; sleep 20; done ) &
 _WC_LOG_SHIPPER_PID=$!
 
-# If /opt/wisent-agent/.venv is already populated by the baked image
-# (wisent-agent family, built via deploy/bake_agent_image.sh), skip the
-# install path entirely. Otherwise fall through to the legacy install path
-# so VMs running on the deeplearning-platform-release base still work.
-if [ ! -x /opt/wisent-agent/.venv/bin/python ]; then
     while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
         echo "Waiting for apt lock..."
     done
@@ -75,21 +70,6 @@ if [ ! -x /opt/wisent-agent/.venv/bin/python ]; then
     pip install --upgrade --force-reinstall 'transformers>=4.55,<5.0' 'tokenizers>=0.20,<0.22'
     pip install --upgrade --force-reinstall 'datasets>=2.18,<3.0' 'huggingface-hub>=0.34.0,<1.0'
     if pip show hf-xet >/dev/null 2>&1; then pip uninstall -y hf-xet; fi
-else
-    echo "wisent-agent venv already present (baked image); skipping install"
-    cd /opt/wisent-agent
-    source .venv/bin/activate
-    # Self-update wisent runtime packages to the latest PyPI releases.
-    # Critical: re-pin transformers and datasets to the same versions the
-    # bake used. Without this, pip's resolver upgrades datasets to 3.x
-    # (which dropped dataset-loading scripts) when wisent's deps loosen,
-    # then every script-loaded task (flores.py, gsm8k forks, basque_bench,
-    # Hennara/aexams) crashes with 'Dataset scripts are no longer supported'.
-    # Same for transformers 5.x's incompatible safetensors shard handling.
-    pip install --upgrade wisent wisent-tools wisent-extractors wisent-evaluators
-    pip install --force-reinstall 'transformers>=4.55,<5.0' 'tokenizers>=0.20,<0.22'
-    pip install --force-reinstall 'datasets>=2.18,<3.0' 'huggingface-hub>=0.34.0,<1.0'
-fi
 
 export WISENT_DTYPE=auto
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True

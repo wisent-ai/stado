@@ -40,12 +40,12 @@
   },
 
   "dashboard": {
-    "_comment": "Keep the Rust listener loopback-only. Caddy terminates TLS and forwards the public object route plus authenticated private routes.",
+    "_comment": "Keep the Rust listener loopback-only. Caddy terminates TLS and forwards the dedicated software release route plus authenticated product/control routes.",
     "bind": "localhost"
   },
 
   "secrets": {
-    "_comment": "Coordinator/dashboard read-only grant for central service items. Each code path reads only the item and exact field it needs; object routes require `stado secrets get stado-object-api --field token`, while machine submit/status/cancel independently require `stado secrets get stado-machine-api --field token`. Both fail closed. No application token belongs in env or this file.",
+    "_comment": "Coordinator/dashboard read-only grant for central service items. Object routes read only stado-object-api/token, machine submit/status/cancel reads only stado-machine-api/token, and managed-service status/restart reads only stado-service-api/token. Every path fails closed; no application token belongs in env or this file.",
     "skarbiec": {
       "url": "https://<control-plane-skarbiec-host>",
       "consumer": "stado-control-plane",
@@ -54,18 +54,27 @@
   },
 
   "agent": {
-    "_comment": "Dedicated Azure VM grant. Its visible items must equal this allowlist exactly; raw values are resolved agent-side and never enter cloud-init.",
+    "_comment": "Dedicated Azure VM grant. Its visible items must equal this allowlist exactly. The grant is handed to the VM only through encrypted Azure protectedSettings, never customData. Jobs may resolve only the exact item#field entries below; stado-aws remains trusted-agent infrastructure and is deliberately absent from secret_fields.",
     "skarbiec": {
       "url": "https://<agent-reachable-skarbiec-host>",
       "consumer": "stado-azure-agent",
       "token_file": "~/.stado/azure-agent-skarbiec-token",
       "items": [
-        "compute-marketplace-agent",
         "stado-aws",
-        "stado-huggingface",
-        "stado-model-router",
-        "stado-wandb",
-        "trading-autonomy-web-runtime"
+        "trading-autonomy-agent-auth",
+        "trading-autonomy-media-router",
+        "trading-autonomy-model-router",
+        "wisent-trade-agent-anthropic",
+        "wisent-trade-agent-email",
+        "wisent-trade-agent-openai"
+      ],
+      "secret_fields": [
+        "trading-autonomy-agent-auth#agent_auth_secret",
+        "trading-autonomy-media-router#token",
+        "trading-autonomy-model-router#token",
+        "wisent-trade-agent-anthropic#api-key",
+        "wisent-trade-agent-email#api-key",
+        "wisent-trade-agent-openai#api-key"
       ]
     }
   },

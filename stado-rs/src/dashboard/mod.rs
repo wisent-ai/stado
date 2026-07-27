@@ -11,9 +11,12 @@
 //! GET/PUT/DELETE /api/object?uri=stado://... - product object data plane
 //! GET /api/object/list?namespace=...&prefix=... - product object listing
 //! GET /api/object/stat?uri=stado://... - product object metadata
+//! GET /api/release/object?uri=stado://releases/... - public software release download
 //! POST /api/machine/submit - submit a canonical machine request
 //! GET /api/machine/status?job_id=... - read canonical machine status
 //! POST /api/machine/cancel?job_id=... - durably cancel a machine job
+//! GET /api/service/status?name=... - read one managed service's beacon status
+//! POST /api/service/restart?name=... - restart one managed service on every declared host
 //! GET /healthz           - liveness (before auth, after the Host guard)
 //! GET /livez             - Cloud Run liveness alias
 //!
@@ -47,6 +50,7 @@ use tokio::net::{TcpListener, TcpStream};
 use crate::artifacts::registry::{ArtifactRegistry, RegistryError as ArtifactRegistryError};
 use crate::artifacts_models::ArtifactRef;
 use crate::config;
+use crate::deploy::{host_channel, production_runner, service};
 use crate::machine::{MachineError, MachineFacade};
 use crate::models::isoformat_utc;
 use crate::providers::local::disk_cleanup::{
@@ -54,6 +58,7 @@ use crate::providers::local::disk_cleanup::{
 };
 use crate::queue::submit::json_dumps_sorted_compact;
 use crate::queue::{python_json_dumps, JobStorage, StorageError};
+use crate::targets;
 
 /// Dashboard serve/refresh failure.
 #[derive(Debug, thiserror::Error)]
@@ -202,8 +207,18 @@ impl Dashboard {
         }
     }
 
-    /// Python `serve`: start the refresh daemon, bind, accept forever.
+    /// Start the refresh daemon and serve HTTP on loopback. This server does
+    /// not terminate TLS, so binding it to a non-loopback interface would
+    /// expose bearer-authenticated routes over plaintext. Production ingress
+    /// must terminate TLS in a reverse proxy and forward to this listener.
     pub async fn serve_with(&self, host: &str, port: u16) -> Result<(), DashboardError> {
+        let listener = TcpListener::bind((host, port)).await?;
+        let local_addr = listener.local_addr()?;
+        if !local_addr.ip().is_loopback() {
+            return Err(DashboardError::Other(format!(
+                "refusing plaintext dashboard bind on non-loopback address {local_addr}; terminate TLS in a loopback reverse proxy"
+            )));
+        }
         // The refresh loop's future trips a `&str` lifetime-generalization
         // issue in the artifact-listing chain (Send "not general enough"),
         // so — like Python's daemon refresher thread — it runs on its own
@@ -219,8 +234,7 @@ impl Dashboard {
                     .expect("dashboard refresh runtime");
                 runtime.block_on(refresher.run_refresh_loop(interval));
             })?;
-        let listener = TcpListener::bind((host, port)).await?;
-        eprintln!("[dashboard] listening on http://{host}:{port}");
+        eprintln!("[dashboard] listening on http://{local_addr}");
         self.serve_on(listener).await
     }
 
@@ -296,8 +310,10 @@ impl Dashboard {
 
     async fn do_get(&self, request: &Request) -> Response {
         let path_no_query = request.path.split('?').next().unwrap_or("");
+        let control_route =
+            path_no_query == "/api/machine/status" || path_no_query == "/api/service/status";
         if !trusted_request_host(request.header("host"), request.header("x-forwarded-proto")) {
-            return if path_no_query == "/api/machine/status" {
+            return if control_route {
                 send_json(http_status("403"), &json!({"error": "forbidden"}))
             } else {
                 cleanup_failure(http_status("403"))
@@ -306,13 +322,15 @@ impl Dashboard {
         if path_no_query == "/healthz" || path_no_query == "/livez" {
             return send_json(http_status("200"), &json!({"ok": true}));
         }
-        let public_object_route = path_no_query == "/api/public/object";
+        let release_object_route = path_no_query == "/api/release/object";
         let object_route = path_no_query == "/api/object"
             || path_no_query == "/api/object/list"
             || path_no_query == "/api/object/stat";
-        if !public_object_route {
+        if !release_object_route {
             let permission = if path_no_query == "/api/machine/status" {
                 "machine:status"
+            } else if path_no_query == "/api/service/status" {
+                "service:status"
             } else if object_route {
                 "object:read"
             } else {
@@ -343,15 +361,15 @@ impl Dashboard {
             Some((path, query)) => (path, query),
             None => (request.path.as_str(), ""),
         };
-        if path == "/api/public/object" {
+        if path == "/api/release/object" {
             let object = match object_from_query(query) {
                 Ok(object) => object,
                 Err(response) => return Ok(response),
             };
-            if object.namespace() != "public" {
+            if object.namespace() != "releases" {
                 return Ok(send_json(
                     http_status("403"),
-                    &json!({"error": "only stado://public objects are publicly readable"}),
+                    &json!({"error": "only stado://releases software artifacts are publicly readable"}),
                 ));
             }
             return self.get_object(request, query).await;
@@ -367,6 +385,9 @@ impl Dashboard {
         }
         if path == "/api/machine/status" {
             return Ok(self.get_machine_status(request, query).await);
+        }
+        if path == "/api/service/status" {
+            return Ok(self.get_service_status(request, query).await);
         }
         if path == "/api/artifacts.json" {
             let artifacts = state.get("artifacts").cloned().unwrap_or_else(|| json!([]));
@@ -612,6 +633,123 @@ impl Dashboard {
         machine_result_response(self.machine_facade().cancel_job(job_id).await)
     }
 
+    async fn get_service_status(&self, request: &Request, query: &str) -> Response {
+        if request.content_length != usize::default() || !request.body.is_empty() {
+            return invalid_service_request("service status does not accept a request body");
+        }
+        let name = match service_name(query) {
+            Ok(name) => name,
+            Err(response) => return response,
+        };
+        let store = match service_beacon_store().await {
+            Ok(store) => store,
+            Err(message) => {
+                return service_failure(
+                    http_status("503"),
+                    "SERVICE_STATUS_FAILED",
+                    message,
+                    true,
+                )
+            }
+        };
+        let rows = match service::find_services(&store, name).await {
+            Ok(rows) => rows,
+            Err(error) => {
+                return service_failure(
+                    http_status("503"),
+                    "SERVICE_STATUS_FAILED",
+                    error.to_string(),
+                    true,
+                )
+            }
+        };
+        if rows.is_empty() {
+            return service_failure(
+                http_status("404"),
+                "NOT_FOUND",
+                format!("no registry-managed service named {name}"),
+                false,
+            );
+        }
+        service_success(Value::Array(
+            rows.iter().map(service::ServiceStatus::to_json).collect(),
+        ))
+    }
+
+    async fn post_service_restart(&self, request: &Request, query: &str) -> Response {
+        if request.header("transfer-encoding").is_some()
+            || request.content_length != usize::default()
+            || !request.body.is_empty()
+        {
+            return invalid_service_request("service restart does not accept a request body");
+        }
+        let name = match service_name(query) {
+            Ok(name) => name,
+            Err(response) => return response,
+        };
+        let services = match declared_services_matching(name).await {
+            Ok(services) => services,
+            Err(message) => {
+                return service_failure(
+                    http_status("503"),
+                    "SERVICE_RESTART_FAILED",
+                    message,
+                    true,
+                )
+            }
+        };
+        if services.is_empty() {
+            return service_failure(
+                http_status("404"),
+                "NOT_FOUND",
+                format!("no registry-managed service named {name}"),
+                false,
+            );
+        }
+        let runner = production_runner();
+        let mut result = Vec::with_capacity(services.len());
+        let mut failures = Vec::new();
+        for declared in &services {
+            let target = match host_channel::canonical_target(&declared.host).await {
+                Ok(target) => target,
+                Err(error) => {
+                    return service_failure(
+                        http_status("503"),
+                        "SERVICE_RESTART_FAILED",
+                        error.to_string(),
+                        true,
+                    )
+                }
+            };
+            let report = match service::restart_service(&target, declared, &runner).await {
+                Ok(report) => report,
+                Err(error) => {
+                    return service_failure(
+                        http_status("503"),
+                        "SERVICE_RESTART_FAILED",
+                        error.to_string(),
+                        true,
+                    )
+                }
+            };
+            if !report.succeeded("restarted") {
+                failures.push(format!("{}: {}", declared.host, report.failure()));
+            }
+            let mut entry = report.to_json();
+            entry["host"] = Value::from(declared.host.clone());
+            result.push(entry);
+        }
+        if !failures.is_empty() {
+            return service_failure(
+                http_status("503"),
+                "SERVICE_RESTART_FAILED",
+                format!("restart failed on {}", failures.join("; ")),
+                true,
+            );
+        }
+        service_success(Value::Array(result))
+    }
+
     async fn put_object(&self, request: &Request, query: &str) -> Result<Response, DashboardError> {
         let object = match object_from_query(query) {
             Ok(object) => object,
@@ -672,28 +810,29 @@ impl Dashboard {
             .path
             .split_once('?')
             .unwrap_or((request.path.as_str(), ""));
-        let machine_route =
-            path == "/api/machine/submit" || path == "/api/machine/cancel";
+        let control_route = path == "/api/machine/submit"
+            || path == "/api/machine/cancel"
+            || path == "/api/service/restart";
         if !trusted_request_host(request.header("host"), request.header("x-forwarded-proto")) {
-            return if machine_route {
+            return if control_route {
                 send_json(http_status("403"), &json!({"error": "forbidden"}))
             } else {
                 cleanup_failure(http_status("403"))
             };
         }
-        if machine_route {
-            let permission = if path == "/api/machine/submit" {
-                "machine:submit"
-            } else {
-                "machine:cancel"
+        if control_route {
+            let permission = match path {
+                "/api/machine/submit" => "machine:submit",
+                "/api/machine/cancel" => "machine:cancel",
+                _ => "service:restart",
             };
             if !authorized(request, permission).await {
                 return send_json(http_status("401"), &json!({"error": "unauthorized"}));
             }
-            return if path == "/api/machine/submit" {
-                self.post_machine_submit(request).await
-            } else {
-                self.post_machine_cancel(request, query).await
+            return match path {
+                "/api/machine/submit" => self.post_machine_submit(request).await,
+                "/api/machine/cancel" => self.post_machine_cancel(request, query).await,
+                _ => self.post_service_restart(request, query).await,
             };
         }
         if !authorized(request, "operate").await {
@@ -883,6 +1022,7 @@ static MACHINE_JOB_ID_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLoc
     regex::Regex::new(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
         .expect("static machine job ID regex compiles")
 });
+
 
 struct Request {
     method: String,
@@ -1142,6 +1282,83 @@ fn machine_job_id(query: &str) -> Result<&str, Response> {
     Ok(job_id)
 }
 
+fn service_name(query: &str) -> Result<&str, Response> {
+    let invalid = || {
+        invalid_service_request(
+            "query must contain exactly one lowercase, path-safe name parameter",
+        )
+    };
+    if query.is_empty() || query.contains('&') {
+        return Err(invalid());
+    }
+    let Some((key, name)) = query.split_once('=') else {
+        return Err(invalid());
+    };
+    if key != "name" || service::validate_service_name(name).is_err() {
+        return Err(invalid());
+    }
+    Ok(name)
+}
+
+async fn service_beacon_store() -> Result<JobStorage, String> {
+    let bucket = targets::GCS_REGISTRY_URI
+        .split_once("//")
+        .map(|(_, rest)| rest.split('/').next().unwrap_or_default())
+        .unwrap_or_default();
+    JobStorage::with_bucket(bucket)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn declared_services_matching(
+    name: &str,
+) -> Result<Vec<service::ManagedService>, String> {
+    let registry = targets::fetch_registry_remote()
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut found = Vec::new();
+    for target in registry.local_targets() {
+        found.extend(
+            service::declared_services(target)
+                .into_iter()
+                .filter(|declared| declared.matches(name)),
+        );
+    }
+    Ok(found)
+}
+
+fn service_success(result: Value) -> Response {
+    send_json(http_status("200"), &json!({"ok": true, "result": result}))
+}
+
+fn service_failure(
+    status: u16,
+    code: &str,
+    message: impl Into<String>,
+    retryable: bool,
+) -> Response {
+    send_json(
+        status,
+        &json!({
+            "ok": false,
+            "error": {
+                "code": code,
+                "message": message.into(),
+                "retryable": retryable,
+            },
+        }),
+    )
+}
+
+fn invalid_service_request(message: impl Into<String>) -> Response {
+    service_failure(
+        http_status("400"),
+        "INVALID_REQUEST",
+        message,
+        false,
+    )
+}
+
 fn validate_remote_machine_request(request: &Value) -> Result<(), MachineError> {
     let Some(request) = request.as_object() else {
         return Ok(());
@@ -1253,17 +1470,18 @@ fn url_decode(input: &str) -> String {
 // Host-header DNS-rebinding guard + Supabase RLS auth
 // ---------------------------------------------------------------------------
 
-/// Python `_trusted_request_host`: reject rebinding locally; allow
-/// authenticated HTTPS reverse proxies (deployment set + X-Forwarded-Proto
-/// https). IPs pass directly; DNS names only in the reverse-proxy case.
+/// Accept loopback Host values for direct local access. A deployment-bound
+/// HTTPS reverse proxy may forward either DNS or IP Host values; because the
+/// listener itself is loopback-only, `X-Forwarded-Proto` cannot be supplied
+/// by external plaintext ingress.
 fn trusted_request_host(value: Option<&str>, forwarded_proto: Option<&str>) -> bool {
     let Some(value) = value else { return false };
     if value.is_empty() {
         return false;
     }
-    // Python's ValueError escape hatch (bad bracket, bad port, non-IP DNS
-    // name): allowed only behind the authenticated reverse proxy.
-    let dns_branch = !config::stado_deployment_id().is_empty() && forwarded_proto == Some("https");
+    // Malformed authorities always fail closed.
+    let proxy_https =
+        !config::stado_deployment_id().is_empty() && forwarded_proto == Some("https");
 
     // authority = [userinfo@]host[:port]; path/query/fragment split off.
     let (authority, has_suffix) = match value.find(['/', '?', '#']) {
@@ -1283,12 +1501,12 @@ fn trusted_request_host(value: Option<&str>, forwarded_proto: Option<&str>) -> b
                     Some(port)
                 } else {
                     // "[::1]junk" — Python raises ValueError on .hostname.
-                    return dns_branch;
+                    return false;
                 };
                 (host, port)
             }
             // Unterminated bracket — urlsplit raises ValueError.
-            None => return dns_branch,
+            None => return false,
         }
     } else {
         match host_port.rsplit_once(':') {
@@ -1300,7 +1518,7 @@ fn trusted_request_host(value: Option<&str>, forwarded_proto: Option<&str>) -> b
     // ValueError -> the DNS branch (even for IP hosts).
     if let Some(port) = port {
         if port.parse::<u16>().is_err() {
-            return dns_branch;
+            return false;
         }
     }
     // Python: `if not host or parsed.username or parsed.password or
@@ -1319,10 +1537,13 @@ fn trusted_request_host(value: Option<&str>, forwarded_proto: Option<&str>) -> b
     {
         return false;
     }
-    if host.parse::<std::net::IpAddr>().is_ok() {
+    if host.eq_ignore_ascii_case("localhost") {
         return true;
     }
-    dns_branch
+    match host.parse::<std::net::IpAddr>() {
+        Ok(address) => address.is_loopback() || proxy_https,
+        Err(_) => proxy_https,
+    }
 }
 
 fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
@@ -1335,13 +1556,20 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     difference == u8::default()
 }
 
-/// Validate the route-specific service token or the Wisent
-/// session/deployment grant through Supabase RLS. Machine and object service
-/// tokens are isolated. Machine routes always fail closed and never fall back
-/// to the object token or Supabase.
+/// Validate a route-specific service token or the Wisent session/deployment
+/// grant through Supabase RLS. Machine, managed-service, and object tokens are
+/// isolated. Machine and managed-service routes always fail closed and never
+/// fall back to another service token or Supabase.
 async fn authorized(request: &Request, permission: &str) -> bool {
-    if permission.starts_with("machine:") {
-        let expected = match crate::skarbiec::read_string("stado-machine-api", "token").await {
+    let control_item = if permission.starts_with("machine:") {
+        Some("stado-machine-api")
+    } else if permission.starts_with("service:") {
+        Some("stado-service-api")
+    } else {
+        None
+    };
+    if let Some(item) = control_item {
+        let expected = match crate::skarbiec::read_string(item, "token").await {
             Ok(Some(value)) => value,
             Ok(None) | Err(_) => String::new(),
         };
@@ -1363,7 +1591,7 @@ async fn authorized(request: &Request, permission: &str) -> bool {
         }
     }
     if deployment_id.is_empty() {
-        return !permission.starts_with("object:");
+        return false;
     }
     let supabase_url = std::env::var("SUPABASE_URL").unwrap_or_default();
     let supabase_url = supabase_url.trim_end_matches('/');

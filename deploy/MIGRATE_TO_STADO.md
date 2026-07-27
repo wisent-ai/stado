@@ -19,7 +19,7 @@ identifiers carry running state.
 | GCP SA | `wisent-compute-sa@` | `stado-sa@` | attached to dispatched VMs |
 | Pub/Sub | `wisent-compute-alerts` | `stado-alerts` | alert sink |
 | Azure | RG/vnet/nsg `wisent-compute*` | `stado*` | provisioned infra (only if Azure provider used) |
-| Cloud Function + baked image | import `wisent_compute` | import `stado` | redeploy after PyPI + config flip |
+| Control plane + Stado release/service | import `wisent_compute` | import `stado` | redeploy through the canonical release/service pipeline after PyPI + config flip |
 
 `config.py` env-defaults still point at the OLD names on purpose, so the fleet
 keeps working until the deliberate cutover in step 6. Nothing breaks from the
@@ -68,8 +68,8 @@ overrides) and restart; the old bucket is intact until step 8.
 ## Note on env-var names
 
 `WC_BUCKET`, `WC_ALERTS_TOPIC`, `WC_STORAGE_BACKEND`, etc. are the deployed
-contract (systemd units, LaunchAgents, baked image). Renaming them to `STADO_*`
-is a separate, optional pass -- if done, update the same unit files and re-bake.
+contract (systemd units, LaunchAgents, service config). Renaming them to `STADO_*`
+is a separate, optional pass -- if done, update the same unit files and release service.
 Left as `WC_*` here to keep the cutover minimal.
 
 

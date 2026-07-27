@@ -71,7 +71,7 @@ pub enum StorageCommands {
     Objects(StorageObjectsArgs),
     /// Delete a product object through the provider-neutral Stado namespace.
     Rm(StorageRmArgs),
-    /// Print the stable Stado gateway URL for a product object.
+    /// Print the gateway URL; only stado://releases/... is bearer-free.
     Url(StorageUrlArgs),
 }
 
@@ -1352,16 +1352,11 @@ async fn rm(args: &StorageRmArgs) -> Result<(), CmdError> {
 
 fn object_url(args: &StorageUrlArgs) -> Result<(), CmdError> {
     let object = crate::object_store::ObjectRef::parse(&args.uri)?;
-    let (base_url, route) = if object.namespace() == "public" {
-        let base_url = match configured_object_base_url("STADO_PUBLIC_BASE_URL")? {
-            Some(base_url) => base_url,
-            None => configured_object_base_url("STADO_API_URL")?.ok_or_else(|| {
-                CmdError::click(
-                    "STADO_PUBLIC_BASE_URL or STADO_API_URL is required to render a public object URL",
-                )
-            })?,
-        };
-        (base_url, "/api/public/object")
+    let (base_url, route) = if object.namespace() == "releases" {
+        let base_url = configured_object_base_url("STADO_API_URL")?.ok_or_else(|| {
+            CmdError::click("STADO_API_URL is required to render a release object URL")
+        })?;
+        (base_url, "/api/release/object")
     } else {
         let remote = RemoteObjectApi::configured()?.ok_or_else(|| {
             CmdError::click("STADO_API_URL is required to render a private object URL")

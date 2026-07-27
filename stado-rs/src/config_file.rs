@@ -518,6 +518,93 @@ pub fn validate(data: &Value) -> Vec<String> {
             );
         }
     }
+    let configured_items = get_in(root, "agent.skarbiec.items")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    match get_in(root, "agent.skarbiec.secret_fields") {
+        None => {}
+        Some(Value::Array(fields)) => {
+            for entry in fields {
+                let Some(reference) = entry.as_str() else {
+                    problems.push(
+                        "agent.skarbiec.secret_fields entries must be item#field strings"
+                            .to_string(),
+                    );
+                    continue;
+                };
+                let Some((item, field)) = reference.split_once('#') else {
+                    problems.push(format!(
+                        "agent.skarbiec.secret_fields entry {reference:?} must be item#field"
+                    ));
+                    continue;
+                };
+                if item.is_empty()
+                    || field.is_empty()
+                    || reference.matches('#').count() != std::iter::once(()).count()
+                {
+                    problems.push(format!(
+                        "agent.skarbiec.secret_fields entry {reference:?} must contain one non-empty item#field"
+                    ));
+                }
+                if !configured_items
+                    .iter()
+                    .any(|configured| configured.as_str() == Some(item))
+                {
+                    problems.push(format!(
+                        "agent.skarbiec.secret_fields entry {reference:?} names an item absent from agent.skarbiec.items"
+                    ));
+                }
+                if matches!(
+                    item,
+                    "stado-aws"
+                        | "stado-azure"
+                        | "stado-gcp"
+                        | "stado-object-api"
+                        | "stado-machine-api"
+                        | "stado-service-api"
+                ) {
+                    problems.push(format!(
+                        "agent.skarbiec.secret_fields must not expose infrastructure item {item:?} to jobs"
+                    ));
+                }
+            }
+        }
+        Some(_) => problems.push(
+            "agent.skarbiec.secret_fields must be an array of item#field strings".to_string(),
+        ),
+    }
+    let local_provider = configured_providers
+        .iter()
+        .any(|provider| provider.as_str() == Some("local"))
+        && !disabled_providers
+            .iter()
+            .any(|provider| provider.as_str() == Some("local"));
+    let has_workload_fields = get_in(root, "agent.skarbiec.secret_fields")
+        .and_then(Value::as_array)
+        .is_some_and(|fields| !fields.is_empty());
+    if local_provider && has_workload_fields {
+        if get_in(root, "agent.skarbiec.consumer").and_then(Value::as_str)
+            != Some("stado-local-agent")
+        {
+            problems.push(
+                "local workload secrets require agent.skarbiec.consumer stado-local-agent"
+                    .to_string(),
+            );
+        }
+        let agent_token = get_in(root, "agent.skarbiec.token_file")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let control_token = get_in(root, "secrets.skarbiec.token_file")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if agent_token.is_empty() || agent_token == control_token {
+            problems.push(
+                "local workload secrets require an agent.skarbiec.token_file distinct from the control-plane grant"
+                    .to_string(),
+            );
+        }
+    }
     let port = root
         .get("dashboard")
         .and_then(Value::as_object)
@@ -574,12 +661,21 @@ pub fn template() -> Value {
                 "consumer": "stado-azure-agent",
                 "token_file": "~/.stado/azure-agent-skarbiec-token",
                 "items": [
-                    "compute-marketplace-agent",
                     "stado-aws",
-                    "stado-huggingface",
-                    "stado-model-router",
-                    "stado-wandb",
-                    "trading-autonomy-web-runtime"
+                    "trading-autonomy-agent-auth",
+                    "trading-autonomy-media-router",
+                    "trading-autonomy-model-router",
+                    "wisent-trade-agent-anthropic",
+                    "wisent-trade-agent-email",
+                    "wisent-trade-agent-openai"
+                ],
+                "secret_fields": [
+                    "trading-autonomy-agent-auth#agent_auth_secret",
+                    "trading-autonomy-media-router#token",
+                    "trading-autonomy-model-router#token",
+                    "wisent-trade-agent-anthropic#api-key",
+                    "wisent-trade-agent-email#api-key",
+                    "wisent-trade-agent-openai#api-key"
                 ]
             }
         },

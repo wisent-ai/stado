@@ -705,14 +705,14 @@ static AGENT_SKARBIEC_ITEMS: LazyLock<Vec<String>> = LazyLock::new(|| {
     cfg_list(
         "WC_AGENT_SKARBIEC_ITEMS",
         "agent.skarbiec.items",
-        &[
-            "compute-marketplace-agent",
-            "stado-aws",
-            "stado-huggingface",
-            "stado-model-router",
-            "stado-wandb",
-            "trading-autonomy-web-runtime",
-        ],
+        &["stado-aws"],
+    )
+});
+static AGENT_SKARBIEC_SECRET_FIELDS: LazyLock<Vec<String>> = LazyLock::new(|| {
+    cfg_list(
+        "WC_AGENT_SKARBIEC_SECRET_FIELDS",
+        "agent.skarbiec.secret_fields",
+        &[],
     )
 });
 
@@ -788,6 +788,25 @@ pub fn agent_skarbiec_token_file() -> &'static str {
 /// that the scoped grant can list neither fewer nor more items before dispatch.
 pub fn agent_skarbiec_items() -> &'static [String] {
     &AGENT_SKARBIEC_ITEMS
+}
+
+/// Exact workload-visible `item#field` references. Infrastructure items may
+/// still be present in [`agent_skarbiec_items`] for trusted agent internals,
+/// but a queued job can resolve only entries in this second, field-level list.
+pub fn agent_skarbiec_secret_fields() -> &'static [String] {
+    &AGENT_SKARBIEC_SECRET_FIELDS
+}
+
+/// Whether a job may project one exact Skarbiec field into its environment.
+/// Matching without allocating keeps this check cheap on every admission path.
+pub fn agent_secret_reference_allowed(item: &str, field: &str) -> bool {
+    AGENT_SKARBIEC_SECRET_FIELDS.iter().any(|entry| {
+        entry
+            .split_once('#')
+            .is_some_and(|(allowed_item, allowed_field)| {
+                allowed_item == item && allowed_field == field
+            })
+    })
 }
 
 /// In-process cache TTL for the GCS-fetched model policy (Python

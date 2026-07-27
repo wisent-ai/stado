@@ -8,6 +8,13 @@
       "notes": "Sole Rust Stado control plane. Runs as a long-lived daemon with Azure primary storage and S3 read fallback.",
       "runtime": "daemon",
       "state_uri": "stado://system/registry"
+    },
+    {
+      "active": true,
+      "name": "mac-outage-control-plane",
+      "runtime": "daemon",
+      "state_uri": "stado://system/registry",
+      "notes": "Outage-safe local Rust control plane while external cloud accounts are fenced."
     }
   ],
   "schema_version": 2,
