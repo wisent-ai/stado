@@ -1,4 +1,4 @@
-//! `stado show-resources` — one read-only, provider-neutral inventory.
+//! `stado resources show` — one read-only, provider-neutral inventory.
 //!
 //! Every source is fault-isolated. A cloud or credential failure is represented
 //! as a degraded source instead of erasing the resources returned by the other
@@ -7,23 +7,16 @@
 use std::collections::BTreeSet;
 
 use chrono::{SecondsFormat, Utc};
-use clap::Args;
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use super::{blast_radius, instances, table, CmdError};
+use super::ShowArgs;
+use crate::cli::{blast_radius, instances, table, CmdError};
 use crate::config;
 use crate::monitor::billing;
 use crate::providers::{gcp::inventory as gcp_inventory, get_provider};
 use crate::queue::copy::Endpoint;
 use crate::queue::JobStorage;
-
-#[derive(Args, Debug)]
-pub struct ShowResourcesArgs {
-    /// Emit the complete versioned machine-readable inventory.
-    #[arg(long)]
-    json: bool,
-}
 
 #[derive(Debug, Clone, Serialize)]
 struct SourceReport {
@@ -52,7 +45,7 @@ struct Summary {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct ResourcesReport {
+pub(crate) struct ResourcesReport {
     schema_version: u8,
     generated_at: String,
     read_only: bool,
@@ -66,17 +59,35 @@ struct ResourcesReport {
     coverage_gaps: Vec<String>,
 }
 
-pub async fn run(args: &ShowResourcesArgs) -> Result<(), CmdError> {
+pub async fn run(args: &ShowArgs) -> Result<(), CmdError> {
+    let report = build(args).await?;
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        print_human(&report);
+    }
+    Ok(())
+}
+
+pub(crate) async fn build(args: &ShowArgs) -> Result<ResourcesReport, CmdError> {
     let primary = Endpoint::configured_primary();
     let backup = Endpoint::configured_backup();
     let active = config::wc_providers().to_vec();
     let disabled = config::wc_disabled_providers().to_vec();
     let configured: BTreeSet<String> = active.iter().chain(&disabled).cloned().collect();
-    let enumerable: Vec<String> = ["gcp", "azure", "aws"]
+    let mut enumerable: Vec<String> = ["gcp", "azure", "aws"]
         .into_iter()
         .filter(|provider| configured.contains(*provider))
         .map(str::to_string)
         .collect();
+    if let Some(provider) = args.provider.as_deref() {
+        if !enumerable.iter().any(|name| name == provider) {
+            return Err(CmdError::usage(format!(
+                "provider {provider:?} is not a configured enumerable cloud"
+            )));
+        }
+        enumerable.retain(|name| name == provider);
+    }
 
     let storage_future = inspect_storage(&primary, backup.as_ref());
     let compute_future = inspect_compute(&enumerable, &active, &disabled, &primary);
@@ -154,12 +165,7 @@ pub async fn run(args: &ShowResourcesArgs) -> Result<(), CmdError> {
         coverage_gaps,
     };
 
-    if args.json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
-    } else {
-        print_human(&report);
-    }
-    Ok(())
+    Ok(report)
 }
 
 async fn inspect_storage(primary: &Endpoint, backup: Option<&Endpoint>) -> SourceReport {

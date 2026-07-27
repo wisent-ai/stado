@@ -122,11 +122,10 @@ Submit a job (or a batch) to the GCS-backed queue.
 | `wc submit --output-uri gs://...` | Additional destination mirrored to after job completion. Additive — `status/<id>/output/` is always written too. |
 | `wc submit --verify STR` | Post-success shell command. Non-zero exit reverses `COMPLETED → FAILED`. Catches silent-success failure modes (e.g. wisent's `extract_and_upload` reporting "5/7 strategies failed" but exiting 0). |
 
-Submitter-side env: `HF_TOKEN`, `GH_TOKEN` are read from the submitter's
-environment and baked into the per-job startup script that the cloud
-agent renders at boot. `COMPUTE_API_KEY` (if set) routes the submission
-through the `compute.wisent.com` HTTPS API instead of writing GCS
-directly.
+Workload credentials are declared as `secret_env` item/field references and
+resolved through the scoped Skarbiec agent grant. Raw values are never read
+from submitter environment variables or embedded in a job document or VM
+startup metadata. The compute API credential is also resolved from Skarbiec.
 
 **Sizing precedence** (each layer overrides the previous):
 
@@ -716,20 +715,41 @@ prevents the rest from running, and a black-holed endpoint becomes one FAIL row
 instead of a hung command. The probe object is deleted even when the read-back
 fails; a leaked one is named so it is obviously safe to remove.
 
-## `stado instances list|reap`
+## `stado instances list` and `stado resources`
 
-Live agent VMs across the configured cloud providers, and the reaper for the
-ones nothing owns.
+`instances list` remains a read-only view of live agent VMs. Every operator
+resource mutation uses the single `resources` command family and a versioned,
+hash-pinned plan.
 
-| Subcommand | Behavior |
+| Command | Behavior |
 |---|---|
-| `stado instances list [--provider P] [--json]` | Instance reference, provider, accelerator, age, and an `orphan` column. A VM is an orphan when no running job and no unexpired provider lease references it. |
-| `stado instances reap [--provider P] [--older-than 2h] [--dry-run] [--yes]` | Deletes orphans. Dry run is the DEFAULT; deletion needs `--yes`, and an explicit `--dry-run` overrides it. Referenced VMs are never deleted and the skip names the holder. |
+| `stado instances list [--provider P] [--json]` | Lists instance reference, provider, accelerator, age, ownership holders, and orphan state. |
+| `stado resources show [--provider P] [--json]` | Produces the provider-neutral inventory used by planning. |
+| `stado resources rationalize --output PLAN [--provider P] [--min-age 24h]` | Writes a canonical, expiring cleanup plan. It never mutates resources. |
+| `stado resources kill-irrational --plan PLAN --expect-hash SHA [--approve ACTION] [--allow-irreversible] [--yes]` | Preflights the full selected action graph, then executes only automatic and explicitly approved actions. Without `--yes`, it is a read-only preview. |
+| `stado resources shutdown --project PROJECT (--all-stado-owned \| --resource gcp:TYPE:LOCATION/NAME) --output PLAN` | Writes a GCP shutdown plan containing only reversible pause, resize-to-zero, stop, and Cloud SQL activation-policy actions. |
+| `stado resources apply --plan PLAN --expect-hash SHA --yes` | Applies exactly one shutdown plan after checking its hash, expiry, configuration fingerprint, dependencies, and every precondition. |
+| `stado resources verify --operation ID` | Compares live state with the applied or restored postconditions and archives `verification-latest.json`. |
+| `stado resources restore --operation ID --yes` | Restores only actions this operation actually applied, in reverse dependency order. Already-desired resources are never “restored.” |
+| `stado resources operations list` / `show ID` | Reads the plan, CAS state, and append-only events from the configured Stado storage backend. |
 
-A provider that cannot be enumerated makes the command exit non-zero rather
-than render as "no orphans" — a hole in the inventory is exactly the failure
-this command exists to prevent. `--older-than` takes a duration (`30m`, `2h`,
-`1d`); a bare number is rejected.
+Explicit shutdown selectors are `gcp:scheduler:REGION/NAME`,
+`gcp:zonal-mig:ZONE/NAME`, `gcp:regional-mig:REGION/NAME`,
+`gcp:instance:ZONE/NAME`, and `gcp:cloud-sql:NAME`. `--all-stado-owned`
+discovers VMs and MIGs covered by Stado's `wisent-agent-*`, `stado-*`, or
+`wisent-*` naming contracts, plus the configured coordinator Scheduler job.
+Cloud SQL has no repository-wide
+ownership contract, so it must be named explicitly.
+
+Plans contain typed action kinds and resource locators, never caller-supplied
+HTTP methods or URLs. Execution performs every preflight before the first
+mutation and repeats the relevant precondition check immediately before each
+action. It aborts on the first unresolved error and records receipts and
+observed state in both configured storage and `~/.stado/operations/`.
+Re-running the same pinned plan reconciles an action interrupted after its
+provider accepted the mutation. Irreversible cleanup requires both an explicit
+action approval and `--allow-irreversible`; shutdown plans reject irreversible
+actions at schema validation time.
 
 ## `stado secrets put|get|ls|rm`
 

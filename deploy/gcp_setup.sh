@@ -30,11 +30,7 @@ if ! gcloud iam service-accounts describe "$SA_EMAIL" --project="$PROJECT" >/dev
 fi
 # bigquery.jobUser lets the tick run the billing-export queries; dataViewer
 # lets it read the gcp_billing_export_v1_* table the credits collector reads.
-# secretAccessor (already listed) covers the optional Azure billing SP secret
-# wisent-azure-billing-sp consumed by the same collector — no extra binding
-# needed for the Azure path, it activates automatically once that secret
-# exists. This keeps credit tracking fully automated with no manual IAM step.
-for role in roles/compute.admin roles/storage.admin roles/pubsub.publisher roles/secretmanager.secretAccessor roles/bigquery.jobUser roles/bigquery.dataViewer; do
+for role in roles/compute.admin roles/storage.admin roles/pubsub.publisher roles/bigquery.jobUser roles/bigquery.dataViewer; do
     gcloud projects add-iam-policy-binding "$PROJECT" \
         --member="serviceAccount:${SA_EMAIL}" --role="$role" --quiet >/dev/null 2>&1
 done
@@ -46,14 +42,8 @@ if ! gcloud pubsub topics describe "$TOPIC" --project="$PROJECT" >/dev/null 2>&1
 fi
 echo "Alerts topic: $TOPIC"
 
-# 5. Secrets
-for secret in wisent-hf-token wisent-gh-token; do
-    if ! gcloud secrets describe "$secret" --project="$PROJECT" >/dev/null 2>&1; then
-        echo "Create secret: echo -n '\$TOKEN' | gcloud secrets create $secret --data-file=- --project=$PROJECT"
-    fi
-done
 
-# 6. Publish release binaries and deploy the Rust Cloud Run coordinator.
+# 5. Publish release binaries and deploy the Rust Cloud Run coordinator.
 # The deploy script also grants the scheduler invoker role, repoints the
 # existing cron health check, and removes the retired Python function.
 GCP_PROJECT="$PROJECT" GCP_REGION="$REGION" bash "$SCRIPT_DIR/deploy_stado_rust.sh"

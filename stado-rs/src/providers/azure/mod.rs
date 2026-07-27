@@ -69,6 +69,8 @@ pub const ARM_API_BASE: &str = "https://management.azure.com";
 /// the same VM contract this provider creates against.
 pub(crate) const COMPUTE_API_VERSION: &str = "2023-09-01";
 const NETWORK_API_VERSION: &str = "2023-09-01";
+const VM_EXTENSION_API_VERSION: &str = "2022-11-01";
+const AGENT_GRANT_EXTENSION_NAME: &str = "stado-agent-grant";
 /// OAuth scope for the client-credentials token request.
 const ARM_SCOPE: &str = "https://management.azure.com/.default";
 /// Resource for IMDS / az-CLI token requests.
@@ -254,6 +256,38 @@ impl ArmClient {
         }
         if !response.status().is_success() {
             return Err(Self::api_error(response, desc).await);
+        }
+        Ok(true)
+    }
+
+    /// DELETE a resource and wait for Azure's operation to finish. Protected
+    /// extension deletion uses this stronger form so decrypted handler
+    /// settings are removed before dispatch is reported successful.
+    async fn delete_lro_allow_404(
+        &self,
+        path: &str,
+        desc: &str,
+    ) -> Result<bool, AzureError> {
+        let response = self.send(reqwest::Method::DELETE, path, None).await?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(false);
+        }
+        if !response.status().is_success() {
+            return Err(Self::api_error(response, desc).await);
+        }
+        let header = |name: &str| {
+            response
+                .headers()
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string)
+        };
+        let async_op = header("azure-asyncoperation");
+        let location = header("location");
+        if let Some(url) = async_op {
+            self.poll_async_operation(&url, desc).await?;
+        } else if let Some(url) = location {
+            self.poll_location(&url, desc).await?;
         }
         Ok(true)
     }
@@ -493,6 +527,70 @@ pub fn vm_body(
     Ok(body)
 }
 
+fn vm_extension_path(subscription: &str, resource_group: &str, vm_name: &str) -> String {
+    format!(
+        "{}/extensions/{AGENT_GRANT_EXTENSION_NAME}?api-version={VM_EXTENSION_API_VERSION}",
+        vm_path(subscription, resource_group, vm_name)
+    )
+}
+
+/// Script carried only in Azure `protectedSettings`. It writes the opaque
+/// grant atomically into `/run` without placing it in argv/stdout, truncates
+/// its own handler copy, and leaves the tmpfs file for the Rust client's
+/// first-read cache to erase.
+fn protected_agent_grant_script(agent_grant: &str) -> String {
+    let encoded_grant = base64::engine::general_purpose::STANDARD.encode(agent_grant.as_bytes());
+    format!(
+        r#"#!/bin/sh
+set -eu
+set +x
+umask 077
+grant_dir=/run/stado-agent-credentials
+grant_file=$grant_dir/skarbiec-token
+grant_tmp=
+grant_b64='{encoded_grant}'
+cleanup() {{
+    grant_b64=
+    if [ -n "${{grant_tmp:-}}" ]; then
+        : > "$grant_tmp" 2>/dev/null || true
+        rm -f "$grant_tmp"
+    fi
+    if [ -f "$0" ]; then
+        : > "$0" 2>/dev/null || true
+        rm -f "$0"
+    fi
+}}
+trap cleanup EXIT HUP INT TERM
+install -d -m 0700 "$grant_dir"
+grant_tmp="$(mktemp "$grant_dir/.skarbiec-token.XXXXXX")"
+printf '%s' "$grant_b64" | base64 -d > "$grant_tmp"
+grant_b64=
+chmod 0600 "$grant_tmp"
+mv -f "$grant_tmp" "$grant_file"
+grant_tmp=
+"#
+    )
+}
+
+fn agent_grant_extension_body(location: &str, agent_grant: &str) -> Value {
+    let protected_script = base64::engine::general_purpose::STANDARD
+        .encode(protected_agent_grant_script(agent_grant).as_bytes());
+    json!({
+        "location": location,
+        "properties": {
+            "publisher": "Microsoft.Azure.Extensions",
+            "type": "CustomScript",
+            "typeHandlerVersion": "2.1",
+            "autoUpgradeMinorVersion": true,
+            "enableAutomaticUpgrade": true,
+            "settings": {},
+            "protectedSettings": {
+                "script": protected_script,
+            },
+        },
+    })
+}
+
 /// Python NIC-create failure classification: QuotaExceeded /
 /// OperationNotAllowed mark the location as skipped.
 fn nic_skip_error(msg: &str) -> bool {
@@ -593,16 +691,69 @@ impl AzureProvider {
         format!("{name}@{location}")
     }
 
-    /// Python `name, _ = instance_ref.split("@")` — a ref that does not
-    /// split into exactly two parts is a ValueError.
-    fn parse_ref(instance_ref: &str) -> Result<&str, ProviderError> {
-        let parts: Vec<&str> = instance_ref.split('@').collect();
-        if parts.len() != 2 {
+    /// Parse the opaque `name@location` handle without allocating.
+    fn parse_ref_parts(instance_ref: &str) -> Result<(&str, &str), ProviderError> {
+        let Some((name, location)) = instance_ref.split_once('@') else {
+            return Err(ProviderError::Value(format!(
+                "invalid instance_ref (expected name@location): {instance_ref}"
+            )));
+        };
+        if name.is_empty() || location.is_empty() || location.contains('@') {
             return Err(ProviderError::Value(format!(
                 "invalid instance_ref (expected name@location): {instance_ref}"
             )));
         }
-        Ok(parts[0])
+        Ok((name, location))
+    }
+
+    fn parse_ref(instance_ref: &str) -> Result<&str, ProviderError> {
+        Self::parse_ref_parts(instance_ref).map(|(name, _)| name)
+    }
+
+    async fn install_agent_grant_extension(
+        &self,
+        instance_ref: &str,
+        agent_grant: &str,
+    ) -> Result<(), ProviderError> {
+        if agent_grant.is_empty() {
+            return Err(ProviderError::Value(
+                "Azure protected agent grant is empty".to_string(),
+            ));
+        }
+        let (name, location) = Self::parse_ref_parts(instance_ref)?;
+        let state = self.state().await?;
+        let path = vm_extension_path(
+            state.client.subscription(),
+            config::azure_resource_group(),
+            name,
+        );
+        let body = agent_grant_extension_body(location, agent_grant);
+        if let Err(error) = state
+            .client
+            .put_lro(
+                &path,
+                &body,
+                &format!("deliver protected agent grant to VM {instance_ref}"),
+            )
+            .await
+        {
+            let _ = state
+                .client
+                .delete_lro_allow_404(
+                    &path,
+                    &format!("remove failed protected-grant extension from VM {instance_ref}"),
+                )
+                .await;
+            return Err(error.into());
+        }
+        state
+            .client
+            .delete_lro_allow_404(
+                &path,
+                &format!("remove protected-grant extension from VM {instance_ref}"),
+            )
+            .await?;
+        Ok(())
     }
 
     /// Python `list_running_instance_refs_with_age`: `(name@location,
@@ -658,6 +809,55 @@ impl AzureProvider {
 
 #[async_trait]
 impl Provider for AzureProvider {
+    #[allow(clippy::too_many_arguments)]
+    async fn create_agent_instance(
+        &self,
+        name: &str,
+        machine_type: &str,
+        accel_type: &str,
+        boot_disk_gb: i64,
+        image: &str,
+        image_project: &str,
+        startup_script: &str,
+        preemptible: bool,
+        agent_grant: Option<&str>,
+    ) -> Result<Option<String>, ProviderError> {
+        let agent_grant = agent_grant
+            .filter(|grant| !grant.is_empty())
+            .ok_or_else(|| {
+                ProviderError::Value(
+                    "Azure agent creation requires protected-settings grant delivery".to_string(),
+                )
+            })?;
+        let reference = self
+            .create_instance(
+                name,
+                machine_type,
+                accel_type,
+                boot_disk_gb,
+                image,
+                image_project,
+                startup_script,
+                preemptible,
+            )
+            .await?;
+        let Some(reference) = reference else {
+            return Ok(None);
+        };
+        if let Err(error) = self
+            .install_agent_grant_extension(&reference, agent_grant)
+            .await
+        {
+            if let Err(cleanup_error) = self.delete_instance(&reference).await {
+                log(&format!(
+                    "protected agent-grant delivery failed for {reference}; VM cleanup also failed: {cleanup_error}"
+                ));
+            }
+            return Err(error);
+        }
+        Ok(Some(reference))
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn create_instance(
         &self,

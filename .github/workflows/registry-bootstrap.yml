@@ -11,6 +11,9 @@ on:
     branches: [main]
     paths:
       - "stado-rs/data/registry.json"
+      - "stado-rs/src/deploy/bootstrap.rs"
+      - "stado-rs/src/deploy/local_install.rs"
+      - "deploy/local/stado.config.json"
       - ".github/workflows/registry-bootstrap.yml"
   workflow_dispatch:
 

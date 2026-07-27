@@ -1,20 +1,13 @@
-# TLS reverse proxy for the Rust Stado dashboard and public immutable objects.
+# TLS reverse proxy for the Rust Stado dashboard, authenticated APIs, and
+# dedicated software release downloads.
 # Environment:
-#   STADO_PUBLIC_HOST       optional; defaults to stado.wisent.com
+#   STADO_API_HOST           optional; defaults to stado.wisent.com
 #   STADO_DASHBOARD_UPSTREAM dashboard listener, including host and port
 #
-# The public route is intentionally forwarded without proxy-layer auth. Rust
-# accepts GET only, requires stado://public/..., and exposes no list/stat/write.
-{$STADO_PUBLIC_HOST:stado.wisent.com} {
-    @public_object path /api/public/object
-    handle @public_object {
-        reverse_proxy {$STADO_DASHBOARD_UPSTREAM}
-    }
-
-    # Every other dashboard/API route keeps its application-level RLS or its
-    # dedicated object/machine Skarbiec authorization. Caddy supplies
-    # X-Forwarded-Proto for the Rust trusted-proxy check.
-    handle {
-        reverse_proxy {$STADO_DASHBOARD_UPSTREAM}
-    }
+# Rust permits bearer-free GET only on /api/release/object and only for the
+# stado://releases software namespace. Product object, machine, service, and
+# dashboard routes enforce their own application authorization.
+{$STADO_API_HOST:stado.wisent.com} {
+    # Caddy supplies X-Forwarded-Proto for the Rust trusted-proxy check.
+    reverse_proxy {$STADO_DASHBOARD_UPSTREAM}
 }

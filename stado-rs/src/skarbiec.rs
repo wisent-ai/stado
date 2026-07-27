@@ -7,6 +7,7 @@
 //! local credential fallback.
 
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::Path;
 use std::sync::{LazyLock, Mutex};
 
@@ -115,6 +116,27 @@ pub(crate) fn read_grant(path: &str) -> Result<String, SkarbiecError> {
 static AGENT_GRANTS: LazyLock<Mutex<HashMap<(String, String), String>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+const TRANSIENT_AGENT_GRANT_DIR: &str = "/run/stado-agent-credentials";
+
+/// Erase the protected-settings handoff after an agent has cached its grant.
+/// Persistent local/Darwin agent grants live elsewhere and intentionally
+/// survive process restarts.
+fn erase_transient_agent_grant(path: &str, byte_count: usize) {
+    let path = Path::new(path);
+    if path.parent() != Some(Path::new(TRANSIENT_AGENT_GRANT_DIR)) {
+        return;
+    }
+    if let Ok(mut file) = std::fs::OpenOptions::new().write(true).open(path) {
+        let _ = std::io::copy(
+            &mut std::io::repeat(u8::MIN).take(u64::try_from(byte_count).unwrap_or(u64::MAX)),
+            &mut file,
+        );
+        let _ = file.set_len(u64::MIN);
+        let _ = file.sync_all();
+    }
+    let _ = std::fs::remove_file(path);
+}
+
 pub struct Client {
     http: reqwest::Client,
     base_url: String,
@@ -162,7 +184,9 @@ impl Client {
             return Ok(token.clone());
         }
         let token = read_grant(&self.token_file)?;
+        let byte_count = token.len();
         cached.insert(key, token.clone());
+        erase_transient_agent_grant(&self.token_file, byte_count);
         Ok(token)
     }
 

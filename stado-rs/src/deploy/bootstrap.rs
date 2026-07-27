@@ -284,13 +284,53 @@ pub async fn provision_target(
     };
 
     if platform == "darwin-arm64" {
-        // Forward a CONFIGURED channel so the remote `bootstrap --local`
-        // populates ~/.stado/bin from the same place this host installed
-        // from. The compiled-in default stays implicit, which keeps the
-        // default command byte-identical.
-        // Provision only the scoped Skarbiec consumer grant. Application
-        // credential values never leave Skarbiec.
-        let grant_path = crate::config::skarbiec_token_file();
+        // A remote workstation receives only its dedicated workload-agent
+        // consumer. Reusing either the control-plane consumer or its token
+        // path is a closed failure before SCP runs.
+        let grant_path = crate::config::agent_skarbiec_token_file();
+        let agent_consumer = crate::config::agent_skarbiec_consumer();
+        let agent_url = crate::config::agent_skarbiec_url();
+        let same_path = std::fs::canonicalize(grant_path)
+            .ok()
+            .zip(std::fs::canonicalize(crate::config::skarbiec_token_file()).ok())
+            .is_some_and(|(agent, control)| agent == control);
+        if grant_path.is_empty()
+            || same_path
+            || agent_consumer != "stado-local-agent"
+            || agent_consumer == crate::config::skarbiec_consumer()
+        {
+            return Err(DeployError(
+                "remote Darwin bootstrap requires consumer stado-local-agent and a distinct agent token_file"
+                    .to_string(),
+            ));
+        }
+        if !agent_url.starts_with("https://") {
+            return Err(DeployError(
+                "remote Darwin bootstrap requires agent.skarbiec.url on authenticated HTTPS"
+                    .to_string(),
+            ));
+        }
+        let agent_vault =
+            crate::skarbiec::Client::new(agent_url, agent_consumer, grant_path).map_err(|error| {
+                DeployError(format!("cannot configure dedicated remote agent grant: {error}"))
+            })?;
+        let mut visible = agent_vault
+            .list_items()
+            .await
+            .map_err(|error| DeployError(format!("cannot authorize remote agent grant: {error}")))?
+            .into_iter()
+            .map(|item| item.id)
+            .collect::<Vec<_>>();
+        visible.sort();
+        let mut expected = crate::config::agent_skarbiec_items().to_vec();
+        expected.sort();
+        expected.dedup();
+        if visible != expected {
+            return Err(DeployError(format!(
+                "stado-local-agent grant exposes {visible:?}; expected exactly {expected:?}"
+            )));
+        }
+        let remote_grant = "$HOME/.stado/local-agent-skarbiec-token";
         let prepare = runner(CommandSpec::new(ssh_argv(
             &ssh_target,
             "umask u=rwx,go=; mkdir -p \"$HOME/.stado\"",
@@ -299,7 +339,7 @@ pub async fn provision_target(
         .map_err(DeployError)?;
         if !prepare.ok() {
             return Err(DeployError(format!(
-                "cannot prepare remote Skarbiec grant directory: {}",
+                "cannot prepare remote agent grant directory: {}",
                 prepare.detail()
             )));
         }
@@ -307,25 +347,25 @@ pub async fn provision_target(
             "scp".to_string(),
             "-q".to_string(),
             grant_path.to_string(),
-            format!("{ssh_target}:.stado/skarbiec-token"),
+            format!("{ssh_target}:.stado/local-agent-skarbiec-token"),
         ]))
         .await
         .map_err(DeployError)?;
         if !copy.ok() {
             return Err(DeployError(format!(
-                "cannot provision remote Skarbiec consumer grant: {}",
+                "cannot provision dedicated remote agent grant: {}",
                 copy.detail()
             )));
         }
         let secure = runner(CommandSpec::new(ssh_argv(
             &ssh_target,
-            "chmod u=rw,go= \"$HOME/.stado/skarbiec-token\"",
+            &format!("chmod u=rw,go= \"{remote_grant}\""),
         )))
         .await
         .map_err(DeployError)?;
         if !secure.ok() {
             return Err(DeployError(format!(
-                "cannot secure remote Skarbiec consumer grant: {}",
+                "cannot secure dedicated remote agent grant: {}",
                 secure.detail()
             )));
         }
@@ -338,10 +378,20 @@ pub async fn provision_target(
                     shlex_quote(crate::config::release_base_url())
                 )
             };
+        let items = crate::config::agent_skarbiec_items().join(",");
+        let secret_fields = crate::config::agent_skarbiec_secret_fields().join(",");
         let skarbiec_prefix = format!(
-            "WC_SKARBIEC_URL={} WC_SKARBIEC_CONSUMER={} WC_SKARBIEC_TOKEN_FILE=\"$HOME/.stado/skarbiec-token\" ",
-            shlex_quote(crate::config::skarbiec_url()),
-            shlex_quote(crate::config::skarbiec_consumer()),
+            "WC_AGENT_SKARBIEC_URL={} WC_AGENT_SKARBIEC_CONSUMER={} \
+             WC_AGENT_SKARBIEC_TOKEN_FILE=\"{remote_grant}\" \
+             WC_AGENT_SKARBIEC_ITEMS={} WC_AGENT_SKARBIEC_SECRET_FIELDS={} \
+             WC_SKARBIEC_URL={} WC_SKARBIEC_CONSUMER={} \
+             WC_SKARBIEC_TOKEN_FILE=\"{remote_grant}\" ",
+            shlex_quote(agent_url),
+            shlex_quote(agent_consumer),
+            shlex_quote(&items),
+            shlex_quote(&secret_fields),
+            shlex_quote(agent_url),
+            shlex_quote(agent_consumer),
         );
         let command = format!(
             "{channel_prefix}{skarbiec_prefix}{} bootstrap --local --target {}",
