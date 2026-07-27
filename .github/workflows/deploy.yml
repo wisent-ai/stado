@@ -4,10 +4,9 @@ on:
   push:
     branches: [main]
     paths:
-      - "stado/**"
+      - "stado-rs/**"
       - "deploy/**"
       - "config/**"
-      - "pyproject.toml"
       - ".github/workflows/deploy.yml"
   workflow_dispatch:
 
@@ -47,17 +46,15 @@ jobs:
       # gs://wisent-compute/registry.json out-of-band — running agents
       # re-fetch on every poll cycle.
 
-      - name: Redeploy Cloud Function
-        run: bash deploy/redeploy_function.sh
+      - name: Publish and deploy Rust coordinator
+        run: bash deploy/deploy_stado_rust.sh
 
-      - name: Verify deployed revision is healthy
-        # Cloud Functions Gen2 deploy already waits for the revision to pass
-        # its health check before returning success — if redeploy_function.sh
-        # exited 0 above, the revision is serving. We just record which
-        # revision is now active for the run logs.
+      - name: Verify deployed revision is ready
+        # `gcloud run deploy` waits for the Rust revision to become Ready.
+        # Record the active revisions for the deployment log.
         run: |
           gcloud run revisions list \
-            --service=wisent-compute-tick \
+            --service=stado-coordinator \
             --region="${GCP_REGION}" \
             --project="${GCP_PROJECT}" \
             --limit=3 \

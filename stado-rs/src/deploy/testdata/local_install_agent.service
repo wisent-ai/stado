@@ -1,0 +1,17 @@
+[Unit]
+Description=Wisent Compute agent (mini-one)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=PYTHONUNBUFFERED=1
+Environment=WC_PYTHON=/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12
+Environment=HF_TOKEN=hf_secret
+Environment=HUGGING_FACE_HUB_TOKEN=hf_secret
+ExecStart=/Users/u/.stado/bin/stado agent --auto
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target

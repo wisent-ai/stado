@@ -73,7 +73,7 @@ cd "\$WORK"
 python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
-pip install --upgrade stado wisent wisent-extractors wisent-evaluators wisent-tools \
+pip install --upgrade wisent wisent-extractors wisent-evaluators wisent-tools \
   lm-eval optuna matplotlib word2number evaluate
 pip install --upgrade --force-reinstall 'transformers>=4.55,<5.0' 'tokenizers>=0.20,<0.22'
 pip install --upgrade --force-reinstall 'datasets>=2.18,<3.0' 'huggingface-hub>=0.34.0,<1.0'
@@ -83,7 +83,7 @@ export HF_TOKEN="$HF_TOKEN"
 huggingface-cli download cross-encoder/nli-deberta-v3-small || true
 huggingface-cli download sentence-transformers/all-MiniLM-L6-v2 || true
 
-.venv/bin/python -c "import stado, wisent, transformers, datasets, lm_eval; print('imports OK')"
+.venv/bin/python -c "import wisent, transformers, datasets, lm_eval; print('job runtime imports OK')"
 
 chown -R root:root "\$WORK"
 chmod -R go+rX "\$WORK"

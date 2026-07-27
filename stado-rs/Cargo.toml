@@ -1,0 +1,60 @@
+[package]
+name = "stado"
+version = "0.4.392"
+edition = "2021"
+description = "Job queue and compute management for Wisent GPU workloads"
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["rustls-tls", "json"], default-features = false }
+sha2 = "0.10"
+hex = "0.4"
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+regex = "1"
+base64 = "0.22"
+url = "2"
+futures = "0.3"
+gcp_auth = "0.12"
+fs2 = "0.4"
+# "dir" is required by the disk-cleanup janitor: os.scandir(dir_fd) parity
+# (directory enumeration relative to an already-validated dir fd — the core
+# sandbox primitive of providers/local/disk_cleanup).
+nix = { version = "0.30", features = ["signal", "process", "fs", "dir"] }
+aws-config = "1"
+aws-sdk-ec2 = "1"
+aws-sdk-s3 = "1"
+cron = "0.15"
+chrono-tz = "0.10"
+tar = "0.4"
+flate2 = "1"
+async-trait = "0.1"
+tempfile = "3"
+
+[[bin]]
+name = "stado"
+path = "src/bin/stado.rs"
+
+[[bin]]
+name = "stado-coverage"
+path = "src/bin/stado_coverage.rs"
+
+[[bin]]
+name = "stado-fix"
+path = "src/bin/stado_fix.rs"
+
+[[bin]]
+name = "stado-watchdog"
+path = "src/bin/stado_watchdog.rs"
+
+[[bin]]
+name = "stado-mcp"
+path = "src/bin/stado_mcp.rs"

@@ -1,0 +1,185 @@
+//! Abstract provider interface and provider registry.
+//!
+//! Port of `stado/providers/base.py` (the `Provider` ABC) and
+//! `stado/providers/__init__.py` (the `get_provider` factory). Python
+//! methods are sync and return `None`/raise; here the trait is async and
+//! fallible, with `create_instance` returning `Ok(None)` on capacity
+//! exhaustion (provider-specific, per the Python contract).
+//!
+//! The `vast` module is NOT a `Provider` implementation: on Vast.ai
+//! wisent-compute is the host, not the renter — it is the marketplace
+//! host-listing bridge ported from `stado/providers/vast/`.
+
+pub mod aws;
+pub mod azure;
+pub mod r#box;
+pub mod gcp;
+pub mod local;
+pub mod vast;
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+
+pub use r#box::BoxProvider;
+
+/// Provider-layer error. Python raises `ValueError` for unknown provider
+/// names and shape rejections, provider-specific exceptions otherwise.
+#[derive(Debug, thiserror::Error)]
+pub enum ProviderError {
+    /// Box provider failures (configuration/transport/API/value).
+    #[error(transparent)]
+    Box(#[from] r#box::BoxError),
+    /// GCP (GCE REST) failures.
+    #[error(transparent)]
+    Gcp(#[from] gcp::GceError),
+    /// AWS (EC2) failures. The message carries the service error code
+    /// (e.g. `InsufficientInstanceCapacity`, `InvalidInstanceID.NotFound`)
+    /// so Python's substring classification works on `error.to_string()`.
+    #[error("{0}")]
+    Aws(String),
+    /// Azure (ARM REST) failures.
+    #[error(transparent)]
+    Azure(#[from] azure::AzureError),
+    /// Storage failures from provider code that consults the queue.
+    #[error(transparent)]
+    Storage(#[from] crate::queue::StorageError),
+    /// Python `ValueError` (unknown provider, shape rejection).
+    #[error("{0}")]
+    Value(String),
+    /// Explicit phase-3 stub for provider surface not ported yet.
+    #[error("{0}")]
+    NotImplemented(String),
+}
+
+/// Python `providers.base.Provider`.
+///
+/// `instance_ref` is the `"name@zone"`-style opaque handle returned by
+/// [`Provider::create_instance`] (the box provider uses the raw box id).
+#[async_trait]
+pub trait Provider: Send + Sync {
+    /// Create instance. Returns the `"name@zone"` ref, or `None` on
+    /// capacity exhaustion. When `preemptible` is true the instance is
+    /// launched as Spot/Preemptible — cheaper but can be terminated by the
+    /// provider at any time.
+    // The 9-parameter shape is the Python base.Provider contract.
+    #[allow(clippy::too_many_arguments)]
+    async fn create_instance(
+        &self,
+        name: &str,
+        machine_type: &str,
+        accel_type: &str,
+        boot_disk_gb: i64,
+        image: &str,
+        image_project: &str,
+        startup_script: &str,
+        preemptible: bool,
+    ) -> Result<Option<String>, ProviderError>;
+
+    /// Delete instance by ref. NotFound is an idempotent success.
+    async fn delete_instance(&self, instance_ref: &str) -> Result<(), ProviderError>;
+
+    /// Check if instance is alive (RUNNING/STAGING/PROVISIONING).
+    ///
+    /// Returns false for TERMINATED, STOPPED, or missing instances. Use
+    /// [`Provider::instance_lifecycle_state`] to distinguish
+    /// preempted-TERMINATED from actually-gone.
+    async fn instance_exists(&self, instance_ref: &str) -> Result<bool, ProviderError>;
+
+    /// Return the raw lifecycle state ("RUNNING"/"TERMINATED"/"STOPPED"/
+    /// None).
+    ///
+    /// Optional method — providers that don't implement it return None and
+    /// the reaper falls back to the [`Provider::instance_exists`] boolean
+    /// check (Python base-class default).
+    async fn instance_lifecycle_state(
+        &self,
+        _instance_ref: &str,
+    ) -> Result<Option<String>, ProviderError> {
+        Ok(None)
+    }
+
+    /// Return `{accel_type: count}` for all wisent-* instances.
+    async fn list_running_instances(&self) -> Result<BTreeMap<String, i64>, ProviderError>;
+
+    /// Return `(name@zone, age_seconds)` for running agent VMs. Optional —
+    /// default empty (providers without a VM fleet); the dead-agent reaper
+    /// then has nothing to reap.
+    async fn list_running_instance_refs_with_age(
+        &self,
+    ) -> Result<Vec<(String, f64)>, ProviderError> {
+        Ok(vec![])
+    }
+}
+
+/// Python `get_provider(name)`. All cloud arms are lazy: credentials and
+/// clients resolve on the first API call, so the factory itself stays
+/// cheap and infallible (see the gcp/aws/azure module docs).
+pub fn get_provider(name: &str) -> Result<Arc<dyn Provider>, ProviderError> {
+    match name {
+        "box" | "box-ascii" => Ok(Arc::new(BoxProvider::from_env()?)),
+        // Lazy: credentials + storage resolve on the first API call, so the
+        // factory itself stays cheap and infallible (see gcp module docs).
+        "gcp" => Ok(Arc::new(gcp::GcpProvider::from_env())),
+        "aws" => Ok(Arc::new(aws::AwsProvider::from_env())),
+        "azure" => Ok(Arc::new(azure::AzureProvider::from_env())),
+        other => Err(ProviderError::Value(format!("Unknown provider: {other}"))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_provider_arms() {
+        // Arc<dyn Provider> is not Debug, so unwrap_err is unavailable.
+        let Err(err) = get_provider("dcloud") else { panic!("unknown provider must fail") };
+        assert_eq!(err.to_string(), "Unknown provider: dcloud");
+
+        // All cloud arms are lazy — credential/subscription resolution
+        // happens on first use, so the factory itself never fails.
+        for name in ["gcp", "aws", "azure"] {
+            assert!(get_provider(name).is_ok(), "{name} factory must succeed");
+        }
+    }
+
+    #[test]
+    fn lifecycle_state_defaults_to_none() {
+        struct Dummy;
+        #[async_trait]
+        impl Provider for Dummy {
+            async fn create_instance(
+                &self,
+                _n: &str,
+                _m: &str,
+                _a: &str,
+                _d: i64,
+                _i: &str,
+                _p: &str,
+                _s: &str,
+                _pre: bool,
+            ) -> Result<Option<String>, ProviderError> {
+                Ok(None)
+            }
+            async fn delete_instance(&self, _r: &str) -> Result<(), ProviderError> {
+                Ok(())
+            }
+            async fn instance_exists(&self, _r: &str) -> Result<bool, ProviderError> {
+                Ok(false)
+            }
+            async fn list_running_instances(
+                &self,
+            ) -> Result<BTreeMap<String, i64>, ProviderError> {
+                Ok(BTreeMap::new())
+            }
+        }
+        let dummy = Dummy;
+        let state = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(dummy.instance_lifecycle_state("anything"))
+            .unwrap();
+        assert_eq!(state, None);
+    }
+}

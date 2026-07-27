@@ -6,7 +6,7 @@ REGION="${GCP_REGION:-us-central1}"
 BUCKET="stado"
 SA_NAME="wisent-compute-sa"
 SA_EMAIL="${SA_NAME}@${PROJECT}.iam.gserviceaccount.com"
-FUNCTION="wisent-compute-tick"
+SERVICE="stado-coordinator"
 SCHEDULER="wisent-compute-cron"
 TOPIC="wisent-compute-alerts"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -53,45 +53,15 @@ for secret in wisent-hf-token wisent-gh-token; do
     fi
 done
 
-# 6. Deploy Cloud Function
-# Package the entire stado module for the function
-STAGING=$(mktemp -d)
-cp -r "$REPO_DIR/stado" "$STAGING/"
-cp "$REPO_DIR/stado/cloud_function/main.py" "$STAGING/main.py"
-cp "$REPO_DIR/stado/cloud_function/requirements.txt" "$STAGING/requirements.txt"
-cp "$REPO_DIR/pyproject.toml" "$STAGING/"
-
-gcloud functions deploy "$FUNCTION" \
-    --gen2 --runtime=python312 --region="$REGION" \
-    --source="$STAGING" \
-    --entry-point=monitor_jobs \
-    --trigger-http --no-allow-unauthenticated \
-    --service-account="$SA_EMAIL" \
-    --memory=512Mi --cpu=1 \
-    --set-env-vars="GCP_PROJECT=${PROJECT},WC_BUCKET=${BUCKET},WC_ALERTS_TOPIC=projects/${PROJECT}/topics/${TOPIC},WC_SLACK_WEBHOOK=${WC_SLACK_WEBHOOK:-},WC_TELEGRAM_BOT_TOKEN=${WC_TELEGRAM_BOT_TOKEN:-},WC_TELEGRAM_CHAT_ID=${WC_TELEGRAM_CHAT_ID:-},WC_SENDGRID_API_KEY=${WC_SENDGRID_API_KEY:-},WC_EMAIL_TO=${WC_EMAIL_TO:-},WC_EMAIL_FROM=${WC_EMAIL_FROM:-compute@example.com}" \
-    --project="$PROJECT" --quiet
-rm -rf "$STAGING"
-echo "Cloud Function deployed"
-
-# 7. Grant invoker
-gcloud run services add-iam-policy-binding "$FUNCTION" \
-    --region="$REGION" --project="$PROJECT" \
-    --member="serviceAccount:${SA_EMAIL}" --role="roles/run.invoker" --quiet >/dev/null
-
-# 8. Cloud Scheduler
-URL=$(gcloud functions describe "$FUNCTION" --gen2 --region="$REGION" --project="$PROJECT" --format='value(serviceConfig.uri)')
-if gcloud scheduler jobs describe "$SCHEDULER" --location="$REGION" --project="$PROJECT" >/dev/null 2>&1; then
-    gcloud scheduler jobs update http "$SCHEDULER" --location="$REGION" --project="$PROJECT" \
-        --schedule="*/3 * * * *" --uri="$URL" --oidc-service-account-email="$SA_EMAIL" --quiet
-else
-    gcloud scheduler jobs create http "$SCHEDULER" --location="$REGION" --project="$PROJECT" \
-        --schedule="*/3 * * * *" --uri="$URL" --oidc-service-account-email="$SA_EMAIL" --quiet
-fi
-echo "Scheduler: $SCHEDULER (every 3 min)"
+# 6. Publish release binaries and deploy the Rust Cloud Run coordinator.
+# The deploy script also grants the scheduler invoker role, repoints the
+# existing cron health check, and removes the retired Python function.
+GCP_PROJECT="$PROJECT" GCP_REGION="$REGION" bash "$SCRIPT_DIR/deploy_stado_rust.sh"
+echo "Rust Cloud Run coordinator deployed"
 
 echo ""
 echo "=== wisent-compute deployed ==="
 echo "Bucket:    gs://${BUCKET}"
-echo "Function:  $FUNCTION"
+echo "Service:   $SERVICE"
 echo "Scheduler: $SCHEDULER"
 echo "Alerts:    $TOPIC"
