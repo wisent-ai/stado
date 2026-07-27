@@ -5,9 +5,10 @@
 //!
 //! Implemented and wired to the library: `package-root`, `capabilities`,
 //! `submit`, `status`, `cancel`, `results`, `profiles`, `config`, `schedule`,
-//! `artifact`, `cost`, `vast`, `agent`, `disk-cleanup`,
-//! `install-disk-cleanup`, `bootstrap`, the complete `host`, `registry`,
-//! and `quota` groups, plus coordinator and dashboard control planes.
+//! `artifact`, `cost`, `vast`, `agent`, `disk-cleanup`, `show-resources`,
+//! `rationalize-resources`, `kill-irrational-resources`, `install-disk-cleanup`,
+//! `bootstrap`, the complete `host`, `registry`, and `quota` groups, plus
+//! coordinator and dashboard control planes.
 
 use clap::{Parser, Subcommand};
 
@@ -35,11 +36,13 @@ pub mod overview;
 pub mod profiles_cmd;
 pub mod queue;
 pub mod quota;
+pub mod rationalize_resources;
 pub mod registry;
 pub mod results;
 pub mod schedule;
 pub mod secrets;
 pub mod service;
+pub mod show_resources;
 pub mod status;
 pub mod storage;
 pub mod submit;
@@ -172,6 +175,18 @@ enum Commands {
     /// Inventory a dependency's live resources, auth, consumers, storage, and DR coverage.
     #[command(name = "blast-radius")]
     BlastRadius(blast_radius::BlastRadiusArgs),
+
+    /// Show one read-only inventory of compute, storage, hosts, cloud resources, and billing.
+    #[command(name = "show-resources")]
+    ShowResources(show_resources::ShowResourcesArgs),
+
+    /// Audit configured clouds and storage for idle, redundant, or stranded resources.
+    #[command(name = "rationalize-resources")]
+    RationalizeResources(rationalize_resources::RationalizeResourcesArgs),
+
+    /// Delete high-confidence irrational resources. Dry run unless `--yes` is given.
+    #[command(name = "kill-irrational-resources")]
+    KillIrrationalResources(rationalize_resources::KillIrrationalResourcesArgs),
 
     /// Inspect or refresh cross-cloud costs, grants, burn, and credit balances.
     #[command(subcommand)]
@@ -1082,6 +1097,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         }
         Commands::Overview { json } => overview::run(json).await,
         Commands::BlastRadius(args) => blast_radius::run(&args).await,
+        Commands::ShowResources(args) => show_resources::run(&args).await,
+        Commands::RationalizeResources(args) => rationalize_resources::run(&args).await,
+        Commands::KillIrrationalResources(args) => rationalize_resources::kill(&args).await,
         Commands::Billing(sub) => billing::dispatch(&sub).await,
         Commands::Azure(sub) => azure::dispatch(sub).await,
         Commands::Mail(sub) => mail::dispatch(&sub).await,
