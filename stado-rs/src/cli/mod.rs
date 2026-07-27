@@ -24,6 +24,7 @@ pub mod disk_cleanup;
 pub mod host;
 pub mod machine;
 pub mod profiles_cmd;
+pub mod overview;
 pub mod quota;
 pub mod registry;
 pub mod results;
@@ -125,6 +126,13 @@ enum Commands {
     /// Print the installed crate data root for desktop provisioning.
     #[command(name = "package-root", hide = true)]
     PackageRoot,
+
+    /// One operator snapshot: jobs, active workers, quota, budgets, burn and credits.
+    Overview {
+        /// Emit the complete machine-readable snapshot.
+        #[arg(long)]
+        json: bool,
+    },
 
     /// Run registry-authorized cleanup for this local target.
     #[command(name = "disk-cleanup")]
@@ -879,6 +887,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             println!("{}", crate::data_dir().display());
             Ok(())
         }
+        Commands::Overview { json } => overview::run(json).await,
         Commands::Submit(args) => submit::run(&args).await,
         Commands::Status { filter_id } => status::run(filter_id.as_deref()).await,
         Commands::Cancel { job_id } => cancel::run(&job_id).await,
