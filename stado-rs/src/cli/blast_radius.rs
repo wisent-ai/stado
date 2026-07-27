@@ -367,7 +367,10 @@ async fn inspect_credential_store() -> CredentialStoreReport {
     }
 }
 
-fn gcp_inventory_options(primary: &Endpoint, backup: Option<&Endpoint>) -> InventoryOptions {
+pub(crate) fn gcp_inventory_options(
+    primary: &Endpoint,
+    backup: Option<&Endpoint>,
+) -> InventoryOptions {
     let mut buckets = BTreeSet::new();
     for endpoint in [Some(primary), backup].into_iter().flatten() {
         if endpoint.kind == "gcs" && !endpoint.bucket.is_empty() {
@@ -464,6 +467,12 @@ async fn inspect_storage_bounded(role: &str, endpoint: Option<&Endpoint>) -> Sto
             names: BTreeMap::new(),
         },
     }
+}
+
+/// Provider-neutral storage projection used by `show-resources`.
+pub(crate) async fn storage_resource_report(role: &str, endpoint: Option<&Endpoint>) -> Value {
+    serde_json::to_value(inspect_storage_bounded(role, endpoint).await.report)
+        .expect("storage report serialization is infallible")
 }
 
 async fn inspect_storage(role: &str, endpoint: Option<&Endpoint>) -> StorageInspection {

@@ -38,6 +38,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Duration, Utc};
 use clap::{Args, Subcommand};
 use futures::StreamExt;
+use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::config;
@@ -129,7 +130,7 @@ pub async fn dispatch(cmd: InstancesCommands) -> Result<(), CmdError> {
 /// is part of the operator's intent, not a default this command gets to
 /// pick. `chrono` does the unit arithmetic, so the conversion factors live
 /// in one audited place instead of here.
-fn parse_older_than(raw: &str) -> Result<Duration, String> {
+pub(crate) fn parse_older_than(raw: &str) -> Result<Duration, String> {
     let text = raw.trim();
     let units: &[(&str, fn(i64) -> Option<Duration>)] = &[
         ("s", Duration::try_seconds),
@@ -340,8 +341,16 @@ impl Fleet {
 }
 
 async fn inventory(store: &JobStorage, providers: &[String]) -> Result<Fleet, CmdError> {
-    let holders = Holders::build(store).await?;
     let live = read_consumer_capacity(store).await?;
+    inventory_with_live(store, providers, &live).await
+}
+
+async fn inventory_with_live(
+    store: &JobStorage,
+    providers: &[String],
+    live: &BTreeMap<String, Value>,
+) -> Result<Fleet, CmdError> {
+    let holders = Holders::build(store).await?;
     let agent_prefix = format!("{}-agent-", config::INSTANCE_PREFIX);
 
     let mut fleet = Fleet {
@@ -370,7 +379,7 @@ async fn inventory(store: &JobStorage, providers: &[String]) -> Result<Fleet, Cm
             let held_by = holders.holders_for(&reference, &vm_name);
             let accel = holders
                 .gpu_type_for(&reference, &vm_name)
-                .or_else(|| broadcast_accel(&live, name, &vm_name))
+                .or_else(|| broadcast_accel(live, name, &vm_name))
                 .or_else(|| name_tag_accel(&agent_prefix, &vm_name))
                 .unwrap_or_else(|| UNKNOWN.to_string());
             fleet.rows.push(InstanceRow {
@@ -391,6 +400,51 @@ async fn inventory(store: &JobStorage, providers: &[String]) -> Result<Fleet, Cm
             .then_with(|| left.reference.cmp(&right.reference))
     });
     Ok(fleet)
+}
+
+/// Read-only fleet projection for resource rationalization. Unlike the
+/// operator list/reaper path, this deliberately skips live-capacity loading,
+/// whose stale-record GC would make an audit mutate the store.
+pub(crate) async fn audit_inventory(
+    store: &JobStorage,
+    providers: &[String],
+) -> Result<AuditFleet, CmdError> {
+    let fleet = inventory_with_live(store, providers, &BTreeMap::new()).await?;
+    Ok(AuditFleet {
+        rows: fleet
+            .rows
+            .into_iter()
+            .map(|row| AuditInstanceRow {
+                reference: row.reference,
+                provider: row.provider,
+                accel: row.accel,
+                age_seconds: row.age_seconds,
+                held_by: row.held_by,
+            })
+            .collect(),
+        errors: fleet.errors,
+    })
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct AuditInstanceRow {
+    pub reference: String,
+    pub provider: String,
+    pub accel: String,
+    pub age_seconds: f64,
+    pub held_by: Vec<String>,
+}
+
+impl AuditInstanceRow {
+    pub fn is_orphan(&self) -> bool {
+        self.held_by.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct AuditFleet {
+    pub rows: Vec<AuditInstanceRow>,
+    pub errors: BTreeMap<String, String>,
 }
 
 /// Accelerator types from this VM's live capacity broadcast
@@ -506,7 +560,33 @@ async fn reap(args: &InstancesReapArgs) -> Result<(), CmdError> {
     // `--dry-run` is the default and wins when both flags are given: the
     // explicit brake beats the explicit accelerator.
     let apply = args.yes && !args.dry_run;
+    reap_fleet(&store, &providers, fleet, args.older_than, apply, args.json).await
+}
 
+/// Action backend for `kill-irrational-resources`.
+///
+/// Its preview is genuinely read-only: unlike the legacy operator reaper it
+/// does not load or garbage-collect capacity publications. Ownership is
+/// rebuilt immediately before every applied deletion.
+pub(crate) async fn reap_irrational(
+    providers: &[String],
+    older_than: Duration,
+    apply: bool,
+    json: bool,
+) -> Result<(), CmdError> {
+    let store = JobStorage::new().await?;
+    let fleet = inventory_with_live(&store, providers, &BTreeMap::new()).await?;
+    reap_fleet(&store, providers, fleet, Some(older_than), apply, json).await
+}
+
+async fn reap_fleet(
+    store: &JobStorage,
+    providers: &[String],
+    fleet: Fleet,
+    older_than: Option<Duration>,
+    apply: bool,
+    json: bool,
+) -> Result<(), CmdError> {
     let mut tallies: BTreeMap<String, Tally> = providers
         .iter()
         .map(|name| (name.clone(), Tally::default()))
@@ -520,7 +600,7 @@ async fn reap(args: &InstancesReapArgs) -> Result<(), CmdError> {
             ));
             continue;
         }
-        if let Some(minimum) = args.older_than {
+        if let Some(minimum) = older_than {
             // A provider that could not read a creation timestamp reports
             // age 0.0; such a VM never clears an age gate, which is the
             // safe direction for a deletion.
@@ -536,6 +616,19 @@ async fn reap(args: &InstancesReapArgs) -> Result<(), CmdError> {
             tally.would_delete.push(row.reference.clone());
             continue;
         }
+        let holders = Holders::build(store).await?;
+        let vm_name = row.reference.split('@').next().unwrap_or_default();
+        let held_by = holders.holders_for(&row.reference, vm_name);
+        if !held_by.is_empty() {
+            tally.skipped.push((
+                row.reference.clone(),
+                format!(
+                    "ownership changed after planning; now referenced by {}",
+                    held_by.join(", ")
+                ),
+            ));
+            continue;
+        }
         let Some(client) = fleet.clients.get(&row.provider) else {
             tally.failed.push((
                 row.reference.clone(),
@@ -549,8 +642,8 @@ async fn reap(args: &InstancesReapArgs) -> Result<(), CmdError> {
         }
     }
 
-    if args.json {
-        report_json(&providers, &fleet, &tallies, apply);
+    if json {
+        report_json(providers, &fleet, &tallies, apply);
     } else {
         report_tables(&fleet, &tallies, apply);
     }
