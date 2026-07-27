@@ -1,0 +1,18 @@
+[Unit]
+Description=Wisent Compute diagnostics watchdog (box-a)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=PYTHONUNBUFFERED=1
+Environment=GOOGLE_CLOUD_PROJECT=wisent-480400
+Environment=GCP_PROJECT=wisent-480400
+Environment=WC_BUCKET=wisent-compute
+ExecStart=/home/u/.stado/bin/stado-watchdog
+Restart=on-failure
+RestartSec=30
+User=u
+
+[Install]
+WantedBy=multi-user.target

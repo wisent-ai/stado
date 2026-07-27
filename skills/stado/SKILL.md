@@ -49,13 +49,11 @@ Run the stdio server with:
 
 ```bash
 stado-mcp
-# or
-python -m stado.mcp.server
 ```
 
 The server reads newline-delimited JSON-RPC from stdin and writes exactly one response line per request to stdout; all diagnostics go to stderr, so stdout carries protocol frames only. It implements `initialize`, `ping`, `tools/list`, and `tools/call`; a request that arrives without an `id` key is treated as a notification and is never answered.
 
-Each `tools/call` shells out to the `stado` CLI (resolved most-portable first: the `stado` console script on PATH, then a `stado` next to the running interpreter, then `python -m stado.cli`), captures stdout, and returns it as the tool result text; a nonzero exit is surfaced as a JSON-RPC error carrying the command's stderr.
+Each `tools/call` invokes the sibling Rust `stado` binary (or `$STADO_BIN` when explicitly configured), captures stdout, and returns it as the tool result text; a nonzero exit is surfaced as a JSON-RPC error carrying the command's stderr.
 
 Exposed tools — the complete read-only allow-list:
 

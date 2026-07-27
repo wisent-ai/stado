@@ -1,0 +1,655 @@
+//! Agent-mode VM dispatch.
+//!
+//! Port of `stado/scheduler/dispatch/agent.py`.
+//!
+//! For each (accel, machine_type) bucket of queued work that isn't already
+//! yielded to a local consumer, launch enough agent VMs to fill remaining
+//! quota — but no more than the bucket's job count. Each VM runs
+//! `wc agent --idle-shutdown`, polls the queue, packs jobs by nvidia-smi
+//! VRAM, and self-terminates when no eligible queued job remains.
+//!
+//! Replaces the legacy 1-VM-per-job dispatch path. VRAM (read live from
+//! the hardware) is the only admission constant; there is no per-VM slot
+//! count.
+
+use std::collections::{BTreeMap, HashMap};
+use std::time::Instant;
+
+use chrono::{DateTime, Utc};
+
+use crate::catalog::GPU_SIZING;
+use crate::config;
+use crate::models::Job;
+use crate::providers::Provider;
+use crate::queue::JobStorage;
+use crate::scheduler::scheduler::{accel_hourly_rate, backoff_due, log, SchedulerError};
+use crate::sizing::Sizing;
+
+/// Per-provider agent startup-script templates. Each launches
+/// `wc agent --kind <provider> --gpu-type <accel> --idle-shutdown` after
+/// installing wisent-compute, but with provider-specific bootstrap
+/// (gsutil vs azcopy, managed identity vs SA JSON, etc.).
+fn template_name_for(provider_name: &str) -> &'static str {
+    match provider_name {
+        "azure" => "startup_gpu_agent_azure.sh",
+        "aws" => "startup_gpu_agent_aws.sh",
+        _ => "startup_gpu_agent.sh",
+    }
+}
+
+/// Substitute `${ACCEL_TYPE}` and every `${KEY}` secret into the template.
+/// Python does plain str.replace per key, so only keys present in
+/// `secrets` are substituted — other `${...}` shell expansions in the
+/// template are left for the VM's shell. Secrets are NEVER logged: the
+/// rendered script goes straight to create_instance and only the
+/// instance ref / accel / machine reach the log lines.
+pub fn render_startup_script(
+    template: &str,
+    accel: &str,
+    secrets: &BTreeMap<String, String>,
+) -> String {
+    let mut script = template.replace("${ACCEL_TYPE}", accel);
+    for (key, val) in secrets {
+        script = script.replace(&format!("${{{key}}}"), val);
+    }
+    script
+}
+
+/// Inputs shared by the caller's per-tick budgets; `available` and
+/// `accel_dispatched` are mutated in place so the caller's books stay
+/// consistent with cloud reality (Python passes dicts by reference).
+pub struct AgentDispatchInputs<'a> {
+    pub queued: Vec<Job>,
+    pub yield_targets: HashMap<String, String>,
+    pub available: &'a mut BTreeMap<String, i64>,
+    pub accel_dispatched: &'a mut BTreeMap<String, i64>,
+    pub per_accel_share: i64,
+    pub per_tick_cap: i64,
+    pub scheduled_so_far: i64,
+}
+
+/// The bucketing half of Python `dispatch_agent_vms`, split out for
+/// tests. Bucket key is (accel, mt); bucket order is first-seen
+/// (Python dict insertion order), which decides which buckets win the
+/// per-tick cap when the queue is deep.
+///
+/// Bucket key is (accel, mt). Default: derive from current GPU_SIZING
+/// via lookup_instance_type — protects against stale job-level machine
+/// specs (e.g. a2-highgpu-2g + nvidia-tesla-a100 for 60GB jobs that GCP
+/// rejects with 'Invalid accelerator specs for accelerator optimized
+/// instances'). Override: caller-pinned job.machine_type wins so users
+/// who need a specific host (g2-standard-8 for 32 GB RAM on an L4 job)
+/// don't get silently downgraded back to the default-tier g2-standard-4
+/// (16 GB RAM, repeated host-OOM source for diffusion training).
+pub(crate) async fn bucket_jobs(
+    queued: &[Job],
+    yield_targets: &HashMap<String, String>,
+    provider_name: &str,
+    sizing: &Sizing,
+    store: &JobStorage,
+    now_utc: DateTime<Utc>,
+) -> Result<Vec<((String, String), Vec<Job>)>, SchedulerError> {
+    let mut buckets: Vec<((String, String), Vec<Job>)> = Vec::new();
+    let mut index: HashMap<(String, String), usize> = HashMap::new();
+    for j in queued {
+        if j.pin_to_provider && j.provider != provider_name {
+            continue;
+        }
+        if yield_targets.contains_key(&j.job_id) {
+            continue;
+        }
+        if !backoff_due(j, now_utc) {
+            continue;
+        }
+        let mut gpu_mem = j.gpu_mem_gb;
+        if gpu_mem <= 0 {
+            // Unmeasured on the queue blob — normalize_queue_sizing forces
+            // gpu_mem_gb=0 whenever observed_vram_gb(model) is None at
+            // sizing time (sizing/__init__.py docstring). Previously this
+            // branch was a hard `continue`, which combined with the
+            // always-write-0 behaviour to lock the entire
+            // unmeasured-model queue out of the autoscaler (199
+            // gpt-oss-20b jobs stuck at gpu_mem_gb=0 observed live
+            // 2026-05-20). Recover by:
+            //   1. Re-checking observed_vram_gb (a sibling job of the
+            //      same model may have just completed and populated the
+            //      map),
+            //   2. Falling back to smallest_live_vram() — the documented
+            //      start size for unmeasured models (see
+            //      escalate_on_oom). If the job overflows that tier,
+            //      escalate_on_oom climbs to next_live_vram on requeue.
+            // If neither yields a number, the fleet has no live GPU
+            // broadcasting at all and the job is genuinely unschedulable
+            // this tick; defer to the next.
+            let model = crate::sizing::model_of(&j.command);
+            let peak = if model.is_empty() { None } else { sizing.observed_vram_gb(store, &model).await? };
+            if let Some(peak) = peak {
+                if peak > 0 {
+                    gpu_mem = peak;
+                }
+            }
+            if gpu_mem <= 0 {
+                let Some(live_small) = sizing.smallest_live_vram(store).await? else { continue };
+                gpu_mem = live_small;
+            }
+        }
+        let (default_mt, default_accel) = config::lookup_instance_type(provider_name, gpu_mem);
+        if default_accel.is_empty() || default_mt.is_empty() {
+            continue;
+        }
+        // Caller-pinned overrides — fall back to catalog if either is
+        // empty.
+        let mt = {
+            let pinned = j.machine_type.trim();
+            if pinned.is_empty() { default_mt } else { pinned }
+        };
+        let accel = {
+            let pinned = j.gpu_type.trim();
+            if pinned.is_empty() { default_accel } else { pinned }
+        };
+        let cap = j.max_cost_per_hour_usd;
+        if cap > 0.0 && !accel.is_empty() {
+            let rate = accel_hourly_rate(accel, j.preemptible);
+            if rate > 0.0 && rate > cap {
+                continue;
+            }
+        }
+        let key = (accel.to_string(), mt.to_string());
+        match index.get(&key) {
+            Some(&idx) => buckets[idx].1.push(j.clone()),
+            None => {
+                index.insert(key.clone(), buckets.len());
+                buckets.push((key, vec![j.clone()]));
+            }
+        }
+    }
+    Ok(buckets)
+}
+
+/// Group queued jobs by (accel, machine_type) and launch agent VMs.
+/// Returns the number of agent VMs created. Python `dispatch_agent_vms`.
+pub async fn dispatch_agent_vms(
+    inputs: AgentDispatchInputs<'_>,
+    store: &JobStorage,
+    sizing: &Sizing,
+    provider: &dyn Provider,
+    provider_name: &str,
+    secrets: &BTreeMap<String, String>,
+    now_utc: DateTime<Utc>,
+) -> Result<i64, SchedulerError> {
+    let template =
+        std::fs::read_to_string(crate::data_dir().join("templates").join(template_name_for(provider_name)))?;
+    dispatch_agent_vms_with_template(
+        inputs,
+        &template,
+        store,
+        sizing,
+        provider,
+        provider_name,
+        secrets,
+        now_utc,
+    )
+    .await
+}
+
+/// [`dispatch_agent_vms`] with the startup-script template injected
+/// (tests substitute a fixture instead of reading data/templates/).
+#[allow(clippy::too_many_arguments)]
+pub async fn dispatch_agent_vms_with_template(
+    inputs: AgentDispatchInputs<'_>,
+    template: &str,
+    store: &JobStorage,
+    sizing: &Sizing,
+    provider: &dyn Provider,
+    provider_name: &str,
+    secrets: &BTreeMap<String, String>,
+    now_utc: DateTime<Utc>,
+) -> Result<i64, SchedulerError> {
+    let AgentDispatchInputs {
+        queued,
+        yield_targets,
+        available,
+        accel_dispatched,
+        per_accel_share,
+        per_tick_cap,
+        scheduled_so_far,
+    } = inputs;
+    let buckets =
+        bucket_jobs(&queued, &yield_targets, provider_name, sizing, store, now_utc).await?;
+
+    let tick_tag = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let mut created: i64 = 0;
+    let mut scheduled = scheduled_so_far;
+    // Time budget: each create_instance can spend ~10s/zone × 7+ zones
+    // for first-encounter stockouts, plus a full retry on the larger tier
+    // in the escalation branch. With n_to_dispatch=2-3 per bucket, the
+    // autoscaler can easily eat 300+ seconds — confirmed live 03:39Z
+    // 2026-05-15 tick 504'd at 540s. Bail out after 120s in the
+    // dispatcher and let the next tick try again (caches will be warm).
+    const DISPATCH_BUDGET_S: u64 = 120;
+    let start = Instant::now();
+    'buckets: for ((accel, mt), jobs) in &buckets {
+        if scheduled >= per_tick_cap {
+            break;
+        }
+        if start.elapsed().as_secs() > DISPATCH_BUDGET_S {
+            log(&format!(
+                "dispatch budget exhausted after {scheduled} scheduled; deferring remaining buckets to next tick"
+            ));
+            break;
+        }
+        let quota_left = available.get(accel).copied().unwrap_or(0);
+        if quota_left <= 0 {
+            log(&format!("Skip bucket accel={accel} machine={mt}: 0 quota slots"));
+            continue;
+        }
+        let share_left = per_accel_share - accel_dispatched.get(accel).copied().unwrap_or(0);
+        if share_left <= 0 {
+            continue;
+        }
+        let n_to_dispatch = (jobs.len() as i64)
+            .min(quota_left)
+            .min(share_left)
+            .min(per_tick_cap - scheduled);
+        let biggest =
+            jobs.iter().max_by_key(|j| j.gpu_mem_gb).expect("bucket is non-empty");
+        // No-preemptible policy: per user instruction (2026-05-06), this
+        // codebase is NOT to dispatch Spot/preemptible VMs even when the
+        // job's `preemptible` field is True. Repeated Spot reclaims of
+        // A100-80 capacity in us-central1 caused 8 cloud-agent VMs to be
+        // deleted under instance_termination_action=DELETE in a single
+        // 3-second window (22:21:10-13Z), forcing requeues that burned
+        // restart-budget on misclassified jobs (since fixed in 0.4.55,
+        // but the underlying preemption noise persists). Override the
+        // job-level flag and force every dispatch to STANDARD.
+        let preemptible_for_call = false;
+        for i in 0..n_to_dispatch {
+            if start.elapsed().as_secs() > DISPATCH_BUDGET_S {
+                log(&format!("dispatch budget exhausted mid-bucket {accel}; deferring"));
+                break 'buckets;
+            }
+            let script = render_startup_script(template, accel, secrets);
+            let instance_name = format!(
+                "{}-agent-{}-{tick_tag}-{i}",
+                config::INSTANCE_PREFIX,
+                accel.rsplit('-').next().unwrap_or(accel)
+            );
+            let mut effective_accel = accel.clone();
+            let mut ref_opt = provider
+                .create_instance(
+                    &instance_name,
+                    mt,
+                    accel,
+                    biggest.boot_disk_gb,
+                    &biggest.image,
+                    &biggest.image_project,
+                    &script,
+                    preemptible_for_call,
+                )
+                .await?;
+            if ref_opt.is_none() {
+                log(&format!("Agent VM create failed accel={accel} machine={mt}"));
+                // Stockout-aware escalation: when create_instance returns
+                // None (zone STOCKOUTs across all configured zones for
+                // this accel), try the next-larger tier from GPU_SIZING.
+                // The job is larger than needed but routes around the
+                // capacity shortage. The same VM tier returns on next
+                // tick if the operator hasn't manually re-routed.
+                let pmem = biggest.gpu_mem_gb;
+                let mut escalated = false;
+                if let Some(sizing_map) = GPU_SIZING.get(provider_name) {
+                    for (next_mem, (next_mt, next_accel)) in sizing_map.range(pmem + 1..) {
+                        if next_accel == &accel.as_str() && next_mt == &mt.as_str() {
+                            continue;
+                        }
+                        if available.get(*next_accel).copied().unwrap_or(0) <= 0 {
+                            continue;
+                        }
+                        log(&format!(
+                            "escalating {accel}/{mt} -> {next_accel}/{next_mt} \
+                             (stockout on {accel}, next tier mem={next_mem})"
+                        ));
+                        ref_opt = provider
+                            .create_instance(
+                                &instance_name,
+                                next_mt,
+                                next_accel,
+                                biggest.boot_disk_gb,
+                                &biggest.image,
+                                &biggest.image_project,
+                                &script,
+                                preemptible_for_call,
+                            )
+                            .await?;
+                        if ref_opt.is_some() {
+                            effective_accel = next_accel.to_string();
+                            escalated = true;
+                            break;
+                        }
+                    }
+                }
+                if !escalated {
+                    continue;
+                }
+            }
+            let instance_ref = ref_opt.expect("escalated or initial create returned a ref");
+            *available.entry(effective_accel.clone()).or_insert(0) -= 1;
+            *accel_dispatched.entry(effective_accel.clone()).or_insert(0) += 1;
+            scheduled += 1;
+            created += 1;
+            log(&format!(
+                "Dispatched agent VM {instance_ref} accel={effective_accel} machine={mt} \
+                 preemptible={preemptible_for_call}"
+            ));
+            if scheduled >= per_tick_cap {
+                break;
+            }
+        }
+    }
+    Ok(created)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::queue::local_file::LocalBackend;
+    use std::sync::{Arc, Mutex};
+
+    fn store() -> (tempfile::TempDir, JobStorage) {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = LocalBackend::new(dir.path().to_str().unwrap()).unwrap();
+        (dir, JobStorage::with_backend(Arc::new(backend), "local"))
+    }
+
+    fn job(job_id: &str, gpu_mem_gb: i64, gpu_type: &str, machine_type: &str) -> Job {
+        let mut job = Job::new(job_id, "run --model org/m");
+        job.gpu_mem_gb = gpu_mem_gb;
+        job.gpu_type = gpu_type.into();
+        job.machine_type = machine_type.into();
+        job
+    }
+
+    /// Records create_instance calls; the per-call results drive
+    /// stockout/escalation tests.
+    #[derive(Default)]
+    struct FakeProvider {
+        calls: Mutex<Vec<(String, String, String, bool)>>,
+        results: Mutex<Vec<Option<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Provider for FakeProvider {
+        async fn create_instance(
+            &self,
+            name: &str,
+            machine_type: &str,
+            accel_type: &str,
+            _d: i64,
+            _i: &str,
+            _p: &str,
+            _s: &str,
+            preemptible: bool,
+        ) -> Result<Option<String>, crate::providers::ProviderError> {
+            self.calls.lock().unwrap().push((
+                name.to_string(),
+                machine_type.to_string(),
+                accel_type.to_string(),
+                preemptible,
+            ));
+            let mut results = self.results.lock().unwrap();
+            if results.is_empty() {
+                return Ok(Some(format!("{name}@zone")));
+            }
+            Ok(results.remove(0))
+        }
+        async fn delete_instance(&self, _r: &str) -> Result<(), crate::providers::ProviderError> {
+            Ok(())
+        }
+        async fn instance_exists(&self, _r: &str) -> Result<bool, crate::providers::ProviderError> {
+            Ok(false)
+        }
+        async fn list_running_instances(
+            &self,
+        ) -> Result<BTreeMap<String, i64>, crate::providers::ProviderError> {
+            Ok(BTreeMap::new())
+        }
+    }
+
+    #[test]
+    fn render_startup_script_substitutes_secrets_without_placeholder_leakage() {
+        let template = "#!/bin/bash\nexport HF_TOKEN=${HF_TOKEN}\nexport WANDB=${WANDB_API_KEY}\n\
+                        echo ${ACCEL_TYPE} $HOME ${NOT_A_SECRET}\n";
+        let secrets = BTreeMap::from([
+            ("HF_TOKEN".to_string(), "hf_zzz".to_string()),
+            ("WANDB_API_KEY".to_string(), "wb-secret".to_string()),
+        ]);
+        let script = render_startup_script(template, "nvidia-l4", &secrets);
+        assert!(script.contains("export HF_TOKEN=hf_zzz"), "{script}");
+        assert!(script.contains("export WANDB=wb-secret"), "{script}");
+        assert!(script.contains("echo nvidia-l4"), "{script}");
+        // No placeholder leakage for substituted keys; untouched shell
+        // expansions survive for the VM's shell.
+        assert!(!script.contains("${HF_TOKEN}"), "{script}");
+        assert!(!script.contains("${ACCEL_TYPE}"), "{script}");
+        assert!(script.contains("${NOT_A_SECRET}"), "{script}");
+        assert!(script.contains("$HOME"), "{script}");
+    }
+
+    #[tokio::test]
+    async fn bucketing_groups_by_accel_and_machine_type_first_seen_order() {
+        let (_dir, store) = store();
+        let now = Utc::now();
+        let yields = HashMap::from([("yielded".to_string(), "local-1".to_string())]);
+        let queued = vec![
+            job("t4-1", 16, "", ""),
+            job("l4-1", 24, "", ""),
+            job("t4-2", 16, "", ""),
+            job("yielded", 16, "", ""),
+            job("l4-pinned", 24, "nvidia-l4", "g2-standard-8"),
+        ];
+        let buckets =
+            bucket_jobs(&queued, &yields, "gcp", crate::sizing::global(), &store, now).await.unwrap();
+        let keys: Vec<&(String, String)> = buckets.iter().map(|(k, _)| k).collect();
+        assert_eq!(
+            keys,
+            vec![
+                &("nvidia-tesla-t4".to_string(), "n1-standard-4".to_string()),
+                &("nvidia-l4".to_string(), "g2-standard-4".to_string()),
+                &("nvidia-l4".to_string(), "g2-standard-8".to_string()),
+            ]
+        );
+        assert_eq!(buckets[0].1.len(), 2);
+        assert_eq!(buckets[1].1.len(), 1);
+        // The caller-pinned machine_type override is not downgraded.
+        assert_eq!(buckets[2].1[0].job_id, "l4-pinned");
+    }
+
+    #[tokio::test]
+    async fn bucketing_skips_backoff_pinned_foreign_and_over_cap_jobs() {
+        let (_dir, store) = store();
+        let now = Utc::now();
+        let mut wedged = job("wedged", 16, "", "");
+        wedged.dispatch_attempts = 3;
+        wedged.last_dispatch_attempt = Some(now.to_rfc3339()); // 15m window, just attempted
+        let mut foreign = job("foreign", 16, "", "");
+        foreign.pin_to_provider = true;
+        foreign.provider = "azure".into();
+        let mut capped = job("capped", 16, "", "");
+        capped.max_cost_per_hour_usd = 0.10; // t4 on-demand rate 0.35 > cap
+        let ok = job("ok", 16, "", "");
+        let buckets = bucket_jobs(
+            &[wedged, foreign, capped, ok],
+            &HashMap::new(),
+            "gcp",
+            crate::sizing::global(),
+            &store,
+            now,
+        )
+        .await
+        .unwrap();
+        assert_eq!(buckets.len(), 1);
+        assert_eq!(buckets[0].1.len(), 1);
+        assert_eq!(buckets[0].1[0].job_id, "ok");
+    }
+
+    fn dispatch_inputs<'a>(
+        queued: Vec<Job>,
+        available: &'a mut BTreeMap<String, i64>,
+        dispatched: &'a mut BTreeMap<String, i64>,
+    ) -> AgentDispatchInputs<'a> {
+        AgentDispatchInputs {
+            queued,
+            yield_targets: HashMap::new(),
+            available,
+            accel_dispatched: dispatched,
+            per_accel_share: 25,
+            per_tick_cap: 25,
+            scheduled_so_far: 0,
+        }
+    }
+
+    const TEMPLATE: &str = "#!/bin/bash\n# ${ACCEL_TYPE} ${HF_TOKEN}\n";
+
+    #[tokio::test]
+    async fn dispatch_creates_min_of_jobs_quota_and_cap_per_bucket() {
+        let (_dir, store) = store();
+        let provider = FakeProvider::default();
+        let secrets = BTreeMap::from([("HF_TOKEN".to_string(), "hf_zzz".to_string())]);
+        let mut available = BTreeMap::from([("nvidia-tesla-t4".to_string(), 2)]);
+        let mut dispatched = BTreeMap::new();
+        let queued = vec![job("a", 16, "", ""), job("b", 16, "", ""), job("c", 16, "", "")];
+        let created = dispatch_agent_vms_with_template(
+            dispatch_inputs(queued, &mut available, &mut dispatched),
+            TEMPLATE,
+            &store,
+            crate::sizing::global(),
+            &provider,
+            "gcp",
+            &secrets,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        // 3 jobs but only 2 quota slots.
+        assert_eq!(created, 2);
+        assert_eq!(available["nvidia-tesla-t4"], 0);
+        assert_eq!(dispatched["nvidia-tesla-t4"], 2);
+        let calls = provider.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        // No-preemptible policy: every dispatch forces STANDARD even when
+        // jobs ask for Spot.
+        assert!(calls.iter().all(|(_, _, _, preemptible)| !preemptible));
+        assert_eq!(calls[0].1, "n1-standard-4");
+        assert_eq!(calls[0].2, "nvidia-tesla-t4");
+    }
+
+    #[tokio::test]
+    async fn stockout_escalates_to_next_larger_gpu_sizing_tier() {
+        let (_dir, store) = store();
+        let provider = FakeProvider::default();
+        // First create (t4) stockouts -> None; the escalated l4 create
+        // succeeds.
+        *provider.results.lock().unwrap() = vec![None, Some("wisent-agent-l4-t@z".to_string())];
+        let mut available = BTreeMap::from([
+            ("nvidia-tesla-t4".to_string(), 1),
+            ("nvidia-l4".to_string(), 1),
+        ]);
+        let mut dispatched = BTreeMap::new();
+        let queued = vec![job("a", 16, "", "")];
+        let created = dispatch_agent_vms_with_template(
+            dispatch_inputs(queued, &mut available, &mut dispatched),
+            TEMPLATE,
+            &store,
+            crate::sizing::global(),
+            &provider,
+            "gcp",
+            &BTreeMap::new(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(created, 1);
+        let calls = provider.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2, "{calls:?}");
+        assert_eq!(calls[0].1, "n1-standard-4"); // original tier
+        assert_eq!(calls[1].1, "g2-standard-4"); // escalated tier (24GB l4)
+        assert_eq!(calls[1].2, "nvidia-l4");
+        // The t4 quota is untouched; the escalation consumed l4 quota.
+        assert_eq!(available["nvidia-tesla-t4"], 1);
+        assert_eq!(available["nvidia-l4"], 0);
+        assert_eq!(dispatched["nvidia-l4"], 1);
+    }
+
+    #[tokio::test]
+    async fn stockout_without_larger_tier_quota_does_not_escalate() {
+        let (_dir, store) = store();
+        let provider = FakeProvider::default();
+        *provider.results.lock().unwrap() = vec![None];
+        // No l4 quota -> escalation is skipped entirely.
+        let mut available = BTreeMap::from([("nvidia-tesla-t4".to_string(), 1)]);
+        let mut dispatched = BTreeMap::new();
+        let created = dispatch_agent_vms_with_template(
+            dispatch_inputs(vec![job("a", 16, "", "")], &mut available, &mut dispatched),
+            TEMPLATE,
+            &store,
+            crate::sizing::global(),
+            &provider,
+            "gcp",
+            &BTreeMap::new(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(created, 0);
+        assert_eq!(provider.calls.lock().unwrap().len(), 1);
+        assert_eq!(available["nvidia-tesla-t4"], 1);
+    }
+
+    #[tokio::test]
+    async fn unmeasured_job_recovers_via_smallest_live_vram() {
+        let (_dir, store) = store();
+        // No live capacity broadcasts at all -> unmeasured job is
+        // unschedulable this tick.
+        let unsized_job = job("unsized", 0, "", "");
+        let buckets = bucket_jobs(
+            std::slice::from_ref(&unsized_job),
+            &HashMap::new(),
+            "gcp",
+            crate::sizing::global(),
+            &store,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        assert!(buckets.is_empty());
+
+        // A live local agent broadcasting total_vram_gb=16 makes the job
+        // recover to the smallest real fleet GPU.
+        crate::queue::capacity::publish_capacity(
+            &store,
+            "local-1",
+            "local",
+            &BTreeMap::new(),
+            None,
+            Some(16),
+            None,
+        )
+        .await
+        .unwrap();
+        let buckets = bucket_jobs(
+            &[unsized_job],
+            &HashMap::new(),
+            "gcp",
+            &Sizing::new(),
+            &store,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(buckets.len(), 1);
+        assert_eq!(buckets[0].0, ("nvidia-tesla-t4".to_string(), "n1-standard-4".to_string()));
+    }
+}

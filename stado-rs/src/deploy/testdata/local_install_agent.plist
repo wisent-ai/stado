@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.wisent.compute.agent.mini-one</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/u/.stado/bin/stado</string>
+        <string>agent</string>
+        <string>--auto</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/com.wisent.compute.agent.mini-one.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/com.wisent.compute.agent.mini-one.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+        <key>WC_PYTHON</key>
+        <string>/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12</string>
+        <key>HF_TOKEN</key>
+        <string>hf_secret</string>
+        <key>HUGGING_FACE_HUB_TOKEN</key>
+        <string>hf_secret</string>
+    </dict>
+</dict>
+</plist>

@@ -1,1 +1,0 @@
-"""Independent workstation diagnostics watchdog."""

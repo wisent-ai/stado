@@ -1,0 +1,511 @@
+//! Job scheduler: pick queued jobs and create instances.
+//!
+//! Port of `stado/scheduler/scheduler.py`. Routing rules:
+//! - job.pin_to_provider=True + job.provider="local" -> only local agent claims
+//! - job.pin_to_provider=True + job.provider=<X>     -> only provider X claims
+//! - job.pin_to_provider=False (default)             -> any consumer with
+//!   capacity can claim. The Cloud Function (this file) skips a job ONLY if
+//!   its capacity cannot satisfy the job (no quota, or cost cap exceeds
+//!   available SKU rate); the local agent then has a chance.
+//!
+//! Dispatch backoff:
+//! A job whose create_instance call failed gets dispatch_attempts++ and a
+//! last_dispatch_attempt timestamp. It is then skipped for a backoff window
+//! that grows with attempt count. This prevents a wedged job (e.g. quota
+//! exhausted in every zone) from slamming the API on every 3-min tick AND
+//! gives the local agent a clean shot at the same job in the meantime.
+//!
+//! Deviation: Python defines a `_attempt` closure (the legacy 1-VM-per-job
+//! dispatch path) that is never called — agent-mode dispatch
+//! ([`dispatch::agent::dispatch_agent_vms`]) fully replaced it. The dead
+//! closure is not ported; its per-job behaviors (empty-machine_type
+//! failure guard, backoff accounting, no-preemptible policy) live on in
+//! the bucketed agent dispatch.
+
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+use chrono::{DateTime, Duration, Utc};
+
+use crate::config;
+use crate::models::Job;
+use crate::providers::{Provider, ProviderError};
+use crate::queue::capacity;
+use crate::queue::{JobStorage, StorageError};
+use crate::scheduler::cost;
+use crate::scheduler::dispatch::agent::{dispatch_agent_vms, AgentDispatchInputs};
+use crate::scheduler::quota::{get_available_slots, QuotaError};
+
+/// Backoff schedule by attempt count; index = attempt count.
+/// Each entry is the minimum minutes since last_dispatch_attempt before we
+/// retry.
+pub const DISPATCH_BACKOFF_MINUTES: [i64; 7] = [0, 1, 5, 15, 30, 60, 120];
+pub const MAX_DISPATCH_BACKOFF_MINUTES: i64 = 240;
+
+/// Reserve the local agent's admission safety buffer
+/// (VRAM_SAFETY_BUFFER_GB = 8 in providers/local_agent.py) so we don't
+/// yield a job the agent then REFUSES at admission (it rejects when
+/// projected_used > total - buffer). Over-committing on raw broadcast
+/// free_vram stranded jobs: yielded to the local agent but rejected by it,
+/// AND skipped by cloud dispatch because they were yielded. Confirmed live
+/// 2026-06-01: a 16GB job yielded to local-ubuntu-server (75/98 GB used,
+/// ~22 free) sat unclaimed forever (22 - 8 = 14 < 16). Reserving the
+/// buffer routes such jobs to cloud.
+pub const LOCAL_ADMISSION_BUFFER_GB: i64 = 8;
+
+/// Scheduler-layer error.
+#[derive(Debug, thiserror::Error)]
+pub enum SchedulerError {
+    /// Quota read failures (live cloud quotas + overlay).
+    #[error(transparent)]
+    Quota(#[from] QuotaError),
+    /// Queue storage failures.
+    #[error(transparent)]
+    Storage(#[from] StorageError),
+    /// Provider create/list failures.
+    #[error(transparent)]
+    Provider(#[from] ProviderError),
+    /// Startup-script template read failures.
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
+/// Python `_log`.
+pub(crate) fn log(msg: &str) {
+    eprintln!("[scheduler] {msg}");
+}
+
+/// Python dict repr for `BTreeMap<String, i64>` (`{'a': 1, 'b': 2}`), so
+/// stderr logs read exactly like the Python Cloud Function's.
+pub(crate) fn py_dict_i64(map: &BTreeMap<String, i64>) -> String {
+    let inner: Vec<String> = map.iter().map(|(k, v)| format!("'{k}': {v}")).collect();
+    format!("{{{}}}", inner.join(", "))
+}
+
+/// Python dict repr for insertion-ordered `(String, i64)` pairs
+/// (consumers_by_free_vram order).
+pub(crate) fn py_pairs_i64(pairs: &[(String, i64)]) -> String {
+    let inner: Vec<String> = pairs.iter().map(|(k, v)| format!("'{k}': {v}")).collect();
+    format!("{{{}}}", inner.join(", "))
+}
+
+/// Return $/hour for one accelerator of this type at given pricing model.
+/// Python `_accel_hourly_rate`.
+pub fn accel_hourly_rate(accel_type: &str, preemptible: bool) -> f64 {
+    let base = crate::catalog::GPU_HOURLY_RATE_USD.get(accel_type).copied().unwrap_or(0.0);
+    if !preemptible {
+        return base;
+    }
+    base * crate::catalog::SPOT_DISCOUNT.get(accel_type).copied().unwrap_or(0.5)
+}
+
+/// True if this job is past its dispatch-backoff window.
+/// Python `_backoff_due`.
+pub fn backoff_due(job: &Job, now_utc: DateTime<Utc>) -> bool {
+    let attempts = job.dispatch_attempts;
+    if attempts <= 0 {
+        return true;
+    }
+    let idx = (attempts as usize).min(DISPATCH_BACKOFF_MINUTES.len() - 1);
+    let wait_minutes = DISPATCH_BACKOFF_MINUTES[idx].min(MAX_DISPATCH_BACKOFF_MINUTES);
+    let Some(last) = &job.last_dispatch_attempt else { return true };
+    if last.is_empty() {
+        return true;
+    }
+    // Python `datetime.fromisoformat(last.replace("Z", "+00:00"))`.
+    let Ok(last_dt) = DateTime::parse_from_rfc3339(&last.replace('Z', "+00:00")) else {
+        return true;
+    };
+    now_utc - last_dt.with_timezone(&Utc) >= Duration::minutes(wait_minutes)
+}
+
+/// Autoscale dispatch cap with queue depth. Python `_dynamic_per_tick_cap`.
+///
+/// Defaults to MAX_SCHEDULE_PER_TICK (4) for shallow queues, scales up for
+/// larger bursts so a 723-job batch doesn't drip-feed at 4-per-tick. Upper
+/// bound aligned with the multi-region preemptible quota envelope (5
+/// regions x ~36 spot GPUs = ~180 ceiling).
+pub fn dynamic_per_tick_cap(queue_depth: i64) -> i64 {
+    let base = config::MAX_SCHEDULE_PER_TICK;
+    if queue_depth <= base * 2 {
+        return base;
+    }
+    // cap=25 fits 60s tick budget
+    (base + (queue_depth - base * 2) / 4 + 4).min(25)
+}
+
+/// The metadata-only prefilter + priority-desc/FIFO ordering half of
+/// Python `schedule_queued_jobs`, split out for tests. Returns the ordered
+/// candidate job ids (already capped to `window_budget`) and the count of
+/// jobs skipped for sitting on a 0-quota accelerator.
+///
+/// Metadata-only prefilter (NO body downloads): keep only jobs whose
+/// accelerator has available quota this tick, so a backlog of
+/// UNDISPATCHABLE jobs cannot saturate the per-tick window and starve
+/// dispatchable work. Confirmed live 2026-06-01: 435 jobs sized to
+/// nvidia-tesla-k80 (0 fleet k80 quota) filled the 200-job FIFO window
+/// every tick -> the only bucket formed was k80 -> "Skip: 0 quota" ->
+/// scheduled 0 for the WHOLE fleet, including brand-new t4/l4 jobs queued
+/// behind the stuck backlog. write_job stamps gpu_mem_gb, gpu_type, and
+/// priority into blob metadata, so this filters + orders the whole queue
+/// cheaply and we read only the surviving window's bodies.
+/// The stuck backlog stays queued and untouched — it just stops blocking.
+pub(crate) fn prefilter_candidates(
+    blobs: &[crate::queue::BlobInfo],
+    available: &BTreeMap<String, i64>,
+    provider_name: &str,
+    window_budget: usize,
+) -> (Vec<String>, usize) {
+    let in_quota: BTreeSet<&str> =
+        available.iter().filter(|(_, v)| **v > 0).map(|(a, _)| a.as_str()).collect();
+    let mut cand: Vec<(i64, i64, String)> = Vec::new(); // (-priority, updated_ts, job_id)
+    let mut skipped_no_quota = 0usize;
+    for info in blobs {
+        if !info.name.ends_with(".json") {
+            continue;
+        }
+        let meta = &info.metadata;
+        let gm: i64 = meta.get("gpu_mem_gb").and_then(|s| s.parse().ok()).unwrap_or(0);
+        let explicit_accel = meta.get("gpu_type").map(|s| s.trim()).unwrap_or("");
+        // gm<=0 jobs are kept: dispatch_agent_vms re-sizes them via its own
+        // observed/smallest_live_vram recovery. Only skip jobs with a
+        // concrete size that maps to an accelerator with zero available
+        // quota.
+        let derived = if gm > 0 { config::lookup_instance_type(provider_name, gm).1 } else { "" };
+        let accel_for_filter = if explicit_accel.is_empty() { derived } else { explicit_accel };
+        if !accel_for_filter.is_empty() && !in_quota.contains(accel_for_filter) {
+            skipped_no_quota += 1;
+            continue;
+        }
+        let prio: i64 = meta.get("priority").and_then(|s| s.parse().ok()).unwrap_or(0);
+        let ts = info.updated.map(|u| u.timestamp()).unwrap_or(0);
+        let jid = info.name.rsplit('/').next().unwrap_or("").trim_end_matches(".json").to_string();
+        cand.push((-prio, ts, jid));
+    }
+    // priority desc, then oldest-first (FIFO)
+    cand.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+    cand.truncate(window_budget);
+    (cand.into_iter().map(|(_, _, jid)| jid).collect(), skipped_no_quota)
+}
+
+/// The cost-optimal local-pack knapsack half of Python
+/// `schedule_queued_jobs`, split out for tests. Returns job_id ->
+/// consumer_id yields.
+///
+/// COST-OPTIMAL LOCAL PACK: knapsack over queued jobs by
+/// $-saved-per-GB-of-local-VRAM, weighted by per-job wall-time so the
+/// score reflects total dollars-saved-per-GB on this specific job (not
+/// per-hour-of-running). Wall-time comes from the median of past
+/// completed jobs of the same (model, gpu_type); when that bucket is
+/// empty, a model-size heuristic is used. Best-fit-decreasing packing.
+pub(crate) fn local_pack(
+    queued: &[Job],
+    local_vram_pool: &[(String, i64)],
+    wt_table: &BTreeMap<(String, String), f64>,
+    now_utc: DateTime<Utc>,
+) -> HashMap<String, String> {
+    let mut yield_targets: HashMap<String, String> = HashMap::new();
+    if local_vram_pool.is_empty() {
+        return yield_targets;
+    }
+    let mut scored: Vec<(f64, i64, &Job)> = Vec::new();
+    for j in queued {
+        let need = j.gpu_mem_gb;
+        if need <= 0 || j.pin_to_provider {
+            continue;
+        }
+        if !backoff_due(j, now_utc) {
+            continue;
+        }
+        let rate = accel_hourly_rate(&j.gpu_type, j.preemptible);
+        if rate <= 0.0 {
+            continue;
+        }
+        let wall_s = cost::estimate_wall_time(&j.command, &j.gpu_type, need, wt_table);
+        let score = (wall_s / 3600.0) * rate / need as f64; // $-saved per GB on this job
+        scored.push((score, need, j));
+    }
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    // (consumer_id, free-after-admission-buffer) in the pool's original
+    // order (consumers_by_free_vram sorts desc); best-fit picks the
+    // strictly-largest free entry so iteration order breaks ties exactly
+    // like the Python dict scan.
+    let mut local_remaining: Vec<(String, i64)> = local_vram_pool
+        .iter()
+        .map(|(cid, v)| (cid.clone(), (v - LOCAL_ADMISSION_BUFFER_GB).max(0)))
+        .collect();
+    for (_, need, j) in &scored {
+        let mut best: Option<usize> = None;
+        for (idx, (_, free_gb)) in local_remaining.iter().enumerate() {
+            if *free_gb >= *need && best.is_none_or(|b| *free_gb > local_remaining[b].1) {
+                best = Some(idx);
+            }
+        }
+        let Some(best_idx) = best else { continue };
+        yield_targets.insert(j.job_id.clone(), local_remaining[best_idx].0.clone());
+        local_remaining[best_idx].1 -= need;
+    }
+    if !yield_targets.is_empty() {
+        log(&format!(
+            "Cost-optimal local pack: {} jobs yielded; remaining_vram={}",
+            yield_targets.len(),
+            py_pairs_i64(&local_remaining)
+        ));
+    }
+    yield_targets
+}
+
+/// Pick queued jobs that fit available GPU slots and cost caps; create
+/// instances. Python `schedule_queued_jobs`.
+pub async fn schedule_queued_jobs(
+    store: &JobStorage,
+    provider: &dyn Provider,
+    provider_name: &str,
+    secrets: &BTreeMap<String, String>,
+) -> Result<i64, SchedulerError> {
+    let available = get_available_slots(store, provider, provider_name).await?;
+    log(&format!("Available slots: {}", py_dict_i64(&available)));
+
+    if available.values().all(|v| *v == 0) {
+        log("No GPU slots available");
+        return Ok(0);
+    }
+
+    // Cap the listing in JobStorage so we never download more than we'd
+    // dispatch this tick. queue/ holds 14k+ blobs after a big batch submit
+    // and downloading every JSON blew the 60s function timeout. Pick by
+    // GCS time_created ascending (FIFO) — anything past
+    // _dynamic_per_tick_cap's ceiling × 8 wouldn't fit in this tick's
+    // budget anyway.
+    let window_budget = dynamic_per_tick_cap(1_000_000_000) as usize * 8;
+
+    let blobs = store.list_blobs_with_meta("queue/").await?;
+    let (candidates, skipped_no_quota) =
+        prefilter_candidates(&blobs, &available, provider_name, window_budget);
+    if skipped_no_quota > 0 {
+        log(&format!(
+            "window: skipped {skipped_no_quota} undispatchable (0-quota-accel) queued jobs"
+        ));
+    }
+    let mut queued: Vec<Job> = Vec::new();
+    for jid in &candidates {
+        if let Some(j) = store.read_job("queue", jid).await? {
+            queued.push(j);
+        }
+    }
+    let now_utc = Utc::now();
+    let full_queue_depth = queued.len() as i64;
+    let per_tick_cap = dynamic_per_tick_cap(full_queue_depth);
+    queued.truncate(per_tick_cap as usize * 8);
+    // filter_already_done was disabled: HfApi.list_repo_files on the
+    // 184k-file wisent-ai/activations repo takes 50+s, eating the 60s
+    // function timeout before any dispatch fires. Wrapper still
+    // short-circuits per-strategy on the box so the cost is only VM boot
+    // for results-already-uploaded jobs.
+
+    // Per-accelerator fairness: when a heterogeneous batch is queued
+    // (e.g. T4 + A100-40 + A100-80 jobs all waiting), pure FIFO means the
+    // first-submitted accel hogs every tick until its quota saturates
+    // while other accels sit idle. Compute a soft per-accel per-tick share
+    // so each accel makes progress concurrently. Round up so
+    // distinct_accels=3 with cap=50 gives 17 each (the leftover 1 falls to
+    // whichever accel comes first in the sorted queue). The pass after
+    // this loop fills any remaining budget without per-accel limits, so we
+    // don't underuse.
+    let distinct_accels: BTreeSet<&str> =
+        queued.iter().map(|j| if j.gpu_type.is_empty() { "_cpu" } else { j.gpu_type.as_str() }).collect();
+    let per_accel_share = if distinct_accels.is_empty() {
+        per_tick_cap
+    } else {
+        let n = distinct_accels.len() as i64;
+        (per_tick_cap + n - 1).div_euclid(n).max(1)
+    };
+
+    // Read live consumer capacity. Any local agent reporting a free slot
+    // for an accelerator is a free-hardware peer we should yield to before
+    // paying for a fresh GCE VM. We track yields by accel so a job we
+    // yielded in this tick doesn't burn the local agent's capacity in our
+    // internal book before it actually claims.
+    let consumer_caps = capacity::read_consumer_capacity(store).await?;
+    let local_free = capacity::total_free_by_accel(&consumer_caps, Some(&["local"]));
+    let local_vram_pool = capacity::consumers_by_free_vram(&consumer_caps, Some(&["local"]));
+    if !local_free.is_empty() {
+        log(&format!("Live local-agent slots: {}", py_dict_i64(&local_free)));
+    }
+    if !local_vram_pool.is_empty() {
+        log(&format!("Live local-agent free_vram_gb: {}", py_pairs_i64(&local_vram_pool)));
+    }
+
+    let mut yield_targets = HashMap::new();
+    if !local_vram_pool.is_empty() {
+        let wt_table = cost::wall_time_table(&cost::collect_completed(store).await?);
+        yield_targets = local_pack(&queued, &local_vram_pool, &wt_table, now_utc);
+    }
+    if per_tick_cap != config::MAX_SCHEDULE_PER_TICK {
+        log(&format!(
+            "Autoscale per-tick cap: {} -> {} (queue={})",
+            config::MAX_SCHEDULE_PER_TICK,
+            per_tick_cap,
+            queued.len()
+        ));
+    }
+
+    // Agent-mode dispatch: launch agent VMs that poll the queue and pack
+    // jobs by VRAM. Replaces the per-job VM dispatch — per-VM concurrency
+    // is now bounded by nvidia-smi readout, not a constant.
+    let mut available = available;
+    let mut accel_dispatched: BTreeMap<String, i64> = BTreeMap::new();
+    let created = dispatch_agent_vms(
+        AgentDispatchInputs {
+            queued,
+            yield_targets,
+            available: &mut available,
+            accel_dispatched: &mut accel_dispatched,
+            per_accel_share,
+            per_tick_cap,
+            scheduled_so_far: 0,
+        },
+        store,
+        crate::sizing::global(),
+        provider,
+        provider_name,
+        secrets,
+        now_utc,
+    )
+    .await?;
+    Ok(created)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::queue::local_file::LocalBackend;
+    use std::sync::Arc;
+
+    fn store() -> (tempfile::TempDir, JobStorage) {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = LocalBackend::new(dir.path().to_str().unwrap()).unwrap();
+        (dir, JobStorage::with_backend(Arc::new(backend), "local"))
+    }
+
+    fn job(job_id: &str, gpu_mem_gb: i64, gpu_type: &str) -> Job {
+        let mut job = Job::new(job_id, "run --model org/m");
+        job.gpu_mem_gb = gpu_mem_gb;
+        job.gpu_type = gpu_type.into();
+        job
+    }
+
+    #[test]
+    fn backoff_schedule_matches_python() {
+        let now = Utc::now();
+        let mut j = job("j", 16, "nvidia-tesla-t4");
+        // attempts<=0 -> always due.
+        assert!(backoff_due(&j, now));
+        j.dispatch_attempts = 1;
+        assert!(backoff_due(&j, now));
+        // attempts=2 -> 5-minute window.
+        j.dispatch_attempts = 2;
+        j.last_dispatch_attempt = Some((now - Duration::minutes(4)).to_rfc3339());
+        assert!(!backoff_due(&j, now));
+        j.last_dispatch_attempt = Some((now - Duration::minutes(6)).to_rfc3339());
+        assert!(backoff_due(&j, now));
+        // attempts beyond the table clamp to the last entry (120m), itself
+        // below MAX_DISPATCH_BACKOFF_MINUTES.
+        j.dispatch_attempts = 99;
+        j.last_dispatch_attempt = Some((now - Duration::minutes(119)).to_rfc3339());
+        assert!(!backoff_due(&j, now));
+        j.last_dispatch_attempt = Some((now - Duration::minutes(121)).to_rfc3339());
+        assert!(backoff_due(&j, now));
+        // Z-suffix timestamps parse (Python fromisoformat path).
+        j.last_dispatch_attempt =
+            Some(format!("{}Z", (now - Duration::minutes(200)).format("%Y-%m-%dT%H:%M:%S")));
+        assert!(backoff_due(&j, now));
+        // Missing/garbage timestamps are due (Python returns True).
+        j.last_dispatch_attempt = None;
+        assert!(backoff_due(&j, now));
+    }
+
+    #[test]
+    fn dynamic_cap_scales_with_depth() {
+        assert_eq!(dynamic_per_tick_cap(0), 4);
+        assert_eq!(dynamic_per_tick_cap(8), 4);
+        // depth 9: base + (9 - 8)//4 + 4 = 8.
+        assert_eq!(dynamic_per_tick_cap(9), 8);
+        assert_eq!(dynamic_per_tick_cap(723), 25); // saturates at the 25 ceiling
+        assert_eq!(dynamic_per_tick_cap(1_000_000_000), 25);
+    }
+
+    #[test]
+    fn accel_hourly_rate_spot_discount() {
+        assert_eq!(accel_hourly_rate("nvidia-l4", false), 0.71);
+        assert!((accel_hourly_rate("nvidia-l4", true) - 0.71 * 0.40).abs() < 1e-12);
+        assert_eq!(accel_hourly_rate("mystery", false), 0.0);
+    }
+
+    #[tokio::test]
+    async fn prefilter_skips_zero_quota_accels_and_orders_priority_desc_fifo() {
+        let (_dir, store) = store();
+        // Dispatchable t4 jobs: one priority-5, two FIFO (priority 0).
+        let mut p5 = job("t4-prio", 16, "nvidia-tesla-t4");
+        p5.priority = 5;
+        store.write_job("queue", &p5).await.unwrap();
+        store.write_job("queue", &job("t4-a", 16, "nvidia-tesla-t4")).await.unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        store.write_job("queue", &job("t4-b", 16, "nvidia-tesla-t4")).await.unwrap();
+        // Undispatchable: k80 (0 quota), plus a 24GB job whose derived
+        // accel (nvidia-l4) has 0 quota even though the metadata gpu_type
+        // was never stamped.
+        store.write_job("queue", &job("k80-stuck", 12, "nvidia-tesla-k80")).await.unwrap();
+        let mut derived = job("l4-stuck", 24, "");
+        derived.machine_type = String::new();
+        store.write_job("queue", &derived).await.unwrap();
+        // gm<=0 jobs are kept for the dispatch-side recovery path.
+        let unsized_job = job("unsized", 0, "");
+        store.upload_text("queue/unsized.json", &unsized_job.to_json()).await.unwrap();
+
+        let available = BTreeMap::from([
+            ("nvidia-tesla-t4".to_string(), 3),
+            ("nvidia-l4".to_string(), 0),
+        ]);
+        let blobs = store.list_blobs_with_meta("queue/").await.unwrap();
+        let (ids, skipped) = prefilter_candidates(&blobs, &available, "gcp", 200);
+        assert_eq!(skipped, 2, "{ids:?}");
+        assert_eq!(ids, vec!["t4-prio", "t4-a", "t4-b", "unsized"]);
+    }
+
+    #[test]
+    fn local_pack_yields_by_dollar_saved_per_gb_with_admission_buffer() {
+        let now = Utc::now();
+        // Two local consumers; the 8GB admission buffer is reserved from
+        // the broadcast free VRAM before packing (local-small: 12 usable,
+        // local-big: 32 usable).
+        let pool = vec![("local-small".to_string(), 20i64), ("local-big".to_string(), 40i64)];
+        let wt = BTreeMap::new(); // heuristic wall-times (identical rate/need curve)
+        // Scores (heuristic wall ~ 50 + 7*(80+5*need), l4 @ $0.71/hr):
+        // need-10 > need-12 > need-31. Best-fit picks the strictly-largest
+        // free consumer first, so both smaller jobs pack into local-big
+        // and the 31GB job finds no fit (big's 32 was consumed by the
+        // first two; small only ever had 12).
+        let queued = vec![job("need-12", 12, "nvidia-l4"), job("need-10", 10, "nvidia-l4"), job("need-31", 31, "nvidia-l4")];
+        let yields = local_pack(&queued, &pool, &wt, now);
+        assert_eq!(yields.len(), 2, "{yields:?}");
+        assert_eq!(yields["need-10"], "local-big");
+        assert_eq!(yields["need-12"], "local-big");
+        assert!(!yields.contains_key("need-31"));
+    }
+
+    #[test]
+    fn local_pack_admission_buffer_blocks_marginal_fit() {
+        let now = Utc::now();
+        // 22 free broadcast -> 14 usable after the 8GB buffer; a 16GB job
+        // must NOT be yielded (the 2026-06-01 stranding incident).
+        let pool = vec![("local-ubuntu-server".to_string(), 22i64)];
+        let queued = vec![job("need-16", 16, "nvidia-l4")];
+        assert!(local_pack(&queued, &pool, &BTreeMap::new(), now).is_empty());
+        // Pinned and 0-quota-rate jobs are never yielded.
+        let pool = vec![("local".to_string(), 100i64)];
+        let mut pinned = job("pinned", 16, "nvidia-l4");
+        pinned.pin_to_provider = true;
+        let unknown_rate = job("no-rate", 16, "mystery-gpu");
+        assert!(local_pack(&[pinned, unknown_rate], &pool, &BTreeMap::new(), now).is_empty());
+    }
+}

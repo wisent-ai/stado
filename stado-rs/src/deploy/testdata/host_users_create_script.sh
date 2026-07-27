@@ -1,0 +1,75 @@
+set -eu
+
+USERNAME=$1
+FULL_NAME=$2
+REQUESTED_SHELL=$3
+MAKE_ADMIN=$4
+REQUIRE_PASSWORD_CHANGE=$5
+OS_NAME=$(/usr/bin/uname -s)
+
+if /usr/bin/id "$USERNAME" >/dev/null 2>&1; then
+    printf 'STADO_USER\texists\t%s\t%s\n' "$OS_NAME" "$USERNAME"
+    exit 0
+fi
+
+IFS= read -r PASSWORD
+if [ -z "$PASSWORD" ]; then
+    echo "initial password is empty" >&2
+    exit 65
+fi
+
+case "$OS_NAME" in
+    Darwin)
+        SHELL_PATH=${REQUESTED_SHELL:-/bin/zsh}
+        if [ ! -x "$SHELL_PATH" ]; then
+            echo "requested shell is not executable: $SHELL_PATH" >&2
+            exit 66
+        fi
+        if [ "$MAKE_ADMIN" = 1 ]; then
+            /usr/sbin/sysadminctl -addUser "$USERNAME" \
+                -fullName "$FULL_NAME" -home "/Users/$USERNAME" \
+                -shell "$SHELL_PATH" -password "$PASSWORD" -admin >/dev/null
+        else
+            /usr/sbin/sysadminctl -addUser "$USERNAME" \
+                -fullName "$FULL_NAME" -home "/Users/$USERNAME" \
+                -shell "$SHELL_PATH" -password "$PASSWORD" >/dev/null
+        fi
+        /usr/sbin/createhomedir -c -u "$USERNAME" >/dev/null
+        if [ "$REQUIRE_PASSWORD_CHANGE" = 1 ]; then
+            /usr/bin/pwpolicy -u "$USERNAME" -setpolicy "newPasswordRequired=1" >/dev/null
+        fi
+        ;;
+    Linux)
+        SHELL_PATH=${REQUESTED_SHELL:-/bin/bash}
+        if [ ! -x "$SHELL_PATH" ]; then
+            echo "requested shell is not executable: $SHELL_PATH" >&2
+            exit 66
+        fi
+        /usr/sbin/useradd --create-home --comment "$FULL_NAME" \
+            --shell "$SHELL_PATH" "$USERNAME"
+        printf '%s:%s\n' "$USERNAME" "$PASSWORD" | /usr/sbin/chpasswd
+        if [ "$MAKE_ADMIN" = 1 ]; then
+            if /usr/bin/getent group sudo >/dev/null 2>&1; then
+                /usr/sbin/usermod --append --groups sudo "$USERNAME"
+            elif /usr/bin/getent group wheel >/dev/null 2>&1; then
+                /usr/sbin/usermod --append --groups wheel "$USERNAME"
+            else
+                echo "neither sudo nor wheel administrator group exists" >&2
+                exit 67
+            fi
+        fi
+        if [ "$REQUIRE_PASSWORD_CHANGE" = 1 ]; then
+            /usr/bin/chage --lastday 0 "$USERNAME"
+        fi
+        ;;
+    *)
+        echo "unsupported host OS: $OS_NAME" >&2
+        exit 69
+        ;;
+esac
+
+if ! /usr/bin/id "$USERNAME" >/dev/null 2>&1; then
+    echo "account creation command returned without creating $USERNAME" >&2
+    exit 70
+fi
+printf 'STADO_USER\tcreated\t%s\t%s\n' "$OS_NAME" "$USERNAME"
