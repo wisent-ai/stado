@@ -402,7 +402,14 @@ async fn resolve_job_secret_environment(
             crate::config::agent_skarbiec_consumer(),
             agent_token_file,
         )
-    } else if crate::config::skarbiec_consumer().ends_with("-agent") {
+    } else if crate::config::skarbiec_consumer()
+        == crate::config::agent_skarbiec_consumer()
+        && crate::config::skarbiec_token_file() == agent_token_file
+        && crate::config::skarbiec_consumer().ends_with("-agent")
+    {
+        // Azure's protected-settings file is erased after first read. The
+        // configured client is safe only when it is byte-for-byte the same
+        // dedicated consumer/path, so it can reuse the in-process cache.
         crate::skarbiec::Client::configured()
     } else {
         return Err(StorageError::Other(
@@ -421,6 +428,12 @@ async fn resolve_job_secret_environment(
         {
             return Err(StorageError::Other(format!(
                 "job {} contains an invalid secret environment reference",
+                job.job_id
+            )));
+        }
+        if !crate::config::agent_secret_reference_allowed(&reference.item, &reference.field) {
+            return Err(StorageError::Other(format!(
+                "job {} secret {env_name} is outside agent.skarbiec.secret_fields",
                 job.job_id
             )));
         }

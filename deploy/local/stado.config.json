@@ -1,6 +1,6 @@
 {
-  "_comment": "Concrete outage-safe Mac profile. Azure, AWS and GCP remain visible in preference order but are explicitly fenced; only the local provider and local storage are active.",
-  "providers": ["local", "azure", "aws", "gcp"],
+  "_comment": "Concrete outage-safe Mac profile. Only the local provider and local storage are active; Azure, AWS and GCP remain explicitly fenced.",
+  "providers": ["local"],
   "providers_disabled": ["azure", "aws", "gcp"],
   "storage": {
     "backend": "local",
@@ -16,20 +16,41 @@
     }
   },
   "dashboard": {
-    "_comment": "Loopback-only object/control API for immediate Mac operation. Object and machine routes still require their separate Skarbiec service tokens.",
+    "_comment": "Loopback-only API for immediate Mac operation. Dashboard view and mutations require deployment-bound authorization; object, machine and managed-service routes require their distinct credentials.",
     "bind": "localhost"
   },
+  "deployment": {
+    "_comment": "Stable local dashboard RLS binding. Never remove this id: unavailable deployment authorization must fail closed.",
+    "id": "local-control-plane"
+  },
   "secrets": {
-    "_comment": "Uses the built-in loopback Skarbiec URL; the consumer and owner-only grant are explicit and must allow the exact stado-object-api/token and stado-machine-api/token fields.",
+    "_comment": "Uses the built-in loopback Skarbiec URL; the consumer and owner-only grant are explicit and must allow exactly the required fields, including stado-object-api/token, stado-machine-api/token and stado-service-api/token.",
     "skarbiec": {
       "consumer": "stado-control-plane",
       "token_file": "~/.stado/control-plane-skarbiec-token"
     }
   },
   "agent": {
+    "_comment": "Dedicated local workload-agent grant. It is never the control-plane grant; jobs can project only the exact item#field allowlist.",
     "skarbiec": {
       "consumer": "stado-local-agent",
-      "token_file": "~/.stado/local-agent-skarbiec-token"
+      "token_file": "~/.stado/local-agent-skarbiec-token",
+      "items": [
+        "trading-autonomy-agent-auth",
+        "trading-autonomy-media-router",
+        "trading-autonomy-model-router",
+        "wisent-trade-agent-anthropic",
+        "wisent-trade-agent-email",
+        "wisent-trade-agent-openai"
+      ],
+      "secret_fields": [
+        "trading-autonomy-agent-auth#agent_auth_secret",
+        "trading-autonomy-media-router#token",
+        "trading-autonomy-model-router#token",
+        "wisent-trade-agent-anthropic#api-key",
+        "wisent-trade-agent-email#api-key",
+        "wisent-trade-agent-openai#api-key"
+      ]
     }
   },
   "alerts": {

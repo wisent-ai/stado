@@ -182,14 +182,9 @@ fn click(exc: DeployError) -> CmdError {
     CmdError::click(exc.to_string())
 }
 
-/// Beacons live in the registry bucket, not necessarily `WC_BUCKET` — the
-/// same store `cli/host.rs::health` reads them from.
+/// Reuse the host command's provider-neutral beacon store selection.
 async fn beacon_store() -> Result<JobStorage, CmdError> {
-    let bucket = targets::GCS_REGISTRY_URI
-        .split_once("//")
-        .map(|(_, rest)| rest.split('/').next().unwrap_or_default())
-        .unwrap_or_default();
-    Ok(JobStorage::with_bucket(bucket).await?)
+    super::host::beacon_store().await
 }
 
 /// The declared managed set matching NAME, without touching beacons.

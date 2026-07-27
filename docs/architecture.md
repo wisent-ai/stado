@@ -88,8 +88,8 @@ passes `_job_eligible` (gpu_type-compat or pinned-local). No slot count
 ## Cloud-agent VM lifecycle
 
 - **Spawn** — scheduler tick calls `provider.create_instance(...)` with
-  `stado/templates/startup_gpu_agent.sh` rendered into the VM's
-  startup script (`HF_TOKEN` substituted from Secret Manager).
+  `stado/templates/startup_gpu_agent.sh` rendered into VM startup metadata
+  without Hugging Face or other workload credentials.
 - **Boot** — VM runs `apt-get install python3-venv`, creates a venv,
   `pip install wisent wisent-compute wisent-extractors wisent-evaluators
   wisent-tools lm-eval` plus pinned `transformers<5.0`, `tokenizers`,

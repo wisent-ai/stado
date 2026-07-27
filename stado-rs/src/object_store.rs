@@ -26,6 +26,12 @@ impl ObjectRef {
     pub fn new(namespace: &str, key: &str) -> Result<Self, StorageError> {
         let namespace = namespace.trim();
         let key = key.trim_matches('/');
+        if namespace == "public" {
+            return Err(StorageError::Other(
+                "the stado://public namespace is retired; use authenticated product namespaces or the dedicated stado://releases software channel"
+                    .to_string(),
+            ));
+        }
         if namespace.is_empty()
             || !namespace
                 .bytes()

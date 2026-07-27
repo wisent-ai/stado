@@ -613,8 +613,9 @@ const BACKUP_ID: &str = "backup";
 const BACKUP_TITLE: &str = "Disaster-recovery replica";
 const BACKUP_REMEDY: &str =
     "set storage.backup backend/bucket/S3 region; put access_key_id and secret_access_key in \
-     Skarbiec item stado-aws; set agent.skarbiec.items to the exact S3 and workload-secret \
-     items, then mint stado-azure-agent with exactly those item:read scopes";
+     Skarbiec item stado-aws; set agent.skarbiec.items to exact dedicated read:<item> scopes \
+     and agent.skarbiec.secret_fields to the smaller workload item#field set, then mint \
+     stado-azure-agent with no additional items";
 
 async fn check_backup(store_error: &str) -> Check {
     let azure_cutover = config::wc_storage_backend() == "azure"

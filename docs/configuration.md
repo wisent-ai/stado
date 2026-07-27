@@ -8,7 +8,6 @@
 | `WC_BUCKET` | GCS bucket for queue + state. | `config.py` (default `wisent-compute`) |
 | `GCP_REGION` | Region for VM creation + quota fetch. | `config.py`, `quota.py:_fetch_gcp_quotas` |
 | `WC_ALERTS_TOPIC` | Pub/Sub topic for the alert publisher. | `config.py` |
-| `HF_TOKEN` | HuggingFace token, baked into VM startup scripts. | `queue/submit.py`, agent template |
 | `WC_LOCAL_SLOTS` | Optional hard cap on local-agent concurrency. `0` = uncapped (default). | `local_agent.py` |
 | `COMPUTE_API_KEY` | If set, `wc submit` / `wc status` route through the `compute.wisent.com` HTTPS API instead of GCS. | `cli.py:_api_key` |
 | `COMPUTE_API_URL` | Overrides the default `https://compute.wisent.com`. | `queue/submit.py` |
