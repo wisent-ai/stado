@@ -43,7 +43,7 @@ use crate::monitor::billing::{
 };
 use crate::queue::JobStorage;
 
-pub async fn dispatch(command: &BillingCommands) -> Result<(), CmdError> {
+pub(crate) async fn dispatch(command: &BillingCommands) -> Result<(), CmdError> {
     let store = JobStorage::with_bucket(crate::config::bucket()).await?;
     match command {
         BillingCommands::Show { json } => {

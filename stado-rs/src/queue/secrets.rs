@@ -41,7 +41,7 @@ use chrono::{DateTime, Utc};
 use regex::Regex;
 use serde::Serialize;
 
-use super::{BlobBackend, JobStorage, StorageError};
+use super::{JobStorage, StorageError};
 
 /// Blob prefix every secret lives under.
 pub const PREFIX: &str = "secrets/";
