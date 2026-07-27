@@ -58,18 +58,24 @@ export WC_AZURE_CONTAINER="${WC_AZURE_CONTAINER}"
 }
 
 # S3 is read failover and a synchronous replica, never an alternate writer.
-# The VM gets only the stado-azure-agent grant whose exact item allowlist was
-# verified by the coordinator. A single-read FIFO transfers it into the Rust
-# agent's in-memory cache; the path then disappears. Raw values are never
-# rendered into cloud-init or inherited by workload processes.
+# The VM gets only the dedicated stado-azure-agent grant. Its opaque value is
+# delivered after VM creation by an encrypted Azure Custom Script extension,
+# never through this customData script. The extension atomically places it in
+# root-only tmpfs; the Rust client caches it on first use, overwrites the file,
+# and unlinks it. Startup remains blocked until that protected handoff arrives.
 export WC_BACKUP_STORAGE_BACKEND="${WC_BACKUP_STORAGE_BACKEND}"
 export WC_BACKUP_BUCKET="${WC_BACKUP_BUCKET}"
 export WC_BACKUP_S3_REGION="${WC_BACKUP_S3_REGION}"
-export WC_SKARBIEC_URL="${WC_AGENT_SKARBIEC_URL}"
-export WC_SKARBIEC_CONSUMER="${WC_AGENT_SKARBIEC_CONSUMER}"
+export WC_AGENT_SKARBIEC_URL="${WC_AGENT_SKARBIEC_URL}"
+export WC_AGENT_SKARBIEC_CONSUMER="${WC_AGENT_SKARBIEC_CONSUMER}"
+export WC_AGENT_SKARBIEC_ITEMS="${WC_AGENT_SKARBIEC_ITEMS}"
+export WC_AGENT_SKARBIEC_SECRET_FIELDS="${WC_AGENT_SKARBIEC_SECRET_FIELDS}"
 _wc_agent_grant_dir=/run/stado-agent-credentials
-_wc_agent_grant_fifo="$_wc_agent_grant_dir/skarbiec-token"
-export WC_SKARBIEC_TOKEN_FILE="$_wc_agent_grant_fifo"
+_wc_agent_grant_file="$_wc_agent_grant_dir/skarbiec-token"
+export WC_AGENT_SKARBIEC_TOKEN_FILE="$_wc_agent_grant_file"
+export WC_SKARBIEC_URL="$WC_AGENT_SKARBIEC_URL"
+export WC_SKARBIEC_CONSUMER="$WC_AGENT_SKARBIEC_CONSUMER"
+export WC_SKARBIEC_TOKEN_FILE="$_wc_agent_grant_file"
 [ "$WC_BACKUP_STORAGE_BACKEND" = "s3" ] || {
     echo "FATAL: Azure agent requires WC_BACKUP_STORAGE_BACKEND=s3 for read failover" | tee /dev/stderr
     false
@@ -87,19 +93,10 @@ case "$WC_SKARBIEC_URL" in
 esac
 mkdir -p "$_wc_agent_grant_dir"
 chmod u=rwx,go= "$_wc_agent_grant_dir"
-rm -f "$_wc_agent_grant_fifo"
-mkfifo "$_wc_agent_grant_fifo"
-chmod u=rw,go= "$_wc_agent_grant_fifo"
-set +x
-_wc_agent_grant="${WC_AGENT_SKARBIEC_TOKEN}"
-(
-    set +x
-    printf '%s' "$_wc_agent_grant" > "$_wc_agent_grant_fifo"
-    rm -f "$_wc_agent_grant_fifo"
-    rmdir "$_wc_agent_grant_dir" || true
-) &
-unset _wc_agent_grant
-set -x
+while [ ! -s "$_wc_agent_grant_file" ]; do
+    echo "Waiting for Azure protected-settings agent grant..."
+    python3 -c 'import time; time.sleep(True)'
+done
 
 # Pre-warm the small auxiliary models so each claimed job skips the download.
 huggingface-cli download cross-encoder/nli-deberta-v3-small || true

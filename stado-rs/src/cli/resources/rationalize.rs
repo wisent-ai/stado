@@ -1,56 +1,28 @@
-//! `stado rationalize-resources` — read-only resource waste audit.
-//!
-//! Recommendations are deliberately conservative: a resource is proposed for
-//! deletion or release only when Stado can identify it, prove it has no live
-//! queue/lease owner where applicable, and establish a minimum age. Ambiguous
-//! resources become review findings; this command never mutates a cloud or the
-//! queue store.
+//! `stado resources rationalize` — read-only audit and immutable plan creation.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
-use clap::Args;
 use serde::Serialize;
 use serde_json::{json, Value};
+use sha2::Digest;
 
-use super::{blast_radius, instances, table, CmdError};
+use super::journal::Journal;
+use super::model::{
+    Action, ActionKind, Authorization, Finding as PlanFinding, FindingDisposition, Intent,
+    InventorySnapshot, OperationScope, ProviderKind, ResourceLocator, Reversibility, Rollback,
+    SourceSnapshot,
+};
+use super::{planner, RationalizeArgs};
+use crate::cli::{blast_radius, instances, table, CmdError};
 use crate::config;
 use crate::providers::gcp::inventory::{self as gcp_inventory, GcpInventoryReport, ProbeReport};
 use crate::queue::copy::Endpoint;
 use crate::queue::JobStorage;
 
-#[derive(Args, Debug)]
-pub struct RationalizeResourcesArgs {
-    /// Ignore candidates younger than this age (`30m`, `24h`, `7d`).
-    #[arg(long, default_value = "24h", value_parser = parse_age_seconds)]
+struct AuditArgs {
     min_age: u64,
-    /// Emit the complete versioned machine-readable report.
-    #[arg(long)]
-    json: bool,
-}
-
-#[derive(Args, Debug)]
-pub struct KillIrrationalResourcesArgs {
-    /// Restrict cleanup to one configured VM provider.
-    #[arg(long)]
-    provider: Option<String>,
-    /// Never delete a VM younger than this (`30m`, `24h`, `7d`).
-    #[arg(
-        long,
-        alias = "older-than",
-        default_value = "24h",
-        value_parser = instances::parse_older_than
-    )]
-    min_age: Duration,
-    /// Preview the deletion plan. This is already the default and overrides `--yes`.
-    #[arg(long)]
-    dry_run: bool,
-    /// Apply the high-confidence deletion plan.
-    #[arg(long)]
-    yes: bool,
-    /// Emit the machine-readable reaper report.
-    #[arg(long)]
-    json: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -103,7 +75,33 @@ struct RationalizationReport {
     findings: Vec<Finding>,
 }
 
-pub async fn run(args: &RationalizeResourcesArgs) -> Result<(), CmdError> {
+pub async fn run(args: &RationalizeArgs) -> Result<(), CmdError> {
+    let age = planner::parse_age(&args.min_age)?;
+    let min_age = u64::try_from(age.num_seconds())
+        .map_err(|_| CmdError::usage("--min-age is outside the supported range"))?;
+    let report = build_report(&AuditArgs { min_age }).await?;
+    let plan = compile_plan(&report, args.provider.as_deref())?;
+    let hash = planner::write_plan(&plan, &args.output)?;
+    Journal::open().await?.create(&plan).await?;
+    if !args.json {
+        print_human(&report);
+    }
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "operation_id": plan.operation_id,
+            "plan": args.output,
+            "sha256": hash,
+            "findings": plan.findings.len(),
+            "actions": plan.actions.len(),
+            "automatic_actions": plan.actions.iter().filter(|action| action.authorization == Authorization::Automatic).count(),
+            "review_required": plan.actions.iter().filter(|action| action.authorization == Authorization::Explicit).count(),
+        }))?
+    );
+    Ok(())
+}
+
+async fn build_report(args: &AuditArgs) -> Result<RationalizationReport, CmdError> {
     let primary = Endpoint::configured_primary();
     let backup = Endpoint::configured_backup();
     let active = config::wc_providers().to_vec();
@@ -263,79 +261,391 @@ pub async fn run(args: &RationalizeResourcesArgs) -> Result<(), CmdError> {
         findings,
     };
 
-    if args.json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
-    } else {
-        print_human(&report);
-    }
-    Ok(())
+    Ok(report)
 }
 
-pub async fn kill(args: &KillIrrationalResourcesArgs) -> Result<(), CmdError> {
-    if args.min_age <= Duration::zero() {
-        return Err(CmdError::usage(
-            "--min-age must be greater than zero for a destructive cleanup",
-        ));
-    }
-    let configured: BTreeSet<String> = config::wc_providers()
+fn compile_plan(
+    report: &RationalizationReport,
+    selected_provider: Option<&str>,
+) -> Result<super::model::Plan, CmdError> {
+    let selected_provider = selected_provider.map(str::trim);
+    let selected: Vec<&Finding> = report
+        .findings
         .iter()
-        .chain(config::wc_disabled_providers())
-        .cloned()
+        .filter(|finding| selected_provider.is_none_or(|provider| finding.provider == provider))
         .collect();
-    let supported = ["gcp", "azure", "aws"];
-    let providers: Vec<String> = if let Some(selected) = args.provider.as_deref() {
-        let selected = selected.trim();
-        if !supported.contains(&selected) {
+    if let Some(provider) = selected_provider {
+        let configured = config::wc_providers()
+            .iter()
+            .chain(config::wc_disabled_providers())
+            .any(|name| name == provider);
+        let reported = selected.iter().any(|finding| finding.provider == provider);
+        if !configured && !reported {
             return Err(CmdError::usage(format!(
-                "{selected:?} has no provider VM deletion contract; use one of: {}",
-                supported.join(", ")
+                "provider {provider:?} is neither configured nor present in the audit"
             )));
         }
-        if !configured.contains(selected) {
-            return Err(CmdError::usage(format!(
-                "provider {selected:?} is not present in providers or providers_disabled"
-            )));
-        }
-        vec![selected.to_string()]
-    } else {
-        supported
-            .into_iter()
-            .filter(|provider| configured.contains(*provider))
-            .map(str::to_string)
-            .collect()
+    }
+
+    let findings: Vec<PlanFinding> = selected
+        .iter()
+        .map(|finding| PlanFinding {
+            id: finding.id.clone(),
+            severity: finding.severity.to_string(),
+            confidence: finding.confidence.to_string(),
+            recommendation: finding.action.to_string(),
+            reason: finding.reason.clone(),
+            evidence: finding.evidence.clone(),
+            disposition: finding_disposition(finding),
+            resource: locator(finding),
+        })
+        .collect();
+    let mut actions = Vec::new();
+    for finding in &selected {
+        actions.extend(actions_for(finding));
+    }
+    let providers = findings
+        .iter()
+        .map(|finding| finding.resource.provider)
+        .collect();
+    let mut projects = BTreeSet::new();
+    if findings
+        .iter()
+        .any(|finding| finding.resource.provider == ProviderKind::Gcp)
+        && !config::project().is_empty()
+    {
+        projects.insert(config::project().to_string());
+    }
+    let report_value = serde_json::to_value(report)?;
+    let snapshot_id = hex::encode(sha2::Sha256::digest(serde_json::to_vec(&report_value)?));
+    let inventory = InventorySnapshot {
+        snapshot_id,
+        complete: report.summary.incomplete_sources == usize::default(),
+        sources: report
+            .sources
+            .iter()
+            .map(|source| SourceSnapshot {
+                name: source.name.clone(),
+                state: source.state.to_string(),
+                detail: source.detail.clone(),
+            })
+            .collect(),
     };
-    if providers.is_empty() {
-        return Err(CmdError::click(
-            "no configured GCP, Azure, or AWS VM fleet is available to clean",
-        ));
-    }
+    planner::new_plan(
+        Intent::RationalizationCleanup,
+        OperationScope {
+            providers,
+            projects,
+            storage: Endpoint::configured_primary().describe(),
+        },
+        inventory,
+        findings,
+        actions,
+    )
+}
 
-    let primary = Endpoint::configured_primary();
-    if primary.kind == "local" {
-        return Err(CmdError::click(
-            "refusing orphan deletion: device-local storage is not an authoritative ownership \
-             view for remote VMs; migrate the active queue to GCS, S3, or Azure Blob first",
-        ));
+fn finding_disposition(finding: &Finding) -> FindingDisposition {
+    if finding.automatic {
+        FindingDisposition::Automatic
+    } else if matches!(finding.action, "disable-or-migrate" | "review-deprovision") {
+        FindingDisposition::Blocked
+    } else {
+        FindingDisposition::ReviewRequired
     }
+}
 
-    let apply = args.yes && !args.dry_run;
-    if !args.json {
-        println!(
-            "{} orphan agent VMs in {} older than {}s; review-only disks, addresses, groups, \
-             reservations, storage, and provider fences will not be changed.",
-            if apply { "Deleting" } else { "Previewing" },
-            providers.join(", "),
-            args.min_age.num_seconds(),
-        );
+fn actions_for(finding: &Finding) -> Vec<Action> {
+    let resource_scope = gcp_scope(finding);
+    let resource = locator(finding);
+    let authorization = if finding.automatic {
+        Authorization::Automatic
+    } else {
+        Authorization::Explicit
+    };
+    let action_id = format!("action-{}", uuid::Uuid::new_v4().simple());
+    match finding.resource_type {
+        "agent-vm" => vec![Action {
+            id: action_id,
+            finding_id: Some(finding.id.clone()),
+            kind: ActionKind::DeleteInstance,
+            authorization,
+            reversibility: Reversibility::Irreversible,
+            resource,
+            parameters: json!({}),
+            preconditions: vec![
+                planner::condition("orphan", json!(true)),
+                planner::condition(
+                    "minimum_age_seconds",
+                    finding.evidence["age_seconds"].clone(),
+                ),
+            ],
+            postconditions: vec![planner::condition("exists", json!(false))],
+            rollback: None,
+            depends_on: Vec::new(),
+        }],
+        "persistent-disk" => {
+            let snapshot_id = format!("action-{}", uuid::Uuid::new_v4().simple());
+            let snapshot_name = recovery_snapshot_name(&resource.name);
+            vec![
+                Action {
+                    id: snapshot_id.clone(),
+                    finding_id: Some(finding.id.clone()),
+                    kind: ActionKind::SnapshotDisk,
+                    authorization: Authorization::Explicit,
+                    reversibility: Reversibility::Reversible,
+                    resource: resource.clone(),
+                    parameters: json!({"snapshot_name": snapshot_name, "scope": resource_scope}),
+                    preconditions: stable_preconditions(
+                        finding,
+                        vec![planner::condition("unattached", json!(true))],
+                    ),
+                    postconditions: vec![planner::condition("snapshot_exists", json!(true))],
+                    rollback: Some(Rollback {
+                        kind: ActionKind::DeleteSnapshot,
+                        parameters: json!({"snapshot_name": snapshot_name}),
+                        preconditions: vec![planner::condition("snapshot_exists", json!(true))],
+                        postconditions: vec![planner::condition("snapshot_exists", json!(false))],
+                    }),
+                    depends_on: Vec::new(),
+                },
+                Action {
+                    id: action_id,
+                    finding_id: Some(finding.id.clone()),
+                    kind: ActionKind::DeleteDisk,
+                    authorization: Authorization::Explicit,
+                    reversibility: Reversibility::SnapshotRestore,
+                    resource,
+                    parameters: json!({"snapshot_name": snapshot_name, "scope": resource_scope, "original": finding.evidence}),
+                    preconditions: stable_preconditions(
+                        finding,
+                        vec![planner::condition("unattached", json!(true))],
+                    ),
+                    postconditions: vec![planner::condition("exists", json!(false))],
+                    rollback: Some(Rollback {
+                        kind: ActionKind::RestoreDisk,
+                        parameters: json!({"snapshot_name": snapshot_name, "scope": resource_scope, "original": finding.evidence}),
+                        preconditions: vec![
+                            planner::condition("exists", json!(false)),
+                            planner::condition("snapshot_exists", json!(true)),
+                        ],
+                        postconditions: disk_restore_postconditions(finding, &snapshot_name),
+                    }),
+                    depends_on: vec![snapshot_id],
+                },
+            ]
+        }
+        "static-address" => vec![irreversible_action(
+            action_id,
+            finding,
+            ActionKind::ReleaseAddress,
+            resource,
+            json!({"scope": resource_scope}),
+            stable_preconditions(
+                finding,
+                vec![
+                    planner::condition("unused", json!(true)),
+                    planner::condition("status", json!("RESERVED")),
+                ],
+            ),
+        )],
+        "managed-instance-group" => vec![irreversible_action(
+            action_id,
+            finding,
+            ActionKind::DeleteManagedInstanceGroup,
+            resource,
+            json!({"scope": resource_scope}),
+            stable_preconditions(
+                finding,
+                vec![planner::condition("target_size", json!(usize::default()))],
+            ),
+        )],
+        "compute-reservation" => vec![irreversible_action(
+            action_id,
+            finding,
+            ActionKind::ReleaseReservation,
+            resource,
+            json!({"scope": resource_scope}),
+            stable_preconditions(
+                finding,
+                vec![
+                    planner::condition("exists", json!(true)),
+                    planner::condition("in_use_count", json!(usize::default())),
+                ],
+            ),
+        )],
+        "storage-backup"
+            if finding.action == "disable" && finding.evidence["backup_config"].is_object() =>
+        {
+            vec![Action {
+                id: action_id,
+                finding_id: Some(finding.id.clone()),
+                kind: ActionKind::DisableStorageBackup,
+                authorization: Authorization::Explicit,
+                reversibility: Reversibility::Reversible,
+                resource,
+                parameters: json!({"previous": finding.evidence["backup_config"]}),
+                preconditions: vec![
+                    planner::condition("configured", json!(true)),
+                    planner::condition("mutable", json!(true)),
+                    planner::condition("backup", finding.evidence["backup_config"].clone()),
+                ],
+                postconditions: vec![planner::condition("configured", json!(false))],
+                rollback: Some(Rollback {
+                    kind: ActionKind::EnableStorageBackup,
+                    parameters: json!({"backup": finding.evidence["backup_config"]}),
+                    preconditions: vec![planner::condition("configured", json!(false))],
+                    postconditions: vec![
+                        planner::condition("configured", json!(true)),
+                        planner::condition("backup", finding.evidence["backup_config"].clone()),
+                    ],
+                }),
+                depends_on: Vec::new(),
+            }]
+        }
+        _ => Vec::new(),
     }
-    instances::reap_irrational(&providers, args.min_age, apply, args.json).await?;
-    if apply && !args.json {
-        println!(
-            "Applied only high-confidence orphan VM deletions. Run `stado rationalize-resources` \
-             again to review non-automatic recommendations."
-        );
+}
+fn gcp_scope(finding: &Finding) -> &'static str {
+    let region = finding
+        .evidence
+        .get("region")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if finding.resource_type == "static-address" && region.is_empty() {
+        "global"
+    } else if !region.is_empty() {
+        "region"
+    } else {
+        "zone"
     }
-    Ok(())
+}
+
+fn recovery_snapshot_name(disk_name: &str) -> String {
+    let prefix = "stado-recovery-";
+    let nonce: String = uuid::Uuid::new_v4()
+        .simple()
+        .to_string()
+        .chars()
+        .take(u64::BYTES as usize)
+        .collect();
+    let suffix = format!("-{}-{nonce}", Utc::now().format("%Y%m%d%H%M%S"));
+    let maximum = (u64::BITS as usize).saturating_sub(true as usize);
+    let available = maximum.saturating_sub(prefix.len() + suffix.len());
+    let disk: String = disk_name.chars().take(available).collect();
+    let disk = disk.trim_end_matches('-');
+    format!(
+        "{prefix}{}{suffix}",
+        if disk.is_empty() { "disk" } else { disk }
+    )
+}
+
+fn disk_restore_postconditions(
+    finding: &Finding,
+    snapshot_name: &str,
+) -> Vec<super::model::Condition> {
+    let mut conditions = vec![
+        planner::condition("exists", json!(true)),
+        planner::condition("source_snapshot", json!(snapshot_name)),
+    ];
+    for field in [
+        "type_url",
+        "type",
+        "size_gb",
+        "labels",
+        "description",
+        "replica_zones",
+        "resource_policies",
+        "physical_block_size_bytes",
+    ] {
+        if let Some(value) = finding.evidence.get(field).filter(|value| !value.is_null()) {
+            conditions.push(planner::condition(field, value.clone()));
+        }
+    }
+    conditions
+}
+
+fn stable_preconditions(
+    finding: &Finding,
+    mut conditions: Vec<super::model::Condition>,
+) -> Vec<super::model::Condition> {
+    if let Some(resource_id) = finding.evidence.get("id").filter(|value| !value.is_null()) {
+        conditions.push(planner::condition("resource_id", resource_id.clone()));
+    }
+    if let Some(created) = finding
+        .evidence
+        .get("creation_timestamp")
+        .filter(|value| !value.is_null())
+    {
+        conditions.push(planner::condition("creation_timestamp", created.clone()));
+    }
+    if let Some(fingerprint) = finding
+        .evidence
+        .get("fingerprint")
+        .filter(|value| !value.is_null())
+    {
+        conditions.push(planner::condition("fingerprint", fingerprint.clone()));
+    }
+    conditions
+}
+
+fn irreversible_action(
+    id: String,
+    finding: &Finding,
+    kind: ActionKind,
+    resource: ResourceLocator,
+    parameters: Value,
+    preconditions: Vec<super::model::Condition>,
+) -> Action {
+    Action {
+        id,
+        finding_id: Some(finding.id.clone()),
+        kind,
+        authorization: Authorization::Explicit,
+        reversibility: Reversibility::Irreversible,
+        resource,
+        parameters,
+        preconditions,
+        postconditions: vec![planner::condition("exists", json!(false))],
+        rollback: None,
+        depends_on: Vec::new(),
+    }
+}
+
+fn locator(finding: &Finding) -> ResourceLocator {
+    let provider = match finding.provider.as_str() {
+        "gcp" => ProviderKind::Gcp,
+        "azure" => ProviderKind::Azure,
+        "aws" => ProviderKind::Aws,
+        "local" => ProviderKind::Local,
+        "vast" => ProviderKind::Vast,
+        "box" => ProviderKind::Box,
+        _ => ProviderKind::Stado,
+    };
+    let (name, location) = finding
+        .resource
+        .rsplit_once('@')
+        .map_or((finding.resource.as_str(), None), |(name, location)| {
+            (name, Some(location.to_string()))
+        });
+    ResourceLocator {
+        provider,
+        resource_type: finding.resource_type.to_string(),
+        project: (provider == ProviderKind::Gcp && !config::project().is_empty())
+            .then(|| config::project().to_string()),
+        location,
+        name: name.to_string(),
+        reference: finding.resource.clone(),
+    }
+}
+fn configured_backup_value() -> Value {
+    let Some(path) = crate::config_file::config_path().ok().flatten() else {
+        return Value::Null;
+    };
+    fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|root| root.pointer("/storage/backup").cloned())
+        .unwrap_or(Value::Null)
 }
 
 fn configuration_findings(
@@ -345,6 +655,7 @@ fn configuration_findings(
     disabled: &[String],
 ) -> Vec<Finding> {
     let mut findings = Vec::new();
+    let backup_config = configured_backup_value();
     if let Some(backup) = backup {
         if primary.describe() == backup.describe() {
             findings.push(finding(
@@ -356,7 +667,11 @@ fn configuration_findings(
                 "storage-backup",
                 backup.describe(),
                 "primary and backup resolve to the same store, so the backup consumes work without adding a failure domain",
-                json!({"primary": primary.describe(), "backup": backup.describe()}),
+                json!({
+                    "primary": primary.describe(),
+                    "backup": backup.describe(),
+                    "backup_config": backup_config.clone(),
+                }),
             ));
         } else if primary.kind == "local" && backup.kind == "local" {
             findings.push(finding(
@@ -368,7 +683,11 @@ fn configuration_findings(
                 "storage-backup",
                 backup.describe(),
                 "a local primary and local backup remain in the same device failure domain; move the backup off-host or disable the misleading replica",
-                json!({"primary": primary.describe(), "backup": backup.describe()}),
+                json!({
+                    "primary": primary.describe(),
+                    "backup": backup.describe(),
+                    "backup_config": backup_config,
+                }),
             ));
         }
     }

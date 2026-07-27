@@ -5,10 +5,9 @@
 //!
 //! Implemented and wired to the library: `package-root`, `capabilities`,
 //! `submit`, `status`, `cancel`, `results`, `profiles`, `config`, `schedule`,
-//! `artifact`, `cost`, `vast`, `agent`, `disk-cleanup`, `show-resources`,
-//! `rationalize-resources`, `kill-irrational-resources`, `install-disk-cleanup`,
-//! `bootstrap`, the complete `host`, `registry`, and `quota` groups, plus
-//! coordinator and dashboard control planes.
+//! `artifact`, `cost`, `vast`, `agent`, `disk-cleanup`, `resources`,
+//! `install-disk-cleanup`, `bootstrap`, the complete `host`, `registry`, and
+//! `quota` groups, plus coordinator and dashboard control planes.
 
 use clap::{Parser, Subcommand};
 
@@ -36,13 +35,12 @@ pub mod overview;
 pub mod profiles_cmd;
 pub mod queue;
 pub mod quota;
-pub mod rationalize_resources;
 pub mod registry;
+pub mod resources;
 pub mod results;
 pub mod schedule;
 pub mod secrets;
 pub mod service;
-pub mod show_resources;
 pub mod status;
 pub mod storage;
 pub mod submit;
@@ -176,17 +174,9 @@ enum Commands {
     #[command(name = "blast-radius")]
     BlastRadius(blast_radius::BlastRadiusArgs),
 
-    /// Show one read-only inventory of compute, storage, hosts, cloud resources, and billing.
-    #[command(name = "show-resources")]
-    ShowResources(show_resources::ShowResourcesArgs),
-
-    /// Audit configured clouds and storage for idle, redundant, or stranded resources.
-    #[command(name = "rationalize-resources")]
-    RationalizeResources(rationalize_resources::RationalizeResourcesArgs),
-
-    /// Delete high-confidence irrational resources. Dry run unless `--yes` is given.
-    #[command(name = "kill-irrational-resources")]
-    KillIrrationalResources(rationalize_resources::KillIrrationalResourcesArgs),
+    /// Inventory, plan, execute, verify, and restore resource operations.
+    #[command(subcommand)]
+    Resources(resources::ResourcesCommands),
 
     /// Inspect or refresh cross-cloud costs, grants, burn, and credit balances.
     #[command(subcommand)]
@@ -324,7 +314,7 @@ enum Commands {
     /// Run a cloud-hosted coordinator and dashboard.
     #[command(name = "cloud-control-plane", hide = true)]
     CloudControlPlane {
-        #[arg(long, default_value = "0.0.0.0")]
+        #[arg(long, default_value = "localhost")]
         bind: String,
         #[arg(long, default_value_t = 8080)]
         port: i64,
@@ -1097,9 +1087,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         }
         Commands::Overview { json } => overview::run(json).await,
         Commands::BlastRadius(args) => blast_radius::run(&args).await,
-        Commands::ShowResources(args) => show_resources::run(&args).await,
-        Commands::RationalizeResources(args) => rationalize_resources::run(&args).await,
-        Commands::KillIrrationalResources(args) => rationalize_resources::kill(&args).await,
+        Commands::Resources(command) => resources::dispatch(command).await,
         Commands::Billing(sub) => billing::dispatch(&sub).await,
         Commands::Azure(sub) => azure::dispatch(sub).await,
         Commands::Mail(sub) => mail::dispatch(&sub).await,

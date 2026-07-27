@@ -241,7 +241,14 @@ pub fn exec_args_for(bins: &Bins, kind: &str, _name: &str) -> Result<Vec<String>
         {
             Ok(vec![bins.stado.clone(), "local-control-plane".to_string()])
         }
-        "coordinator" => Ok(vec![bins.stado.clone(), "cloud-control-plane".to_string()]),
+        "coordinator" => Ok(vec![
+            bins.stado.clone(),
+            "cloud-control-plane".to_string(),
+            "--bind".to_string(),
+            crate::config::dashboard_bind().to_string(),
+            "--port".to_string(),
+            crate::config::dashboard_port().to_string(),
+        ]),
         "disk-cleanup" => Ok(vec![
             bins.stado.clone(),
             "disk-cleanup".to_string(),
@@ -344,18 +351,52 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
 /// renderers iterate this order byte-exactly).
 pub fn build_env(kind: &str, inputs: &EnvInputs) -> Vec<(String, String)> {
     let mut env: Vec<(String, String)> = vec![("PYTHONUNBUFFERED".to_string(), "1".to_string())];
-    env.push((
-        "WC_SKARBIEC_URL".to_string(),
-        crate::config::skarbiec_url().to_string(),
-    ));
+    let agent_url = crate::config::agent_skarbiec_url();
+    let (skarbiec_url, skarbiec_consumer, skarbiec_token_file) = if kind == "agent" {
+        (
+            if agent_url.is_empty() {
+                crate::config::skarbiec_url()
+            } else {
+                agent_url
+            },
+            crate::config::agent_skarbiec_consumer(),
+            crate::config::agent_skarbiec_token_file(),
+        )
+    } else {
+        (
+            crate::config::skarbiec_url(),
+            crate::config::skarbiec_consumer(),
+            crate::config::skarbiec_token_file(),
+        )
+    };
+    env.push(("WC_SKARBIEC_URL".to_string(), skarbiec_url.to_string()));
     env.push((
         "WC_SKARBIEC_CONSUMER".to_string(),
-        crate::config::skarbiec_consumer().to_string(),
+        skarbiec_consumer.to_string(),
     ));
     env.push((
         "WC_SKARBIEC_TOKEN_FILE".to_string(),
-        crate::config::skarbiec_token_file().to_string(),
+        skarbiec_token_file.to_string(),
     ));
+    if kind == "agent" {
+        env.push(("WC_AGENT_SKARBIEC_URL".to_string(), skarbiec_url.to_string()));
+        env.push((
+            "WC_AGENT_SKARBIEC_CONSUMER".to_string(),
+            skarbiec_consumer.to_string(),
+        ));
+        env.push((
+            "WC_AGENT_SKARBIEC_TOKEN_FILE".to_string(),
+            skarbiec_token_file.to_string(),
+        ));
+        env.push((
+            "WC_AGENT_SKARBIEC_ITEMS".to_string(),
+            crate::config::agent_skarbiec_items().join(","),
+        ));
+        env.push((
+            "WC_AGENT_SKARBIEC_SECRET_FIELDS".to_string(),
+            crate::config::agent_skarbiec_secret_fields().join(","),
+        ));
+    }
     // The standalone agent and the outage-safe local control plane both
     // execute Python probes and job payloads. Preserve the operator PATH so
     // child jobs see the same toolchain as an interactive Stado invocation.

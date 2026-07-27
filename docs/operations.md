@@ -60,7 +60,7 @@ these substrings to classify failures fast:
 | `RuntimeError: Cannot set NUMBA_NUM_THREADS` | numba init happened before wisent's env-set. Set `NUMBA_NUM_THREADS=1` in the agent's env BEFORE Python starts. |
 | `does not appear to have files named` | transformers shard-name miscompute on `gpt_oss` / 0-indexed safetensors. Fixed in `transformers>=4.57`. |
 | `AttributeError: ... has no attribute 'transformer'` | wisent activation hook expected GPT-2 path on a model whose `model_type` contains `gpt`; gpt_oss uses Llama-style. Fixed in `transformer_analysis.py`. |
-| `gated repo` / `401 Client Error` | `HF_TOKEN` missing or revoked. Rotate in Secret Manager: `gcloud secrets versions add wisent-hf-token --data-file=-`. |
+| `gated repo` / `401 Client Error` | The scoped workload credential cannot read the requested repository. Rotate `stado-huggingface/token` through the stdin-only Skarbiec service path; never place the token in VM metadata or logs. |
 | `Quota 'PREEMPTIBLE_NVIDIA_*_GPUS' exceeded` | Hit the regional preemptible quota. Either raise via GCP console or add zones to `MACHINE_TYPE_ZONES`. |
 
 ## Velocity / load script

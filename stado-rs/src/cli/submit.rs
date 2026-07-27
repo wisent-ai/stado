@@ -213,6 +213,11 @@ pub(crate) fn parse_secret_env(
                 "--secret-env contains an unsafe environment, item, or field name: {value:?}"
             )));
         }
+        if !crate::config::agent_secret_reference_allowed(item, field) {
+            return Err(CmdError::click(format!(
+                "--secret-env reference {item}#{field} is not in agent.skarbiec.secret_fields"
+            )));
+        }
         if parsed
             .insert(
                 env_name.to_string(),

@@ -155,6 +155,24 @@ fn show() -> Result<(), CmdError> {
         Value::from(config::agent_skarbiec_token_file()),
     );
     resolved.insert(
+        "agent_skarbiec_items".into(),
+        Value::Array(
+            config::agent_skarbiec_items()
+                .iter()
+                .map(|item| Value::from(item.as_str()))
+                .collect(),
+        ),
+    );
+    resolved.insert(
+        "agent_skarbiec_secret_fields".into(),
+        Value::Array(
+            config::agent_skarbiec_secret_fields()
+                .iter()
+                .map(|reference| Value::from(reference.as_str()))
+                .collect(),
+        ),
+    );
+    resolved.insert(
         "azure_resource_group".into(),
         Value::from(config::azure_resource_group()),
     );

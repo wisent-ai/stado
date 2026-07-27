@@ -20,7 +20,7 @@ use chrono::{DateTime, Utc};
 use crate::catalog::GPU_SIZING;
 use crate::config;
 use crate::models::Job;
-use crate::providers::Provider;
+use crate::providers::{Provider, ProviderError};
 use crate::queue::JobStorage;
 use crate::scheduler::scheduler::{accel_hourly_rate, backoff_due, log, SchedulerError};
 use crate::sizing::Sizing;
@@ -57,11 +57,10 @@ pub(crate) fn bundled_template_for(provider_name: &str) -> &'static str {
 /// consume it — gives a new placeholder exactly one place to be
 /// registered instead of one per producer.
 ///
-/// Azure cloud-init receives every non-secret locator needed to construct
-/// the Azure primary and S3 read-failover store, plus routing metadata for
-/// its dedicated agent consumer. The opaque grant is supplied by
-/// [`crate::coordinator::secrets_from_skarbiec`]; raw provider and workload
-/// values never enter this map.
+/// Azure customData receives every non-secret locator needed to construct the
+/// Azure primary and S3 read-failover store, plus routing and exact field
+/// allowlists for its dedicated agent consumer. The opaque grant stays under
+/// an internal map key and is delivered only through Azure protected settings.
 ///
 /// Keys a given template never mentions are never matched, so isolated GCP
 /// provider tooling remains byte-identical.
@@ -98,6 +97,14 @@ pub fn deployment_substitutions() -> BTreeMap<String, String> {
         (
             "WC_AGENT_SKARBIEC_CONSUMER".to_string(),
             config::agent_skarbiec_consumer().to_string(),
+        ),
+        (
+            "WC_AGENT_SKARBIEC_ITEMS".to_string(),
+            config::agent_skarbiec_items().join(","),
+        ),
+        (
+            "WC_AGENT_SKARBIEC_SECRET_FIELDS".to_string(),
+            config::agent_skarbiec_secret_fields().join(","),
         ),
         (
             "WC_RELEASE_BASE_URL".to_string(),
@@ -137,7 +144,11 @@ pub fn render_startup_script(
     deployment: &BTreeMap<String, String>,
 ) -> Result<String, SchedulerError> {
     let mut script = template.replace("${ACCEL_TYPE}", accel);
-    for (key, val) in secrets.iter().chain(deployment.iter()) {
+    for (key, val) in secrets
+        .iter()
+        .filter(|(key, _)| key.as_str() != crate::coordinator::AZURE_AGENT_PROTECTED_GRANT)
+        .chain(deployment.iter())
+    {
         let needle = format!("${{{key}}}");
         if script.contains(needle.as_str()) {
             script = script.replace(needle.as_str(), val);
@@ -350,6 +361,22 @@ pub async fn dispatch_agent_vms_with_template(
     .await?;
 
     let deployment = deployment_substitutions();
+    let protected_agent_grant = if provider_name == "azure" {
+        Some(
+            secrets
+                .get(crate::coordinator::AZURE_AGENT_PROTECTED_GRANT)
+                .filter(|grant| !grant.is_empty())
+                .map(String::as_str)
+                .ok_or_else(|| {
+                    ProviderError::Value(
+                        "Azure agent dispatch requires a dedicated grant for protected-settings delivery"
+                            .to_string(),
+                    )
+                })?,
+        )
+    } else {
+        None
+    };
     let tick_tag = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -419,6 +446,13 @@ pub async fn dispatch_agent_vms_with_template(
                 break 'buckets;
             }
         };
+        if protected_agent_grant.is_some_and(|grant| script.contains(grant)) {
+            return Err(ProviderError::Value(
+                "refusing Azure dispatch because the protected agent grant reached customData"
+                    .to_string(),
+            )
+            .into());
+        }
         for i in 0..n_to_dispatch {
             if start.elapsed().as_secs() > DISPATCH_BUDGET_S {
                 log(&format!(
@@ -433,7 +467,7 @@ pub async fn dispatch_agent_vms_with_template(
             );
             let mut effective_accel = accel.clone();
             let mut ref_opt = provider
-                .create_instance(
+                .create_agent_instance(
                     &instance_name,
                     mt,
                     accel,
@@ -442,6 +476,7 @@ pub async fn dispatch_agent_vms_with_template(
                     &biggest.image_project,
                     &script,
                     preemptible_for_call,
+                    protected_agent_grant,
                 )
                 .await?;
             if ref_opt.is_none() {
@@ -469,7 +504,7 @@ pub async fn dispatch_agent_vms_with_template(
                              (stockout on {accel}, next tier mem={next_mem})"
                         ));
                         ref_opt = provider
-                            .create_instance(
+                            .create_agent_instance(
                                 &instance_name,
                                 next_mt,
                                 next_accel,
@@ -478,6 +513,7 @@ pub async fn dispatch_agent_vms_with_template(
                                 &biggest.image_project,
                                 &script,
                                 preemptible_for_call,
+                                protected_agent_grant,
                             )
                             .await?;
                         if ref_opt.is_some() {
