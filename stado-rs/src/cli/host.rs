@@ -12,12 +12,13 @@ use crate::targets::{ComputeTarget, Registry};
 
 /// The store the health beacons live in.
 ///
-/// Python reads the beacon from the registry bucket (`GCS_REGISTRY_URI`),
-/// not necessarily `WC_BUCKET`, so this is deliberately not
-/// `JobStorage::new()`. Every reader of `host_health/<host>.json` in the
-/// CLI goes through here so they cannot end up pointed at different
-/// buckets.
+/// GCS retains its historical registry bucket. Provider-neutral backends
+/// keep registry and beacon objects in the configured JobStorage, so a GCS
+/// locator must never be reinterpreted as an Azure container or S3 bucket.
 pub(crate) async fn beacon_store() -> Result<crate::queue::JobStorage, CmdError> {
+    if crate::config::wc_storage_backend() != "gcs" {
+        return Ok(crate::queue::JobStorage::new().await?);
+    }
     let bucket = crate::targets::GCS_REGISTRY_URI
         .split_once("//")
         .map(|(_, rest)| rest.split('/').next().unwrap_or_default())

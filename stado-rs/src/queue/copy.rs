@@ -93,6 +93,7 @@ pub const CANONICAL_PREFIXES: &[&str] = &[
     "machine_inputs/",
     "config/",
     "state/",
+    "operations/",
     "failure_fixes/",
     "coverage/",
     "host_health/",

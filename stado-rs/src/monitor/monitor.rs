@@ -499,7 +499,7 @@ pub async fn reap_dead_agents(
     let refs = provider.list_running_instance_refs_with_age().await?;
     let mut deleted: i64 = 0;
     // Three reap conditions, each age/liveness-guarded so a VM still in its
-    // startup-script install phase (~10-14 min on baked images) is not killed
+    // startup-script install phase (~10-14 min on provider base images) is not killed
     // before it can work.
     //   Branch A (dead-agent): age > BOOT_GRACE AND no fresh capacity
     //     broadcast. Covers crashed agents + startup-script failures.

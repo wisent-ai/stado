@@ -37,11 +37,6 @@ pub const COMPUTE_API_BASE: &str = "https://compute.googleapis.com/compute/v1";
 /// OAuth scope matching the Python google-cloud-compute client.
 const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 
-/// The baked agent image family (Python `baked_family`). The
-/// bake_agent_image.sh script publishes images into family 'wisent-agent'
-/// in the local project; when present, every dispatched VM uses the baked
-/// image instead of the legacy deeplearning-platform-release base.
-const BAKED_IMAGE_FAMILY: &str = "wisent-agent";
 
 /// Python `_log`.
 fn log(msg: &str) {
@@ -617,33 +612,6 @@ impl Provider for GcpProvider {
         let client = &state.client;
         let store = &state.store;
 
-        // Override per-job stored image if a baked agent image family
-        // exists. When present, every dispatched VM uses the baked image
-        // (which already has wisent-compute + transformers + datasets
-        // pre-installed) instead of the legacy deeplearning-platform-
-        // release base, dropping boot time from ~5-10 install-rotations to
-        // ~30 install-secs. No baked image family published yet (404) ->
-        // use the per-job image argument unchanged. Any other error
-        // propagates.
-        let mut image = image.to_string();
-        let mut image_project = image_project.to_string();
-        let family_path = format!(
-            "/projects/{}/global/images/family/{BAKED_IMAGE_FAMILY}",
-            client.project()
-        );
-        if let Some(latest) = client
-            .get_allow_404(&family_path, "get image family wisent-agent")
-            .await?
-        {
-            if let Some(latest_name) = latest
-                .get("name")
-                .and_then(Value::as_str)
-                .filter(|s| !s.is_empty())
-            {
-                image = latest_name.to_string();
-                image_project = client.project().to_string();
-            }
-        }
 
         let zones = config::machine_type_zones()
             .get(machine_type)
@@ -688,8 +656,8 @@ impl Provider for GcpProvider {
                 machine_type,
                 accel_type,
                 boot_disk_gb,
-                &image,
-                &image_project,
+                image,
+                image_project,
                 startup_script,
                 preemptible,
             )

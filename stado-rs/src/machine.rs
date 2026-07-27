@@ -557,6 +557,11 @@ pub fn validate_request(request: &Value) -> Result<Map<String, Value>, MachineEr
                 "secret_env.{env_name} requires path-safe item and field strings"
             )));
         }
+        if !config::agent_secret_reference_allowed(item, field) {
+            return Err(invalid(format!(
+                "secret_env.{env_name} reference is not in agent.skarbiec.secret_fields"
+            )));
+        }
     }
     let Some(inputs) = normalized["input_objects"].as_object() else {
         return Err(invalid("input_objects must be an object"));

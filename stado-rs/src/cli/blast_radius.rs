@@ -469,7 +469,7 @@ async fn inspect_storage_bounded(role: &str, endpoint: Option<&Endpoint>) -> Sto
     }
 }
 
-/// Provider-neutral storage projection used by `show-resources`.
+/// Provider-neutral storage projection used by `resources show`.
 pub(crate) async fn storage_resource_report(role: &str, endpoint: Option<&Endpoint>) -> Value {
     serde_json::to_value(inspect_storage_bounded(role, endpoint).await.report)
         .expect("storage report serialization is infallible")

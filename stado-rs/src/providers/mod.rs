@@ -77,6 +77,41 @@ pub trait Provider: Send + Sync {
         preemptible: bool,
     ) -> Result<Option<String>, ProviderError>;
 
+    /// Create a workload-agent instance and, when supplied, deliver its
+    /// dedicated grant over a provider-native protected channel. The default
+    /// rejects grants so a provider can never silently fall back to startup
+    /// metadata. Azure overrides this with a protected VM extension.
+    #[allow(clippy::too_many_arguments)]
+    async fn create_agent_instance(
+        &self,
+        name: &str,
+        machine_type: &str,
+        accel_type: &str,
+        boot_disk_gb: i64,
+        image: &str,
+        image_project: &str,
+        startup_script: &str,
+        preemptible: bool,
+        agent_grant: Option<&str>,
+    ) -> Result<Option<String>, ProviderError> {
+        if agent_grant.is_some() {
+            return Err(ProviderError::Value(
+                "provider has no protected agent-grant delivery channel".to_string(),
+            ));
+        }
+        self.create_instance(
+            name,
+            machine_type,
+            accel_type,
+            boot_disk_gb,
+            image,
+            image_project,
+            startup_script,
+            preemptible,
+        )
+        .await
+    }
+
     /// Delete instance by ref. NotFound is an idempotent success.
     async fn delete_instance(&self, instance_ref: &str) -> Result<(), ProviderError>;
 
