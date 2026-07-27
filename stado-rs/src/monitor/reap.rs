@@ -58,19 +58,26 @@ pub async fn reap_terminal_runs(
 ) -> Result<ReapSummary, StorageError> {
     let mut summary = ReapSummary::default();
     for run_id in list_runs(store).await? {
-        let Some(mut manifest) = read_run(store, &run_id).await? else { continue };
+        let Some(mut manifest) = read_run(store, &run_id).await? else {
+            continue;
+        };
         if manifest.get("reaped_at").is_some_and(py_truthy) {
             continue;
         }
         summary.examined_runs += 1;
-        let Some(status) = run_status(store, &run_id).await? else { continue };
+        let Some(status) = run_status(store, &run_id).await? else {
+            continue;
+        };
         if !status.all_terminal {
             continue;
         }
 
         // Python manifest["job_ids"] — a missing/non-array key raises there.
         let job_ids: Vec<String> = match manifest.get("job_ids").and_then(Value::as_array) {
-            Some(arr) => arr.iter().filter_map(|j| j.as_str().map(str::to_string)).collect(),
+            Some(arr) => arr
+                .iter()
+                .filter_map(|j| j.as_str().map(str::to_string))
+                .collect(),
             None => {
                 return Err(StorageError::Other(format!(
                     "run manifest {run_id} missing job_ids"
@@ -159,15 +166,31 @@ mod tests {
         write_run(&store, "run-a", &["ja1", "ja2"]).await;
         store.write_job("completed", &job("ja1")).await.unwrap();
         store.write_job("failed", &job("ja2")).await.unwrap();
-        store.upload_text("status/ja1/heartbeat", "RUNNING 2026-05-13T00:26:33Z").await.unwrap();
-        store.upload_text("status/ja1/status", "COMPLETED").await.unwrap();
-        store.upload_text("status/ja2/status", "FAILED").await.unwrap();
+        store
+            .upload_text("status/ja1/heartbeat", "RUNNING 2026-05-13T00:26:33Z")
+            .await
+            .unwrap();
+        store
+            .upload_text("status/ja1/status", "COMPLETED")
+            .await
+            .unwrap();
+        store
+            .upload_text("status/ja2/status", "FAILED")
+            .await
+            .unwrap();
         // Run B: still has a job in running/.
         write_run(&store, "run-b", &["jb1"]).await;
         store.write_job("running", &job("jb1")).await.unwrap();
 
         let summary = reap_terminal_runs(&store, 0).await.unwrap();
-        assert_eq!(summary, ReapSummary { reaped_runs: 1, deleted_jobs: 2, examined_runs: 2 });
+        assert_eq!(
+            summary,
+            ReapSummary {
+                reaped_runs: 1,
+                deleted_jobs: 2,
+                examined_runs: 2
+            }
+        );
 
         // Run A manifest snapshotted; per-job blobs + status dirs gone.
         let manifest = read_run(&store, "run-a").await.unwrap().unwrap();
@@ -187,7 +210,14 @@ mod tests {
         // A second call skips the already-reaped manifest; run-b is
         // examined again (no reaped_at) but is still not terminal.
         let second = reap_terminal_runs(&store, 0).await.unwrap();
-        assert_eq!(second, ReapSummary { reaped_runs: 0, deleted_jobs: 0, examined_runs: 1 });
+        assert_eq!(
+            second,
+            ReapSummary {
+                reaped_runs: 0,
+                deleted_jobs: 0,
+                examined_runs: 1
+            }
+        );
     }
 
     #[tokio::test]

@@ -17,7 +17,7 @@
 //!
 //! DEVIATION (intended): the Rust binary is not pip-installed, so
 //!   * drift DETECTION compares the crate version (CARGO_PKG_VERSION)
-//!     against `gs://wisent-compute/releases/stado/latest.json` — the
+//!     against the release channel's `latest.json` pointer — the
 //!     release channel the Rust binaries actually ship through (see
 //!     [`crate::self_update`]). PyPI is deliberately NOT consulted: the
 //!     `stado` PyPI package tracks the Python implementation, whose
@@ -30,7 +30,8 @@
 //!   * remediation on a local-kind agent IS ported as binary self-update
 //!     (Python's `pip_upgrade_and_exec`: `pip install --upgrade stado` +
 //!     `os.execv`): [`crate::self_update::self_update`] downloads the new
-//!     release from `gs://wisent-compute/releases/stado/<version>/<platform>/`,
+//!     release from `<version>/<platform>/` under the configured release
+//!     channel ([`crate::config::release_base_url`], any HTTPS backend),
 //!     verifies every binary against SHA256SUMS, atomically replaces the
 //!     running binary + same-dir siblings, then [`crate::self_update::reexec`]
 //!     replaces the process image. On ANY failure the error is logged and
@@ -39,8 +40,9 @@
 //!   * `WC_SKIP_VERSION_CHECK=1` still short-circuits the whole check —
 //!     detection AND remediation;
 //!   * the cloud-agent self-terminate-on-drift path IS kept (calls
-//!     [`super::gcp_self::self_terminate`]); the dispatcher creates a fresh
-//!     VM whose startup installs the new version before the agent starts.
+//!     [`super::self_terminate`], which routes to the GCE or Azure
+//!     deleter by agent kind); the dispatcher creates a fresh VM whose
+//!     startup installs the new version before the agent starts.
 
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
@@ -112,7 +114,10 @@ pub fn latest_release_from_json(body: &serde_json::Value) -> Option<String> {
     if releases.is_empty() {
         return None;
     }
-    releases.keys().max_by(|a, b| version_tuple(a).cmp(&version_tuple(b))).cloned()
+    releases
+        .keys()
+        .max_by(|a, b| version_tuple(a).cmp(&version_tuple(b)))
+        .cloned()
 }
 
 static PYPI_CACHE: LazyLock<Mutex<HashMap<String, (Instant, String)>>> =
@@ -129,7 +134,11 @@ pub async fn pypi_latest(pkg: &str) -> Option<String> {
 /// [`pypi_latest`] against an explicit URL (tests inject a loopback server
 /// or fabricate failures offline).
 pub async fn pypi_latest_at(url: &str, pkg: &str) -> Option<String> {
-    let cached = PYPI_CACHE.lock().expect("pypi cache lock").get(pkg).cloned();
+    let cached = PYPI_CACHE
+        .lock()
+        .expect("pypi cache lock")
+        .get(pkg)
+        .cloned();
     if let Some((ts, latest)) = &cached {
         if ts.elapsed() < CACHE_TTL {
             return Some(latest.clone());
@@ -143,12 +152,19 @@ pub async fn pypi_latest_at(url: &str, pkg: &str) -> Option<String> {
         .and_then(|resp| resp.error_for_status())
         .ok();
     let latest = match body {
-        Some(resp) => resp.json::<serde_json::Value>().await.ok().and_then(|v| latest_release_from_json(&v)),
+        Some(resp) => resp
+            .json::<serde_json::Value>()
+            .await
+            .ok()
+            .and_then(|v| latest_release_from_json(&v)),
         None => None,
     };
     match latest {
         Some(latest) => {
-            PYPI_CACHE.lock().expect("pypi cache lock").insert(pkg.to_string(), (Instant::now(), latest.clone()));
+            PYPI_CACHE
+                .lock()
+                .expect("pypi cache lock")
+                .insert(pkg.to_string(), (Instant::now(), latest.clone()));
             Some(latest)
         }
         // Network/parse failure: stale cache beats nothing (Python
@@ -160,7 +176,7 @@ pub async fn pypi_latest_at(url: &str, pkg: &str) -> Option<String> {
 /// (installed, latest) when the release channel's latest version is
 /// strictly newer than the installed version; None = no drift. Python
 /// `detect_drift`, with the detection source switched from PyPI to
-/// `gs://wisent-compute/releases/stado/latest.json` (see the module-docs
+/// the release channel's `latest.json` pointer (see the module-docs
 /// deviation — PyPI tracks the Python package, not these binaries).
 pub async fn detect_drift() -> Option<(String, String)> {
     let installed = env!("CARGO_PKG_VERSION").to_string();
@@ -245,7 +261,7 @@ pub enum DriftOutcome {
 /// stands in for the drained-slots check (`if slots:` / `if not slots:`).
 ///
 /// Two triggers for remediation:
-///   1. `gs://wisent-compute/releases/stado/latest.json` naming a release
+///   1. the release channel's `latest.json` naming a release
 ///      strictly newer than the installed version ([`detect_drift`]).
 ///   2. `import wisent` raises in the venv (broken wheel published to
 ///      PyPI — happened with wisent 0.11.36's missing ImageAdapter
@@ -271,7 +287,10 @@ pub async fn maybe_drain_or_upgrade(
     log_fn: &mut dyn FnMut(&str),
     kind: &str,
 ) -> DriftOutcome {
-    if std::env::var("WC_SKIP_VERSION_CHECK").map(|v| v.trim() == "1").unwrap_or(false) {
+    if std::env::var("WC_SKIP_VERSION_CHECK")
+        .map(|v| v.trim() == "1")
+        .unwrap_or(false)
+    {
         return DriftOutcome::Clean;
     }
     // If a job is active, drift cannot be applied yet. Avoid making the
@@ -297,7 +316,7 @@ pub async fn maybe_drain_or_upgrade(
             "cloud agent {kind} drift={drift:?} ok={ok}; self-terminate \
              so dispatcher creates a fresh VM with new version baked in"
         ));
-        super::gcp_self::self_terminate(log_fn).await;
+        super::self_terminate(kind, log_fn).await;
         return DriftOutcome::SelfTerminated;
     }
     if !ok {
@@ -315,7 +334,9 @@ pub async fn maybe_drain_or_upgrade(
     // replace, then re-exec. On success reexec never returns.
     match crate::self_update::self_update(log_fn).await {
         Ok(crate::self_update::UpdateOutcome::Updated { from, to }) => {
-            log_fn(&format!("self-update {from} -> {to} installed; re-executing the new binary"));
+            log_fn(&format!(
+                "self-update {from} -> {to} installed; re-executing the new binary"
+            ));
             let exec_err = crate::self_update::reexec();
             log_fn(&format!(
                 "re-exec after self-update failed: {exec_err}; continuing on the old in-memory binary"
@@ -367,7 +388,10 @@ mod tests {
             "releases": {"0.4.9": [], "0.4.100": [], "0.4.99": [], "0.3.0": []}
         });
         assert_eq!(latest_release_from_json(&body).as_deref(), Some("0.4.100"));
-        assert_eq!(latest_release_from_json(&serde_json::json!({"releases": {}})), None);
+        assert_eq!(
+            latest_release_from_json(&serde_json::json!({"releases": {}})),
+            None
+        );
         assert_eq!(latest_release_from_json(&serde_json::json!({})), None);
     }
 
@@ -390,7 +414,10 @@ mod tests {
         // fetch from the dead server: the cached value must come back.
         PYPI_CACHE.lock().unwrap().insert(
             pkg.to_string(),
-            (Instant::now() - CACHE_TTL - Duration::from_secs(1), "0.2.0".to_string()),
+            (
+                Instant::now() - CACHE_TTL - Duration::from_secs(1),
+                "0.2.0".to_string(),
+            ),
         );
         assert_eq!(pypi_latest_at(&url, pkg).await.as_deref(), Some("0.2.0"));
         // Cleanup so no other test observes the seeded entry.

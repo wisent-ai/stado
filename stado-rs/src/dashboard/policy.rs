@@ -3,13 +3,17 @@
 //! Only the disk-cleanup controls exposed by the dashboard are readable or
 //! writable here. The full registry contains routing and SSH data and must not
 //! be returned by the operator API.
+//!
+//! This is the WRITE side of `registry.json` and goes through the store
+//! `WC_STORAGE_BACKEND` selects. `targets::fetch_registry_remote` is the
+//! READ side and resolves the same [`REGISTRY_BLOB`] through the same
+//! store, so both address one object on every backend.
 
 use serde_json::{json, Map, Value};
 
 use crate::queue::{BlobBackend, StorageError};
-use crate::targets::{clear_registry_gcs_cache, validate_registry};
+use crate::targets::{clear_registry_cache, validate_registry, REGISTRY_BLOB};
 
-const REGISTRY_BLOB: &str = "registry.json";
 const ROOT_FIELDS: &[&str] = &["target", "disk_cleanup", "pinned_only", "weles"];
 const CLEANUP_FIELDS: &[&str] = &[
     "mode",
@@ -57,7 +61,9 @@ impl PolicyError {
 }
 
 fn generation_value(version: &str) -> Value {
-    version.parse::<u64>().map_or_else(|_| json!(version), |value| json!(value))
+    version
+        .parse::<u64>()
+        .map_or_else(|_| json!(version), |value| json!(value))
 }
 
 fn policy_target(target: &Value) -> Option<Value> {
@@ -81,7 +87,8 @@ pub async fn policy_view(backend: &dyn BlobBackend) -> Result<Value, PolicyError
         .ok_or(PolicyError::MissingRegistry)?;
     let registry: Value = serde_json::from_str(&versioned.content)
         .map_err(|error| PolicyError::InvalidRegistry(error.to_string()))?;
-    validate_registry(&registry).map_err(|error| PolicyError::InvalidRegistry(error.to_string()))?;
+    validate_registry(&registry)
+        .map_err(|error| PolicyError::InvalidRegistry(error.to_string()))?;
     let targets = registry
         .get("targets")
         .and_then(Value::as_array)
@@ -92,7 +99,11 @@ pub async fn policy_view(backend: &dyn BlobBackend) -> Result<Value, PolicyError
     Ok(json!({"generation": generation_value(&versioned.version), "targets": targets}))
 }
 
-fn reject_unknown(object: &Map<String, Value>, allowed: &[&str], location: &str) -> Result<(), PolicyError> {
+fn reject_unknown(
+    object: &Map<String, Value>,
+    allowed: &[&str],
+    location: &str,
+) -> Result<(), PolicyError> {
     let mut unknown = object
         .keys()
         .filter(|key| !allowed.contains(&key.as_str()))
@@ -134,7 +145,11 @@ fn apply_cleanup_patch(target: &mut Map<String, Value>, patch: &Value) -> Result
 
     if let Some(cleaners_patch) = patch.get("cleaners") {
         let cleaners_patch = object(cleaners_patch, "disk_cleanup.cleaners")?;
-        reject_unknown(cleaners_patch, &["weles_recordings"], "disk_cleanup.cleaners")?;
+        reject_unknown(
+            cleaners_patch,
+            &["weles_recordings"],
+            "disk_cleanup.cleaners",
+        )?;
         if let Some(weles_patch) = cleaners_patch.get("weles_recordings") {
             let weles_patch = object(weles_patch, "disk_cleanup.cleaners.weles_recordings")?;
             reject_unknown(
@@ -145,7 +160,9 @@ fn apply_cleanup_patch(target: &mut Map<String, Value>, patch: &Value) -> Result
             let cleaners = cleanup
                 .get_mut("cleaners")
                 .and_then(Value::as_object_mut)
-                .ok_or_else(|| PolicyError::InvalidRegistry("disk_cleanup.cleaners must be an object".into()))?;
+                .ok_or_else(|| {
+                    PolicyError::InvalidRegistry("disk_cleanup.cleaners must be an object".into())
+                })?;
             let cleaner = cleaners
                 .entry("weles_recordings")
                 .or_insert_with(|| json!({}))
@@ -191,15 +208,16 @@ pub async fn update_policy(
         .ok_or(PolicyError::MissingRegistry)?;
     let mut registry: Value = serde_json::from_str(&versioned.content)
         .map_err(|error| PolicyError::InvalidRegistry(error.to_string()))?;
-    validate_registry(&registry).map_err(|error| PolicyError::InvalidRegistry(error.to_string()))?;
+    validate_registry(&registry)
+        .map_err(|error| PolicyError::InvalidRegistry(error.to_string()))?;
 
     let target = registry
         .get_mut("targets")
         .and_then(Value::as_array_mut)
         .and_then(|targets| {
-            targets.iter_mut().find(|target| {
-                target.get("name").and_then(Value::as_str) == Some(target_name)
-            })
+            targets
+                .iter_mut()
+                .find(|target| target.get("name").and_then(Value::as_str) == Some(target_name))
         })
         .ok_or_else(|| PolicyError::TargetNotFound(target_name.to_string()))?;
     let target = target
@@ -211,7 +229,9 @@ pub async fn update_policy(
     }
     if let Some(pinned_only) = request.get("pinned_only") {
         if !pinned_only.is_boolean() {
-            return Err(PolicyError::InvalidRequest("pinned_only must be a boolean".into()));
+            return Err(PolicyError::InvalidRequest(
+                "pinned_only must be a boolean".into(),
+            ));
         }
         target.insert("pinned_only".into(), pinned_only.clone());
     }
@@ -231,6 +251,6 @@ pub async fn update_policy(
         Err(StorageError::StorageConflict(_)) => return Err(PolicyError::Conflict),
         Err(error) => return Err(PolicyError::Storage(error)),
     };
-    clear_registry_gcs_cache();
+    clear_registry_cache();
     Ok(json!({"ok": true, "generation": generation_value(&new_version)}))
 }

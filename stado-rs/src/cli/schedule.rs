@@ -29,7 +29,10 @@ fn created_by() -> String {
 /// that submits COMMAND on a cron schedule.
 pub async fn create(args: &ScheduleCreateArgs) -> Result<(), CmdError> {
     if !cron_is_valid(&args.cron) {
-        return Err(CmdError::click(format!("invalid cron expression: '{}'", args.cron)));
+        return Err(CmdError::click(format!(
+            "invalid cron expression: '{}'",
+            args.cron
+        )));
     }
     let apt_list: Vec<String> = args
         .apt
@@ -38,8 +41,9 @@ pub async fn create(args: &ScheduleCreateArgs) -> Result<(), CmdError> {
         .filter(|p| !p.is_empty())
         .collect();
     let now = Utc::now();
-    let next_due = compute_next_due(&args.cron, now, &args.tz)
-        .map_err(|exc| CmdError::click(format!("could not compute next run ({}): {exc}", args.tz)))?;
+    let next_due = compute_next_due(&args.cron, now, &args.tz).map_err(|exc| {
+        CmdError::click(format!("could not compute next run ({}): {exc}", args.tz))
+    })?;
     let sid = generate_schedule_id();
     let mut sched = Schedule::new(&sid, &args.cron, &args.command);
     sched.tz = args.tz.clone();
@@ -69,7 +73,10 @@ pub async fn create(args: &ScheduleCreateArgs) -> Result<(), CmdError> {
     println!("created schedule {sid} ({state})");
     println!("  cron:     {}  ({})", args.cron, args.tz);
     println!("  next run: {}", sched.next_due_at);
-    println!("  command:  {}", args.command.chars().take(80).collect::<String>());
+    println!(
+        "  command:  {}",
+        args.command.chars().take(80).collect::<String>()
+    );
     Ok(())
 }
 
@@ -79,7 +86,13 @@ pub async fn list() -> Result<(), CmdError> {
     let mut scheds = schedules::list_schedules(&store).await?;
     // Python sort key: s.next_due_at or "~" — plain string sort, paused
     // ("" → "~") last.
-    scheds.sort_by_key(|s| if s.next_due_at.is_empty() { "~".to_string() } else { s.next_due_at.clone() });
+    scheds.sort_by_key(|s| {
+        if s.next_due_at.is_empty() {
+            "~".to_string()
+        } else {
+            s.next_due_at.clone()
+        }
+    });
     if scheds.is_empty() {
         println!("(no schedules)");
         return Ok(());

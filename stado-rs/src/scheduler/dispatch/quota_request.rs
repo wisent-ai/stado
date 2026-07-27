@@ -68,7 +68,9 @@ pub enum QuotaRequestError {
 /// Python's quotaPreferenceId:
 /// `f"compute-gpus-{region}-{gpu_family}".lower().replace("_", "-")`.
 pub fn gcp_preference_id(region: &str, gpu_family: &str) -> String {
-    format!("compute-gpus-{region}-{gpu_family}").to_lowercase().replace('_', "-")
+    format!("compute-gpus-{region}-{gpu_family}")
+        .to_lowercase()
+        .replace('_', "-")
 }
 
 /// The QuotaPreference resource body (REST field names; int64 values are
@@ -149,8 +151,7 @@ pub async fn gcp_request_increase(
     contact_email: &str,
 ) -> Result<Value, QuotaRequestError> {
     let Some((_, family)) = GCP_ACCEL_TO_GPU_FAMILY.iter().find(|(a, _)| *a == accel) else {
-        let mut known: Vec<&str> =
-            GCP_ACCEL_TO_GPU_FAMILY.iter().map(|(_, f)| *f).collect();
+        let mut known: Vec<&str> = GCP_ACCEL_TO_GPU_FAMILY.iter().map(|(_, f)| *f).collect();
         known.sort_unstable();
         let known: Vec<String> = known.iter().map(|f| format!("'{f}'")).collect();
         return Err(QuotaRequestError::Value(format!(
@@ -158,7 +159,15 @@ pub async fn gcp_request_increase(
             known.join(", ")
         )));
     };
-    Ok(gcp_request_for_family(client, region, family, new_limit, justification, contact_email).await?)
+    Ok(gcp_request_for_family(
+        client,
+        region,
+        family,
+        new_limit,
+        justification,
+        contact_email,
+    )
+    .await?)
 }
 
 /// The Microsoft.Quota create_or_update body (Python
@@ -198,7 +207,10 @@ pub async fn azure_request_increase_with_client(
             &format!("quota create_or_update {family_name}"),
         )
         .await?;
-    let name = resp.get("id").and_then(Value::as_str).unwrap_or(family_name);
+    let name = resp
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or(family_name);
     Ok(json!({"name": name, "available": true}))
 }
 
@@ -235,8 +247,9 @@ pub async fn gcp_fanout(
     justification: &str,
     contact_email: &str,
 ) -> Vec<Value> {
-    let targets: Vec<String> =
-        regions.map(<[String]>::to_vec).unwrap_or_else(|| config::regions().to_vec());
+    let targets: Vec<String> = regions
+        .map(<[String]>::to_vec)
+        .unwrap_or_else(|| config::regions().to_vec());
     let owned;
     let client = match gcp_client {
         Some(client) => Some(client),
@@ -299,8 +312,9 @@ pub async fn azure_fanout(accel: &str, new_limit: i64, regions: Option<&[String]
             "error": format!("no Azure compute family matches accel '{accel}'"),
         })];
     }
-    let targets: Vec<String> =
-        regions.map(<[String]>::to_vec).unwrap_or_else(|| config::azure_locations().to_vec());
+    let targets: Vec<String> = regions
+        .map(<[String]>::to_vec)
+        .unwrap_or_else(|| config::azure_locations().to_vec());
     let subscription = config::azure_subscription_id();
     let mut out = Vec::new();
     for loc in &targets {
@@ -349,8 +363,15 @@ pub async fn request_quota_increases(
     for provider in providers {
         match provider.as_str() {
             "gcp" => out.extend(
-                gcp_fanout(gcp_client, accel, new_limit, regions, justification, contact_email)
-                    .await,
+                gcp_fanout(
+                    gcp_client,
+                    accel,
+                    new_limit,
+                    regions,
+                    justification,
+                    contact_email,
+                )
+                .await,
             ),
             "azure" => out.extend(azure_fanout(accel, new_limit, regions).await),
             other => out.push(json!({
@@ -459,7 +480,9 @@ mod tests {
         ])
         .await;
         let client = CloudQuotasClient::for_test(&server.base_url, "p");
-        let r = gcp_request_for_family(&client, "us-east1", "NVIDIA_L4", 8, "j", "e@x").await.unwrap();
+        let r = gcp_request_for_family(&client, "us-east1", "NVIDIA_L4", 8, "j", "e@x")
+            .await
+            .unwrap();
         assert_eq!(r["created"], json!(false));
         let requests = server.requests.lock().unwrap().clone();
         assert_eq!(requests.len(), 2, "{requests:?}");
@@ -505,7 +528,9 @@ mod tests {
         ])
         .await;
         let client = ArmClient::for_test(&server.base_url, "sub-9");
-        let r = azure_request_increase_with_client(&client, "eastus", "fam", 192).await.unwrap();
+        let r = azure_request_increase_with_client(&client, "eastus", "fam", 192)
+            .await
+            .unwrap();
         assert_eq!(r, json!({"name": "x", "available": true}));
         let requests = server.requests.lock().unwrap().clone();
         assert!(
@@ -521,8 +546,13 @@ mod tests {
 
     #[tokio::test]
     async fn azure_request_increase_unset_subscription_is_informational() {
-        let r = azure_request_increase("", "eastus", "fam", 16).await.unwrap();
-        assert_eq!(r, json!({"available": false, "reason": "AZURE_SUBSCRIPTION_ID unset"}));
+        let r = azure_request_increase("", "eastus", "fam", 16)
+            .await
+            .unwrap();
+        assert_eq!(
+            r,
+            json!({"available": false, "reason": "AZURE_SUBSCRIPTION_ID unset"})
+        );
     }
 
     #[tokio::test]

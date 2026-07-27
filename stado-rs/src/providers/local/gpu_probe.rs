@@ -60,9 +60,10 @@ pub async fn proc_tree_pids(root_pid: i32) -> HashSet<i32> {
         .output()
         .await
     {
-        Ok(out) if out.status.success() => {
-            tree_pids_from(&parse_ps_pid_ppid(&String::from_utf8_lossy(&out.stdout)), root_pid)
-        }
+        Ok(out) if out.status.success() => tree_pids_from(
+            &parse_ps_pid_ppid(&String::from_utf8_lossy(&out.stdout)),
+            root_pid,
+        ),
         _ => HashSet::from([root_pid]),
     }
 }
@@ -76,7 +77,11 @@ pub fn parse_compute_apps(text: &str) -> Vec<(String, i32, i64)> {
             if parts.len() != 3 {
                 return None;
             }
-            Some((parts[0].to_string(), parts[1].parse().ok()?, parts[2].parse().ok()?))
+            Some((
+                parts[0].to_string(),
+                parts[1].parse().ok()?,
+                parts[2].parse().ok()?,
+            ))
         })
         .collect()
 }
@@ -106,7 +111,9 @@ pub fn attributed_used_gb(rows: &[(String, i32, i64)], pids: &HashSet<i32>) -> i
             *per_gpu_mib.entry(gpu_uuid.as_str()).or_insert(0) += mib;
         }
     }
-    let Some(&peak_mib) = per_gpu_mib.values().max() else { return 0 };
+    let Some(&peak_mib) = per_gpu_mib.values().max() else {
+        return 0;
+    };
     // Ceil to GiB (Python -(-peak_mib // 1024)); i64::div_ceil is unstable
     // on this toolchain.
     (peak_mib + 1023) / 1024
@@ -128,7 +135,10 @@ pub async fn smi_job_used_gb(root_pid: i32) -> i64 {
         _ => return -1,
     };
     let pids = proc_tree_pids(root_pid).await;
-    attributed_used_gb(&parse_compute_apps(&String::from_utf8_lossy(&out.stdout)), &pids)
+    attributed_used_gb(
+        &parse_compute_apps(&String::from_utf8_lossy(&out.stdout)),
+        &pids,
+    )
 }
 
 #[cfg(test)]

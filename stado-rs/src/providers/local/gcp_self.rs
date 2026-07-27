@@ -14,6 +14,14 @@ pub const METADATA_BASE: &str = "http://metadata.google.internal/computeMetadata
 
 const METADATA_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// [`METADATA_TIMEOUT`], for the sibling cloud probe: the Azure IMDS
+/// probe in [`super::azure_self`] fails closed for the same reason (off
+/// that cloud the link-local endpoint black-holes packets instead of
+/// refusing them) and must not drift to a different ceiling.
+pub(crate) const fn metadata_timeout() -> Duration {
+    METADATA_TIMEOUT
+}
+
 /// Python `_fetch_metadata(path, timeout=2.0)`.
 pub async fn fetch_metadata(path: &str) -> Result<String, reqwest::Error> {
     fetch_metadata_at(METADATA_BASE, path, METADATA_TIMEOUT).await
@@ -70,7 +78,9 @@ pub async fn self_terminate(log_fn: &mut dyn FnMut(&str)) {
     }
     match self_metadata().await {
         Ok((name, zone)) => {
-            log_fn(&format!("GCE self-terminate: instances delete {name} in {zone}"));
+            log_fn(&format!(
+                "GCE self-terminate: instances delete {name} in {zone}"
+            ));
             // Detached like Python's subprocess.Popen(...DEVNULL...): the
             // VM is going away; we never wait on the child.
             if let Err(err) = std::process::Command::new("gcloud")
@@ -97,21 +107,35 @@ mod tests {
 
     #[test]
     fn zone_path_parsing() {
-        assert_eq!(zone_from_path("projects/123/zones/us-central1-a"), "us-central1-a");
+        assert_eq!(
+            zone_from_path("projects/123/zones/us-central1-a"),
+            "us-central1-a"
+        );
         assert_eq!(zone_from_path("us-east4-b"), "us-east4-b");
     }
 
     #[tokio::test]
     async fn fetch_metadata_sends_flavor_header_and_trims() {
-        let server = testutil::mock_http(vec![testutil::http_response(200, "OK", "123456789\n")]).await;
+        let server =
+            testutil::mock_http(vec![testutil::http_response(200, "OK", "123456789\n")]).await;
         let value = fetch_metadata_at(&server.base_url, "instance/id", Duration::from_secs(2))
             .await
             .unwrap();
         assert_eq!(value, "123456789");
         let requests = server.requests.lock().unwrap();
         assert_eq!(requests.len(), 1);
-        assert!(requests[0].contains("GET /instance/id HTTP/1.1"), "{}", requests[0]);
-        assert!(requests[0].to_ascii_lowercase().contains("metadata-flavor: google"), "{}", requests[0]);
+        assert!(
+            requests[0].contains("GET /instance/id HTTP/1.1"),
+            "{}",
+            requests[0]
+        );
+        assert!(
+            requests[0]
+                .to_ascii_lowercase()
+                .contains("metadata-flavor: google"),
+            "{}",
+            requests[0]
+        );
         server.stop();
     }
 
@@ -121,7 +145,8 @@ mod tests {
         // immediately, so the connection is refused — the off-GCE path.
         let server = testutil::mock_http(vec![]).await;
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let result = fetch_metadata_at(&server.base_url, "instance/id", Duration::from_millis(500)).await;
+        let result =
+            fetch_metadata_at(&server.base_url, "instance/id", Duration::from_millis(500)).await;
         assert!(result.is_err());
         server.stop();
     }

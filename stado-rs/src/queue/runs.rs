@@ -20,8 +20,14 @@ pub const RUN_PREFIX: &str = "runs";
 /// Prefixes a job can no longer leave.
 pub const TERMINAL_PREFIXES: [&str; 4] = ["completed", "uploaded", "failed", "cancelled"];
 /// Every prefix a member job can sit in (probe order).
-pub const ALL_PREFIXES: [&str; 6] =
-    ["queue", "running", "completed", "uploaded", "failed", "cancelled"];
+pub const ALL_PREFIXES: [&str; 6] = [
+    "queue",
+    "running",
+    "completed",
+    "uploaded",
+    "failed",
+    "cancelled",
+];
 
 /// `run-<unix seconds>-<8 hex chars>` (Python `generate_run_id`).
 pub fn generate_run_id() -> String {
@@ -47,8 +53,12 @@ pub fn derive_run_name(commands: &[String]) -> String {
                     }
                 }
                 "--model" => {
-                    let model =
-                        next.trim_matches(['\'', '"']).rsplit('/').next().unwrap_or("").to_string();
+                    let model = next
+                        .trim_matches(['\'', '"'])
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or("")
+                        .to_string();
                     if !models.contains(&model) {
                         models.push(model);
                     }
@@ -122,15 +132,30 @@ pub async fn write_run_manifest(
     );
     body.insert("submitter_app".into(), Value::from(submitter_app));
     body.insert("submitted_by".into(), Value::from(manifest.submitted_by));
-    body.insert("submitted_from".into(), Value::from(manifest.submitted_from));
+    body.insert(
+        "submitted_from".into(),
+        Value::from(manifest.submitted_from),
+    );
     body.insert("n_jobs".into(), Value::from(manifest.job_ids.len()));
     body.insert(
         "job_ids".into(),
-        Value::Array(manifest.job_ids.iter().map(|j| Value::from(j.as_str())).collect()),
+        Value::Array(
+            manifest
+                .job_ids
+                .iter()
+                .map(|j| Value::from(j.as_str()))
+                .collect(),
+        ),
     );
     body.insert(
         "commands".into(),
-        Value::Array(manifest.commands.iter().map(|c| Value::from(c.as_str())).collect()),
+        Value::Array(
+            manifest
+                .commands
+                .iter()
+                .map(|c| Value::from(c.as_str()))
+                .collect(),
+        ),
     );
     store
         .upload_text(
@@ -145,13 +170,18 @@ pub async fn read_run(
     store: &JobStorage,
     run_id: &str,
 ) -> Result<Option<Map<String, Value>>, StorageError> {
-    let Some(raw) = store.download_text(&format!("{RUN_PREFIX}/{run_id}.json")).await? else {
+    let Some(raw) = store
+        .download_text(&format!("{RUN_PREFIX}/{run_id}.json"))
+        .await?
+    else {
         return Ok(None);
     };
     let value: Value = serde_json::from_str(&raw)?;
     match value {
         Value::Object(map) => Ok(Some(map)),
-        _ => Err(StorageError::Other(format!("run manifest {run_id} is not a JSON object"))),
+        _ => Err(StorageError::Other(format!(
+            "run manifest {run_id} is not a JSON object"
+        ))),
     }
 }
 
@@ -190,7 +220,11 @@ pub async fn run_status(
     let job_ids: Vec<String> = manifest
         .get("job_ids")
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|j| j.as_str().map(str::to_string)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|j| j.as_str().map(str::to_string))
+                .collect()
+        })
         .unwrap_or_default();
     let mut counts: BTreeMap<String, i64> =
         ALL_PREFIXES.iter().map(|p| (p.to_string(), 0)).collect();
@@ -210,7 +244,10 @@ pub async fn run_status(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
-        n_jobs: manifest.get("n_jobs").and_then(Value::as_i64).unwrap_or(job_ids.len() as i64),
+        n_jobs: manifest
+            .get("n_jobs")
+            .and_then(Value::as_i64)
+            .unwrap_or(job_ids.len() as i64),
         counts,
         missing,
         in_flight,

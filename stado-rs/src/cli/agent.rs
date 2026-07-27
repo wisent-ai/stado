@@ -11,7 +11,9 @@ use crate::queue::JobStorage;
 /// numbers/bools differs only for True/False/none — an accepted cosmetic
 /// deviation for env values, which are strings in practice).
 fn env_value_str(v: &serde_json::Value) -> String {
-    v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string())
+    v.as_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| v.to_string())
 }
 
 /// The shared --auto/--target registry-application half of the Python
@@ -30,14 +32,18 @@ async fn apply_registry_target(
         if gpu_type.is_empty() {
             gpu_type = t.gpu_type.clone().unwrap_or_default();
         }
-        let env_slots = std::env::var("WC_LOCAL_SLOTS").unwrap_or_default().trim().to_string();
+        let env_slots = std::env::var("WC_LOCAL_SLOTS")
+            .unwrap_or_default()
+            .trim()
+            .to_string();
         if t.slots > 0 || env_slots.is_empty() {
             std::env::set_var("WC_LOCAL_SLOTS", t.slots.to_string());
         }
         for (k, v) in &t.env_overrides {
             std::env::set_var(k, env_value_str(v));
         }
-        let effective_slots = std::env::var("WC_LOCAL_SLOTS").unwrap_or_else(|_| t.slots.to_string());
+        let effective_slots =
+            std::env::var("WC_LOCAL_SLOTS").unwrap_or_else(|_| t.slots.to_string());
         println!(
             "agent --auto: target={} gpu_type={gpu_type} slots={effective_slots} registry_slots={}",
             t.name, t.slots
@@ -48,16 +54,23 @@ async fn apply_registry_target(
             .map_err(|e| CmdError::click(e.to_string()))?
             .ok_or_else(|| CmdError::click(format!("target '{target}' not found in registry")))?;
         if t.kind != "local" {
-            return Err(CmdError::click(format!("target '{target}' kind={}, expected local", t.kind)));
+            return Err(CmdError::click(format!(
+                "target '{target}' kind={}, expected local",
+                t.kind
+            )));
         }
         if gpu_type.is_empty() {
             gpu_type = t.gpu_type.clone().unwrap_or_default();
         }
-        let env_slots = std::env::var("WC_LOCAL_SLOTS").unwrap_or_default().trim().to_string();
+        let env_slots = std::env::var("WC_LOCAL_SLOTS")
+            .unwrap_or_default()
+            .trim()
+            .to_string();
         if t.slots > 0 || env_slots.is_empty() {
             std::env::set_var("WC_LOCAL_SLOTS", t.slots.to_string());
         }
-        let effective_slots = std::env::var("WC_LOCAL_SLOTS").unwrap_or_else(|_| t.slots.to_string());
+        let effective_slots =
+            std::env::var("WC_LOCAL_SLOTS").unwrap_or_else(|_| t.slots.to_string());
         println!(
             "agent: target={} gpu_type={gpu_type} slots={effective_slots} registry_slots={}",
             t.name, t.slots
@@ -86,7 +99,10 @@ pub async fn run(
     // defensive vast_has_renter helper already runs here today,
     // so the API key has to be in env anyway. Operator opt-out:
     // WC_VAST_AUTO_LIST=0.
-    let auto_list_env = std::env::var("WC_VAST_AUTO_LIST").unwrap_or_default().trim().to_lowercase();
+    let auto_list_env = std::env::var("WC_VAST_AUTO_LIST")
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase();
     let explicit_off = matches!(auto_list_env.as_str(), "0" | "false" | "no" | "off");
     let explicit_on = matches!(auto_list_env.as_str(), "1" | "true" | "yes" | "on");
     let env_has_api_key = vast::vast_api_key_available().await;
@@ -116,8 +132,10 @@ pub async fn run(
             ..Default::default()
         };
         tokio::spawn(async move {
-            if let Err(exc) =
-                vast::auto_list_loop(&client, &store, &hostname, params, |m| println!("[vast] {m}")).await
+            if let Err(exc) = vast::auto_list_loop(&client, &store, &hostname, params, |m| {
+                println!("[vast] {m}")
+            })
+            .await
             {
                 eprintln!("[vast] auto-list loop exited: {exc}");
             }

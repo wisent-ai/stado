@@ -171,12 +171,17 @@ pub fn load_profile(name: &str) -> Result<Map<String, Value>, ProfileError> {
                     )));
                 }
             };
-            map.entry("name".to_string()).or_insert_with(|| Value::from(name));
+            map.entry("name".to_string())
+                .or_insert_with(|| Value::from(name));
             return Ok(map);
         }
     }
     let available = list_profiles().join(", ");
-    let available = if available.is_empty() { "(none)".to_string() } else { available };
+    let available = if available.is_empty() {
+        "(none)".to_string()
+    } else {
+        available
+    };
     Err(ProfileError::NotFound(format!(
         "profile '{name}' not found. Searched: {}. Available: {available}",
         candidate_dirs()
@@ -207,7 +212,10 @@ fn py_eq(a: &Value, b: &Value) -> bool {
 /// `--gpu-type nvidia-l4` overrides the profile's gpu_type; a user who
 /// doesn't pass --gpu-type takes whatever the profile says (including
 /// nothing).
-pub fn merge_into_kwargs(profile: &Map<String, Value>, cli: &Map<String, Value>) -> Map<String, Value> {
+pub fn merge_into_kwargs(
+    profile: &Map<String, Value>,
+    cli: &Map<String, Value>,
+) -> Map<String, Value> {
     let mut out = cli.clone();
     for (pkey, kwarg) in PROFILE_KEY_TO_KWARG {
         let Some(profile_value) = profile.get(pkey) else {
@@ -252,7 +260,10 @@ mod tests {
     fn missing_profile_error_lists_search_path() {
         let err = load_profile("no-such-profile-xyz").unwrap_err();
         let msg = err.to_string();
-        assert!(msg.starts_with("profile 'no-such-profile-xyz' not found. Searched: "), "{msg}");
+        assert!(
+            msg.starts_with("profile 'no-such-profile-xyz' not found. Searched: "),
+            "{msg}"
+        );
         assert!(msg.contains("Available: ai_toolkit_zimage"), "{msg}");
     }
 

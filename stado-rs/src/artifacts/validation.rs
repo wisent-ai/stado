@@ -39,26 +39,40 @@ fn split_uri(uri: &str) -> SplitUri {
             // WHATWG lowercases the scheme, as does Python urlsplit.
             scheme: parsed.scheme().to_string(),
             has_credentials: !parsed.username().is_empty() || parsed.password().is_some(),
-            query_keys: parsed.query_pairs().map(|(key, _)| key.into_owned()).collect(),
+            query_keys: parsed
+                .query_pairs()
+                .map(|(key, _)| key.into_owned())
+                .collect(),
         },
         Err(_) => {
             // Not an absolute URI. Python would still report a scheme when
             // the text before ':' looks like one (`[A-Za-z][A-Za-z0-9+.-]*`),
             // e.g. `s3:bucket` parses fine in WHATWG too, so the only URIs
             // landing here have no usable scheme.
-            SplitUri { scheme: String::new(), has_credentials: false, query_keys: Vec::new() }
+            SplitUri {
+                scheme: String::new(),
+                has_credentials: false,
+                query_keys: Vec::new(),
+            }
         }
     }
 }
 
 fn is_hex_sha256(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
 }
 
 fn validate_location(location: &ArtifactLocation, prefix: &str, issues: &mut Vec<String>) {
     let parsed = split_uri(&location.uri);
     if !ALLOWED_SCHEMES.contains(&parsed.scheme.as_str()) {
-        let scheme = if parsed.scheme.is_empty() { "<none>" } else { &parsed.scheme };
+        let scheme = if parsed.scheme.is_empty() {
+            "<none>"
+        } else {
+            &parsed.scheme
+        };
         issues.push(format!("{prefix}.uri uses unsupported scheme: {scheme}"));
     }
     if parsed.has_credentials {
@@ -66,11 +80,15 @@ fn validate_location(location: &ArtifactLocation, prefix: &str, issues: &mut Vec
     }
     for key in &parsed.query_keys {
         if sensitive_query_key().is_match(key) {
-            issues.push(format!("{prefix}.uri contains sensitive query field: {key}"));
+            issues.push(format!(
+                "{prefix}.uri contains sensitive query field: {key}"
+            ));
         }
     }
     if !location.sha256.is_empty() && !is_hex_sha256(&location.sha256.to_lowercase()) {
-        issues.push(format!("{prefix}.sha256 must contain 64 hexadecimal characters"));
+        issues.push(format!(
+            "{prefix}.sha256 must contain 64 hexadecimal characters"
+        ));
     }
     if location.size_bytes.is_some_and(|n| n < 0) {
         issues.push(format!("{prefix}.size_bytes cannot be negative"));
@@ -85,7 +103,10 @@ fn validate_location(location: &ArtifactLocation, prefix: &str, issues: &mut Vec
 pub fn validate_manifest(manifest: &ArtifactManifest) -> Vec<String> {
     let mut issues: Vec<String> = Vec::new();
     if manifest.schema_version != 1 {
-        issues.push(format!("unsupported schema_version: {}", manifest.schema_version));
+        issues.push(format!(
+            "unsupported schema_version: {}",
+            manifest.schema_version
+        ));
     }
     if manifest.title.trim().is_empty() {
         issues.push("title is required".to_string());
@@ -154,7 +175,11 @@ mod tests {
         // Every allowed scheme passes the scheme check.
         for scheme in ["az", "gs", "hf", "https"] {
             let m = manifest_with_uris(&[format!("{scheme}://bucket/path").as_str()]);
-            assert_eq!(validate_manifest(&m), Vec::<String>::new(), "scheme {scheme}");
+            assert_eq!(
+                validate_manifest(&m),
+                Vec::<String>::new(),
+                "scheme {scheme}"
+            );
         }
     }
 
@@ -176,18 +201,33 @@ mod tests {
     fn embedded_credentials_are_rejected() {
         let m = manifest_with_uris(&["https://user:secret@example.com/data"]);
         let issues = validate_manifest(&m);
-        assert!(issues.contains(&"locations[0].uri must not embed credentials".to_string()), "{issues:?}");
+        assert!(
+            issues.contains(&"locations[0].uri must not embed credentials".to_string()),
+            "{issues:?}"
+        );
         let m = manifest_with_uris(&["https://user@example.com/data"]);
         let issues = validate_manifest(&m);
-        assert!(issues.contains(&"locations[0].uri must not embed credentials".to_string()), "{issues:?}");
+        assert!(
+            issues.contains(&"locations[0].uri must not embed credentials".to_string()),
+            "{issues:?}"
+        );
     }
 
     #[test]
     fn sensitive_query_fields_are_rejected() {
         // The full sensitive list from validation.py's _SENSITIVE_QUERY_KEY.
         for key in [
-            "token", "access_token", "access-token", "api_key", "apikey", "credential",
-            "password", "secret", "signature", "sig", "x-goog-signature",
+            "token",
+            "access_token",
+            "access-token",
+            "api_key",
+            "apikey",
+            "credential",
+            "password",
+            "secret",
+            "signature",
+            "sig",
+            "x-goog-signature",
         ] {
             let m = manifest_with_uris(&[format!("https://example.com/d?{key}=abc").as_str()]);
             let issues = validate_manifest(&m);
@@ -215,14 +255,23 @@ mod tests {
             "Demo",
         );
         let issues = validate_manifest(&m);
-        assert!(issues.contains(&"at least one location is required".to_string()), "{issues:?}");
-        assert!(issues.contains(&"exactly one primary location is required".to_string()), "{issues:?}");
+        assert!(
+            issues.contains(&"at least one location is required".to_string()),
+            "{issues:?}"
+        );
+        assert!(
+            issues.contains(&"exactly one primary location is required".to_string()),
+            "{issues:?}"
+        );
 
         // Two primaries.
         m = manifest_with_uris(&["gs://a/x", "gs://a/y"]);
         m.locations[1].role = "primary".into();
         let issues = validate_manifest(&m);
-        assert!(issues.contains(&"exactly one primary location is required".to_string()), "{issues:?}");
+        assert!(
+            issues.contains(&"exactly one primary location is required".to_string()),
+            "{issues:?}"
+        );
 
         // Self-dependency.
         m = valid_manifest();
@@ -235,9 +284,20 @@ mod tests {
         m.locations[0].size_bytes = Some(-1);
         m.locations[0].file_count = Some(-2);
         let issues = validate_manifest(&m);
-        assert!(issues.contains(&"locations[0].sha256 must contain 64 hexadecimal characters".to_string()), "{issues:?}");
-        assert!(issues.contains(&"locations[0].size_bytes cannot be negative".to_string()), "{issues:?}");
-        assert!(issues.contains(&"locations[0].file_count cannot be negative".to_string()), "{issues:?}");
+        assert!(
+            issues.contains(
+                &"locations[0].sha256 must contain 64 hexadecimal characters".to_string()
+            ),
+            "{issues:?}"
+        );
+        assert!(
+            issues.contains(&"locations[0].size_bytes cannot be negative".to_string()),
+            "{issues:?}"
+        );
+        assert!(
+            issues.contains(&"locations[0].file_count cannot be negative".to_string()),
+            "{issues:?}"
+        );
         // Uppercase hex is accepted (Python lowercases before matching).
         m = valid_manifest();
         m.locations[0].sha256 = "A".repeat(64);
@@ -249,8 +309,14 @@ mod tests {
         m.title = "  ".into();
         m.labels.insert("x".repeat(129), "v".into());
         let issues = validate_manifest(&m);
-        assert!(issues.contains(&"unsupported schema_version: 2".to_string()), "{issues:?}");
-        assert!(issues.contains(&"title is required".to_string()), "{issues:?}");
+        assert!(
+            issues.contains(&"unsupported schema_version: 2".to_string()),
+            "{issues:?}"
+        );
+        assert!(
+            issues.contains(&"title is required".to_string()),
+            "{issues:?}"
+        );
         assert!(
             issues.contains(
                 &"labels must have non-empty keys <=128 and values <=512 characters".to_string()

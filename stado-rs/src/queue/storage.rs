@@ -50,18 +50,30 @@ impl JobStorage {
         match config::wc_storage_backend() {
             "local" => {
                 let backend = LocalBackend::new(config::wc_local_storage_path())?;
-                Ok(Self::with_backend_and_bucket(Arc::new(backend), "local", bucket))
+                Ok(Self::with_backend_and_bucket(
+                    Arc::new(backend),
+                    "local",
+                    bucket,
+                ))
             }
             "gcs" => {
                 let backend = GcsBackend::new(bucket).await?;
-                Ok(Self::with_backend_and_bucket(Arc::new(backend), "gcs", bucket))
+                Ok(Self::with_backend_and_bucket(
+                    Arc::new(backend),
+                    "gcs",
+                    bucket,
+                ))
             }
             "azure" => {
                 let backend = AzureBlobBackend::new(
                     config::wc_azure_storage_account(),
                     config::wc_azure_container(),
                 )?;
-                Ok(Self::with_backend_and_bucket(Arc::new(backend), "azure", bucket))
+                Ok(Self::with_backend_and_bucket(
+                    Arc::new(backend),
+                    "azure",
+                    bucket,
+                ))
             }
             "s3" => {
                 // Python: S3Backend(WC_S3_BUCKET or bucket_name, WC_S3_REGION)
@@ -69,9 +81,17 @@ impl JobStorage {
                 // when WC_S3_BUCKET is empty. `bucket_name` on the facade
                 // stays the passed bucket either way (Python parity).
                 let configured = config::wc_s3_bucket();
-                let s3_bucket = if configured.is_empty() { bucket } else { configured };
+                let s3_bucket = if configured.is_empty() {
+                    bucket
+                } else {
+                    configured
+                };
                 let backend = S3Backend::new(s3_bucket, config::wc_s3_region()).await?;
-                Ok(Self::with_backend_and_bucket(Arc::new(backend), "s3", bucket))
+                Ok(Self::with_backend_and_bucket(
+                    Arc::new(backend),
+                    "s3",
+                    bucket,
+                ))
             }
             other => Err(StorageError::Other(format!(
                 "WC_STORAGE_BACKEND={other} is not supported (use \"gcs\", \"local\", \
@@ -182,7 +202,9 @@ impl JobStorage {
                 "expected_version is required for compare-and-swap".into(),
             ));
         }
-        self.backend.compare_and_swap_text(blob_path, expected_version, content).await
+        self.backend
+            .compare_and_swap_text(blob_path, expected_version, content)
+            .await
     }
 
     /// Atomically upload a local file; `false` if the blob exists.
@@ -191,7 +213,9 @@ impl JobStorage {
         blob_path: &str,
         filename: &Path,
     ) -> Result<bool, StorageError> {
-        self.backend.upload_file_if_absent(blob_path, filename).await
+        self.backend
+            .upload_file_if_absent(blob_path, filename)
+            .await
     }
 
     /// Delete a blob. Idempotent. Python `_delete_blob`.
@@ -238,7 +262,10 @@ impl JobStorage {
     /// Read a job blob; `None` when absent. Corrupt JSON propagates as an
     /// error (the Python code strict-raises since the listing extraction).
     pub async fn read_job(&self, prefix: &str, job_id: &str) -> Result<Option<Job>, StorageError> {
-        let Some(data) = self.backend.download_text(&format!("{prefix}/{job_id}.json")).await?
+        let Some(data) = self
+            .backend
+            .download_text(&format!("{prefix}/{job_id}.json"))
+            .await?
         else {
             return Ok(None);
         };
@@ -284,7 +311,8 @@ impl JobStorage {
         to_prefix: &str,
     ) -> Result<(), StorageError> {
         self.write_job(to_prefix, job).await?;
-        self.delete_blob(&format!("{from_prefix}/{}.json", job.job_id)).await?;
+        self.delete_blob(&format!("{from_prefix}/{}.json", job.job_id))
+            .await?;
         if from_prefix == "queue" {
             self.delete_priority_marker(&job.job_id).await?;
         }
@@ -358,13 +386,17 @@ impl JobStorage {
 
     /// Upload the job's launch script to `scripts/{job_id}.sh`.
     pub async fn upload_script(&self, job_id: &str, content: &str) -> Result<(), StorageError> {
-        self.upload_text(&format!("scripts/{job_id}.sh"), content).await
+        self.upload_text(&format!("scripts/{job_id}.sh"), content)
+            .await
     }
 
     /// Read the job's launch script; "" when absent. Python
     /// `download_script`.
     pub async fn read_script(&self, job_id: &str) -> Result<String, StorageError> {
-        Ok(self.download_text(&format!("scripts/{job_id}.sh")).await?.unwrap_or_default())
+        Ok(self
+            .download_text(&format!("scripts/{job_id}.sh"))
+            .await?
+            .unwrap_or_default())
     }
 
     // ---- status / heartbeat ----
@@ -372,7 +404,10 @@ impl JobStorage {
     /// First whitespace-separated token of `status/{job_id}/status`, or
     /// `None` when absent.
     pub async fn read_status(&self, job_id: &str) -> Result<Option<String>, StorageError> {
-        let Some(data) = self.download_text(&format!("status/{job_id}/status")).await? else {
+        let Some(data) = self
+            .download_text(&format!("status/{job_id}/status"))
+            .await?
+        else {
             return Ok(None);
         };
         Ok(data.split_whitespace().next().map(str::to_string))
@@ -397,7 +432,8 @@ impl JobStorage {
     /// Remove both status blobs for a job.
     pub async fn cleanup_status(&self, job_id: &str) -> Result<(), StorageError> {
         for suffix in ["status", "heartbeat"] {
-            self.delete_blob(&format!("status/{job_id}/{suffix}")).await?;
+            self.delete_blob(&format!("status/{job_id}/{suffix}"))
+                .await?;
         }
         Ok(())
     }
@@ -452,14 +488,20 @@ mod tests {
         store.write_job("queue", &j).await.unwrap();
         // inv = 99999999 - 5 = 99999994; key = f"{inv:08d}-{created_at}-{jid}.json"
         let expected = "queue_priority/99999994-2026-01-02T03:04:05+00:00-j9.json";
-        assert_eq!(store.list_paths("queue_priority/", 0).await.unwrap(), vec![expected]);
+        assert_eq!(
+            store.list_paths("queue_priority/", 0).await.unwrap(),
+            vec![expected]
+        );
         assert_eq!(
             store.download_text(expected).await.unwrap().as_deref(),
             Some("{\"job_id\": \"j9\", \"priority\": 5}")
         );
         // priority 0 jobs get no marker.
         store.write_job("queue", &job("j0")).await.unwrap();
-        assert_eq!(store.list_paths("queue_priority/", 0).await.unwrap().len(), 1);
+        assert_eq!(
+            store.list_paths("queue_priority/", 0).await.unwrap().len(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -471,7 +513,11 @@ mod tests {
         store.move_job(&j, "queue", "running").await.unwrap();
         assert!(store.read_job("queue", "jm").await.unwrap().is_none());
         assert!(store.read_job("running", "jm").await.unwrap().is_some());
-        assert!(store.list_paths("queue_priority/", 0).await.unwrap().is_empty());
+        assert!(store
+            .list_paths("queue_priority/", 0)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
@@ -482,7 +528,11 @@ mod tests {
         store.write_job("queue", &j).await.unwrap();
         store.delete_job("queue", "jd").await.unwrap();
         assert!(store.read_job("queue", "jd").await.unwrap().is_none());
-        assert!(store.list_paths("queue_priority/", 0).await.unwrap().is_empty());
+        assert!(store
+            .list_paths("queue_priority/", 0)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
@@ -490,7 +540,15 @@ mod tests {
         let (_dir, store) = store();
         store.write_job("queue", &job("jp")).await.unwrap();
         assert!(store.update_priority("jp", "queue", 9).await.unwrap());
-        assert_eq!(store.read_job("queue", "jp").await.unwrap().unwrap().priority, 9);
+        assert_eq!(
+            store
+                .read_job("queue", "jp")
+                .await
+                .unwrap()
+                .unwrap()
+                .priority,
+            9
+        );
         assert!(!store.update_priority("missing", "queue", 1).await.unwrap());
     }
 
@@ -501,11 +559,23 @@ mod tests {
         assert!(!store.create_text_if_absent("state/x", "v2").await.unwrap());
         let v1 = store.read_text_versioned("state/x").await.unwrap().unwrap();
         assert_eq!(v1.content, "v1");
-        let v2 = store.compare_and_swap_text("state/x", &v1.version, "v2").await.unwrap();
+        let v2 = store
+            .compare_and_swap_text("state/x", &v1.version, "v2")
+            .await
+            .unwrap();
         assert_ne!(v2, v1.version);
-        let err = store.compare_and_swap_text("state/x", "", "v3").await.unwrap_err();
-        assert!(err.to_string().contains("expected_version is required"), "{err}");
-        let err = store.compare_and_swap_text("state/x", &v1.version, "v3").await.unwrap_err();
+        let err = store
+            .compare_and_swap_text("state/x", "", "v3")
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("expected_version is required"),
+            "{err}"
+        );
+        let err = store
+            .compare_and_swap_text("state/x", &v1.version, "v3")
+            .await
+            .unwrap_err();
         assert!(matches!(err, StorageError::StorageConflict(_)), "{err:?}");
     }
 
@@ -513,16 +583,28 @@ mod tests {
     async fn script_upload_read() {
         let (_dir, store) = store();
         assert_eq!(store.read_script("s1").await.unwrap(), "");
-        store.upload_script("s1", "#!/bin/bash\necho go").await.unwrap();
-        assert_eq!(store.read_script("s1").await.unwrap(), "#!/bin/bash\necho go");
+        store
+            .upload_script("s1", "#!/bin/bash\necho go")
+            .await
+            .unwrap();
+        assert_eq!(
+            store.read_script("s1").await.unwrap(),
+            "#!/bin/bash\necho go"
+        );
     }
 
     #[tokio::test]
     async fn status_and_heartbeat_helpers() {
         let (_dir, store) = store();
         assert_eq!(store.read_status("h1").await.unwrap(), None);
-        store.upload_text("status/h1/status", "running pid 123").await.unwrap();
-        assert_eq!(store.read_status("h1").await.unwrap().as_deref(), Some("running"));
+        store
+            .upload_text("status/h1/status", "running pid 123")
+            .await
+            .unwrap();
+        assert_eq!(
+            store.read_status("h1").await.unwrap().as_deref(),
+            Some("running")
+        );
 
         // Missing heartbeat is not stale; a fresh one is not stale either.
         assert!(!store.heartbeat_stale("h1", 15).await.unwrap());

@@ -57,7 +57,11 @@ impl LocalBackend {
         let metadata = root.join(".metadata");
         fs::create_dir_all(&locks)?;
         fs::create_dir_all(&metadata)?;
-        Ok(Self { root, locks, metadata })
+        Ok(Self {
+            root,
+            locks,
+            metadata,
+        })
     }
 
     /// Resolve a blob path against the deployment root, rejecting escapes
@@ -131,9 +135,15 @@ impl LocalBackend {
         path: &str,
         f: impl FnOnce() -> Result<T, StorageError>,
     ) -> Result<T, StorageError> {
-        let lock_path = self.locks.join(hex::encode(Sha256::digest(path.as_bytes())));
+        let lock_path = self
+            .locks
+            .join(hex::encode(Sha256::digest(path.as_bytes())));
         // Python opens the lock file "a+b" (read + append).
-        let file = OpenOptions::new().read(true).append(true).create(true).open(lock_path)?;
+        let file = OpenOptions::new()
+            .read(true)
+            .append(true)
+            .create(true)
+            .open(lock_path)?;
         file.lock_exclusive()?;
         let result = f();
         // Python releases the lock in a finally block and would propagate an
@@ -205,11 +215,7 @@ impl BlobBackend for LocalBackend {
         }
     }
 
-    async fn download_to_filename(
-        &self,
-        path: &str,
-        dest: &Path,
-    ) -> Result<bool, StorageError> {
+    async fn download_to_filename(&self, path: &str, dest: &Path) -> Result<bool, StorageError> {
         let source = self.path(path)?;
         if !source.is_file() {
             return Ok(false);
@@ -219,11 +225,7 @@ impl BlobBackend for LocalBackend {
         Ok(true)
     }
 
-    async fn upload_text_if_absent(
-        &self,
-        path: &str,
-        content: &str,
-    ) -> Result<bool, StorageError> {
+    async fn upload_text_if_absent(&self, path: &str, content: &str) -> Result<bool, StorageError> {
         self.create_if_absent(path, content.as_bytes())
     }
 
@@ -354,7 +356,9 @@ impl BlobBackend for LocalBackend {
             .unwrap_or_default();
         // Python skips None and empty-string values.
         current.extend(
-            kv.iter().filter(|(_, value)| !value.is_empty()).map(|(k, v)| (k.clone(), v.clone())),
+            kv.iter()
+                .filter(|(_, value)| !value.is_empty())
+                .map(|(k, v)| (k.clone(), v.clone())),
         );
         // Python `json.dumps(current, sort_keys=True)` with default
         // separators (", " / ": "). BTreeMap iterates in sorted key order.
@@ -409,12 +413,21 @@ mod tests {
         assert_eq!(b.download_text("a/b.txt").await.unwrap(), None);
         assert_eq!(b.download_bytes("a/b.txt").await.unwrap(), None);
         b.upload_text("a/b.txt", "hello").await.unwrap();
-        assert_eq!(b.download_text("a/b.txt").await.unwrap().as_deref(), Some("hello"));
-        assert_eq!(b.download_bytes("a/b.txt").await.unwrap().as_deref(), Some(b"hello".as_slice()));
+        assert_eq!(
+            b.download_text("a/b.txt").await.unwrap().as_deref(),
+            Some("hello")
+        );
+        assert_eq!(
+            b.download_bytes("a/b.txt").await.unwrap().as_deref(),
+            Some(b"hello".as_slice())
+        );
         assert!(b.exists("a/b.txt").await.unwrap());
         // Unconditional overwrite.
         b.upload_text("a/b.txt", "world").await.unwrap();
-        assert_eq!(b.download_text("a/b.txt").await.unwrap().as_deref(), Some("world"));
+        assert_eq!(
+            b.download_text("a/b.txt").await.unwrap().as_deref(),
+            Some("world")
+        );
     }
 
     #[tokio::test]
@@ -432,7 +445,10 @@ mod tests {
         let (_dir, b) = backend();
         assert!(b.upload_text_if_absent("lock", "first").await.unwrap());
         assert!(!b.upload_text_if_absent("lock", "second").await.unwrap());
-        assert_eq!(b.download_text("lock").await.unwrap().as_deref(), Some("first"));
+        assert_eq!(
+            b.download_text("lock").await.unwrap().as_deref(),
+            Some("first")
+        );
     }
 
     #[tokio::test]
@@ -443,7 +459,10 @@ mod tests {
         assert!(b.upload_file_if_absent("f", &src).await.unwrap());
         fs::write(&src, "changed").unwrap();
         assert!(!b.upload_file_if_absent("f", &src).await.unwrap());
-        assert_eq!(b.download_text("f").await.unwrap().as_deref(), Some("file-bytes"));
+        assert_eq!(
+            b.download_text("f").await.unwrap().as_deref(),
+            Some("file-bytes")
+        );
     }
 
     #[tokio::test]
@@ -456,12 +475,21 @@ mod tests {
         assert_eq!(v1.version, hex::encode(Sha256::digest(b"one")));
 
         // Winning CAS returns the new version and updates the content.
-        let v2 = b.compare_and_swap_text("cas", &v1.version, "two").await.unwrap();
+        let v2 = b
+            .compare_and_swap_text("cas", &v1.version, "two")
+            .await
+            .unwrap();
         assert_eq!(v2, hex::encode(Sha256::digest(b"two")));
-        assert_eq!(b.download_text("cas").await.unwrap().as_deref(), Some("two"));
+        assert_eq!(
+            b.download_text("cas").await.unwrap().as_deref(),
+            Some("two")
+        );
 
         // Stale version loses the race.
-        let err = b.compare_and_swap_text("cas", &v1.version, "three").await.unwrap_err();
+        let err = b
+            .compare_and_swap_text("cas", &v1.version, "three")
+            .await
+            .unwrap_err();
         assert!(matches!(err, StorageError::StorageConflict(_)), "{err:?}");
 
         // CAS against a missing blob: Python raises FileNotFoundError.
@@ -473,7 +501,9 @@ mod tests {
     async fn delete_is_idempotent_and_clears_sidecar() {
         let (_dir, b) = backend();
         b.upload_text("d", "x").await.unwrap();
-        b.set_metadata("d", &BTreeMap::from([("k".into(), "v".into())])).await.unwrap();
+        b.set_metadata("d", &BTreeMap::from([("k".into(), "v".into())]))
+            .await
+            .unwrap();
         b.delete("d").await.unwrap();
         assert!(!b.exists("d").await.unwrap());
         assert!(b.list_blobs_with_meta("d").await.unwrap().is_empty());
@@ -492,7 +522,9 @@ mod tests {
         b.upload_text("pref/c.json", "3").await.unwrap();
         b.upload_text("other/x.json", "4").await.unwrap();
         // Metadata sidecars must not leak into listings.
-        b.set_metadata("pref/a.json", &BTreeMap::from([("k".into(), "v".into())])).await.unwrap();
+        b.set_metadata("pref/a.json", &BTreeMap::from([("k".into(), "v".into())]))
+            .await
+            .unwrap();
 
         assert_eq!(
             b.list_paths("pref/", 0).await.unwrap(),
@@ -512,11 +544,15 @@ mod tests {
         assert!((Utc::now() - updated).num_seconds() < 60);
 
         // set_metadata on a missing blob is a no-op.
-        b.set_metadata("missing", &BTreeMap::from([("k".into(), "v".into())])).await.unwrap();
+        b.set_metadata("missing", &BTreeMap::from([("k".into(), "v".into())]))
+            .await
+            .unwrap();
         assert!(!b.exists("missing").await.unwrap());
 
         // Merge semantics; empty values are skipped (Python parity).
-        b.set_metadata("m", &BTreeMap::from([("a".into(), "1".into())])).await.unwrap();
+        b.set_metadata("m", &BTreeMap::from([("a".into(), "1".into())]))
+            .await
+            .unwrap();
         b.set_metadata(
             "m",
             &BTreeMap::from([("b".into(), "2".into()), ("empty".into(), String::new())]),

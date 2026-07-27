@@ -5,8 +5,8 @@
 //! per-user service that runs `stado agent` (for kind=local targets) or
 //! `stado coordinator` (for runtime=daemon coordinators) so it persists
 //! across reboots without sudo or ssh. Units ExecStart the release
-//! binaries in `~/.stado/bin/` (populated from
-//! `gs://wisent-compute/releases/stado/` by [`ensure_bins`] when missing)
+//! binaries in `~/.stado/bin/` (populated from the release channel,
+//! [`crate::config::release_base_url`], by [`ensure_bins`] when missing)
 //! and the agent unit exports WC_PYTHON so the Rust agent's Python probes
 //! and job payloads use the host's job-environment interpreter.
 //!
@@ -25,15 +25,16 @@ use std::time::Duration;
 
 use futures::future::BoxFuture;
 
-use super::{py_dict_repr, shlex_quote, write_if_changed, CommandOutput, CommandSpec, DeployError, Runner};
+use super::{
+    py_dict_repr, shlex_quote, write_if_changed, CommandOutput, CommandSpec, DeployError, Runner,
+};
 
 /// Python `LABEL_PREFIX`.
 pub const LABEL_PREFIX: &str = "com.wisent.compute";
 
 /// Fetches the central HF write token (Python `_hf_write_token`);
 /// injectable so tests never touch GCS.
-pub type TokenFetcher =
-    Arc<dyn Fn() -> BoxFuture<'static, Result<String, String>> + Send + Sync>;
+pub type TokenFetcher = Arc<dyn Fn() -> BoxFuture<'static, Result<String, String>> + Send + Sync>;
 
 /// The host init system (Python `platform.system()` mapped to the two
 /// supported cases).
@@ -117,72 +118,83 @@ fn release_platform() -> Result<&'static str, DeployError> {
     }
 }
 
-/// Populate `~/.stado/bin/` from the release bucket via the local
-/// gcloud/ADC (through `runner`) when any service binary is missing.
-/// Every binary is checksum-verified against the release's SHA256SUMS
-/// before anything is installed; a fully populated dir is a no-op.
-pub async fn ensure_bins(
+/// Populate `~/.stado/bin/` from the release channel
+/// ([`crate::config::release_base_url`]) when any service binary is
+/// missing. Every binary is checksum-verified against the release's
+/// SHA256SUMS before anything is installed; a fully populated dir is a
+/// no-op.
+///
+/// Fetched over plain HTTPS rather than shelled out to `gcloud storage
+/// cp`: the box being provisioned is exactly the box that may have
+/// neither gcloud nor GCP credentials, and gcloud cannot read a release
+/// channel hosted anywhere but GCS.
+pub async fn ensure_bins(home: &Path, echo: &mut dyn FnMut(&str)) -> Result<(), DeployError> {
+    ensure_bins_with(home, &crate::self_update::HttpReleaseFetcher::new(), echo).await
+}
+
+/// [`ensure_bins`] against an injected fetcher (offline tests).
+pub async fn ensure_bins_with(
     home: &Path,
-    runner: &Runner,
+    fetcher: &impl crate::self_update::ReleaseFetcher,
     echo: &mut dyn FnMut(&str),
 ) -> Result<(), DeployError> {
     use std::os::unix::fs::PermissionsExt;
 
     use crate::self_update::{
-        parse_latest_json, parse_sha256sums, sha256_hex, LATEST_JSON_PATH, RELEASE_BUCKET,
-        RELEASE_PREFIX, SHA256SUMS_NAME,
+        parse_latest_json, parse_sha256sums, sha256_hex, LATEST_JSON_NAME, SHA256SUMS_NAME,
     };
     let bin_dir = home.join(".stado").join("bin");
-    if LOCAL_BINARIES.iter().all(|name| bin_dir.join(name).is_file()) {
+    if LOCAL_BINARIES
+        .iter()
+        .all(|name| bin_dir.join(name).is_file())
+    {
         return Ok(());
     }
     let platform = release_platform()?;
     std::fs::create_dir_all(&bin_dir).map_err(|exc| DeployError(exc.to_string()))?;
-    let latest = runner(CommandSpec::new(vec![
-        "gcloud".to_string(),
-        "storage".to_string(),
-        "cp".to_string(),
-        format!("gs://{RELEASE_BUCKET}/{LATEST_JSON_PATH}"),
-        "-".to_string(),
-    ]))
-    .await
-    .map_err(DeployError)?;
-    if !latest.ok() {
-        return Err(DeployError(format!("release lookup failed: {}", latest.detail())));
-    }
-    let release = parse_latest_json(latest.stdout.trim())
-        .ok_or_else(|| DeployError(format!("malformed {LATEST_JSON_PATH}: {}", latest.stdout.trim())))?;
-    let prefix = format!("{RELEASE_PREFIX}/{}/{platform}", release.version);
-    let tmp = tempfile::tempdir().map_err(|exc| DeployError(exc.to_string()))?;
-    for name in LOCAL_BINARIES.iter().chain(std::iter::once(&SHA256SUMS_NAME)) {
-        let output = runner(CommandSpec::new(vec![
-            "gcloud".to_string(),
-            "storage".to_string(),
-            "cp".to_string(),
-            format!("gs://{RELEASE_BUCKET}/{prefix}/{name}"),
-            tmp.path().join(name).to_string_lossy().into_owned(),
-        ]))
+    let latest = fetcher
+        .fetch(LATEST_JSON_NAME)
         .await
-        .map_err(DeployError)?;
-        if !output.ok() {
-            return Err(DeployError(format!(
-                "release download failed for {name}: {}",
-                output.detail()
-            )));
-        }
-    }
+        .map_err(|exc| DeployError(format!("release lookup failed: {exc}")))?
+        .ok_or_else(|| {
+            DeployError(format!(
+                "release lookup failed: {LATEST_JSON_NAME} is missing"
+            ))
+        })?;
+    let latest = String::from_utf8(latest)
+        .map_err(|exc| DeployError(format!("release lookup failed: {exc}")))?;
+    let release = parse_latest_json(latest.trim())
+        .ok_or_else(|| DeployError(format!("malformed {LATEST_JSON_NAME}: {}", latest.trim())))?;
+    let prefix = format!("{}/{platform}", release.version);
+    let sums_bytes = fetcher
+        .fetch(&format!("{prefix}/{SHA256SUMS_NAME}"))
+        .await
+        .map_err(|exc| {
+            DeployError(format!(
+                "release download failed for {SHA256SUMS_NAME}: {exc}"
+            ))
+        })?
+        .ok_or_else(|| {
+            DeployError(format!(
+                "release download failed for {SHA256SUMS_NAME}: not published"
+            ))
+        })?;
     let sums = parse_sha256sums(
-        &std::fs::read_to_string(tmp.path().join(SHA256SUMS_NAME))
-            .map_err(|exc| DeployError(exc.to_string()))?,
+        std::str::from_utf8(&sums_bytes).map_err(|exc| DeployError(exc.to_string()))?,
     )
     .map_err(|exc| DeployError(exc.to_string()))?;
-    // Verify EVERY binary before installing the first (self_update's
-    // abort-before-first-rename stance): a bad hash leaves ~/.stado/bin
-    // untouched.
+    // Download + verify EVERY binary before installing the first
+    // (self_update's abort-before-first-rename stance): a bad hash leaves
+    // ~/.stado/bin untouched.
     let mut verified: Vec<(&str, Vec<u8>)> = Vec::with_capacity(LOCAL_BINARIES.len());
     for name in LOCAL_BINARIES {
-        let bytes =
-            std::fs::read(tmp.path().join(name)).map_err(|exc| DeployError(exc.to_string()))?;
+        let bytes = fetcher
+            .fetch(&format!("{prefix}/{name}"))
+            .await
+            .map_err(|exc| DeployError(format!("release download failed for {name}: {exc}")))?
+            .ok_or_else(|| {
+                DeployError(format!("release download failed for {name}: not published"))
+            })?;
         let expected = sums
             .get(name)
             .ok_or_else(|| DeployError(format!("SHA256SUMS has no entry for {name}")))?;
@@ -216,7 +228,11 @@ pub fn label(kind: &str, name: &str) -> String {
 /// Python `_exec_args_for(entry, kind)`.
 pub fn exec_args_for(bins: &Bins, kind: &str, name: &str) -> Result<Vec<String>, DeployError> {
     match kind {
-        "agent" => Ok(vec![bins.stado.clone(), "agent".to_string(), "--auto".to_string()]),
+        "agent" => Ok(vec![
+            bins.stado.clone(),
+            "agent".to_string(),
+            "--auto".to_string(),
+        ]),
         "coordinator" => Ok(vec![
             bins.stado.clone(),
             "coordinator".to_string(),
@@ -234,8 +250,11 @@ pub fn exec_args_for(bins: &Bins, kind: &str, name: &str) -> Result<Vec<String>,
             // model-router 5xx) does not require launchd to restart the
             // whole job; the next iteration retries cleanly.
             let pattern = crate::config::FAILURE_FIXER_COMMAND_PATTERN;
-            let pat_arg =
-                if pattern.is_empty() { String::new() } else { format!("--command-pattern '{pattern}'") };
+            let pat_arg = if pattern.is_empty() {
+                String::new()
+            } else {
+                format!("--command-pattern '{pattern}'")
+            };
             Ok(vec![
                 "/bin/bash".to_string(),
                 "-c".to_string(),
@@ -354,10 +373,12 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
 /// The unit environment, in Python dict insertion order (the plist/unit
 /// renderers iterate this order byte-exactly).
 pub fn build_env(kind: &str, inputs: &EnvInputs) -> Vec<(String, String)> {
-    let mut env: Vec<(String, String)> =
-        vec![("PYTHONUNBUFFERED".to_string(), "1".to_string())];
+    let mut env: Vec<(String, String)> = vec![("PYTHONUNBUFFERED".to_string(), "1".to_string())];
     if !inputs.adc.is_empty() {
-        env.push(("GOOGLE_APPLICATION_CREDENTIALS".to_string(), inputs.adc.to_string()));
+        env.push((
+            "GOOGLE_APPLICATION_CREDENTIALS".to_string(),
+            inputs.adc.to_string(),
+        ));
     }
     // Only the agent kind needs the job-environment interpreter: it runs
     // the Python probes (smoketest, CUDA probe, fleet flush) and spawns
@@ -379,7 +400,10 @@ pub fn build_env(kind: &str, inputs: &EnvInputs) -> Vec<(String, String)> {
     // ambient HF_TOKEN (which was read-only -> 403 on upload).
     if kind != "disk-cleanup" && !inputs.hf_token.is_empty() {
         env.push(("HF_TOKEN".to_string(), inputs.hf_token.to_string()));
-        env.push(("HUGGING_FACE_HUB_TOKEN".to_string(), inputs.hf_token.to_string()));
+        env.push((
+            "HUGGING_FACE_HUB_TOKEN".to_string(),
+            inputs.hf_token.to_string(),
+        ));
     }
     // failure-fixer authenticates via the local `claude` CLI's OAuth
     // session (maintained by wisent-claude-reauth on the mac mini), not
@@ -411,8 +435,23 @@ pub fn build_env(kind: &str, inputs: &EnvInputs) -> Vec<(String, String)> {
 
 /// [`build_env`] with inputs probed from the process environment and the
 /// filesystem (Python's direct `os.environ` / `Path.home()` reads).
-pub fn install_env(home: &Path, kind: &str, hf_token: &str, wc_python: &str) -> Vec<(String, String)> {
-    let adc = adc_path(home);
+///
+/// The ADC probe is skipped unless the queue storage backend is GCS.
+/// [`build_env`] omits GOOGLE_APPLICATION_CREDENTIALS for an empty `adc`,
+/// so an Azure-only or S3-only install no longer bakes a demand for GCP
+/// credentials that the box may not have. A `gcs` backend (the default)
+/// probes exactly as before.
+pub fn install_env(
+    home: &Path,
+    kind: &str,
+    hf_token: &str,
+    wc_python: &str,
+) -> Vec<(String, String)> {
+    let adc = if crate::config::wc_storage_backend() == "gcs" {
+        adc_path(home)
+    } else {
+        String::new()
+    };
     let path = std::env::var("PATH").ok();
     let google_cloud_project = std::env::var("GOOGLE_CLOUD_PROJECT").ok();
     let gcp_project = std::env::var("GCP_PROJECT").ok();
@@ -432,8 +471,10 @@ pub fn install_env(home: &Path, kind: &str, hf_token: &str, wc_python: &str) -> 
 /// Python `_plist_text` (raw interpolation, exactly like the Python — no
 /// XML escaping, same as the source).
 pub fn plist_text(label: &str, exec_args: &[String], env: &[(String, String)]) -> String {
-    let args_xml: String =
-        exec_args.iter().map(|a| format!("        <string>{a}</string>\n")).collect();
+    let args_xml: String = exec_args
+        .iter()
+        .map(|a| format!("        <string>{a}</string>\n"))
+        .collect();
     let env_xml: String = env
         .iter()
         .filter(|(_, v)| !v.is_empty())
@@ -530,7 +571,12 @@ impl InstallPlan {
     /// Python's dry-run branch of `install_local`.
     pub fn dry_run_lines(&self) -> Vec<String> {
         vec![
-            format!("[dry-run] {}={} on {}", self.kind, self.name, self.os.python_name()),
+            format!(
+                "[dry-run] {}={} on {}",
+                self.kind,
+                self.name,
+                self.os.python_name()
+            ),
             format!("  exec: {}", self.exec_args.join(" ")),
             format!("  env:  {}", py_dict_repr(&self.env)),
         ]
@@ -633,7 +679,10 @@ async fn install_cron_fallback(
     write_if_changed(&wrapper, &content).map_err(|exc| DeployError(exc.to_string()))?;
 
     let wrapper_arg = shlex_quote(&wrapper.to_string_lossy());
-    let cron_line = format!("@reboot /bin/sh {wrapper_arg} >> {} 2>&1", shlex_quote(&log));
+    let cron_line = format!(
+        "@reboot /bin/sh {wrapper_arg} >> {} 2>&1",
+        shlex_quote(&log)
+    );
     let cron_script = format!(
         "{{ crontab -l 2>/dev/null | grep -Fv -- {wrapper_arg} || true; printf '%s\\n' {}; }} | crontab -",
         shlex_quote(&cron_line)
@@ -646,17 +695,26 @@ async fn install_cron_fallback(
     .await
     .map_err(DeployError)?;
     if !cron.ok() {
-        return Err(DeployError(format!("crontab install failed: {}", cron.detail())));
+        return Err(DeployError(format!(
+            "crontab install failed: {}",
+            cron.detail()
+        )));
     }
     let start = runner(CommandSpec::new(vec![
         "/bin/sh".to_string(),
         "-c".to_string(),
-        format!("nohup /bin/sh {wrapper_arg} >> {} 2>&1 </dev/null &", shlex_quote(&log)),
+        format!(
+            "nohup /bin/sh {wrapper_arg} >> {} 2>&1 </dev/null &",
+            shlex_quote(&log)
+        ),
     ]))
     .await
     .map_err(DeployError)?;
     if !start.ok() {
-        return Err(DeployError(format!("agent start failed: {}", start.detail())));
+        return Err(DeployError(format!(
+            "agent start failed: {}",
+            start.detail()
+        )));
     }
     echo(&format!(
         "[ok]   installed headless cron job {} (logs: {log})",
@@ -678,8 +736,8 @@ pub async fn execute_plan(
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|exc| DeployError(exc.to_string()))?;
     }
-    let written = write_if_changed(&path, &plan.content())
-        .map_err(|exc| DeployError(exc.to_string()))?;
+    let written =
+        write_if_changed(&path, &plan.content()).map_err(|exc| DeployError(exc.to_string()))?;
     let verb = if written { "wrote" } else { "unchanged" };
     match plan.os {
         LocalOs::Darwin => {
@@ -750,7 +808,9 @@ pub async fn execute_plan(
                     .await
                     .map_err(DeployError)?;
                     if !contextual.ok() {
-                        echo("[warn] launchctl unavailable in this SSH session; using cron fallback");
+                        echo(
+                            "[warn] launchctl unavailable in this SSH session; using cron fallback",
+                        );
                         install_cron_fallback(plan, home, runner, echo).await?;
                         return Ok(());
                     }
@@ -817,7 +877,7 @@ pub async fn install_local(
         }
         return Ok(());
     }
-    ensure_bins(&home, runner, echo).await?;
+    ensure_bins(&home, echo).await?;
     execute_plan(&install_plan, &home, current_uid(), runner, echo).await
 }
 
@@ -850,13 +910,23 @@ mod tests {
     }
 
     fn out(code: i32, stdout: &str, stderr: &str) -> CommandOutput {
-        CommandOutput { code, stdout: stdout.to_string(), stderr: stderr.to_string() }
+        CommandOutput {
+            code,
+            stdout: stdout.to_string(),
+            stderr: stderr.to_string(),
+        }
     }
 
     #[test]
     fn label_matches_python() {
-        assert_eq!(label("disk-cleanup", "disk-cleanup"), "com.wisent.compute.disk-cleanup.disk-cleanup");
-        assert_eq!(label("agent", "mini-one"), "com.wisent.compute.agent.mini-one");
+        assert_eq!(
+            label("disk-cleanup", "disk-cleanup"),
+            "com.wisent.compute.disk-cleanup.disk-cleanup"
+        );
+        assert_eq!(
+            label("agent", "mini-one"),
+            "com.wisent.compute.agent.mini-one"
+        );
     }
 
     #[test]
@@ -868,7 +938,12 @@ mod tests {
         );
         assert_eq!(
             exec_args_for(&bins, "coordinator", "main").unwrap(),
-            vec!["/Users/u/.stado/bin/stado", "coordinator", "--target", "main"]
+            vec![
+                "/Users/u/.stado/bin/stado",
+                "coordinator",
+                "--target",
+                "main"
+            ]
         );
         assert_eq!(
             exec_args_for(&bins, "disk-cleanup", "disk-cleanup").unwrap(),
@@ -914,10 +989,16 @@ mod tests {
             env,
             vec![
                 ("PYTHONUNBUFFERED".to_string(), "1".to_string()),
-                ("GOOGLE_APPLICATION_CREDENTIALS".to_string(), "/home/u/adc.json".to_string()),
+                (
+                    "GOOGLE_APPLICATION_CREDENTIALS".to_string(),
+                    "/home/u/adc.json".to_string()
+                ),
                 ("WC_PYTHON".to_string(), FRAMEWORK_PYTHON.to_string()),
                 ("HF_TOKEN".to_string(), "hf_secret".to_string()),
-                ("HUGGING_FACE_HUB_TOKEN".to_string(), "hf_secret".to_string()),
+                (
+                    "HUGGING_FACE_HUB_TOKEN".to_string(),
+                    "hf_secret".to_string()
+                ),
             ]
         );
         // Missing token (blob absent) leaves no HF keys at all.
@@ -926,7 +1007,10 @@ mod tests {
         // Non-agent kinds never carry WC_PYTHON, even when resolved.
         let env = build_env(
             "coordinator",
-            &EnvInputs { wc_python: FRAMEWORK_PYTHON, ..Default::default() },
+            &EnvInputs {
+                wc_python: FRAMEWORK_PYTHON,
+                ..Default::default()
+            },
         );
         assert!(!env.iter().any(|(k, _)| k == "WC_PYTHON"));
     }
@@ -935,7 +1019,11 @@ mod tests {
     fn build_env_disk_cleanup_never_carries_hf_token() {
         let env = build_env(
             "disk-cleanup",
-            &EnvInputs { hf_token: "hf_secret", google_cloud_project: Some("proj"), ..Default::default() },
+            &EnvInputs {
+                hf_token: "hf_secret",
+                google_cloud_project: Some("proj"),
+                ..Default::default()
+            },
         );
         assert_eq!(
             env,
@@ -965,7 +1053,10 @@ mod tests {
             vec![
                 ("PYTHONUNBUFFERED".to_string(), "1".to_string()),
                 ("HF_TOKEN".to_string(), "hf_secret".to_string()),
-                ("HUGGING_FACE_HUB_TOKEN".to_string(), "hf_secret".to_string()),
+                (
+                    "HUGGING_FACE_HUB_TOKEN".to_string(),
+                    "hf_secret".to_string()
+                ),
                 ("PATH".to_string(), "/opt/homebrew/bin:/usr/bin".to_string()),
                 ("GOOGLE_CLOUD_PROJECT".to_string(), "proj".to_string()),
                 ("WC_BUCKET".to_string(), "wisent-compute".to_string()),
@@ -979,9 +1070,16 @@ mod tests {
             ("PYTHONUNBUFFERED".to_string(), "1".to_string()),
             ("WC_PYTHON".to_string(), FRAMEWORK_PYTHON.to_string()),
             ("HF_TOKEN".to_string(), "hf_secret".to_string()),
-            ("HUGGING_FACE_HUB_TOKEN".to_string(), "hf_secret".to_string()),
+            (
+                "HUGGING_FACE_HUB_TOKEN".to_string(),
+                "hf_secret".to_string(),
+            ),
         ];
-        let args = vec!["/Users/u/.stado/bin/stado".to_string(), "agent".to_string(), "--auto".to_string()];
+        let args = vec![
+            "/Users/u/.stado/bin/stado".to_string(),
+            "agent".to_string(),
+            "--auto".to_string(),
+        ];
         assert_eq!(
             plist_text("com.wisent.compute.agent.mini-one", &args, &env),
             include_str!("testdata/local_install_agent.plist")
@@ -999,7 +1097,11 @@ mod tests {
             kind: "agent".to_string(),
             os: LocalOs::Darwin,
             label: label("agent", "mini-one"),
-            exec_args: vec!["/Users/u/.stado/bin/stado".to_string(), "agent".to_string(), "--auto".to_string()],
+            exec_args: vec![
+                "/Users/u/.stado/bin/stado".to_string(),
+                "agent".to_string(),
+                "--auto".to_string(),
+            ],
             env: vec![
                 ("PYTHONUNBUFFERED".to_string(), "1".to_string()),
                 ("WC_PYTHON".to_string(), FRAMEWORK_PYTHON.to_string()),
@@ -1020,11 +1122,17 @@ mod tests {
 
     #[test]
     fn command_argv_matches_python() {
-        let path = Path::new("/home/u/Library/LaunchAgents/com.wisent.compute.agent.mini-one.plist");
-        let [bootout, bootstrap, kickstart] = darwin_commands("com.wisent.compute.agent.mini-one", path, 501);
+        let path =
+            Path::new("/home/u/Library/LaunchAgents/com.wisent.compute.agent.mini-one.plist");
+        let [bootout, bootstrap, kickstart] =
+            darwin_commands("com.wisent.compute.agent.mini-one", path, 501);
         assert_eq!(
             bootout.argv,
-            vec!["launchctl", "bootout", "gui/501/com.wisent.compute.agent.mini-one"]
+            vec![
+                "launchctl",
+                "bootout",
+                "gui/501/com.wisent.compute.agent.mini-one"
+            ]
         );
         assert_eq!(
             bootstrap.argv,
@@ -1037,13 +1145,24 @@ mod tests {
         );
         assert_eq!(
             kickstart.argv,
-            vec!["launchctl", "kickstart", "-k", "gui/501/com.wisent.compute.agent.mini-one"]
+            vec![
+                "launchctl",
+                "kickstart",
+                "-k",
+                "gui/501/com.wisent.compute.agent.mini-one"
+            ]
         );
         let [reload, enable] = linux_commands("com.wisent.compute.agent.mini-one");
         assert_eq!(reload.argv, vec!["systemctl", "--user", "daemon-reload"]);
         assert_eq!(
             enable.argv,
-            vec!["systemctl", "--user", "enable", "--now", "com.wisent.compute.agent.mini-one.service"]
+            vec![
+                "systemctl",
+                "--user",
+                "enable",
+                "--now",
+                "com.wisent.compute.agent.mini-one.service"
+            ]
         );
     }
 
@@ -1053,7 +1172,11 @@ mod tests {
             kind: "agent".to_string(),
             os: LocalOs::Darwin,
             label: label("agent", "mini-one"),
-            exec_args: vec!["/Users/u/.stado/bin/stado".to_string(), "agent".to_string(), "--auto".to_string()],
+            exec_args: vec![
+                "/Users/u/.stado/bin/stado".to_string(),
+                "agent".to_string(),
+                "--auto".to_string(),
+            ],
             env: vec![("PYTHONUNBUFFERED".to_string(), "1".to_string())],
         }
     }
@@ -1062,12 +1185,18 @@ mod tests {
     async fn execute_darwin_retries_bootstrap_then_kickstarts() {
         let home = tempfile::tempdir().unwrap();
         let plan = darwin_plan();
-        let (runner, calls) =
-            fake_runner(vec![out(0, "", ""), out(1, "", "busy"), out(0, "", ""), out(0, "", "")]);
+        let (runner, calls) = fake_runner(vec![
+            out(0, "", ""),
+            out(1, "", "busy"),
+            out(0, "", ""),
+            out(0, "", ""),
+        ]);
         let mut lines: Vec<String> = Vec::new();
-        execute_plan(&plan, home.path(), 501, &runner, &mut |l| lines.push(l.to_string()))
-            .await
-            .unwrap();
+        execute_plan(&plan, home.path(), 501, &runner, &mut |l| {
+            lines.push(l.to_string())
+        })
+        .await
+        .unwrap();
         let plist = plan.unit_path(home.path());
         assert_eq!(std::fs::read_to_string(&plist).unwrap(), plan.content());
         let calls = calls.lock().unwrap();
@@ -1090,14 +1219,18 @@ mod tests {
         let outputs = vec![out(0, "", ""), out(0, "", ""), out(0, "", "")];
         let (runner, _calls) = fake_runner(outputs.clone());
         let mut lines: Vec<String> = Vec::new();
-        execute_plan(&plan, home.path(), 501, &runner, &mut |l| lines.push(l.to_string()))
-            .await
-            .unwrap();
+        execute_plan(&plan, home.path(), 501, &runner, &mut |l| {
+            lines.push(l.to_string())
+        })
+        .await
+        .unwrap();
         let (runner2, _calls2) = fake_runner(outputs);
         let mut lines2: Vec<String> = Vec::new();
-        execute_plan(&plan, home.path(), 501, &runner2, &mut |l| lines2.push(l.to_string()))
-            .await
-            .unwrap();
+        execute_plan(&plan, home.path(), 501, &runner2, &mut |l| {
+            lines2.push(l.to_string())
+        })
+        .await
+        .unwrap();
         assert!(lines2[0].starts_with("[plist] unchanged "), "{lines2:?}");
     }
 
@@ -1109,9 +1242,11 @@ mod tests {
         outputs.extend(std::iter::repeat_n(out(37, "", "Boot-out failed"), 5));
         let (runner, calls) = fake_runner(outputs);
         let mut lines: Vec<String> = Vec::new();
-        let err = execute_plan(&plan, home.path(), 501, &runner, &mut |l| lines.push(l.to_string()))
-            .await
-            .unwrap_err();
+        let err = execute_plan(&plan, home.path(), 501, &runner, &mut |l| {
+            lines.push(l.to_string())
+        })
+        .await
+        .unwrap_err();
         assert_eq!(err.0, "launchctl bootstrap failed: Boot-out failed");
         assert_eq!(calls.lock().unwrap().len(), 6); // bootout + 5 attempts
     }
@@ -1119,12 +1254,17 @@ mod tests {
     #[tokio::test]
     async fn execute_linux_enable_failure_is_click_style_error() {
         let home = tempfile::tempdir().unwrap();
-        let plan = InstallPlan { os: LocalOs::Linux, ..darwin_plan() };
+        let plan = InstallPlan {
+            os: LocalOs::Linux,
+            ..darwin_plan()
+        };
         let (runner, _calls) = fake_runner(vec![out(0, "", ""), out(1, "", "no bus")]);
         let mut lines: Vec<String> = Vec::new();
-        let err = execute_plan(&plan, home.path(), 501, &runner, &mut |l| lines.push(l.to_string()))
-            .await
-            .unwrap_err();
+        let err = execute_plan(&plan, home.path(), 501, &runner, &mut |l| {
+            lines.push(l.to_string())
+        })
+        .await
+        .unwrap_err();
         assert_eq!(err.0, "systemctl enable failed: no bus");
         assert_eq!(
             lines[0],
@@ -1132,87 +1272,115 @@ mod tests {
         );
     }
 
-    /// Runner that serves the release tree: latest.json, then writes each
-    /// requested object to the local destination in argv[4].
-    fn release_runner(
+    /// Offline release channel: `latest.json`, a SHA256SUMS over
+    /// `binaries`, and every binary under `<version>/<platform>/`.
+    struct ReleaseFixture {
+        objects: std::collections::HashMap<String, Vec<u8>>,
+        /// When set, every fetch is a transport failure instead of a
+        /// lookup — the unreachable-channel case.
+        error: Option<String>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::self_update::ReleaseFetcher for ReleaseFixture {
+        async fn fetch(
+            &self,
+            object_path: &str,
+        ) -> Result<Option<Vec<u8>>, crate::self_update::SelfUpdateError> {
+            if let Some(message) = &self.error {
+                return Err(crate::self_update::SelfUpdateError::Fetch(message.clone()));
+            }
+            Ok(self.objects.get(object_path).cloned())
+        }
+    }
+
+    /// `tamper` corrupts one object AFTER its checksum was computed.
+    fn release_fixture(
         version: &str,
         binaries: &[(&str, &[u8])],
         tamper: Option<&str>,
-    ) -> Runner {
-        use crate::self_update::sha256_hex;
-        let version = version.to_string();
+    ) -> ReleaseFixture {
+        use crate::self_update::{sha256_hex, LATEST_JSON_NAME, SHA256SUMS_NAME};
+        let mut objects = std::collections::HashMap::new();
+        objects.insert(
+            LATEST_JSON_NAME.to_string(),
+            format!(r#"{{"version": "{version}", "channel": "stable"}}"#).into_bytes(),
+        );
         let sums = binaries
             .iter()
             .map(|(name, bytes)| format!("{}  {}", sha256_hex(bytes), name))
             .collect::<Vec<_>>()
             .join("\n")
             + "\n";
-        let objects: Vec<(String, Vec<u8>)> = binaries
-            .iter()
-            .map(|(name, bytes)| {
-                let content = if Some(*name) == tamper { b"tampered".to_vec() } else { bytes.to_vec() };
-                (name.to_string(), content)
-            })
-            .collect();
-        super::super::runner_fn(move |spec: CommandSpec| {
-            let version = version.clone();
-            let sums = sums.clone();
-            let objects = objects.clone();
-            async move {
-                assert_eq!(spec.argv[..3], ["gcloud", "storage", "cp"]);
-                let src = spec.argv[3].clone();
-                if src.ends_with("latest.json") {
-                    assert_eq!(spec.argv[4], "-");
-                    return Ok(CommandOutput {
-                        code: 0,
-                        stdout: format!(r#"{{"version": "{version}", "channel": "stable"}}"#),
-                        stderr: String::new(),
-                    });
-                }
-                assert!(src.contains(&format!("releases/stado/{version}/")), "{src}");
-                let name = src.rsplit('/').next().unwrap_or("").to_string();
-                let content = if name == "SHA256SUMS" {
-                    sums.into_bytes()
-                } else {
-                    objects
-                        .iter()
-                        .find(|(n, _)| *n == name)
-                        .unwrap_or_else(|| panic!("unexpected download {name}"))
-                        .1
-                        .clone()
-                };
-                std::fs::write(std::path::PathBuf::from(&spec.argv[4]), content).unwrap();
-                Ok(CommandOutput { code: 0, stdout: String::new(), stderr: String::new() })
-            }
-        })
+        let prefix = format!("{version}/{}", platform_str());
+        objects.insert(format!("{prefix}/{SHA256SUMS_NAME}"), sums.into_bytes());
+        for (name, bytes) in binaries {
+            let content = if Some(*name) == tamper {
+                b"tampered".to_vec()
+            } else {
+                bytes.to_vec()
+            };
+            objects.insert(format!("{prefix}/{name}"), content);
+        }
+        ReleaseFixture {
+            objects,
+            error: None,
+        }
     }
 
     #[tokio::test]
     async fn ensure_bins_downloads_verifies_and_is_idempotent() {
         use std::os::unix::fs::PermissionsExt;
         let home = tempfile::tempdir().unwrap();
-        let runner = release_runner(
+        let fetcher = release_fixture(
             "9.9.9",
-            &[("stado", b"new-stado"), ("stado-fix", b"new-fix"), ("stado-watchdog", b"new-wd")],
+            &[
+                ("stado", b"new-stado"),
+                ("stado-fix", b"new-fix"),
+                ("stado-watchdog", b"new-wd"),
+            ],
             None,
         );
         let mut lines: Vec<String> = Vec::new();
-        ensure_bins(home.path(), &runner, &mut |l| lines.push(l.to_string())).await.unwrap();
+        ensure_bins_with(home.path(), &fetcher, &mut |l| lines.push(l.to_string()))
+            .await
+            .unwrap();
         let bin_dir = home.path().join(".stado").join("bin");
         assert_eq!(std::fs::read(bin_dir.join("stado")).unwrap(), b"new-stado");
-        assert_eq!(std::fs::read(bin_dir.join("stado-fix")).unwrap(), b"new-fix");
-        assert_eq!(std::fs::read(bin_dir.join("stado-watchdog")).unwrap(), b"new-wd");
-        assert_eq!(std::fs::metadata(bin_dir.join("stado")).unwrap().permissions().mode() & 0o777, 0o755);
+        assert_eq!(
+            std::fs::read(bin_dir.join("stado-fix")).unwrap(),
+            b"new-fix"
+        );
+        assert_eq!(
+            std::fs::read(bin_dir.join("stado-watchdog")).unwrap(),
+            b"new-wd"
+        );
+        assert_eq!(
+            std::fs::metadata(bin_dir.join("stado"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755
+        );
         assert_eq!(
             lines,
-            vec![format!("[install] downloaded stado 9.9.9 ({}) -> {}", platform_str(), bin_dir.display())]
+            vec![format!(
+                "[install] downloaded stado 9.9.9 ({}) -> {}",
+                platform_str(),
+                bin_dir.display()
+            )]
         );
-        // Fully populated: a runner that panics on any call proves no-op.
-        let runner = super::super::runner_fn(|_spec: CommandSpec| async move {
-            panic!("no download expected when ~/.stado/bin is populated")
-        });
+        // Fully populated: an empty channel proves no-op — any fetch
+        // would miss and fail the install.
+        let fetcher = ReleaseFixture {
+            objects: std::collections::HashMap::new(),
+            error: None,
+        };
         let mut lines: Vec<String> = Vec::new();
-        ensure_bins(home.path(), &runner, &mut |l| lines.push(l.to_string())).await.unwrap();
+        ensure_bins_with(home.path(), &fetcher, &mut |l| lines.push(l.to_string()))
+            .await
+            .unwrap();
         assert!(lines.is_empty());
     }
 
@@ -1223,27 +1391,40 @@ mod tests {
     #[tokio::test]
     async fn ensure_bins_hash_mismatch_installs_nothing() {
         let home = tempfile::tempdir().unwrap();
-        let runner = release_runner(
+        let fetcher = release_fixture(
             "9.9.9",
-            &[("stado", b"new-stado"), ("stado-fix", b"new-fix"), ("stado-watchdog", b"new-wd")],
+            &[
+                ("stado", b"new-stado"),
+                ("stado-fix", b"new-fix"),
+                ("stado-watchdog", b"new-wd"),
+            ],
             Some("stado-fix"),
         );
         let mut lines: Vec<String> = Vec::new();
-        let err = ensure_bins(home.path(), &runner, &mut |l| lines.push(l.to_string()))
+        let err = ensure_bins_with(home.path(), &fetcher, &mut |l| lines.push(l.to_string()))
             .await
             .unwrap_err();
         assert!(err.0.starts_with("sha256 mismatch for stado-fix"), "{err}");
-        assert!(!home.path().join(".stado").join("bin").join("stado").exists());
+        assert!(!home
+            .path()
+            .join(".stado")
+            .join("bin")
+            .join("stado")
+            .exists());
     }
 
     #[tokio::test]
     async fn ensure_bins_release_lookup_failure_is_error() {
         let home = tempfile::tempdir().unwrap();
-        let (runner, _calls) = fake_runner(vec![out(1, "", "bucket unreachable")]);
+        let fetcher = ReleaseFixture {
+            objects: std::collections::HashMap::new(),
+            error: Some("channel unreachable".to_string()),
+        };
         let mut lines: Vec<String> = Vec::new();
-        let err = ensure_bins(home.path(), &runner, &mut |l| lines.push(l.to_string()))
+        let err = ensure_bins_with(home.path(), &fetcher, &mut |l| lines.push(l.to_string()))
             .await
             .unwrap_err();
-        assert_eq!(err.0, "release lookup failed: bucket unreachable");
+        assert!(err.0.starts_with("release lookup failed:"), "{err}");
+        assert!(err.0.contains("channel unreachable"), "{err}");
     }
 }

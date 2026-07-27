@@ -33,8 +33,11 @@ pub const POLL_INTERVAL_S: u64 = 10;
 /// Capacity broadcast staleness threshold.
 pub const CAPACITY_STALE_SECONDS: u64 = 180;
 /// Capacity broadcast heartbeat; always fresh before the stale threshold.
-pub const CAPACITY_HEARTBEAT_INTERVAL_S: u64 =
-    if POLL_INTERVAL_S > CAPACITY_STALE_SECONDS / 3 { POLL_INTERVAL_S } else { CAPACITY_STALE_SECONDS / 3 };
+pub const CAPACITY_HEARTBEAT_INTERVAL_S: u64 = if POLL_INTERVAL_S > CAPACITY_STALE_SECONDS / 3 {
+    POLL_INTERVAL_S
+} else {
+    CAPACITY_STALE_SECONDS / 3
+};
 
 /// Per-job heartbeat interval (derived from the 15-min staleness threshold).
 pub const SLOT_HEARTBEAT_INTERVAL_S: u64 = 60;

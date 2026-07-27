@@ -23,9 +23,14 @@ pub fn run(sub: &str) -> Result<(), CmdError> {
 /// `config init`: write the commented template to ~/.stado/config.json.
 fn init() -> Result<(), CmdError> {
     let home = std::env::var("HOME").map_err(|_| CmdError::click("HOME is not set"))?;
-    let path = std::path::Path::new(&home).join(".stado").join("config.json");
+    let path = std::path::Path::new(&home)
+        .join(".stado")
+        .join("config.json");
     if path.exists() {
-        return Err(CmdError::click(format!("config file already exists: {}", path.display())));
+        return Err(CmdError::click(format!(
+            "config file already exists: {}",
+            path.display()
+        )));
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -64,28 +69,87 @@ fn show() -> Result<(), CmdError> {
     resolved.insert("region".into(), Value::from(config::region()));
     resolved.insert(
         "regions".into(),
-        Value::Array(config::regions().iter().map(|r| Value::from(r.as_str())).collect()),
+        Value::Array(
+            config::regions()
+                .iter()
+                .map(|r| Value::from(r.as_str()))
+                .collect(),
+        ),
     );
     resolved.insert(
         "wc_providers".into(),
-        Value::Array(config::wc_providers().iter().map(|p| Value::from(p.as_str())).collect()),
+        Value::Array(
+            config::wc_providers()
+                .iter()
+                .map(|p| Value::from(p.as_str()))
+                .collect(),
+        ),
     );
-    resolved.insert("wc_storage_backend".into(), Value::from(config::wc_storage_backend()));
-    resolved.insert("wc_local_storage_path".into(), Value::from(config::wc_local_storage_path()));
-    resolved.insert("azure_subscription_id".into(), Value::from(config::azure_subscription_id()));
-    resolved.insert("azure_resource_group".into(), Value::from(config::azure_resource_group()));
+    resolved.insert(
+        "wc_storage_backend".into(),
+        Value::from(config::wc_storage_backend()),
+    );
+    resolved.insert(
+        "wc_local_storage_path".into(),
+        Value::from(config::wc_local_storage_path()),
+    );
+    resolved.insert(
+        "wc_backup_storage_backend".into(),
+        Value::from(config::wc_backup_storage_backend()),
+    );
+    resolved.insert(
+        "wc_backup_bucket".into(),
+        Value::from(config::wc_backup_bucket()),
+    );
+    resolved.insert(
+        "wc_backup_azure_storage_account".into(),
+        Value::from(config::wc_backup_azure_storage_account()),
+    );
+    resolved.insert(
+        "wc_backup_azure_container".into(),
+        Value::from(config::wc_backup_azure_container()),
+    );
+    resolved.insert(
+        "wc_backup_s3_region".into(),
+        Value::from(config::wc_backup_s3_region()),
+    );
+    resolved.insert(
+        "wc_backup_local_storage_path".into(),
+        Value::from(config::wc_backup_local_storage_path()),
+    );
+    resolved.insert(
+        "azure_subscription_id".into(),
+        Value::from(config::azure_subscription_id()),
+    );
+    resolved.insert(
+        "azure_resource_group".into(),
+        Value::from(config::azure_resource_group()),
+    );
     resolved.insert(
         "azure_locations".into(),
-        Value::Array(config::azure_locations().iter().map(|l| Value::from(l.as_str())).collect()),
+        Value::Array(
+            config::azure_locations()
+                .iter()
+                .map(|l| Value::from(l.as_str()))
+                .collect(),
+        ),
     );
-    resolved.insert("dashboard_bind".into(), Value::from(config::dashboard_bind()));
-    resolved.insert("dashboard_port".into(), Value::from(config::dashboard_port()));
+    resolved.insert(
+        "dashboard_bind".into(),
+        Value::from(config::dashboard_bind()),
+    );
+    resolved.insert(
+        "dashboard_port".into(),
+        Value::from(config::dashboard_port()),
+    );
 
     let where_ = config_file::config_path().map_err(|exc| CmdError::click(exc.to_string()))?;
     let mut out = Map::new();
     out.insert(
         "file".into(),
-        where_.map(|p| Value::from(p.display().to_string())).unwrap_or(Value::Null),
+        where_
+            .map(|p| Value::from(p.display().to_string()))
+            .unwrap_or(Value::Null),
     );
     out.insert("resolved".into(), Value::Object(resolved));
     println!("{}", serde_json::to_string_pretty(&Value::Object(out))?);

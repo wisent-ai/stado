@@ -110,11 +110,17 @@ fn dir_size(path: &Path) -> i64 {
     let mut total = 0i64;
     let mut stack = vec![path.to_path_buf()];
     while let Some(current) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&current) else { continue };
+        let Ok(entries) = std::fs::read_dir(&current) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let child = entry.path();
-            let Ok(kind) = entry.file_type() else { continue };
-            let Ok(target) = std::fs::metadata(&child) else { continue };
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            let Ok(target) = std::fs::metadata(&child) else {
+                continue;
+            };
             if target.is_dir() {
                 if !kind.is_symlink() {
                     stack.push(child);
@@ -139,7 +145,10 @@ fn remove_tree(path: &Path) -> io::Result<()> {
         ));
     }
     if !info.is_dir() {
-        return Err(io::Error::new(io::ErrorKind::NotADirectory, "not a directory"));
+        return Err(io::Error::new(
+            io::ErrorKind::NotADirectory,
+            "not a directory",
+        ));
     }
     let entries: Vec<PathBuf> = std::fs::read_dir(path)?
         .collect::<io::Result<Vec<_>>>()?
@@ -181,7 +190,10 @@ pub fn scan_weles(
             }
             expanded
         } else {
-            let parts = [std::ffi::OsString::from("weles"), std::ffi::OsString::from("recordings")];
+            let parts = [
+                std::ffi::OsString::from("weles"),
+                std::ffi::OsString::from("recordings"),
+            ];
             match fixed_root(home, &parts, false)? {
                 Some(root) => root,
                 None => {
@@ -312,7 +324,12 @@ mod tests {
         assert!(!upload_proof_ok(&run)); // no proof at all
         std::fs::write(run.join(".uploaded.json"), "not json").unwrap();
         assert!(!upload_proof_ok(&run));
-        std::fs::write(run.join(".uploaded.json"), json!({"version": 2, "file_count": 1, "uploaded_at": "2026-01-01T00:00:00+00:00"}).to_string()).unwrap();
+        std::fs::write(
+            run.join(".uploaded.json"),
+            json!({"version": 2, "file_count": 1, "uploaded_at": "2026-01-01T00:00:00+00:00"})
+                .to_string(),
+        )
+        .unwrap();
         assert!(!upload_proof_ok(&run)); // wrong proof version
         write_upload_proof(&run, now - 100, 0);
         assert!(!upload_proof_ok(&run)); // zero file_count
@@ -323,7 +340,11 @@ mod tests {
         set_mtime(&run.join("data.bin"), now - 200);
         assert!(upload_proof_ok(&run));
         // A broken timestamp invalidates the proof.
-        std::fs::write(run.join(".uploaded.json"), json!({"version": 1, "file_count": 1, "uploaded_at": "when?"}).to_string()).unwrap();
+        std::fs::write(
+            run.join(".uploaded.json"),
+            json!({"version": 1, "file_count": 1, "uploaded_at": "when?"}).to_string(),
+        )
+        .unwrap();
         assert!(!upload_proof_ok(&run));
         // "Z" suffix timestamps parse (fromisoformat replace parity):
         // stamp the proof AFTER the child's mtime, with a Z suffix.
@@ -348,7 +369,10 @@ mod tests {
         assert!(!run_active(&run, (now - 86_400) as f64));
         std::fs::write(run.join("fresh.bin"), b"y").unwrap();
         assert!(run_active(&run, (now - 86_400) as f64));
-        assert!(!run_active(&th.join("does-not-exist"), (now - 86_400) as f64));
+        assert!(!run_active(
+            &th.join("does-not-exist"),
+            (now - 86_400) as f64
+        ));
     }
 
     #[test]
@@ -415,7 +439,10 @@ mod tests {
         let report = run_pass(&th, enforce_registry(weles_cleaner()), "testhost", 0, false);
         let weles = &report["cleaners"]["weles_recordings"];
         assert_eq!(weles["deleted_items"], 1, "{report}");
-        assert_eq!(weles["skipped"]["upload_proof_unavailable_v1"], 1, "{report}");
+        assert_eq!(
+            weles["skipped"]["upload_proof_unavailable_v1"], 1,
+            "{report}"
+        );
         assert!(!proven.exists());
         assert!(unproven.exists());
     }
@@ -426,7 +453,10 @@ mod tests {
         let unproven = aged_run(&th, "unproven-run", false);
         let cleaner = json!({"min_age_seconds": 86400, "allow_missing_upload_proof": true});
         let report = run_pass(&th, enforce_registry(cleaner), "testhost", 0, false);
-        assert_eq!(report["cleaners"]["weles_recordings"]["deleted_items"], 1, "{report}");
+        assert_eq!(
+            report["cleaners"]["weles_recordings"]["deleted_items"], 1,
+            "{report}"
+        );
         assert!(!unproven.exists());
     }
 
@@ -471,7 +501,10 @@ mod tests {
         assert!(active.exists());
         // active_run is NOT a public skip reason (Python parity).
         let public = super::super::sanitize_cleanup_report(&report);
-        assert_eq!(public["cleaners"]["weles_recordings"]["skipped"], json!({"too_young": 1}));
+        assert_eq!(
+            public["cleaners"]["weles_recordings"]["skipped"],
+            json!({"too_young": 1})
+        );
     }
 
     #[test]
@@ -528,7 +561,10 @@ mod tests {
         set_mtime(&dir, now - 2 * 86_400);
         let report = run_pass(&th, enforce_registry(weles_cleaner()), "testhost", 0, false);
         let weles = &report["cleaners"]["weles_recordings"];
-        assert_eq!(weles["skipped"]["upload_proof_unavailable_v1"], 1, "{report}");
+        assert_eq!(
+            weles["skipped"]["upload_proof_unavailable_v1"], 1,
+            "{report}"
+        );
         assert_eq!(weles["deleted_items"], 0);
         assert!(dir.exists());
     }
@@ -550,7 +586,10 @@ mod tests {
             "root": custom.to_string_lossy(),
         });
         let report = run_pass(&th, enforce_registry(cleaner), "testhost", 0, false);
-        assert_eq!(report["cleaners"]["weles_recordings"]["deleted_items"], 1, "{report}");
+        assert_eq!(
+            report["cleaners"]["weles_recordings"]["deleted_items"], 1,
+            "{report}"
+        );
         assert!(!run.exists());
     }
 
@@ -558,7 +597,10 @@ mod tests {
     fn absent_root_reports_root_absent() {
         let th = TempHome::new();
         let report = run_pass(&th, enforce_registry(weles_cleaner()), "testhost", 0, false);
-        assert_eq!(report["cleaners"]["weles_recordings"]["skipped"]["root_absent"], 1, "{report}");
+        assert_eq!(
+            report["cleaners"]["weles_recordings"]["skipped"]["root_absent"], 1,
+            "{report}"
+        );
         assert_eq!(report["outcome"], "no_eligible_items");
     }
 }

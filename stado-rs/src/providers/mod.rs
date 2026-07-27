@@ -135,7 +135,9 @@ mod tests {
     #[test]
     fn get_provider_arms() {
         // Arc<dyn Provider> is not Debug, so unwrap_err is unavailable.
-        let Err(err) = get_provider("dcloud") else { panic!("unknown provider must fail") };
+        let Err(err) = get_provider("dcloud") else {
+            panic!("unknown provider must fail")
+        };
         assert_eq!(err.to_string(), "Unknown provider: dcloud");
 
         // All cloud arms are lazy — credential/subscription resolution
@@ -169,9 +171,7 @@ mod tests {
             async fn instance_exists(&self, _r: &str) -> Result<bool, ProviderError> {
                 Ok(false)
             }
-            async fn list_running_instances(
-                &self,
-            ) -> Result<BTreeMap<String, i64>, ProviderError> {
+            async fn list_running_instances(&self) -> Result<BTreeMap<String, i64>, ProviderError> {
                 Ok(BTreeMap::new())
             }
         }

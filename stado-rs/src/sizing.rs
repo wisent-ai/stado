@@ -83,7 +83,9 @@ const CAPS_CACHE_TTL_S: u64 = 30;
 /// Python `_model_of`: `--model <value>` out of a command line,
 /// quote-stripped. "" when absent.
 pub fn model_of(command: &str) -> String {
-    let Some(caps) = MODEL_RE.captures(command) else { return String::new() };
+    let Some(caps) = MODEL_RE.captures(command) else {
+        return String::new();
+    };
     caps[1].trim_matches(['\'', '"']).to_string()
 }
 
@@ -97,7 +99,11 @@ pub fn oom_required_gb(text: &str) -> i64 {
     let mut need: f64 = proc[1].parse().unwrap_or(0.0);
     if let Some(alloc) = alloc {
         let x: f64 = alloc[1].parse().unwrap_or(0.0);
-        need += if alloc[2].eq_ignore_ascii_case("gib") { x } else { x / 1024.0 };
+        need += if alloc[2].eq_ignore_ascii_case("gib") {
+            x
+        } else {
+            x / 1024.0
+        };
     }
     (need.ceil() as i64).max(1)
 }
@@ -136,8 +142,14 @@ impl Default for Sizing {
 impl Sizing {
     pub fn new() -> Self {
         Self {
-            observed: Mutex::new(ObservedCache { map: None, built_at: None }),
-            caps: Mutex::new(CapsCache { vrams: None, built_at: None }),
+            observed: Mutex::new(ObservedCache {
+                map: None,
+                built_at: None,
+            }),
+            caps: Mutex::new(CapsCache {
+                vrams: None,
+                built_at: None,
+            }),
         }
     }
 
@@ -185,7 +197,11 @@ impl Sizing {
         store: &JobStorage,
         current: i64,
     ) -> Result<Option<i64>, StorageError> {
-        Ok(self.live_total_vrams(store).await?.into_iter().find(|v| *v > current))
+        Ok(self
+            .live_total_vrams(store)
+            .await?
+            .into_iter()
+            .find(|v| *v > current))
     }
 
     /// model -> min measured peak_vram_gb over its completed runs.
@@ -208,14 +224,20 @@ impl Sizing {
             .collect();
         let mut peaks: HashMap<String, Vec<i64>> = HashMap::new();
         if !completed_paths.is_empty() {
-            for text in download_many(store, &completed_paths).await?.into_iter().flatten() {
+            for text in download_many(store, &completed_paths)
+                .await?
+                .into_iter()
+                .flatten()
+            {
                 let doc: Value = serde_json::from_str(&text)?;
                 if doc.get("state").and_then(Value::as_str) != Some("completed") {
                     continue;
                 }
                 // Python `isinstance(peak, int)`: a JSON float (74.0) is not
                 // an int and as_i64 rejects it the same way.
-                let Some(peak) = doc.get("peak_vram_gb").and_then(Value::as_i64) else { continue };
+                let Some(peak) = doc.get("peak_vram_gb").and_then(Value::as_i64) else {
+                    continue;
+                };
                 if peak <= 0 {
                     continue; // unmeasured / CPU job — not a usable observation
                 }
@@ -268,7 +290,11 @@ impl Sizing {
             let live_vrams = self.live_total_vrams(store).await?;
             let max_live_vram = live_vrams.last().copied();
             let mut floors: HashMap<String, i64> = HashMap::new();
-            for text in download_many(store, &failed_paths).await?.into_iter().flatten() {
+            for text in download_many(store, &failed_paths)
+                .await?
+                .into_iter()
+                .flatten()
+            {
                 let doc: Value = serde_json::from_str(&text)?;
                 let model = model_of(doc.get("command").and_then(Value::as_str).unwrap_or(""));
                 if model.is_empty() {
@@ -300,7 +326,10 @@ impl Sizing {
     pub async fn live_total_vrams(&self, store: &JobStorage) -> Result<Vec<i64>, StorageError> {
         let mut cache = self.caps.lock().await;
         if let Some(vrams) = &cache.vrams {
-            if cache.built_at.is_some_and(|t| t.elapsed() < Duration::from_secs(CAPS_CACHE_TTL_S)) {
+            if cache
+                .built_at
+                .is_some_and(|t| t.elapsed() < Duration::from_secs(CAPS_CACHE_TTL_S))
+            {
                 return Ok(vrams.clone());
             }
         }
@@ -309,10 +338,14 @@ impl Sizing {
         let paths = store.list_paths("capacity/", 0).await?;
         for text in download_many(store, &paths).await?.into_iter().flatten() {
             let doc: Value = serde_json::from_str(&text)?;
-            let Some(pub_at) = doc.get("published_at").and_then(Value::as_str) else { continue };
+            let Some(pub_at) = doc.get("published_at").and_then(Value::as_str) else {
+                continue;
+            };
             // Python `except Exception: continue` — an unparseable
             // published_at just drops the broadcast.
-            let Ok(published) = DateTime::parse_from_rfc3339(pub_at) else { continue };
+            let Ok(published) = DateTime::parse_from_rfc3339(pub_at) else {
+                continue;
+            };
             let age = (now - published.with_timezone(&Utc)).num_seconds();
             if age > LIVE_TTL_S {
                 continue;
@@ -492,7 +525,10 @@ mod tests {
             "total_vram_gb": total_vram_gb,
         }))
         .unwrap();
-        store.upload_text(&format!("capacity/{cid}.json"), &body).await.unwrap();
+        store
+            .upload_text(&format!("capacity/{cid}.json"), &body)
+            .await
+            .unwrap();
     }
 
     fn now_rfc3339() -> String {
@@ -523,7 +559,10 @@ mod tests {
     fn oom_required_gb_parses_pytorch_message() {
         assert_eq!(oom_required_gb("no figures here"), 0);
         // proc only: ceil(70.2) = 71.
-        assert_eq!(oom_required_gb("this process has 70.2 GiB memory in use"), 71);
+        assert_eq!(
+            oom_required_gb("this process has 70.2 GiB memory in use"),
+            71
+        );
         // proc + GiB alloc.
         assert_eq!(
             oom_required_gb("CUDA out of memory. Tried to allocate 2.00 GiB ... this process has 70.00 GiB memory in use"),
@@ -541,7 +580,9 @@ mod tests {
     #[test]
     fn is_oom_error_matches_cuda_variants() {
         assert!(is_oom_error("RuntimeError: CUDA out of memory"));
-        assert!(is_oom_error("torch.cuda.OutOfMemoryError: CUDA out of memory"));
+        assert!(is_oom_error(
+            "torch.cuda.OutOfMemoryError: CUDA out of memory"
+        ));
         assert!(is_oom_error("cudaErrorMemoryAllocation"));
         assert!(!is_oom_error("disk full"));
     }
@@ -567,7 +608,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(sizing.live_total_vrams(&store).await.unwrap(), vec![24, 80, 96]);
+        assert_eq!(
+            sizing.live_total_vrams(&store).await.unwrap(),
+            vec![24, 80, 96]
+        );
         assert_eq!(sizing.smallest_live_vram(&store).await.unwrap(), Some(24));
         assert_eq!(sizing.next_live_vram(&store, 24).await.unwrap(), Some(80));
         assert_eq!(sizing.next_live_vram(&store, 96).await.unwrap(), None);
@@ -587,21 +631,45 @@ mod tests {
         let sizing = Sizing::new();
         publish(&store, "local-a", 80, &now_rfc3339()).await;
         // Trusted per-GPU-probe samples: 74 and 50 -> min = 50.
-        store.upload_text("completed/a.json", &completed_doc("m1", 74, true)).await.unwrap();
-        store.upload_text("completed/b.json", &completed_doc("m1", 50, true)).await.unwrap();
+        store
+            .upload_text("completed/a.json", &completed_doc("m1", 74, true))
+            .await
+            .unwrap();
+        store
+            .upload_text("completed/b.json", &completed_doc("m1", 50, true))
+            .await
+            .unwrap();
         // Legacy cross-GPU-sum record (per_gpu=false): NOT trusted.
-        store.upload_text("completed/c.json", &completed_doc("m1", 89, false)).await.unwrap();
+        store
+            .upload_text("completed/c.json", &completed_doc("m1", 89, false))
+            .await
+            .unwrap();
         // Unmeasured / CPU job: not a usable observation.
-        store.upload_text("completed/d.json", &completed_doc("m1", 0, true)).await.unwrap();
+        store
+            .upload_text("completed/d.json", &completed_doc("m1", 0, true))
+            .await
+            .unwrap();
         // peak_vram_per_gpu missing entirely: pre-0.4.241 record, skipped.
         let legacy = python_json_dumps(&json!({
             "job_id": "e", "command": "x --model m1 --task t", "state": "completed", "peak_vram_gb": 30,
         }))
         .unwrap();
-        store.upload_text("completed/e.json", &legacy).await.unwrap();
+        store
+            .upload_text("completed/e.json", &legacy)
+            .await
+            .unwrap();
 
-        assert_eq!(sizing.observed_vram_gb(&store, "m1").await.unwrap(), Some(50));
-        assert_eq!(sizing.observed_vram_gb(&store, "unknown-model").await.unwrap(), None);
+        assert_eq!(
+            sizing.observed_vram_gb(&store, "m1").await.unwrap(),
+            Some(50)
+        );
+        assert_eq!(
+            sizing
+                .observed_vram_gb(&store, "unknown-model")
+                .await
+                .unwrap(),
+            None
+        );
     }
 
     #[tokio::test]
@@ -609,7 +677,10 @@ mod tests {
         let (_dir, store) = store();
         let sizing = Sizing::new();
         publish(&store, "local-a", 80, &now_rfc3339()).await;
-        store.upload_text("completed/a.json", &completed_doc("m1", 89, false)).await.unwrap();
+        store
+            .upload_text("completed/a.json", &completed_doc("m1", 89, false))
+            .await
+            .unwrap();
         assert_eq!(sizing.observed_vram_gb(&store, "m1").await.unwrap(), None);
     }
 
@@ -620,13 +691,22 @@ mod tests {
         // Fleet's smallest GPU is 80; a 96GB-box sample of the elastic
         // workload is not a valid lower bound and would fence the fleet off.
         publish(&store, "local-a", 80, &now_rfc3339()).await;
-        store.upload_text("completed/a.json", &completed_doc("m1", 89, true)).await.unwrap();
+        store
+            .upload_text("completed/a.json", &completed_doc("m1", 89, true))
+            .await
+            .unwrap();
         assert_eq!(sizing.observed_vram_gb(&store, "m1").await.unwrap(), None);
         // A second, fleet-representative sample governs via min().
-        store.upload_text("completed/b.json", &completed_doc("m1", 74, true)).await.unwrap();
+        store
+            .upload_text("completed/b.json", &completed_doc("m1", 74, true))
+            .await
+            .unwrap();
         // Fresh Sizing: the observed map is cached on the instance.
         let sizing = Sizing::new();
-        assert_eq!(sizing.observed_vram_gb(&store, "m1").await.unwrap(), Some(74));
+        assert_eq!(
+            sizing.observed_vram_gb(&store, "m1").await.unwrap(),
+            Some(74)
+        );
     }
 
     #[tokio::test]
@@ -634,7 +714,10 @@ mod tests {
         let (_dir, store) = store();
         let sizing = Sizing::new();
         publish(&store, "local-a", 80, &now_rfc3339()).await;
-        store.upload_text("completed/a.json", &completed_doc("m1", 50, true)).await.unwrap();
+        store
+            .upload_text("completed/a.json", &completed_doc("m1", 50, true))
+            .await
+            .unwrap();
         // OOM floor 71 > observed 50 -> map entry raised to the floor.
         let failed = python_json_dumps(&json!({
             "job_id": "f1", "command": "x --model m1 --task t",
@@ -650,7 +733,10 @@ mod tests {
         .unwrap();
         store.upload_text("failed/f2.json", &failed2).await.unwrap();
 
-        assert_eq!(sizing.observed_vram_gb(&store, "m1").await.unwrap(), Some(71));
+        assert_eq!(
+            sizing.observed_vram_gb(&store, "m1").await.unwrap(),
+            Some(71)
+        );
         assert_eq!(sizing.observed_vram_gb(&store, "m2").await.unwrap(), None);
     }
 
@@ -667,10 +753,17 @@ mod tests {
         job.started_at = Some(now_rfc3339());
         job.instance_ref = Some("agent@host-a".into());
         store.write_job("running", &job).await.unwrap();
-        store.upload_text("status/j-oom/heartbeat", "x").await.unwrap();
+        store
+            .upload_text("status/j-oom/heartbeat", "x")
+            .await
+            .unwrap();
 
         let requeued = sizing
-            .escalate_on_oom(&store, &mut job, "torch.cuda.OutOfMemoryError: CUDA out of memory")
+            .escalate_on_oom(
+                &store,
+                &mut job,
+                "torch.cuda.OutOfMemoryError: CUDA out of memory",
+            )
             .await
             .unwrap();
         assert!(requeued);
@@ -679,7 +772,15 @@ mod tests {
         assert!(job.failed_at.is_none() && job.error.is_none());
         assert!(job.instance_ref.is_none() && job.started_at.is_none());
         assert!(store.read_job("running", "j-oom").await.unwrap().is_none());
-        assert_eq!(store.read_job("queue", "j-oom").await.unwrap().unwrap().gpu_mem_gb, 80);
+        assert_eq!(
+            store
+                .read_job("queue", "j-oom")
+                .await
+                .unwrap()
+                .unwrap()
+                .gpu_mem_gb,
+            80
+        );
         assert_eq!(store.read_status("j-oom").await.unwrap(), None);
     }
 
@@ -693,7 +794,11 @@ mod tests {
         store.write_job("running", &job).await.unwrap();
         // Floor 71 > current 24 -> jump straight to 71, not next_live_vram.
         let requeued = sizing
-            .escalate_on_oom(&store, &mut job, "out of memory: this process has 70.2 GiB memory in use")
+            .escalate_on_oom(
+                &store,
+                &mut job,
+                "out of memory: this process has 70.2 GiB memory in use",
+            )
             .await
             .unwrap();
         assert!(requeued);
@@ -704,7 +809,11 @@ mod tests {
         big.gpu_mem_gb = 24;
         store.write_job("running", &big).await.unwrap();
         let requeued = sizing
-            .escalate_on_oom(&store, &mut big, "out of memory: this process has 200 GiB memory in use")
+            .escalate_on_oom(
+                &store,
+                &mut big,
+                "out of memory: this process has 200 GiB memory in use",
+            )
             .await
             .unwrap();
         assert!(!requeued);
@@ -716,29 +825,37 @@ mod tests {
         let (_dir, store) = store();
         let sizing = Sizing::new();
         publish(&store, "local-a", 80, &now_rfc3339()).await;
-        store.upload_text("completed/a.json", &completed_doc("m-measured", 50, true)).await.unwrap();
+        store
+            .upload_text("completed/a.json", &completed_doc("m-measured", 50, true))
+            .await
+            .unwrap();
 
         // Model already has a measured peak -> a real OOM is a real failure.
         let mut job = Job::new("j-m", "run --model m-measured --task t1");
         job.gpu_mem_gb = 80;
         store.write_job("running", &job).await.unwrap();
-        assert!(
-            !sizing.escalate_on_oom(&store, &mut job, "CUDA out of memory").await.unwrap()
-        );
+        assert!(!sizing
+            .escalate_on_oom(&store, &mut job, "CUDA out of memory")
+            .await
+            .unwrap());
         assert!(store.read_job("running", "j-m").await.unwrap().is_some());
 
         // Unmeasured model on the largest live GPU -> genuine ceiling.
         let mut top = Job::new("j-top", "run --model m-other --task t1");
         top.gpu_mem_gb = 80;
         store.write_job("running", &top).await.unwrap();
-        assert!(
-            !sizing.escalate_on_oom(&store, &mut top, "CUDA out of memory").await.unwrap()
-        );
+        assert!(!sizing
+            .escalate_on_oom(&store, &mut top, "CUDA out of memory")
+            .await
+            .unwrap());
 
         // Non-OOM error text -> never requeues.
         let mut other = Job::new("j-x", "run --model m-other --task t1");
         other.gpu_mem_gb = 24;
-        assert!(!sizing.escalate_on_oom(&store, &mut other, "segfault").await.unwrap());
+        assert!(!sizing
+            .escalate_on_oom(&store, &mut other, "segfault")
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -746,7 +863,10 @@ mod tests {
         let (_dir, store) = store();
         let sizing = Sizing::new();
         publish(&store, "local-a", 80, &now_rfc3339()).await;
-        store.upload_text("completed/a.json", &completed_doc("m-measured", 50, true)).await.unwrap();
+        store
+            .upload_text("completed/a.json", &completed_doc("m-measured", 50, true))
+            .await
+            .unwrap();
 
         // Unmeasured model with a stale hardcoded size -> forced to 0.
         let mut stale = Job::new("j-stale", "run --model m-new --task t1");
@@ -767,13 +887,31 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(corrected, 2);
-        assert_eq!(store.read_job("queue", "j-stale").await.unwrap().unwrap().gpu_mem_gb, 0);
-        assert_eq!(store.read_job("queue", "j-meas").await.unwrap().unwrap().gpu_mem_gb, 50);
+        assert_eq!(
+            store
+                .read_job("queue", "j-stale")
+                .await
+                .unwrap()
+                .unwrap()
+                .gpu_mem_gb,
+            0
+        );
+        assert_eq!(
+            store
+                .read_job("queue", "j-meas")
+                .await
+                .unwrap()
+                .unwrap()
+                .gpu_mem_gb,
+            50
+        );
         assert!(logs.lock().unwrap()[0].contains("normalized 2 queue jobs"));
 
         // Second pass is a no-op.
-        let corrected =
-            sizing.normalize_queue_sizing(&store, &|_| ()).await.unwrap();
+        let corrected = sizing
+            .normalize_queue_sizing(&store, &|_| ())
+            .await
+            .unwrap();
         assert_eq!(corrected, 0);
     }
 
@@ -788,7 +926,10 @@ mod tests {
             "peak_vram_gb": 12, "peak_vram_per_gpu": true,
         }))
         .unwrap();
-        store.upload_text("completed/w.json", &wrong_state).await.unwrap();
+        store
+            .upload_text("completed/w.json", &wrong_state)
+            .await
+            .unwrap();
         assert_eq!(sizing.observed_vram_gb(&store, "m1").await.unwrap(), None);
     }
 }

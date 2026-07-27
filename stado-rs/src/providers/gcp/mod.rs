@@ -49,7 +49,11 @@ fn log(msg: &str) {
 
 /// Python f-string rendering of a bool.
 fn py_bool(value: bool) -> &'static str {
-    if value { "True" } else { "False" }
+    if value {
+        "True"
+    } else {
+        "False"
+    }
 }
 
 /// GCE transport/API error. The `Api` message embeds the error codes
@@ -92,8 +96,15 @@ impl GceClient {
     /// (cloud-platform scope). No credentials is a hard error (same as the
     /// Python SDK client construction).
     pub async fn new(project: &str) -> Result<Self, GceError> {
-        let auth = gcp_auth::provider().await.map_err(|err| GceError::Auth(err.to_string()))?;
-        Ok(Self::assemble(project, COMPUTE_API_BASE, Some(auth), Duration::from_secs(1)))
+        let auth = gcp_auth::provider()
+            .await
+            .map_err(|err| GceError::Auth(err.to_string()))?;
+        Ok(Self::assemble(
+            project,
+            COMPUTE_API_BASE,
+            Some(auth),
+            Duration::from_secs(1),
+        ))
     }
 
     /// Bind to an explicit base URL without credentials (loopback mocks in
@@ -127,7 +138,9 @@ impl GceClient {
 
     /// Fresh (cached by gcp_auth until expiry) bearer token; None in tests.
     async fn token(&self) -> Result<Option<String>, GceError> {
-        let Some(auth) = &self.inner.auth else { return Ok(None) };
+        let Some(auth) = &self.inner.auth else {
+            return Ok(None);
+        };
         let token = auth
             .token(&[CLOUD_PLATFORM_SCOPE])
             .await
@@ -252,10 +265,14 @@ impl GceClient {
         operation: &str,
         desc: &str,
     ) -> Result<(), GceError> {
-        let path =
-            format!("/projects/{}/zones/{zone}/operations/{operation}", self.project());
+        let path = format!(
+            "/projects/{}/zones/{zone}/operations/{operation}",
+            self.project()
+        );
         loop {
-            let op = self.get(&path, &format!("get operation {operation}")).await?;
+            let op = self
+                .get(&path, &format!("get operation {operation}"))
+                .await?;
             if op.get("status").and_then(Value::as_str) == Some("DONE") {
                 if let Some(error) = op.get("error") {
                     let mut codes = Vec::new();
@@ -286,12 +303,16 @@ impl GceClient {
     /// instance does not exist.
     async fn instance_status(&self, zone: &str, name: &str) -> Result<Option<String>, GceError> {
         let path = format!("/projects/{}/zones/{zone}/instances/{name}", self.project());
-        let Some(instance) =
-            self.get_allow_404(&path, &format!("get instance {name}@{zone}")).await?
+        let Some(instance) = self
+            .get_allow_404(&path, &format!("get instance {name}@{zone}"))
+            .await?
         else {
             return Ok(None);
         };
-        Ok(instance.get("status").and_then(Value::as_str).map(str::to_string))
+        Ok(instance
+            .get("status")
+            .and_then(Value::as_str)
+            .map(str::to_string))
     }
 
     /// `GET .../aggregated/instances?filter=...`, flattened to
@@ -306,7 +327,10 @@ impl GceClient {
                 crate::queue::gcs::percent_encode(filter)
             );
             if let Some(token) = &page_token {
-                path.push_str(&format!("&pageToken={}", crate::queue::gcs::percent_encode(token)));
+                path.push_str(&format!(
+                    "&pageToken={}",
+                    crate::queue::gcs::percent_encode(token)
+                ));
             }
             let page = self.get(&path, "aggregatedList instances").await?;
             if let Some(items) = page.get("items").and_then(Value::as_object) {
@@ -417,7 +441,9 @@ pub struct GcpProvider {
 impl GcpProvider {
     /// Python `GCPProvider()` — lazy in Rust (see the module docs).
     pub fn from_env() -> Self {
-        GcpProvider { state: OnceCell::new() }
+        GcpProvider {
+            state: OnceCell::new(),
+        }
     }
 
     /// Bind explicit client + storage (tests).
@@ -472,10 +498,15 @@ impl GcpProvider {
         startup_script: &str,
         preemptible: bool,
     ) -> Result<(), GceError> {
-        let instance_path =
-            format!("/projects/{}/zones/{zone}/instances/{name}", client.project());
+        let instance_path = format!(
+            "/projects/{}/zones/{zone}/instances/{name}",
+            client.project()
+        );
         client
-            .delete_allow_404(&instance_path, &format!("delete stale instance {name}@{zone}"))
+            .delete_allow_404(
+                &instance_path,
+                &format!("delete stale instance {name}@{zone}"),
+            )
             .await?;
         let body = instance_body(
             name,
@@ -489,12 +520,15 @@ impl GcpProvider {
             preemptible,
         );
         let insert_path = format!("/projects/{}/zones/{zone}/instances", client.project());
-        let op = client.post(&insert_path, &body, &format!("insert {name}@{zone}")).await?;
-        let op_name = op
-            .get("name")
-            .and_then(Value::as_str)
-            .ok_or_else(|| GceError::Api(format!("GCE insert {name}@{zone} -> no operation name")))?;
-        client.wait_zone_operation(zone, op_name, &format!("insert {name}@{zone}")).await
+        let op = client
+            .post(&insert_path, &body, &format!("insert {name}@{zone}"))
+            .await?;
+        let op_name = op.get("name").and_then(Value::as_str).ok_or_else(|| {
+            GceError::Api(format!("GCE insert {name}@{zone} -> no operation name"))
+        })?;
+        client
+            .wait_zone_operation(zone, op_name, &format!("insert {name}@{zone}"))
+            .await
     }
 
     /// Python `list_running_instance_refs_with_age`: `(name@zone,
@@ -534,7 +568,10 @@ impl GcpProvider {
             if status == "TERMINATED" {
                 continue;
             }
-            let created = instance.get("creationTimestamp").and_then(Value::as_str).unwrap_or("");
+            let created = instance
+                .get("creationTimestamp")
+                .and_then(Value::as_str)
+                .unwrap_or("");
             let mut age = 0.0;
             if !created.is_empty() {
                 // Python: datetime.fromisoformat(created.replace("Z",
@@ -589,13 +626,18 @@ impl Provider for GcpProvider {
         // propagates.
         let mut image = image.to_string();
         let mut image_project = image_project.to_string();
-        let family_path =
-            format!("/projects/{}/global/images/family/{BAKED_IMAGE_FAMILY}", client.project());
-        if let Some(latest) =
-            client.get_allow_404(&family_path, "get image family wisent-agent").await?
+        let family_path = format!(
+            "/projects/{}/global/images/family/{BAKED_IMAGE_FAMILY}",
+            client.project()
+        );
+        if let Some(latest) = client
+            .get_allow_404(&family_path, "get image family wisent-agent")
+            .await?
         {
-            if let Some(latest_name) =
-                latest.get("name").and_then(Value::as_str).filter(|s| !s.is_empty())
+            if let Some(latest_name) = latest
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
             {
                 image = latest_name.to_string();
                 image_project = client.project().to_string();
@@ -715,11 +757,16 @@ impl Provider for GcpProvider {
     async fn delete_instance(&self, instance_ref: &str) -> Result<(), ProviderError> {
         let state = self.state().await?;
         let (name, zone) = Self::parse_ref(instance_ref)?;
-        let path =
-            format!("/projects/{}/zones/{zone}/instances/{name}", state.client.project());
+        let path = format!(
+            "/projects/{}/zones/{zone}/instances/{name}",
+            state.client.project()
+        );
         // Idempotent: already-deleted instance is the desired terminal
         // state. Any other API error propagates so the caller sees it.
-        state.client.delete_allow_404(&path, &format!("delete {instance_ref}")).await?;
+        state
+            .client
+            .delete_allow_404(&path, &format!("delete {instance_ref}"))
+            .await?;
         Ok(())
     }
 
@@ -729,7 +776,10 @@ impl Provider for GcpProvider {
         let Some(status) = state.client.instance_status(zone, name).await? else {
             return Ok(false);
         };
-        Ok(matches!(status.as_str(), "RUNNING" | "STAGING" | "PROVISIONING"))
+        Ok(matches!(
+            status.as_str(),
+            "RUNNING" | "STAGING" | "PROVISIONING"
+        ))
     }
 
     async fn instance_lifecycle_state(
@@ -760,8 +810,7 @@ impl Provider for GcpProvider {
             if !matches!(status, "RUNNING" | "STAGING" | "PROVISIONING") {
                 continue;
             }
-            if let Some(accelerators) =
-                instance.get("guestAccelerators").and_then(Value::as_array)
+            if let Some(accelerators) = instance.get("guestAccelerators").and_then(Value::as_array)
             {
                 for accel in accelerators {
                     let atype = accel
@@ -772,8 +821,10 @@ impl Provider for GcpProvider {
                     if atype.is_empty() {
                         continue;
                     }
-                    let count =
-                        accel.get("acceleratorCount").and_then(Value::as_i64).unwrap_or(0);
+                    let count = accel
+                        .get("acceleratorCount")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0);
                     *counts.entry(atype.to_string()).or_insert(0) += count;
                 }
             }
@@ -830,12 +881,18 @@ mod tests {
             "#!/bin/bash\necho hi",
             true,
         );
-        assert_eq!(spot["machineType"], json!("zones/us-central1-b/machineTypes/n1-standard-4"));
+        assert_eq!(
+            spot["machineType"],
+            json!("zones/us-central1-b/machineTypes/n1-standard-4")
+        );
         assert_eq!(
             spot["disks"][0]["initializeParams"]["sourceImage"],
             json!("projects/deeplearning-platform-release/global/images/base-image")
         );
-        assert_eq!(spot["disks"][0]["initializeParams"]["diskSizeGb"], json!(200));
+        assert_eq!(
+            spot["disks"][0]["initializeParams"]["diskSizeGb"],
+            json!(200)
+        );
         assert_eq!(
             spot["scheduling"],
             json!({
@@ -860,7 +917,15 @@ mod tests {
 
         // On-demand: no Spot fields; empty accel -> no guest accelerators.
         let on_demand = instance_body(
-            "vm1", "us-central1-b", "n1-standard-4", "", 200, "img", "proj", "", false,
+            "vm1",
+            "us-central1-b",
+            "n1-standard-4",
+            "",
+            200,
+            "img",
+            "proj",
+            "",
+            false,
         );
         assert_eq!(
             on_demand["scheduling"],
@@ -880,8 +945,16 @@ mod tests {
         let _guard = stockout::test_lock().await;
         let (_dir, store) = store();
         let server = mock_http(vec![
-            http_response(404, "Not Found", r#"{"error": {"code": 404, "message": "not found"}}"#),
-            http_response(404, "Not Found", r#"{"error": {"code": 404, "message": "not found"}}"#),
+            http_response(
+                404,
+                "Not Found",
+                r#"{"error": {"code": 404, "message": "not found"}}"#,
+            ),
+            http_response(
+                404,
+                "Not Found",
+                r#"{"error": {"code": 404, "message": "not found"}}"#,
+            ),
             http_response(200, "OK", PENDING),
             http_response(200, "OK", DONE),
         ])
@@ -906,20 +979,40 @@ mod tests {
         assert_eq!(requests.len(), 4, "{requests:?}");
         // The mock server replaces the whole API base URL, so paths start
         // at /projects/... (no /compute/v1 prefix).
-        assert!(requests[0].starts_with(
-            "GET /projects/test-project/global/images/family/wisent-agent "
-        ), "{}", requests[0]);
-        assert!(requests[1].starts_with(
-            "DELETE /projects/test-project/zones/us-central1-b/instances/vm1 "
-        ), "{}", requests[1]);
-        assert!(requests[2].starts_with(
-            "POST /projects/test-project/zones/us-central1-b/instances "
-        ), "{}", requests[2]);
-        assert!(requests[2].contains(r#""provisioningModel":"SPOT""#), "{}", requests[2]);
-        assert!(requests[2].contains(r#""startup-script","value":"echo hi""#), "{}", requests[2]);
-        assert!(requests[3].starts_with(
-            "GET /projects/test-project/zones/us-central1-b/operations/operation-1 "
-        ), "{}", requests[3]);
+        assert!(
+            requests[0]
+                .starts_with("GET /projects/test-project/global/images/family/wisent-agent "),
+            "{}",
+            requests[0]
+        );
+        assert!(
+            requests[1]
+                .starts_with("DELETE /projects/test-project/zones/us-central1-b/instances/vm1 "),
+            "{}",
+            requests[1]
+        );
+        assert!(
+            requests[2].starts_with("POST /projects/test-project/zones/us-central1-b/instances "),
+            "{}",
+            requests[2]
+        );
+        assert!(
+            requests[2].contains(r#""provisioningModel":"SPOT""#),
+            "{}",
+            requests[2]
+        );
+        assert!(
+            requests[2].contains(r#""startup-script","value":"echo hi""#),
+            "{}",
+            requests[2]
+        );
+        assert!(
+            requests[3].starts_with(
+                "GET /projects/test-project/zones/us-central1-b/operations/operation-1 "
+            ),
+            "{}",
+            requests[3]
+        );
         server.stop();
     }
 
@@ -928,7 +1021,11 @@ mod tests {
         let _guard = stockout::test_lock().await;
         let (_dir, store) = store();
         let server = mock_http(vec![
-            http_response(200, "OK", r#"{"name": "wisent-agent-20260501", "status": "READY"}"#),
+            http_response(
+                200,
+                "OK",
+                r#"{"name": "wisent-agent-20260501", "status": "READY"}"#,
+            ),
             http_response(404, "Not Found", r#"{"error": {"code": 404}}"#),
             http_response(200, "OK", PENDING),
             http_response(200, "OK", DONE),
@@ -937,15 +1034,23 @@ mod tests {
         let provider = provider_for(&server, &store);
         let result = provider
             .create_instance(
-                "vm1", "n1-standard-4", "", 200, "base-image", "deeplearning-platform-release",
-                "echo hi", false,
+                "vm1",
+                "n1-standard-4",
+                "",
+                200,
+                "base-image",
+                "deeplearning-platform-release",
+                "echo hi",
+                false,
             )
             .await
             .unwrap();
         assert_eq!(result.as_deref(), Some("vm1@us-central1-b"));
         let requests = request_bodies(&server);
         assert!(
-            requests[2].contains(r#""sourceImage":"projects/test-project/global/images/wisent-agent-20260501""#),
+            requests[2].contains(
+                r#""sourceImage":"projects/test-project/global/images/wisent-agent-20260501""#
+            ),
             "{}",
             requests[2]
         );
@@ -978,18 +1083,34 @@ mod tests {
         let provider = provider_for(&server, &store);
         let result = provider
             .create_instance(
-                "vm1", "n1-standard-4", "nvidia-tesla-t4", 200, "img", "proj", "echo hi", false,
+                "vm1",
+                "n1-standard-4",
+                "nvidia-tesla-t4",
+                200,
+                "img",
+                "proj",
+                "echo hi",
+                false,
             )
             .await
             .unwrap();
         assert_eq!(result.as_deref(), Some("vm1@europe-west4-a"));
         let requests = request_bodies(&server);
         assert_eq!(requests.len(), 8, "{requests:?}");
-        assert!(requests[5].starts_with(
-            "DELETE /projects/test-project/zones/europe-west4-a/instances/vm1 "
-        ), "{}", requests[5]);
-        assert!(!requests.iter().any(|r| r.contains("us-central1-a")), "{requests:?}");
-        assert!(!requests.iter().any(|r| r.contains("us-central1-c")), "{requests:?}");
+        assert!(
+            requests[5]
+                .starts_with("DELETE /projects/test-project/zones/europe-west4-a/instances/vm1 "),
+            "{}",
+            requests[5]
+        );
+        assert!(
+            !requests.iter().any(|r| r.contains("us-central1-a")),
+            "{requests:?}"
+        );
+        assert!(
+            !requests.iter().any(|r| r.contains("us-central1-c")),
+            "{requests:?}"
+        );
         // The cross-call quota cache was marked for (region, accel).
         let blob = store
             .download_text(stockout::QUOTA_BLOB)
@@ -1007,7 +1128,9 @@ mod tests {
         // Pre-mark us-central1-b as stocked out; the loop's first API call
         // must target us-central1-a. That zone then stockouts live and the
         // cache picks it up.
-        stockout::mark_zone_stockout(&store, "us-central1-b").await.unwrap();
+        stockout::mark_zone_stockout(&store, "us-central1-b")
+            .await
+            .unwrap();
         let server = mock_http(vec![
             http_response(404, "Not Found", r#"{"error": {"code": 404}}"#),
             http_response(404, "Not Found", r#"{"error": {"code": 404}}"#),
@@ -1027,7 +1150,14 @@ mod tests {
         let provider = provider_for(&server, &store);
         let result = provider
             .create_instance(
-                "vm1", "n1-standard-4", "nvidia-tesla-t4", 200, "img", "proj", "echo hi", false,
+                "vm1",
+                "n1-standard-4",
+                "nvidia-tesla-t4",
+                200,
+                "img",
+                "proj",
+                "echo hi",
+                false,
             )
             .await
             .unwrap();
@@ -1035,10 +1165,18 @@ mod tests {
         let requests = request_bodies(&server);
         assert_eq!(requests.len(), 8, "{requests:?}");
         // First instance call went to us-central1-a (b was cache-skipped).
-        assert!(requests[1].contains("zones/us-central1-a/instances/vm1"), "{}", requests[1]);
+        assert!(
+            requests[1].contains("zones/us-central1-a/instances/vm1"),
+            "{}",
+            requests[1]
+        );
         // The live stockout of us-central1-a was marked.
-        assert!(stockout::zone_recently_stocked_out(&store, "us-central1-a").await.unwrap());
-        assert!(stockout::zone_recently_stocked_out(&store, "us-central1-b").await.unwrap());
+        assert!(stockout::zone_recently_stocked_out(&store, "us-central1-a")
+            .await
+            .unwrap());
+        assert!(stockout::zone_recently_stocked_out(&store, "us-central1-b")
+            .await
+            .unwrap());
         server.stop();
     }
 
@@ -1059,7 +1197,14 @@ mod tests {
         let provider = provider_for(&server, &store);
         let result = provider
             .create_instance(
-                "vm1", "n1-standard-4", "nvidia-tesla-t4", 200, "img", "proj", "echo hi", false,
+                "vm1",
+                "n1-standard-4",
+                "nvidia-tesla-t4",
+                200,
+                "img",
+                "proj",
+                "echo hi",
+                false,
             )
             .await
             .unwrap();
@@ -1089,7 +1234,14 @@ mod tests {
         let provider = provider_for(&server, &store);
         let result = provider
             .create_instance(
-                "vm1", "n1-standard-4", "nvidia-tesla-t4", 200, "img", "proj", "echo hi", false,
+                "vm1",
+                "n1-standard-4",
+                "nvidia-tesla-t4",
+                200,
+                "img",
+                "proj",
+                "echo hi",
+                false,
             )
             .await
             .unwrap();
@@ -1120,7 +1272,14 @@ mod tests {
         let provider = provider_for(&server, &store);
         let result = provider
             .create_instance(
-                "vm1", "n1-standard-4", "nvidia-tesla-t4", 200, "img", "proj", "echo hi", false,
+                "vm1",
+                "n1-standard-4",
+                "nvidia-tesla-t4",
+                200,
+                "img",
+                "proj",
+                "echo hi",
+                false,
             )
             .await
             .unwrap();
@@ -1139,10 +1298,15 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs_f64();
-        let map: BTreeMap<String, f64> =
-            config::zone_rotation().iter().map(|z| (z.clone(), now)).collect();
+        let map: BTreeMap<String, f64> = config::zone_rotation()
+            .iter()
+            .map(|z| (z.clone(), now))
+            .collect();
         store
-            .upload_text(stockout::STOCKOUT_BLOB, &serde_json::to_string(&map).unwrap())
+            .upload_text(
+                stockout::STOCKOUT_BLOB,
+                &serde_json::to_string(&map).unwrap(),
+            )
             .await
             .unwrap();
         let server = mock_http(vec![http_response(
@@ -1153,7 +1317,16 @@ mod tests {
         .await;
         let provider = provider_for(&server, &store);
         let result = provider
-            .create_instance("vm1", "n1-standard-4", "", 200, "img", "proj", "echo hi", false)
+            .create_instance(
+                "vm1",
+                "n1-standard-4",
+                "",
+                200,
+                "img",
+                "proj",
+                "echo hi",
+                false,
+            )
             .await
             .unwrap();
         assert_eq!(result, None);
@@ -1173,7 +1346,16 @@ mod tests {
         .await;
         let provider = provider_for(&server, &store);
         let err = provider
-            .create_instance("vm1", "n1-standard-4", "", 200, "img", "proj", "echo hi", false)
+            .create_instance(
+                "vm1",
+                "n1-standard-4",
+                "",
+                200,
+                "img",
+                "proj",
+                "echo hi",
+                false,
+            )
             .await
             .unwrap_err();
         assert!(err.to_string().contains("HTTP 500"), "{err}");
@@ -1196,7 +1378,10 @@ mod tests {
         let provider = provider_for(&server, &store);
         provider.delete_instance("vm1@us-central1-b").await.unwrap();
         provider.delete_instance("vm1@us-central1-b").await.unwrap();
-        let err = provider.delete_instance("vm1@us-central1-b").await.unwrap_err();
+        let err = provider
+            .delete_instance("vm1@us-central1-b")
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("HTTP 403"), "{err}");
         server.stop();
 
@@ -1221,10 +1406,20 @@ mod tests {
         assert!(provider.instance_exists("vm1@us-central1-b").await.unwrap());
         assert!(!provider.instance_exists("vm1@us-central1-b").await.unwrap());
         assert_eq!(
-            provider.instance_lifecycle_state("vm1@us-central1-b").await.unwrap().as_deref(),
+            provider
+                .instance_lifecycle_state("vm1@us-central1-b")
+                .await
+                .unwrap()
+                .as_deref(),
             Some("STOPPING")
         );
-        assert_eq!(provider.instance_lifecycle_state("vm1@us-central1-b").await.unwrap(), None);
+        assert_eq!(
+            provider
+                .instance_lifecycle_state("vm1@us-central1-b")
+                .await
+                .unwrap(),
+            None
+        );
         server.stop();
     }
 
@@ -1253,18 +1448,27 @@ mod tests {
                 ]}
             }
         }"#;
-        let server =
-            mock_http(vec![http_response(200, "OK", page1), http_response(200, "OK", page2)]).await;
+        let server = mock_http(vec![
+            http_response(200, "OK", page1),
+            http_response(200, "OK", page2),
+        ])
+        .await;
         let provider = provider_for(&server, &store);
         let counts = provider.list_running_instances().await.unwrap();
         assert_eq!(
             counts,
-            BTreeMap::from([("nvidia-l4".to_string(), 1), ("nvidia-tesla-t4".to_string(), 2)])
+            BTreeMap::from([
+                ("nvidia-l4".to_string(), 1),
+                ("nvidia-tesla-t4".to_string(), 2)
+            ])
         );
         let requests = request_bodies(&server);
         // The exact Python filter: name:{INSTANCE_PREFIX}-*.
         assert!(
-            requests[0].replace("%3A", ":").replace("%2A", "*").contains("filter=name:wisent-*"),
+            requests[0]
+                .replace("%3A", ":")
+                .replace("%2A", "*")
+                .contains("filter=name:wisent-*"),
             "{}",
             requests[0]
         );
@@ -1287,7 +1491,10 @@ mod tests {
         }"#;
         let server = mock_http(vec![http_response(200, "OK", body)]).await;
         let provider = provider_for(&server, &store);
-        let refs = provider.list_running_instance_refs_with_age().await.unwrap();
+        let refs = provider
+            .list_running_instance_refs_with_age()
+            .await
+            .unwrap();
         assert_eq!(refs.len(), 2, "{refs:?}");
         assert_eq!(refs[0].0, "wisent-agent-1@us-central1-b");
         assert!(refs[0].1 > 0.0, "age in seconds since boot: {:?}", refs[0]);

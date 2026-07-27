@@ -39,7 +39,10 @@ fn log(msg: &str) {
 
 /// Python `AZ_ORDER` — `[f"{REGION}{suffix}" for suffix in a,c,d,b]`.
 pub fn az_order(region: &str) -> Vec<String> {
-    ["a", "c", "d", "b"].iter().map(|suffix| format!("{region}{suffix}")).collect()
+    ["a", "c", "d", "b"]
+        .iter()
+        .map(|suffix| format!("{region}{suffix}"))
+        .collect()
 }
 
 /// Inputs for one RunInstances attempt (the Python `run_instances(...)`
@@ -104,7 +107,9 @@ impl Ec2Client {
             .region(aws_config::Region::new(config::aws_region().to_string()))
             .load()
             .await;
-        Ec2Client { client: aws_sdk_ec2::Client::new(&sdk_config) }
+        Ec2Client {
+            client: aws_sdk_ec2::Client::new(&sdk_config),
+        }
     }
 }
 
@@ -132,12 +137,20 @@ impl Ec2Api for Ec2Client {
         let out = self
             .client
             .describe_subnets()
-            .filters(Filter::builder().name("availability-zone").values(az).build())
+            .filters(
+                Filter::builder()
+                    .name("availability-zone")
+                    .values(az)
+                    .build(),
+            )
             .filters(Filter::builder().name("vpc-id").values(vpc_id).build())
             .send()
             .await
             .map_err(|err| ec2_error("describe_subnets", &err))?;
-        Ok(out.subnets().first().and_then(|subnet| subnet.subnet_id().map(str::to_string)))
+        Ok(out
+            .subnets()
+            .first()
+            .and_then(|subnet| subnet.subnet_id().map(str::to_string)))
     }
 
     async fn run_instance(&self, args: &RunInstanceArgs) -> Result<String, ProviderError> {
@@ -154,7 +167,9 @@ impl Ec2Api for Ec2Client {
             .security_group_ids(&args.security_group)
             .subnet_id(&args.subnet_id)
             .iam_instance_profile(
-                IamInstanceProfileSpecification::builder().name(&args.iam_profile).build(),
+                IamInstanceProfileSpecification::builder()
+                    .name(&args.iam_profile)
+                    .build(),
             )
             .user_data(user_data)
             .block_device_mappings(
@@ -228,7 +243,12 @@ impl Ec2Api for Ec2Client {
                     .values(format!("{}-*", config::INSTANCE_PREFIX))
                     .build(),
             )
-            .filters(Filter::builder().name("instance-state-name").values("running").build())
+            .filters(
+                Filter::builder()
+                    .name("instance-state-name")
+                    .values("running")
+                    .build(),
+            )
             .into_paginator()
             .send();
         let mut out = Vec::new();
@@ -277,7 +297,10 @@ impl AwsProvider {
     /// Python `AWSProvider()` — the SDK client itself resolves lazily on
     /// the first API call (see the module docs).
     pub fn from_env() -> Self {
-        AwsProvider { settings: AwsSettings::from_env(), api: OnceCell::new() }
+        AwsProvider {
+            settings: AwsSettings::from_env(),
+            api: OnceCell::new(),
+        }
     }
 
     /// Bind explicit settings + a fake API (tests).
@@ -285,7 +308,10 @@ impl AwsProvider {
     fn with_api(settings: AwsSettings, api: Arc<dyn Ec2Api>) -> Self {
         let cell = OnceCell::new();
         let _ = cell.set(api);
-        AwsProvider { settings, api: cell }
+        AwsProvider {
+            settings,
+            api: cell,
+        }
     }
 
     async fn api(&self) -> &Arc<dyn Ec2Api> {
@@ -316,8 +342,11 @@ impl Provider for AwsProvider {
         // through.
         let sg = &self.settings.security_group;
         let iam = &self.settings.iam_profile;
-        let ami =
-            if self.settings.ami_id.is_empty() { image } else { self.settings.ami_id.as_str() };
+        let ami = if self.settings.ami_id.is_empty() {
+            image
+        } else {
+            self.settings.ami_id.as_str()
+        };
         if sg.is_empty() || ami.is_empty() {
             return Err(ProviderError::Value(
                 "AWS_SECURITY_GROUP and AWS_AMI_ID are required".to_string(),
@@ -427,7 +456,11 @@ mod tests {
             az: &str,
             _vpc_id: &str,
         ) -> Result<Option<String>, ProviderError> {
-            Ok(self.subnets.get(az).cloned().unwrap_or(Some(format!("subnet-{az}"))))
+            Ok(self
+                .subnets
+                .get(az)
+                .cloned()
+                .unwrap_or(Some(format!("subnet-{az}"))))
         }
         async fn run_instance(&self, args: &RunInstanceArgs) -> Result<String, ProviderError> {
             let az = args.subnet_id.trim_start_matches("subnet-").to_string();
@@ -440,7 +473,10 @@ mod tests {
             }
         }
         async fn terminate_instance(&self, instance_id: &str) -> Result<(), ProviderError> {
-            self.terminate_calls.lock().unwrap().push(instance_id.to_string());
+            self.terminate_calls
+                .lock()
+                .unwrap()
+                .push(instance_id.to_string());
             match self.terminate_responses.lock().unwrap().first() {
                 Some(Ok(())) | None => Ok(()),
                 Some(Err(msg)) => Err(aws_err(msg)),
@@ -482,7 +518,16 @@ mod tests {
     async fn create_instance_happy_path_first_az() {
         let p = provider(FakeEc2::default());
         let result = p
-            .create_instance("vm1", "g4dn.xlarge", "nvidia-tesla-t4", 200, "ami-ignored", "", "echo hi", false)
+            .create_instance(
+                "vm1",
+                "g4dn.xlarge",
+                "nvidia-tesla-t4",
+                200,
+                "ami-ignored",
+                "",
+                "echo hi",
+                false,
+            )
             .await
             .unwrap();
         assert_eq!(result.as_deref(), Some("i-us-east-1a"));
@@ -501,7 +546,16 @@ mod tests {
         );
         let p = AwsProvider::with_api(settings(), Arc::new(fake));
         let result = p
-            .create_instance("vm1", "g4dn.xlarge", "nvidia-tesla-t4", 200, "", "", "echo hi", true)
+            .create_instance(
+                "vm1",
+                "g4dn.xlarge",
+                "nvidia-tesla-t4",
+                200,
+                "",
+                "",
+                "echo hi",
+                true,
+            )
             .await
             .unwrap();
         assert_eq!(result.as_deref(), Some("i-us-east-1c"));
@@ -513,7 +567,9 @@ mod tests {
         raw.subnets.insert("us-east-1a".to_string(), None);
         raw.run_responses.insert(
             "us-east-1c".to_string(),
-            vec![Err("EC2 run_instances failed: InsufficientInstanceCapacity: x".to_string())],
+            vec![Err(
+                "EC2 run_instances failed: InsufficientInstanceCapacity: x".to_string(),
+            )],
         );
         let shared = Arc::new(raw);
         let p = AwsProvider::with_api(settings(), shared.clone());
@@ -533,7 +589,9 @@ mod tests {
         for az in ["us-east-1a", "us-east-1c", "us-east-1d", "us-east-1b"] {
             raw.run_responses.insert(
                 az.to_string(),
-                vec![Err("EC2 run_instances failed: UnauthorizedOperation: nope".to_string())],
+                vec![Err(
+                    "EC2 run_instances failed: UnauthorizedOperation: nope".to_string()
+                )],
             );
         }
         let p = provider(raw);
@@ -553,7 +611,10 @@ mod tests {
             .create_instance("vm1", "g4dn.xlarge", "", 200, "ami-x", "", "echo hi", false)
             .await
             .unwrap_err();
-        assert_eq!(err.to_string(), "AWS_SECURITY_GROUP and AWS_AMI_ID are required");
+        assert_eq!(
+            err.to_string(),
+            "AWS_SECURITY_GROUP and AWS_AMI_ID are required"
+        );
 
         // Empty AWS_AMI_ID falls back to the per-job image argument.
         let mut s2 = settings();
@@ -561,7 +622,16 @@ mod tests {
         let shared = Arc::new(FakeEc2::default());
         let p2 = AwsProvider::with_api(s2, shared.clone());
         assert!(p2
-            .create_instance("vm1", "g4dn.xlarge", "", 200, "ami-job", "", "echo hi", false)
+            .create_instance(
+                "vm1",
+                "g4dn.xlarge",
+                "",
+                200,
+                "ami-job",
+                "",
+                "echo hi",
+                false
+            )
             .await
             .unwrap()
             .is_some());
@@ -570,24 +640,23 @@ mod tests {
     #[tokio::test]
     async fn delete_instance_notfound_is_success() {
         let shared = Arc::new(FakeEc2::default());
-        shared
-            .terminate_responses
-            .lock()
-            .unwrap()
-            .push(Err("EC2 terminate_instances failed: InvalidInstanceID.NotFound: \
+        shared.terminate_responses.lock().unwrap().push(Err(
+            "EC2 terminate_instances failed: InvalidInstanceID.NotFound: \
                  The instance ID 'i-gone' does not exist"
-                .to_string()));
+                .to_string(),
+        ));
         let p = AwsProvider::with_api(settings(), shared.clone());
         p.delete_instance("i-gone").await.unwrap();
-        assert_eq!(shared.terminate_calls.lock().unwrap().as_slice(), &["i-gone"]);
+        assert_eq!(
+            shared.terminate_calls.lock().unwrap().as_slice(),
+            &["i-gone"]
+        );
 
         // Other errors propagate.
         let other = Arc::new(FakeEc2::default());
-        other
-            .terminate_responses
-            .lock()
-            .unwrap()
-            .push(Err("EC2 terminate_instances failed: UnauthorizedOperation: no".to_string()));
+        other.terminate_responses.lock().unwrap().push(Err(
+            "EC2 terminate_instances failed: UnauthorizedOperation: no".to_string(),
+        ));
         let p2 = AwsProvider::with_api(settings(), other);
         assert!(p2.delete_instance("i-x").await.is_err());
     }
@@ -595,9 +664,12 @@ mod tests {
     #[tokio::test]
     async fn instance_exists_state_mapping() {
         let mut raw = FakeEc2::default();
-        raw.states.insert("i-run".to_string(), Some("running".to_string()));
-        raw.states.insert("i-pend".to_string(), Some("pending".to_string()));
-        raw.states.insert("i-term".to_string(), Some("terminated".to_string()));
+        raw.states
+            .insert("i-run".to_string(), Some("running".to_string()));
+        raw.states
+            .insert("i-pend".to_string(), Some("pending".to_string()));
+        raw.states
+            .insert("i-term".to_string(), Some("terminated".to_string()));
         raw.state_errors.insert(
             "i-gone".to_string(),
             "EC2 describe_instances failed: InvalidInstanceID.NotFound: x".to_string(),

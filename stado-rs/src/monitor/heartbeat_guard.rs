@@ -122,7 +122,10 @@ pub async fn any_job_heartbeat_fresh(
         if jid.is_empty() {
             continue;
         }
-        let text = match store.download_text(&format!("status/{jid}/heartbeat")).await {
+        let text = match store
+            .download_text(&format!("status/{jid}/heartbeat"))
+            .await
+        {
             Ok(text) => text,
             Err(_) => {
                 // A coordinator-side GCS read failure is NOT proof the job
@@ -139,8 +142,12 @@ pub async fn any_job_heartbeat_fresh(
                 return true;
             }
         };
-        let Some(text) = text.filter(|t| !t.is_empty()) else { continue };
-        let Some(ts) = parse_heartbeat_ts(&text) else { continue };
+        let Some(text) = text.filter(|t| !t.is_empty()) else {
+            continue;
+        };
+        let Some(ts) = parse_heartbeat_ts(&text) else {
+            continue;
+        };
         if now - ts < threshold_seconds {
             return true;
         }
@@ -207,7 +214,9 @@ async fn prefix_has_fresh_blob(
     prefix: Option<&str>,
     threshold_seconds: f64,
 ) -> bool {
-    let Some(prefix) = prefix.filter(|p| !p.is_empty()) else { return false };
+    let Some(prefix) = prefix.filter(|p| !p.is_empty()) else {
+        return false;
+    };
     let now = now_unix();
     let infos = match store.list_blobs_with_meta(prefix).await {
         Ok(infos) => infos,
@@ -264,12 +273,18 @@ async fn job_command_for_jid(store: &JobStorage, jid: &str) -> String {
             // fail-safe handled by caller's defer-on-fresh logic
             Err(_) => return String::new(),
         };
-        let Some(text) = text.filter(|t| !t.is_empty()) else { continue };
+        let Some(text) = text.filter(|t| !t.is_empty()) else {
+            continue;
+        };
         // Python json.loads(txt).get("command") or ""; a non-object or
         // unparseable blob maps to "" (Python: except -> "").
         return serde_json::from_str::<serde_json::Value>(&text)
             .ok()
-            .and_then(|v| v.get("command").and_then(|c| c.as_str()).map(str::to_string))
+            .and_then(|v| {
+                v.get("command")
+                    .and_then(|c| c.as_str())
+                    .map(str::to_string)
+            })
             .unwrap_or_default();
     }
     String::new()
@@ -355,7 +370,9 @@ pub async fn build_ref_to_jids(
     for job in store.list_jobs("running", 0).await? {
         if let Some(instance_ref) = job.instance_ref.filter(|r| !r.is_empty()) {
             if !job.job_id.is_empty() {
-                out.entry(instance_ref).or_default().push(job.job_id.clone());
+                out.entry(instance_ref)
+                    .or_default()
+                    .push(job.job_id.clone());
             }
         }
     }
@@ -429,7 +446,9 @@ mod tests {
             expected_version: &str,
             content: &str,
         ) -> Result<String, StorageError> {
-            self.0.compare_and_swap_text(path, expected_version, content).await
+            self.0
+                .compare_and_swap_text(path, expected_version, content)
+                .await
         }
         async fn delete(&self, path: &str) -> Result<(), StorageError> {
             self.0.delete(path).await
@@ -444,10 +463,7 @@ mod tests {
         ) -> Result<Vec<String>, StorageError> {
             self.0.list_paths(prefix, oldest_first).await
         }
-        async fn updated_at(
-            &self,
-            path: &str,
-        ) -> Result<Option<DateTime<Utc>>, StorageError> {
+        async fn updated_at(&self, path: &str) -> Result<Option<DateTime<Utc>>, StorageError> {
             self.0.updated_at(path).await
         }
         async fn set_metadata(
@@ -477,18 +493,27 @@ mod tests {
 
         // Fresh: written now.
         store
-            .upload_text("status/j1/heartbeat", &format!("RUNNING {}", Utc::now().to_rfc3339()))
+            .upload_text(
+                "status/j1/heartbeat",
+                &format!("RUNNING {}", Utc::now().to_rfc3339()),
+            )
             .await
             .unwrap();
         assert!(any_job_heartbeat_fresh(&store, jid, 1800.0).await);
 
         // Stale: 2h old embedded timestamp.
         let old = (Utc::now() - Duration::hours(2)).to_rfc3339();
-        store.upload_text("status/j1/heartbeat", &format!("RUNNING {old}")).await.unwrap();
+        store
+            .upload_text("status/j1/heartbeat", &format!("RUNNING {old}"))
+            .await
+            .unwrap();
         assert!(!any_job_heartbeat_fresh(&store, jid, 1800.0).await);
 
         // Unparseable: no timestamp in the blob.
-        store.upload_text("status/j1/heartbeat", "no timestamp here").await.unwrap();
+        store
+            .upload_text("status/j1/heartbeat", "no timestamp here")
+            .await
+            .unwrap();
         assert!(!any_job_heartbeat_fresh(&store, jid, 1800.0).await);
 
         // Missing blob: not fresh, not an error.
@@ -522,8 +547,12 @@ mod tests {
 
     #[test]
     fn self_terminating_command_detection() {
-        assert!(is_self_terminating_command("pip install --upgrade wc; pkill -f 'wc agent'"));
-        assert!(is_self_terminating_command("kill -9 123 # wc agent restart"));
+        assert!(is_self_terminating_command(
+            "pip install --upgrade wc; pkill -f 'wc agent'"
+        ));
+        assert!(is_self_terminating_command(
+            "kill -9 123 # wc agent restart"
+        ));
         assert!(!is_self_terminating_command("pkill -f something-else"));
         assert!(!is_self_terminating_command("wc agent run"));
         assert!(!is_self_terminating_command(""));
@@ -539,7 +568,10 @@ mod tests {
         // No blobs under the prefix yet -> not fresh.
         assert!(!any_job_checkpoint_fresh(&store, &job, 5400.0).await);
         // A blob written now under ckpts/run1/ -> fresh.
-        store.upload_text("ckpts/run1/shard-00001", "weights").await.unwrap();
+        store
+            .upload_text("ckpts/run1/shard-00001", "weights")
+            .await
+            .unwrap();
         assert!(any_job_checkpoint_fresh(&store, &job, 5400.0).await);
         // A zero threshold forces "stale" deterministically.
         assert!(!any_job_checkpoint_fresh(&store, &job, 0.0).await);
@@ -548,8 +580,7 @@ mod tests {
         assert!(!any_job_checkpoint_fresh(&store, &job, 5400.0).await);
         // jids-list variant finds the same blob via the running/ blob.
         store.write_job("running", &job).await.unwrap();
-        job.command =
-            "python train.py --checkpoint-gcs-uri gs://bucket/ckpts/run1/".to_string();
+        job.command = "python train.py --checkpoint-gcs-uri gs://bucket/ckpts/run1/".to_string();
         store.write_job("running", &job).await.unwrap();
         assert!(any_job_checkpoint_fresh_jids(&store, &["jc".to_string()], 5400.0).await);
     }
@@ -561,11 +592,16 @@ mod tests {
         job.state = job_state::RUNNING.to_string();
         job.instance_ref = Some("local@host1".into());
         store.write_job("running", &job).await.unwrap();
-        store.upload_text("status/js/heartbeat", "RUNNING 2026-05-13T00:26:33Z").await.unwrap();
+        store
+            .upload_text("status/js/heartbeat", "RUNNING 2026-05-13T00:26:33Z")
+            .await
+            .unwrap();
 
         let logs: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
         let log_fn = |msg: &str| logs.lock().unwrap().push(msg.to_string());
-        assert!(finalize_if_self_terminating(&store, &mut job, &log_fn).await.unwrap());
+        assert!(finalize_if_self_terminating(&store, &mut job, &log_fn)
+            .await
+            .unwrap());
         let done = store.read_job("completed", "js").await.unwrap().unwrap();
         assert_eq!(done.state, job_state::COMPLETED);
         assert!(done.completed_at.is_some());
@@ -578,7 +614,9 @@ mod tests {
         let mut other = Job::new("jo", "python train.py");
         other.state = job_state::RUNNING.to_string();
         store.write_job("running", &other).await.unwrap();
-        assert!(!finalize_if_self_terminating(&store, &mut other, &log_fn).await.unwrap());
+        assert!(!finalize_if_self_terminating(&store, &mut other, &log_fn)
+            .await
+            .unwrap());
         assert!(store.read_job("running", "jo").await.unwrap().is_some());
     }
 
@@ -601,6 +639,8 @@ mod tests {
 
         let jids = fresh_jids_pointing_to_ref(&store, "vm1@zone-a").await;
         assert_eq!(jids, vec!["j1".to_string(), "j2".to_string()]);
-        assert!(fresh_jids_pointing_to_ref(&store, "nobody@zone-z").await.is_empty());
+        assert!(fresh_jids_pointing_to_ref(&store, "nobody@zone-z")
+            .await
+            .is_empty());
     }
 }

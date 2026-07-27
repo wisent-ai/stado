@@ -1,0 +1,40 @@
+{
+  "_comment": "Azure-only Stado deployment. Install at ~/.config/stado/config.json (or point $STADO_CONFIG at it). Resolution order is env > this file > built-in default, so deploy/azure/env.example still overrides anything here. Replace every <placeholder> before use; empty strings are treated as unset and fall through to the built-in default, which is GCP-shaped.",
+
+  "providers": ["azure"],
+
+  "storage": {
+    "backend": "azure",
+    "azure": {
+      "account": "<storage-account>",
+      "container": "stado"
+    },
+    "gcs": {
+      "_comment": "Not used for routing under the azure backend, but queue/storage.rs keeps it as bucket_name and it leaks into gs:// URIs (machine.rs) and the coverage verifier. Keep it matching the container name.",
+      "bucket": "stado"
+    }
+  },
+
+  "azure": {
+    "subscription_id": "<subscription-id>",
+    "resource_group": "wisent-compute",
+    "locations": ["eastus", "westus2", "westus3"],
+    "vnet": "wisent-compute-vnet",
+    "subnet": "wisent-compute-subnet",
+    "nsg": "wisent-compute-nsg",
+    "_network_comment": "The provider does NOT create networking. vnet and nsg must already exist per region, named <vnet>-<location> and <nsg>-<location> (providers/azure/network.rs). The subnet is a child of the region vnet so it carries no suffix.",
+    "_image_comment": "image_urn is omitted so the built-in default applies: the microsoft-dsvm ubuntu-hpc image, which ships the NVIDIA driver and CUDA preinstalled. Override here only to pin a different publisher:offer:sku:version.",
+    "vm_username": "wisent",
+    "ssh_public_key": "<contents of ~/.weles/azure_vm_key.pub>"
+  },
+
+  "release": {
+    "_comment": "Binary release channel for self-update and for the agent VM bootstrap. The built-in default is the GCS releases bucket, which is dead with GCP billing off. Mirror releases/stado/** into the Azure container and point this at it, or no agent VM can install itself.",
+    "base_url": "https://<storage-account>.blob.core.windows.net/stado/releases/stado"
+  },
+
+  "alerts": {
+    "_comment": "Empty topic disables the GCP Pub/Sub channel; left at its default it is non-empty, so every alert pays a failing ADC probe before falling through. Slack/Telegram/SendGrid are unaffected — configure at least one or alerting is silently gone.",
+    "topic": ""
+  }
+}

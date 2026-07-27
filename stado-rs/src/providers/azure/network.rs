@@ -75,8 +75,10 @@ pub async fn create_nic(
     subnet_id_str: &str,
     nsg_id_str: &str,
 ) -> Result<String, AzureError> {
-    let path =
-        format!("{}?api-version={NETWORK_API_VERSION}", nic_path(client.subscription(), rg, name));
+    let path = format!(
+        "{}?api-version={NETWORK_API_VERSION}",
+        nic_path(client.subscription(), rg, name)
+    );
     let body = nic_body(location, subnet_id_str, nsg_id_str);
     let desc = format!("create NIC {}", nic_name(name));
     let nic = client.put_lro(&path, &body, &desc).await?;
@@ -89,11 +91,16 @@ pub async fn create_nic(
 /// Python `delete_nic`: best-effort — every failure is logged, never
 /// propagated (Python swallows all exceptions here).
 pub async fn delete_nic(client: &ArmClient, rg: &str, name: &str) {
-    let path =
-        format!("{}?api-version={NETWORK_API_VERSION}", nic_path(client.subscription(), rg, name));
+    let path = format!(
+        "{}?api-version={NETWORK_API_VERSION}",
+        nic_path(client.subscription(), rg, name)
+    );
     let desc = format!("delete NIC {}", nic_name(name));
     if let Err(err) = client.delete_allow_404(&path, &desc).await {
-        log(&format!("NIC delete failed for {}: {err:?}", nic_name(name)));
+        log(&format!(
+            "NIC delete failed for {}: {err:?}",
+            nic_name(name)
+        ));
     }
 }
 
@@ -104,7 +111,13 @@ mod tests {
     #[test]
     fn arm_ids_match_python() {
         assert_eq!(
-            subnet_id("sub-1", "rg", "wisent-compute-vnet", "wisent-compute-subnet", "eastus"),
+            subnet_id(
+                "sub-1",
+                "rg",
+                "wisent-compute-vnet",
+                "wisent-compute-subnet",
+                "eastus"
+            ),
             "/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.Network/\
              virtualNetworks/wisent-compute-vnet-eastus/subnets/wisent-compute-subnet"
         );
@@ -124,7 +137,10 @@ mod tests {
             body["properties"]["ipConfigurations"][0]["properties"]["subnet"]["id"],
             json!("/subnet/id")
         );
-        assert_eq!(body["properties"]["networkSecurityGroup"]["id"], json!("/nsg/id"));
+        assert_eq!(
+            body["properties"]["networkSecurityGroup"]["id"],
+            json!("/nsg/id")
+        );
 
         // Empty NSG -> no networkSecurityGroup key (Python omits it).
         let no_nsg = nic_body("eastus", "/subnet/id", "");

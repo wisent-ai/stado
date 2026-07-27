@@ -88,7 +88,8 @@ fn e_get(map: Option<&Map<String, Value>>, key: &str, default: &str) -> String {
 /// Python `str(map.get(key, default))` without escaping (used inside
 /// already-escaped compositions).
 fn str_get(map: Option<&Map<String, Value>>, key: &str, default: &str) -> String {
-    map.and_then(|m| m.get(key)).map_or_else(|| default.to_string(), py_str)
+    map.and_then(|m| m.get(key))
+        .map_or_else(|| default.to_string(), py_str)
 }
 
 fn as_obj(value: Option<&Value>) -> Option<&Map<String, Value>> {
@@ -115,7 +116,11 @@ fn format_age(value: Option<&Value>) -> String {
     if seconds < 3600.0 {
         return format!("{}m{}s", (seconds / 60.0) as i64, (seconds % 60.0) as i64);
     }
-    format!("{}h{}m", (seconds / 3600.0) as i64, ((seconds % 3600.0) / 60.0) as i64)
+    format!(
+        "{}h{}m",
+        (seconds / 3600.0) as i64,
+        ((seconds % 3600.0) / 60.0) as i64
+    )
 }
 
 /// Python `_bytes`: ints only -> "X.Y GiB", anything else "unknown".
@@ -180,7 +185,11 @@ fn cleanup_card(cleanup: &Value) -> String {
         .into_iter()
         .filter(|name| caps.and_then(|c| c.get(*name)) == Some(&Value::Bool(true)))
         .collect();
-    let active_caps = if active_caps.is_empty() { "none".to_string() } else { active_caps.join(", ") };
+    let active_caps = if active_caps.is_empty() {
+        "none".to_string()
+    } else {
+        active_caps.join(", ")
+    };
     let pressure_text = match report.get("pressure_active") {
         Some(Value::Bool(true)) => "active",
         Some(Value::Bool(false)) => "clear",
@@ -399,7 +408,10 @@ pub fn render_html(state: &Value, cleanup: &Value, refresh: i64) -> String {
                     str_get(agent, "free_vram_gb", "?"),
                     str_get(agent, "total_vram_gb", "?")
                 )),
-                escape(&format!("{} ago", format_age(agent.and_then(|a| a.get("age_seconds"))))),
+                escape(&format!(
+                    "{} ago",
+                    format_age(agent.and_then(|a| a.get("age_seconds")))
+                )),
             ];
             agent_rows.push_str("<tr>");
             for value in values {
@@ -472,9 +484,7 @@ pub fn render_html(state: &Value, cleanup: &Value, refresh: i64) -> String {
             let aliases = artifact
                 .and_then(|a| a.get("aliases"))
                 .and_then(Value::as_array)
-                .map(|aliases| {
-                    aliases.iter().map(py_str).collect::<Vec<_>>().join(", ")
-                })
+                .map(|aliases| aliases.iter().map(py_str).collect::<Vec<_>>().join(", "))
                 .unwrap_or_default();
             artifact_rows.push_str("<tr>");
             artifact_rows.push_str(&format!(
@@ -485,7 +495,11 @@ pub fn render_html(state: &Value, cleanup: &Value, refresh: i64) -> String {
             ));
             artifact_rows.push_str(&format!(
                 "<td>{}</td>",
-                if aliases.is_empty() { escape("-") } else { escape(&aliases) }
+                if aliases.is_empty() {
+                    escape("-")
+                } else {
+                    escape(&aliases)
+                }
             ));
             artifact_rows.push_str(&format!(
                 "<td>{}</td>",
@@ -531,14 +545,20 @@ pub fn render_html(state: &Value, cleanup: &Value, refresh: i64) -> String {
     out.push_str(&e_get(counts, "completed", "0"));
     out.push_str("</strong> &nbsp; failed <strong>");
     out.push_str(&e_get(counts, "failed", "0"));
-    out.push_str("</strong></div>\n<h2>throughput &amp; ETA</h2><div>avg wall per completed job: <strong>");
-    out.push_str(&escape(&format_age(throughput.and_then(|t| t.get("avg_wall_seconds_per_completed_job")))));
+    out.push_str(
+        "</strong></div>\n<h2>throughput &amp; ETA</h2><div>avg wall per completed job: <strong>",
+    );
+    out.push_str(&escape(&format_age(
+        throughput.and_then(|t| t.get("avg_wall_seconds_per_completed_job")),
+    )));
     out.push_str("</strong> (");
     out.push_str(&e_get(throughput, "samples", "0"));
     out.push_str(" samples)</div><div>live free slots across all agents: <strong>");
     out.push_str(&e_get(throughput, "live_total_free_slots", "0"));
     out.push_str("</strong></div><div>projected drain of current queue: <strong>");
-    out.push_str(&escape(&format_age(throughput.and_then(|t| t.get("projected_remaining_seconds")))));
+    out.push_str(&escape(&format_age(
+        throughput.and_then(|t| t.get("projected_remaining_seconds")),
+    )));
     out.push_str("</strong></div>\n<h2>per model</h2><table><tr><th>model</th><th>queued</th><th>running</th><th>completed</th><th>failed</th></tr>");
     if model_rows.is_empty() {
         out.push_str("<tr><td colspan=\"5\" class=\"muted\">no jobs</td></tr>");
@@ -665,8 +685,8 @@ mod tests {
             "<h2>queue</h2>",
             "queued <strong>2</strong>",
             "throughput &amp; ETA",
-            "10m0s",  // avg wall 600s
-            "20m0s",  // projected 1200s
+            "10m0s", // avg wall 600s
+            "20m0s", // projected 1200s
             "<h2>per model</h2>",
             "llama-8b",
             "<h2>live agents</h2>",

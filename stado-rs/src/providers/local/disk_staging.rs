@@ -24,9 +24,29 @@ use std::sync::LazyLock;
 
 /// Python `_BAD_FS`: pseudo/RAM filesystems that must never host staging.
 const BAD_FS: &[&str] = &[
-    "tmpfs", "devtmpfs", "proc", "sysfs", "cgroup", "cgroup2", "fusectl", "configfs", "debugfs",
-    "pstore", "bpf", "ramfs", "mqueue", "tracefs", "securityfs", "autofs", "nsfs", "binfmt_misc",
-    "hugetlbfs", "rpc_pipefs", "fuse.gvfsd-fuse", "squashfs", "iso9660",
+    "tmpfs",
+    "devtmpfs",
+    "proc",
+    "sysfs",
+    "cgroup",
+    "cgroup2",
+    "fusectl",
+    "configfs",
+    "debugfs",
+    "pstore",
+    "bpf",
+    "ramfs",
+    "mqueue",
+    "tracefs",
+    "securityfs",
+    "autofs",
+    "nsfs",
+    "binfmt_misc",
+    "hugetlbfs",
+    "rpc_pipefs",
+    "fuse.gvfsd-fuse",
+    "squashfs",
+    "iso9660",
 ];
 
 static NVME_PART_RE: LazyLock<regex::Regex> =
@@ -71,7 +91,9 @@ pub fn parse_mounts(text: &str) -> Vec<String> {
 /// Disk-backed, read-write mount points (from /proc/mounts).
 /// Python `_candidate_mounts`.
 pub fn candidate_mounts() -> Vec<String> {
-    std::fs::read_to_string("/proc/mounts").map(|text| parse_mounts(&text)).unwrap_or_default()
+    std::fs::read_to_string("/proc/mounts")
+        .map(|text| parse_mounts(&text))
+        .unwrap_or_default()
 }
 
 /// Python `_free_gb` (`shutil.disk_usage(path).free`). -1.0 on error.
@@ -100,13 +122,19 @@ pub fn writable_for_self(path: &Path) -> bool {
 /// Python `_add_other_exec`: chmod o+x, then verify the bit stuck.
 fn add_other_exec(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
-    let Ok(md) = std::fs::metadata(path) else { return false };
+    let Ok(md) = std::fs::metadata(path) else {
+        return false;
+    };
     let mode = md.permissions().mode();
     let new_mode = mode | 0o001;
-    if new_mode != mode && std::fs::set_permissions(path, std::fs::Permissions::from_mode(new_mode)).is_err() {
+    if new_mode != mode
+        && std::fs::set_permissions(path, std::fs::Permissions::from_mode(new_mode)).is_err()
+    {
         return false;
     }
-    std::fs::metadata(path).map(|m| m.permissions().mode() & 0o001 != 0).unwrap_or(false)
+    std::fs::metadata(path)
+        .map(|m| m.permissions().mode() & 0o001 != 0)
+        .unwrap_or(false)
 }
 
 /// Python `_try_repair_traversal`: o+x every parent of `target` (root only).
@@ -117,7 +145,10 @@ fn try_repair_traversal(target: &Path, log_fn: &mut dyn FnMut(&str)) {
             break;
         }
         if !add_other_exec(&p) {
-            log_fn(&format!("staging: cannot chmod o+x {} (need root); admin should add o+x", p.display()));
+            log_fn(&format!(
+                "staging: cannot chmod o+x {} (need root); admin should add o+x",
+                p.display()
+            ));
         }
         dir = p.parent().map(Path::to_path_buf);
     }
@@ -148,13 +179,19 @@ pub fn parse_passwd(text: &str) -> Vec<PasswdEntry> {
             fields.next()?; // password placeholder
             let uid = fields.next()?.parse().ok()?;
             let gid = fields.next()?.parse().ok()?;
-            Some(PasswdEntry { name: name.to_string(), uid, gid })
+            Some(PasswdEntry {
+                name: name.to_string(),
+                uid,
+                gid,
+            })
         })
         .collect()
 }
 
 fn read_passwd() -> Vec<PasswdEntry> {
-    std::fs::read_to_string("/etc/passwd").map(|text| parse_passwd(&text)).unwrap_or_default()
+    std::fs::read_to_string("/etc/passwd")
+        .map(|text| parse_passwd(&text))
+        .unwrap_or_default()
 }
 
 /// Python `_agent_user`: WISENT_STAGING_USER override, else the passwd
@@ -179,9 +216,13 @@ fn chown_if_root(path: &Path, user: &str) {
     if euid() != 0 {
         return;
     }
-    let Some(entry) = read_passwd().into_iter().find(|entry| entry.name == user) else { return };
+    let Some(entry) = read_passwd().into_iter().find(|entry| entry.name == user) else {
+        return;
+    };
     use std::os::unix::fs::MetadataExt;
-    let Ok(md) = std::fs::metadata(path) else { return };
+    let Ok(md) = std::fs::metadata(path) else {
+        return;
+    };
     if md.uid() != entry.uid {
         if let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) {
             // SAFETY: c_path is a valid NUL-terminated path; errors are
@@ -210,7 +251,8 @@ pub fn block_base_name(name: &str) -> String {
     if let Some(caps) = NVME_PART_RE.captures(name) {
         return caps[1].to_string();
     }
-    name.trim_end_matches(|c: char| c.is_ascii_digit()).to_string()
+    name.trim_end_matches(|c: char| c.is_ascii_digit())
+        .to_string()
 }
 
 /// Pure: resolve the /sys/block base dir for a device name — the name
@@ -225,7 +267,13 @@ pub fn resolved_block_base(sys_root: &Path, name: &str) -> String {
 
 /// Pure: read /sys/block/<base>/queue/rotational; unreadable -> true (HDD).
 pub fn rotational_file_value(sys_root: &Path, base: &str) -> bool {
-    match std::fs::read_to_string(sys_root.join("block").join(base).join("queue").join("rotational")) {
+    match std::fs::read_to_string(
+        sys_root
+            .join("block")
+            .join(base)
+            .join("queue")
+            .join("rotational"),
+    ) {
         Ok(text) => text.trim() == "1",
         Err(_) => true,
     }
@@ -238,7 +286,9 @@ pub fn is_rotational_at(mounts_text: &str, sys_root: &Path, mnt: &str) -> bool {
     // HDD and never wins over a confirmed SSD. Multi-GB shard staging is
     // write-throughput bound, so an SSD is strongly preferable to a larger
     // HDD.
-    let Some(dev) = parse_mount_device(mounts_text, mnt) else { return true };
+    let Some(dev) = parse_mount_device(mounts_text, mnt) else {
+        return true;
+    };
     if !dev.starts_with("/dev/") {
         return true;
     }
@@ -263,9 +313,14 @@ pub fn is_rotational(mnt: &str) -> bool {
 /// chosen path, or None when nothing was changed.
 /// Python `setup_agent_staging`.
 pub async fn setup_agent_staging(log_fn: &mut dyn FnMut(&str)) -> Option<String> {
-    let explicit = std::env::var("TMPDIR").unwrap_or_default().trim().to_string();
+    let explicit = std::env::var("TMPDIR")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
     if !explicit.is_empty() && !explicit.starts_with("/tmp") {
-        log_fn(&format!("staging: TMPDIR already set to {explicit}; keeping it"));
+        log_fn(&format!(
+            "staging: TMPDIR already set to {explicit}; keeping it"
+        ));
         return Some(explicit);
     }
     if !tmp_is_tmpfs().await {
@@ -391,20 +446,37 @@ bad line
     fn is_rotational_at_short_circuits_unknown_devices() {
         let mounts = "tmpfs /tmp tmpfs rw 0 0\n";
         // No /dev/ backing -> True.
-        assert!(is_rotational_at(mounts, Path::new("/nonexistent-sys"), "/tmp"));
+        assert!(is_rotational_at(
+            mounts,
+            Path::new("/nonexistent-sys"),
+            "/tmp"
+        ));
         // Mount absent from the table -> True.
-        assert!(is_rotational_at(mounts, Path::new("/nonexistent-sys"), "/data"));
+        assert!(is_rotational_at(
+            mounts,
+            Path::new("/nonexistent-sys"),
+            "/data"
+        ));
     }
 
     #[test]
     fn parse_passwd_rows() {
-        let text = "root:x:0:0:root:/root:/bin/bash\nagent:x:1000:1000::/home/agent:/bin/zsh\nbad\n";
+        let text =
+            "root:x:0:0:root:/root:/bin/bash\nagent:x:1000:1000::/home/agent:/bin/zsh\nbad\n";
         let entries = parse_passwd(text);
         assert_eq!(
             entries,
             vec![
-                PasswdEntry { name: "root".into(), uid: 0, gid: 0 },
-                PasswdEntry { name: "agent".into(), uid: 1000, gid: 1000 },
+                PasswdEntry {
+                    name: "root".into(),
+                    uid: 0,
+                    gid: 0
+                },
+                PasswdEntry {
+                    name: "agent".into(),
+                    uid: 1000,
+                    gid: 1000
+                },
             ]
         );
     }

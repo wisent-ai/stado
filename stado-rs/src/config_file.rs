@@ -23,8 +23,11 @@ use serde_json::{Map, Value};
 /// Environment variable naming an explicit config file path.
 pub const FILE_ENV: &str = "STADO_CONFIG";
 /// Candidate config file locations, searched in order after $STADO_CONFIG.
-pub const CANDIDATES: [&str; 3] =
-    ["stado.config.json", "~/.config/stado/config.json", "~/.stado/config.json"];
+pub const CANDIDATES: [&str; 3] = [
+    "stado.config.json",
+    "~/.config/stado/config.json",
+    "~/.stado/config.json",
+];
 
 /// Error raised for an unreadable / malformed config file (Python
 /// `ValueError`).
@@ -120,7 +123,11 @@ pub fn config_path() -> Result<Option<PathBuf>, ConfigError> {
 fn get_in<'a>(data: &'a Map<String, Value>, dotted: &str) -> Option<&'a Value> {
     let mut current: Option<&Value> = None;
     for (index, part) in dotted.split('.').enumerate() {
-        let map = if index == 0 { data } else { current?.as_object()? };
+        let map = if index == 0 {
+            data
+        } else {
+            current?.as_object()?
+        };
         current = map.get(part);
     }
     current
@@ -209,10 +216,13 @@ pub fn validate(data: &Value) -> Vec<String> {
     let storage = root.get("storage").and_then(Value::as_object);
     let backend = storage.and_then(|s| s.get("backend"));
     if let Some(backend) = backend.filter(|b| !b.is_null()) {
-        let ok = backend.as_str().is_some_and(|b| matches!(b, "gcs" | "azure" | "s3" | "local"));
+        let ok = backend
+            .as_str()
+            .is_some_and(|b| matches!(b, "gcs" | "azure" | "s3" | "local"));
         if !ok {
-            problems
-                .push(format!("storage.backend must be gcs|azure|s3|local, got {backend:?}"));
+            problems.push(format!(
+                "storage.backend must be gcs|azure|s3|local, got {backend:?}"
+            ));
         }
     }
     if backend.and_then(Value::as_str) == Some("gcs") {
@@ -318,7 +328,10 @@ mod tests {
     fn load_uncached_parses_objects_and_rejects_non_objects() {
         let file = write_temp_config(r#"{"a": {"b": "file-value"}}"#);
         let data = load_uncached(file.path()).unwrap();
-        assert_eq!(get_in(&data, "a.b"), Some(&Value::String("file-value".into())));
+        assert_eq!(
+            get_in(&data, "a.b"),
+            Some(&Value::String("file-value".into()))
+        );
         assert_eq!(get_in(&data, "a.missing.deep"), None);
         assert_eq!(get_in(&data, "a.b.deeper"), None); // b is not an object
 
@@ -328,7 +341,10 @@ mod tests {
             Err(ConfigError::NotAnObject(_))
         ));
         let broken = write_temp_config("{invalid json");
-        assert!(matches!(load_uncached(broken.path()), Err(ConfigError::Invalid { .. })));
+        assert!(matches!(
+            load_uncached(broken.path()),
+            Err(ConfigError::Invalid { .. })
+        ));
     }
 
     #[test]
@@ -336,46 +352,66 @@ mod tests {
         // Unique env var / dotted keys so no other test or real config file
         // can interfere regardless of test execution order.
         std::env::set_var("STADO_TEST_RESOLVE_ENV", "from-env");
-        assert_eq!(resolve("STADO_TEST_RESOLVE_ENV", "zz.nope", "dflt"), "from-env");
+        assert_eq!(
+            resolve("STADO_TEST_RESOLVE_ENV", "zz.nope", "dflt"),
+            "from-env"
+        );
         // Empty-string env counts as unset.
         std::env::set_var("STADO_TEST_RESOLVE_ENV", "");
         assert_eq!(resolve("STADO_TEST_RESOLVE_ENV", "zz.nope", "dflt"), "dflt");
         std::env::remove_var("STADO_TEST_RESOLVE_ENV");
-        assert_eq!(resolve("STADO_TEST_RESOLVE_MISSING", "zz.nope", "dflt"), "dflt");
+        assert_eq!(
+            resolve("STADO_TEST_RESOLVE_MISSING", "zz.nope", "dflt"),
+            "dflt"
+        );
     }
 
     #[test]
     fn resolve_list_parses_comma_env() {
         std::env::set_var("STADO_TEST_LIST_ENV", " a, b ,,c,");
-        assert_eq!(resolve_list("STADO_TEST_LIST_ENV", "zz.nope", &["x"]), ["a", "b", "c"]);
+        assert_eq!(
+            resolve_list("STADO_TEST_LIST_ENV", "zz.nope", &["x"]),
+            ["a", "b", "c"]
+        );
         std::env::remove_var("STADO_TEST_LIST_ENV");
-        assert_eq!(resolve_list("STADO_TEST_LIST_MISSING", "zz.nope", &["x", "y"]), ["x", "y"]);
+        assert_eq!(
+            resolve_list("STADO_TEST_LIST_MISSING", "zz.nope", &["x", "y"]),
+            ["x", "y"]
+        );
     }
 
     #[test]
     fn validate_catches_structural_problems() {
         assert!(validate(&template()).is_empty());
-        assert!(validate(&serde_json::json!({"storage": {"backend": "ftp"}}))
-            .iter()
-            .any(|p| p.contains("gcs|azure|s3|local")));
-        assert!(validate(&serde_json::json!({"storage": {"backend": "gcs"}}))
-            .iter()
-            .any(|p| p.contains("storage.gcs.bucket")));
+        assert!(
+            validate(&serde_json::json!({"storage": {"backend": "ftp"}}))
+                .iter()
+                .any(|p| p.contains("gcs|azure|s3|local"))
+        );
+        assert!(
+            validate(&serde_json::json!({"storage": {"backend": "gcs"}}))
+                .iter()
+                .any(|p| p.contains("storage.gcs.bucket"))
+        );
         assert!(validate(&serde_json::json!({"storage": {"backend": "s3"}}))
             .iter()
             .any(|p| p.contains("storage.s3.bucket")));
         assert!(validate(&serde_json::json!({"providers": []}))
             .iter()
             .any(|p| p.contains("non-empty list")));
-        assert!(validate(&serde_json::json!({"providers": ["gcp", "dcloud"]}))
-            .iter()
-            .any(|p| p.contains("unknown provider")));
+        assert!(
+            validate(&serde_json::json!({"providers": ["gcp", "dcloud"]}))
+                .iter()
+                .any(|p| p.contains("unknown provider"))
+        );
         assert!(validate(&serde_json::json!({"dashboard": {"port": 70000}}))
             .iter()
             .any(|p| p.contains("dashboard.port")));
-        assert!(validate(&serde_json::json!({"dashboard": {"port": "8765"}}))
-            .iter()
-            .any(|p| p.contains("dashboard.port")));
+        assert!(
+            validate(&serde_json::json!({"dashboard": {"port": "8765"}}))
+                .iter()
+                .any(|p| p.contains("dashboard.port"))
+        );
         // Top-level "bucket" satisfies the gcs backend requirement.
         assert!(validate(&serde_json::json!({
             "storage": {"backend": "gcs"}, "bucket": "stado"

@@ -308,7 +308,11 @@ fn prepare_lock_barrier(
     root_info: &FileStat,
     lock_state: &BTreeMap<Parts, Identity>,
 ) -> Result<StableId, JanitorError> {
-    safefs::mkdir_at(root_fd, OsStr::new(HF_BARRIER_NAME), Mode::from_bits_truncate(0o700))?;
+    safefs::mkdir_at(
+        root_fd,
+        OsStr::new(HF_BARRIER_NAME),
+        Mode::from_bits_truncate(0o700),
+    )?;
     let barrier_fd = safefs::open_dir_at(root_fd, OsStr::new(HF_BARRIER_NAME))?;
     let result = (|barrier_fd: &OwnedFd| {
         let marker = safefs::open_file_at(
@@ -382,8 +386,7 @@ fn barrier_lock_state_matches(
     expected: &BTreeMap<Parts, Identity>,
     current: &BTreeMap<Parts, Identity>,
 ) -> bool {
-    if expected.len() != current.len()
-        || !expected.keys().zip(current.keys()).all(|(a, b)| a == b)
+    if expected.len() != current.len() || !expected.keys().zip(current.keys()).all(|(a, b)| a == b)
     {
         return false;
     }
@@ -470,7 +473,11 @@ fn enter_lock_barrier(
         Ok(identities) => Ok(identities),
         Err(exc) => {
             if exchanged {
-                safefs::rename_exchange(root_fd, OsStr::new(".locks"), OsStr::new(HF_BARRIER_NAME))?;
+                safefs::rename_exchange(
+                    root_fd,
+                    OsStr::new(".locks"),
+                    OsStr::new(HF_BARRIER_NAME),
+                )?;
             }
             discard_barrier(root_fd, root_info)?;
             Err(exc)
@@ -493,7 +500,9 @@ fn leave_lock_barrier(
             return Err(os_error("cache lock barrier changed before restoration"));
         }
         if stable_identity(&safefs::fstat(private_fd.as_raw_fd())?) != original {
-            return Err(os_error("held cache lock namespace changed before restoration"));
+            return Err(os_error(
+                "held cache lock namespace changed before restoration",
+            ));
         }
     }
     drop(canonical_fd);
@@ -713,7 +722,10 @@ fn scan_refs(
                     }
                     let mut path_parts = refs_parts.clone();
                     path_parts.extend(relative.iter().cloned());
-                    by_commit.entry(commit).or_default().push((path_parts, identity(&info)));
+                    by_commit
+                        .entry(commit)
+                        .or_default()
+                        .push((path_parts, identity(&info)));
                 } else {
                     return Err(os_error("unsafe cache reference"));
                 }
@@ -830,7 +842,11 @@ fn scan_repo(
             let info = safefs::fstatat_nofollow(blobs_fd.as_raw_fd(), &name)?;
             check_info(&info, root_info)?;
             if name.to_string_lossy().ends_with(".incomplete") || name.as_bytes() == b".work" {
-                let expected_type = if name.as_bytes() == b".work" { IFDIR } else { IFREG };
+                let expected_type = if name.as_bytes() == b".work" {
+                    IFDIR
+                } else {
+                    IFREG
+                };
                 if ifmt(info.st_mode as u32) != expected_type {
                     return Err(os_error("unsafe incomplete blob data"));
                 }
@@ -866,13 +882,7 @@ fn scan_repo(
                 return Err(os_error("unsafe snapshot revision"));
             }
             let (state, modified, snapshot_expected, referenced_blobs) = snapshot_state(
-                root_fd,
-                root_info,
-                repo_parts,
-                &name,
-                &blobs,
-                budget,
-                report,
+                root_fd, root_info, repo_parts, &name, &blobs, budget, report,
             )?;
             let commit_key = name.to_string_lossy().into_owned();
             candidates.push(HfCandidate {
@@ -912,14 +922,22 @@ fn scan_repo(
             .cloned()
             .collect();
         if unique.len() != exclusive.len() {
-            report.skip_hf("blob_link_count_uncertain", (exclusive.len() - unique.len()) as i64);
+            report.skip_hf(
+                "blob_link_count_uncertain",
+                (exclusive.len() - unique.len()) as i64,
+            );
         }
-        candidates[index].delete_blobs =
-            unique.iter().map(|path| (path.clone(), blobs[path])).collect();
-        candidates[index].expected +=
-            unique.iter().map(|path| blob_sizes[path]).sum::<i64>();
+        candidates[index].delete_blobs = unique
+            .iter()
+            .map(|path| (path.clone(), blobs[path]))
+            .collect();
+        candidates[index].expected += unique.iter().map(|path| blob_sizes[path]).sum::<i64>();
     }
-    Ok(RepoScan { candidates, blobs, blob_sizes })
+    Ok(RepoScan {
+        candidates,
+        blobs,
+        blob_sizes,
+    })
 }
 
 /// Python `_hf_scan_cache`.
@@ -991,7 +1009,8 @@ fn recheck_ref(
 ) -> Result<(), JanitorError> {
     let parent_fd = safefs::open_path(root_fd, &path_parts[..path_parts.len() - 1])?;
     let result = (|parent_fd: &OwnedFd| {
-        let info = safefs::fstatat_nofollow(parent_fd.as_raw_fd(), &path_parts[path_parts.len() - 1])?;
+        let info =
+            safefs::fstatat_nofollow(parent_fd.as_raw_fd(), &path_parts[path_parts.len() - 1])?;
         if identity(&info) != *expected || ifmt(info.st_mode as u32) != IFREG {
             return Err(os_error("cache reference changed"));
         }
@@ -1008,8 +1027,8 @@ fn recheck_ref(
             safefs::read_fd(descriptor.as_raw_fd(), 257)?
         };
         drop(descriptor);
-        let matches_commit = payload.len() <= 256
-            && std::str::from_utf8(&payload).map(str::trim) == Ok(commit);
+        let matches_commit =
+            payload.len() <= 256 && std::str::from_utf8(&payload).map(str::trim) == Ok(commit);
         if !matches_commit {
             return Err(os_error("cache reference retargeted"));
         }
@@ -1027,8 +1046,16 @@ fn recheck_repository_snapshots(
     budget: &mut ScanBudget,
     report: &mut CleanupReport,
 ) -> Result<(), JanitorError> {
-    let live: Vec<&HfCandidate> = scan.candidates.iter().filter(|item| !item.deleted).collect();
-    let repo = &scan.candidates.first().map(|c| c.repo.clone()).unwrap_or_default();
+    let live: Vec<&HfCandidate> = scan
+        .candidates
+        .iter()
+        .filter(|item| !item.deleted)
+        .collect();
+    let repo = &scan
+        .candidates
+        .first()
+        .map(|c| c.repo.clone())
+        .unwrap_or_default();
     let mut snapshots_parts = repo.clone();
     snapshots_parts.push(OsString::from("snapshots"));
     let snapshots_fd = safefs::open_path(root_fd, &snapshots_parts)?;
@@ -1155,7 +1182,11 @@ pub fn run_hf(
 
     let mut budget = ScanBudget::new(policy.max_scan_items, deadline);
     let scan_phase = (|budget: &mut ScanBudget, report: &mut CleanupReport| {
-        let parts = [OsString::from(".cache"), OsString::from("huggingface"), OsString::from("hub")];
+        let parts = [
+            OsString::from(".cache"),
+            OsString::from("huggingface"),
+            OsString::from("hub"),
+        ];
         let Some(root) = fixed_root(home, &parts, false)? else {
             report.skip_hf("root_absent", 1);
             return Ok(None);
@@ -1192,10 +1223,18 @@ pub fn run_hf(
             Err(exc) => return Err(exc),
         };
         let scans = scan_cache(root_fd.as_raw_fd(), &root_info, budget, report)?;
-        Ok(Some((root_fd, root_info, lock_state_map, lock_fds, locks_present, scans)))
+        Ok(Some((
+            root_fd,
+            root_info,
+            lock_state_map,
+            lock_fds,
+            locks_present,
+            scans,
+        )))
     })(&mut budget, report);
 
-    let (root_fd, mut root_info, lock_state_map, lock_fds, locks_present, scans) = match scan_phase {
+    let (root_fd, mut root_info, lock_state_map, lock_fds, locks_present, scans) = match scan_phase
+    {
         Ok(Some(value)) => value,
         Ok(None) => return Ok((0, 0)),
         Err(exc) => {
@@ -1272,83 +1311,88 @@ pub fn run_hf(
             report.skip_hf("lock_root_absent", 1);
             break;
         }
-        let parts = [OsString::from(".cache"), OsString::from("huggingface"), OsString::from("hub")];
+        let parts = [
+            OsString::from(".cache"),
+            OsString::from("huggingface"),
+            OsString::from("hub"),
+        ];
         // Python `_fixed_root(..., required=True)` and `.stat()` raise
         // straight out of _run_hf here.
-        let current_root = fixed_root(home, &parts, true)?.expect("required=true never yields None");
+        let current_root =
+            fixed_root(home, &parts, true)?.expect("required=true never yields None");
         let current_stat = std::fs::metadata(&current_root).map_err(JanitorError::from)?;
         if identity_from_metadata(&current_stat) != identity(&root_info) {
             report.skip_hf("root_changed", 1);
             break;
         }
-        let recheck = (|scans: &mut Vec<RepoScan>,
-                        budget: &mut ScanBudget,
-                        report: &mut CleanupReport| {
-            recheck_repository_snapshots(
-                root_fd.as_raw_fd(),
-                &root_info,
-                &scans[scan_index],
-                budget,
-                report,
-            )?;
-            let refs = scans[scan_index].candidates[candidate_index].refs.clone();
-            let commit = scans[scan_index].candidates[candidate_index]
-                .commit
-                .to_string_lossy()
-                .into_owned();
-            for (path_parts, ident) in &refs {
-                budget.tick(report)?;
-                recheck_ref(root_fd.as_raw_fd(), path_parts, ident, &commit)?;
-            }
-            let (current_locks, temporary_fds, current_locks_present) = scan_lock_state(
-                root_fd.as_raw_fd(),
-                &root_info,
-                budget,
-                report,
-                false,
-                ".locks",
-                &BTreeSet::new(),
-            )?;
-            drop(temporary_fds);
-            if !current_locks_present || current_locks != lock_state_map {
-                return Err(os_error("cache lock set changed"));
-            }
-            let known: BTreeSet<Identity> = lock_state_map.values().copied().collect();
-            for descriptor in &lock_fds {
-                if !known.contains(&identity(&safefs::fstat(descriptor.as_raw_fd())?)) {
-                    return Err(os_error("held cache lock changed"));
+        let recheck =
+            (|scans: &mut Vec<RepoScan>, budget: &mut ScanBudget, report: &mut CleanupReport| {
+                recheck_repository_snapshots(
+                    root_fd.as_raw_fd(),
+                    &root_info,
+                    &scans[scan_index],
+                    budget,
+                    report,
+                )?;
+                let refs = scans[scan_index].candidates[candidate_index].refs.clone();
+                let commit = scans[scan_index].candidates[candidate_index]
+                    .commit
+                    .to_string_lossy()
+                    .into_owned();
+                for (path_parts, ident) in &refs {
+                    budget.tick(report)?;
+                    recheck_ref(root_fd.as_raw_fd(), path_parts, ident, &commit)?;
                 }
-            }
-            Ok(())
-        })(&mut scans, &mut budget, report);
+                let (current_locks, temporary_fds, current_locks_present) = scan_lock_state(
+                    root_fd.as_raw_fd(),
+                    &root_info,
+                    budget,
+                    report,
+                    false,
+                    ".locks",
+                    &BTreeSet::new(),
+                )?;
+                drop(temporary_fds);
+                if !current_locks_present || current_locks != lock_state_map {
+                    return Err(os_error("cache lock set changed"));
+                }
+                let known: BTreeSet<Identity> = lock_state_map.values().copied().collect();
+                for descriptor in &lock_fds {
+                    if !known.contains(&identity(&safefs::fstat(descriptor.as_raw_fd())?)) {
+                        return Err(os_error("held cache lock changed"));
+                    }
+                }
+                Ok(())
+            })(&mut scans, &mut budget, report);
         if let Err(exc) = recheck {
             report.add_error("huggingface_recheck", &exc);
             break;
         }
         let before = free_bytes(home)?;
-        let delete_result = (|scans: &mut Vec<RepoScan>,
-                             budget: &mut ScanBudget,
-                             report: &mut CleanupReport| {
-            let barrier_identities = enter_lock_barrier(
-                root_fd.as_raw_fd(),
-                &root_info,
-                &lock_state_map,
-                &lock_fds,
-                budget,
-                report,
-            )?;
-            let exec_outcome =
-                execute_candidate(root_fd.as_raw_fd(), &scans[scan_index].candidates[candidate_index]);
-            let leave_outcome =
-                leave_lock_barrier(root_fd.as_raw_fd(), &root_info, barrier_identities);
-            // Python `finally:` semantics: a leave error replaces an exec
-            // error; an exec error propagates through a clean leave.
-            match (exec_outcome, leave_outcome) {
-                (Ok(()), Ok(())) => Ok(()),
-                (Err(exec), Ok(())) => Err(exec),
-                (_, Err(leave)) => Err(leave),
-            }
-        })(&mut scans, &mut budget, report);
+        let delete_result =
+            (|scans: &mut Vec<RepoScan>, budget: &mut ScanBudget, report: &mut CleanupReport| {
+                let barrier_identities = enter_lock_barrier(
+                    root_fd.as_raw_fd(),
+                    &root_info,
+                    &lock_state_map,
+                    &lock_fds,
+                    budget,
+                    report,
+                )?;
+                let exec_outcome = execute_candidate(
+                    root_fd.as_raw_fd(),
+                    &scans[scan_index].candidates[candidate_index],
+                );
+                let leave_outcome =
+                    leave_lock_barrier(root_fd.as_raw_fd(), &root_info, barrier_identities);
+                // Python `finally:` semantics: a leave error replaces an exec
+                // error; an exec error propagates through a clean leave.
+                match (exec_outcome, leave_outcome) {
+                    (Ok(()), Ok(())) => Ok(()),
+                    (Err(exec), Ok(())) => Err(exec),
+                    (_, Err(leave)) => Err(leave),
+                }
+            })(&mut scans, &mut budget, report);
         if let Err(exc) = delete_result {
             report.add_error("huggingface_delete", &exc);
             break;
@@ -1402,11 +1446,22 @@ mod tests {
     #[test]
     fn normalize_link_accepts_repo_blobs_only() {
         let repo = vec![os("models--org--name")];
-        let link = vec![os("models--org--name"), os("snapshots"), os("c1"), os("file")];
+        let link = vec![
+            os("models--org--name"),
+            os("snapshots"),
+            os("c1"),
+            os("file"),
+        ];
         let ok = normalize_link(&repo, &link, OsStr::new("../../blobs/sha")).unwrap();
         assert_eq!(ok, vec![os("models--org--name"), os("blobs"), os("sha")]);
         // Nested file, deeper relative path.
-        let link = vec![os("models--org--name"), os("snapshots"), os("c1"), os("sub"), os("f")];
+        let link = vec![
+            os("models--org--name"),
+            os("snapshots"),
+            os("c1"),
+            os("sub"),
+            os("f"),
+        ];
         let ok = normalize_link(&repo, &link, OsStr::new("../../../blobs/sha")).unwrap();
         assert_eq!(ok, vec![os("models--org--name"), os("blobs"), os("sha")]);
         // Redundant ./ segments are fine.
@@ -1417,7 +1472,12 @@ mod tests {
     #[test]
     fn normalize_link_refuses_attacks() {
         let repo = vec![os("models--org--name")];
-        let link = vec![os("models--org--name"), os("snapshots"), os("c1"), os("file")];
+        let link = vec![
+            os("models--org--name"),
+            os("snapshots"),
+            os("c1"),
+            os("file"),
+        ];
         // Absolute target (the symlink-to-/etc attack).
         assert!(normalize_link(&repo, &link, OsStr::new("/etc/passwd")).is_err());
         // Escaping above the snapshot parent.
@@ -1447,18 +1507,30 @@ mod tests {
     #[test]
     fn unlink_checked_removes_only_the_exact_identity() {
         let th = TempHome::new();
-        make_hf_repo(&th.home, "models--org--name", "abc123", &[("blobA", b"aaaa")]);
+        make_hf_repo(
+            &th.home,
+            "models--org--name",
+            "abc123",
+            &[("blobA", b"aaaa")],
+        );
         let (root_fd, _root_info) = open_hub(&th.home);
         let parts = vec![os("models--org--name"), os("blobs"), os("blobA")];
         let ident = blob_identity(root_fd.as_raw_fd(), "models--org--name", "blobA");
         unlink_checked(root_fd.as_raw_fd(), &parts, &ident, false).unwrap();
-        assert!(!th.join(".cache/huggingface/hub/models--org--name/blobs/blobA").exists());
+        assert!(!th
+            .join(".cache/huggingface/hub/models--org--name/blobs/blobA")
+            .exists());
     }
 
     #[test]
     fn unlink_checked_refuses_drifted_content() {
         let th = TempHome::new();
-        let repo = make_hf_repo(&th.home, "models--org--name", "abc123", &[("blobA", b"aaaa")]);
+        let repo = make_hf_repo(
+            &th.home,
+            "models--org--name",
+            "abc123",
+            &[("blobA", b"aaaa")],
+        );
         let (root_fd, _root_info) = open_hub(&th.home);
         let parts = vec![os("models--org--name"), os("blobs"), os("blobA")];
         let ident = blob_identity(root_fd.as_raw_fd(), "models--org--name", "blobA");
@@ -1471,7 +1543,12 @@ mod tests {
     #[test]
     fn unlink_checked_refuses_type_swap_to_symlink() {
         let th = TempHome::new();
-        let repo = make_hf_repo(&th.home, "models--org--name", "abc123", &[("blobA", b"aaaa")]);
+        let repo = make_hf_repo(
+            &th.home,
+            "models--org--name",
+            "abc123",
+            &[("blobA", b"aaaa")],
+        );
         let (root_fd, _root_info) = open_hub(&th.home);
         let parts = vec![os("models--org--name"), os("blobs"), os("blobA")];
         let ident = blob_identity(root_fd.as_raw_fd(), "models--org--name", "blobA");
@@ -1479,10 +1556,20 @@ mod tests {
         std::fs::remove_file(repo.join("blobs/blobA")).unwrap();
         std::os::unix::fs::symlink("/etc/passwd", repo.join("blobs/blobA")).unwrap();
         assert!(unlink_checked(root_fd.as_raw_fd(), &parts, &ident, false).is_err());
-        assert!(repo.join("blobs/blobA").symlink_metadata().unwrap().file_type().is_symlink());
+        assert!(repo
+            .join("blobs/blobA")
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink());
         // And a directory where a file was expected is refused too.
         let th2 = TempHome::new();
-        let repo2 = make_hf_repo(&th2.home, "models--org--name", "abc123", &[("blobA", b"aaaa")]);
+        let repo2 = make_hf_repo(
+            &th2.home,
+            "models--org--name",
+            "abc123",
+            &[("blobA", b"aaaa")],
+        );
         let (root_fd2, _) = open_hub(&th2.home);
         let ident2 = blob_identity(root_fd2.as_raw_fd(), "models--org--name", "blobA");
         std::fs::remove_file(repo2.join("blobs/blobA")).unwrap();
@@ -1498,7 +1585,10 @@ mod tests {
     fn enforce_registry() -> serde_json::Value {
         super::super::kit::registry_json(
             "testhost",
-            super::super::kit::policy_json("enforce", json!({"huggingface_cache": super::super::kit::hf_cleaner()})),
+            super::super::kit::policy_json(
+                "enforce",
+                json!({"huggingface_cache": super::super::kit::hf_cleaner()}),
+            ),
         )
     }
 
@@ -1516,14 +1606,26 @@ mod tests {
         let report = run_attack(&th);
         let hf = &report["cleaners"]["huggingface_cache"];
         assert_eq!(hf["deleted_items"], 0);
-        assert!(report["errors"].as_array().unwrap().iter().any(|e| e == "huggingface_cache:OSError"), "{report}");
+        assert!(
+            report["errors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e == "huggingface_cache:OSError"),
+            "{report}"
+        );
         assert!(real.exists());
     }
 
     #[test]
     fn snapshot_symlink_to_etc_is_refused_and_nothing_deleted() {
         let th = TempHome::new();
-        let repo = make_hf_repo(&th.home, "models--org--name", "abc123", &[("blobA", b"aaaa")]);
+        let repo = make_hf_repo(
+            &th.home,
+            "models--org--name",
+            "abc123",
+            &[("blobA", b"aaaa")],
+        );
         // The classic escape: a snapshot entry pointing at /etc.
         std::fs::remove_file(repo.join("snapshots/abc123/file1.txt")).unwrap();
         std::os::unix::fs::symlink("/etc/passwd", repo.join("snapshots/abc123/file1.txt")).unwrap();
@@ -1531,7 +1633,14 @@ mod tests {
         let report = run_attack(&th);
         let hf = &report["cleaners"]["huggingface_cache"];
         assert_eq!(hf["deleted_items"], 0, "{report}");
-        assert!(report["errors"].as_array().unwrap().iter().any(|e| e == "huggingface_cache:OSError"), "{report}");
+        assert!(
+            report["errors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e == "huggingface_cache:OSError"),
+            "{report}"
+        );
         assert!(repo.join("snapshots/abc123").exists());
         assert!(repo.join("blobs/blobA").exists());
         assert!(Path::new("/etc/passwd").exists());
@@ -1540,10 +1649,16 @@ mod tests {
     #[test]
     fn snapshot_symlink_escaping_repo_is_refused() {
         let th = TempHome::new();
-        let repo = make_hf_repo(&th.home, "models--org--name", "abc123", &[("blobA", b"aaaa")]);
+        let repo = make_hf_repo(
+            &th.home,
+            "models--org--name",
+            "abc123",
+            &[("blobA", b"aaaa")],
+        );
         std::fs::remove_file(repo.join("snapshots/abc123/file1.txt")).unwrap();
         // Stays in the cache but leaves the repository's blobs.
-        std::os::unix::fs::symlink("../../refs/main", repo.join("snapshots/abc123/file1.txt")).unwrap();
+        std::os::unix::fs::symlink("../../refs/main", repo.join("snapshots/abc123/file1.txt"))
+            .unwrap();
         backdate_tree(&repo, 2 * 3600);
         let report = run_attack(&th);
         assert_eq!(report["cleaners"]["huggingface_cache"]["deleted_items"], 0);
@@ -1553,9 +1668,15 @@ mod tests {
     #[test]
     fn snapshot_referencing_unknown_blob_is_refused() {
         let th = TempHome::new();
-        let repo = make_hf_repo(&th.home, "models--org--name", "abc123", &[("blobA", b"aaaa")]);
+        let repo = make_hf_repo(
+            &th.home,
+            "models--org--name",
+            "abc123",
+            &[("blobA", b"aaaa")],
+        );
         std::fs::remove_file(repo.join("snapshots/abc123/file1.txt")).unwrap();
-        std::os::unix::fs::symlink("../../blobs/ghost", repo.join("snapshots/abc123/file1.txt")).unwrap();
+        std::os::unix::fs::symlink("../../blobs/ghost", repo.join("snapshots/abc123/file1.txt"))
+            .unwrap();
         backdate_tree(&repo, 2 * 3600);
         let report = run_attack(&th);
         assert_eq!(report["cleaners"]["huggingface_cache"]["deleted_items"], 0);
@@ -1565,7 +1686,12 @@ mod tests {
     #[test]
     fn symlinked_snapshot_dir_and_blob_are_refused() {
         let th = TempHome::new();
-        let repo = make_hf_repo(&th.home, "models--org--name", "abc123", &[("blobA", b"aaaa")]);
+        let repo = make_hf_repo(
+            &th.home,
+            "models--org--name",
+            "abc123",
+            &[("blobA", b"aaaa")],
+        );
         // Replace the snapshot dir with a symlink.
         let target = th.join("evil-snapshot");
         std::fs::create_dir(&target).unwrap();
@@ -1577,21 +1703,34 @@ mod tests {
 
         // A symlinked blob is refused outright.
         let th2 = TempHome::new();
-        let repo2 = make_hf_repo(&th2.home, "models--org--name", "abc123", &[("blobA", b"aaaa")]);
+        let repo2 = make_hf_repo(
+            &th2.home,
+            "models--org--name",
+            "abc123",
+            &[("blobA", b"aaaa")],
+        );
         let outside = th2.join("outside-blob");
         std::fs::write(&outside, b"outside").unwrap();
         std::fs::remove_file(repo2.join("blobs/blobA")).unwrap();
         std::os::unix::fs::symlink(&outside, repo2.join("blobs/blobA")).unwrap();
         backdate_tree(&repo2, 2 * 3600);
         let report = run_attack(&th2);
-        assert_eq!(report["cleaners"]["huggingface_cache"]["deleted_items"], 0, "{report}");
+        assert_eq!(
+            report["cleaners"]["huggingface_cache"]["deleted_items"], 0,
+            "{report}"
+        );
         assert!(outside.exists());
     }
 
     #[test]
     fn symlinked_lock_file_is_refused() {
         let th = TempHome::new();
-        let repo = make_hf_repo(&th.home, "models--org--name", "abc123", &[("blobA", b"aaaa")]);
+        let repo = make_hf_repo(
+            &th.home,
+            "models--org--name",
+            "abc123",
+            &[("blobA", b"aaaa")],
+        );
         let lock_path = th.join(".cache/huggingface/hub/.locks/models--org--name/abc123.lock");
         std::fs::remove_file(&lock_path).unwrap();
         let outside = th.join("held-elsewhere");
@@ -1599,14 +1738,22 @@ mod tests {
         std::os::unix::fs::symlink(&outside, &lock_path).unwrap();
         backdate_tree(&repo, 2 * 3600);
         let report = run_attack(&th);
-        assert_eq!(report["cleaners"]["huggingface_cache"]["deleted_items"], 0, "{report}");
+        assert_eq!(
+            report["cleaners"]["huggingface_cache"]["deleted_items"], 0,
+            "{report}"
+        );
         assert!(repo.join("snapshots/abc123").exists());
     }
 
     #[test]
     fn hardlinked_blob_is_not_deleted_and_reports_uncertain() {
         let th = TempHome::new();
-        let repo = make_hf_repo(&th.home, "models--org--name", "abc123", &[("blobA", b"aaaa")]);
+        let repo = make_hf_repo(
+            &th.home,
+            "models--org--name",
+            "abc123",
+            &[("blobA", b"aaaa")],
+        );
         // A second hard link to the same blob inode (nlink = 2): the
         // janitor cannot prove exclusivity and must keep the blob.
         let second_link = th.join(".cache/huggingface/hub/models--org--name/blobs/blobA-copy");
@@ -1624,11 +1771,20 @@ mod tests {
     #[test]
     fn shared_blob_survives_deleting_one_of_two_revisions() {
         let th = TempHome::new();
-        let repo = make_hf_repo(&th.home, "models--org--name", "aaaaaa", &[("shared", b"data")]);
+        let repo = make_hf_repo(
+            &th.home,
+            "models--org--name",
+            "aaaaaa",
+            &[("shared", b"data")],
+        );
         // Second revision referencing the same blob.
         std::fs::create_dir_all(repo.join("snapshots/bbbbbb")).unwrap();
         std::os::unix::fs::symlink("../../blobs/shared", repo.join("snapshots/bbbbbb/f")).unwrap();
-        std::fs::write(th.join(".cache/huggingface/hub/.locks/models--org--name/bbbbbb.lock"), b"").unwrap();
+        std::fs::write(
+            th.join(".cache/huggingface/hub/.locks/models--org--name/bbbbbb.lock"),
+            b"",
+        )
+        .unwrap();
         backdate_tree(&repo, 3 * 3600);
         backdate_tree(&repo.join("snapshots/bbbbbb"), 2 * 3600);
         let report = run_attack(&th);
@@ -1640,7 +1796,12 @@ mod tests {
     #[test]
     fn incomplete_download_marks_repository_incomplete() {
         let th = TempHome::new();
-        let repo = make_hf_repo(&th.home, "models--org--name", "abc123", &[("blobA", b"aaaa")]);
+        let repo = make_hf_repo(
+            &th.home,
+            "models--org--name",
+            "abc123",
+            &[("blobA", b"aaaa")],
+        );
         std::fs::write(repo.join("blobs/blobB.incomplete"), b"partial").unwrap();
         backdate_tree(&repo, 2 * 3600);
         let report = run_attack(&th);
@@ -1653,12 +1814,20 @@ mod tests {
     #[test]
     fn tampered_blob_is_caught_by_recheck_before_deletion() {
         let th = TempHome::new();
-        let repo = make_hf_repo(&th.home, "models--org--name", "abc123", &[("blobA", b"aaaa")]);
+        let repo = make_hf_repo(
+            &th.home,
+            "models--org--name",
+            "abc123",
+            &[("blobA", b"aaaa")],
+        );
         backdate_tree(&repo, 2 * 3600);
         // Directly exercise the recheck: scan, tamper, recheck must fail.
         let (root_fd, root_info) = open_hub(&th.home);
         let mut report = super::super::CleanupReport::base(0, "testhost");
-        let mut budget = super::super::ScanBudget::new(10000, std::time::Instant::now() + std::time::Duration::from_secs(30));
+        let mut budget = super::super::ScanBudget::new(
+            10000,
+            std::time::Instant::now() + std::time::Duration::from_secs(30),
+        );
         let scans = scan_cache(root_fd.as_raw_fd(), &root_info, &mut budget, &mut report).unwrap();
         std::fs::write(repo.join("blobs/blobA"), b"tampered-with-different-size").unwrap();
         let err = recheck_repository_snapshots(
@@ -1675,11 +1844,19 @@ mod tests {
     #[test]
     fn added_snapshot_between_scan_and_recheck_aborts() {
         let th = TempHome::new();
-        let repo = make_hf_repo(&th.home, "models--org--name", "abc123", &[("blobA", b"aaaa")]);
+        let repo = make_hf_repo(
+            &th.home,
+            "models--org--name",
+            "abc123",
+            &[("blobA", b"aaaa")],
+        );
         backdate_tree(&repo, 2 * 3600);
         let (root_fd, root_info) = open_hub(&th.home);
         let mut report = super::super::CleanupReport::base(0, "testhost");
-        let mut budget = super::super::ScanBudget::new(10000, std::time::Instant::now() + std::time::Duration::from_secs(30));
+        let mut budget = super::super::ScanBudget::new(
+            10000,
+            std::time::Instant::now() + std::time::Duration::from_secs(30),
+        );
         let scans = scan_cache(root_fd.as_raw_fd(), &root_info, &mut budget, &mut report).unwrap();
         // A new revision appears after the scan: the snapshot set changed.
         std::fs::create_dir_all(repo.join("snapshots/ffffff")).unwrap();
@@ -1702,13 +1879,28 @@ mod tests {
     #[test]
     fn barrier_roundtrip_preserves_lock_namespace() {
         let th = TempHome::new();
-        make_hf_repo(&th.home, "models--org--name", "abc123", &[("blobA", b"aaaa")]);
+        make_hf_repo(
+            &th.home,
+            "models--org--name",
+            "abc123",
+            &[("blobA", b"aaaa")],
+        );
         let (root_fd, root_info) = open_hub(&th.home);
         let mut report = super::super::CleanupReport::base(0, "testhost");
-        let mut budget = super::super::ScanBudget::new(10000, std::time::Instant::now() + std::time::Duration::from_secs(30));
-        let (state, held, present) =
-            scan_lock_state(root_fd.as_raw_fd(), &root_info, &mut budget, &mut report, true, ".locks", &BTreeSet::new())
-                .unwrap();
+        let mut budget = super::super::ScanBudget::new(
+            10000,
+            std::time::Instant::now() + std::time::Duration::from_secs(30),
+        );
+        let (state, held, present) = scan_lock_state(
+            root_fd.as_raw_fd(),
+            &root_info,
+            &mut budget,
+            &mut report,
+            true,
+            ".locks",
+            &BTreeSet::new(),
+        )
+        .unwrap();
         assert!(present);
         assert_eq!(held.len(), 1);
         let identities = enter_lock_barrier(
@@ -1722,18 +1914,35 @@ mod tests {
         .unwrap();
         // Mid-barrier: `.locks` is the marked private copy, the original
         // namespace sits at the barrier name.
-        assert!(th.join(".cache/huggingface/hub/.locks/.wisent-compute-barrier").exists());
-        assert!(th.join(".cache/huggingface/hub/.wisent-compute-lock-barrier/models--org--name/abc123.lock").exists());
+        assert!(th
+            .join(".cache/huggingface/hub/.locks/.wisent-compute-barrier")
+            .exists());
+        assert!(th
+            .join(
+                ".cache/huggingface/hub/.wisent-compute-lock-barrier/models--org--name/abc123.lock"
+            )
+            .exists());
         leave_lock_barrier(root_fd.as_raw_fd(), &root_info, identities).unwrap();
-        assert!(th.join(".cache/huggingface/hub/.locks/models--org--name/abc123.lock").exists());
-        assert!(!th.join(".cache/huggingface/hub/.locks/.wisent-compute-barrier").exists());
-        assert!(!th.join(".cache/huggingface/hub/.wisent-compute-lock-barrier").exists());
+        assert!(th
+            .join(".cache/huggingface/hub/.locks/models--org--name/abc123.lock")
+            .exists());
+        assert!(!th
+            .join(".cache/huggingface/hub/.locks/.wisent-compute-barrier")
+            .exists());
+        assert!(!th
+            .join(".cache/huggingface/hub/.wisent-compute-lock-barrier")
+            .exists());
     }
 
     #[test]
     fn recovery_discards_interrupted_barrier() {
         let th = TempHome::new();
-        make_hf_repo(&th.home, "models--org--name", "abc123", &[("blobA", b"aaaa")]);
+        make_hf_repo(
+            &th.home,
+            "models--org--name",
+            "abc123",
+            &[("blobA", b"aaaa")],
+        );
         let hub = th.join(".cache/huggingface/hub");
         let (root_fd, root_info) = open_hub(&th.home);
         // Simulate a crash AFTER prepare but BEFORE the exchange: private
@@ -1770,7 +1979,12 @@ mod tests {
     #[test]
     fn scan_rejects_unknown_layouts() {
         let th = TempHome::new();
-        make_hf_repo(&th.home, "models--org--name", "abc123", &[("blobA", b"aaaa")]);
+        make_hf_repo(
+            &th.home,
+            "models--org--name",
+            "abc123",
+            &[("blobA", b"aaaa")],
+        );
         // Stray file at the cache root.
         std::fs::write(th.join(".cache/huggingface/hub/random-file"), b"x").unwrap();
         let report = run_attack(&th);
@@ -1779,41 +1993,73 @@ mod tests {
 
         // Direct layout mixed with repository layout.
         let th2 = TempHome::new();
-        make_hf_repo(&th2.home, "models--org--name", "abc123", &[("blobA", b"aaaa")]);
+        make_hf_repo(
+            &th2.home,
+            "models--org--name",
+            "abc123",
+            &[("blobA", b"aaaa")],
+        );
         std::fs::create_dir_all(th2.join(".cache/huggingface/hub/blobs")).unwrap();
         let report = run_attack(&th2);
-        assert_eq!(report["cleaners"]["huggingface_cache"]["deleted_items"], 0, "{report}");
+        assert_eq!(
+            report["cleaners"]["huggingface_cache"]["deleted_items"], 0,
+            "{report}"
+        );
     }
 
     #[test]
     fn invalid_ref_contents_abort_the_repo() {
         let th = TempHome::new();
-        let repo = make_hf_repo(&th.home, "models--org--name", "abc123", &[("blobA", b"aaaa")]);
+        let repo = make_hf_repo(
+            &th.home,
+            "models--org--name",
+            "abc123",
+            &[("blobA", b"aaaa")],
+        );
         std::fs::write(repo.join("refs/main"), "not-a-hex-commit!!").unwrap();
         backdate_tree(&repo, 2 * 3600);
         let report = run_attack(&th);
-        assert_eq!(report["cleaners"]["huggingface_cache"]["deleted_items"], 0, "{report}");
+        assert_eq!(
+            report["cleaners"]["huggingface_cache"]["deleted_items"], 0,
+            "{report}"
+        );
         assert!(repo.join("snapshots/abc123").exists());
     }
 
     #[test]
     fn empty_snapshot_is_refused() {
         let th = TempHome::new();
-        let repo = make_hf_repo(&th.home, "models--org--name", "abc123", &[("blobA", b"aaaa")]);
+        let repo = make_hf_repo(
+            &th.home,
+            "models--org--name",
+            "abc123",
+            &[("blobA", b"aaaa")],
+        );
         std::fs::create_dir_all(repo.join("snapshots/empty00")).unwrap();
         backdate_tree(&repo, 2 * 3600);
         let report = run_attack(&th);
         // The empty snapshot poisons the whole scan (fail closed).
-        assert_eq!(report["cleaners"]["huggingface_cache"]["deleted_items"], 0, "{report}");
+        assert_eq!(
+            report["cleaners"]["huggingface_cache"]["deleted_items"], 0,
+            "{report}"
+        );
         assert!(repo.join("snapshots/abc123").exists());
     }
 
     #[test]
     fn scan_budget_cap_stops_and_reports() {
         let th = TempHome::new();
-        let repo = make_hf_repo(&th.home, "models--org--name", "abc123", &[("blobA", b"aaaa")]);
+        let repo = make_hf_repo(
+            &th.home,
+            "models--org--name",
+            "abc123",
+            &[("blobA", b"aaaa")],
+        );
         backdate_tree(&repo, 2 * 3600);
-        let mut policy = super::super::kit::policy_json("enforce", json!({"huggingface_cache": super::super::kit::hf_cleaner()}));
+        let mut policy = super::super::kit::policy_json(
+            "enforce",
+            json!({"huggingface_cache": super::super::kit::hf_cleaner()}),
+        );
         policy["max_scan_items"] = json!(1);
         policy["max_items_per_pass"] = json!(1);
         let registry = registry_json("testhost", policy);
@@ -1828,7 +2074,12 @@ mod tests {
     #[test]
     fn identity_tuple_and_type_checks() {
         let th = TempHome::new();
-        make_hf_repo(&th.home, "models--org--name", "abc123", &[("blobA", b"aaaa")]);
+        make_hf_repo(
+            &th.home,
+            "models--org--name",
+            "abc123",
+            &[("blobA", b"aaaa")],
+        );
         let (root_fd, _root_info) = open_hub(&th.home);
         let parts: Vec<OsString> = vec![OsString::from_vec(b"models--org--name".to_vec())];
         let fd = safefs::open_path(root_fd.as_raw_fd(), &parts).unwrap();
@@ -1846,4 +2097,3 @@ mod tests {
         assert!(th.join(".cache/wisent-compute").is_dir());
     }
 }
-

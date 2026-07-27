@@ -50,7 +50,10 @@ pub struct ToolError {
 
 impl ToolError {
     fn internal(message: impl Into<String>) -> Self {
-        Self { code: CODE_INTERNAL_ERROR, message: message.into() }
+        Self {
+            code: CODE_INTERNAL_ERROR,
+            message: message.into(),
+        }
     }
 }
 
@@ -282,7 +285,8 @@ fn run(cli_tokens: &[&str], extra: &[String]) -> Result<String, ToolError> {
         .map_err(|err| ToolError::internal(format!("stado CLI not found: {err}")))?;
     match capture {
         Capture::TimedOut { .. } => {
-            let rendered: Vec<String> = argv.iter().map(|a| crate::models::py_str_repr(a)).collect();
+            let rendered: Vec<String> =
+                argv.iter().map(|a| crate::models::py_str_repr(a)).collect();
             Err(ToolError::internal(format!(
                 "stado CLI timed out: Command '[{}]' timed out after {SUBPROCESS_TIMEOUT_SECONDS} seconds",
                 rendered.join(", ")
@@ -290,7 +294,11 @@ fn run(cli_tokens: &[&str], extra: &[String]) -> Result<String, ToolError> {
         }
         Capture::Completed { rc, stdout, stderr } => {
             if rc != 0 {
-                let detail = if stderr.trim().is_empty() { stdout.trim() } else { stderr.trim() };
+                let detail = if stderr.trim().is_empty() {
+                    stdout.trim()
+                } else {
+                    stderr.trim()
+                };
                 return Err(ToolError::internal(if detail.is_empty() {
                     format!("stado {} exited nonzero", cli_tokens.join(" "))
                 } else {
@@ -335,14 +343,20 @@ fn python_str(value: &Value) -> String {
 /// raise a -32601 ToolError.
 pub fn call_tool(name: &str, args: &Map<String, Value>) -> Result<Value, ToolError> {
     let Some(tool) = tool_by_name(name) else {
-        return Err(ToolError { code: CODE_METHOD_NOT_FOUND, message: format!("unknown tool: {name}") });
+        return Err(ToolError {
+            code: CODE_METHOD_NOT_FOUND,
+            message: format!("unknown tool: {name}"),
+        });
     };
     let mut extra: Vec<String> = Vec::new();
     if let Some(arg) = &tool.arg {
         let value = args.get(arg.name);
         let falsy = value.map(python_falsy).unwrap_or(true);
         if arg.required && falsy {
-            return Err(ToolError::internal(format!("missing required argument: {}", arg.name)));
+            return Err(ToolError::internal(format!(
+                "missing required argument: {}",
+                arg.name
+            )));
         }
         if let Some(value) = value {
             if !falsy {
@@ -425,7 +439,11 @@ pub fn handle(request: &Value) -> Option<Value> {
                 Err(err) => error_response(&rid, err.code, &err.message),
             }
         }
-        Some(other) => error_response(&rid, CODE_METHOD_NOT_FOUND, &format!("method not found: {other}")),
+        Some(other) => error_response(
+            &rid,
+            CODE_METHOD_NOT_FOUND,
+            &format!("method not found: {other}"),
+        ),
         None => error_response(
             &rid,
             CODE_METHOD_NOT_FOUND,
@@ -453,7 +471,15 @@ pub fn serve<R: BufRead, W: Write>(reader: R, writer: &mut W) {
         let request: Value = match serde_json::from_str(line) {
             Ok(request) => request,
             Err(_) => {
-                let _ = writeln!(writer, "{}", frame(&error_response(&Value::Null, CODE_PARSE_ERROR, "parse error")));
+                let _ = writeln!(
+                    writer,
+                    "{}",
+                    frame(&error_response(
+                        &Value::Null,
+                        CODE_PARSE_ERROR,
+                        "parse error"
+                    ))
+                );
                 let _ = writer.flush();
                 continue;
             }
@@ -462,7 +488,11 @@ pub fn serve<R: BufRead, W: Write>(reader: R, writer: &mut W) {
             let _ = writeln!(
                 writer,
                 "{}",
-                frame(&error_response(&Value::Null, CODE_PARSE_ERROR, "request must be a JSON object"))
+                frame(&error_response(
+                    &Value::Null,
+                    CODE_PARSE_ERROR,
+                    "request must be a JSON object"
+                ))
             );
             let _ = writer.flush();
             continue;
@@ -528,11 +558,22 @@ mod tests {
         assert_eq!(
             names,
             [
-                "stado_status", "stado_cost_report", "stado_quota_show", "stado_quota_catalog",
-                "stado_quota_requests", "stado_profiles", "stado_schedule_list",
-                "stado_schedule_show", "stado_registry_pull", "stado_host_health",
-                "stado_artifact_list", "stado_artifact_show", "stado_artifact_resolve",
-                "stado_artifact_verify", "stado_artifact_lineage", "stado_vast_status",
+                "stado_status",
+                "stado_cost_report",
+                "stado_quota_show",
+                "stado_quota_catalog",
+                "stado_quota_requests",
+                "stado_profiles",
+                "stado_schedule_list",
+                "stado_schedule_show",
+                "stado_registry_pull",
+                "stado_host_health",
+                "stado_artifact_list",
+                "stado_artifact_show",
+                "stado_artifact_resolve",
+                "stado_artifact_verify",
+                "stado_artifact_lineage",
+                "stado_vast_status",
             ]
         );
     }
@@ -541,8 +582,9 @@ mod tests {
     /// Python module (`stado.mcp.server.TOOLS`).
     #[test]
     fn tool_schemas_match_python_byte_for_byte() {
-        let expected: Value = serde_json::from_str(include_str!("../tests/fixtures/mcp_tools.json"))
-            .expect("fixture parses");
+        let expected: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/mcp_tools.json"))
+                .expect("fixture parses");
         assert_eq!(json!(tool_definitions()), expected);
     }
 
@@ -555,8 +597,14 @@ mod tests {
             assert_eq!(error_of(frame)["code"], CODE_PARSE_ERROR);
         }
         assert_eq!(error_of(&responses[0])["message"], "parse error");
-        assert_eq!(error_of(&responses[1])["message"], "request must be a JSON object");
-        assert_eq!(error_of(&responses[2])["message"], "request must be a JSON object");
+        assert_eq!(
+            error_of(&responses[1])["message"],
+            "request must be a JSON object"
+        );
+        assert_eq!(
+            error_of(&responses[2])["message"],
+            "request must be a JSON object"
+        );
     }
 
     #[test]
@@ -568,7 +616,10 @@ mod tests {
         );
         assert_eq!(responses.len(), 1, "notifications are never answered");
         assert_eq!(error_of(&responses[0])["code"], CODE_METHOD_NOT_FOUND);
-        assert_eq!(error_of(&responses[0])["message"], "method not found: resources/list");
+        assert_eq!(
+            error_of(&responses[0])["message"],
+            "method not found: resources/list"
+        );
         assert_eq!(responses[0]["id"], 9);
     }
 
@@ -580,8 +631,14 @@ mod tests {
              {\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"nope\"}}\n",
         );
         assert_eq!(error_of(&responses[0])["code"], CODE_INTERNAL_ERROR);
-        assert_eq!(error_of(&responses[0])["message"], "params.name must be a string");
-        assert_eq!(error_of(&responses[1])["message"], "params.name must be a string");
+        assert_eq!(
+            error_of(&responses[0])["message"],
+            "params.name must be a string"
+        );
+        assert_eq!(
+            error_of(&responses[1])["message"],
+            "params.name must be a string"
+        );
         assert_eq!(error_of(&responses[2])["code"], CODE_METHOD_NOT_FOUND);
         assert_eq!(error_of(&responses[2])["message"], "unknown tool: nope");
     }
@@ -615,12 +672,18 @@ mod tests {
         // Optional positional arg appended; flag-style arg for artifact list.
         let args = Map::from_iter([("filter".to_string(), json!("batch-7"))]);
         let result = call_tool("stado_status", &args).unwrap();
-        assert!(result["content"][0]["text"].as_str().unwrap().contains("argv: status batch-7"));
+        assert!(result["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("argv: status batch-7"));
 
         let args = Map::from_iter([("type".to_string(), json!("activations"))]);
         let result = call_tool("stado_artifact_list", &args).unwrap();
         let text = result["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("argv: artifact list --json --type activations"), "{text}");
+        assert!(
+            text.contains("argv: artifact list --json --type activations"),
+            "{text}"
+        );
 
         // Empty optional arg is dropped (Python `not value`).
         let args = Map::from_iter([("filter".to_string(), json!(""))]);
@@ -652,7 +715,13 @@ mod tests {
         assert_eq!(err.message, "stado vast status exited nonzero");
 
         // Binary missing entirely -> "not found" tool error.
-        std::env::set_var("STADO_BIN", dir.path().join("no-such-binary").to_string_lossy().into_owned());
+        std::env::set_var(
+            "STADO_BIN",
+            dir.path()
+                .join("no-such-binary")
+                .to_string_lossy()
+                .into_owned(),
+        );
         let err = call_tool("stado_status", &Map::new()).unwrap_err();
         assert!(err.message.starts_with("stado CLI not found: "), "{err:?}");
         std::env::remove_var("STADO_BIN");
@@ -668,6 +737,9 @@ mod tests {
         // Fallback ends in a bare "stado" (PATH) when no sibling exists.
         let argv = stado_argv();
         assert_eq!(argv.len(), 1);
-        assert!(argv[0] == "stado" || argv[0].ends_with("/stado"), "{argv:?}");
+        assert!(
+            argv[0] == "stado" || argv[0].ends_with("/stado"),
+            "{argv:?}"
+        );
     }
 }

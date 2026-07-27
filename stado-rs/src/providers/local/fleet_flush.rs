@@ -44,8 +44,12 @@ pub fn pid_live(pid: i32) -> bool {
 /// Python `_active_flush`: live pid in the lock file -> true; stale lock
 /// is removed; unreadable/unparsable lock -> false.
 pub fn active_flush(lock_path: &Path) -> bool {
-    let Ok(text) = std::fs::read_to_string(lock_path) else { return false };
-    let Ok(pid) = text.trim().parse::<i32>() else { return false };
+    let Ok(text) = std::fs::read_to_string(lock_path) else {
+        return false;
+    };
+    let Ok(pid) = text.trim().parse::<i32>() else {
+        return false;
+    };
     if pid_live(pid) {
         return true;
     }
@@ -56,7 +60,10 @@ pub fn active_flush(lock_path: &Path) -> bool {
 /// Pick the oldest rotated flush dir, or rotate `staging` into a fresh
 /// one. Python the candidates/else branch of `spawn_fleet_flush`. Returns
 /// None when there is nothing to flush (staging missing or empty).
-pub(crate) fn pick_or_rotate(staging: &Path, flush_root: &Path) -> std::io::Result<Option<PathBuf>> {
+pub(crate) fn pick_or_rotate(
+    staging: &Path,
+    flush_root: &Path,
+) -> std::io::Result<Option<PathBuf>> {
     let mut candidates: Vec<PathBuf> = std::fs::read_dir(flush_root)?
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.path())
@@ -67,7 +74,9 @@ pub(crate) fn pick_or_rotate(staging: &Path, flush_root: &Path) -> std::io::Resu
         return Ok(Some(first));
     }
     let non_empty = staging.is_dir()
-        && std::fs::read_dir(staging).map(|mut it| it.next().is_some()).unwrap_or(false);
+        && std::fs::read_dir(staging)
+            .map(|mut it| it.next().is_some())
+            .unwrap_or(false);
     if !non_empty {
         return Ok(None);
     }
@@ -87,7 +96,10 @@ pub(crate) fn pick_or_rotate(staging: &Path, flush_root: &Path) -> std::io::Resu
 /// Returns Ok(true) when a background flush is active or was started. The
 /// caller can keep admitting GPU jobs because new jobs write to a freshly
 /// recreated fleet_staging directory while the rotated directory uploads.
-pub fn spawn_fleet_flush(fleet_staging: &Path, log_fn: &mut dyn FnMut(&str)) -> std::io::Result<bool> {
+pub fn spawn_fleet_flush(
+    fleet_staging: &Path,
+    log_fn: &mut dyn FnMut(&str),
+) -> std::io::Result<bool> {
     spawn_fleet_flush_with(&super::python_bin(), fleet_staging, log_fn)
 }
 
@@ -99,7 +111,10 @@ pub fn spawn_fleet_flush_with(
     log_fn: &mut dyn FnMut(&str),
 ) -> std::io::Result<bool> {
     let staging = fleet_staging;
-    let name = staging.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = staging
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let flush_root = staging.with_file_name(format!("{name}.async_flushes"));
     let log_root = staging.with_file_name(format!("{name}.flush_logs"));
     std::fs::create_dir_all(&flush_root)?;
@@ -108,10 +123,18 @@ pub fn spawn_fleet_flush_with(
     if active_flush(&lock_path) {
         return Ok(true);
     }
-    let Some(flush_dir) = pick_or_rotate(staging, &flush_root)? else { return Ok(false) };
+    let Some(flush_dir) = pick_or_rotate(staging, &flush_root)? else {
+        return Ok(false);
+    };
 
-    let log_name = flush_dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let log_file = std::fs::OpenOptions::new().create(true).append(true).open(log_root.join(format!("{log_name}.log")))?;
+    let log_name = flush_dir
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_root.join(format!("{log_name}.log")))?;
     let err_file = log_file.try_clone()?;
     let child = std::process::Command::new(python)
         .args(["-c", FLUSH_RUNNER])
@@ -125,7 +148,10 @@ pub fn spawn_fleet_flush_with(
         .spawn()?;
     let pid = child.id();
     std::fs::write(&lock_path, pid.to_string())?;
-    log_fn(&format!("started async fleet staging flush pid={pid} dir={}", flush_dir.display()));
+    log_fn(&format!(
+        "started async fleet staging flush pid={pid} dir={}",
+        flush_dir.display()
+    ));
     // Detached like the Python Popen: never waited on. Dropping the Child
     // handle leaves the process running (it is re-parented to init).
     Ok(true)
@@ -184,14 +210,21 @@ mod tests {
 
         let flush_dir = pick_or_rotate(&staging, &flush_root).unwrap().unwrap();
         assert!(flush_dir.parent() == Some(flush_root.as_path()));
-        assert!(flush_dir.file_name().unwrap().to_string_lossy().starts_with("flush_"));
+        assert!(flush_dir
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("flush_"));
         assert_eq!(std::fs::read(flush_dir.join("shard.bin")).unwrap(), b"data");
         // Fresh staging dir exists and is empty.
         assert!(staging.is_dir());
         assert!(std::fs::read_dir(&staging).unwrap().next().is_none());
 
         // A second rotation reuses the pending flush dir without rotating.
-        assert_eq!(pick_or_rotate(&staging, &flush_root).unwrap().unwrap(), flush_dir);
+        assert_eq!(
+            pick_or_rotate(&staging, &flush_root).unwrap().unwrap(),
+            flush_dir
+        );
 
         // Nothing pending and an empty staging -> nothing to flush.
         std::fs::remove_dir_all(&flush_dir).unwrap();
@@ -209,10 +242,15 @@ mod tests {
         std::fs::write(staging.join("shard.bin"), b"data").unwrap();
 
         let mut lines: Vec<String> = Vec::new();
-        let started = spawn_fleet_flush_with("true", &staging, &mut |l: &str| lines.push(l.to_string())).unwrap();
+        let started =
+            spawn_fleet_flush_with("true", &staging, &mut |l: &str| lines.push(l.to_string()))
+                .unwrap();
         assert!(started);
         assert_eq!(lines.len(), 1);
-        assert!(lines[0].contains("started async fleet staging flush pid="), "{lines:?}");
+        assert!(
+            lines[0].contains("started async fleet staging flush pid="),
+            "{lines:?}"
+        );
 
         // One rotated dir with the payload; staging recreated empty.
         let rotated: Vec<PathBuf> = std::fs::read_dir(&flush_root)
@@ -222,7 +260,10 @@ mod tests {
             .filter(|p| p.is_dir())
             .collect();
         assert_eq!(rotated.len(), 1);
-        assert_eq!(std::fs::read(rotated[0].join("shard.bin")).unwrap(), b"data");
+        assert_eq!(
+            std::fs::read(rotated[0].join("shard.bin")).unwrap(),
+            b"data"
+        );
         assert!(staging.is_dir());
         // Lock file holds a (numeric) pid; the log file exists.
         let lock = std::fs::read_to_string(flush_root.join(".active_pid")).unwrap();
@@ -238,13 +279,19 @@ mod tests {
         std::fs::write(staging.join("shard.bin"), b"data").unwrap();
         std::fs::create_dir_all(&flush_root).unwrap();
         // A live flush holds the lock (our own pid).
-        std::fs::write(flush_root.join(".active_pid"), std::process::id().to_string()).unwrap();
+        std::fs::write(
+            flush_root.join(".active_pid"),
+            std::process::id().to_string(),
+        )
+        .unwrap();
 
         let started = spawn_fleet_flush_with("true", &staging, &mut |_| {}).unwrap();
         assert!(started);
         // Nothing rotated, staging untouched.
         assert_eq!(std::fs::read(staging.join("shard.bin")).unwrap(), b"data");
-        assert!(std::fs::read_dir(&flush_root).unwrap().all(|e| !e.unwrap().path().is_dir()));
+        assert!(std::fs::read_dir(&flush_root)
+            .unwrap()
+            .all(|e| !e.unwrap().path().is_dir()));
     }
 
     #[test]

@@ -39,25 +39,52 @@ export HF_HUB_DOWNLOAD_TIMEOUT=120
 export HF_HUB_DISABLE_TELEMETRY=1
 export HF_HUB_ETAG_TIMEOUT=1
 
-# Install the Rust orchestration binary from the release bucket. Job
+# Install the Rust orchestration binary from the release channel. Job
 # payloads still run as Python from the venv above (exported as WC_PYTHON
 # for the agent's probes), but the control plane has no Python fallback.
-# No gcloud on this image, so the download uses the public GCS HTTPS
-# endpoint. An unavailable or invalid release aborts startup. Shell-locals
-# use $VAR (never the braced form) so the dispatcher's placeholder
-# substitution leaves them alone.
+# The channel base is substituted by the dispatcher from
+# config::release_base_url() (env WC_RELEASE_BASE_URL), so this template
+# is not tied to any one cloud's object store. No cloud CLI is installed
+# on this image, so every download is plain curl over HTTPS. An
+# unavailable or invalid release aborts startup. curl's stderr is NOT
+# discarded: a failed release download is the difference between a
+# working fleet and a silently empty one. Shell-locals use $VAR (never
+# the braced form) so the dispatcher's placeholder substitution leaves
+# them alone; the two below drop the WC_ prefix because they need braced
+# ${VAR%...} operators, which must not look like a dispatcher key.
+#
+# An EC2 instance has no Azure identity to mint a bearer token with, so
+# an Azure blob channel must be public-read or carry a container SAS in
+# WC_RELEASE_BASE_URL. That query string is split off the base here and
+# re-appended after each object path, which is the only place it works.
+RELEASE_BASE="${WC_RELEASE_BASE_URL}"
+RELEASE_QS=""
+case "$RELEASE_BASE" in
+    *\?*)
+        RELEASE_QS="?${RELEASE_BASE#*\?}"
+        RELEASE_BASE="${RELEASE_BASE%%\?*}"
+        ;;
+esac
+RELEASE_BASE="${RELEASE_BASE%/}"
 AGENT_BIN="$WORK/bin/stado"
+# curl against the release channel: $1 is the URL, remaining args are
+# forwarded to curl, and any pre-authentication query string rides along.
+_wc_release_curl() {
+    local url="$1"
+    shift
+    curl -fsSL "$url$RELEASE_QS" "$@"
+}
 _wc_install_agent_binary() {
     mkdir -p "$WORK/bin" || return 1
-    local version
-    version="$(curl -fsSL https://storage.googleapis.com/wisent-compute/releases/stado/latest.json 2>/dev/null \
+    local version rc
+    version="$(_wc_release_curl "$RELEASE_BASE/latest.json" \
         | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin)["version"])')" || return 1
     [ -n "$version" ] || return 1
-    local base="https://storage.googleapis.com/wisent-compute/releases/stado/$version/linux-amd64"
+    local base="$RELEASE_BASE/$version/linux-amd64"
     local tmp
     tmp="$(mktemp -d)" || return 1
-    curl -fsSL "$base/stado" -o "$tmp/stado" 2>/dev/null || { rm -rf "$tmp"; return 1; }
-    curl -fsSL "$base/SHA256SUMS" -o "$tmp/SHA256SUMS" 2>/dev/null || { rm -rf "$tmp"; return 1; }
+    _wc_release_curl "$base/stado" -o "$tmp/stado" || { rc=$?; rm -rf "$tmp"; return "$rc"; }
+    _wc_release_curl "$base/SHA256SUMS" -o "$tmp/SHA256SUMS" || { rc=$?; rm -rf "$tmp"; return "$rc"; }
     grep -E '[ *]stado$' "$tmp/SHA256SUMS" > "$tmp/stado.sha256" || { rm -rf "$tmp"; return 1; }
     (cd "$tmp" && sha256sum -c stado.sha256) || { rm -rf "$tmp"; return 1; }
     chmod 755 "$tmp/stado" || { rm -rf "$tmp"; return 1; }

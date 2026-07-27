@@ -92,7 +92,10 @@ fn next_link(header: &str) -> String {
     for part in header.split(',') {
         let bits: Vec<&str> = part.trim().split(';').collect();
         if bits.len() > 1 && bits[1..].iter().any(|bit| bit.trim() == "rel=\"next\"") {
-            return bits[0].trim().trim_matches(|c| c == '<' || c == '>').to_string();
+            return bits[0]
+                .trim()
+                .trim_matches(|c| c == '<' || c == '>')
+                .to_string();
         }
     }
     String::new()
@@ -112,8 +115,14 @@ pub async fn fetch_hf_tree(repo: &str, revision: &str) -> Result<Vec<String>, Tr
         .timeout(std::time::Duration::from_secs(60))
         .user_agent("stado-artifacts/1")
         .build()
-        .map_err(|exc| TreeFetchError { kind: "RequestError", message: exc.to_string() })?;
-    let token = std::env::var("HF_TOKEN").unwrap_or_default().trim().to_string();
+        .map_err(|exc| TreeFetchError {
+            kind: "RequestError",
+            message: exc.to_string(),
+        })?;
+    let token = std::env::var("HF_TOKEN")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
 
     let mut paths: Vec<String> = Vec::new();
     while !url.is_empty() {
@@ -126,7 +135,11 @@ pub async fn fetch_hf_tree(repo: &str, revision: &str) -> Result<Vec<String>, Tr
             .await
             .and_then(reqwest::Response::error_for_status)
             .map_err(|exc| TreeFetchError {
-                kind: if exc.is_status() { "HTTPError" } else { "RequestError" },
+                kind: if exc.is_status() {
+                    "HTTPError"
+                } else {
+                    "RequestError"
+                },
                 message: exc.to_string(),
             })?;
         let link = response
@@ -135,10 +148,10 @@ pub async fn fetch_hf_tree(repo: &str, revision: &str) -> Result<Vec<String>, Tr
             .and_then(|value| value.to_str().ok())
             .unwrap_or("")
             .to_string();
-        let page: Value = response
-            .json()
-            .await
-            .map_err(|exc| TreeFetchError { kind: "RequestError", message: exc.to_string() })?;
+        let page: Value = response.json().await.map_err(|exc| TreeFetchError {
+            kind: "RequestError",
+            message: exc.to_string(),
+        })?;
         let Some(items) = page.as_array() else {
             return Err(TreeFetchError {
                 kind: "RuntimeError",
@@ -161,8 +174,9 @@ pub async fn fetch_hf_tree(repo: &str, revision: &str) -> Result<Vec<String>, Tr
 
 /// Injectable tree fetcher (Python passes `tree_fetcher` to the adapter
 /// constructor for tests).
-pub type TreeFetcher =
-    Arc<dyn Fn(String, String) -> BoxFuture<'static, Result<Vec<String>, TreeFetchError>> + Send + Sync>;
+pub type TreeFetcher = Arc<
+    dyn Fn(String, String) -> BoxFuture<'static, Result<Vec<String>, TreeFetchError>> + Send + Sync,
+>;
 
 // ---------------------------------------------------------------------------
 // ActivationDatasetAdapter
@@ -205,7 +219,12 @@ fn py_truthy(value: &Value) -> bool {
 fn str_list(map: &Map<String, Value>, key: &str) -> Vec<String> {
     map.get(key)
         .and_then(Value::as_array)
-        .map(|items| items.iter().filter_map(|v| v.as_str().map(ToString::to_string)).collect())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|v| v.as_str().map(ToString::to_string))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -234,7 +253,10 @@ impl ActivationDatasetAdapter {
     /// primary `hf://datasets/<repo>@<commit>` location, or `None` when the
     /// URI shape or `immutable_revision` cross-check fails.
     fn location(manifest: &ArtifactManifest) -> Option<(String, String)> {
-        let primary = manifest.locations.iter().find(|item| item.role == "primary")?;
+        let primary = manifest
+            .locations
+            .iter()
+            .find(|item| item.role == "primary")?;
         let captures = hf_location_re().captures(&primary.uri)?;
         let (repo, revision) = (&captures[1], &captures[2]);
         // Python compares case-sensitively against the captured revision.
@@ -280,9 +302,7 @@ impl ActivationDatasetAdapter {
             files
                 .iter()
                 .filter(|path| re.is_match(path))
-                .filter_map(|path| {
-                    path.rsplit_once('/').map(|(dir, _)| format!("{dir}/"))
-                })
+                .filter_map(|path| path.rsplit_once('/').map(|(dir, _)| format!("{dir}/")))
                 .collect()
         };
         let raw_shard_leaves = shard_leaves(raw_shard_re());
@@ -295,9 +315,14 @@ impl ActivationDatasetAdapter {
         let mut aggregate_leaves = 0i64;
         let require_complete = spec.get("require_complete_markers").is_none_or(py_truthy);
 
-        let raw_root = raw.get("root").and_then(Value::as_str).unwrap_or("raw_activations");
-        let aggregated_root =
-            aggregated.get("root").and_then(Value::as_str).unwrap_or("activations");
+        let raw_root = raw
+            .get("root")
+            .and_then(Value::as_str)
+            .unwrap_or("raw_activations");
+        let aggregated_root = aggregated
+            .get("root")
+            .and_then(Value::as_str)
+            .unwrap_or("activations");
         let raw_benchmarks = str_list(raw, "benchmarks");
         let raw_formats = str_list(raw, "formats");
         let aggregated_benchmarks = str_list(aggregated, "benchmarks");
@@ -339,14 +364,21 @@ impl ActivationDatasetAdapter {
                 return;
             }
             let sample = values[..values.len().min(5)].join(", ");
-            let suffix =
-                if values.len() > 5 { format!(" (+{} more)", values.len() - 5) } else { String::new() };
+            let suffix = if values.len() > 5 {
+                format!(" (+{} more)", values.len() - 5)
+            } else {
+                String::new()
+            };
             issues.push(format!("missing/incomplete {label}: {sample}{suffix}"));
         };
         add_missing("raw leaves", &raw_missing, &mut issues);
         add_missing("aggregated leaves", &aggregate_missing, &mut issues);
-        let mut pair_text_deduped: Vec<String> =
-            pair_text_missing.iter().cloned().collect::<HashSet<_>>().into_iter().collect();
+        let mut pair_text_deduped: Vec<String> = pair_text_missing
+            .iter()
+            .cloned()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
         pair_text_deduped.sort();
         add_missing("pair-text mappings", &pair_text_deduped, &mut issues);
 
@@ -355,8 +387,14 @@ impl ActivationDatasetAdapter {
         let summary = Map::from_iter([
             ("models".into(), Value::from(models.len() as i64)),
             ("raw_leaves_expected".into(), Value::from(raw_leaves)),
-            ("raw_leaves_complete".into(), Value::from(raw_leaves - raw_missing.len() as i64)),
-            ("aggregated_leaves_expected".into(), Value::from(aggregate_leaves)),
+            (
+                "raw_leaves_complete".into(),
+                Value::from(raw_leaves - raw_missing.len() as i64),
+            ),
+            (
+                "aggregated_leaves_expected".into(),
+                Value::from(aggregate_leaves),
+            ),
             (
                 "aggregated_leaves_complete".into(),
                 Value::from(aggregate_leaves - aggregate_missing.len() as i64),
@@ -416,7 +454,10 @@ impl ArtifactAdapter for ActivationDatasetAdapter {
                 Map::new(),
             );
         };
-        let spec = manifest.partitions.get("activation_dataset").and_then(Value::as_object);
+        let spec = manifest
+            .partitions
+            .get("activation_dataset")
+            .and_then(Value::as_object);
         let Some(spec) = spec else {
             return self.report(
                 false,
@@ -447,7 +488,9 @@ impl ArtifactAdapter for ActivationDatasetAdapter {
             Err(exc) => {
                 return self.report(
                     false,
-                    vec![format!("could not list pinned Hugging Face revision: {exc}")],
+                    vec![format!(
+                        "could not list pinned Hugging Face revision: {exc}"
+                    )],
                     Map::new(),
                 );
             }
@@ -468,10 +511,15 @@ fn revision_is_hex_commit(revision: &str) -> bool {
 /// quoting/escaping support — the desired-state TSVs are plain
 /// tab-separated values; quoted fields are pathological input here.
 fn read_tsv(path: &Path) -> Result<Vec<BTreeMap<String, String>>, String> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|exc| format!("{}: {exc}", path.display()))?;
+    let content =
+        std::fs::read_to_string(path).map_err(|exc| format!("{}: {exc}", path.display()))?;
     let mut lines = content.lines();
-    let headers: Vec<&str> = lines.next().unwrap_or("").trim_end_matches('\r').split('\t').collect();
+    let headers: Vec<&str> = lines
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('\r')
+        .split('\t')
+        .collect();
     let mut rows = Vec::new();
     for line in lines {
         let line = line.trim_end_matches('\r');
@@ -525,9 +573,7 @@ pub fn build_activation_manifest(
     version: &str,
 ) -> Result<ArtifactManifest, String> {
     if !revision_is_hex_commit(revision) {
-        return Err(
-            "revision must be an immutable 40-64 character hexadecimal commit".to_string()
-        );
+        return Err("revision must be an immutable 40-64 character hexadecimal commit".to_string());
     }
     let model_rows = read_tsv(&desired_state_dir.join("model_scope.tsv"))?;
     let target_rows =
@@ -539,7 +585,9 @@ pub fn build_activation_manifest(
             .map_err(|exc| {
                 format!(
                     "{}: {exc}",
-                    desired_state_dir.join("activation_benchmarks_canonical.txt").display()
+                    desired_state_dir
+                        .join("activation_benchmarks_canonical.txt")
+                        .display()
                 )
             })?
             .lines()
@@ -580,7 +628,9 @@ pub fn build_activation_manifest(
         .cloned()
         .collect();
     let aggregated_formats = dedupe_ordered(
-        format_rows.iter().map(|row| cell(row, "activation_collection_format").to_string()),
+        format_rows
+            .iter()
+            .map(|row| cell(row, "activation_collection_format").to_string()),
     );
     let mut raw_benchmarks: Vec<String> = raw_rows
         .iter()
@@ -589,7 +639,9 @@ pub fn build_activation_manifest(
         .collect();
     raw_benchmarks.sort();
     let raw_formats = dedupe_ordered(
-        format_rows.iter().map(|row| cell(row, "prompt_construction_strategy").to_string()),
+        format_rows
+            .iter()
+            .map(|row| cell(row, "prompt_construction_strategy").to_string()),
     );
     if models.is_empty()
         || aggregated_benchmarks.is_empty()
@@ -654,14 +706,31 @@ pub fn build_activation_manifest(
     }];
     manifest.schemas = ["raw-activations", "aggregated-activations", "pair-texts"]
         .iter()
-        .map(|name| Map::from_iter([(String::from("name"), json!(name)), (String::from("version"), json!(1))]))
+        .map(|name| {
+            Map::from_iter([
+                (String::from("name"), json!(name)),
+                (String::from("version"), json!(1)),
+            ])
+        })
         .collect();
     manifest.summary = Map::from_iter([
         ("models".into(), Value::from(models.len() as i64)),
-        ("raw_benchmarks".into(), Value::from(raw_benchmarks.len() as i64)),
-        ("raw_prompt_formats".into(), Value::from(raw_formats.len() as i64)),
-        ("aggregated_benchmarks".into(), Value::from(aggregated_benchmarks.len() as i64)),
-        ("aggregated_formats".into(), Value::from(aggregated_formats.len() as i64)),
+        (
+            "raw_benchmarks".into(),
+            Value::from(raw_benchmarks.len() as i64),
+        ),
+        (
+            "raw_prompt_formats".into(),
+            Value::from(raw_formats.len() as i64),
+        ),
+        (
+            "aggregated_benchmarks".into(),
+            Value::from(aggregated_benchmarks.len() as i64),
+        ),
+        (
+            "aggregated_formats".into(),
+            Value::from(aggregated_formats.len() as i64),
+        ),
         (
             "aggregated_benchmarks_canonical".into(),
             Value::from(canonical_benchmarks.len() as i64),
@@ -734,7 +803,10 @@ mod tests {
 
         // Uppercase revision in the URI is lowercased.
         let mut m = activation_manifest();
-        m.locations[0].uri = format!("hf://datasets/wisent-ai/activations@{}", REVISION.to_uppercase());
+        m.locations[0].uri = format!(
+            "hf://datasets/wisent-ai/activations@{}",
+            REVISION.to_uppercase()
+        );
         assert_eq!(ActivationDatasetAdapter::location(&m).unwrap().1, REVISION);
 
         // immutable_revision mismatch rejects the location.
@@ -755,7 +827,9 @@ mod tests {
     fn inventory_passes_on_complete_tree() {
         let adapter = ActivationDatasetAdapter::new();
         let manifest = activation_manifest();
-        let spec = manifest.partitions["activation_dataset"].as_object().unwrap();
+        let spec = manifest.partitions["activation_dataset"]
+            .as_object()
+            .unwrap();
         let report = adapter.inventory_report(spec, &complete_files());
         assert!(report.passed, "{:?}", report.issues);
         assert_eq!(report.adapter, "activation-dataset-v1");
@@ -771,29 +845,40 @@ mod tests {
     fn inventory_flags_missing_shards_markers_and_pair_texts() {
         let adapter = ActivationDatasetAdapter::new();
         let manifest = activation_manifest();
-        let spec = manifest.partitions["activation_dataset"].as_object().unwrap();
+        let spec = manifest.partitions["activation_dataset"]
+            .as_object()
+            .unwrap();
 
         // Only the raw shard; complete markers, aggregated leaf and pair
         // text are absent.
         let files: HashSet<String> =
             ["raw_activations/model-a/bench1/fmt1/layer_0_chunk_0.safetensors"]
-                .iter().map(ToString::to_string).collect();
+                .iter()
+                .map(ToString::to_string)
+                .collect();
         let report = adapter.inventory_report(spec, &files);
         assert!(!report.passed);
         assert!(
             report.issues.iter().any(|i| i
                 .starts_with("missing/incomplete raw leaves: raw_activations/model-a/bench1/fmt1")),
-            "{:?}", report.issues
+            "{:?}",
+            report.issues
         );
         assert!(
-            report.issues.iter().any(|i| i
-                .starts_with("missing/incomplete aggregated leaves: activations/model-a/bench1/afmt1")),
-            "{:?}", report.issues
+            report.issues.iter().any(|i| i.starts_with(
+                "missing/incomplete aggregated leaves: activations/model-a/bench1/afmt1"
+            )),
+            "{:?}",
+            report.issues
         );
         assert!(
-            report.issues.iter().any(|i| i
-                .starts_with("missing/incomplete pair-text mappings: pair_texts/bench1.json")),
-            "{:?}", report.issues
+            report
+                .issues
+                .iter()
+                .any(|i| i
+                    .starts_with("missing/incomplete pair-text mappings: pair_texts/bench1.json")),
+            "{:?}",
+            report.issues
         );
 
         // require_complete_markers=false passes with shards alone.
@@ -810,7 +895,9 @@ mod tests {
             "activations/model-a/bench1/afmt1/layer_0.safetensors",
             "pair_texts/bench1.json",
         ]
-        .iter().map(ToString::to_string).collect();
+        .iter()
+        .map(ToString::to_string)
+        .collect();
         let report = adapter.inventory_report(spec2, &files);
         assert!(report.passed, "{:?}", report.issues);
     }
@@ -843,7 +930,10 @@ mod tests {
 
         let adapter = ActivationDatasetAdapter::with_fetcher(Arc::new(|_repo, _rev| {
             Box::pin(async move {
-                Err(TreeFetchError { kind: "HTTPError", message: "404 Not Found".into() })
+                Err(TreeFetchError {
+                    kind: "HTTPError",
+                    message: "404 Not Found".into(),
+                })
             })
         }));
         let report = adapter.verify(&activation_manifest(), false).await;
@@ -869,7 +959,10 @@ mod tests {
 
     #[test]
     fn quote_matches_python_urllib() {
-        assert_eq!(quote("wisent-ai/activations", true), "wisent-ai/activations");
+        assert_eq!(
+            quote("wisent-ai/activations", true),
+            "wisent-ai/activations"
+        );
         assert_eq!(quote("a b@c", true), "a%20b%40c");
         assert_eq!(quote("a/b", false), "a%2Fb");
         assert_eq!(quote("żółć", false), "%C5%BC%C3%B3%C5%82%C4%87");
@@ -882,7 +975,10 @@ mod tests {
             next_link(r#"<https://huggingface.co/api/x?cursor=abc>; rel="next""#),
             "https://huggingface.co/api/x?cursor=abc"
         );
-        assert_eq!(next_link(r#"<https://x>; rel="prev", <https://y>; rel="next""#), "https://y");
+        assert_eq!(
+            next_link(r#"<https://x>; rel="prev", <https://y>; rel="next""#),
+            "https://y"
+        );
         assert_eq!(next_link(""), "");
         assert_eq!(next_link(r#"<https://x>; rel="last""#), "");
     }
@@ -908,7 +1004,11 @@ mod tests {
             "benchmark\traw_scope\nbench2\tkeep_all_formats\nbench1\tdrop\n",
         )
         .unwrap();
-        std::fs::write(dir.join("activation_benchmarks_canonical.txt"), "bench1\nbench2\n\n").unwrap();
+        std::fs::write(
+            dir.join("activation_benchmarks_canonical.txt"),
+            "bench1\nbench2\n\n",
+        )
+        .unwrap();
     }
 
     #[test]
@@ -930,7 +1030,10 @@ mod tests {
             manifest.ref_.to_string(),
             "activation-dataset/wisent-ai/activations@desired-v2-0123456789ab"
         );
-        assert_eq!(manifest.title, "Wisent activation database — desired state v2");
+        assert_eq!(
+            manifest.title,
+            "Wisent activation database — desired state v2"
+        );
         assert_eq!(manifest.producer.run_id, "run-1");
         assert_eq!(manifest.producer.job_ids, vec!["j1", "j2"]);
         assert_eq!(
@@ -960,26 +1063,24 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_desired_state(dir.path());
         // Short / non-hex revision.
-        let err =
-            build_activation_manifest("r", "abc123", dir.path(), "", &[], "").unwrap_err();
-        assert_eq!(err, "revision must be an immutable 40-64 character hexadecimal commit");
+        let err = build_activation_manifest("r", "abc123", dir.path(), "", &[], "").unwrap_err();
+        assert_eq!(
+            err,
+            "revision must be an immutable 40-64 character hexadecimal commit"
+        );
         // Missing TSV directory surfaces as an error.
-        let err = build_activation_manifest(
-            "r",
-            REVISION,
-            &dir.path().join("nope"),
-            "",
-            &[],
-            "",
-        )
-        .unwrap_err();
+        let err = build_activation_manifest("r", REVISION, &dir.path().join("nope"), "", &[], "")
+            .unwrap_err();
         assert!(err.contains("model_scope.tsv"), "{err}");
         // Empty scope.
         let dir2 = tempfile::tempdir().unwrap();
         write_desired_state(dir2.path());
-        std::fs::write(dir2.path().join("model_scope.tsv"), "model_slug\tin_scope\nm\tno\n").unwrap();
-        let err =
-            build_activation_manifest("r", REVISION, dir2.path(), "", &[], "").unwrap_err();
+        std::fs::write(
+            dir2.path().join("model_scope.tsv"),
+            "model_slug\tin_scope\nm\tno\n",
+        )
+        .unwrap();
+        let err = build_activation_manifest("r", REVISION, dir2.path(), "", &[], "").unwrap_err();
         assert_eq!(err, "desired-state TSVs produced an empty activation scope");
     }
 

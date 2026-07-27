@@ -1,27 +1,35 @@
-//! Binary self-update from the release bucket.
+//! Binary self-update from the release channel.
 //!
 //! Closes the phase-4 gap called out in
 //! [`crate::providers::local::version_check`]: Python agents remediated
 //! version drift with `pip install --upgrade stado` + `os.execv`; the Rust
 //! binary is not pip-installed, so drift detection compares
-//! `CARGO_PKG_VERSION` against the pointer object
-//! `gs://wisent-compute/releases/stado/latest.json`
+//! `CARGO_PKG_VERSION` against the pointer object `latest.json`
 //! (`{"version": "X.Y.Z", "channel": "stable"}`) — PyPI is deliberately
 //! NOT consulted, because the `stado` PyPI package tracks the Python
 //! implementation, whose version numbers no longer describe the running
 //! Rust binary.
 //!
-//! Release layout (written by the release pipeline):
+//! The channel is a base URL — [`crate::config::release_base_url`], env
+//! `WC_RELEASE_BASE_URL` — NOT a bucket. Everything below is fetched with
+//! plain HTTPS GETs, so one code path serves the public GCS endpoint (the
+//! default, unchanged), an Azure blob container, a CDN or a plain web
+//! server. Only the Azure case needs credentials, and it reuses the
+//! shared [`crate::azure_token`] chain plus the REST API version pinned
+//! by `queue::azure_blob` rather than a second token implementation.
+//!
+//! Release layout (written by the release pipeline; identical on every
+//! backend, which is what makes the channel portable):
 //!
 //! ```text
-//! gs://wisent-compute/releases/stado/latest.json
-//! gs://wisent-compute/releases/stado/<version>/<platform>/stado
-//! gs://wisent-compute/releases/stado/<version>/<platform>/wc
-//! gs://wisent-compute/releases/stado/<version>/<platform>/stado-coverage
-//! gs://wisent-compute/releases/stado/<version>/<platform>/stado-fix
-//! gs://wisent-compute/releases/stado/<version>/<platform>/stado-watchdog
-//! gs://wisent-compute/releases/stado/<version>/<platform>/stado-mcp
-//! gs://wisent-compute/releases/stado/<version>/<platform>/SHA256SUMS
+//! <base>/latest.json
+//! <base>/<version>/<platform>/stado
+//! <base>/<version>/<platform>/wc
+//! <base>/<version>/<platform>/stado-coverage
+//! <base>/<version>/<platform>/stado-fix
+//! <base>/<version>/<platform>/stado-watchdog
+//! <base>/<version>/<platform>/stado-mcp
+//! <base>/<version>/<platform>/SHA256SUMS
 //! ```
 //!
 //! `platform` is [`platform_triple_short`] (`linux-amd64` or
@@ -32,7 +40,7 @@
 //! verifies EVERY target binary against SHA256SUMS, then atomically
 //! replaces (`<name>.new` + chmod 755 + fsync + rename) the running binary
 //! AND its same-dir siblings that exist among [`RELEASE_BINARIES`].
-//! Failure stance: any error (bucket unreachable, malformed sums, hash
+//! Failure stance: any error (channel unreachable, malformed sums, hash
 //! mismatch, unwritable install dir, unsupported platform) aborts BEFORE
 //! the first rename — the old binaries stay in place and the caller keeps
 //! running. Extra files in the install dir are never touched; sibling
@@ -47,27 +55,27 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 
+use crate::config::release_base_url;
 use crate::providers::local::version_check::version_newer;
-use crate::queue::{BlobBackend, GcsBackend};
+use crate::queue::azure_blob::{STORAGE_RESOURCE, STORAGE_SCOPE, X_MS_VERSION};
 
-/// Bucket the release pipeline publishes to. Deliberately NOT
-/// `config::bucket()` — that is the QUEUE bucket (default "stado"); the
-/// release tree lives in "wisent-compute" regardless of queue config.
-pub const RELEASE_BUCKET: &str = "wisent-compute";
-
-/// Prefix of the release tree inside [`RELEASE_BUCKET`].
-pub const RELEASE_PREFIX: &str = "releases/stado";
-
-/// Pointer object republished by the release pipeline on every release.
-pub const LATEST_JSON_PATH: &str = "releases/stado/latest.json";
+/// Pointer object republished by the release pipeline on every release,
+/// named relative to [`release_base_url`].
+pub const LATEST_JSON_NAME: &str = "latest.json";
 
 /// The checksum manifest inside each `<version>/<platform>/` directory.
 pub const SHA256SUMS_NAME: &str = "SHA256SUMS";
 
 /// Binaries published per release/platform. The self-update replaces the
 /// running binary plus the same-dir siblings among these names that exist.
-pub const RELEASE_BINARIES: [&str; 6] =
-    ["stado", "wc", "stado-coverage", "stado-fix", "stado-watchdog", "stado-mcp"];
+pub const RELEASE_BINARIES: [&str; 6] = [
+    "stado",
+    "wc",
+    "stado-coverage",
+    "stado-fix",
+    "stado-watchdog",
+    "stado-mcp",
+];
 
 /// Self-update failure. Every variant aborts before any binary is
 /// replaced; the caller logs and keeps running the old binary.
@@ -75,8 +83,11 @@ pub const RELEASE_BINARIES: [&str; 6] =
 pub enum SelfUpdateError {
     /// This OS/arch has no published release triple.
     #[error("no release triple for platform {os}-{arch} (supported: linux-amd64, darwin-arm64)")]
-    UnsupportedPlatform { os: &'static str, arch: &'static str },
-    /// The release bucket/object could not be read.
+    UnsupportedPlatform {
+        os: &'static str,
+        arch: &'static str,
+    },
+    /// The release channel/object could not be read.
     #[error("release fetch failed: {0}")]
     Fetch(String),
     /// SHA256SUMS is not parseable coreutils format.
@@ -87,7 +98,11 @@ pub enum SelfUpdateError {
     MissingSum(String),
     /// A downloaded binary does not match its published checksum.
     #[error("sha256 mismatch for {name}: expected {expected}, got {actual}")]
-    HashMismatch { name: String, expected: String, actual: String },
+    HashMismatch {
+        name: String,
+        expected: String,
+        actual: String,
+    },
     /// `current_exe` has no usable parent directory.
     #[error("cannot determine install dir of {path}", path = .0.display())]
     NoInstallDir(PathBuf),
@@ -154,37 +169,103 @@ pub fn platform_triple_short() -> Result<&'static str, SelfUpdateError> {
 }
 
 /// Download seam for the release tree, so tests can run fully offline.
-/// `object_path` is bucket-relative (e.g. [`LATEST_JSON_PATH`]).
+/// `object_path` is relative to [`release_base_url`] (e.g.
+/// [`LATEST_JSON_NAME`], or `<version>/<platform>/stado`).
 #[async_trait]
 pub trait ReleaseFetcher: Send + Sync {
     /// Object bytes, or `None` when the object does not exist.
     async fn fetch(&self, object_path: &str) -> Result<Option<Vec<u8>>, SelfUpdateError>;
 }
 
-/// [`ReleaseFetcher`] over the crate's GCS JSON-API backend, bound to
-/// [`RELEASE_BUCKET`] explicitly (NOT the queue bucket).
-pub struct GcsReleaseFetcher {
-    backend: GcsBackend,
+/// Host suffix that marks a release channel as Azure Blob Storage. Those
+/// URLs get a storage-scoped bearer token; every other host (the public
+/// GCS endpoint, a CDN, a plain web server) is fetched anonymously, which
+/// is what keeps an unconfigured install byte-identical to before.
+const AZURE_BLOB_HOST_SUFFIX: &str = ".blob.core.windows.net";
+
+/// True when the HOST of `base_url` is an Azure Blob endpoint. Matches on
+/// the host alone: a path segment that happens to contain the suffix must
+/// not switch authentication on.
+fn is_azure_blob_url(base_url: &str) -> bool {
+    let after_scheme = base_url
+        .split_once("://")
+        .map_or(base_url, |(_, rest)| rest);
+    let host = after_scheme
+        .split(['/', ':', '?', '#'])
+        .next()
+        .unwrap_or_default();
+    host.to_ascii_lowercase().ends_with(AZURE_BLOB_HOST_SUFFIX)
 }
 
-impl GcsReleaseFetcher {
-    /// Resolve GCP credentials (same gcp_auth pattern as the queue
-    /// backend) and bind to [`RELEASE_BUCKET`].
-    pub async fn new() -> Result<Self, SelfUpdateError> {
-        let backend = GcsBackend::new(RELEASE_BUCKET)
-            .await
-            .map_err(|err| SelfUpdateError::Fetch(err.to_string()))?;
-        Ok(Self { backend })
+/// [`ReleaseFetcher`] over plain HTTPS against [`release_base_url`].
+///
+/// Backend-agnostic by construction: the release layout is a fixed set of
+/// static paths, so any host that serves them is a valid channel. Azure
+/// blob endpoints additionally carry a bearer token from the shared
+/// [`crate::azure_token`] chain and the pinned blob REST API version,
+/// because containers are not public-read.
+pub struct HttpReleaseFetcher {
+    http: reqwest::Client,
+    /// Channel base, trailing slash already stripped by
+    /// [`release_base_url`]. Borrowed, never copied per fetch.
+    base_url: &'static str,
+    /// True when [`Self::base_url`] is an Azure blob endpoint.
+    azure_auth: bool,
+}
+
+impl HttpReleaseFetcher {
+    /// Bind to the configured release channel ([`release_base_url`]).
+    /// Infallible: credentials, when needed at all, are resolved lazily
+    /// per fetch by the shared token chain.
+    pub fn new() -> Self {
+        let base_url = release_base_url();
+        Self {
+            http: reqwest::Client::new(),
+            base_url,
+            azure_auth: is_azure_blob_url(base_url),
+        }
+    }
+}
+
+impl Default for HttpReleaseFetcher {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 #[async_trait]
-impl ReleaseFetcher for GcsReleaseFetcher {
+impl ReleaseFetcher for HttpReleaseFetcher {
     async fn fetch(&self, object_path: &str) -> Result<Option<Vec<u8>>, SelfUpdateError> {
-        self.backend
-            .download_bytes(object_path)
+        let url = format!("{}/{object_path}", self.base_url);
+        let mut request = self.http.get(&url);
+        if self.azure_auth {
+            let token =
+                crate::azure_token::bearer_token(&self.http, STORAGE_SCOPE, STORAGE_RESOURCE)
+                    .await
+                    .map_err(|err| SelfUpdateError::Fetch(format!("{url}: {err}")))?;
+            request = request
+                .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"))
+                .header("x-ms-version", X_MS_VERSION);
+        }
+        let response = request
+            .send()
             .await
-            .map_err(|err| SelfUpdateError::Fetch(err.to_string()))
+            .map_err(|err| SelfUpdateError::Fetch(format!("{url}: {err}")))?;
+        let status = response.status();
+        // Missing object, not a failure: the caller distinguishes "no such
+        // release" from "channel unreachable". A disabled-billing 403 or a
+        // 401 from a container we cannot read stays a hard error.
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !status.is_success() {
+            return Err(SelfUpdateError::Fetch(format!("{url} -> HTTP {status}")));
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|err| SelfUpdateError::Fetch(format!("{url}: {err}")))?;
+        Ok(Some(bytes.to_vec()))
     }
 }
 
@@ -198,17 +279,16 @@ pub fn parse_latest_json(body: &str) -> Option<LatestRelease> {
     Some(parsed)
 }
 
-/// Fetch and parse `latest.json` from the release bucket. `None` on any
+/// Fetch and parse `latest.json` from the release channel. `None` on any
 /// failure — drift detection must never crash the agent loop (same
 /// stance as the old PyPI fetch).
 pub async fn check_latest() -> Option<LatestRelease> {
-    let fetcher = GcsReleaseFetcher::new().await.ok()?;
-    check_latest_with(&fetcher).await
+    check_latest_with(&HttpReleaseFetcher::new()).await
 }
 
 /// [`check_latest`] against an injected fetcher (tests).
 pub async fn check_latest_with(fetcher: &impl ReleaseFetcher) -> Option<LatestRelease> {
-    let bytes = fetcher.fetch(LATEST_JSON_PATH).await.ok()??;
+    let bytes = fetcher.fetch(LATEST_JSON_NAME).await.ok()??;
     parse_latest_json(std::str::from_utf8(&bytes).ok()?)
 }
 
@@ -238,13 +318,19 @@ pub fn parse_sha256sums(body: &str) -> Result<BTreeMap<String, String>, SelfUpda
             continue;
         }
         let Some(split_at) = line.find(char::is_whitespace) else {
-            return Err(SelfUpdateError::MalformedSums(format!("line {}: {line:?}", lineno + 1)));
+            return Err(SelfUpdateError::MalformedSums(format!(
+                "line {}: {line:?}",
+                lineno + 1
+            )));
         };
         let hash = &line[..split_at];
         let name = line[split_at..].trim_start();
         let name = name.strip_prefix('*').unwrap_or(name);
         if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) || name.is_empty() {
-            return Err(SelfUpdateError::MalformedSums(format!("line {}: {line:?}", lineno + 1)));
+            return Err(SelfUpdateError::MalformedSums(format!(
+                "line {}: {line:?}",
+                lineno + 1
+            )));
         }
         out.insert(name.to_string(), hash.to_ascii_lowercase());
     }
@@ -254,7 +340,10 @@ pub fn parse_sha256sums(body: &str) -> Result<BTreeMap<String, String>, SelfUpda
 /// Names among [`RELEASE_BINARIES`] to replace: the running binary plus
 /// the same-dir siblings that exist. Missing siblings stay missing;
 /// nothing outside the six published names is ever touched.
-pub fn update_targets(install_dir: &Path, current_exe: &Path) -> Result<Vec<String>, SelfUpdateError> {
+pub fn update_targets(
+    install_dir: &Path,
+    current_exe: &Path,
+) -> Result<Vec<String>, SelfUpdateError> {
     let exe_name = current_exe
         .file_name()
         .and_then(|n| n.to_str())
@@ -286,10 +375,10 @@ fn current_exe_path() -> std::io::Result<PathBuf> {
     Ok(exe)
 }
 
-/// Full self-update against the real release bucket: fetch latest.json,
+/// Full self-update against the real release channel: fetch latest.json,
 /// bail when not strictly newer, download + verify + atomically replace.
 pub async fn self_update(log_fn: &mut dyn FnMut(&str)) -> Result<UpdateOutcome, SelfUpdateError> {
-    let fetcher = GcsReleaseFetcher::new().await?;
+    let fetcher = HttpReleaseFetcher::new();
     let current_exe = current_exe_path()?;
     let platform = platform_triple_short()?;
     self_update_with(&fetcher, platform, &current_exe, log_fn).await
@@ -305,10 +394,16 @@ pub async fn self_update_with(
 ) -> Result<UpdateOutcome, SelfUpdateError> {
     let installed = env!("CARGO_PKG_VERSION").to_string();
     let latest = check_latest_with(fetcher).await.ok_or_else(|| {
-        SelfUpdateError::Fetch(format!("{LATEST_JSON_PATH} unreachable or invalid in gs://{RELEASE_BUCKET}"))
+        SelfUpdateError::Fetch(format!(
+            "{LATEST_JSON_NAME} unreachable or invalid in the configured release channel \
+             (WC_RELEASE_BASE_URL)"
+        ))
     })?;
     if !version_newer(&installed, &latest.version) {
-        return Ok(UpdateOutcome::UpToDate { installed, latest: latest.version });
+        return Ok(UpdateOutcome::UpToDate {
+            installed,
+            latest: latest.version,
+        });
     }
     let to = latest.version;
     let install_dir = current_exe
@@ -320,10 +415,11 @@ pub async fn self_update_with(
     // rename below is atomic only within one filesystem). Creating it is
     // also the writability probe: refuse BEFORE any download when the
     // install dir is read-only for us.
-    let staging = tempfile::tempdir_in(install_dir)
-        .map_err(|err| SelfUpdateError::InstallDirNotWritable(install_dir.to_path_buf(), err.to_string()))?;
+    let staging = tempfile::tempdir_in(install_dir).map_err(|err| {
+        SelfUpdateError::InstallDirNotWritable(install_dir.to_path_buf(), err.to_string())
+    })?;
 
-    let prefix = format!("{RELEASE_PREFIX}/{to}/{platform}");
+    let prefix = format!("{to}/{platform}");
     let sums_bytes = fetcher
         .fetch(&format!("{prefix}/{SHA256SUMS_NAME}"))
         .await?
@@ -337,7 +433,9 @@ pub async fn self_update_with(
     // or a missing object leaves the install dir completely untouched.
     let mut staged: Vec<(String, PathBuf)> = Vec::with_capacity(targets.len());
     for name in &targets {
-        let expected = sums.get(name).ok_or_else(|| SelfUpdateError::MissingSum(name.clone()))?;
+        let expected = sums
+            .get(name)
+            .ok_or_else(|| SelfUpdateError::MissingSum(name.clone()))?;
         let bytes = fetcher
             .fetch(&format!("{prefix}/{name}"))
             .await?
@@ -352,7 +450,10 @@ pub async fn self_update_with(
         }
         let staged_path = staging.path().join(name);
         std::fs::write(&staged_path, &bytes)?;
-        log_fn(&format!("self-update: verified {name} {to} ({} bytes)", bytes.len()));
+        log_fn(&format!(
+            "self-update: verified {name} {to} ({} bytes)",
+            bytes.len()
+        ));
         staged.push((name.clone(), staged_path));
     }
 
@@ -364,7 +465,10 @@ pub async fn self_update_with(
         log_fn(&format!("self-update: installed {name} {to}"));
     }
     std::fs::File::open(install_dir)?.sync_all()?;
-    Ok(UpdateOutcome::Updated { from: installed, to })
+    Ok(UpdateOutcome::Updated {
+        from: installed,
+        to,
+    })
 }
 
 /// Copy the verified staging file next to `dest` as `<name>.new`, chmod
@@ -395,7 +499,9 @@ fn replace_verified(staged: &Path, dest: &Path) -> Result<(), SelfUpdateError> {
 pub fn reexec() -> std::io::Error {
     use std::os::unix::process::CommandExt;
     match current_exe_path() {
-        Ok(exe) => std::process::Command::new(exe).args(std::env::args_os().skip(1)).exec(),
+        Ok(exe) => std::process::Command::new(exe)
+            .args(std::env::args_os().skip(1))
+            .exec(),
         Err(err) => err,
     }
 }
@@ -423,10 +529,10 @@ mod tests {
     fn mock_release(version: &str, platform: &str, binaries: &[(&str, &[u8])]) -> MockFetcher {
         let mut objects = HashMap::new();
         objects.insert(
-            LATEST_JSON_PATH.to_string(),
+            LATEST_JSON_NAME.to_string(),
             format!(r#"{{"version": "{version}", "channel": "stable"}}"#).into_bytes(),
         );
-        let prefix = format!("{RELEASE_PREFIX}/{version}/{platform}");
+        let prefix = format!("{version}/{platform}");
         let sums = binaries
             .iter()
             .map(|(name, bytes)| format!("{}  {}", sha256_hex(bytes), name))
@@ -462,7 +568,12 @@ mod tests {
         assert_eq!(parsed.version, "0.4.393");
         assert_eq!(parsed.channel, "stable");
         // channel optional (defaults to stable); version required.
-        assert_eq!(parse_latest_json(r#"{"version": "1.0.0"}"#).unwrap().channel, "stable");
+        assert_eq!(
+            parse_latest_json(r#"{"version": "1.0.0"}"#)
+                .unwrap()
+                .channel,
+            "stable"
+        );
         assert!(parse_latest_json(r#"{"channel": "stable"}"#).is_none());
         assert!(parse_latest_json(r#"{"version": ""}"#).is_none());
         assert!(parse_latest_json("not json").is_none());
@@ -478,15 +589,11 @@ mod tests {
 
     #[test]
     fn sha256sums_parses_coreutils_format() {
-        let body = format!(
-            "{}  stado\n{} *wc\n\n",
-            "a".repeat(64),
-            "B".repeat(64)
-        );
+        let body = format!("{}  stado\n{} *wc\n\n", "a".repeat(64), "B".repeat(64));
         let sums = parse_sha256sums(&body).expect("valid sums");
         assert_eq!(sums["stado"], "a".repeat(64));
         assert_eq!(sums["wc"], "b".repeat(64)); // hex normalized to lowercase
-        // Malformed lines are a hard error.
+                                                // Malformed lines are a hard error.
         assert!(parse_sha256sums("abc  stado\n").is_err()); // short hash
         assert!(parse_sha256sums(&format!("{}\n", "a".repeat(64))).is_err()); // no name
         assert!(parse_sha256sums("").unwrap().is_empty());
@@ -518,17 +625,33 @@ mod tests {
 
         assert_eq!(
             outcome,
-            UpdateOutcome::Updated { from: env!("CARGO_PKG_VERSION").to_string(), to: "999.0.0".into() }
+            UpdateOutcome::Updated {
+                from: env!("CARGO_PKG_VERSION").to_string(),
+                to: "999.0.0".into()
+            }
         );
         // Running binary + existing sibling replaced...
         assert_eq!(std::fs::read(&exe).unwrap(), b"new-stado");
         assert_eq!(std::fs::read(install.join("wc")).unwrap(), b"new-wc");
         // ...chmod 755 applied...
-        assert_eq!(std::fs::metadata(&exe).unwrap().permissions().mode() & 0o777, 0o755);
-        assert_eq!(std::fs::metadata(install.join("wc")).unwrap().permissions().mode() & 0o777, 0o755);
+        assert_eq!(
+            std::fs::metadata(&exe).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        assert_eq!(
+            std::fs::metadata(install.join("wc"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755
+        );
         // ...extra files kept, missing siblings stay missing, no scratch
         // files (`.new` or staging dir) left behind.
-        assert_eq!(std::fs::read(install.join("notes.txt")).unwrap(), b"keep me");
+        assert_eq!(
+            std::fs::read(install.join("notes.txt")).unwrap(),
+            b"keep me"
+        );
         assert!(!install.join("stado-fix").exists());
         let entries: Vec<String> = std::fs::read_dir(install)
             .unwrap()
@@ -552,9 +675,10 @@ mod tests {
             &[("stado", b"new-stado"), ("wc", b"new-wc")],
         );
         // Corrupt the stado object AFTER the sums were computed.
-        fetcher
-            .objects
-            .insert(format!("{RELEASE_PREFIX}/999.0.0/test-platform/stado"), b"tampered".to_vec());
+        fetcher.objects.insert(
+            "999.0.0/test-platform/stado".to_string(),
+            b"tampered".to_vec(),
+        );
 
         let err = self_update_with(&fetcher, "test-platform", &exe, &mut no_log)
             .await
@@ -629,16 +753,23 @@ mod tests {
         let result = self_update_with(&fetcher, "test-platform", &exe, &mut no_log).await;
         // Restore writability so the TempDir can clean itself up.
         std::fs::set_permissions(install, std::fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(matches!(result, Err(SelfUpdateError::InstallDirNotWritable(..))));
+        assert!(matches!(
+            result,
+            Err(SelfUpdateError::InstallDirNotWritable(..))
+        ));
         assert_eq!(std::fs::read(&exe).unwrap(), b"old-stado");
     }
 
     #[tokio::test]
     async fn check_latest_with_reads_pointer_object() {
         let fetcher = mock_release("1.2.3", "test-platform", &[]);
-        let latest = check_latest_with(&fetcher).await.expect("latest.json parses");
+        let latest = check_latest_with(&fetcher)
+            .await
+            .expect("latest.json parses");
         assert_eq!(latest.version, "1.2.3");
-        let empty = MockFetcher { objects: HashMap::new() };
+        let empty = MockFetcher {
+            objects: HashMap::new(),
+        };
         assert!(check_latest_with(&empty).await.is_none());
     }
 }

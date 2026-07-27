@@ -30,8 +30,7 @@ pub mod job_state {
     }
 }
 
-pub const DEPRECATED_ACTIVATION_ENTRYPOINT: &str =
-    "wisent.scripts.activations.extract_and_upload";
+pub const DEPRECATED_ACTIVATION_ENTRYPOINT: &str = "wisent.scripts.activations.extract_and_upload";
 
 pub fn deprecated_activation_command_reason(command: &str) -> &'static str {
     if !command.contains(DEPRECATED_ACTIVATION_ENTRYPOINT) {
@@ -311,7 +310,8 @@ pub(crate) fn isoformat_utc(dt: chrono::DateTime<chrono::Utc>) -> String {
 /// Replicates Python's `ensure_ascii=True`: escapes every non-ASCII char as
 /// \uXXXX (with surrogate pairs for astral planes). Already-escaped sequences
 /// and structural characters are untouched.
-pub(crate) fn ensure_ascii(s: &str) -> String {    let mut out = String::with_capacity(s.len());
+pub(crate) fn ensure_ascii(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
     for ch in s.chars() {
         if (ch as u32) < 0x7f {
             out.push(ch);
@@ -349,7 +349,11 @@ pub(crate) fn json_dumps_pretty_sorted(value: &Value) -> String {
 /// the string contains a single quote (and no double quote); backslash-escapes
 /// for the quote, backslash, and the usual control characters.
 pub(crate) fn py_str_repr(s: &str) -> String {
-    let quote = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
+    let quote = if s.contains('\'') && !s.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
     let mut out = String::with_capacity(s.len() + 2);
     out.push(quote);
     for ch in s.chars() {
@@ -405,7 +409,10 @@ mod tests {
         j.priority = 5;
         j.apt_packages = vec!["htop".into()];
         let json = j.to_json();
-        assert!(json.contains("\\u017c"), "non-ASCII must be escaped: {json}");
+        assert!(
+            json.contains("\\u017c"),
+            "non-ASCII must be escaped: {json}"
+        );
         let j2 = Job::from_json(&json).unwrap();
         assert_eq!(j2.command, j.command);
         assert_eq!(j2.priority, 5);

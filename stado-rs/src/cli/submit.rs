@@ -123,7 +123,8 @@ pub struct SubmitArgs {
 async fn resolve_input_artifacts(
     values: &[String],
 ) -> Result<(Map<String, Value>, Map<String, Value>), CmdError> {
-    let name_re = regex::Regex::new(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$").expect("static regex compiles");
+    let name_re =
+        regex::Regex::new(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$").expect("static regex compiles");
     // The registry is built lazily: with no --input-artifact flags there is
     // nothing to resolve (Python constructs JobStorage eagerly, but its
     // constructor performs no I/O either).
@@ -140,13 +141,19 @@ async fn resolve_input_artifacts(
     let mut resolved = Map::new();
     for value in values {
         let Some((name, reference)) = value.split_once('=') else {
-            return Err(CmdError::click(format!("--input-artifact must be NAME=REF: '{value}'")));
+            return Err(CmdError::click(format!(
+                "--input-artifact must be NAME=REF: '{value}'"
+            )));
         };
         if !name_re.is_match(name) {
-            return Err(CmdError::click(format!("artifact input name is unsafe: '{name}'")));
+            return Err(CmdError::click(format!(
+                "artifact input name is unsafe: '{name}'"
+            )));
         }
         if requested.contains_key(name) {
-            return Err(CmdError::click(format!("duplicate artifact input name: {name}")));
+            return Err(CmdError::click(format!(
+                "duplicate artifact input name: {name}"
+            )));
         }
         let manifest = registry
             .as_ref()
@@ -158,7 +165,10 @@ async fn resolve_input_artifacts(
             .iter()
             .find(|location| location.role == "primary")
             .ok_or_else(|| {
-                CmdError::click(format!("artifact has no primary location: {}", manifest.ref_))
+                CmdError::click(format!(
+                    "artifact has no primary location: {}",
+                    manifest.ref_
+                ))
             })?;
         requested.insert(name.to_string(), Value::from(reference));
         resolved.insert(
@@ -178,32 +188,49 @@ async fn resolve_input_artifacts(
 
 /// The submit kwargs the CLI passes, as a JSON map keyed by the Python
 /// kwarg names — the exact input `profiles.merge_into_kwargs` expects.
-fn cli_kwargs_json(args: &SubmitArgs, apt_list: &[String], spot: bool, any_provider: bool) -> Map<String, Value> {
+fn cli_kwargs_json(
+    args: &SubmitArgs,
+    apt_list: &[String],
+    spot: bool,
+    any_provider: bool,
+) -> Map<String, Value> {
     Map::from_iter([
         ("gpu_type".into(), Value::from(args.gpu_type.as_str())),
         ("vram_gb".into(), Value::from(args.vram_gb)),
-        ("machine_type".into(), Value::from(args.machine_type.as_str())),
+        (
+            "machine_type".into(),
+            Value::from(args.machine_type.as_str()),
+        ),
         (
             "apt_packages".into(),
             Value::Array(apt_list.iter().map(|p| Value::from(p.as_str())).collect()),
         ),
         ("pre_command".into(), Value::from(args.pre_command.as_str())),
         ("repo".into(), Value::from(args.repo.as_str())),
-        ("repo_workdir".into(), Value::from(args.repo_workdir.as_str())),
+        (
+            "repo_workdir".into(),
+            Value::from(args.repo_workdir.as_str()),
+        ),
         ("repo_extras".into(), Value::from(args.repo_extras.as_str())),
         ("output_uri".into(), Value::from(args.output_uri.as_str())),
         ("verify_command".into(), Value::from(args.verify.as_str())),
         ("exclusive".into(), Value::from(args.exclusive)),
         ("priority".into(), Value::from(args.priority)),
         ("preemptible".into(), Value::from(spot)),
-        ("max_cost_per_hour_usd".into(), Value::from(args.max_cost_per_hour)),
+        (
+            "max_cost_per_hour_usd".into(),
+            Value::from(args.max_cost_per_hour),
+        ),
         ("provider".into(), Value::from(args.provider.as_str())),
         ("pin_to_provider".into(), Value::from(!any_provider)),
     ])
 }
 
 fn get_str(map: &Map<String, Value>, key: &str) -> String {
-    map.get(key).and_then(Value::as_str).unwrap_or_default().to_string()
+    map.get(key)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
 }
 
 fn get_i64(map: &Map<String, Value>, key: &str) -> i64 {
@@ -221,7 +248,12 @@ fn get_bool(map: &Map<String, Value>, key: &str) -> bool {
 fn get_str_list(map: &Map<String, Value>, key: &str) -> Vec<String> {
     map.get(key)
         .and_then(Value::as_array)
-        .map(|items| items.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -233,8 +265,13 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
              kill-and-restart path.",
         ));
     }
-    let mut apt_list: Vec<String> =
-        args.apt.split(',').map(str::trim).filter(|p| !p.is_empty()).map(str::to_string).collect();
+    let mut apt_list: Vec<String> = args
+        .apt
+        .split(',')
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
+        .collect();
     let (requested_artifacts, resolved_artifacts) =
         resolve_input_artifacts(&args.input_artifacts).await?;
 
@@ -259,8 +296,12 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
     // merge_into_kwargs adopts profile fields wherever the CLI value
     // matches the wisent-compute default.
     if !args.profile.is_empty() {
-        let profile = profiles::load_profile(&args.profile).map_err(|exc| CmdError::click(exc.to_string()))?;
-        let merged = profiles::merge_into_kwargs(&profile, &cli_kwargs_json(args, &apt_list, spot, any_provider));
+        let profile = profiles::load_profile(&args.profile)
+            .map_err(|exc| CmdError::click(exc.to_string()))?;
+        let merged = profiles::merge_into_kwargs(
+            &profile,
+            &cli_kwargs_json(args, &apt_list, spot, any_provider),
+        );
         gpu_type = get_str(&merged, "gpu_type");
         vram_gb = get_i64(&merged, "vram_gb");
         machine_type = get_str(&merged, "machine_type");
@@ -277,7 +318,10 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
         max_cost_per_hour = get_f64(&merged, "max_cost_per_hour_usd");
         provider = get_str(&merged, "provider");
         any_provider = !get_bool(&merged, "pin_to_provider");
-        let description = profile.get("description").and_then(Value::as_str).unwrap_or("");
+        let description = profile
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or("");
         let description: String = description.chars().take(80).collect();
         println!("Profile '{}' applied: {description}", args.profile);
     }
@@ -345,7 +389,11 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
         println!("Job ID: {}", jobs[0].job_id);
     }
     println!("  submitted {}/{} jobs", n, commands.len());
-    let mode = if super::api_key().is_empty() { "GCS" } else { "API" };
+    let mode = if super::api_key().is_empty() {
+        "GCS"
+    } else {
+        "API"
+    };
     let mut flags: Vec<String> = Vec::new();
     if options.preemptible {
         flags.push("spot".into());
@@ -380,7 +428,14 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
     if !verify_command.is_empty() {
         flags.push("verify".into());
     }
-    let flag_str = if flags.is_empty() { String::new() } else { format!(" [{}]", flags.join(", ")) };
-    println!("\nSubmitted {} job(s) via {mode}{flag_str}. Batch: {batch_id}", commands.len());
+    let flag_str = if flags.is_empty() {
+        String::new()
+    } else {
+        format!(" [{}]", flags.join(", "))
+    };
+    println!(
+        "\nSubmitted {} job(s) via {mode}{flag_str}. Batch: {batch_id}",
+        commands.len()
+    );
     Ok(())
 }

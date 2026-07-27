@@ -24,7 +24,10 @@ pub fn write_probe_ok(path: &Path) -> bool {
     let Ok(mut file) = tempfile::NamedTempFile::with_prefix_in(".wc-disk-probe-", path) else {
         return false;
     };
-    file.write_all(b"x").and_then(|()| file.flush()).and_then(|()| file.as_file().sync_all()).is_ok()
+    file.write_all(b"x")
+        .and_then(|()| file.flush())
+        .and_then(|()| file.as_file().sync_all())
+        .is_ok()
 }
 
 /// Python `_dir_size_gb`: recursive file-size total in GB. 0 if missing.
@@ -37,7 +40,9 @@ pub fn dir_size_gb(path: &Path) -> f64 {
 
 fn dir_size_bytes(path: &Path) -> u64 {
     let mut total = 0u64;
-    let Ok(entries) = std::fs::read_dir(path) else { return 0 };
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return 0;
+    };
     for entry in entries.flatten() {
         let child = entry.path();
         if child.is_dir() {
@@ -52,7 +57,9 @@ fn dir_size_bytes(path: &Path) -> u64 {
 /// Python `_largest_child_dir_gb`: size of the largest direct child dir.
 pub fn largest_child_dir_gb(path: &Path) -> f64 {
     let mut largest = 0.0f64;
-    let Ok(entries) = std::fs::read_dir(path) else { return 0.0 };
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return 0.0;
+    };
     for entry in entries.flatten() {
         let child = entry.path();
         if child.is_dir() {
@@ -133,8 +140,14 @@ pub(crate) fn observe(home: &Path) -> GateObservation {
     let home_write_probe_ok = write_probe_ok(home);
     let staging_root = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
     let staging_free_gb = free_gb(Path::new(&staging_root));
-    let largest_pending_gb = largest_child_dir_gb(&Path::new(&staging_root).join("wisent_raw_pending"));
-    GateObservation { home_free_gb, home_write_probe_ok, staging_free_gb, largest_pending_gb }
+    let largest_pending_gb =
+        largest_child_dir_gb(&Path::new(&staging_root).join("wisent_raw_pending"));
+    GateObservation {
+        home_free_gb,
+        home_write_probe_ok,
+        staging_free_gb,
+        largest_pending_gb,
+    }
 }
 
 #[cfg(test)]
@@ -158,22 +171,39 @@ mod tests {
         assert!(!decide_lines(&healthy).0);
 
         // $HOME write probe failure refuses outright.
-        let (refuse, lines) = decide_lines(&GateObservation { home_write_probe_ok: false, ..healthy });
+        let (refuse, lines) = decide_lines(&GateObservation {
+            home_write_probe_ok: false,
+            ..healthy
+        });
         assert!(refuse);
-        assert!(lines[0].contains("$HOME write probe failed (~500.0 GB free)"), "{lines:?}");
+        assert!(
+            lines[0].contains("$HOME write probe failed (~500.0 GB free)"),
+            "{lines:?}"
+        );
 
         // Staging free below the largest pending raw dir refuses.
-        let (refuse, lines) =
-            decide_lines(&GateObservation { staging_free_gb: 40.0, ..healthy });
+        let (refuse, lines) = decide_lines(&GateObservation {
+            staging_free_gb: 40.0,
+            ..healthy
+        });
         assert!(refuse);
-        assert!(lines[0].contains("staging low (~40GB free < measured pending dir 50GB)"), "{lines:?}");
+        assert!(
+            lines[0].contains("staging low (~40GB free < measured pending dir 50GB)"),
+            "{lines:?}"
+        );
 
         // Equal values do NOT refuse (Python `0 <= free < largest`).
-        let (refuse, _) = decide_lines(&GateObservation { staging_free_gb: 50.0, ..healthy });
+        let (refuse, _) = decide_lines(&GateObservation {
+            staging_free_gb: 50.0,
+            ..healthy
+        });
         assert!(!refuse);
 
         // Unreadable staging (-1.0) is not gated on.
-        let (refuse, _) = decide_lines(&GateObservation { staging_free_gb: -1.0, ..healthy });
+        let (refuse, _) = decide_lines(&GateObservation {
+            staging_free_gb: -1.0,
+            ..healthy
+        });
         assert!(!refuse);
 
         // Home probe failure dominates; the staging rule never fires.

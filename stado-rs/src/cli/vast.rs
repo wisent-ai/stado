@@ -19,15 +19,29 @@ use crate::queue::JobStorage;
 /// Dispatch one `vast` subcommand.
 pub(super) async fn dispatch(command: &VastCommands) -> Result<(), CmdError> {
     match command {
-        VastCommands::List { price_gpu, price_disk, price_min_bid } => {
-            list(*price_gpu, *price_disk, *price_min_bid).await
-        }
+        VastCommands::List {
+            price_gpu,
+            price_disk,
+            price_min_bid,
+        } => list(*price_gpu, *price_disk, *price_min_bid).await,
         VastCommands::Unlist => unlist().await,
         VastCommands::Status => status().await,
         VastCommands::Monitor { bucket } => monitor(bucket).await,
-        VastCommands::AutoList { idle_window_s, poll_interval_s, price_gpu, max_duration_s, dry_run } => {
-            auto_list(*idle_window_s, *poll_interval_s, *price_gpu, *max_duration_s, *dry_run)
-                .await
+        VastCommands::AutoList {
+            idle_window_s,
+            poll_interval_s,
+            price_gpu,
+            max_duration_s,
+            dry_run,
+        } => {
+            auto_list(
+                *idle_window_s,
+                *poll_interval_s,
+                *price_gpu,
+                *max_duration_s,
+                *dry_run,
+            )
+            .await
         }
     }
 }
@@ -48,7 +62,12 @@ fn echo_json(value: &Value) {
 async fn list(price_gpu: f64, price_disk: f64, price_min_bid: Option<f64>) -> Result<(), CmdError> {
     let client = VastClient::from_env().await.map_err(cmd_err)?;
     let result = client
-        .list_machine(&ListMachineParams { price_gpu, price_disk, price_min_bid, ..ListMachineParams::default() })
+        .list_machine(&ListMachineParams {
+            price_gpu,
+            price_disk,
+            price_min_bid,
+            ..ListMachineParams::default()
+        })
         .await
         .map_err(cmd_err)?;
     echo_json(&result);
@@ -71,7 +90,12 @@ async fn status() -> Result<(), CmdError> {
 
 /// Python `datetime.utcnow().isoformat() + "Z"` (microseconds always).
 fn now_utc_iso_z() -> String {
-    format!("{}Z", chrono::Utc::now().naive_utc().format("%Y-%m-%dT%H:%M:%S%.6f"))
+    format!(
+        "{}Z",
+        chrono::Utc::now()
+            .naive_utc()
+            .format("%Y-%m-%dT%H:%M:%S%.6f")
+    )
 }
 
 async fn monitor(bucket: &str) -> Result<(), CmdError> {
@@ -119,7 +143,11 @@ async fn auto_list(
         idle_window_s,
         poll_interval_s: poll_interval_s.max(0) as u64,
         price_gpu,
-        duration_s: if max_duration_s > 0 { Some(max_duration_s) } else { None },
+        duration_s: if max_duration_s > 0 {
+            Some(max_duration_s)
+        } else {
+            None
+        },
         dry_run,
     };
     vast::auto_list_loop(&client, &store, &hostname, params, |m| println!("{m}"))
