@@ -377,7 +377,7 @@ enum Commands {
     /// Move queue state between storage backends (billing-outage migration).
     #[command(subcommand)]
     Storage(storage::StorageCommands),
-    /// Read and manage application credentials in Azure Key Vault.
+    /// Read and manage application credentials in Skarbiec.
     #[command(subcommand)]
     Secrets(secrets::SecretsCommands),
     /// Maintenance mode: pause/resume dispatching, and drain the fleet.
@@ -394,7 +394,7 @@ enum Commands {
 }
 
 #[derive(Subcommand)]
-enum BillingCommands {
+pub(crate) enum BillingCommands {
     /// Read the last billing snapshot published by the coordinator.
     Show {
         #[arg(long)]
@@ -421,7 +421,7 @@ enum BillingCommands {
 }
 
 #[derive(Subcommand)]
-enum MailCommands {
+pub(crate) enum MailCommands {
     /// Search Gmail and list categorized message metadata.
     Search {
         /// Gmail search expression, for example: from:microsoft.com azure.

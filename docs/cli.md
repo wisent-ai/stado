@@ -303,6 +303,18 @@ unavailable.
 |---|---|
 | `stado host health <target>` | Print the latest registry-managed host beacon, disk state, service states, log tail, and backing-object timestamp/generation. |
 | `stado host health <target> --json` | Emit the same read-only report as JSON for automation and MCP. |
+| `stado host reboot <target>` | Graceful reboot through the approved channel. Reports `reboot_requested` or the host's own refusal — usually sudo wanting a password. |
+| `stado host uptime <target>` | Uptime, load averages and logged-in users. Load is read from the kernel, not scraped from the `uptime` line, whose shape differs between macOS and Linux. |
+| `stado host ping <target>` | One verdict from two signals: ssh reachability and health-beacon age. The worse signal decides, so a box answering ssh with a stale beacon fails. |
+| `stado host disk <target>` | Disk usage plus the registry cleanup policy and the janitor's own state: last pass, bytes freed, next scheduled pass. |
+| `stado host cleanup <target> --dry-run` | Preview what the registry cleanup would delete. `--dry-run` is mandatory; it drives the janitor's own planning phase and writes no state. |
+| `stado host exec <target> -- CMD` | Run one approved read-only command. An allowlist, not a shell: the operator's words select a fixed argv entry and never join the command line. A refusal prints the allowlist. |
+
+Every one of these resolves its target from the canonical registry and
+refuses a target that is unknown, not a local host, or has no registry-managed
+ssh destination. They share one channel, `deploy/host_channel.rs`, which
+derives its ssh options from `host reboot`'s rather than copying them, so the
+commands cannot drift apart. All accept `--json`.
 
 ## `stado registry`
 
@@ -676,3 +688,57 @@ stado service adopt com.wisent.weles-api --host charless-mac-mini
 stado service restart com.wisent.weles-api
 stado service logs com.wisent.weles-api --lines 40
 ```
+
+## `stado doctor [--json] [--fix-hints]`
+
+Ordered deployment preflight. Every check reports PASS, WARN or FAIL with a
+remedy naming the exact variable or command that fixes it, and the command
+exits non-zero if anything FAILs.
+
+| Check | What FAIL means |
+|---|---|
+| config | Backend, providers, locator and the config file actually in use. FAILs on the azure backend with an empty storage account; WARNs when the container is still the default, which silently reads an empty container. |
+| storage | Writes, reads back and deletes one probe object. This is the check that separates "the queue is empty" from "the store is unreachable". |
+| providers | An authenticated call per configured provider, reporting the upstream error verbatim. |
+| quota | Live quota per accelerator. FAILs when everything is zero, because dispatch then cannot succeed no matter what else is right. |
+| release | Fetches the release pointer the agent VMs install themselves from. Unreachable means cloud-init aborts before the agent starts. |
+| template | Renders the agent startup template through the dispatcher's own code path and asserts no placeholder survives. A preflight that renders differently would prove nothing. |
+| vm-identity | Azure VMs with no managed identity can neither read the queue nor delete themselves. |
+| registry | Reachable, parses, and names this host or an active coordinator. |
+| queue-control | Reports a paused queue, which otherwise looks exactly like an idle fleet. |
+| alerts | At least one channel, and not only the GCP one on a deployment with no GCP. |
+
+Checks are fault-isolated and individually deadline-bounded: one failure never
+prevents the rest from running, and a black-holed endpoint becomes one FAIL row
+instead of a hung command. The probe object is deleted even when the read-back
+fails; a leaked one is named so it is obviously safe to remove.
+
+## `stado instances list|reap`
+
+Live agent VMs across the configured cloud providers, and the reaper for the
+ones nothing owns.
+
+| Subcommand | Behavior |
+|---|---|
+| `stado instances list [--provider P] [--json]` | Instance reference, provider, accelerator, age, and an `orphan` column. A VM is an orphan when no running job and no unexpired provider lease references it. |
+| `stado instances reap [--provider P] [--older-than 2h] [--dry-run] [--yes]` | Deletes orphans. Dry run is the DEFAULT; deletion needs `--yes`, and an explicit `--dry-run` overrides it. Referenced VMs are never deleted and the skip names the holder. |
+
+A provider that cannot be enumerated makes the command exit non-zero rather
+than render as "no orphans" — a hole in the inventory is exactly the failure
+this command exists to prevent. `--older-than` takes a duration (`30m`, `2h`,
+`1d`); a bare number is rejected.
+
+## `stado secrets put|get|ls|rm`
+
+Application credentials in Azure Key Vault. `put` reads the value from STDIN
+only — there is deliberately no `--value` flag, because argv is visible in
+process listings and shell history:
+
+```bash
+stado secrets put wisent-azure-billing-sp < sp.json
+```
+
+`get` is the only subcommand that renders a value; `ls` reads metadata alone.
+The billing collector reads its Azure service principal from here and nowhere
+else — no fallback to another cloud's secret manager, because that coupling is
+what turned a closed GCP billing account into a loss of Azure credit visibility.
