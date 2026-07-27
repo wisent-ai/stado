@@ -76,6 +76,10 @@ pub trait Ec2Api: Send + Sync {
     /// Instance types of every running `wisent-*`-tagged instance
     /// (DescribeInstances paginated).
     async fn running_instance_types(&self) -> Result<Vec<String>, ProviderError>;
+    /// Live Stado agent instance ids and their launch age.
+    async fn running_agent_refs_with_age(&self) -> Result<Vec<(String, f64)>, ProviderError> {
+        Ok(Vec::new())
+    }
 }
 
 /// Lift an [`aws_sdk_ec2::error::SdkError`] into [`ProviderError::Aws`],
@@ -316,6 +320,49 @@ impl Ec2Api for Ec2Client {
         }
         Ok(out)
     }
+
+    async fn running_agent_refs_with_age(&self) -> Result<Vec<(String, f64)>, ProviderError> {
+        let mut stream = self
+            .client
+            .describe_instances()
+            .filters(
+                Filter::builder()
+                    .name("tag:Name")
+                    .values(format!("{}-agent-*", config::INSTANCE_PREFIX))
+                    .build(),
+            )
+            .filters(
+                Filter::builder()
+                    .name("instance-state-name")
+                    .values("pending")
+                    .values("running")
+                    .values("stopping")
+                    .values("stopped")
+                    .build(),
+            )
+            .into_paginator()
+            .send();
+        let now = chrono::Utc::now().timestamp();
+        let mut out = Vec::new();
+        while let Some(page) = stream.next().await {
+            let page = page.map_err(|err| ec2_error("describe_instances", &err))?;
+            for reservation in page.reservations() {
+                for instance in reservation.instances() {
+                    let Some(instance_id) = instance.instance_id() else {
+                        continue;
+                    };
+                    let age = instance
+                        .launch_time()
+                        .map(|created| {
+                            now.saturating_sub(created.secs()).max(i64::default()) as f64
+                        })
+                        .unwrap_or_default();
+                    out.push((instance_id.to_string(), age));
+                }
+            }
+        }
+        Ok(out)
+    }
 }
 
 /// Env-resolved settings for the provider (Python reads them from
@@ -471,6 +518,12 @@ impl Provider for AwsProvider {
             }
         }
         Ok(counts)
+    }
+
+    async fn list_running_instance_refs_with_age(
+        &self,
+    ) -> Result<Vec<(String, f64)>, ProviderError> {
+        self.api().await?.running_agent_refs_with_age().await
     }
 }
 
