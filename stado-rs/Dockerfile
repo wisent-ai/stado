@@ -1,5 +1,5 @@
 # Builds the stado Rust binaries for linux/amd64 (fleet rollout).
-# Used by cloudbuild.yaml; the produced binaries land in /out.
+# Used by the provider-neutral Azure release workflow; binaries land in /out.
 FROM rust:slim-bookworm AS build
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends pkg-config \
@@ -18,7 +18,7 @@ RUN cargo build --release --locked \
     && cp target/release/stado /out/wc \
     && cd /out && sha256sum * > SHA256SUMS
 
-FROM gcr.io/distroless/cc-debian12
+FROM debian:bookworm-slim
 COPY --from=build /out /out
 COPY --from=build /app/data /app/data
 ENTRYPOINT ["/bin/false"]

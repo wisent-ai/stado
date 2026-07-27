@@ -204,7 +204,7 @@ async fn authorized_json(
 }
 
 async fn read_gcp_budgets() -> Value {
-    let auth = match gcp_auth::provider().await {
+    let auth = match crate::skarbiec::gcp_provider().await {
         Ok(auth) => auth,
         Err(err) => return json!({"status": "error", "detail": err.to_string()}),
     };

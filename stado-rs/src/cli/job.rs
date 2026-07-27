@@ -176,6 +176,7 @@ fn rerun_options(original: &Job) -> SubmitOptions {
         yield_command: original.yield_command.clone(),
         yield_grace_seconds: original.yield_grace_seconds,
         pinned_host: original.pinned_host.clone(),
+        secret_env: original.secret_env.clone(),
         // The resolved map is the reproducible half: aliases were already
         // pinned to immutable versions at the original submit, and a rerun
         // must read the same bytes the original read.

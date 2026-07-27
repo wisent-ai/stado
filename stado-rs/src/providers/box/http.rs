@@ -174,16 +174,26 @@ impl BoxHttpTransport {
         query: &[(&str, String)],
         max_bytes: usize,
     ) -> Result<Vec<u8>, BoxError> {
+        let api_key = if self.api_key.is_empty() {
+            crate::skarbiec::read_string("stado-box", "api_key")
+                .await
+                .map_err(|err| BoxError::configuration(err.to_string()))?
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    BoxError::configuration(
+                        "Skarbiec item stado-box field api_key is required for Box provider",
+                    )
+                })?
+        } else {
+            self.api_key.clone()
+        };
         let method = reqwest::Method::from_bytes(method.as_bytes())
             .map_err(|_| BoxError::value(format!("invalid HTTP method {method:?}")))?;
         let mut request = self
             .client
             .request(method, self.url(path, query))
             .timeout(self.timeout)
-            .header(
-                reqwest::header::AUTHORIZATION,
-                format!("Bearer {}", self.api_key),
-            )
+            .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
             .header(reqwest::header::ACCEPT, "application/json");
         if let Some(body) = body {
             // Python json.dumps(body, separators=(",", ":")) — compact.
@@ -199,6 +209,13 @@ impl BoxHttpTransport {
             return Err(api_error(status, &raw));
         }
         Ok(raw)
+    }
+    /// Build a transport whose bearer token is resolved from
+    /// `stado-box/api_key` in Skarbiec on each request.
+    pub fn from_skarbiec(base_url: &str, timeout_seconds: f64) -> Result<Self, BoxError> {
+        let mut transport = Self::new("skarbiec", base_url, timeout_seconds)?;
+        transport.api_key.clear();
+        Ok(transport)
     }
 }
 

@@ -40,6 +40,7 @@ pub async fn create(args: &ScheduleCreateArgs) -> Result<(), CmdError> {
         .map(|p| p.trim().to_string())
         .filter(|p| !p.is_empty())
         .collect();
+    let secret_env = super::submit::parse_secret_env(&args.secret_env)?;
     let now = Utc::now();
     let next_due = compute_next_due(&args.cron, now, &args.tz).map_err(|exc| {
         CmdError::click(format!("could not compute next run ({}): {exc}", args.tz))
@@ -64,6 +65,7 @@ pub async fn create(args: &ScheduleCreateArgs) -> Result<(), CmdError> {
     sched.output_uri = args.output_uri.clone();
     sched.verify_command = args.verify.clone();
     sched.exclusive = args.exclusive;
+    sched.secret_env = secret_env;
     sched.overlap_policy = args.overlap_policy.clone();
     sched.created_by = created_by();
     sched.next_due_at = isoformat_utc(next_due);

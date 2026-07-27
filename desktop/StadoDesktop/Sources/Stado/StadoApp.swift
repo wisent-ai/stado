@@ -1,13 +1,23 @@
 import SwiftUI
+import WisentAuth
 
 @main
 struct StadoApp: App {
     @StateObject private var operationsStore = OperationsStore()
     @StateObject private var cleanupStore = CleanupStore()
+    @StateObject private var deploymentStore = DeploymentStore()
+    @StateObject private var auth = WisentAuthStore(productName: "Stado")
 
     var body: some Scene {
         WindowGroup("Stado Operations Console") {
-            ConsoleView(store: operationsStore)
+            WisentAuthGate(store: auth) {
+                ConsoleView(
+                    store: operationsStore,
+                    cleanupStore: cleanupStore,
+                    deploymentStore: deploymentStore,
+                    auth: auth
+                )
+            }
         }
         .defaultSize(
             width: StadoTheme.Layout.windowMinimumWidth,
@@ -23,7 +33,7 @@ struct StadoApp: App {
         .menuBarExtraStyle(.window)
 
         Settings {
-            SettingsView(operationsStore: operationsStore, cleanupStore: cleanupStore)
+            SettingsView(deploymentStore: deploymentStore)
         }
     }
 

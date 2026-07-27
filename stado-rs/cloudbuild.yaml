@@ -1,3 +1,5 @@
+# OPTIONAL GCP-PROVIDER TOOL ONLY. The active Azure workflow never invokes
+# this file, gcloud, gsutil, Cloud Build or the GCS release channel.
 # Builds linux/amd64 stado binaries and publishes them as a release:
 #   gs://wisent-compute/releases/stado/<version>/linux-amd64/{stado,wc,stado-*,SHA256SUMS}
 # Submit with:  gcloud builds submit --config cloudbuild.yaml .

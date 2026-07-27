@@ -20,28 +20,22 @@ concurrency:
 
 jobs:
   bootstrap:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, stado-control-plane]
     permissions:
       contents: read
-      id-token: write
     env:
-      GCP_PROJECT: wisent-480400
+      STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust stado release
+      - name: Require configured Rust Stado
         run: |
-          version="$(curl -fsSL https://storage.googleapis.com/wisent-compute/releases/stado/latest.json | jq -r .version)"
-          base="https://storage.googleapis.com/wisent-compute/releases/stado/${version}/linux-amd64"
-          tmp="$(mktemp -d)"
-          curl -fsSL "${base}/stado" -o "${tmp}/stado"
-          curl -fsSL "${base}/SHA256SUMS" -o "${tmp}/SHA256SUMS"
-          grep -E '[ *]stado$' "${tmp}/SHA256SUMS" > "${tmp}/stado.sha256"
-          (cd "${tmp}" && sha256sum -c stado.sha256)
-          chmod +x "${tmp}/stado"
-          mkdir -p "${HOME}/.local/bin"
-          mv "${tmp}/stado" "${HOME}/.local/bin/stado"
-          echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+          if ! command -v stado >/dev/null; then
+            echo "::error::Rust stado is not installed. Run the Azure deploy workflow before registry bootstrap."
+            false
+          fi
+          stado config validate
+          stado doctor --fix-hints
 
       - name: Load deploy SSH key
         # WISENT_BOOTSTRAP_SSH_KEY is a repo or org secret containing the
@@ -65,7 +59,10 @@ jobs:
         id: targets
         run: |
           registry="${RUNNER_TEMP}/registry.json"
-          curl -fsSL "https://storage.googleapis.com/wisent-compute/registry.json" -o "$registry"
+          if ! stado registry pull > "$registry"; then
+            echo "::error::Canonical registry is unreadable from configured Azure primary or S3 read fallback."
+            false
+          fi
           names="$(jq -r '[.targets[] | select(.kind == "local" and (.ssh // "") != "") | .name] | join(",")' "$registry")"
           count="$(jq '[.targets[] | select(.kind == "local" and (.ssh // "") != "")] | length' "$registry")"
           echo "::group::Targets to provision (${count})"

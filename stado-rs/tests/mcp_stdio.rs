@@ -30,7 +30,12 @@ fn stdio_session_end_to_end() {
         "garbage\n",
         "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"stado_vast_status\"}}\n",
     );
-    child.stdin.as_mut().unwrap().write_all(input.as_bytes()).unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
     drop(child.stdin.take());
     let out = child.wait_with_output().unwrap();
     assert!(out.status.success());

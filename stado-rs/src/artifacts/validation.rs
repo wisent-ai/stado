@@ -1,8 +1,8 @@
 //! Backend-independent artifact manifest validation.
 //!
-//! Port of `stado/artifacts/validation.py`: the URI scheme allowlist
-//! (az/gs/hf/https), embedded-credential and sensitive query-param
-//! rejection, and the structural manifest checks.
+//! Artifact locations accept the provider-neutral `stado://` namespace plus
+//! external immutable sources (HF/HTTPS). Legacy provider schemes remain
+//! readable while manifests are migrated.
 
 use regex::Regex;
 use url::Url;
@@ -10,7 +10,7 @@ use url::Url;
 use crate::artifacts_models::{ArtifactLocation, ArtifactManifest};
 
 /// Python `_ALLOWED_SCHEMES`.
-const ALLOWED_SCHEMES: [&str; 4] = ["az", "gs", "hf", "https"];
+const ALLOWED_SCHEMES: &[&str] = &["stado", "az", "gs", "hf", "https"];
 
 fn sensitive_query_key() -> &'static Regex {
     use std::sync::OnceLock;

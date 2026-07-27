@@ -21,7 +21,7 @@
 //!   command.
 //! - **Same code path as production.** The template probe renders through
 //!   [`crate::scheduler::dispatch::agent::bundled_template_for`] with
-//!   [`crate::coordinator::secrets_from_env`] and
+//!   credentials resolved from Skarbiec and
 //!   [`crate::scheduler::dispatch::agent::deployment_substitutions`] — the
 //!   dispatcher's own text, secrets and config. A preflight that rendered
 //!   its own copy would prove nothing about what dispatch ships.
@@ -48,7 +48,7 @@ use crate::config_file;
 use crate::coordinator;
 use crate::monitor::alerts::AlertChannels;
 use crate::providers;
-use crate::queue::{control, JobStorage};
+use crate::queue::{control, copy::Endpoint, JobStorage};
 use crate::scheduler::dispatch::agent;
 use crate::scheduler::quota;
 use crate::self_update::{self, HttpReleaseFetcher, ReleaseFetcher};
@@ -299,6 +299,8 @@ pub async fn run() -> Report {
     let (
         config_check,
         storage_check,
+        backup_check,
+        object_auth_check,
         providers_check,
         quota_check,
         release_check,
@@ -316,6 +318,18 @@ pub async fn run() -> Report {
             STORAGE_TITLE,
             STORAGE_REMEDY,
             check_storage_round_trip(store, &store_error)
+        ),
+        bounded(
+            BACKUP_ID,
+            BACKUP_TITLE,
+            BACKUP_REMEDY,
+            check_backup(&store_error)
+        ),
+        bounded(
+            OBJECT_AUTH_ID,
+            OBJECT_AUTH_TITLE,
+            OBJECT_AUTH_REMEDY,
+            check_object_auth()
         ),
         bounded(
             PROVIDERS_ID,
@@ -336,7 +350,7 @@ pub async fn run() -> Report {
             check_release_channel()
         ),
         bounded(TEMPLATE_ID, TEMPLATE_TITLE, TEMPLATE_REMEDY, async {
-            check_agent_template()
+            check_agent_template().await
         }),
         bounded(IDENTITY_ID, IDENTITY_TITLE, IDENTITY_REMEDY, async {
             check_vm_identity()
@@ -365,6 +379,8 @@ pub async fn run() -> Report {
         checks: vec![
             config_check,
             storage_check,
+            backup_check,
+            object_auth_check,
             providers_check,
             quota_check,
             release_check,
@@ -384,9 +400,8 @@ pub async fn run() -> Report {
 const CONFIG_ID: &str = "config";
 const CONFIG_TITLE: &str = "Config";
 const CONFIG_REMEDY: &str =
-    "governed by WC_STORAGE_BACKEND, WC_PROVIDERS and the storage locator vars \
-     (WC_BUCKET / WC_AZURE_STORAGE_ACCOUNT + WC_AZURE_CONTAINER / WC_S3_BUCKET / \
-     WC_LOCAL_STORAGE_PATH); `stado config show` prints the resolved set";
+    "set provider preference, explicit provider fences and storage locators in the Stado \
+     deployment config; `stado config show` prints the resolved set";
 
 /// Resolved backend, providers, storage locator and the config file
 /// actually in use.
@@ -417,20 +432,27 @@ fn check_config() -> Check {
     findings.note(
         Status::Pass,
         format!(
-            "backend={backend} {locator} providers=[{}] config_file={config_file}",
-            config::wc_providers().join(",")
+            "backend={backend} {locator} providers=[{}] disabled=[{}] config_file={config_file}",
+            config::wc_providers().join(","),
+            config::wc_disabled_providers().join(",")
         ),
     );
 
-    match backend {
-        "gcs" | "azure" | "s3" | "local" => {}
-        other => {
-            findings.note(
-                Status::Fail,
-                format!("WC_STORAGE_BACKEND={other:?} is not a backend this build can construct"),
-            );
-            findings.remedy("set WC_STORAGE_BACKEND to one of gcs, azure, s3, local");
-        }
+    if crate::capabilities::constructible_variant(
+        crate::capabilities::CapabilityKind::Storage,
+        backend,
+    )
+    .is_none()
+    {
+        findings.note(
+            Status::Fail,
+            format!("WC_STORAGE_BACKEND={backend:?} is not a backend this build can construct"),
+        );
+        let choices =
+            crate::capabilities::configurable_ids(crate::capabilities::CapabilityKind::Storage)
+                .collect::<Vec<_>>()
+                .join(", ");
+        findings.remedy(format!("set storage.backend to one of {choices} in config"));
     }
 
     if backend == "azure" {
@@ -445,27 +467,20 @@ fn check_config() -> Check {
                     .to_string(),
             );
             findings.remedy(
-                "export WC_AZURE_STORAGE_ACCOUNT=<storage account> (or set \
-                 storage.azure.account in the stado config file)",
+                "set storage.azure.account to the provisioned account in the Stado deployment \
+                 config",
             );
         }
-        if config::wc_azure_container() == config::DEFAULT_AZURE_CONTAINER {
-            // The default name predates the rename to `stado`; landing on
-            // it by accident reads an empty container, which is
-            // indistinguishable from an empty queue at every other command.
+        if config::wc_azure_container().is_empty() {
             findings.note(
-                Status::Warn,
-                format!(
-                    "WC_AZURE_CONTAINER is still the compiled-in default {:?}, not {:?}; if the \
-                     queue was migrated into a differently named container this reads an empty \
-                     one and every listing looks like an empty queue",
-                    config::DEFAULT_AZURE_CONTAINER,
-                    config::bucket()
-                ),
+                Status::Fail,
+                "WC_AZURE_CONTAINER is unresolved while Azure primary storage is selected; \
+                 every queue and object operation would target no container"
+                    .to_string(),
             );
             findings.remedy(
-                "export WC_AZURE_CONTAINER=<container holding the queue> (or set \
-                 storage.azure.container in the stado config file)",
+                "set storage.azure.container to the provisioned private container in the Stado \
+                 deployment config",
             );
         }
     }
@@ -475,7 +490,7 @@ fn check_config() -> Check {
             Status::Fail,
             "WC_PROVIDERS resolved to an empty list".to_string(),
         );
-        findings.remedy("export WC_PROVIDERS=gcp (or azure, aws, local, comma-separated)");
+        findings.remedy("configure at least one unfenced provider in preferred order");
     }
 
     findings.into_check(CONFIG_ID, CONFIG_TITLE, CONFIG_REMEDY)
@@ -488,10 +503,9 @@ fn check_config() -> Check {
 const STORAGE_ID: &str = "storage";
 const STORAGE_TITLE: &str = "Storage round trip";
 const STORAGE_REMEDY: &str =
-    "the store is selected by WC_STORAGE_BACKEND and its locator vars; credentials come from \
-     the backend's own chain — application-default for gcs, Managed Identity or the current \
-     Azure CLI identity for azure, the standard AWS chain for s3; persistent application \
-     credentials belong in Azure Key Vault";
+    "the store is selected by WC_STORAGE_BACKEND and its locator vars; GCS and \
+     Azure prefer managed identity and otherwise use stado-gcp/stado-azure in \
+     Skarbiec; S3 uses stado-aws in Skarbiec";
 
 /// Object name for one round trip. Unique per run, so two operators
 /// running `stado doctor` at once cannot delete each other's probe, and
@@ -595,6 +609,235 @@ async fn check_storage_round_trip(store: Option<&JobStorage>, store_error: &str)
     findings.into_check(STORAGE_ID, STORAGE_TITLE, STORAGE_REMEDY)
 }
 
+const BACKUP_ID: &str = "backup";
+const BACKUP_TITLE: &str = "Disaster-recovery replica";
+const BACKUP_REMEDY: &str =
+    "set storage.backup backend/bucket/S3 region; put access_key_id and secret_access_key in \
+     Skarbiec item stado-aws; set agent.skarbiec.items to the exact S3 and workload-secret \
+     items, then mint stado-azure-agent with exactly those item:read scopes";
+
+async fn check_backup(store_error: &str) -> Check {
+    let azure_cutover = config::wc_storage_backend() == "azure"
+        || config::wc_providers()
+            .iter()
+            .any(|provider| provider == "azure");
+    if !azure_cutover && config::wc_storage_backend() == "local" {
+        if config::wc_backup_storage_backend() != "local"
+            || config::wc_backup_local_storage_path().is_empty()
+            || config::wc_backup_local_storage_path() == config::wc_local_storage_path()
+        {
+            return Check::fail(
+                BACKUP_ID,
+                BACKUP_TITLE,
+                "local outage profile needs a distinct storage.backup.local.path; use \
+                 ~/.stado/local-backup"
+                    .to_string(),
+                "configure a distinct local backup path; it is temporary same-disk protection, \
+                 not cross-provider disaster recovery",
+            );
+        }
+        let Some(endpoint) = Endpoint::configured_backup() else {
+            return Check::fail(
+                BACKUP_ID,
+                BACKUP_TITLE,
+                "local backup endpoint did not resolve".to_string(),
+                "set storage.backup.backend=local and storage.backup.local.path",
+            );
+        };
+        let backend = match endpoint.build().await {
+            Ok(backend) => backend,
+            Err(error) => {
+                return Check::fail(
+                    BACKUP_ID,
+                    BACKUP_TITLE,
+                    format!(
+                        "local backup cannot be opened at {}: {error}",
+                        endpoint.describe()
+                    ),
+                    "create an owner-writable ~/.stado/local-backup directory",
+                )
+            }
+        };
+        if let Err(error) = backend
+            .list_blobs_with_meta("diagnostics/backup-access/")
+            .await
+        {
+            return Check::fail(
+                BACKUP_ID,
+                BACKUP_TITLE,
+                format!(
+                    "local backup cannot be listed at {}: {error}",
+                    endpoint.describe()
+                ),
+                "create an owner-writable ~/.stado/local-backup directory",
+            );
+        }
+        if !store_error.is_empty() {
+            return Check::fail(
+                BACKUP_ID,
+                BACKUP_TITLE,
+                format!("local primary plus backup could not be constructed: {store_error}"),
+                "create owner-writable ~/.stado/local-storage and ~/.stado/local-backup directories",
+            );
+        }
+        return Check::pass(
+            BACKUP_ID,
+            BACKUP_TITLE,
+            format!(
+                "{} mirrors the local primary with read fallback; this is same-disk temporary \
+                 protection only",
+                endpoint.describe()
+            ),
+            "restore required Azure-primary plus S3 cross-provider disaster recovery after the \
+             tenant block is removed",
+        );
+    }
+    if !azure_cutover {
+        return Check::pass(
+            BACKUP_ID,
+            BACKUP_TITLE,
+            "Azure cutover is not active; no mandatory S3 replica".to_string(),
+            BACKUP_REMEDY,
+        );
+    }
+    if config::wc_backup_storage_backend() != "s3" {
+        return Check::fail(
+            BACKUP_ID,
+            BACKUP_TITLE,
+            format!(
+                "Azure cutover requires WC_BACKUP_STORAGE_BACKEND=s3, got {:?}; no automatic \
+                 writer promotion is permitted",
+                config::wc_backup_storage_backend()
+            ),
+            BACKUP_REMEDY,
+        );
+    }
+    if config::wc_backup_bucket().is_empty() || config::wc_backup_s3_region().is_empty() {
+        return Check::fail(
+            BACKUP_ID,
+            BACKUP_TITLE,
+            format!(
+                "S3 replica locator unresolved: bucket={:?} region={:?}",
+                config::wc_backup_bucket(),
+                config::wc_backup_s3_region()
+            ),
+            BACKUP_REMEDY,
+        );
+    }
+    let Some(endpoint) = Endpoint::configured_backup() else {
+        return Check::fail(
+            BACKUP_ID,
+            BACKUP_TITLE,
+            "S3 replica endpoint did not resolve from the configured backup locator".to_string(),
+            BACKUP_REMEDY,
+        );
+    };
+    let backend = match endpoint.build().await {
+        Ok(backend) => backend,
+        Err(error) => {
+            return Check::fail(
+                BACKUP_ID,
+                BACKUP_TITLE,
+                format!(
+                    "S3 replica credentials could not be resolved from Skarbiec item \
+                     stado-aws: {error}"
+                ),
+                BACKUP_REMEDY,
+            )
+        }
+    };
+    if let Err(error) = backend
+        .list_blobs_with_meta("diagnostics/backup-access/")
+        .await
+    {
+        return Check::fail(
+            BACKUP_ID,
+            BACKUP_TITLE,
+            format!(
+                "S3 replica bucket is absent or stado-aws lacks list access at {}: {error}",
+                endpoint.describe()
+            ),
+            BACKUP_REMEDY,
+        );
+    }
+    if !store_error.is_empty() {
+        return Check::fail(
+            BACKUP_ID,
+            BACKUP_TITLE,
+            format!(
+                "Azure primary plus S3 backup could not be constructed; backup bucket, \
+                 coordinator credentials, or primary identity is unresolved: {store_error}"
+            ),
+            BACKUP_REMEDY,
+        );
+    }
+    match coordinator::agent_backup_grant().await {
+        Ok(Some(_)) => Check::pass(
+            BACKUP_ID,
+            BACKUP_TITLE,
+            format!(
+                "coordinator can list S3 replica s3://{} in {}; dedicated agent consumer {:?} \
+                 can read exactly stado-aws",
+                config::wc_backup_bucket(),
+                config::wc_backup_s3_region(),
+                config::agent_skarbiec_consumer()
+            ),
+            BACKUP_REMEDY,
+        ),
+        Ok(None) => Check::fail(
+            BACKUP_ID,
+            BACKUP_TITLE,
+            "Azure-agent S3 grant was not resolved; dispatch would create a VM with no readable \
+             failover store"
+                .to_string(),
+            BACKUP_REMEDY,
+        ),
+        Err(error) => Check::fail(
+            BACKUP_ID,
+            BACKUP_TITLE,
+            format!("Azure-agent S3 grant is absent, unreachable, or overbroad: {error}"),
+            BACKUP_REMEDY,
+        ),
+    }
+}
+
+const OBJECT_AUTH_ID: &str = "object-auth";
+const OBJECT_AUTH_TITLE: &str = "Object gateway auth";
+const OBJECT_AUTH_REMEDY: &str =
+    "grant stado-control-plane scope stado-object-api:read; verify its non-empty field with \
+     `stado secrets get stado-object-api --field token`; only trusted publisher/server \
+     deployments receive the same value as their server-side STADO_API_TOKEN";
+
+async fn check_object_auth() -> Check {
+    match crate::skarbiec::read_string("stado-object-api", "token").await {
+        Ok(Some(token)) if !token.is_empty() => Check::pass(
+            OBJECT_AUTH_ID,
+            OBJECT_AUTH_TITLE,
+            "coordinator service grant can read field token from item stado-object-api; no token \
+             is stored in deployment environment"
+                .to_string(),
+            OBJECT_AUTH_REMEDY,
+        ),
+        Ok(_) => Check::fail(
+            OBJECT_AUTH_ID,
+            OBJECT_AUTH_TITLE,
+            "field token in Skarbiec item stado-object-api is missing or empty; object routes \
+             fail closed"
+                .to_string(),
+            OBJECT_AUTH_REMEDY,
+        ),
+        Err(error) => Check::fail(
+            OBJECT_AUTH_ID,
+            OBJECT_AUTH_TITLE,
+            format!(
+                "coordinator service grant cannot read field token from item stado-object-api; \
+                 object routes fail closed: {error}"
+            ),
+            OBJECT_AUTH_REMEDY,
+        ),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 3. Provider auth
 // ---------------------------------------------------------------------------
@@ -602,10 +845,9 @@ async fn check_storage_round_trip(store: Option<&JobStorage>, store_error: &str)
 const PROVIDERS_ID: &str = "providers";
 const PROVIDERS_TITLE: &str = "Provider auth";
 const PROVIDERS_REMEDY: &str =
-    "each provider in WC_PROVIDERS authenticates through its own chain: application-default \
-     credentials for gcp, Managed Identity or the current Azure CLI identity plus \
-     AZURE_SUBSCRIPTION_ID for azure, the standard AWS chain plus AWS_REGION for aws; \
-     persistent application credentials belong in Azure Key Vault";
+    "each provider uses workload identity or its Skarbiec item: stado-gcp for \
+     GCP, stado-azure plus AZURE_SUBSCRIPTION_ID for Azure, and stado-aws plus \
+     AWS_REGION for AWS";
 
 /// The cheapest authenticated call each provider offers: list what it is
 /// already running. Reports the exact upstream error, because "the
@@ -762,6 +1004,20 @@ const RELEASE_REMEDY: &str =
 /// before the agent starts while still billing for the instance.
 async fn check_release_channel() -> Check {
     let base = config::release_base_url();
+    if base.is_empty()
+        && config::wc_providers()
+            .iter()
+            .all(|provider| provider == LOCAL_PROVIDER)
+    {
+        return Check::pass(
+            RELEASE_ID,
+            RELEASE_TITLE,
+            "local-only outage profile uses the installed Rust binary; no cloud VM release \
+             channel is active"
+                .to_string(),
+            RELEASE_REMEDY,
+        );
+    }
     let fetcher = HttpReleaseFetcher::new();
     let mut findings = Findings::default();
     match fetcher.fetch(self_update::LATEST_JSON_NAME).await {
@@ -819,8 +1075,8 @@ async fn check_release_channel() -> Check {
 const TEMPLATE_ID: &str = "template";
 const TEMPLATE_TITLE: &str = "Agent template";
 const TEMPLATE_REMEDY: &str =
-    "credential placeholders come from the coordinator's environment (HF_TOKEN, \
-     SUPABASE_ACCESS_TOKEN); deployment placeholders come from \
+    "credential placeholders come from Skarbiec items stado-huggingface and \
+     stado-supabase; deployment placeholders come from \
      scheduler::dispatch::agent::deployment_substitutions, i.e. WC_STORAGE_BACKEND, \
      WC_AZURE_STORAGE_ACCOUNT, WC_AZURE_CONTAINER, WC_RELEASE_BASE_URL, WC_S3_BUCKET, \
      AWS_REGION";
@@ -843,8 +1099,31 @@ fn representative_accel(provider: &str) -> Option<&'static str> {
 /// template exports `${WC_STORAGE_BACKEND}` and friends under `set -u`,
 /// no producer supplied them, and every dispatched VM aborted before the
 /// agent started — billing for instances that ran nothing.
-fn check_agent_template() -> Check {
-    let secrets = coordinator::secrets_from_env();
+async fn check_agent_template() -> Check {
+    if config::wc_providers()
+        .iter()
+        .all(|provider| representative_accel(provider).is_none())
+    {
+        return Check::pass(
+            TEMPLATE_ID,
+            TEMPLATE_TITLE,
+            "active providers dispatch no cloud agent VMs; no startup template credentials are \
+             required"
+                .to_string(),
+            TEMPLATE_REMEDY,
+        );
+    }
+    let secrets = match coordinator::secrets_from_skarbiec().await {
+        Ok(secrets) => secrets,
+        Err(err) => {
+            return Check::fail(
+                TEMPLATE_ID,
+                TEMPLATE_TITLE,
+                format!("cannot resolve template credentials from Skarbiec: {err}"),
+                TEMPLATE_REMEDY,
+            )
+        }
+    };
     let deployment = agent::deployment_substitutions();
     let mut findings = Findings::default();
     for name in config::wc_providers() {
@@ -1054,9 +1333,9 @@ async fn check_queue_control(store: Option<&JobStorage>, store_error: &str) -> C
 const ALERTS_ID: &str = "alerts";
 const ALERTS_TITLE: &str = "Alerts";
 const ALERTS_REMEDY: &str =
-    "configure at least one channel that does not depend on GCP: WC_SLACK_WEBHOOK, or \
-     WC_TELEGRAM_BOT_TOKEN + WC_TELEGRAM_CHAT_ID, or WC_SENDGRID_API_KEY + WC_EMAIL_TO; clear \
-     WC_ALERTS_TOPIC on a deployment that has left GCP";
+    "configure at least one non-GCP channel in the stado-alerts Skarbiec item: \
+     slack_webhook, telegram_bot_token + telegram_chat_id, or sendgrid_api_key + \
+     WC_EMAIL_TO; clear WC_ALERTS_TOPIC on a deployment that has left GCP";
 
 /// At least one alert channel that survives the cloud going away.
 ///

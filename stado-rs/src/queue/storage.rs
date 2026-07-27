@@ -47,7 +47,14 @@ impl JobStorage {
     /// bucket for routing — it is rooted at `config::wc_local_storage_path()`
     /// — but keeps it as `bucket_name` like Python `JobStorage(bucket)`.
     pub async fn with_bucket(bucket: &str) -> Result<Self, StorageError> {
-        match config::wc_storage_backend() {
+        let configured_backend = config::wc_storage_backend();
+        let backend = crate::capabilities::constructible_variant(
+            crate::capabilities::CapabilityKind::Storage,
+            configured_backend,
+        )
+        .map(|variant| variant.id)
+        .unwrap_or(configured_backend);
+        let storage = match backend {
             "local" => {
                 let backend = LocalBackend::new(config::wc_local_storage_path())?;
                 Ok(Self::with_backend_and_bucket(
@@ -93,11 +100,37 @@ impl JobStorage {
                     bucket,
                 ))
             }
-            other => Err(StorageError::Other(format!(
-                "WC_STORAGE_BACKEND={other} is not supported (use \"gcs\", \"local\", \
-                 \"azure\" or \"s3\")"
-            ))),
+            other => {
+                let choices = crate::capabilities::configurable_ids(
+                    crate::capabilities::CapabilityKind::Storage,
+                )
+                .collect::<Vec<_>>()
+                .join("\", \"");
+                Err(StorageError::Other(format!(
+                    "WC_STORAGE_BACKEND={other} is not supported (use \"{choices}\")"
+                )))
+            }
+        }?;
+        storage.with_configured_read_failover().await
+    }
+
+    async fn with_configured_read_failover(mut self) -> Result<Self, StorageError> {
+        let Some(endpoint) = super::copy::Endpoint::configured_backup() else {
+            return Ok(self);
+        };
+        let primary = super::copy::Endpoint::configured_primary();
+        if primary.describe() == endpoint.describe() {
+            return Err(StorageError::Other(format!(
+                "primary and backup resolve to the same store ({})",
+                primary.describe()
+            )));
         }
+        let backup = endpoint.build().await?;
+        self.backend = Arc::new(super::failover::ReadFailoverBackend::new(
+            self.backend.clone(),
+            backup,
+        ));
+        Ok(self)
     }
 
     /// Bind the facade to an explicit backend (tests, custom deployments).
@@ -384,9 +417,12 @@ impl JobStorage {
 
     // ---- scripts ----
 
-    /// Upload the job's launch script to `scripts/{job_id}.sh`.
+    /// Upload an immutable launch script to the internal scheduler path and
+    /// the provider-neutral product object exposed by `startup_script_uri`.
     pub async fn upload_script(&self, job_id: &str, content: &str) -> Result<(), StorageError> {
         self.upload_text(&format!("scripts/{job_id}.sh"), content)
+            .await?;
+        self.upload_text(&format!("ecosystem/jobs/{job_id}/startup-script"), content)
             .await
     }
 

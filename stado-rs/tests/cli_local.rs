@@ -50,11 +50,18 @@ fn submit_status_cancel_flow() {
     let storage = storage.as_path();
 
     // Submit a plain CPU job.
-    let out = stado(storage, &["submit", "echo hello-from-cli-test", "--priority", "3"]);
+    let out = stado(
+        storage,
+        &["submit", "echo hello-from-cli-test", "--priority", "3"],
+    );
     assert!(out.status.success(), "submit failed: {}", stderr(&out));
     let job_id = job_id_of(&out);
     assert!(job_id.chars().all(|c| c.is_ascii_hexdigit()) && job_id.len() == 8);
-    assert!(stdout(&out).contains("submitted 1/1 jobs"), "{}", stdout(&out));
+    assert!(
+        stdout(&out).contains("submitted 1/1 jobs"),
+        "{}",
+        stdout(&out)
+    );
     assert!(stdout(&out).contains("via GCS"), "{}", stdout(&out));
     assert!(stdout(&out).contains("priority=3"), "{}", stdout(&out));
 
@@ -80,7 +87,11 @@ fn submit_status_cancel_flow() {
     // Status no longer finds it.
     let out = stado(storage, &["status", &job_id]);
     assert!(out.status.success());
-    assert!(stdout(&out).contains(&format!("(no job with id {job_id})")), "{}", stdout(&out));
+    assert!(
+        stdout(&out).contains(&format!("(no job with id {job_id})")),
+        "{}",
+        stdout(&out)
+    );
 }
 
 #[test]
@@ -88,7 +99,12 @@ fn yieldable_without_on_yield_fails_with_python_message() {
     let dir = tempfile::tempdir().unwrap();
     let storage = dir.path().join("storage");
     let out = stado(storage.as_path(), &["submit", "echo hi", "--yieldable"]);
-    assert_eq!(out.status.code(), Some(1), "expected exit 1: {}", stdout(&out));
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "expected exit 1: {}",
+        stdout(&out)
+    );
     assert!(
         stderr(&out).contains(
             "Error: --yieldable requires --on-yield '<command>': a yieldable job must \
@@ -106,10 +122,17 @@ fn deprecated_activation_entrypoint_is_refused() {
     let storage = dir.path().join("storage");
     let out = stado(
         storage.as_path(),
-        &["submit", "python -m wisent.scripts.activations.extract_and_upload --x"],
+        &[
+            "submit",
+            "python -m wisent.scripts.activations.extract_and_upload --x",
+        ],
     );
     assert_eq!(out.status.code(), Some(1));
-    assert!(stderr(&out).contains("refusing deprecated foreground activation uploader"), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("refusing deprecated foreground activation uploader"),
+        "{}",
+        stderr(&out)
+    );
 }
 
 #[test]
@@ -118,17 +141,29 @@ fn profiles_lists_bundled_profile() {
     let storage = dir.path().join("storage");
     let out = stado(storage.as_path(), &["profiles"]);
     assert!(out.status.success(), "profiles failed: {}", stderr(&out));
-    assert!(stdout(&out).contains("ai_toolkit_zimage"), "{}", stdout(&out));
+    assert!(
+        stdout(&out).contains("ai_toolkit_zimage"),
+        "{}",
+        stdout(&out)
+    );
 
     // Dumping one profile prints its JSON.
     let out = stado(storage.as_path(), &["profiles", "ai_toolkit_zimage"]);
     assert!(out.status.success());
-    assert!(stdout(&out).contains("\"gpu_type\": \"nvidia-l4\""), "{}", stdout(&out));
+    assert!(
+        stdout(&out).contains("\"gpu_type\": \"nvidia-l4\""),
+        "{}",
+        stdout(&out)
+    );
 
     // Unknown profile exits 1 with the click-style error.
     let out = stado(storage.as_path(), &["profiles", "no-such-profile-xyz"]);
     assert_eq!(out.status.code(), Some(1));
-    assert!(stderr(&out).contains("profile 'no-such-profile-xyz' not found"), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("profile 'no-such-profile-xyz' not found"),
+        "{}",
+        stderr(&out)
+    );
 }
 
 #[test]
@@ -140,16 +175,24 @@ fn submit_with_profile_applies_profile_defaults() {
         &["submit", "echo profiled", "--profile", "ai_toolkit_zimage"],
     );
     assert!(out.status.success(), "submit failed: {}", stderr(&out));
-    assert!(stdout(&out).contains("Profile 'ai_toolkit_zimage' applied:"), "{}", stdout(&out));
+    assert!(
+        stdout(&out).contains("Profile 'ai_toolkit_zimage' applied:"),
+        "{}",
+        stdout(&out)
+    );
     let job_id = job_id_of(&out);
     // The profile's gpu_type/vram_gb/machine_type/apt landed on the job.
-    let json = std::fs::read_to_string(storage.join("queue").join(format!("{job_id}.json"))).unwrap();
+    let json =
+        std::fs::read_to_string(storage.join("queue").join(format!("{job_id}.json"))).unwrap();
     let job = Job::from_json(&json).unwrap();
     assert_eq!(job.gpu_type, "nvidia-l4");
     assert_eq!(job.gpu_mem_gb, 22);
     assert_eq!(job.machine_type, "g2-standard-8");
     assert!(job.exclusive);
-    assert_eq!(job.apt_packages, vec!["libgl1", "libglib2.0-0", "git-lfs", "build-essential"]);
+    assert_eq!(
+        job.apt_packages,
+        vec!["libgl1", "libglib2.0-0", "git-lfs", "build-essential"]
+    );
     assert_eq!(job.repo, "https://github.com/ostris/ai-toolkit.git");
 }
 
@@ -166,7 +209,11 @@ fn config_validate_passes_on_temp_config() {
         .env("WC_LOCAL_STORAGE_PATH", &storage)
         .output()
         .expect("stado binary runs");
-    assert!(out.status.success(), "config validate failed: {}", stderr(&out));
+    assert!(
+        out.status.success(),
+        "config validate failed: {}",
+        stderr(&out)
+    );
     assert!(stdout(&out).starts_with("config ok ("), "{}", stdout(&out));
 
     // A broken config reports ERROR lines and exits 1.
@@ -177,21 +224,36 @@ fn config_validate_passes_on_temp_config() {
         .output()
         .expect("stado binary runs");
     assert_eq!(out.status.code(), Some(1));
-    assert!(stdout(&out).contains("ERROR storage.backend must be gcs|azure|s3|local"), "{}", stdout(&out));
+    assert!(
+        stdout(&out).contains("ERROR storage.backend must be gcs|azure|s3|local"),
+        "{}",
+        stdout(&out)
+    );
 
     // Unknown subcommand is a click-style error.
     let out = stado(storage.as_path(), &["config", "bogus"]);
     assert_eq!(out.status.code(), Some(1));
-    assert!(stderr(&out).contains("unknown config subcommand: bogus (show|validate|init)"), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("unknown config subcommand: bogus (show|validate|init)"),
+        "{}",
+        stderr(&out)
+    );
 }
 
 #[test]
 fn unimplemented_command_exits_2() {
     let dir = tempfile::tempdir().unwrap();
     let storage = dir.path().join("storage");
-    let out = stado(storage.as_path(), &["host", "weles-recordings-dir", "somehost", "/data/rec"]);
+    let out = stado(
+        storage.as_path(),
+        &["host", "weles-recordings-dir", "somehost", "/data/rec"],
+    );
     assert_eq!(out.status.code(), Some(2));
-    assert!(stderr(&out).contains("not yet implemented"), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("not yet implemented"),
+        "{}",
+        stderr(&out)
+    );
 }
 
 #[test]
@@ -199,7 +261,10 @@ fn coordinator_unknown_target_exits_1() {
     let dir = tempfile::tempdir().unwrap();
     let storage = dir.path().join("storage");
     // --target resolution fails before any storage/network access.
-    let out = stado(storage.as_path(), &["coordinator", "--target", "no-such-coord", "--once"]);
+    let out = stado(
+        storage.as_path(),
+        &["coordinator", "--target", "no-such-coord", "--once"],
+    );
     assert_eq!(out.status.code(), Some(1));
     assert!(
         stderr(&out).contains("coordinator 'no-such-coord' not found in registry"),
@@ -234,13 +299,19 @@ async fn submit_job_writes_roundtrippable_queue_blob() {
         batch_id: "batch-test".into(),
         ..Default::default()
     };
-    let job = submit_job("python -m train --epochs 1", &options).await.expect("submit_job succeeds");
+    let job = submit_job("python -m train --epochs 1", &options)
+        .await
+        .expect("submit_job succeeds");
 
     // The blob landed on disk and round-trips byte-identically.
     let blob = storage.join("queue").join(format!("{}.json", job.job_id));
     let raw = std::fs::read_to_string(&blob).expect("queue blob written");
     let parsed = Job::from_json(&raw).expect("blob parses");
-    assert_eq!(parsed.to_json(), raw, "blob must round-trip byte-identically");
+    assert_eq!(
+        parsed.to_json(),
+        raw,
+        "blob must round-trip byte-identically"
+    );
 
     // Fields match the requested flags.
     assert_eq!(parsed.job_id, job.job_id);
@@ -264,10 +335,20 @@ async fn submit_job_writes_roundtrippable_queue_blob() {
     assert_eq!(parsed.submitted_via, "cli");
 
     // The startup script was uploaded alongside and picked the GPU template.
-    let script = std::fs::read_to_string(storage.join("scripts").join(format!("{}.sh", job.job_id)))
-        .expect("startup script written");
-    assert!(script.contains("Wisent GPU startup:"), "GPU template expected:\n{script}");
+    let script =
+        std::fs::read_to_string(storage.join("scripts").join(format!("{}.sh", job.job_id)))
+            .expect("startup script written");
+    assert!(
+        script.contains("Wisent GPU startup:"),
+        "GPU template expected:\n{script}"
+    );
     assert!(script.contains(&job.job_id), "{script}");
-    assert!(script.contains("git clone --depth 1 https://github.com/org/repo.git repo"), "{script}");
-    assert!(script.contains("apt-get install -y --no-install-recommends htop git-lfs"), "{script}");
+    assert!(
+        script.contains("git clone --depth 1 https://github.com/org/repo.git repo"),
+        "{script}"
+    );
+    assert!(
+        script.contains("apt-get install -y --no-install-recommends htop git-lfs"),
+        "{script}"
+    );
 }

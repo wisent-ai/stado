@@ -25,9 +25,6 @@ pip install --no-cache-dir wisent==${WISENT_VERSION} lm-eval optuna
 
 ${REPO_BLOCK}
 
-export HF_TOKEN="${HF_TOKEN}"
-export HUGGING_FACE_HUB_TOKEN="${HF_TOKEN}"
-huggingface-cli login --token "${HF_TOKEN}" --add-to-git-credential || true
 
 mkdir -p /home/ubuntu/output
 printf '%s' '${ARTIFACT_INPUTS_B64}' | base64 --decode > /home/ubuntu/artifacts.json

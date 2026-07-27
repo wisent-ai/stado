@@ -1,39 +1,30 @@
 //! Coordinator daemon — Rust port of `stado/coordinator.py`.
 //!
-//! The same scheduling tick the GCP Cloud Function runs, as a long-lived
-//! local process so the system can run without GCP CF / Cloud Scheduler.
+//! The provider-neutral scheduling tick runs as a long-lived local process,
+//! with no Cloud Run, Cloud Scheduler or Python control-plane dependency.
 //!
-//! Reads the named coordinator entry from the registry (default: the one
-//! whose active=true), constructs the same JobStorage + provider +
-//! scheduler call chain the CF's `monitor_jobs` uses, and loops on the
-//! configured interval_seconds. `--once` runs a single tick and exits
-//! (cron-driven runtimes).
-//!
-//! State stays in the registry-declared state_uri (currently always GCS),
-//! so swapping coordinator from GCF to a daemon on the Mac doesn't change
-//! which queue the agents see.
+//! The named coordinator entry supplies runtime cadence and identity only.
+//! Queue/object state always comes from [`crate::queue::JobStorage::new`],
+//! governed by Stado deployment config (`WC_STORAGE_BACKEND` plus its primary
+//! and backup locators). A legacy registry `state_uri` is metadata and can
+//! never override provider, backend, account, container or bucket.
 //!
 //! Cloud Function parity: `stado/cloud_function/main.py::monitor_jobs`
 //! composes the SAME tick (fire due schedules -> normalize sizing ->
 //! makespan assign -> per provider check/reap/schedule -> run reaper ->
 //! billing collect) and needs no separate port — [`run_tick`] is the single
-//! implementation. Confirmed against main.py: the only differences are the
-//! secrets source (CF: Secret Manager; daemon: process env, as in
-//! coordinator.py) and the box owner default (CF: "gcp-cloud-function";
-//! daemon: hostname).
+//! implementation. Credentials for both deployment shapes are resolved from
+//! Skarbiec; the remaining deployment-specific difference is the box-owner
+//! default (Cloud Function: "gcp-cloud-function"; daemon: hostname).
 //!
-//! Registry re-resolution is at full Python parity: every tick re-reads the
-//! canonical registry (source="gcs") via
-//! [`crate::targets::fetch_registry_remote`] so an operator can kill a rogue
-//! daemon by removing its entry. The remote registry is the ONLY authority
-//! for the self-survival check — there is no local escape hatch.
+//! Registry re-resolution runs every tick through
+//! [`crate::targets::fetch_registry_remote`], which reads the configured
+//! Stado store. The remote registry is the only authority for the
+//! self-survival check — there is no local escape hatch.
 //!
-//! DEVIATION from Python: the check exits ONLY on a registry that was
-//! successfully READ and does not list the coordinator. Python treats an
-//! unreachable store as an empty registry, so a storage outage terminates
-//! every coordinator in the fleet at once — exactly what happened when the
-//! GCP billing account was closed and every GCS call began answering
-//! `accountDisabled`. A fetch failure now logs loudly and keeps ticking.
+//! An unreadable primary (with no readable backup) is not interpreted as an
+//! empty registry. The coordinator logs the storage failure and keeps
+//! ticking; only a registry that was actually read may revoke the daemon.
 //!
 //! Deviations from coordinator.py (all deliberate):
 //! 1. Self-update: Python does PyPI drift-detect + `pip install --upgrade`
@@ -50,6 +41,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
+use serde_json::Value;
 
 use crate::config;
 use crate::monitor::billing::collect_billing;
@@ -102,9 +94,8 @@ pub enum ResolvedProvider {
     },
 }
 
-/// Pick the coordinator entry: explicit --target, or the active one
-/// (Python `_resolve_coordinator`; source="auto" — GCS first, bundled
-/// fallback).
+/// Pick the coordinator entry: explicit --target, or the active one, from the
+/// configured Stado registry with bundled fallback.
 async fn resolve_coordinator(target: Option<&str>) -> Result<Coordinator, String> {
     let registry = load_registry_auto().await.map_err(|exc| exc.to_string())?;
     if let Some(target) = target {
@@ -134,18 +125,6 @@ async fn resolve_coordinator(target: Option<&str>) -> Result<Coordinator, String
     Ok(active[0].clone())
 }
 
-/// Strip 'gs://' prefix to get the bucket name JobStorage expects
-/// (Python `_bucket_from_state_uri`).
-fn bucket_from_state_uri(state_uri: &str) -> String {
-    state_uri
-        .strip_prefix("gs://")
-        .unwrap_or(state_uri)
-        .split('/')
-        .next()
-        .unwrap_or("")
-        .to_string()
-}
-
 /// `platform.node()` — the daemon-side default box-tick owner (Python
 /// `os.uname().nodename`). Same approach as queue/submit.rs.
 fn nodename() -> String {
@@ -163,60 +142,97 @@ fn nodename() -> String {
         .unwrap_or_default()
 }
 
-/// Populate the secrets map that dispatch_agent_vms uses to fill
-/// ${KEY} placeholders in startup_gpu_agent.sh. Without this, the
-/// rendered script keeps a literal ${HF_TOKEN}; with `set -u` at the
-/// top of the template, line 50 (`export HF_TOKEN="${HF_TOKEN}"`)
-/// crashes on unbound variable, the agent never starts, and the VM
-/// sits idle until manually deleted. We saw 37 such orphan VMs
-/// accumulate over ~24h on 2026-05-09 -> 2026-05-10 because secrets
-/// had been an empty dict here forever.
+/// Validate the dedicated Azure-agent grant and return its opaque token.
 ///
-/// Credentials only. The non-secret `${KEY}` substitutions the templates
-/// also need — storage backend, Azure account/container, release base URL,
-/// AWS bucket and region — are produced by
-/// [`crate::scheduler::dispatch::agent::deployment_substitutions`] from
-/// config, so a deployment setting never has to be smuggled through a
-/// secrets bag, and a missing one now aborts the bucket instead of booting
-/// a VM that dies on `set -u`.
-///
-/// Crate-visible so `crate::doctor` renders its template preflight with the
-/// exact secrets bag a real tick would supply; a preflight fed a different
-/// map could pass while dispatch still shipped an unsubstituted `${KEY}`.
-pub(crate) fn secrets_from_env() -> BTreeMap<String, String> {
-    let mut secrets = BTreeMap::new();
-    for key in ["HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"] {
-        if let Ok(val) = std::env::var(key) {
-            let val = val.trim();
-            if !val.is_empty() {
-                secrets.insert(key.to_string(), val.to_string());
+/// The grant exposes only the configured S3 failover credential and explicit
+/// workload-secret items. Values are resolved agent-side for explicit jobs.
+/// `None` means this deployment does not dispatch Azure agents.
+pub(crate) async fn agent_backup_grant() -> Result<Option<String>, crate::skarbiec::SkarbiecError> {
+    use crate::skarbiec::SkarbiecError;
+
+    let azure_agents = config::wc_providers().iter().any(|name| name == "azure");
+    if !azure_agents {
+        return Ok(None);
+    }
+    let url = config::agent_skarbiec_url();
+    if url.is_empty() {
+        return Err(SkarbiecError::Deployment(
+            "WC_AGENT_SKARBIEC_URL is required for Azure workload agents; set it to an HTTPS \
+             Skarbiec endpoint reachable from the VM"
+                .to_string(),
+        ));
+    }
+    if !url.starts_with("https://") {
+        return Err(SkarbiecError::Deployment(format!(
+            "WC_AGENT_SKARBIEC_URL={url:?} is not HTTPS; a remote VM grant must never cross \
+             plaintext HTTP"
+        )));
+    }
+    let consumer = config::agent_skarbiec_consumer();
+    if consumer != "stado-azure-agent" {
+        return Err(SkarbiecError::Deployment(format!(
+            "WC_AGENT_SKARBIEC_CONSUMER must be stado-azure-agent, got {consumer:?}"
+        )));
+    }
+    let token_file = config::agent_skarbiec_token_file();
+    if token_file.is_empty() {
+        return Err(SkarbiecError::Deployment(
+            "WC_AGENT_SKARBIEC_TOKEN_FILE is required; use the owner-only \
+             ~/.stado/azure-agent-skarbiec-token grant"
+                .to_string(),
+        ));
+    }
+    let agent_token = crate::skarbiec::read_grant(token_file)?;
+    let agent_vault = crate::skarbiec::Client::new(url, consumer, token_file)?;
+    if config::wc_backup_storage_backend() == "s3" {
+        let aws = agent_vault.read_item("stado-aws").await?;
+        for field in ["access_key_id", "secret_access_key"] {
+            if !aws
+                .get(field)
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.is_empty())
+            {
+                return Err(SkarbiecError::MissingValue(format!("stado-aws/{field}")));
             }
         }
     }
-    if let Some(hf) = secrets.get("HF_TOKEN").cloned() {
-        secrets
-            .entry("HUGGING_FACE_HUB_TOKEN".to_string())
-            .or_insert(hf);
+    let mut visible: Vec<String> = agent_vault
+        .list_items()
+        .await?
+        .into_iter()
+        .map(|item| item.id)
+        .collect();
+    visible.sort();
+    let mut expected = config::agent_skarbiec_items().to_vec();
+    expected.sort();
+    expected.dedup();
+    if config::wc_backup_storage_backend() == "s3"
+        && !expected.iter().any(|item| item == "stado-aws")
+    {
+        return Err(SkarbiecError::Deployment(
+            "agent.skarbiec.items must include stado-aws for S3 failover".to_string(),
+        ));
     }
-    // Supabase Management API token goes to a distinct placeholder
-    // (WC_SUPABASE_TOKEN) so the startup template can use bash empty-
-    // default expansion without conflicting with python's literal-string
-    // substitution. dispatched VMs export SUPABASE_ACCESS_TOKEN in their
-    // env when this is populated.
-    if let Ok(supa) = std::env::var("SUPABASE_ACCESS_TOKEN") {
-        let supa = supa.trim();
-        if !supa.is_empty() {
-            secrets.insert("WC_SUPABASE_TOKEN".to_string(), supa.to_string());
-        }
+    if visible != expected {
+        return Err(SkarbiecError::Deployment(format!(
+            "consumer {consumer:?} can list {visible:?}; the Azure-agent grant must expose \
+             only its S3 failover credential and workload-secret items"
+        )));
     }
-    if !secrets.contains_key("HF_TOKEN") {
-        log(
-            "WARN: HF_TOKEN not in coordinator env; dispatched VMs will \
-             fail their startup script on `set -u` line 50. Set HF_TOKEN \
-             in the LaunchAgent's EnvironmentVariables and reload.",
-        );
+    Ok(Some(agent_token))
+}
+
+/// Resolve the one scoped consumer grant injected into Azure VM cloud-init.
+///
+/// Workload values are never rendered into startup scripts. The agent uses
+/// this grant to resolve only each job's explicit `secret_env` references.
+pub(crate) async fn secrets_from_skarbiec(
+) -> Result<BTreeMap<String, String>, crate::skarbiec::SkarbiecError> {
+    let mut secrets = BTreeMap::new();
+    if let Some(agent_token) = agent_backup_grant().await? {
+        secrets.insert("WC_AGENT_SKARBIEC_TOKEN".to_string(), agent_token);
     }
-    secrets
+    Ok(secrets)
 }
 
 /// Resolve `WC_PROVIDERS` into tick arms. "local" is skipped (device-local
@@ -360,38 +376,39 @@ pub async fn run(target: Option<&str>, once: bool) -> Result<i32, String> {
         return Ok(0);
     }
 
-    let parsed = bucket_from_state_uri(&coord.state_uri);
-    let bucket = if parsed.is_empty() {
-        config::bucket().to_string()
-    } else {
-        parsed
-    };
-    let store = JobStorage::with_bucket(&bucket)
-        .await
-        .map_err(|exc| exc.to_string())?;
+    let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
     let interval = coord.interval_seconds.max(15) as u64;
     log(&format!(
-        "coordinator '{}' runtime={} interval={interval}s state={}",
-        coord.name, coord.runtime, coord.state_uri
+        "coordinator '{}' runtime={} interval={interval}s storage={} \
+         registry_state_uri_metadata={:?}",
+        coord.name,
+        coord.runtime,
+        store.backend_name(),
+        coord.state_uri
     ));
 
-    let secrets = secrets_from_env();
+    let secrets = secrets_from_skarbiec()
+        .await
+        .map_err(|err| err.to_string())?;
     loop {
-        let mut update_log = |message: &str| log(message);
-        match crate::self_update::self_update(&mut update_log).await {
-            Ok(crate::self_update::UpdateOutcome::Updated { from, to }) => {
-                log(&format!(
-                    "coordinator self-update installed {from} -> {to}; re-executing"
-                ));
-                let exc = crate::self_update::reexec();
-                log(&format!(
-                    "coordinator self-update re-exec failed; continuing old process image: {exc}"
-                ));
+        if !config::release_base_url().is_empty() {
+            let mut update_log = |message: &str| log(message);
+            match crate::self_update::self_update(&mut update_log).await {
+                Ok(crate::self_update::UpdateOutcome::Updated { from, to }) => {
+                    log(&format!(
+                        "coordinator self-update installed {from} -> {to}; re-executing"
+                    ));
+                    let exc = crate::self_update::reexec();
+                    log(&format!(
+                        "coordinator self-update re-exec failed; continuing old process image: \
+                         {exc}"
+                    ));
+                }
+                Ok(crate::self_update::UpdateOutcome::UpToDate { .. }) => {}
+                Err(exc) => log(&format!(
+                    "coordinator self-update failed; continuing current version: {exc}"
+                )),
             }
-            Ok(crate::self_update::UpdateOutcome::UpToDate { .. }) => {}
-            Err(exc) => log(&format!(
-                "coordinator self-update failed; continuing current version: {exc}"
-            )),
         }
         // Re-resolve the coordinator entry from the registry each tick. The
         // initial resolve at process start captures the entry once and
@@ -404,10 +421,9 @@ pub async fn run(target: Option<&str>, once: bool) -> Result<i32, String> {
         // already on the latest published version). Re-resolving each tick
         // means a registry change takes effect within one interval_seconds
         // without depending on a new release being published.
-        // Python reads source="gcs" — the remote registry is the ONLY
-        // authority for the self-survival check there, with no local
-        // escape hatch. Same here, but a registry we could not READ is
-        // not an authority at all.
+        // The canonical registry is read from configured Stado storage and is
+        // the only self-survival authority. A registry we could not read is
+        // not an authority at all, even when primary reads are failing over.
         if let Some(target) = target {
             let survival = fetch_registry_remote().await;
             // Exit ONLY when a registry we actually READ omits the entry.
@@ -418,7 +434,7 @@ pub async fn run(target: Option<&str>, once: bool) -> Result<i32, String> {
                     "coordinator '{target}' not in the canonical registry; exiting. \
                      Operator removed/renamed the entry — daemon stops here so \
                      launchd/supervisor backs off and stale code stops issuing \
-                     GCE mutations."
+                     cloud-resource mutations."
                 ));
                 return Ok(0);
             }
@@ -437,6 +453,15 @@ pub async fn run(target: Option<&str>, once: bool) -> Result<i32, String> {
             .await
             .map_err(|exc| exc.to_string())?;
         log(&format!("tick scheduled={n}"));
+        match crate::queue::copy::replicate_configured_backup().await {
+            Ok(Some(report)) if report.is_clean() => log("disaster-recovery replication clean"),
+            Ok(Some(report)) => log(&format!(
+                "disaster-recovery replication incomplete: {} object(s) failed",
+                report.failed()
+            )),
+            Ok(None) => {}
+            Err(exc) => log(&format!("disaster-recovery replication failed: {exc}")),
+        }
         if once {
             return Ok(0);
         }

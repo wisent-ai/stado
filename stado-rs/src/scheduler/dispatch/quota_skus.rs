@@ -74,7 +74,7 @@ struct Inner {
 impl CloudQuotasClient {
     /// Bind to the public Cloud Quotas API, resolving GCP credentials.
     pub async fn new(project: &str) -> Result<Self, CatalogError> {
-        let auth = gcp_auth::provider()
+        let auth = crate::skarbiec::gcp_provider()
             .await
             .map_err(|err| CatalogError::Auth(err.to_string()))?;
         Ok(Self::assemble(project, CLOUD_QUOTAS_BASE, Some(auth)))
@@ -391,76 +391,81 @@ pub fn azure_rows_from_skus(skus: &[Value]) -> Vec<Value> {
     out
 }
 
-/// Enumerate Azure Compute GPU VM families across every location the
-/// subscription has access to (Python `_azure_catalog`), via the `az` CLI
-/// subprocess. `az vm list-skus` is the only API that maps every SKU to
-/// its containing family, which is what Microsoft.Quota's create_or_update
-/// keys on as resource_name.
-///
-/// A failure surfaces as a single row with `ok=false` plus an `error`
-/// field so the caller can print it without dying (Python parity:
-/// `{type(exc).__name__}: {exc}`).
-pub fn azure_catalog() -> Vec<Value> {
-    let output = std::process::Command::new("az")
-        .args([
-            "vm",
-            "list-skus",
-            "--resource-type",
-            "virtualMachines",
-            "-o",
-            "json",
-        ])
-        .output();
-    let output = match output {
-        Ok(output) => output,
-        // FileNotFoundError: az not on PATH.
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return vec![json!({
-                "provider": "azure",
-                "ok": false,
-                "error": format!("FileNotFoundError: {err}"),
-            })];
-        }
+/// Enumerate Azure Compute GPU VM families across every location available to
+/// the subscription through ARM. Authentication uses managed identity or the
+/// `stado-azure` Skarbiec item; Azure CLI is not consulted.
+pub async fn azure_catalog() -> Vec<Value> {
+    let subscription = crate::config::azure_subscription_id();
+    if subscription.is_empty() {
+        return vec![json!({
+            "provider": "azure",
+            "ok": false,
+            "error": "AZURE_SUBSCRIPTION_ID is required",
+        })];
+    }
+    let http = reqwest::Client::new();
+    let token = match crate::azure_token::identity_bearer_token(
+        &http,
+        "https://management.azure.com/.default",
+        "https://management.azure.com",
+    )
+    .await
+    {
+        Ok(token) => token,
         Err(err) => {
             return vec![json!({
                 "provider": "azure",
                 "ok": false,
-                "error": format!("OSError: {err}"),
+                "error": err.to_string(),
             })];
         }
     };
-    if !output.status.success() {
-        // subprocess.CalledProcessError from check=True.
-        let code = output
-            .status
-            .code()
-            .map(|c| c.to_string())
-            .unwrap_or_else(|| "?".into());
-        return vec![json!({
-            "provider": "azure",
-            "ok": false,
-            "error": format!(
-                "CalledProcessError: Command '['az', 'vm', 'list-skus', '--resource-type', \
-                 'virtualMachines', '-o', 'json']' returned non-zero exit status {code}."
-            ),
-        })];
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    // Python: json.loads(r.stdout) if r.stdout.strip() else []
-    let skus: Vec<Value> = if stdout.trim().is_empty() {
-        Vec::new()
-    } else {
-        match serde_json::from_str(&stdout) {
-            Ok(skus) => skus,
+    let mut next = Some(format!(
+        "https://management.azure.com/subscriptions/{subscription}/providers/Microsoft.Compute/skus?api-version=2021-07-01"
+    ));
+    let mut skus = Vec::new();
+    while let Some(url) = next.take() {
+        let response = match http.get(url).bearer_auth(&token).send().await {
+            Ok(response) => response,
             Err(err) => {
                 return vec![json!({
                     "provider": "azure",
                     "ok": false,
-                    "error": format!("JSONDecodeError: {err}"),
+                    "error": err.to_string(),
                 })];
             }
+        };
+        let status = response.status();
+        let body: Value = match response.json().await {
+            Ok(body) => body,
+            Err(err) => {
+                return vec![json!({
+                    "provider": "azure",
+                    "ok": false,
+                    "error": err.to_string(),
+                })];
+            }
+        };
+        if !status.is_success() {
+            return vec![json!({
+                "provider": "azure",
+                "ok": false,
+                "error": format!("Azure Compute SKU list returned HTTP {status}: {body}"),
+            })];
         }
-    };
+        skus.extend(
+            body.get("value")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .cloned(),
+        );
+        next = body
+            .get("nextLink")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+    }
     azure_rows_from_skus(&skus)
 }
 
@@ -483,7 +488,7 @@ pub async fn provider_catalog(
             };
             gcp_catalog(client).await
         }
-        "azure" => Ok(azure_catalog()),
+        "azure" => Ok(azure_catalog().await),
         other => Ok(vec![json!({
             "provider": other,
             "ok": false,
@@ -655,7 +660,7 @@ pub async fn gcp_request_all_families(
 /// everywhere any family is available. Per-target "family not in this
 /// location" failures are captured in the result list, not raised.
 pub async fn azure_request_all_families(new_limit: i64, locations: &[String]) -> Vec<Value> {
-    let catalog = azure_catalog();
+    let catalog = azure_catalog().await;
     let mut families: std::collections::BTreeSet<String> = Default::default();
     let mut all_locs: std::collections::BTreeSet<String> = Default::default();
     for row in &catalog {

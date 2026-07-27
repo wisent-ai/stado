@@ -9,15 +9,14 @@
 //! the provider does not create networking. instance_ref is
 //! `"name@location"`.
 //!
-//! Auth is the hand-rolled DefaultAzureCredential-equivalent token chain in
-//! [`crate::azure_token`] (env service principal -> IMDS managed identity ->
-//! `az` CLI), shared with the Azure Blob queue backend; here it is scoped to
-//! ARM (`https://management.azure.com`).
+//! Authentication is shared with the Azure Blob queue backend through
+//! [`crate::azure_token`]: an Azure managed identity is preferred, then the
+//! `stado-azure` service-principal item is read from Skarbiec. This module
+//! requests the ARM audience (`https://management.azure.com`).
 //!
-//! On an agent VM that chain has neither service-principal env vars nor the
-//! `az` CLI, so it can only resolve through IMDS — which answers solely for
-//! a VM that carries a managed identity. Agent VMs are therefore created
-//! with the pre-provisioned user-assigned identity named by
+//! On an agent VM IMDS resolves only when the VM carries a managed identity.
+//! Agent VMs are therefore created with the pre-provisioned user-assigned
+//! identity named by
 //! [`crate::config::azure_vm_identity_id`] (`AZURE_VM_IDENTITY_ID`), whose
 //! resource id [`vm_body`] renders into the ARM `identity` block. The
 //! operator grants that single identity, once:
@@ -106,7 +105,7 @@ pub enum AzureError {
     Api(String),
 }
 
-// --- Token chain (DefaultAzureCredential equivalent) ---
+// --- Managed-identity / Skarbiec token source ---
 
 /// Fresh bearer token for ARM, from the shared chain's per-scope cache.
 async fn bearer_token(http: &reqwest::Client) -> Result<String, AzureError> {

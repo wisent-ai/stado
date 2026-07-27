@@ -25,19 +25,22 @@ current and estimated balances, pending eligible charges, expired credit,
 grant amount and validity when the billing property is readable, billing
 status, and the paid-overage risk when the spending limit is off.
 
-The Azure billing service-principal JSON is read exclusively from Azure Key
-Vault. Configure the vault data-plane URL with `WC_AZURE_KEY_VAULT_URL` and the
-secret name with `WC_AZURE_BILLING_SECRET` (default:
-`wisent-azure-billing-sp`). Stado authenticates to the vault with Azure Managed
-Identity or the current Azure CLI identity; it never bootstraps vault access
-from a client secret. There is no credential fallback to a local file, process
-environment, queue blob, or GCP Secret Manager.
+The Azure billing service-principal object is read exclusively from the
+separate `skarbiec` repository/service. Configure a loopback HTTP endpoint or
+a TLS-protected remote endpoint with `WC_SKARBIEC_URL` (default
+`http://127.0.0.1:8787`), the consumer with `WC_SKARBIEC_CONSUMER` (default
+`stado`), and an owner-only grant file with `WC_SKARBIEC_TOKEN_FILE` (default
+`~/.stado/skarbiec-token`). Raw grants are not accepted from environment
+variables. `WC_AZURE_BILLING_SECRET` selects the item
+id (default `wisent-azure-billing-sp`). There is no credential fallback to
+Azure Key Vault, a local credential file, process environment, queue storage,
+or another cloud's secret manager.
 
-The secret JSON uses lowercase fields `tenant_id`, `client_id`,
+The item is a JSON object with lowercase fields `tenant_id`, `client_id`,
 `client_secret`, `billing_account`, `billing_profile_system_id`, and optionally
 `subscription_id`. The Azure principal needs Billing profile reader on the
-selected billing profile. The identity running Stado separately needs
-permission to read that Key Vault secret.
+selected billing profile. The Stado consumer grant needs
+`read:wisent-azure-billing-sp` (or a matching read glob).
 
 ## `stado billing watch [--interval DURATION] [--once] [--json]`
 
@@ -730,15 +733,49 @@ this command exists to prevent. `--older-than` takes a duration (`30m`, `2h`,
 
 ## `stado secrets put|get|ls|rm`
 
-Application credentials in Azure Key Vault. `put` reads the value from STDIN
-only — there is deliberately no `--value` flag, because argv is visible in
-process listings and shell history:
+Application credentials in the separate Skarbiec service. `put` reads from
+STDIN only — there is deliberately no `--value` flag because argv is visible
+in process listings and shell history. Use distinct runtime and operator
+consumer grants:
 
 ```bash
-stado secrets put wisent-azure-billing-sp < sp.json
+skarbiec token-mint stado-runtime \
+  --scopes read:stado-*,read:wisent-azure-billing-sp
+skarbiec token-mint stado-operator \
+  --scopes read:*,write:*,delete:*
+# Save the selected consumer token in ~/.stado/skarbiec-token, chmod 600 it,
+# set WC_SKARBIEC_CONSUMER to the matching consumer, then:
+skarbiec serve
+WC_SKARBIEC_CONSUMER=stado-operator stado secrets put stado-aws < aws.json
 ```
 
-`get` is the only subcommand that renders a value; `ls` reads metadata alone.
-The billing collector reads its Azure service principal from here and nowhere
-else — no fallback to another cloud's secret manager, because that coupling is
-what turned a closed GCP billing account into a loss of Azure credit visibility.
+`get` is the only Stado subcommand that renders a value; `ls` reads metadata
+alone. `put` creates an encrypted Skarbiec version and `rm` performs a
+recoverable soft delete. Each action requires a matching action-qualified
+grant scope and is recorded in Skarbiec's tamper-evident audit journal.
+
+Canonical application-credential items:
+
+| Item | JSON fields |
+|---|---|
+| `stado-compute` | `api_key` |
+| `stado-huggingface` | `token`, optionally `write_token` |
+| `stado-github` | `token` |
+| `stado-supabase` | `access_token`, optionally `anon_key` |
+| `stado-box` | `api_key` |
+| `stado-vast` | `api_key` |
+| `stado-gcp` | `service_account` (JSON object or encoded JSON string; managed identity is preferred on GCP) |
+| `stado-azure` | `tenant_id`, `client_id`, `client_secret` (managed identity is preferred on Azure) |
+| `stado-aws` | `access_key_id`, `secret_access_key`, optionally `session_token` (IMDSv2 is preferred on EC2) |
+| `stado-gmail` | `access_token`, or `client_id` + `client_secret` + `refresh_token` |
+| `stado-anthropic` | `api_key` |
+| `stado-alerts` | `slack_webhook`, `telegram_bot_token`, `telegram_chat_id`, `sendgrid_api_key` |
+| `wisent-azure-billing-sp` | `tenant_id`, `client_id`, `client_secret`, `billing_account`, optionally `billing_profile_system_id`, `subscription_id` |
+
+Cloud workload identity remains the transport identity for GCP, Azure and AWS
+resource APIs; those short-lived platform identities are not application
+credential values and are never persisted by Stado.
+
+The billing collector reads its Azure service principal from this item and
+nowhere else. This removes the cross-cloud coupling that previously turned a
+closed GCP billing account into loss of Azure credit visibility.
