@@ -3,9 +3,8 @@
 //! Port of `stado/queue/azure_blob.py` (`AzureBlobBackend`). The Python code
 //! uses azure-storage-blob with DefaultAzureCredential; here every call is a
 //! direct REST request against `https://{account}.blob.core.windows.net`
-//! with a Bearer token from the shared [`crate::azure_token`] chain (scope
-//! `https://storage.azure.com/.default`, the same audience the Python SDK
-//! requests).
+//! with a Bearer token from [`crate::azure_token`]: managed identity first,
+//! then the `stado-azure` service-principal item in Skarbiec.
 //!
 //! REST API version: `x-ms-version: 2023-11-03` (recent stable; the Python
 //! SDK negotiates its own version, so this pins an equivalent feature set —
@@ -363,6 +362,7 @@ struct ListEntry {
     name: String,
     creation_time: Option<DateTime<Utc>>,
     last_modified: Option<DateTime<Utc>>,
+    size: Option<u64>,
     metadata: BTreeMap<String, String>,
 }
 
@@ -444,6 +444,7 @@ fn parse_list_blobs(xml: &str) -> (Vec<ListEntry>, Option<String>) {
             name: xml_tag(block, "Name").map(xml_unescape).unwrap_or_default(),
             creation_time: xml_tag(block, "Creation-Time").and_then(parse_http_date),
             last_modified: xml_tag(block, "Last-Modified").and_then(parse_http_date),
+            size: xml_tag(block, "Content-Length").and_then(|value| value.parse().ok()),
             metadata: parse_metadata(block),
         });
         rest = &after_open[blob_end + "</Blob>".len()..];
@@ -663,6 +664,7 @@ impl BlobBackend for AzureBlobBackend {
             .map(|entry| BlobInfo {
                 name: entry.name,
                 updated: entry.last_modified,
+                size: entry.size,
                 metadata: entry.metadata,
             })
             .collect())

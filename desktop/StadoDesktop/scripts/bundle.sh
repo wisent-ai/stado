@@ -9,6 +9,18 @@ PRODUCT="Stado"
 BUNDLE="$ROOT/.build/Stado.app"
 INSTALLED_BUNDLE="${STADO_INSTALL_APP_PATH:-$HOME/Applications/Stado.app}"
 EXECUTABLE="$ROOT/.build/release/$PRODUCT"
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+
+unregister_bundle() {
+    if output=$("$LSREGISTER" -u "$1" 2>&1); then
+        return 0
+    fi
+    case "$output" in
+        *-10814*) return 0 ;;
+    esac
+    print -u2 "$output"
+    return 1
+}
 
 print "→ building release"
 swift build -c release --product "$PRODUCT"
@@ -25,6 +37,7 @@ cp "$ROOT/Resources/Info.plist" "$BUNDLE/Contents/Info.plist"
 cp "$EXECUTABLE" "$BUNDLE/Contents/MacOS/Stado"
 chmod +x "$BUNDLE/Contents/MacOS/Stado"
 
+sh "$ROOT/scripts/import-brand-icon.sh" stado-desktop "$BUNDLE/Contents/Resources/AppIcon.icns"
 IDENTITY="${STADO_SIGN_IDENTITY:-${WISENT_CODESIGN_IDENTITY:-}}"
 if [[ -z "$IDENTITY" ]]; then
     IDENTITY=$(security find-identity -v -p codesigning \
@@ -57,7 +70,14 @@ rm -rf "$INSTALLED_BUNDLE"
 mkdir -p "$(dirname "$INSTALLED_BUNDLE")"
 ditto "$BUNDLE" "$INSTALLED_BUNDLE"
 codesign --verify --strict --deep --verbose=2 "$INSTALLED_BUNDLE"
+unregister_bundle "$BUNDLE"
+"$LSREGISTER" -f "$INSTALLED_BUNDLE"
 print "✓ $INSTALLED_BUNDLE"
+
+RESTART_APP=${WISENT_RESTART_APP:-"$ROOT/scripts/wisent-restart-app"}
+if [[ "${WISENT_RESTART_AFTER_BUILD:-1}" != 0 && -x "$RESTART_APP" ]]; then
+    "$RESTART_APP" --if-running "$INSTALLED_BUNDLE"
+fi
 
 if [[ "${1:-}" == "--open" ]]; then
     open "$INSTALLED_BUNDLE"

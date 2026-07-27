@@ -6,11 +6,10 @@
 //! listing per tick, set-membership check per queued job, completed-jobs
 //! get moved straight from queue to completed without ever spinning up.
 //!
-//! Port of `stado/scheduler/skip_done.py`. The HF SDK call
 //! (`huggingface_hub.HfApi.list_repo_files`) becomes a reqwest walk of the
 //! HF HTTP tree API (`GET /api/datasets/{repo}/tree/main?recursive=true`,
-//! paginated, `HF_TOKEN` env for auth) behind the injectable
-//! [`RepoFileLister`] so tests never touch the network.
+//! paginated, with `stado-huggingface/token` from Skarbiec for auth) behind
+//! the injectable [`RepoFileLister`] so tests never touch the network.
 //!
 //! NOTE — currently DISABLED in the Python scheduler; the module is ported
 //! faithfully with the scheduler.py comment preserved:
@@ -105,8 +104,8 @@ pub trait RepoFileLister: Send + Sync {
 
 /// reqwest-backed lister replacing `huggingface_hub.HfApi.list_repo_files`:
 /// walks `GET {base}/api/datasets/{repo_id}/tree/main?recursive=true`
-/// following `Link: <url>; rel="next"` pagination. `HF_TOKEN` (when set)
-/// goes in the `Authorization: Bearer` header.
+/// following `Link: <url>; rel="next"` pagination. The production constructor
+/// resolves its bearer token from Skarbiec when the listing starts.
 pub struct HfApiLister {
     pub base_url: String,
     pub repo_id: String,
@@ -115,12 +114,12 @@ pub struct HfApiLister {
 }
 
 impl HfApiLister {
-    /// Production lister for [`HF_REPO_ID`], token from `HF_TOKEN` env.
+    /// Production lister for [`HF_REPO_ID`]; credentials come from Skarbiec.
     pub fn from_env() -> Self {
         Self {
             base_url: "https://huggingface.co".into(),
             repo_id: HF_REPO_ID.into(),
-            token: std::env::var("HF_TOKEN").unwrap_or_default(),
+            token: String::new(),
             client: reqwest::Client::new(),
         }
     }
@@ -136,12 +135,20 @@ impl HfApiLister {
 #[async_trait]
 impl RepoFileLister for HfApiLister {
     async fn list_repo_files(&self) -> Result<Vec<String>, SkipDoneError> {
+        let token = if self.token.is_empty() {
+            crate::skarbiec::read_string("stado-huggingface", "token")
+                .await
+                .map_err(|err| SkipDoneError::Other(err.to_string()))?
+                .unwrap_or_default()
+        } else {
+            self.token.clone()
+        };
         let mut files = Vec::new();
         let mut url = Some(self.start_url());
         while let Some(u) = url {
             let mut request = self.client.get(&u);
-            if !self.token.is_empty() {
-                request = request.header("Authorization", format!("Bearer {}", self.token));
+            if !token.is_empty() {
+                request = request.header("Authorization", format!("Bearer {token}"));
             }
             let response = request.send().await?;
             let next = response

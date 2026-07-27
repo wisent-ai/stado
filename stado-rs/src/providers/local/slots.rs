@@ -18,18 +18,14 @@
 //!     which is `/bin/sh` on POSIX) with `process_group(0)` — the exact
 //!     semantic of Python's `start_new_session=True` (setsid; the child
 //!     becomes a process-group leader so `killpg` can reap the whole tree).
-//!   * The output_uri mirror keeps the `gsutil -m cp -r` SUBPROCESS for
-//!     byte-parity of the mirror path (job.output_uri may point at a bucket
-//!     the configured storage client wasn't constructed for), but a missing
-//!     gsutil binary is LOGGED instead of raising `FileNotFoundError` —
-//!     the canonical `status/<id>/output/` upload already ran, so crashing
-//!     the agent over the additive mirror would lose nothing and cost a
-//!     running fleet.
+//!   * The optional output mirror accepts only `stado://` object prefixes
+//!     and writes through [`JobStorage`]. Mirror failure is logged because
+//!     canonical `status/<id>/output/` data is already durable.
 //!   * `WISENT_RAW_*` env floats that fail to parse panic (Python's
 //!     `float()` raises `ValueError`, crashing the agent visibly).
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
@@ -341,56 +337,112 @@ fn head_chars(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }
 
-/// Python `shutil.which("gsutil")` + the two well-known Cloud SDK install
-/// locations. `_gsutil_bin`.
-pub fn gsutil_bin() -> String {
-    if let Some(found) = which_on_path("gsutil") {
-        return found;
-    }
-    let home = crate::config_file::expand_tilde("~");
-    for candidate in [
-        home.join("google-cloud-sdk/bin/gsutil"),
-        PathBuf::from("/opt/google-cloud-sdk/bin/gsutil"),
-    ] {
-        if candidate.is_file() {
-            return candidate.to_string_lossy().into_owned();
+/// Copy only execution-runtime variables into untrusted job subprocesses.
+/// Control-plane config, Skarbiec routing, cloud credentials, and storage
+/// locators stay exclusively in the Stado agent process.
+fn inherit_safe_agent_environment(command: &mut tokio::process::Command) {
+    const EXACT: &[&str] = &[
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "TZ",
+        "TMPDIR",
+        "VIRTUAL_ENV",
+        "CONDA_PREFIX",
+        "PYTHONPATH",
+        "LD_LIBRARY_PATH",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+    ];
+    const PREFIXES: &[&str] = &["CUDA_", "NVIDIA_", "HIP_", "ROCR_", "WISENT_RAW_"];
+    command.env_clear();
+    for (name, value) in std::env::vars_os() {
+        let key = name.to_string_lossy();
+        if EXACT.contains(&key.as_ref()) || PREFIXES.iter().any(|prefix| key.starts_with(prefix)) {
+            command.env(name, value);
         }
     }
-    "gsutil".to_string()
 }
 
-/// `shutil.which`: first executable named `name` on $PATH.
-fn which_on_path(name: &str) -> Option<String> {
-    use std::os::unix::fs::PermissionsExt;
-    for dir in std::env::var_os("PATH")?.to_string_lossy().split(':') {
-        let candidate = Path::new(dir).join(name);
-        if let Ok(meta) = candidate.metadata() {
-            if meta.is_file() && meta.permissions().mode() & 0o111 != 0 {
-                return Some(candidate.to_string_lossy().into_owned());
-            }
+fn valid_env_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|ch| ch == '_' || ch.is_ascii_alphabetic())
+        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+}
+
+async fn resolve_job_secret_environment(
+    job: &Job,
+) -> Result<BTreeMap<String, String>, StorageError> {
+    let mut environment = BTreeMap::new();
+    if job.secret_env.is_empty() {
+        return Ok(environment);
+    }
+    let agent_token_file = crate::config::agent_skarbiec_token_file();
+    let client = if Path::new(agent_token_file).is_file() {
+        let configured_url = crate::config::agent_skarbiec_url();
+        let url = if configured_url.trim().is_empty() {
+            crate::config::skarbiec_url()
+        } else {
+            configured_url
+        };
+        crate::skarbiec::Client::new(
+            url,
+            crate::config::agent_skarbiec_consumer(),
+            agent_token_file,
+        )
+    } else if crate::config::skarbiec_consumer().ends_with("-agent") {
+        crate::skarbiec::Client::configured()
+    } else {
+        return Err(StorageError::Other(
+            "workload secrets require a dedicated agent Skarbiec grant".to_string(),
+        ));
+    }
+    .map_err(|error| {
+        StorageError::Other(format!(
+            "cannot configure workload secret resolver: {error}"
+        ))
+    })?;
+    for (env_name, reference) in &job.secret_env {
+        if !valid_env_name(env_name)
+            || reference.item.trim().is_empty()
+            || reference.field.trim().is_empty()
+        {
+            return Err(StorageError::Other(format!(
+                "job {} contains an invalid secret environment reference",
+                job.job_id
+            )));
         }
+        let value = client
+            .read_string(&reference.item, &reference.field)
+            .await
+            .map_err(|error| {
+                StorageError::Other(format!(
+                    "cannot resolve job {} secret {env_name}: {error}",
+                    job.job_id
+                ))
+            })?
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                StorageError::Other(format!(
+                    "job {} secret {env_name} is missing or empty",
+                    job.job_id
+                ))
+            })?;
+        environment.insert(env_name.clone(), value);
     }
-    None
-}
-
-/// Central write-scoped HF token from gs://<bucket>/config/hf_token,
-/// injected into every job env so uploads do not 403 when the agent ambient
-/// HF_TOKEN is read-only. Cached per process; empty if unset.
-/// Python `_hf_write_token`.
-static HF_WRITE_TOK: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
-
-pub async fn hf_write_token(store: &JobStorage) -> Result<String, StorageError> {
-    if let Some(cached) = HF_WRITE_TOK.lock().expect("hf token cache lock").clone() {
-        return Ok(cached);
-    }
-    let token = store
-        .download_text("config/hf_token")
-        .await?
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    *HF_WRITE_TOK.lock().expect("hf token cache lock") = Some(token.clone());
-    Ok(token)
+    Ok(environment)
 }
 
 // ---------------------------------------------------------------------------
@@ -495,50 +547,142 @@ pub async fn install_apt_packages(job: &Job, kind: &str, log_fn: &mut dyn FnMut(
     }
 }
 
-/// Copy /tmp/wc-<job_id>/output/* to job.output_uri (e.g.
-/// gs://other-bucket/path/). Additive — the canonical
-/// status/<id>/output/ upload via [`upload_output`] already ran.
-/// Python `_mirror_to_output_uri`.
+/// Copy every output file to the caller's provider-neutral Stado object
+/// prefix. Additive — the canonical status path was already uploaded.
 ///
-/// Uses the gsutil subprocess for cross-bucket portability (job.output_uri
-/// may point at a bucket the configured storage client wasn't constructed
-/// for) — kept as a subprocess for byte-parity of the mirror path. Failures
-/// are logged but do NOT reverse the COMPLETED state — the canonical
-/// output is already in storage and the caller can re-mirror manually.
-pub async fn mirror_to_output_uri(job: &Job, log_fn: &mut dyn FnMut(&str)) {
+/// Failures remain non-fatal because canonical output is durable and the
+/// caller can re-run the mirror without changing job lifecycle state.
+pub async fn mirror_to_output_uri(store: &JobStorage, job: &Job, log_fn: &mut dyn FnMut(&str)) {
     let uri = job.output_uri.trim();
     if uri.is_empty() {
         return;
     }
-    let output_dir = format!("/tmp/wc-{}/output", job.job_id);
-    if !Path::new(&output_dir).exists() {
-        return;
-    }
-    let res = tokio::process::Command::new(gsutil_bin())
-        .args(["-m", "cp", "-r", &format!("{output_dir}/."), uri])
-        .output()
-        .await;
-    match res {
-        Ok(out) if out.status.success() => {
-            log_fn(&format!("output_uri mirror ok: {} -> {uri}", job.job_id));
-        }
-        Ok(out) => {
+    let base = match crate::object_store::ObjectRef::parse(uri) {
+        Ok(base) => base,
+        Err(error) => {
             log_fn(&format!(
-                "output_uri mirror failed for {} -> {uri}: rc={} err={}",
-                job.job_id,
-                python_returncode(out.status),
-                captured_head(&out.stderr, &out.stdout, 200)
-            ));
-        }
-        // DEVIATION: Python raises FileNotFoundError here (no gsutil on
-        // PATH). Logged instead — the canonical output upload already ran.
-        Err(exc) => {
-            log_fn(&format!(
-                "output_uri mirror failed for {} -> {uri}: spawn error: {exc}",
+                "output_uri mirror refused for {}: {error}",
                 job.job_id
             ));
+            return;
+        }
+    };
+    let output_dir = PathBuf::from(format!("/tmp/wc-{}/output", job.job_id));
+    if !output_dir.exists() {
+        return;
+    }
+    for path in walk_files(&output_dir) {
+        let relative = path
+            .strip_prefix(&output_dir)
+            .unwrap_or(&path)
+            .components()
+            .map(|component| component.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
+        let object = match crate::object_store::ObjectRef::new(
+            base.namespace(),
+            &format!("{}/{relative}", base.key().trim_end_matches('/')),
+        ) {
+            Ok(object) => object,
+            Err(error) => {
+                log_fn(&format!("output_uri mirror path failed: {error}"));
+                continue;
+            }
+        };
+        match tokio::fs::read(&path).await {
+            Ok(content) => {
+                if let Err(error) = store.upload_bytes(&object.storage_path(), &content).await {
+                    log_fn(&format!(
+                        "output_uri mirror failed for {} -> {object}: {error}",
+                        job.job_id
+                    ));
+                }
+            }
+            Err(error) => log_fn(&format!(
+                "output_uri mirror failed to read {}: {error}",
+                path.display()
+            )),
         }
     }
+}
+
+/// Materialize explicitly declared Stado objects while storage credentials
+/// are still confined to the trusted agent process.
+async fn materialize_stado_inputs(
+    store: &JobStorage,
+    inputs: &serde_json::Map<String, Value>,
+    work_dir: &Path,
+) -> Result<(), StorageError> {
+    use sha2::Digest as _;
+    fn reject_symlink(path: &Path) -> Result<(), StorageError> {
+        match std::fs::symlink_metadata(path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => Err(StorageError::PathEscape(
+                format!("job input path contains a symlink: {}", path.display()),
+            )),
+            Ok(_) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(StorageError::Io(error)),
+        }
+    }
+
+    for (name, value) in inputs {
+        let Some(spec) = value.as_object() else {
+            continue;
+        };
+        let Some(uri) = spec.get("stado_uri").and_then(Value::as_str) else {
+            continue;
+        };
+        let relative = spec
+            .get("relative_path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                StorageError::Other(format!(
+                    "input {name} with stado_uri requires relative_path"
+                ))
+            })?;
+        let relative_path = Path::new(relative);
+        if relative_path.as_os_str().is_empty()
+            || relative_path
+                .components()
+                .any(|part| !matches!(part, std::path::Component::Normal(_)))
+        {
+            return Err(StorageError::Other(format!(
+                "input {name} relative_path must stay inside the job work directory"
+            )));
+        }
+        let object = crate::object_store::ObjectRef::parse(uri)?;
+        let content = store
+            .read_bytes(&object.storage_path())
+            .await?
+            .ok_or_else(|| StorageError::Other(format!("input {name} is absent: {object}")))?;
+        if let Some(expected) = spec
+            .get("sha256")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+        {
+            let actual = hex::encode(sha2::Sha256::digest(&content));
+            if actual != expected {
+                return Err(StorageError::Other(format!(
+                    "input {name} digest mismatch: expected {expected}, got {actual}"
+                )));
+            }
+        }
+        let destination = work_dir.join(relative_path);
+        let mut checked = work_dir.to_path_buf();
+        reject_symlink(&checked)?;
+        for component in relative_path.components() {
+            let std::path::Component::Normal(part) = component else {
+                unreachable!("relative path was validated above");
+            };
+            checked.push(part);
+            reject_symlink(&checked)?;
+        }
+        if let Some(parent) = destination.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        tokio::fs::write(destination, content).await?;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -598,6 +742,27 @@ pub async fn start_slot(
     let artifact_inputs_json = canonical_json(&Value::Object(job.resolved_input_artifacts.clone()));
     let artifact_inputs_file = format!("{work_dir}/artifacts.json");
     std::fs::write(&artifact_inputs_file, &artifact_inputs_json)?;
+    if let Err(error) =
+        materialize_stado_inputs(store, &job.resolved_input_artifacts, Path::new(&work_dir)).await
+    {
+        job.state = job_state::FAILED.to_string();
+        job.failed_at = Some(isoformat_utc(Utc::now()));
+        job.error = Some(format!("input materialization failed: {error}"));
+        store.move_job(&job, "queue", "failed").await?;
+        log_fn(&format!("refuse {}: {error}", job.job_id));
+        return Ok(None);
+    }
+    let secret_environment = match resolve_job_secret_environment(&job).await {
+        Ok(environment) => environment,
+        Err(error) => {
+            job.state = job_state::FAILED.to_string();
+            job.failed_at = Some(isoformat_utc(Utc::now()));
+            job.error = Some(format!("workload secret resolution failed: {error}"));
+            store.move_job(&job, "queue", "failed").await?;
+            log_fn(&format!("refuse {}: {error}", job.job_id));
+            return Ok(None);
+        }
+    };
     write_status(
         store,
         &job.job_id,
@@ -623,11 +788,11 @@ pub async fn start_slot(
     });
     std::fs::create_dir_all(&fleet_staging)?;
     let mut command = tokio::process::Command::new("/bin/sh");
+    inherit_safe_agent_environment(&mut command);
     command
         .arg("-c")
         .arg(&full_command)
         .current_dir(&work_dir)
-        // Inherits the agent env by default (Python **os.environ).
         .env("WISENT_DTYPE", "auto")
         .env("PYTHONUNBUFFERED", "1")
         .env("HF_HUB_DISABLE_XET", "1")
@@ -635,6 +800,7 @@ pub async fn start_slot(
         .env("WC_JOB_ID", &job.job_id)
         .env("WC_ARTIFACT_INPUTS_JSON", &artifact_inputs_json)
         .env("WC_ARTIFACT_INPUTS_FILE", &artifact_inputs_file)
+        .envs(secret_environment)
         .stdout(std::process::Stdio::from(log_file.try_clone()?))
         // subprocess.STDOUT parity: stderr lands in the same log file.
         .stderr(std::process::Stdio::from(log_file.try_clone()?))
@@ -645,12 +811,6 @@ pub async fn start_slot(
         // The existing Vast SIGSTOP/SIGCONT still target the root pid
         // directly, so their behavior is unchanged.
         .process_group(0);
-    let hf = hf_write_token(store).await?;
-    if !hf.is_empty() {
-        command
-            .env("HF_TOKEN", &hf)
-            .env("HUGGING_FACE_HUB_TOKEN", &hf);
-    }
     let child = command.spawn()?;
     let pid = child.id().expect("freshly spawned child has a pid") as i32;
     log_fn(&format!(
@@ -725,11 +885,23 @@ pub async fn request_yield(
             .saturating_duration_since(Instant::now())
             .as_secs()
             .max(1);
+        let secret_environment = match resolve_job_secret_environment(&job).await {
+            Ok(environment) => environment,
+            Err(error) => {
+                log_fn(&format!(
+                    "yield: workload secret resolution failed for {}: {error}",
+                    job.job_id
+                ));
+                BTreeMap::new()
+            }
+        };
         let mut cmd = tokio::process::Command::new("/bin/sh");
+        inherit_safe_agent_environment(&mut cmd);
         cmd.arg("-c")
             .arg(&hook)
             .env("WC_JOB_ID", &job.job_id)
             .env("WC_JOB_PID", pgid.to_string())
+            .envs(secret_environment)
             // A timed-out hook is killed (Python subprocess.run timeout
             // semantics: kill the direct child, reap, raise).
             .kill_on_drop(true);
@@ -901,10 +1073,24 @@ pub async fn advance_slot(
         // reverses the COMPLETED→FAILED. The verify command must define
         // its own clear failure conditions; the runner does not impose
         // a wall-clock cap.
-        match tokio::process::Command::new("/bin/sh")
+        let secret_environment = match resolve_job_secret_environment(&slot.slot.job).await {
+            Ok(environment) => environment,
+            Err(error) => {
+                ret = i32::MAX;
+                verify_err = format!("verify_command secret resolution failed: {error}");
+                log_fn(&format!(
+                    "verify_command secret resolution failed for {job_id}: {error}"
+                ));
+                BTreeMap::new()
+            }
+        };
+        let mut command = tokio::process::Command::new("/bin/sh");
+        inherit_safe_agent_environment(&mut command);
+        match command
             .arg("-c")
             .arg(&verify_cmd)
             .current_dir(format!("/tmp/wc-{job_id}"))
+            .envs(secret_environment)
             .output()
             .await
         {
@@ -992,7 +1178,7 @@ pub async fn advance_slot(
     // FAILED so debugging logs and partial artifacts also land at
     // the caller's project URI. Failure here is logged, not raised
     // — canonical status/<id>/output/ is already written.
-    mirror_to_output_uri(&job, log_fn).await;
+    mirror_to_output_uri(store, &job, log_fn).await;
     // log_file already flushed+closed above before upload_output.
     if job.state == job_state::FAILED {
         log_fn(&format!(

@@ -6,6 +6,8 @@
 //! tolerance maps to serde: unknown keys are ignored, missing keys fall back
 //! to the Python dataclass defaults via `#[serde(default = ...)]`.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -78,6 +80,14 @@ fn default_max_yields() -> i64 {
 }
 fn default_executor() -> String {
     "stado-agent".into()
+}
+
+/// A named workload secret resolved by the agent immediately before spawn.
+/// Queue records contain only this reference; plaintext never enters storage.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobSecretRef {
+    pub item: String,
+    pub field: String,
 }
 
 /// The central job record. Field order matches the Python dataclass so
@@ -247,6 +257,9 @@ pub struct Job {
     pub prompt_model: String,
     #[serde(default)]
     pub prompt_reasoning_effort: String,
+    /// Explicit per-job environment variables backed by scoped Skarbiec fields.
+    #[serde(default)]
+    pub secret_env: BTreeMap<String, JobSecretRef>,
     // Named, reproducible artifact inputs.
     #[serde(default)]
     pub input_artifacts: Map<String, Value>,

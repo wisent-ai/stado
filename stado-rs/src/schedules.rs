@@ -34,13 +34,14 @@
 //!     in croniter but fail here, so `cron_is_valid` returns false and the
 //!     CLI refuses them at `schedule create` time.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 
 use chrono::{DateTime, NaiveDateTime, Utc};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 
+use crate::models::JobSecretRef;
 use crate::queue::submit::{submit_job, SubmitOptions};
 use crate::queue::{JobStorage, StorageError};
 
@@ -299,6 +300,8 @@ pub struct Schedule {
     pub verify_command: String,
     #[serde(default)]
     pub exclusive: bool,
+    #[serde(default)]
+    pub secret_env: BTreeMap<String, JobSecretRef>,
     // ---- firing bookkeeping ----
     /// Filled by [`Schedule::finalize_new`] when empty (Python
     /// `__post_init__`).
@@ -373,6 +376,7 @@ impl Schedule {
             output_uri: self.output_uri.clone(),
             verify_command: self.verify_command.clone(),
             exclusive: self.exclusive,
+            secret_env: self.secret_env.clone(),
             ..Default::default()
         }
     }

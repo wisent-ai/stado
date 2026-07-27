@@ -38,10 +38,7 @@ fn watchdog(bin_dir: &Path, storage: &Path, args: &[&str]) -> Output {
         .env("WC_LOCAL_STORAGE_PATH", storage)
         .env("STADO_CONFIG", storage.join("no-such-config.json"))
         .env("HOSTNAME", "testbox01")
-        .env(
-            "PATH",
-            format!("{}:/usr/bin:/bin", bin_dir.display()),
-        );
+        .env("PATH", format!("{}:/usr/bin:/bin", bin_dir.display()));
     cmd.output().expect("stado-watchdog binary runs")
 }
 
@@ -64,7 +61,9 @@ fn once_collects_and_uploads_diagnostics() {
     assert_eq!(out.status.code(), Some(0));
     let printed = stdout(&out);
     assert!(
-        printed.trim_end().ends_with("uploaded box_diagnostics/testbox01.json"),
+        printed
+            .trim_end()
+            .ends_with("uploaded box_diagnostics/testbox01.json"),
         "{printed}"
     );
 
@@ -76,7 +75,10 @@ fn once_collects_and_uploads_diagnostics() {
     let text = std::fs::read_to_string(&flat).unwrap();
     assert_eq!(text, std::fs::read_to_string(&nested).unwrap());
     // json.dumps(indent=2, sort_keys=True).
-    assert!(text.find("\"bucket\"").unwrap() < text.find("\"commands\"").unwrap(), "{text}");
+    assert!(
+        text.find("\"bucket\"").unwrap() < text.find("\"commands\"").unwrap(),
+        "{text}"
+    );
 
     let payload: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(payload["schema"], "wisent-box-diagnostics-v1");
@@ -89,14 +91,26 @@ fn once_collects_and_uploads_diagnostics() {
     assert_eq!(commands.len(), 9);
     // Nonzero rc kept, not treated as an error.
     assert_eq!(commands["systemctl-agent"]["rc"], 3);
-    assert_eq!(commands["systemctl-agent"]["stdout_tail"], "stub-systemctl\n");
+    assert_eq!(
+        commands["systemctl-agent"]["stdout_tail"],
+        "stub-systemctl\n"
+    );
     assert_eq!(commands["nvidia-smi"]["stdout_tail"], "stub-nvidia-smi\n");
     // Exact argv including the bucket interpolation.
     assert_eq!(
         commands["capacity-list"]["cmd"],
-        serde_json::json!(["gcloud", "--quiet", "storage", "ls", "gs://test-bucket/capacity/"])
+        serde_json::json!([
+            "gcloud",
+            "--quiet",
+            "storage",
+            "ls",
+            "gs://test-bucket/capacity/"
+        ])
     );
-    assert_eq!(commands["capacity-list"]["stdout_tail"], "stub-gcloud gs://test-bucket/capacity/\n");
+    assert_eq!(
+        commands["capacity-list"]["stdout_tail"],
+        "stub-gcloud gs://test-bucket/capacity/\n"
+    );
 }
 
 #[test]
@@ -117,7 +131,9 @@ fn argparse_error_format_and_exit_codes() {
     assert_eq!(out.status.code(), Some(2));
     assert_eq!(
         stderr(&out),
-        format!("{usage}\nstado-watchdog: error: argument --interval-s: invalid int value: 'abc'\n")
+        format!(
+            "{usage}\nstado-watchdog: error: argument --interval-s: invalid int value: 'abc'\n"
+        )
     );
 
     let out = watchdog(&bin_dir, &storage, &["--bucket"]);
@@ -130,6 +146,11 @@ fn argparse_error_format_and_exit_codes() {
     let out = watchdog(&bin_dir, &storage, &["--help"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     let help = stdout(&out);
-    assert!(help.starts_with(&format!("{usage}\n\nUpload workstation diagnostics to GCS.\n")), "{help}");
+    assert!(
+        help.starts_with(&format!(
+            "{usage}\n\nUpload workstation diagnostics to GCS.\n"
+        )),
+        "{help}"
+    );
     assert!(help.contains("options:\n  -h, --help            show this help message and exit\n"));
 }

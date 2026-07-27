@@ -10,6 +10,8 @@
     <string>Stado</string>
     <key>CFBundleIdentifier</key>
     <string>ai.wisent.stado</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
@@ -20,6 +22,17 @@
     <string>1.0.0</string>
     <key>CFBundleVersion</key>
     <string>1</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>Wisent Identity</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>ai.wisent.stado</string>
+            </array>
+        </dict>
+    </array>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
 

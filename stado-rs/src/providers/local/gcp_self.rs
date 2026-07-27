@@ -3,9 +3,8 @@
 //! Port of `stado/providers/local/gcp_self.py`.
 //!
 //! Lets the agent detect that it is running inside a GCE VM and
-//! self-terminate the VM via gcloud when it has no work left. Only used by
-//! the agent's idle-shutdown branch — the workstation/Vast.ai mode never
-//! calls these.
+//! self-terminate it through the Compute REST API with managed identity.
+//! Only used by the agent's idle-shutdown branch.
 
 use std::time::Duration;
 
@@ -67,36 +66,47 @@ pub async fn self_metadata() -> Result<(String, String), reqwest::Error> {
     Ok((name, zone))
 }
 
-/// If on GCE, delete this VM via gcloud. Best-effort; failure is
-/// non-fatal. Python `self_terminate`.
-///
-/// No-op outside GCE so a misconfigured idle-shutdown on the workstation
-/// can't accidentally power off the box.
+/// If on GCE, delete this VM through the Compute REST API. Best-effort;
+/// failure is non-fatal. No-op outside GCE.
 pub async fn self_terminate(log_fn: &mut dyn FnMut(&str)) {
     if !on_gcp().await {
         return;
     }
-    match self_metadata().await {
-        Ok((name, zone)) => {
-            log_fn(&format!(
-                "GCE self-terminate: instances delete {name} in {zone}"
-            ));
-            // Detached like Python's subprocess.Popen(...DEVNULL...): the
-            // VM is going away; we never wait on the child.
-            if let Err(err) = std::process::Command::new("gcloud")
-                .args(["compute", "instances", "delete"])
-                .arg(&name)
-                .arg(format!("--zone={zone}"))
-                .arg("--quiet")
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-            {
-                log_fn(&format!("GCE self-terminate failed: {err}"));
-            }
+    let result: Result<(), String> = async {
+        let (name, zone) = self_metadata().await.map_err(|err| err.to_string())?;
+        let project = fetch_metadata("project/project-id")
+            .await
+            .map_err(|err| err.to_string())?;
+        log_fn(&format!(
+            "GCE self-terminate: instances delete {name} in {zone}"
+        ));
+        let auth = crate::skarbiec::gcp_provider()
+            .await
+            .map_err(|err| err.to_string())?;
+        let token = auth
+            .token(&["https://www.googleapis.com/auth/cloud-platform"])
+            .await
+            .map_err(|err| err.to_string())?;
+        let response = reqwest::Client::new()
+            .delete(format!(
+                "https://compute.googleapis.com/compute/v1/projects/{project}/zones/{zone}/instances/{name}"
+            ))
+            .bearer_auth(token.as_str())
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "Compute instances.delete returned HTTP {}",
+                response.status()
+            ))
         }
-        Err(err) => log_fn(&format!("GCE self-terminate failed: {err}")),
+    }
+    .await;
+    if let Err(err) = result {
+        log_fn(&format!("GCE self-terminate failed: {err}"));
     }
 }
 

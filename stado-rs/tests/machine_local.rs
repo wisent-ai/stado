@@ -68,7 +68,11 @@ fn request_file(dir: &Path, name: &str, body: &str) -> std::path::PathBuf {
 fn plant_job(storage: &Path, prefix: &str, job_id: &str) -> Job {
     let job = Job::new(job_id, "echo planted");
     std::fs::create_dir_all(storage.join(prefix)).unwrap();
-    std::fs::write(storage.join(prefix).join(format!("{job_id}.json")), job.to_json()).unwrap();
+    std::fs::write(
+        storage.join(prefix).join(format!("{job_id}.json")),
+        job.to_json(),
+    )
+    .unwrap();
     job
 }
 
@@ -84,9 +88,15 @@ fn machine_submit_is_idempotent_and_conflicts_on_digest_mismatch() {
     );
     let request_arg = request.to_str().unwrap();
 
-    let out = stado(&storage, &["machine", "submit", "--request-file", request_arg]);
+    let out = stado(
+        &storage,
+        &["machine", "submit", "--request-file", request_arg],
+    );
     let first = ok_envelope(&out);
-    let job_id = first["job"]["job_id"].as_str().expect("job_id in result").to_string();
+    let job_id = first["job"]["job_id"]
+        .as_str()
+        .expect("job_id in result")
+        .to_string();
     assert_eq!(job_id.len(), 8);
     assert_eq!(first["job"]["state"], Value::from("queued"));
     assert_eq!(first["job"]["command"], Value::from("echo machine-test"));
@@ -98,9 +108,15 @@ fn machine_submit_is_idempotent_and_conflicts_on_digest_mismatch() {
     assert!(storage.join(format!("queue/{job_id}.json")).exists());
 
     // Exact replay returns the STORED result: same job, no new submission.
-    let out = stado(&storage, &["machine", "submit", "--request-file", request_arg]);
+    let out = stado(
+        &storage,
+        &["machine", "submit", "--request-file", request_arg],
+    );
     let replay = ok_envelope(&out);
-    assert_eq!(replay, first, "replay must return the stored result verbatim");
+    assert_eq!(
+        replay, first,
+        "replay must return the stored result verbatim"
+    );
     assert_eq!(
         std::fs::read_dir(storage.join("queue")).unwrap().count(),
         1,
@@ -113,8 +129,15 @@ fn machine_submit_is_idempotent_and_conflicts_on_digest_mismatch() {
         "changed.json",
         r#"{"client_request_id": "req-alpha-1", "command": "echo DIFFERENT"}"#,
     );
-    let out =
-        stado(&storage, &["machine", "submit", "--request-file", changed.to_str().unwrap()]);
+    let out = stado(
+        &storage,
+        &[
+            "machine",
+            "submit",
+            "--request-file",
+            changed.to_str().unwrap(),
+        ],
+    );
     let err = err_envelope(&out);
     assert_eq!(err["code"], Value::from("IDEMPOTENCY_CONFLICT"), "{err}");
     assert_eq!(err["retryable"], Value::from(false));
@@ -132,10 +155,19 @@ fn machine_submit_validates_request_shape() {
         "unknown.json",
         r#"{"client_request_id": "r1", "command": "x", "surprise": true}"#,
     );
-    let out = stado(&storage, &["machine", "submit", "--request-file", bad.to_str().unwrap()]);
+    let out = stado(
+        &storage,
+        &["machine", "submit", "--request-file", bad.to_str().unwrap()],
+    );
     let err = err_envelope(&out);
     assert_eq!(err["code"], Value::from("INVALID_REQUEST"), "{err}");
-    assert!(err["message"].as_str().unwrap().contains("unknown request field(s): surprise"), "{err}");
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap()
+            .contains("unknown request field(s): surprise"),
+        "{err}"
+    );
 
     // Path-unsafe client_request_id.
     let bad = request_file(
@@ -143,18 +175,32 @@ fn machine_submit_validates_request_shape() {
         "badid.json",
         r#"{"client_request_id": "a/b", "command": "x"}"#,
     );
-    let out = stado(&storage, &["machine", "submit", "--request-file", bad.to_str().unwrap()]);
+    let out = stado(
+        &storage,
+        &["machine", "submit", "--request-file", bad.to_str().unwrap()],
+    );
     let err = err_envelope(&out);
     assert_eq!(err["code"], Value::from("INVALID_REQUEST"), "{err}");
 
     // Unreadable request file.
     let out = stado(
         &storage,
-        &["machine", "submit", "--request-file", dir.path().join("nope.json").to_str().unwrap()],
+        &[
+            "machine",
+            "submit",
+            "--request-file",
+            dir.path().join("nope.json").to_str().unwrap(),
+        ],
     );
     let err = err_envelope(&out);
     assert_eq!(err["code"], Value::from("INVALID_REQUEST"), "{err}");
-    assert!(err["message"].as_str().unwrap().contains("cannot read request JSON"), "{err}");
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot read request JSON"),
+        "{err}"
+    );
 
     // Source archives are gated to the GCS backend.
     let archive = dir.path().join("src.tar.gz");
@@ -167,7 +213,10 @@ fn machine_submit_validates_request_shape() {
             archive.display()
         ),
     );
-    let out = stado(&storage, &["machine", "submit", "--request-file", bad.to_str().unwrap()]);
+    let out = stado(
+        &storage,
+        &["machine", "submit", "--request-file", bad.to_str().unwrap()],
+    );
     let err = err_envelope(&out);
     // The placeholder is not a tar.gz: validation fails before the backend gate.
     assert_eq!(err["code"], Value::from("INVALID_SOURCE_ARCHIVE"), "{err}");
@@ -188,28 +237,47 @@ fn machine_status_and_logs_cursor_paging() {
     let out = stado(&storage, &["machine", "status", "ffffffff"]);
     let err = err_envelope(&out);
     assert_eq!(err["code"], Value::from("NOT_FOUND"), "{err}");
-    assert_eq!(err["message"], Value::from("job 'ffffffff' was not found"), "{err}");
+    assert_eq!(
+        err["message"],
+        Value::from("job 'ffffffff' was not found"),
+        "{err}"
+    );
 
     // Plant a command log and page through it by byte cursor.
     let output = storage.join("status/aa11bb22/output");
     std::fs::create_dir_all(&output).unwrap();
     std::fs::write(output.join("command_output.log"), b"0123456789").unwrap();
 
-    let out = stado(&storage, &["machine", "logs", "aa11bb22", "--cursor", "0", "--limit", "4"]);
+    let out = stado(
+        &storage,
+        &[
+            "machine", "logs", "aa11bb22", "--cursor", "0", "--limit", "4",
+        ],
+    );
     let page = ok_envelope(&out);
     assert_eq!(page["text"], Value::from("0123"));
     assert_eq!(page["cursor"], Value::from(0));
     assert_eq!(page["next_cursor"], Value::from(4));
     assert_eq!(page["eof"], Value::from(false));
 
-    let out = stado(&storage, &["machine", "logs", "aa11bb22", "--cursor", "4", "--limit", "100"]);
+    let out = stado(
+        &storage,
+        &[
+            "machine", "logs", "aa11bb22", "--cursor", "4", "--limit", "100",
+        ],
+    );
     let page = ok_envelope(&out);
     assert_eq!(page["text"], Value::from("456789"));
     assert_eq!(page["next_cursor"], Value::from(10));
     assert_eq!(page["eof"], Value::from(true));
 
     // Cursor beyond the end is INVALID_CURSOR.
-    let out = stado(&storage, &["machine", "logs", "aa11bb22", "--cursor", "11", "--limit", "5"]);
+    let out = stado(
+        &storage,
+        &[
+            "machine", "logs", "aa11bb22", "--cursor", "11", "--limit", "5",
+        ],
+    );
     let err = err_envelope(&out);
     assert_eq!(err["code"], Value::from("INVALID_CURSOR"), "{err}");
     // Negative cursor and non-positive limit are INVALID_CURSOR too.
@@ -261,7 +329,13 @@ fn machine_artifacts_download_verifies_manifest() {
     let out_dir = dir.path().join("download");
     let out = stado(
         &storage,
-        &["machine", "artifacts", "artjob77", "--output-dir", out_dir.to_str().unwrap()],
+        &[
+            "machine",
+            "artifacts",
+            "artjob77",
+            "--output-dir",
+            out_dir.to_str().unwrap(),
+        ],
     );
     let result = ok_envelope(&out);
     assert_eq!(result["job_id"], Value::from("artjob77"));
@@ -274,19 +348,37 @@ fn machine_artifacts_download_verifies_manifest() {
         artifacts[0]["sha256"],
         Value::from(hex::encode(sha2::Sha256::digest(b"{\"loss\": 0.1}")))
     );
-    assert_eq!(artifacts[1]["relative_path"], Value::from("nested/blob.bin"));
+    assert_eq!(
+        artifacts[1]["relative_path"],
+        Value::from("nested/blob.bin")
+    );
     // Files landed under the output dir, no tempfiles left behind.
-    assert_eq!(std::fs::read(out_dir.join("metrics.json")).unwrap(), b"{\"loss\": 0.1}");
-    assert_eq!(std::fs::read(out_dir.join("nested/blob.bin")).unwrap(), b"\x00\x01\x02");
+    assert_eq!(
+        std::fs::read(out_dir.join("metrics.json")).unwrap(),
+        b"{\"loss\": 0.1}"
+    );
+    assert_eq!(
+        std::fs::read(out_dir.join("nested/blob.bin")).unwrap(),
+        b"\x00\x01\x02"
+    );
     assert!(!std::fs::read_dir(&out_dir).unwrap().any(|e| {
-        e.unwrap().file_name().to_string_lossy().starts_with(".stado-")
+        e.unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".stado-")
     }));
 
     // Non-terminal job: NOT_TERMINAL.
     plant_job(&storage, "running", "running1");
     let out = stado(
         &storage,
-        &["machine", "artifacts", "running1", "--output-dir", out_dir.to_str().unwrap()],
+        &[
+            "machine",
+            "artifacts",
+            "running1",
+            "--output-dir",
+            out_dir.to_str().unwrap(),
+        ],
     );
     let err = err_envelope(&out);
     assert_eq!(err["code"], Value::from("NOT_TERMINAL"), "{err}");
@@ -295,7 +387,13 @@ fn machine_artifacts_download_verifies_manifest() {
     plant_job(&storage, "failed", "emptyj1");
     let out = stado(
         &storage,
-        &["machine", "artifacts", "emptyj1", "--output-dir", out_dir.to_str().unwrap()],
+        &[
+            "machine",
+            "artifacts",
+            "emptyj1",
+            "--output-dir",
+            out_dir.to_str().unwrap(),
+        ],
     );
     let err = err_envelope(&out);
     assert_eq!(err["code"], Value::from("NO_ARTIFACTS"), "{err}");

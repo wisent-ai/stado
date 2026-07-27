@@ -16,6 +16,7 @@
 //! resolved on the first API call, so `get_provider("gcp")` stays a cheap,
 //! sync factory. Failures surface on the first method call instead.
 
+pub mod inventory;
 pub mod stockout;
 
 use std::collections::{BTreeMap, HashSet};
@@ -96,7 +97,7 @@ impl GceClient {
     /// (cloud-platform scope). No credentials is a hard error (same as the
     /// Python SDK client construction).
     pub async fn new(project: &str) -> Result<Self, GceError> {
-        let auth = gcp_auth::provider()
+        let auth = crate::skarbiec::gcp_provider()
             .await
             .map_err(|err| GceError::Auth(err.to_string()))?;
         Ok(Self::assemble(

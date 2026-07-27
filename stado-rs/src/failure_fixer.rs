@@ -51,6 +51,8 @@ pub enum FixError {
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Skarbiec(#[from] crate::skarbiec::SkarbiecError),
 }
 
 /// One failed job's relevant fields, parsed from `failed/<jid>.json`
@@ -240,15 +242,21 @@ pub async fn dispatch_fix(
             "job_id": rec.job_id,
             "status": CLAUDE_NOT_FOUND,
             "attempts": attempts,
-            "error": "`claude` CLI not on PATH. Install Claude Code and \
-                      complete OAuth before running the failure-fixer.",
+            "error": "`claude` CLI not on PATH. Install Claude Code before \
+                      running the failure-fixer.",
         }));
     };
-    // Python subprocess.run([claude, "-p", prompt], capture_output=True,
-    // text=True) — NO timeout; a Claude session runs as long as it runs.
+    let anthropic_key = crate::skarbiec::read_string("stado-anthropic", "api_key")
+        .await?
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            crate::skarbiec::SkarbiecError::MissingValue("stado-anthropic/api_key".into())
+        })?;
+    // The CLI receives its credential from Skarbiec for this child only.
     let proc = std::process::Command::new(&claude)
         .arg("-p")
         .arg(&prompt)
+        .env("ANTHROPIC_API_KEY", anthropic_key)
         .output()?;
     let rc = proc.status.code().unwrap_or(-1);
     let stdout = String::from_utf8_lossy(&proc.stdout);
