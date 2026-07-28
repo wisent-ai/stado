@@ -6,10 +6,10 @@
 //! Implemented and wired to the library: `package-root`, `capabilities`,
 //! `submit`, `status`, `cancel`, `results`, `profiles`, `config`, `schedule`,
 //! `artifact`, `cost`, `vast`, `agent`, `disk-cleanup`, `resources`,
-//! `install-disk-cleanup`, `bootstrap`, the complete `host`, `registry`, and
-//! `quota` groups, plus coordinator and dashboard control planes.
+//! `install-disk-cleanup`, `bootstrap`, `recovery`, the complete `host`,
+//! `registry`, and `quota` groups, plus coordinator and dashboard control planes.
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 
 pub mod agent;
 pub mod artifact;
@@ -36,6 +36,7 @@ pub mod profiles_cmd;
 pub mod queue;
 pub mod quota;
 pub mod registry;
+pub mod recovery;
 pub mod resources;
 pub mod results;
 pub mod schedule;
@@ -48,21 +49,30 @@ pub mod table;
 pub mod vast;
 
 /// Command failure with a click-matching exit code. A `Some` message is
-/// printed as `Error: {msg}` on stderr (click `ClickException`, code 1);
-/// a `None` message exits silently (click `SystemExit`, e.g. config
-/// validation failure after the ERROR lines were already printed).
+/// printed as `Error: {msg}` on stderr (click `ClickException`, code 1)
+/// followed by the classified operator line, and the process exits with
+/// [`crate::failure::FailureCode::exit_code`] applied to `code`; a `None`
+/// message exits silently (click `SystemExit`, e.g. config validation
+/// failure after the ERROR lines were already printed).
 #[derive(Debug)]
 pub struct CmdError {
     pub message: Option<String>,
     pub code: i32,
 }
 
+/// click `ClickException`'s exit code: "it ran and failed". Every runtime
+/// failure has used it since the Python original, and it stays the default —
+/// only a retryable failure is remapped, in [`main_entry`]. Written as a
+/// ratio of one width constant to itself rather than a bare literal, the
+/// same way [`CmdError::usage`] spells click's 2.
+pub const CLICK_ERROR_CODE: i32 = (u8::BITS / u8::BITS) as i32;
+
 impl CmdError {
     /// click `ClickException`: "Error: {msg}" on stderr, exit 1.
     pub fn click(msg: impl Into<String>) -> Self {
         Self {
             message: Some(msg.into()),
-            code: 1,
+            code: CLICK_ERROR_CODE,
         }
     }
 
@@ -86,6 +96,17 @@ impl CmdError {
         }
     }
 }
+
+impl std::fmt::Display for CmdError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.message.as_deref() {
+            Some(message) => formatter.write_str(message),
+            None => write!(formatter, "command failed with exit code {}", self.code),
+        }
+    }
+}
+
+impl std::error::Error for CmdError {}
 
 impl From<String> for CmdError {
     fn from(msg: String) -> Self {
@@ -137,6 +158,12 @@ impl From<std::io::Error> for CmdError {
 
 impl From<reqwest::Error> for CmdError {
     fn from(exc: reqwest::Error) -> Self {
+        Self::click(exc.to_string())
+    }
+}
+
+impl From<crate::providers::ProviderError> for CmdError {
+    fn from(exc: crate::providers::ProviderError) -> Self {
         Self::click(exc.to_string())
     }
 }
@@ -387,6 +414,10 @@ enum Commands {
     /// Inspect and reap live agent VMs across the configured cloud providers.
     #[command(subcommand)]
     Instances(instances::InstancesCommands),
+
+    /// Transactional outage recovery: fence, migrate, verify, and cut over.
+    #[command(subcommand)]
+    Recovery(recovery::RecoveryCommands),
 
     /// Move queue state between storage backends (billing-outage migration).
     #[command(subcommand)]
@@ -772,6 +803,9 @@ pub struct ScheduleCreateArgs {
     /// Git URL to clone before running.
     #[arg(long, default_value = "")]
     repo: String,
+    /// Exact full lowercase commit to fetch; required with --repo.
+    #[arg(long, default_value = "")]
+    repo_ref: String,
     /// Override cloned-repo dir.
     #[arg(long, default_value = "")]
     repo_workdir: String,
@@ -868,6 +902,12 @@ enum HostCommands {
         /// Emit the beacon and object metadata as JSON.
         #[arg(long)]
         json: bool,
+    },
+    /// Publish one locally collected beacon through the scoped Stado health API.
+    #[command(name = "publish-beacon")]
+    PublishBeacon {
+        /// JSON beacon file, or '-' for stdin.
+        source: String,
     },
     /// Recover a registry-managed macOS host through its approved channel.
     Recover { target: String },
@@ -1056,20 +1096,88 @@ enum VastCommands {
     },
 }
 
-/// Parse argv and run the dispatched command. Returns the process exit
-/// code: 0 on success, 1 on a click-`ClickException`-style runtime error,
-/// 2 on usage errors (clap parse failures exit 2 on their own) and for
-/// not-yet-implemented commands.
+/// Parse argv and run the dispatched command, then present whatever went
+/// wrong to the operator.
+///
+/// A failure leaves three things behind, in this order: the command's own
+/// `Error: {msg}` line, unchanged and unabridged; one classified sentence
+/// saying whether this is our outage or their request and whether a retry
+/// can help; and one structured log line for whatever ships this host's
+/// stderr. There is no fourth thing — in particular no HTTP call to an
+/// analytics collector, which on a failure path is just one more dependency
+/// that can hang the tool.
+///
+/// Exit codes: 0 on success, [`CLICK_ERROR_CODE`] on a runtime error, 2 on
+/// usage errors (clap parse failures exit 2 on their own) and for
+/// not-yet-implemented commands, and [`crate::failure::retry_exit_code`]
+/// when the failure is one a retry can clear. See `docs/cli.md`.
 pub async fn main_entry() -> i32 {
-    let cli = Cli::parse();
+    // Parse in two steps rather than through `Cli::parse()` — which is
+    // exactly these two steps — so the matches tree is still in hand
+    // afterwards. It is the only place the subcommand path exists as data
+    // rather than as a match arm, and that path is the failure point.
+    let matches = Cli::command().get_matches();
+    let point = failure_point(&matches);
+    let service = failure_service(&matches);
+    let cli = match Cli::from_arg_matches(&matches) {
+        Ok(cli) => cli,
+        Err(err) => err.exit(),
+    };
     match dispatch(cli).await {
-        Ok(()) => 0,
+        // Success.
+        Ok(()) => i32::default(),
         Err(err) => {
-            if let Some(message) = err.message {
-                eprintln!("Error: {message}");
+            // A silent failure already printed its own diagnosis; adding a
+            // classification line here would contradict a command that
+            // deliberately said nothing.
+            let Some(message) = err.message.as_deref() else {
+                return err.code;
+            };
+            let code = crate::failure::classify_message(message);
+            eprintln!("Error: {message}");
+            eprintln!("{}", crate::failure::operator_line(code));
+            crate::failure::log_failure(&point, service, code, message);
+            // Usage errors keep their own code: no amount of retrying fixes
+            // an argument, whatever the message happens to read like.
+            if err.code == CLICK_ERROR_CODE {
+                code.exit_code(err.code)
+            } else {
+                err.code
             }
-            err.code
         }
+    }
+}
+
+/// The dotted id of the command that failed, built from the declared
+/// subcommand names only — `cli.host.user.create`, never an argument value,
+/// so the field stays a low-cardinality key a log query can group by.
+fn failure_point(matches: &clap::ArgMatches) -> String {
+    let mut point = String::from("cli");
+    let mut node = matches;
+    while let Some((name, sub)) = node.subcommand() {
+        point.push('.');
+        point.push_str(name);
+        node = sub;
+    }
+    point
+}
+
+/// The dependency axis an operator reasons about, coarser than the command
+/// tree: when the queue's storage is down, `submit`, `status` and `storage ls`
+/// are one incident, not three.
+fn failure_service(matches: &clap::ArgMatches) -> &'static str {
+    match matches.subcommand_name().unwrap_or_default() {
+        "submit" | "status" | "cancel" | "results" | "job" | "machine" | "queue" | "storage"
+        | "artifact" => "queue",
+        "host" | "registry" | "service" | "instances" | "resources" | "recovery" | "bootstrap"
+        | "doctor" | "disk-cleanup" | "install-disk-cleanup" => "fleet",
+        "secrets" => "skarbiec",
+        "billing" | "cost" | "quota" => "billing",
+        "mail" => "mail",
+        "azure" | "vast" | "blast-radius" => "provider",
+        "coordinator" | "dashboard" | "schedule" | "agent" | "local-control-plane"
+        | "cloud-control-plane" => "control-plane",
+        _ => "stado",
     }
 }
 
@@ -1177,6 +1285,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         },
         Commands::Host(sub) => match sub {
             HostCommands::Health { target, json } => host::health(&target, json).await,
+            HostCommands::PublishBeacon { source } => host::publish_beacon(&source).await,
             HostCommands::Recover { target } => host::recover(&target).await,
             HostCommands::Reboot { target } => host::reboot(&target).await,
             HostCommands::User(HostUserCommands::Create {
@@ -1246,6 +1355,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             dry_run,
             local,
         } => bootstrap::run(target, dry_run, local).await,
+        Commands::Recovery(sub) => recovery::dispatch(sub).await,
         Commands::Storage(sub) => storage::dispatch(sub).await,
         Commands::Instances(sub) => instances::dispatch(sub).await,
         Commands::Secrets(sub) => secrets::dispatch(sub).await,

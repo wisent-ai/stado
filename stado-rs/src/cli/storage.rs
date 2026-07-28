@@ -64,12 +64,14 @@ pub enum StorageCommands {
     /// Compare two stores object-for-object. Read-only; copies nothing.
     Verify(Box<StorageVerifyArgs>),
     /// Upload a product object through the provider-neutral Stado namespace.
+    /// Release objects are always create-only, even without --if-absent.
     Put(StoragePutArgs),
     /// Download a product object through the provider-neutral Stado namespace.
     Get(StorageGetArgs),
     /// List product objects in one provider-neutral Stado namespace.
     Objects(StorageObjectsArgs),
     /// Delete a product object through the provider-neutral Stado namespace.
+    /// Release objects are immutable and cannot be deleted.
     Rm(StorageRmArgs),
     /// Print the gateway URL; only stado://releases/... is bearer-free.
     Url(StorageUrlArgs),
@@ -81,45 +83,45 @@ pub enum StorageCommands {
 pub struct EndpointArgs {
     /// Source backend.
     #[arg(long, value_parser = ["gcs", "azure", "s3", "local"])]
-    from: String,
+    pub(crate) from: String,
     /// Destination backend.
     #[arg(long, value_parser = ["gcs", "azure", "s3", "local"])]
-    to: String,
+    pub(crate) to: String,
 
     /// Source bucket (gcs, s3).
     #[arg(long, default_value = "")]
-    from_bucket: String,
+    pub(crate) from_bucket: String,
     /// Destination bucket (gcs, s3).
     #[arg(long, default_value = "")]
-    to_bucket: String,
+    pub(crate) to_bucket: String,
     /// Source storage account (azure).
     #[arg(long, default_value = "")]
-    from_account: String,
+    pub(crate) from_account: String,
     /// Destination storage account (azure).
     #[arg(long, default_value = "")]
-    to_account: String,
+    pub(crate) to_account: String,
     /// Source container (azure).
     #[arg(long, default_value = "")]
-    from_container: String,
+    pub(crate) from_container: String,
     /// Destination container (azure).
     #[arg(long, default_value = "")]
-    to_container: String,
+    pub(crate) to_container: String,
     /// Source root directory (local).
     #[arg(long, default_value = "")]
-    from_path: String,
+    pub(crate) from_path: String,
     /// Destination root directory (local).
     #[arg(long, default_value = "")]
-    to_path: String,
+    pub(crate) to_path: String,
     /// Source region (s3); empty defers to the AWS default chain.
     #[arg(long, default_value = "")]
-    from_region: String,
+    pub(crate) from_region: String,
     /// Destination region (s3); empty defers to the AWS default chain.
     #[arg(long, default_value = "")]
-    to_region: String,
+    pub(crate) to_region: String,
 }
 
 impl EndpointArgs {
-    fn source(&self) -> Endpoint {
+    pub(crate) fn source(&self) -> Endpoint {
         Endpoint {
             kind: self.from.clone(),
             bucket: self.from_bucket.clone(),
@@ -130,7 +132,7 @@ impl EndpointArgs {
         }
     }
 
-    fn destination(&self) -> Endpoint {
+    pub(crate) fn destination(&self) -> Endpoint {
         Endpoint {
             kind: self.to.clone(),
             bucket: self.to_bucket.clone(),
@@ -210,7 +212,8 @@ pub struct StoragePutArgs {
     uri: String,
     /// Local source file, or '-' for stdin.
     source: String,
-    /// Refuse to replace an existing object.
+    /// Refuse to replace an existing object. Implied for stado://releases/...
+    /// because release objects are immutable.
     #[arg(long)]
     if_absent: bool,
     /// Media type retained as provider-neutral object metadata.
@@ -309,6 +312,7 @@ async fn run(args: &StorageCopyArgs) -> Result<(), CmdError> {
             concurrency: args.concurrency.get(),
         },
         args.dry_run,
+        true,
     )
     .await
 }
@@ -327,15 +331,17 @@ async fn backup(args: &StorageBackupArgs) -> Result<(), CmdError> {
             concurrency: args.concurrency.get(),
         },
         args.dry_run,
+        true,
     )
     .await
 }
 
-async fn copy_between(
+pub(crate) async fn copy_between(
     from: Endpoint,
     to: Endpoint,
     options: CopyOptions,
     dry_run: bool,
+    warn_live: bool,
 ) -> Result<(), CmdError> {
     if from.describe() == to.describe() {
         return Err(CmdError::click(format!(
@@ -351,13 +357,17 @@ async fn copy_between(
     if dry_run {
         let plan = copy::plan(&source, &destination, &options).await?;
         print_plan(&plan);
-        print_split_brain_warning();
+        if warn_live {
+            print_split_brain_warning();
+        }
         return Ok(());
     }
 
     let report = copy::copy(&source, &destination, &options).await?;
     print_report(&report);
-    print_split_brain_warning();
+    if warn_live {
+        print_split_brain_warning();
+    }
     if !report.is_clean() {
         return Err(CmdError::click(format!(
             "{} object(s) failed to copy; the resume sentinel at {} was left at the last \
@@ -943,12 +953,31 @@ impl RemoteObjectApi {
         }))
     }
 
+    fn configured_release_reader() -> Result<Option<Self>, CmdError> {
+        let Some(base_url) = configured_object_base_url("STADO_API_URL")? else {
+            return Ok(None);
+        };
+        let http = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?;
+        Ok(Some(Self {
+            http,
+            base_url,
+            token: String::new(),
+        }))
+    }
+
     fn endpoint(&self, route: &str, query: &[(&str, &str)]) -> Result<url::Url, CmdError> {
         object_api_endpoint(&self.base_url, route, query)
     }
 
     fn request(&self, method: reqwest::Method, endpoint: url::Url) -> reqwest::RequestBuilder {
-        self.http.request(method, endpoint).bearer_auth(&self.token)
+        let request = self.http.request(method, endpoint);
+        if self.token.is_empty() {
+            request
+        } else {
+            request.bearer_auth(&self.token)
+        }
     }
 
     async fn put(
@@ -979,6 +1008,13 @@ impl RemoteObjectApi {
         let endpoint = self.endpoint("/api/object", &[("uri", uri)])?;
         let response = self.request(reqwest::Method::GET, endpoint).send().await?;
         self.success_body(response, max_object_api_download_body(), "object GET")
+            .await
+    }
+
+    async fn get_release(&self, uri: &str) -> Result<Vec<u8>, CmdError> {
+        let endpoint = self.endpoint("/api/release/object", &[("uri", uri)])?;
+        let response = self.request(reqwest::Method::GET, endpoint).send().await?;
+        self.success_body(response, max_object_api_download_body(), "release GET")
             .await
     }
 
@@ -1200,6 +1236,8 @@ fn response_body_detail(body: &[u8], secret: &str) -> String {
     let detail = detail.trim();
     if detail.is_empty() {
         "<empty response body>".to_string()
+    } else if secret.is_empty() {
+        detail.to_string()
     } else {
         detail.replace(secret, "[REDACTED]")
     }
@@ -1218,15 +1256,16 @@ fn read_object_source(source: &str) -> Result<Vec<u8>, CmdError> {
 async fn put(args: &StoragePutArgs) -> Result<(), CmdError> {
     let object = crate::object_store::ObjectRef::parse(&args.uri)?;
     let uri = object.to_string();
+    let create_only = args.if_absent || object.namespace() == "releases";
     if let Some(remote) = RemoteObjectApi::configured()? {
         let bytes = read_object_source(&args.source)?;
         remote
-            .put(&uri, &args.content_type, args.if_absent, bytes)
+            .put(&uri, &args.content_type, create_only, bytes)
             .await?;
     } else {
         let path = object.storage_path();
         let store = JobStorage::new().await?;
-        let uploaded = if args.if_absent {
+        let uploaded = if create_only {
             if args.source == "-" {
                 let bytes = read_object_source(&args.source)?;
                 let mut source = tempfile::NamedTempFile::new()?;
@@ -1244,8 +1283,13 @@ async fn put(args: &StoragePutArgs) -> Result<(), CmdError> {
         };
 
         if !uploaded {
+            let policy = if object.namespace() == "releases" {
+                "release objects are immutable"
+            } else {
+                "--if-absent refused to replace it"
+            };
             return Err(CmdError::click(format!(
-                "{object} already exists; --if-absent refused to replace it"
+                "{object} already exists; {policy}"
             )));
         }
 
@@ -1268,7 +1312,17 @@ async fn put(args: &StoragePutArgs) -> Result<(), CmdError> {
 async fn get(args: &StorageGetArgs) -> Result<(), CmdError> {
     let object = crate::object_store::ObjectRef::parse(&args.uri)?;
     let uri = object.to_string();
-    let bytes = if let Some(remote) = RemoteObjectApi::configured()? {
+    let bytes = if object.namespace() == "releases" {
+        if let Some(remote) = RemoteObjectApi::configured_release_reader()? {
+            remote.get_release(&uri).await?
+        } else {
+            let store = JobStorage::new().await?;
+            let Some(bytes) = store.read_bytes(&object.storage_path()).await? else {
+                return Err(CmdError::click(format!("{object}: absent")));
+            };
+            bytes
+        }
+    } else if let Some(remote) = RemoteObjectApi::configured()? {
         remote.get(&uri).await?
     } else {
         let store = JobStorage::new().await?;
@@ -1335,6 +1389,11 @@ async fn objects(args: &StorageObjectsArgs) -> Result<(), CmdError> {
 
 async fn rm(args: &StorageRmArgs) -> Result<(), CmdError> {
     let object = crate::object_store::ObjectRef::parse(&args.uri)?;
+    if object.namespace() == "releases" {
+        return Err(CmdError::click(
+            "release objects are immutable and cannot be deleted",
+        ));
+    }
     let uri = object.to_string();
     if let Some(remote) = RemoteObjectApi::configured()? {
         remote.delete(&uri).await?;
@@ -1385,6 +1444,8 @@ struct PrefixDiff {
     missing: Vec<String>,
     extra: Vec<String>,
     metadata_gaps: Vec<(String, Vec<String>)>,
+    body_mismatches: Vec<String>,
+    body_errors: Vec<(String, String)>,
     source_error: Option<String>,
     destination_error: Option<String>,
 }
@@ -1396,6 +1457,8 @@ impl PrefixDiff {
             || !self.missing.is_empty()
             || !self.extra.is_empty()
             || !self.metadata_gaps.is_empty()
+            || !self.body_mismatches.is_empty()
+            || !self.body_errors.is_empty()
     }
 
     fn status(&self) -> String {
@@ -1412,8 +1475,44 @@ impl PrefixDiff {
     }
 }
 
-/// Compare one prefix. Read-only: this lists both ends and downloads
-/// nothing, so it is safe against a store the operator is unsure about.
+/// Result of comparing one common object's body bytes.
+struct BodyCheck {
+    name: String,
+    mismatch: bool,
+    error: Option<String>,
+}
+
+async fn compare_body(
+    source: Arc<dyn BlobBackend>,
+    destination: Arc<dyn BlobBackend>,
+    name: String,
+) -> BodyCheck {
+    let (source_body, destination_body) = tokio::join!(
+        source.download_bytes(&name),
+        destination.download_bytes(&name),
+    );
+    let outcome = match (source_body, destination_body) {
+        (Ok(Some(source_body)), Ok(Some(destination_body))) => {
+            return BodyCheck {
+                name,
+                mismatch: source_body != destination_body,
+                error: None,
+            };
+        }
+        (Ok(None), _) => "source object vanished after listing".to_string(),
+        (_, Ok(None)) => "destination object vanished after listing".to_string(),
+        (Err(error), _) => format!("source body read failed: {error}"),
+        (_, Err(error)) => format!("destination body read failed: {error}"),
+    };
+    BodyCheck {
+        name,
+        mismatch: false,
+        error: Some(outcome),
+    }
+}
+
+/// Compare one prefix. Read-only: lists metadata and downloads both bodies
+/// for every object present on both sides; it never writes or repairs.
 async fn diff_prefix(
     source: &Arc<dyn BlobBackend>,
     destination: &Arc<dyn BlobBackend>,
@@ -1471,6 +1570,24 @@ async fn diff_prefix(
         .filter(|name| !source_names.contains(*name))
         .cloned()
         .collect();
+    let body_checks: Vec<BodyCheck> = futures::stream::iter(
+        source_names
+            .iter()
+            .filter(|name| landed.contains_key(*name))
+            .cloned(),
+    )
+    .map(|name| compare_body(Arc::clone(source), Arc::clone(destination), name))
+    .buffered(copy::DEFAULT_CONCURRENCY)
+    .collect()
+    .await;
+    for check in body_checks {
+        if check.mismatch {
+            diff.body_mismatches.push(check.name);
+        } else if let Some(error) = check.error {
+            diff.body_errors.push((check.name, error));
+        }
+    }
+
     diff
 }
 
@@ -1521,12 +1638,24 @@ fn selected_prefixes(requested: &[String]) -> Vec<String> {
     requested.to_vec()
 }
 
-/// The post-copy check `deploy/MIGRATE_TO_STADO.md` demands ("verify object
-/// counts match") and never provided. Reads both stores and writes to
-/// neither; exits non-zero on any divergence.
+/// Full post-copy verification. Reads names, metadata, and body bytes from
+/// both stores and writes to neither; exits non-zero on any divergence.
 async fn verify(args: &StorageVerifyArgs) -> Result<(), CmdError> {
-    let from = args.ends.source();
-    let to = args.ends.destination();
+    verify_between(
+        args.ends.source(),
+        args.ends.destination(),
+        &args.prefix,
+        args.json,
+    )
+    .await
+}
+
+pub(crate) async fn verify_between(
+    from: Endpoint,
+    to: Endpoint,
+    requested_prefixes: &[String],
+    as_json: bool,
+) -> Result<(), CmdError> {
     if from.describe() == to.describe() {
         return Err(CmdError::click(format!(
             "source and destination are the same store ({}); there is nothing to compare",
@@ -1535,7 +1664,7 @@ async fn verify(args: &StorageVerifyArgs) -> Result<(), CmdError> {
     }
     let source = from.build().await?;
     let destination = to.build().await?;
-    let prefixes = selected_prefixes(&args.prefix);
+    let prefixes = selected_prefixes(requested_prefixes);
 
     let diffs: Vec<PrefixDiff> = futures::stream::iter(prefixes.iter())
         .map(|prefix| diff_prefix(&source, &destination, prefix))
@@ -1546,10 +1675,15 @@ async fn verify(args: &StorageVerifyArgs) -> Result<(), CmdError> {
     let missing: usize = diffs.iter().map(|diff| diff.missing.len()).sum();
     let extra: usize = diffs.iter().map(|diff| diff.extra.len()).sum();
     let gaps: usize = diffs.iter().map(|diff| diff.metadata_gaps.len()).sum();
+    let body_mismatches: usize = diffs
+        .iter()
+        .map(|diff| diff.body_mismatches.len())
+        .sum();
+    let body_errors: usize = diffs.iter().map(|diff| diff.body_errors.len()).sum();
     let diverging = diffs.iter().filter(|diff| diff.diverged()).count();
     let divergent = diffs.iter().any(PrefixDiff::diverged);
 
-    if args.json {
+    if as_json {
         echo_json(&json!({
             "from": from.describe(),
             "to": to.describe(),
@@ -1557,6 +1691,8 @@ async fn verify(args: &StorageVerifyArgs) -> Result<(), CmdError> {
             "missing_at_destination": missing,
             "only_at_destination": extra,
             "metadata_mismatches": gaps,
+            "body_mismatches": body_mismatches,
+            "body_read_errors": body_errors,
             "diverging_prefixes": diverging,
             "divergent": divergent,
         }))?;
@@ -1576,7 +1712,8 @@ async fn verify(args: &StorageVerifyArgs) -> Result<(), CmdError> {
     Err(CmdError::click(format!(
         "{diverging} of {} prefix(es) diverge: {missing} object(s) missing at the \
          destination, {extra} only at the destination, {gaps} whose metadata did not \
-         land. Nothing was copied — re-run `stado storage copy` with the same locators, \
+         land, {body_mismatches} with different content, {body_errors} with unreadable \
+         content. Nothing was copied — re-run `stado storage copy` with the same locators, \
          then verify again.",
         diffs.len()
     )))
@@ -1593,6 +1730,12 @@ fn diff_json(diff: &PrefixDiff) -> Value {
             .metadata_gaps
             .iter()
             .map(|(name, keys)| json!({"name": name, "keys": keys}))
+            .collect::<Vec<Value>>(),
+        "body_mismatches": diff.body_mismatches,
+        "body_read_errors": diff
+            .body_errors
+            .iter()
+            .map(|(name, error)| json!({"name": name, "error": error}))
             .collect::<Vec<Value>>(),
         "source_error": diff.source_error,
         "destination_error": diff.destination_error,
@@ -1611,6 +1754,7 @@ fn print_diff_table(diffs: &[PrefixDiff]) {
                 diff.missing.len().to_string(),
                 diff.extra.len().to_string(),
                 diff.metadata_gaps.len().to_string(),
+                (diff.body_mismatches.len() + diff.body_errors.len()).to_string(),
                 diff.status(),
             ]
         })
@@ -1623,6 +1767,7 @@ fn print_diff_table(diffs: &[PrefixDiff]) {
             "MISSING",
             "EXTRA",
             "META-DIFF",
+            "BODY-DIFF",
             "STATUS",
         ],
         &rows,
@@ -1649,6 +1794,12 @@ fn print_diff_detail(diffs: &[PrefixDiff]) {
         }
         for (name, keys) in &diff.metadata_gaps {
             println!("  metadata did not land on {name}: {}", keys.join(", "));
+        }
+        for name in &diff.body_mismatches {
+            println!("  body differs: {name}");
+        }
+        for (name, error) in &diff.body_errors {
+            println!("  body unreadable for {name}: {error}");
         }
     }
 }
