@@ -495,3 +495,42 @@ pub fn value_for(name: &str) -> Option<String> {
     }
     None
 }
+
+/// Candidate unlock phrases for a passphrase-protected key, newest first.
+///
+/// A protected key is useless without its phrase, and the phrase is the one
+/// piece of key material the design deliberately keeps off the machine. When it
+/// is nevertheless in a transcript — because some tool printed it, or a process
+/// listing caught it — this is where recovery finds it.
+///
+/// Returns the values in process memory for a caller that tests them. Nothing
+/// here prints, and the caller is expected to report which NAME worked rather
+/// than what it contained.
+pub fn unlock_candidates() -> Vec<(String, String)> {
+    let interesting = |name: &str| {
+        let upper = name.to_ascii_uppercase();
+        upper.contains("UNLOCK") || upper.contains("PASSPHRASE")
+    };
+    let mut candidates: Vec<(String, String)> = Vec::new();
+    for path in transcript_files() {
+        for (payload, origin) in payloads(&path) {
+            if origin != Origin::Runtime {
+                continue;
+            }
+            for line in payload.lines() {
+                for (name, value) in pairs_in_line(line) {
+                    if !interesting(&name) || value.len() < min_secret_len() {
+                        continue;
+                    }
+                    let already = candidates
+                        .iter()
+                        .any(|(_, known): &(String, String)| known == &value);
+                    if !already {
+                        candidates.push((name, value));
+                    }
+                }
+            }
+        }
+    }
+    candidates
+}
