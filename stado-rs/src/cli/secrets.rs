@@ -138,6 +138,12 @@ fn harvest(json: bool, restore: Option<&str>, all: bool) -> Result<(), CmdError>
                     "distinct_values": finding.distinct_values,
                     "newest_seen": finding.newest_seen,
                     "sources": finding.sources.len(),
+                    // The table shows this; automation needs it too, or it
+                    // cannot tell a live credential from a committed literal.
+                    "origin": match finding.origin {
+                        crate::transcripts::Origin::Runtime => "runtime",
+                        crate::transcripts::Origin::FileQuote => "file",
+                    },
                 })
             })
             .collect();
