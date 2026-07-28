@@ -206,3 +206,48 @@ What remains is a whole module plus a status-message builder kept
 alive by a single test asserting text production can no longer emit. Removing
 them means deleting that test, which needs the owner's approval — hence this
 note instead of a commit.
+
+## Third gap set — the Skarbiec key-loss incident
+
+`add-user --role owner` registered a freshly generated key as owner without
+re-encrypting anything and without changing the vault's `owner` field, and the
+key every stored item was actually encrypted to left the keyring the same
+night. Every surface reported success: the broker's `/health` answered `ok`
+without touching key material, reads of an undecryptable item dropped the TCP
+connection instead of returning a status, and `recovery-status` printed a
+fingerprint whether or not the offline material still existed. Diagnosis then
+took hours of one-off shell pipelines — list the keyring, map fingerprints to
+keygrips, guess which recipient the ciphertext names, hunt for the file that
+would open it. None of that was a command, so none of it survived the session
+that produced it, which is the defect this set closes.
+
+- **secrets doctor** — `stado secrets doctor [--json]`, surface in
+  `cli/secrets.rs`, engine in Skarbiec's own `key-doctor`. It runs the
+  installed binary rather than reimplementing the check: the vault and the
+  keyring belong to Skarbiec, and during an outage a second opinion that
+  disagrees with the program actually performing the decryption is worse than
+  no opinion. One table gives every recipient, its role, whether the vault
+  document really names it owner, whether its secret half is in this keyring,
+  and the exact `private-keys-v1.d/<KEYGRIP>.key` path a restore has to
+  produce — the encryption subkey, because that is the file decryption needs
+  and the primary will not do. A readable vault exits zero; anything else
+  exits non-zero carrying the remedy. It is answered before any Skarbiec
+  client is constructed, since a grant, a token or a live service is precisely
+  what may be broken, and `SKARBIEC_BIN` overrides discovery — the only way to
+  diagnose a build before it is installed, which is the case whenever the
+  installed binary is itself what is stale.
+
+Shipped in Skarbiec, where the knowledge belongs: `key-doctor` (the engine
+above, reading the vault document and keyring directly and never the HTTP API,
+proving the verdict by opening a deterministic canary item and discarding the
+plaintext), `rotate-owner` (which re-encrypts every current and historical
+ciphertext onto a new owner and preserves the recovery recipient — the
+operation `add-user` was mistaken for, and which did not exist in the shipped
+source), an honest `recovery-status`, a `/health` that opens key material
+instead of reporting liveness, and a refusal on `add-user --role owner`.
+
+Two findings came out of running the new command rather than reasoning about
+it, which is the argument for shipping commands over notes: the vault document
+still named the previous owner because `add-user` writes the recipients map and
+never the owner field, and two worker recipients hold items whose secret halves
+may live on other machines — recovery avenues nobody had listed.

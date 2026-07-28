@@ -37,16 +37,154 @@ pub enum SecretsCommands {
         /// Skarbiec item id.
         name: String,
     },
+    /// Report whether any key on this machine can still open the vault, and
+    /// which key files a restore needs when none can.
+    Doctor {
+        /// Emit Skarbiec's own JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
-    let vault =
-        crate::skarbiec::Client::configured().map_err(|err| CmdError::click(err.to_string()))?;
     match command {
-        SecretsCommands::Put { name } => put(&vault, &name).await,
-        SecretsCommands::Get { name, field } => get(&vault, &name, field.as_deref()).await,
-        SecretsCommands::Ls { json } => ls(&vault, json).await,
-        SecretsCommands::Rm { name } => rm(&vault, &name).await,
+        // `doctor` is answered before any client exists. Every other verb needs
+        // a grant, a token and a live service, which is exactly the set of
+        // things this verb is for when one of them is what broke.
+        SecretsCommands::Doctor { json } => doctor(json),
+        SecretsCommands::Put { name } => put(&client()?, &name).await,
+        SecretsCommands::Get { name, field } => get(&client()?, &name, field.as_deref()).await,
+        SecretsCommands::Ls { json } => ls(&client()?, json).await,
+        SecretsCommands::Rm { name } => rm(&client()?, &name).await,
+    }
+}
+
+fn client() -> Result<crate::skarbiec::Client, CmdError> {
+    crate::skarbiec::Client::configured().map_err(|err| CmdError::click(err.to_string()))
+}
+
+/// Where Stado installs Skarbiec, mirroring
+/// [`crate::deploy::host_recovery::WC_CANDIDATES`]: one prefix, discovered the
+/// same way, so the two cannot drift apart.
+const SKARBIEC_CANDIDATES: &[&str] = &["$HOME/.stado/bin/skarbiec"];
+
+fn skarbiec_binary() -> Result<std::path::PathBuf, CmdError> {
+    let home = std::env::var("HOME").map_err(|_| CmdError::click("HOME is not set"))?;
+    // `SKARBIEC_BIN` is the override the credential scripts already use, and it
+    // is the only way to diagnose a build before it is installed — which is the
+    // situation whenever the installed binary is the thing that is stale.
+    if let Ok(explicit) = std::env::var("SKARBIEC_BIN") {
+        let path = std::path::PathBuf::from(&explicit);
+        if !path.is_file() {
+            return Err(CmdError::click(format!(
+                "SKARBIEC_BIN names no file: {explicit}"
+            )));
+        }
+        return Ok(path);
+    }
+    for candidate in SKARBIEC_CANDIDATES {
+        let path = std::path::PathBuf::from(candidate.replace("$HOME", &home));
+        if path.is_file() {
+            return Ok(path);
+        }
+    }
+    Err(CmdError::click(format!(
+        "no installed skarbiec binary at {}",
+        SKARBIEC_CANDIDATES.join(", ")
+    )))
+}
+
+/// Runs Skarbiec's own `key-doctor` rather than reimplementing it. The vault and
+/// the keyring belong to Skarbiec; a second opinion computed here could disagree
+/// with the program that actually performs the decryption, and during an outage
+/// two answers are worse than none.
+fn doctor(json: bool) -> Result<(), CmdError> {
+    let binary = skarbiec_binary()?;
+    let output = std::process::Command::new(&binary)
+        .arg("key-doctor")
+        .output()?;
+    let report: Value = serde_json::from_slice(&output.stdout).map_err(|_| {
+        CmdError::click(format!(
+            "{} key-doctor produced no report: {}",
+            binary.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    })?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return verdict(&report);
+    }
+    let rows: Vec<Vec<String>> = report
+        .get("recipients")
+        .and_then(Value::as_array)
+        .map(|recipients| {
+            recipients
+                .iter()
+                .map(|entry| {
+                    let field = |name: &str| {
+                        entry
+                            .get(name)
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string()
+                    };
+                    let flag = |name: &str| match entry
+                        .get(name)
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false)
+                    {
+                        true => "yes".to_string(),
+                        false => "no".to_string(),
+                    };
+                    // The encryption subkey file is the one a restore must
+                    // produce, and Skarbiec lists it last.
+                    let key_file = entry
+                        .get("key_files")
+                        .and_then(Value::as_array)
+                        .and_then(|files| files.last())
+                        .and_then(Value::as_str)
+                        .unwrap_or("(no keygrip)")
+                        .to_string();
+                    vec![
+                        field("uid"),
+                        field("role"),
+                        flag("is_owner"),
+                        flag("secret_half_present"),
+                        key_file,
+                    ]
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    table::print(
+        &["RECIPIENT", "ROLE", "DOC OWNER", "SECRET HALF", "KEY FILE"],
+        &rows,
+    );
+    println!(
+        "vault {} is {}",
+        report
+            .get("vault")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        report
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+    );
+    verdict(&report)
+}
+
+/// A readable vault exits zero; anything else is a failure an operator has to
+/// see in `$?`, not only on screen.
+fn verdict(report: &Value) -> Result<(), CmdError> {
+    match report.get("status").and_then(Value::as_str) {
+        Some("readable") | Some("empty") => Ok(()),
+        _ => Err(CmdError::click(
+            report
+                .get("remedy")
+                .and_then(Value::as_str)
+                .unwrap_or("the vault cannot be opened by any key on this machine"),
+        )),
     }
 }
 
