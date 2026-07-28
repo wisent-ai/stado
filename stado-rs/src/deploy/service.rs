@@ -711,8 +711,27 @@ printf 'STADO_HOST\\t%s\\t%s\\t%s\\t%s\\n' \"$os\" \"$domain\" \"$unit\" \"$unit
 const RESTART_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   if [ -f \"$unit_path\" ]; then
     /bin/launchctl bootout \"$domain/$unit\" >/dev/null 2>&1 || true
+    /bin/launchctl enable \"$domain/$unit\" >/dev/null || true
     detail=$(/bin/launchctl bootstrap \"$domain\" \"$unit_path\" 2>&1)
     rc=$?
+    if ! /bin/launchctl print \"$domain/$unit\" >/dev/null; then
+      detail=$(/bin/launchctl asuser \"$uid\" /bin/launchctl bootstrap \"$domain\" \"$unit_path\")
+      rc=$?
+    fi
+    if ! /bin/launchctl print \"$domain/$unit\" >/dev/null; then
+      program=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments' \"$unit_path\" | /usr/bin/sed -n '/^[[:space:]]*[/]/{s/^[[:space:]]*//;p;q;}')
+      if [ -n \"$program\" ]; then
+        recovery_unit=\"${unit}-recovery\"
+        detail=$(/bin/launchctl submit -l \"$recovery_unit\" -- \"$program\")
+        rc=$?
+        if /bin/launchctl print \"$domain/$recovery_unit\" >/dev/null; then unit=\"$recovery_unit\"; fi
+      fi
+    fi
+    if ! /bin/launchctl print \"$domain/$unit\" >/dev/null && [ -n \"$program\" ]; then
+      /usr/bin/nohup \"$program\" </dev/null &>/dev/null &
+      say 'restarted' \"direct process $!\"
+      exit
+    fi
     if [ \"$rc\" -ne 0 ]; then
       say 'bootstrap_failed' \"$rc $detail\"
       exit 0
@@ -729,6 +748,21 @@ else
   if [ \"$rc\" -eq 0 ]; then say 'restarted' 'systemd --user'; else say 'restart_failed' \"$rc $detail\"; fi
 fi
 ";
+/// Recovery fencing: stop the unit without disabling it or changing the
+/// registry. A later restart loads the same unit after its Stado config has
+/// been atomically cut over.
+const STOP_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
+  recovery_unit=\"${unit}-recovery\"
+  /bin/launchctl bootout \"$gui/$unit\" >/dev/null 2>&1 || true
+  /bin/launchctl bootout \"$user_domain/$unit\" >/dev/null 2>&1 || true
+  /bin/launchctl bootout \"$gui/$recovery_unit\" >/dev/null 2>&1 || true
+  /bin/launchctl bootout \"$user_domain/$recovery_unit\" >/dev/null 2>&1 || true
+else
+  /usr/bin/systemctl --user stop \"$unit\" >/dev/null 2>&1 || true
+fi
+say 'stopped' \"$unit_path\"
+";
+
 
 /// `service adopt`: a read-only probe. Adoption claims an existing unit, so
 /// the host has to agree the unit is there before the registry says Stado
@@ -854,6 +888,17 @@ pub async fn restart_service(
     runner: &Runner,
 ) -> Result<RemoteReport, DeployError> {
     let script = remote_script(service.unit_id(), "", &service.path, RESTART_BODY)?;
+    run_remote(target, script, runner).await
+}
+
+/// Stop one managed service for a fenced recovery cutover. Unlike
+/// [`retire_service`], this leaves the unit enabled and registered.
+pub async fn stop_service(
+    target: &ComputeTarget,
+    service: &ManagedService,
+    runner: &Runner,
+) -> Result<RemoteReport, DeployError> {
+    let script = remote_script(service.unit_id(), "", &service.path, STOP_BODY)?;
     run_remote(target, script, runner).await
 }
 
