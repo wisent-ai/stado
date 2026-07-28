@@ -54,8 +54,8 @@ pub enum SecretsCommands {
         /// The value streams to Skarbiec and is never printed.
         #[arg(long)]
         restore: Option<String>,
-        /// Also list code identifiers that merely look like secret names.
-        /// Transcripts contain source, so this is mostly variables.
+        /// Also scan payloads that merely quoted a file. Those are source code,
+        /// so their names are usually identifiers, not credentials in use.
         #[arg(long)]
         all: bool,
     },
@@ -153,10 +153,17 @@ fn harvest(json: bool, restore: Option<&str>, all: bool) -> Result<(), CmdError>
                 finding.distinct_values.to_string(),
                 finding.newest_seen.clone(),
                 finding.sources.len().to_string(),
+                match finding.origin {
+                    crate::transcripts::Origin::Runtime => "runtime".to_string(),
+                    crate::transcripts::Origin::FileQuote => "file".to_string(),
+                },
             ]
         })
         .collect();
-    table::print(&["NAME", "SEEN", "DISTINCT", "NEWEST", "FILES"], &rows);
+    table::print(
+        &["NAME", "SEEN", "DISTINCT", "NEWEST", "FILES", "ORIGIN"],
+        &rows,
+    );
     println!(
         "{} recoverable credential name(s) in agent transcripts; restore one with --restore NAME",
         rows.len()
