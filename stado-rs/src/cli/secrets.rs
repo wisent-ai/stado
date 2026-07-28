@@ -4,7 +4,8 @@
 //! encryption, authorization, versioning, recovery-recipient handling, and
 //! audit logging. Stado retains no local or cloud-secret-manager fallback.
 
-use std::io::Read;
+use std::io::{Read, Write};
+use std::os::unix::fs::OpenOptionsExt;
 
 use clap::Subcommand;
 use serde_json::{json, Value};
@@ -37,6 +38,18 @@ pub enum SecretsCommands {
         /// Skarbiec item id.
         name: String,
     },
+    /// Mint one request-only bootstrap token directly into an owner-only file.
+    #[command(name = "mint-acquisition-token")]
+    MintAcquisitionToken {
+        /// Exact consumer identity.
+        consumer: String,
+        /// Exact existing Skarbiec item id.
+        item: String,
+        /// Exact string field the consumer may request.
+        field: String,
+        /// New token file. Refuses to overwrite an existing path.
+        output: String,
+    },
     /// Report whether any key on this machine can still open the vault, and
     /// which key files a restore needs when none can.
     Doctor {
@@ -59,6 +72,9 @@ pub enum SecretsCommands {
         #[arg(long)]
         all: bool,
     },
+    /// Test unlock phrases found in transcripts against the vault, reporting
+    /// which source name worked. Never prints a phrase.
+    TryUnlock {},
 }
 
 pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
@@ -70,10 +86,19 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
         // Same reasoning as `doctor`: the transcripts are readable when the
         // vault is not, which is the only reason this verb is worth having.
         SecretsCommands::Harvest { json, restore, all } => harvest(json, restore.as_deref(), all),
+        // Also answered without a client: a protected key that nothing can
+        // unlock is precisely the state where every other verb is unavailable.
+        SecretsCommands::TryUnlock {} => try_unlock(),
         SecretsCommands::Put { name } => put(&client()?, &name).await,
         SecretsCommands::Get { name, field } => get(&client()?, &name, field.as_deref()).await,
         SecretsCommands::Ls { json } => ls(&client()?, json).await,
         SecretsCommands::Rm { name } => rm(&client()?, &name).await,
+        SecretsCommands::MintAcquisitionToken {
+            consumer,
+            item,
+            field,
+            output,
+        } => mint_acquisition_token(&consumer, &item, &field, &output),
     }
 }
 
@@ -212,6 +237,114 @@ fn skarbiec_binary() -> Result<std::path::PathBuf, CmdError> {
     )))
 }
 
+const SKARBIEC_LAUNCHER_CANDIDATES: &[&str] = &["$HOME/.stado/bin/skarbiec-keychain-launcher"];
+
+fn skarbiec_launcher() -> Result<std::path::PathBuf, CmdError> {
+    let home = std::env::var("HOME").map_err(|_| CmdError::click("HOME is not set"))?;
+    if let Ok(explicit) = std::env::var("SKARBIEC_LAUNCHER") {
+        let path = std::path::PathBuf::from(&explicit);
+        if !path.is_file() {
+            return Err(CmdError::click(format!(
+                "SKARBIEC_LAUNCHER names no file: {explicit}"
+            )));
+        }
+        return Ok(path);
+    }
+    for candidate in SKARBIEC_LAUNCHER_CANDIDATES {
+        let path = std::path::PathBuf::from(candidate.replace("$HOME", &home));
+        if path.is_file() {
+            return Ok(path);
+        }
+    }
+    Err(CmdError::click(format!(
+        "no installed Skarbiec launcher at {}",
+        SKARBIEC_LAUNCHER_CANDIDATES.join(", ")
+    )))
+}
+
+fn exact_component(kind: &str, value: &str) -> Result<(), CmdError> {
+    if value.is_empty()
+        || !value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "._-".contains(character))
+    {
+        return Err(CmdError::click(format!(
+            "{kind} must be a non-empty exact name containing only ASCII letters, digits, dot, underscore, or dash"
+        )));
+    }
+    Ok(())
+}
+
+fn mint_acquisition_token(
+    consumer: &str,
+    item: &str,
+    field: &str,
+    output: &str,
+) -> Result<(), CmdError> {
+    exact_component("consumer", consumer)?;
+    exact_component("item", item)?;
+    exact_component("field", field)?;
+    let output_path = std::path::Path::new(output);
+    if output_path.try_exists()? {
+        return Err(CmdError::click(format!(
+            "refusing to overwrite existing token file {}",
+            output_path.display()
+        )));
+    }
+    let launcher = skarbiec_launcher()?;
+    let scope = format!("{item}#{field}");
+    let minted = std::process::Command::new(&launcher)
+        .arg("token-mint")
+        .arg(consumer)
+        .arg("--acquisition-scopes")
+        .arg(&scope)
+        .output()?;
+    if !minted.status.success() {
+        return Err(CmdError::click(format!(
+            "{} token-mint failed: {}",
+            launcher.display(),
+            String::from_utf8_lossy(&minted.stderr).trim()
+        )));
+    }
+    let report: Value = serde_json::from_slice(&minted.stdout).map_err(|_| {
+        CmdError::click(format!(
+            "{} token-mint produced no JSON report",
+            launcher.display()
+        ))
+    })?;
+    let token = report
+        .get("token")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| CmdError::click("Skarbiec token-mint report contained no token"))?;
+    let owner_read_write = (u8::BITS - u16::BITS / u8::BITS) << (u8::BITS - u16::BITS / u8::BITS);
+    let write_result = (|| -> std::io::Result<()> {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(owner_read_write)
+            .open(output_path)?;
+        file.write_all(token.as_bytes())?;
+        file.sync_all()
+    })();
+    if let Err(error) = write_result {
+        let _ = std::process::Command::new(&launcher)
+            .arg("token-revoke")
+            .arg(consumer)
+            .output();
+        let _ = std::fs::remove_file(output_path);
+        return Err(CmdError::click(format!(
+            "cannot write token file {}: {error}; the freshly minted grant was revoked",
+            output_path.display()
+        )));
+    }
+    println!(
+        "minted request-only {scope} grant for {consumer} into {}",
+        output_path.display()
+    );
+    Ok(())
+}
+
 /// One reader for Skarbiec's verdict, shared by `doctor` and the `harvest`
 /// restore guard so the two can never disagree about whether the vault opens.
 ///
@@ -299,6 +432,49 @@ fn doctor(json: bool) -> Result<(), CmdError> {
             .unwrap_or("unknown")
     );
     verdict(&report)
+}
+
+/// Test every unlock phrase the transcripts still hold against the vault.
+///
+/// The oracle is Skarbiec's own `key-doctor`, run once per candidate with the
+/// phrase in its environment: if the canary item opens, that phrase is the one.
+/// Reusing the existing verdict means no second decryption path and no crypto
+/// written here.
+///
+/// Reports the SOURCE NAME of the phrase that worked, never the phrase. A
+/// passphrase that leaked into a transcript should not also be printed to a
+/// terminal by the tool that found it.
+fn try_unlock() -> Result<(), CmdError> {
+    let binary = skarbiec_binary()?;
+    let candidates = crate::transcripts::unlock_candidates();
+    if candidates.is_empty() {
+        return Err(CmdError::click(
+            "no unlock phrase of any kind survives in transcript runtime output",
+        ));
+    }
+    println!(
+        "testing {} distinct phrase(s) from transcript history",
+        candidates.len()
+    );
+    for (name, phrase) in &candidates {
+        let output = std::process::Command::new(&binary)
+            .arg("key-doctor")
+            .env("SKARBIEC_UNLOCK", phrase)
+            .output()?;
+        let report: Value = match serde_json::from_slice(&output.stdout) {
+            Ok(report) => report,
+            Err(_) => continue,
+        };
+        if let Some("readable") = report.get("status").and_then(Value::as_str) {
+            println!("the vault OPENS with the phrase recorded under {name}");
+            println!("set it as SKARBIEC_UNLOCK, then rotate-owner onto a key you control");
+            return Ok(());
+        }
+    }
+    Err(CmdError::click(format!(
+        "none of the {} surviving phrase(s) opens the vault: the protected key's passphrase is not in any transcript",
+        candidates.len()
+    )))
 }
 
 /// A readable vault exits zero; anything else is a failure an operator has to
