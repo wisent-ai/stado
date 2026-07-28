@@ -275,7 +275,18 @@ may live on other machines — recovery avenues nobody had listed.
   `--restore` refuses when `key-doctor` says the vault cannot be opened.
   Encrypting needs only public halves, so writing into a dead vault SUCCEEDS and
   produces one more unreadable item — the recovered value would be buried in the
-  hole it was pulled out of. Default output is environment-style names only;
-  transcripts also contain source, and marker matching alone pulls in
-  identifiers like `withCredentials` with no credential behind them. `--all`
-  shows those too.
+  hole it was pulled out of.
+
+  The engine reads the session schemas rather than scanning the files as text,
+  and that distinction is the whole difference between an inventory and a pile
+  of guesses. Both stores record which tool produced each payload: omp names the
+  tool on the result event, Claude names the call and carries the tool name in
+  the earlier assistant `tool_use` block, so the file is read in order and the
+  id-to-name map moves forward with it. A payload from a shell or an evaluator
+  observed the live machine — environments, process tables, command output. A
+  payload from a read or a search merely quoted a file, so its `KEY`-ish names
+  are identifiers in the repository, not credentials that were in use. Only the
+  first kind is scanned by default and only the first kind can be restored;
+  `--all` widens to the second. A flat text scan cannot tell them apart, which
+  is exactly how the first version of this reported hundreds of variable names
+  as recoverable secrets.
