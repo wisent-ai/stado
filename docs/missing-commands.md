@@ -251,3 +251,31 @@ it, which is the argument for shipping commands over notes: the vault document
 still named the previous owner because `add-user` writes the recipients map and
 never the owner field, and two worker recipients hold items whose secret halves
 may live on other machines — recovery avenues nobody had listed.
+
+- **secrets harvest** — `stado secrets harvest [--json] [--all] [--restore NAME]`,
+  surface in `cli/secrets.rs`, engine in `transcripts.rs`. Agent runtimes
+  persist every tool call and result, and those results include process
+  listings, environment dumps and file reads, so credentials the fleet never
+  meant to write down sit in plain text on disk, dated, in files nobody prunes.
+  During this incident that was the only surviving copy of several live values.
+  The scan has two uses at once: the recovery inventory for a vault whose key
+  material is gone, and the exposure inventory to shrink afterwards.
+
+  It reports names, counts, distinct-value counts, dates and file counts, and
+  NEVER a value — the defect being measured is values reaching places that only
+  needed names, and a tool that printed them would add a terminal, a shell
+  history and its own transcript to that list. A value moves only through
+  `--restore NAME`, which streams it into `skarbiec set` over stdin.
+
+  The transcript lake under `~/.transcript-lake` is deliberately not a source:
+  its ingest masks high-entropy fields, so armored key material arrives there
+  already destroyed. The raw per-session stores keep it intact, which is the
+  finding worth acting on.
+
+  `--restore` refuses when `key-doctor` says the vault cannot be opened.
+  Encrypting needs only public halves, so writing into a dead vault SUCCEEDS and
+  produces one more unreadable item — the recovered value would be buried in the
+  hole it was pulled out of. Default output is environment-style names only;
+  transcripts also contain source, and marker matching alone pulls in
+  identifiers like `withCredentials` with no credential behind them. `--all`
+  shows those too.
