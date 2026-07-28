@@ -44,6 +44,21 @@ pub enum SecretsCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Inventory credentials recoverable from agent transcripts. Reports names
+    /// and counts, never values.
+    Harvest {
+        /// Emit JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+        /// Restore one exact name into the vault, newest observed value first.
+        /// The value streams to Skarbiec and is never printed.
+        #[arg(long)]
+        restore: Option<String>,
+        /// Also list code identifiers that merely look like secret names.
+        /// Transcripts contain source, so this is mostly variables.
+        #[arg(long)]
+        all: bool,
+    },
 }
 
 pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
@@ -52,11 +67,101 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
         // a grant, a token and a live service, which is exactly the set of
         // things this verb is for when one of them is what broke.
         SecretsCommands::Doctor { json } => doctor(json),
+        // Same reasoning as `doctor`: the transcripts are readable when the
+        // vault is not, which is the only reason this verb is worth having.
+        SecretsCommands::Harvest { json, restore, all } => harvest(json, restore.as_deref(), all),
         SecretsCommands::Put { name } => put(&client()?, &name).await,
         SecretsCommands::Get { name, field } => get(&client()?, &name, field.as_deref()).await,
         SecretsCommands::Ls { json } => ls(&client()?, json).await,
         SecretsCommands::Rm { name } => rm(&client()?, &name).await,
     }
+}
+
+/// Inventory of credentials still recoverable from agent transcripts, and the
+/// single-name restore path.
+///
+/// The report carries names, counts, dates and source files. It carries no
+/// values, because the defect it measures is values reaching places that only
+/// needed names — printing them here would add a terminal, a shell history and
+/// this process's own transcript to that list. `--restore NAME` is the one path
+/// a value travels, and it goes straight into Skarbiec's stdin.
+fn harvest(json: bool, restore: Option<&str>, all: bool) -> Result<(), CmdError> {
+    if let Some(name) = restore {
+        let value = crate::transcripts::value_for(name).ok_or_else(|| {
+            CmdError::click(format!(
+                "no secret-shaped value for {name} in any transcript; run without --restore to see what is there"
+            ))
+        })?;
+        let binary = skarbiec_binary()?;
+        // Encrypting needs only public halves, so a write into a vault nobody
+        // can open SUCCEEDS and produces one more unreadable item. Refuse: the
+        // recovered value would be buried in the same hole it is being pulled
+        // out of.
+        let report = key_doctor_report(&binary)?;
+        match report.get("status").and_then(Value::as_str) {
+            Some("readable") | Some("empty") => {}
+            _ => {
+                return Err(CmdError::click(format!(
+                    "refusing to restore {name}: the vault cannot be opened by any key here, so the write would be encrypted to recipients nobody holds. Own a readable vault first (see `stado secrets doctor`)"
+                )))
+            }
+        }
+        let mut child = std::process::Command::new(&binary)
+            .arg("set")
+            .arg(name)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()?;
+        if let Some(stdin) = child.stdin.as_mut() {
+            use std::io::Write;
+            stdin.write_all(value.as_bytes())?;
+        }
+        let finished = child.wait_with_output()?;
+        if !finished.status.success() {
+            return Err(CmdError::click(format!(
+                "{} set {name} failed: {}",
+                binary.display(),
+                String::from_utf8_lossy(&finished.stderr).trim()
+            )));
+        }
+        println!("restored {name} into the vault from transcript history");
+        return Ok(());
+    }
+    let findings = crate::transcripts::scan(all);
+    if json {
+        let rendered: Vec<Value> = findings
+            .iter()
+            .map(|finding| {
+                json!({
+                    "name": finding.name,
+                    "occurrences": finding.occurrences,
+                    "distinct_values": finding.distinct_values,
+                    "newest_seen": finding.newest_seen,
+                    "sources": finding.sources.len(),
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&json!(rendered))?);
+        return Ok(());
+    }
+    let rows: Vec<Vec<String>> = findings
+        .iter()
+        .map(|finding| {
+            vec![
+                finding.name.clone(),
+                finding.occurrences.to_string(),
+                finding.distinct_values.to_string(),
+                finding.newest_seen.clone(),
+                finding.sources.len().to_string(),
+            ]
+        })
+        .collect();
+    table::print(&["NAME", "SEEN", "DISTINCT", "NEWEST", "FILES"], &rows);
+    println!(
+        "{} recoverable credential name(s) in agent transcripts; restore one with --restore NAME",
+        rows.len()
+    );
+    Ok(())
 }
 
 fn client() -> Result<crate::skarbiec::Client, CmdError> {
@@ -94,22 +199,31 @@ fn skarbiec_binary() -> Result<std::path::PathBuf, CmdError> {
     )))
 }
 
-/// Runs Skarbiec's own `key-doctor` rather than reimplementing it. The vault and
-/// the keyring belong to Skarbiec; a second opinion computed here could disagree
-/// with the program that actually performs the decryption, and during an outage
-/// two answers are worse than none.
-fn doctor(json: bool) -> Result<(), CmdError> {
-    let binary = skarbiec_binary()?;
-    let output = std::process::Command::new(&binary)
+/// One reader for Skarbiec's verdict, shared by `doctor` and the `harvest`
+/// restore guard so the two can never disagree about whether the vault opens.
+///
+/// It runs Skarbiec's own `key-doctor` rather than reimplementing the check.
+/// The vault and the keyring belong to Skarbiec; a second opinion computed here
+/// could disagree with the program that actually performs the decryption, and
+/// during an outage two answers are worse than none.
+fn key_doctor_report(binary: &std::path::Path) -> Result<Value, CmdError> {
+    let output = std::process::Command::new(binary)
         .arg("key-doctor")
         .output()?;
-    let report: Value = serde_json::from_slice(&output.stdout).map_err(|_| {
+    serde_json::from_slice(&output.stdout).map_err(|_| {
         CmdError::click(format!(
             "{} key-doctor produced no report: {}",
             binary.display(),
             String::from_utf8_lossy(&output.stderr).trim()
         ))
-    })?;
+    })
+}
+
+/// Report which keys can still open the vault, and which key files a restore
+/// needs when none can.
+fn doctor(json: bool) -> Result<(), CmdError> {
+    let binary = skarbiec_binary()?;
+    let report = key_doctor_report(&binary)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
         return verdict(&report);
