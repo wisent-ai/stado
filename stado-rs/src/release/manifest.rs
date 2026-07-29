@@ -150,16 +150,20 @@ impl ReleaseManifest {
     }
 }
 
-/// The package's own `version = "..."`, which is the first one in a manifest;
-/// dependency versions come later and are not the product's.
-fn first_toml_version(body: &str) -> Option<String> {
+/// The first `<key> = "..."` in a TOML file. For `version` that is the package's
+/// own, since dependency versions come later and are not the product's.
+pub fn first_toml_string(body: &str, key: &str) -> Option<String> {
     body.lines().find_map(|line| {
-        let rest = line.strip_prefix("version")?.trim_start();
+        let rest = line.strip_prefix(key)?.trim_start();
         let rest = rest.strip_prefix('=')?.trim();
         let rest = rest.strip_prefix('"')?;
         let (value, _) = rest.split_once('"')?;
         Some(value.to_string())
     })
+}
+
+fn first_toml_version(body: &str) -> Option<String> {
+    first_toml_string(body, "version")
 }
 
 fn replace_first_toml_version(body: &str, version: &str) -> Option<String> {
