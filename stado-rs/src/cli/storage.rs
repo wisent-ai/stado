@@ -690,7 +690,9 @@ async fn ls_canonical(store: &JobStorage, as_json: bool) -> Result<(), CmdError>
 /// `ls_canonical` reports `unreachable`.
 async fn ls_prefix(store: &JobStorage, prefix: &str, args: &StorageLsArgs) -> Result<(), CmdError> {
     let backend = store.backend();
-    let mut blobs = backend.list_blobs_with_meta(prefix).await?;
+    let mut blobs = backend
+        .list_blobs_with_meta(&backend_prefix(prefix)?)
+        .await?;
     blobs.sort_by(|left, right| left.name.cmp(&right.name));
     let total = blobs.len();
     let truncated = total > args.limit;
@@ -865,6 +867,41 @@ async fn probe(backend: &Arc<dyn BlobBackend>, path: &str) -> Presence {
     }
 }
 
+/// Resolve a CLI path argument to the key the backend actually stores under.
+///
+/// Two addressing forms reach the commands that take a path: a `stado://` product
+/// URI, whose on-disk key carries the canonical root prefix, and a bare queue path,
+/// which is already a backend key. Only the explicit scheme is rewritten, so queue
+/// callers are untouched.
+///
+/// Passing the URI through verbatim is why `stat` and `cat` answered "absent" about
+/// objects that `put` had just stored and `objects` listed: both skipped the
+/// mapping that the product commands apply through `ObjectRef`. A command that
+/// reports a healthy object as missing is worse than one that cannot address it at
+/// all, because it reads as a failed write and invites a retry that immutability
+/// then refuses.
+fn backend_key(path: &str) -> Result<String, CmdError> {
+    if path.starts_with("stado://") {
+        Ok(crate::object_store::ObjectRef::parse(path)?.storage_path())
+    } else {
+        Ok(path.to_string())
+    }
+}
+
+/// The same resolution for a listing prefix, which may name a whole namespace and
+/// therefore carry no key at all.
+fn backend_prefix(prefix: &str) -> Result<String, CmdError> {
+    match prefix.strip_prefix("stado://") {
+        Some(rest) => {
+            let (namespace, key) = rest.split_once('/').unwrap_or((rest, ""));
+            Ok(crate::object_store::ObjectRef::namespace_prefix(
+                namespace, key,
+            )?)
+        }
+        None => Ok(prefix.to_string()),
+    }
+}
+
 /// Exit code contract: zero means the question was ANSWERED (`present` or
 /// `absent`), non-zero means it was not (`unreachable`). Scripting an
 /// "is it gone?" check on the exit status therefore never mistakes a dead
@@ -872,20 +909,7 @@ async fn probe(backend: &Arc<dyn BlobBackend>, path: &str) -> Presence {
 async fn stat(args: &StorageStatArgs) -> Result<(), CmdError> {
     let store = JobStorage::new().await?;
     let backend = store.backend();
-    // A `stado://` URI addresses a product object, whose on-disk key carries the
-    // canonical root prefix. A bare path addresses the queue store directly, so
-    // only the explicit scheme is rewritten and existing callers are untouched.
-    //
-    // Probing the URI verbatim is why this command reported every published
-    // release as absent while `objects` listed the same object and `put` had just
-    // written it: `stat` was the one path that skipped the mapping both of those
-    // apply. A verification command that answers "not there" about an object that
-    // is there is worse than having no verification command.
-    let probe_path = if args.path.starts_with("stado://") {
-        crate::object_store::ObjectRef::parse(&args.path)?.storage_path()
-    } else {
-        args.path.clone()
-    };
+    let probe_path = backend_key(&args.path)?;
     let presence = probe(backend, &probe_path).await;
 
     // Metadata and the timestamp come from the listing, which is a separate
@@ -978,7 +1002,7 @@ async fn stat(args: &StorageStatArgs) -> Result<(), CmdError> {
 /// unreachable store is an error here too and never an empty body.
 async fn cat(args: &StorageCatArgs) -> Result<(), CmdError> {
     let store = JobStorage::new().await?;
-    let Some(bytes) = store.read_bytes(&args.path).await? else {
+    let Some(bytes) = store.read_bytes(&backend_key(&args.path)?).await? else {
         return Err(CmdError::click(format!(
             "{:?}: absent — the store answered and the object is not there",
             args.path
