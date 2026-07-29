@@ -30,6 +30,8 @@
 //! no third slot to put them in. The [`Change`] is still reported, so the reason
 //! for a release is never lost even when the number cannot express it.
 
+pub mod manifest;
+
 use std::collections::BTreeSet;
 
 /// One token of Python `_version_tuple`: (0, int) for numeric tokens,
