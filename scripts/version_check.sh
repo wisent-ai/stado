@@ -102,18 +102,26 @@ if [ "$claims_channel" = yes ]; then
 else
   # An empty listing and an unreachable store are the same silence, and here the wrong
   # answer is the passing one: the assertion would conclude "nothing is published"
-  # precisely when it learned nothing. So absence is only read after a request that
-  # demonstrably succeeded. `stat` is the control because it distinguishes absent from
-  # unreachable, and the probe object need not exist. The forward branch above needs no
-  # such control: it requires a positive answer, so silence there already refuses.
+  # precisely when it learned nothing. So absence is read only from testimony. `stat`
+  # given a full stado:// URI is the control, because it names one of three states for
+  # one object — present, absent, unreachable — where the listing has only silence. A
+  # bare path would answer about the queue store instead and say absent forever.
+  #
+  # Only a stated present or absent counts. Anything else — unreachable, an empty
+  # field, a state this script does not know — is an answer nobody gave, and refusing
+  # is the direction that cannot certify a lie. The forward branch above needs no
+  # control: it demands a positive answer, so silence there already refuses.
   probe="stado://releases/stado/$released/linux-amd64/stado"
-  probe_state="$("$stado_bin" storage stat "$probe" --json | jq -r .state)"
-  if [ "$probe_state" = unreachable ]; then
-    echo "::error::the release channel is unreachable ($probe), so the absence of a" \
-      "published stado release is unproven. Refusing rather than assuming that" \
-      "$marker is honest."
-    false
-  fi
+  probe_state="$("$stado_bin" storage stat "$probe" --json | jq -r '.state // ""')"
+  case "$probe_state" in
+    present | absent) ;;
+    *)
+      echo "::error::the release channel did not testify about $probe (state" \
+        "'${probe_state:-none}'), so the absence of a published stado release is" \
+        "unproven. Refusing rather than assuming $marker is honest."
+      false
+      ;;
+  esac
   if printf '%s' "$listing" | jq -e '.objects | any(has("key"))' >/dev/null; then
     echo "::error::$baseline claims nothing is published ($marker), but the release" \
       "channel already serves stado releases, so every comparison is measured" \
