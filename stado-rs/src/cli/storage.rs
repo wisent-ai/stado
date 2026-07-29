@@ -872,16 +872,30 @@ async fn probe(backend: &Arc<dyn BlobBackend>, path: &str) -> Presence {
 async fn stat(args: &StorageStatArgs) -> Result<(), CmdError> {
     let store = JobStorage::new().await?;
     let backend = store.backend();
-    let presence = probe(backend, &args.path).await;
+    // A `stado://` URI addresses a product object, whose on-disk key carries the
+    // canonical root prefix. A bare path addresses the queue store directly, so
+    // only the explicit scheme is rewritten and existing callers are untouched.
+    //
+    // Probing the URI verbatim is why this command reported every published
+    // release as absent while `objects` listed the same object and `put` had just
+    // written it: `stat` was the one path that skipped the mapping both of those
+    // apply. A verification command that answers "not there" about an object that
+    // is there is worse than having no verification command.
+    let probe_path = if args.path.starts_with("stado://") {
+        crate::object_store::ObjectRef::parse(&args.path)?.storage_path()
+    } else {
+        args.path.clone()
+    };
+    let presence = probe(backend, &probe_path).await;
 
     // Metadata and the timestamp come from the listing, which is a separate
     // grant from object read: if listing is denied while the read worked,
     // say so rather than downgrading a known-present object to unreachable.
     let (metadata, updated, metadata_error) = match &presence {
-        Presence::Present { .. } => match backend.list_blobs_with_meta(&args.path).await {
+        Presence::Present { .. } => match backend.list_blobs_with_meta(&probe_path).await {
             Ok(blobs) => blobs
                 .into_iter()
-                .find(|blob| blob.name == args.path)
+                .find(|blob| blob.name == probe_path)
                 .map_or_else(
                     || (BTreeMap::new(), None, None),
                     |blob| (blob.metadata, blob.updated, None),
