@@ -57,8 +57,15 @@ use serde_json::Value;
 const TRANSCRIPT_ROOTS: &[&str] = &[
     "$HOME/.omp/agent/sessions",
     "$HOME/.claude/projects",
+    // The mirror, and the largest store of all — tens of thousands of session
+    // files. Omitting it made every "not in any transcript" verdict cover a
+    // fraction of the evidence.
+    "$HOME/.claude/transcripts-repo",
+    // Kimi keeps sessions under its own tree with a wire format of its own.
+    "$HOME/.kimi-code/sessions",
     "$HOME/.codex",
     "$HOME/.factory",
+    "$HOME/.oko",
 ];
 
 /// Tools whose output describes the live machine rather than a file's contents.
@@ -335,6 +342,47 @@ fn payloads_from_event(
                 if !text.is_empty() {
                     out.push((text, origin));
                 }
+            }
+        }
+    }
+
+    // Kimi: a third shape, and the reason this parser silently ignored twelve
+    // thousand session files. Its wire wraps everything in
+    // `context.append_loop_event`, the tool name rides on the `tool.call` event
+    // and the output on a later `tool.result` that names only the call, so the
+    // id-to-name map is carried forward exactly as it is for Claude.
+    if let Some(inner) = event.get("event") {
+        let kind = inner
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if kind == "tool.call" {
+            if let (Some(id), Some(name)) = (
+                inner.get("toolCallId").and_then(Value::as_str),
+                inner.get("name").and_then(Value::as_str),
+            ) {
+                tool_names.insert(id.to_string(), name.to_string());
+            }
+        }
+        if kind == "tool.result" {
+            let tool = inner
+                .get("toolCallId")
+                .and_then(Value::as_str)
+                .and_then(|id| tool_names.get(id))
+                .cloned()
+                .unwrap_or_default();
+            let origin = match is_runtime_tool(&tool) {
+                true => Origin::Runtime,
+                false => Origin::FileQuote,
+            };
+            let text = inner
+                .get("result")
+                .and_then(|result| result.get("output"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_default();
+            if !text.is_empty() {
+                out.push((text, origin));
             }
         }
     }
