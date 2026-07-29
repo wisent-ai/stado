@@ -32,6 +32,7 @@ pub mod profiles;
 pub mod providers;
 pub mod queue;
 pub mod rate_limit;
+pub mod release;
 pub mod scheduler;
 pub mod schedules;
 pub mod self_update;
