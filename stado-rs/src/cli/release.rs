@@ -8,11 +8,15 @@
 //!
 //! NO Python original: nothing there ever decided a version.
 
+use std::path::{Path, PathBuf};
+
 use clap::{Args, Subcommand};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 use super::table::print as print_table;
 use super::CmdError;
+use crate::release::manifest::ReleaseManifest;
 use crate::release::{decide, Change, Surface, Version};
 
 #[derive(Subcommand)]
@@ -22,6 +26,31 @@ pub enum ReleaseCommands {
     Next(NextArgs),
     /// Print one build's observable command surface.
     Surface(SurfaceArgs),
+    /// Build, classify, checksum and publish a product declared by its
+    /// `.stado-release.json`. The same procedure for every product, so none of it
+    /// has to be reimplemented per repository.
+    Publish(PublishArgs),
+}
+
+#[derive(Args)]
+pub struct PublishArgs {
+    /// Version already on the channel, to classify this candidate against.
+    #[arg(long)]
+    against: Option<String>,
+    /// Write the derived version into the declared version file and stop.
+    #[arg(long)]
+    bump: bool,
+    /// Declare breakage the command surface cannot show.
+    #[arg(long)]
+    breaking: bool,
+    /// Resolve and report, building and publishing nothing.
+    #[arg(long)]
+    dry_run: bool,
+    /// Product root; defaults to the working directory.
+    #[arg(long)]
+    root: Option<PathBuf>,
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Args)]
@@ -61,7 +90,303 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
     match command {
         ReleaseCommands::Next(args) => next(&args),
         ReleaseCommands::Surface(args) => surface(&args),
+        ReleaseCommands::Publish(args) => publish(&args).await,
     }
+}
+
+/// Run a command in the product root and return its stdout, failing loudly.
+fn run(root: &Path, program: &str, args: &[String]) -> Result<String, CmdError> {
+    let output = std::process::Command::new(program)
+        .args(args)
+        .current_dir(root)
+        .output()
+        .map_err(|err| CmdError::click(format!("{program}: {err}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(CmdError::click(format!(
+            "{program} {} failed: {}",
+            args.join(" "),
+            stderr.trim()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn git(root: &Path, args: &[&str]) -> Result<String, CmdError> {
+    let owned: Vec<String> = args.iter().map(|arg| (*arg).to_string()).collect();
+    run(root, "git", &owned)
+}
+
+/// Refuse the two states that would bind an immutable coordinate to something
+/// nobody can rebuild: a working copy, and a revision that lives on one machine.
+fn revision(root: &Path) -> Result<String, CmdError> {
+    if !git(root, &["status", "--porcelain"])?.is_empty() {
+        return Err(CmdError::click(
+            "the tree has uncommitted changes: commit them, so this version resolves \
+             to a revision that can be rebuilt"
+                .to_string(),
+        ));
+    }
+    let ancestry = std::process::Command::new("git")
+        .args(["merge-base", "--is-ancestor", "HEAD", "origin/main"])
+        .current_dir(root)
+        .status()
+        .map_err(|err| CmdError::click(format!("git: {err}")))?;
+    if !ancestry.success() {
+        return Err(CmdError::click(
+            "HEAD is not on origin/main: push it first, or fetch if that ref is stale".to_string(),
+        ));
+    }
+    git(root, &["rev-parse", "HEAD"])
+}
+
+async fn publish(args: &PublishArgs) -> Result<(), CmdError> {
+    let root = match &args.root {
+        Some(path) => path.clone(),
+        None => std::env::current_dir()?,
+    };
+    let manifest = ReleaseManifest::load(&root).map_err(|err| CmdError::click(err.to_string()))?;
+    let (program, build_args) = manifest
+        .build
+        .split_first()
+        .ok_or_else(|| CmdError::click("the declared build command is empty"))?;
+    let platform = crate::config::stado_release_platform();
+    if platform.is_empty() {
+        return Err(CmdError::click(
+            "STADO_RELEASE_PLATFORM is unset: the platform is configuration, not a \
+             guess this command is entitled to make"
+                .to_string(),
+        ));
+    }
+    let version = manifest
+        .read_version(&root)
+        .map_err(|err| CmdError::click(err.to_string()))?;
+    let commit = revision(&root)?;
+
+    let prefix = format!("stado://releases/{}/{version}/{platform}", manifest.product);
+    let artifact_name = Path::new(&manifest.artifact)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| CmdError::click("the declared artifact has no file name"))?
+        .to_string();
+    let binary_uri = format!("{prefix}/{artifact_name}");
+    let sums_uri = format!("{prefix}/{}", crate::self_update::SHA256SUMS_NAME);
+
+    if args.dry_run {
+        return report_plan(
+            args,
+            &manifest,
+            &version,
+            &platform,
+            &commit,
+            &binary_uri,
+            &sums_uri,
+        );
+    }
+
+    // Bake the coordinate and the revision in, so the artifact names itself.
+    let mut build = std::process::Command::new(program);
+    build.args(build_args).current_dir(&root);
+    if let Some(key) = &manifest.release_uri_env {
+        build.env(key, &binary_uri);
+    }
+    if let Some(key) = &manifest.commit_env {
+        build.env(key, &commit);
+    }
+    let built = build
+        .status()
+        .map_err(|err| CmdError::click(format!("{program}: {err}")))?;
+    if !built.success() {
+        return Err(CmdError::click("the declared build command failed"));
+    }
+
+    let artifact = root.join(&manifest.artifact);
+    let bytes = std::fs::read(&artifact)
+        .map_err(|err| CmdError::click(format!("{}: {err}", artifact.display())))?;
+    let digest = hex::encode(Sha256::digest(&bytes));
+
+    // Classify before uploading, so a wrong number is refused rather than burned
+    // into a coordinate that can never be rewritten.
+    let mut change = None;
+    if let Some(against) = &args.against {
+        let current = Version::parse(against).map_err(|err| CmdError::click(err.to_string()))?;
+        let surface_command = manifest.surface_command.as_deref().ok_or_else(|| {
+            CmdError::click(
+                "this product declares no surface_command, so a change cannot be \
+                 classified from evidence",
+            )
+        })?;
+        let published_uri = format!(
+            "stado://releases/{}/{against}/{platform}/{artifact_name}",
+            manifest.product
+        );
+        let previous = super::storage::fetch_object(&published_uri).await?;
+        let staged = tempfile::NamedTempFile::new()?;
+        std::fs::write(staged.path(), &previous)?;
+        // Executability is copied from the candidate rather than written as a mode,
+        // so the permission is whatever this product's build already produces.
+        std::fs::set_permissions(staged.path(), std::fs::metadata(&artifact)?.permissions())?;
+        let published_surface = read_surface(&staged.path().to_string_lossy(), surface_command)?;
+        let candidate_surface = read_surface(&artifact.to_string_lossy(), surface_command)?;
+        let decision = decide(
+            current,
+            &published_surface,
+            &candidate_surface,
+            args.breaking,
+        );
+        let derived = decision.next.to_string();
+        if args.bump {
+            if derived == version {
+                println!(
+                    "{} already says {derived}; nothing to bump",
+                    manifest.version_file
+                );
+                return Ok(());
+            }
+            manifest
+                .write_version(&root, &derived)
+                .map_err(|err| CmdError::click(err.to_string()))?;
+            println!("change:  {} against {against}", decision.change.as_str());
+            println!("{}: {version} -> {derived}", manifest.version_file);
+            println!(
+                "\ncommit and push that, then publish. The bump is a source change and is \
+                 committed like any other, because a published coordinate has to resolve \
+                 to a revision that is already pushed."
+            );
+            return Ok(());
+        }
+        if derived != version {
+            return Err(CmdError::click(format!(
+                "the surface change against {against} requires {derived}, but {} says \
+                 {version}; derive it with --bump, or declare hidden breakage with --breaking",
+                manifest.version_file
+            )));
+        }
+        change = Some(decision.change);
+    } else if args.bump {
+        return Err(CmdError::click(
+            "--bump needs --against: the number is derived from a comparison, so there is \
+             nothing to derive it from without a predecessor"
+                .to_string(),
+        ));
+    }
+
+    // Refuse an artifact that cannot report where it came from.
+    if manifest.release_uri_env.is_some() {
+        verify_stamp(&artifact, &binary_uri, &commit)?;
+    }
+
+    let staged_sums = tempfile::NamedTempFile::new()?;
+    std::fs::write(
+        staged_sums.path(),
+        format!("{digest}  {artifact_name}\n").as_bytes(),
+    )?;
+
+    super::storage::store_object(
+        &binary_uri,
+        &artifact.to_string_lossy(),
+        "application/octet-stream",
+        true,
+    )
+    .await?;
+    super::storage::store_object(
+        &sums_uri,
+        &staged_sums.path().to_string_lossy(),
+        "text/plain",
+        true,
+    )
+    .await?;
+
+    if args.json {
+        return echo_json(&json!({
+            "product": manifest.product,
+            "version": version,
+            "platform": platform,
+            "commit": commit,
+            "binary": binary_uri,
+            "manifest": sums_uri,
+            "digest": digest,
+            "change": change.map(Change::as_str),
+        }));
+    }
+    println!("published {} {version} for {platform}", manifest.product);
+    println!("  {binary_uri}");
+    println!("  {sums_uri}");
+    Ok(())
+}
+
+/// Ask the built artifact what it is, and refuse to publish if it disagrees with
+/// the coordinate it was built for.
+fn verify_stamp(artifact: &Path, binary_uri: &str, commit: &str) -> Result<(), CmdError> {
+    let output = std::process::Command::new(artifact)
+        .arg("version")
+        .output()
+        .map_err(|err| CmdError::click(format!("{}: {err}", artifact.display())))?;
+    let body = String::from_utf8_lossy(&output.stdout);
+    let reported: Value = serde_json::from_str(&body).map_err(|err| {
+        CmdError::click(format!(
+            "{} version did not answer with JSON: {err}",
+            artifact.display()
+        ))
+    })?;
+    let field = |name: &str| {
+        reported
+            .get(name)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    if field("release") != binary_uri {
+        return Err(CmdError::click(format!(
+            "the build reports release {:?}, expected {binary_uri:?}",
+            field("release")
+        )));
+    }
+    if field("commit") != commit {
+        return Err(CmdError::click(format!(
+            "the build reports commit {:?}, expected {commit:?}",
+            field("commit")
+        )));
+    }
+    Ok(())
+}
+
+fn report_plan(
+    args: &PublishArgs,
+    manifest: &ReleaseManifest,
+    version: &str,
+    platform: &str,
+    commit: &str,
+    binary_uri: &str,
+    sums_uri: &str,
+) -> Result<(), CmdError> {
+    if args.json {
+        return echo_json(&json!({
+            "product": manifest.product,
+            "version": version,
+            "platform": platform,
+            "commit": commit,
+            "binary": binary_uri,
+            "manifest": sums_uri,
+            "state": "dry run",
+        }));
+    }
+    print_table(
+        &["FIELD", "VALUE"],
+        &[
+            vec!["product".to_string(), manifest.product.clone()],
+            vec!["version".to_string(), version.to_string()],
+            vec!["platform".to_string(), platform.to_string()],
+            vec!["commit".to_string(), commit.to_string()],
+            vec!["binary".to_string(), binary_uri.to_string()],
+            vec!["manifest".to_string(), sums_uri.to_string()],
+        ],
+    );
+    println!("\ndry run — nothing built, nothing published.");
+    if args.against.is_some() {
+        println!("Classification needs a built candidate, so it is not part of a dry run.");
+    }
+    Ok(())
 }
 
 /// Ask a build what it can do. Run rather than read out of a source tree, because
