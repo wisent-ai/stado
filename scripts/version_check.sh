@@ -154,7 +154,27 @@ case "$marker" in
   git-archive:*) have="$marker" ;;
   head:*) have="head" ;;
 esac
-best="$(python3 scripts/baseline.py --best --stado "$stado_bin")"
+# Into a file, with the status tested on its own line. `set -e` does reach a bare
+# assignment from a command substitution, but it stops reaching the moment a pipeline
+# appears inside one, and this line is one edit away from growing a `| tail` -- so the
+# status is tested where it cannot be discarded. Then both identities are asserted
+# non-empty BEFORE they are compared: an identity that read empty must be reported as
+# an identity that read empty, not as an artifact named "" superseding this baseline,
+# and if both sides ever read empty the comparison would pass vacuously.
+scratch="$(mktemp -d)"
+trap 'rm -rf "$scratch"' EXIT
+if ! python3 scripts/baseline.py --best --stado "$stado_bin" > "$scratch/best"; then
+  echo "::error::the baseline generator could not establish the best reachable" \
+    "artifact, so whether this baseline is superseded is unproven." \
+    "Refusing rather than assuming it is current."
+  false
+fi
+best="$(cat "$scratch/best")"
+if [ -z "$best" ] || [ -z "$have" ]; then
+  echo "::error::an artifact identity read empty (best '$best', baseline '$have')," \
+    "so this comparison would prove nothing."
+  false
+fi
 if [ "$best" != "$have" ]; then
   echo "::error::the baseline is $have, but $best is reachable now, so every" \
     "comparison is measured against a superseded artifact." \
