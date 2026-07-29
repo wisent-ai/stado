@@ -35,6 +35,7 @@ the file concerned (see "Deviations" below).
 | `src/artifacts/`, `src/artifacts_models.rs` | `stado/artifacts/` |
 | `src/catalog.rs`, `src/sizing.rs`, `src/targets.rs`, `src/schedules.rs`, `src/profiles.rs` | `stado/_catalog/`, `stado/sizing/`, `stado/targets/`, `stado/schedules/`, `stado/profiles/` |
 | `src/machine.rs`, `src/mcp.rs` | `stado/machine.py`, `stado/mcp/` |
+| `src/autonomy/` | Cross-cloud inventory, dynamic pricing, cost allocation/forecasting, placement optimization, policy, immutable decisions, bounded reconciliation, schedules, lifecycle, and savings measurement |
 | `src/cli/` | `stado/cli.py` (click → clap derive; full command tree declared, unported commands dispatch to `cli/stub.rs`) |
 | `src/testutil.rs` | test-only loopback mock HTTP server |
 
@@ -77,6 +78,58 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 ```
 
+## Autonomous control plane and FinOps
+
+The coordinator runs one policy-driven autonomy cycle per tick. `report-only`
+is the default mode: discovery, price refresh, forecasts, anomalies,
+recommendations, and proposed plans are persisted, but infrastructure is not
+mutated. `enforce-safe` permits only reversible schedules and placement onto
+already-running capacity. `enforce-owned` additionally permits bounded new
+cloud placement and may mutate only resources carrying Stado ownership or an
+explicit adoption marker when the matching resource rule authorizes the
+action. Production and stateful resources require per-rule
+`allow_production_mutation` / `allow_stateful_mutation` exceptions in addition
+to the applicable mutation permission. Incomplete inventory, stale price
+coverage, unknown egress, expired decisions, failed compare-and-swap, or the
+emergency pause fail closed.
+
+Inventory covers Stado/local capacity plus GCP, AWS, and Azure compute,
+storage, network, images, snapshots, reservations, and managed services.
+Prices come from the GCP Cloud Billing Catalog, AWS Price List and EC2 Spot
+Price History, and Azure Retail Prices APIs; no static cloud price is used by
+the optimizer. The placement objective combines live compute price, startup
+delay, observed retry risk, hard region/capability constraints, and RFC 3339
+job deadlines. Capacity is consumed in descending priority, then
+earliest-deadline order; candidates that cannot meet a deadline are rejected.
+Monthly forecasts use the higher of live resource burn and observed
+month-to-date billing burn.
+
+Operator entry points:
+
+```sh
+stado optimize status --json
+stado optimize policy show
+stado optimize policy apply --file policy.json --expect-version VERSION
+stado optimize run
+stado optimize explain DECISION_ID
+stado optimize pause "incident"
+stado optimize resume
+stado cost allocation --json
+stado cost forecast --json
+stado cost anomalies --json
+stado cost savings --json
+stado resources show --json
+stado resources adopt RESOURCE_ID --owner OWNER --policy-ref POLICY_VERSION --expect-revision PROVIDER_REVISION
+```
+
+The dashboard exposes the combined queue, inventory, forecast, anomaly,
+savings, and latest-decision state through `/api/state.json`; the HTML
+overview renders the same control-plane summary.
+Canonical state lives below `autonomy/` in the configured queue backend.
+Cloud credentials are obtained only from workload identity or scoped
+Skarbiec grants; process-environment credential chains are deliberately
+disabled.
+
 ## Deviations
 
 Deliberate divergences from the Python source are documented where they
@@ -117,13 +170,6 @@ documented in the module cited):
   `POST /api/registry/policy` (Python `dashboard_policy.py`) are not
   served — they fall through to 404 and the HTML policy card shows its
   safe-failure message (`src/dashboard/mod.rs`).
-- Provider instance termination on cancel is not ported
-  (TODO(phase-3)): `stado cancel` / `machine cancel` move the job out of
-  the queue but cannot delete the cloud instance; a note tells the operator
-  to delete it manually (`src/machine.rs`, `src/cli/cancel.rs`).
-- Azure live-quota arm: the Azure compute-usage list is not ported, so
-  `stado quota show` contributes zero live quota for Azure
-  (TODO(phase-3); `src/scheduler/quota.rs`).
 - Binary self-update: the version check reports a newer release but never
   downloads it (TODO(phase-4); `src/providers/local/version_check.rs`,
   `src/coordinator.rs`).

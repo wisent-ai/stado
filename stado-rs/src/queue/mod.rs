@@ -46,6 +46,7 @@ pub mod tombstone;
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -55,6 +56,38 @@ pub use gcs::GcsBackend;
 pub use local_file::LocalBackend;
 pub use s3::S3Backend;
 pub use storage::JobStorage;
+
+use crate::capabilities::StorageAdapter;
+
+/// Concrete locators consumed by the single storage-adapter factory.
+///
+/// The catalog selects the adapter; callers supply only endpoint values. This
+/// keeps constructor ownership here instead of duplicating backend-name
+/// switches in the queue facade, copier, doctor, and recovery commands.
+pub(crate) struct BackendLocator<'a> {
+    pub bucket: &'a str,
+    pub account: &'a str,
+    pub container: &'a str,
+    pub region: &'a str,
+    pub path: &'a str,
+}
+
+pub(crate) async fn construct_backend(
+    adapter: StorageAdapter,
+    locator: BackendLocator<'_>,
+) -> Result<Arc<dyn BlobBackend>, StorageError> {
+    match adapter {
+        StorageAdapter::Gcs => Ok(Arc::new(GcsBackend::new(locator.bucket).await?)),
+        StorageAdapter::AzureBlob => Ok(Arc::new(AzureBlobBackend::new(
+            locator.account,
+            locator.container,
+        )?)),
+        StorageAdapter::S3 => Ok(Arc::new(
+            S3Backend::new(locator.bucket, locator.region).await?,
+        )),
+        StorageAdapter::Local => Ok(Arc::new(LocalBackend::new(locator.path)?)),
+    }
+}
 
 /// Text blob content together with the opaque backend version token used
 /// for compare-and-swap: the GCS generation, or the local SHA-256 hex of

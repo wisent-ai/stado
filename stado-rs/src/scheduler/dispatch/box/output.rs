@@ -72,6 +72,15 @@ fn repo_prelude(job: &Job) -> String {
     if repo.is_empty() {
         return String::new();
     }
+    let repo_ref = job.repo_ref.trim();
+    let sha1_hex_len = "0000000000000000000000000000000000000000".len();
+    if repo_ref.len() != sha1_hex_len
+        || !repo_ref
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return "printf '%s\\n' 'repository workload refused: repo_ref must be a full lowercase 40-hex commit' >&2 && false && ".to_string();
+    }
     let mut workdir = job.repo_workdir.trim().to_string();
     if workdir.is_empty() {
         workdir = repo
@@ -92,7 +101,18 @@ fn repo_prelude(job: &Job) -> String {
              && pip install --break-system-packages --no-build-isolation '.[{extras}]'"
         )
     };
-    format!("rm -rf {workdir} && git clone --depth 1 {repo} {workdir} && cd {workdir}{install} && cd .. && ")
+    let repo = shell_quote(repo);
+    let repo_ref = shell_quote(repo_ref);
+    let workdir = shell_quote(&workdir);
+    format!(
+        "rm -rf {workdir} \
+         && git init --quiet {workdir} \
+         && git -C {workdir} remote add origin {repo} \
+         && git -C {workdir} fetch --quiet --depth 1 origin {repo_ref} \
+         && git -C {workdir} checkout --quiet --detach {repo_ref} \
+         && test \"$(git -C {workdir} rev-parse HEAD)\" = {repo_ref} \
+         && cd {workdir}{install} && cd .. && "
+    )
 }
 
 /// Python `pre_command_prelude`.
@@ -401,22 +421,41 @@ mod tests {
         let mut job = Job::new("j", "python run.py");
         assert_eq!(build_job_command(&job), "python run.py");
         job.repo = "https://github.com/org/repo.git".into();
+        let repo_ref = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        job.repo_ref = repo_ref.into();
         job.repo_extras = "train".into();
         job.pre_command = "export A=1;".into();
         let cmd = build_job_command(&job);
-        assert_eq!(
-            cmd,
-            "rm -rf repo && git clone --depth 1 https://github.com/org/repo.git repo \
-             && cd repo && pip install --break-system-packages --upgrade pip setuptools wheel \
-             && pip install --break-system-packages --no-build-isolation '.[train]' \
-             && cd .. && export A=1 && python run.py"
+        assert!(
+            cmd.starts_with(
+                "rm -rf repo && git init --quiet repo \
+                 && git -C repo remote add origin https://github.com/org/repo.git \
+                 && git -C repo fetch --quiet --depth "
+            ),
+            "{cmd}"
         );
+        assert!(
+            cmd.contains(&format!(
+                " origin {repo_ref} && git -C repo checkout --quiet --detach {repo_ref} \
+                 && test \"$(git -C repo rev-parse HEAD)\" = {repo_ref} && cd repo"
+            )),
+            "{cmd}"
+        );
+        assert!(
+            cmd.ends_with(
+                "pip install --break-system-packages --upgrade pip setuptools wheel \
+                 && pip install --break-system-packages --no-build-isolation '.[train]' \
+                 && cd .. && export A=1 && python run.py"
+            ),
+            "{cmd}"
+        );
+        assert!(!cmd.contains("repository workload refused"), "{cmd}");
         // Empty extras skips the install stanza; repo_workdir wins.
         job.repo_extras = String::new();
         job.repo_workdir = "custom-dir".into();
         let cmd = build_job_command(&job);
         assert!(
-            cmd.starts_with("rm -rf custom-dir && git clone --depth 1"),
+            cmd.starts_with("rm -rf custom-dir && git init --quiet custom-dir"),
             "{cmd}"
         );
         assert!(!cmd.contains("pip install"), "{cmd}");

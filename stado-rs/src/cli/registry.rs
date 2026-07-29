@@ -453,7 +453,7 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
         claimed.extend(slugs.iter().cloned());
         // Only kind=local declares a machine that runs a beacon; "gcp" and
         // "vast" targets are dispatcher pools, not boxes.
-        if target.kind != "local" {
+        if !target.is_provider(crate::capabilities::ProviderId::Local) {
             continue;
         }
         let Some(beacon) = slugs.iter().find_map(|slug| beacons.get(slug)) else {
@@ -534,7 +534,11 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
         // Only local agents map one-to-one onto a registry box; a "gcp" or
         // "vast" broadcast comes from an ephemeral VM the registry
         // deliberately does not enumerate.
-        if payload.get("kind").and_then(Value::as_str) != Some("local") {
+        if !payload
+            .get("kind")
+            .and_then(Value::as_str)
+            .is_some_and(|kind| crate::capabilities::ProviderId::Local.matches(kind))
+        {
             continue;
         }
         // consumer_id is "<kind>-<hostname>"
@@ -673,10 +677,12 @@ pub async fn beacon_age(as_json: bool) -> Result<(), CmdError> {
         .iter()
         .map(|target| {
             let beacon = beacon_for(target, &beacons);
-            let rank = match (target.kind.as_str(), beacon.is_some()) {
-                (_, true) => BeaconRank::Reported,
-                ("local", false) => BeaconRank::Missing,
-                (_, false) => BeaconRank::NotExpected,
+            let rank = if beacon.is_some() {
+                BeaconRank::Reported
+            } else if target.is_provider(crate::capabilities::ProviderId::Local) {
+                BeaconRank::Missing
+            } else {
+                BeaconRank::NotExpected
             };
             BeaconRow {
                 name: target.name.clone(),

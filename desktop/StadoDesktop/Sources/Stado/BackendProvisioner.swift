@@ -1,6 +1,5 @@
 import CryptoKit
 import Foundation
-import WisentAuth
 
 struct ProvisioningUpdate: Sendable {
     let phase: String
@@ -163,9 +162,6 @@ actor BackendProvisioner {
             "--quiet"
         ])
 
-        let authConfiguration = WisentAuthConfiguration.production(
-            bundleIdentifier: Bundle.main.bundleIdentifier ?? "ai.wisent.stado"
-        )
         let environmentFile = context.appendingPathComponent("cloud-run-env.json")
         let environment: [String: String] = [
             "WC_BUCKET": bucket,
@@ -174,8 +170,6 @@ actor BackendProvisioner {
             "GCP_PROJECT": project,
             "GCP_REGION": region,
             "STADO_DEPLOYMENT_ID": deployment.id,
-            "SUPABASE_URL": authConfiguration.supabaseURL,
-            "SUPABASE_ANON_KEY": authConfiguration.anonKey,
             "WC_DASHBOARD_REFRESH_SECONDS": "10"
         ]
         try JSONSerialization.data(withJSONObject: environment, options: [.prettyPrinted])
@@ -316,9 +310,6 @@ actor BackendProvisioner {
             ])
         }
 
-        let authConfiguration = WisentAuthConfiguration.production(
-            bundleIdentifier: Bundle.main.bundleIdentifier ?? "ai.wisent.stado"
-        )
         let environmentValues = [
             "WC_BUCKET=stado",
             "WC_STORAGE_BACKEND=azure",
@@ -329,8 +320,6 @@ actor BackendProvisioner {
             "AZURE_RESOURCE_GROUP=\(resourceGroup)",
             "AZURE_REGION=\(region)",
             "STADO_DEPLOYMENT_ID=\(deployment.id)",
-            "SUPABASE_URL=\(authConfiguration.supabaseURL)",
-            "SUPABASE_ANON_KEY=\(authConfiguration.anonKey)",
             "WC_DASHBOARD_REFRESH_SECONDS=10"
         ]
 
@@ -745,9 +734,6 @@ actor BackendProvisioner {
         ])
         try await run(docker.path, ["push", image])
 
-        let authConfiguration = WisentAuthConfiguration.production(
-            bundleIdentifier: Bundle.main.bundleIdentifier ?? "ai.wisent.stado"
-        )
         let environment: [String: String] = [
             "WC_BUCKET": bucket,
             "WC_STORAGE_BACKEND": "s3",
@@ -759,8 +745,6 @@ actor BackendProvisioner {
             "AWS_IAM_PROFILE": agentProfile,
             "AWS_AMI_ID": ami,
             "STADO_DEPLOYMENT_ID": deployment.id,
-            "SUPABASE_URL": authConfiguration.supabaseURL,
-            "SUPABASE_ANON_KEY": authConfiguration.anonKey,
             "WC_DASHBOARD_REFRESH_SECONDS": "10"
         ]
         let sourceConfiguration = try writeJSON([
@@ -868,9 +852,6 @@ actor BackendProvisioner {
         try fileManager.createDirectory(at: logs, withIntermediateDirectories: true)
 
         let environment = ProcessInfo.processInfo.environment
-        let authConfiguration = WisentAuthConfiguration.production(
-            bundleIdentifier: Bundle.main.bundleIdentifier ?? "ai.wisent.stado"
-        )
         let plist: [String: Any] = [
             "Label": label,
             "ProgramArguments": [
@@ -889,8 +870,6 @@ actor BackendProvisioner {
                 "WC_PROVIDERS": "local",
                 "WC_DASHBOARD_REFRESH_SECONDS": "5",
                 "STADO_DEPLOYMENT_ID": deployment.id,
-                "SUPABASE_URL": authConfiguration.supabaseURL,
-                "SUPABASE_ANON_KEY": authConfiguration.anonKey,
             ],
             "RunAtLoad": true,
             "KeepAlive": ["SuccessfulExit": false],

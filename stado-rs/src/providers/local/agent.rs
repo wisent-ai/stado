@@ -19,13 +19,11 @@
 //!     "pip_upgrade_and_exec for restart" line but does NOT re-exec — the
 //!     binary self-update in [`crate::self_update`] fires on version drift
 //!     only; a gpu_type change remains an operator-restart action.
-//!   * Version drift on a local-kind agent triggers binary self-update +
-//!     re-exec ([`crate::self_update`], Python's pip_upgrade_and_exec
-//!     semantics; detection reads the release channel's `latest.json`,
-//!     not PyPI). When the update FAILS the error is logged and the agent
-//!     KEEPS CLAIMING on the old binary ([`DriftOutcome::DriftDetected`]):
-//!     wedging the agent into skip-claim forever would be a silent fleet
-//!     outage, which is worse than a stale binary.
+//!   * Version drift on a local-kind agent triggers exact-coordinate binary
+//!     self-update and re-exec. Detection reads the configured immutable Stado
+//!     release version, never a mutable channel or PyPI. On failure the agent
+//!     logs the error and keeps claiming on the old binary; wedging it into
+//!     skip-claim forever would be a fleet outage.
 //!   * Python `local_agent.py:647` references a bare
 //!     `VRAM_SAFETY_BUFFER_GB` that does not exist in that module (latent
 //!     NameError on the raw multi-claim path). Ported as the computed
@@ -453,10 +451,10 @@ fn diag_map(d: &DiskGateDiag) -> [(String, Value); 4] {
 /// Main agent loop. Polls queue, runs jobs when Vast.ai is idle.
 /// Python `run_agent`.
 ///
-/// idle_shutdown=true: exit cleanly (and self-delete the GCE VM if running
-/// on one) once both: (a) no slots active, and (b) no queued job is
-/// eligible to run on this consumer's free VRAM. Used for the cloud-VM
-/// agent path.
+/// idle_shutdown=true: exit cleanly once both: (a) no slots are active and
+/// (b) no queued job is eligible for this consumer's free VRAM. The scheduler
+/// observes the stopped capacity heartbeat and releases ephemeral machines
+/// through their owning provider adapters.
 ///
 /// kind: capacity-broadcast label distinguishing physical workstations
 /// (kind="local") from ephemeral cloud-agent VMs (kind="gcp", ...).
@@ -589,7 +587,7 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             last_fleet_flush = Instant::now();
         }
         if let Some(t) = lookup_self_auto(&hostname).await? {
-            if t.kind == "local" {
+            if t.is_provider(crate::capabilities::ProviderId::Local) {
                 // Env overrides are now owned by systemd (/etc/wisent/wisent-agent.env).
                 // Ignore registry env deltas so an external registry push cannot
                 // trigger a pip reinstall loop or override local tuning.
@@ -808,11 +806,9 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                 "Queue paused ({}); claiming nothing",
                 queue_control.pause_summary()
             ));
-            // An ephemeral cloud agent with no slots left is idle BY
-            // DEFINITION while paused — there is nothing it may claim — so
-            // let it self-delete instead of billing for the whole
-            // maintenance window. Dispatch is paused too, so nothing
-            // replaces it until resume.
+            // An ephemeral cloud agent with no slots left is idle while paused.
+            // Exit so the capacity heartbeat stops; dispatch is paused, and the
+            // owning provider adapter reaps the machine without replacing it.
             if idle_shutdown && slots.is_empty() {
                 log_fn("idle_shutdown: no slots + queue paused; exiting");
                 self_terminate(kind, log_fn).await;

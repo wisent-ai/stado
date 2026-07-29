@@ -75,12 +75,22 @@ pub(crate) async fn build(args: &ShowArgs) -> Result<ResourcesReport, CmdError> 
     let active = config::wc_providers().to_vec();
     let disabled = config::wc_disabled_providers().to_vec();
     let configured: BTreeSet<String> = active.iter().chain(&disabled).cloned().collect();
-    let mut enumerable: Vec<String> = ["gcp", "azure", "aws"]
-        .into_iter()
-        .filter(|provider| configured.contains(*provider))
-        .map(str::to_string)
-        .collect();
-    if let Some(provider) = args.provider.as_deref() {
+    let mut enumerable =
+        crate::capabilities::provider_ids(crate::capabilities::RuntimeFacet::Inventory)
+            .into_iter()
+            .map(|provider| provider.as_str().to_string())
+            .filter(|provider| configured.contains(provider))
+            .collect::<Vec<_>>();
+    if let Some(requested) = args.provider.as_deref() {
+        let provider = crate::capabilities::canonical_id(
+            crate::capabilities::RuntimeFacet::Inventory,
+            requested,
+        )
+        .ok_or_else(|| {
+            CmdError::usage(format!(
+                "provider {requested:?} has no inventory capability"
+            ))
+        })?;
         if !enumerable.iter().any(|name| name == provider) {
             return Err(CmdError::usage(format!(
                 "provider {provider:?} is not a configured enumerable cloud"
@@ -92,7 +102,11 @@ pub(crate) async fn build(args: &ShowArgs) -> Result<ResourcesReport, CmdError> 
     let storage_future = inspect_storage(&primary, backup.as_ref());
     let compute_future = inspect_compute(&enumerable, &active, &disabled, &primary);
     let registry_future = inspect_registry();
-    let gcp_future = inspect_gcp(configured.contains("gcp"), &primary, backup.as_ref());
+    let gcp_future = inspect_gcp(
+        configured.contains(crate::capabilities::ProviderId::Gcp.as_str()),
+        &primary,
+        backup.as_ref(),
+    );
     let billing_future = inspect_billing(&configured);
     let (storage, compute, host_registry, gcp_inventory, billing) = tokio::join!(
         storage_future,
@@ -173,7 +187,7 @@ async fn inspect_storage(primary: &Endpoint, backup: Option<&Endpoint>) -> Sourc
         blast_radius::storage_resource_report("primary", Some(primary)),
         blast_radius::storage_resource_report("backup", backup),
     );
-    let reports = vec![primary, backup];
+    let reports: Vec<Value> = vec![primary, backup];
     let state = if reports.iter().any(|report| {
         matches!(
             report.get("state").and_then(Value::as_str),
@@ -200,7 +214,7 @@ async fn inspect_compute(
 ) -> SourceReport {
     let mut reports = Vec::new();
     let mut source_errors = Vec::new();
-    let authoritative = primary.kind != "local";
+    let authoritative = primary.adapter() != Some(crate::capabilities::StorageAdapter::Local);
 
     if !enumerable.is_empty() && authoritative {
         match JobStorage::new().await {
@@ -278,18 +292,26 @@ async fn inspect_compute(
         if enumerable.contains(provider) {
             continue;
         }
-        let (state, reason) = match provider.as_str() {
-            "local" => (
+        let adapter =
+            crate::capabilities::variant(crate::capabilities::RuntimeFacet::Compute, provider)
+                .map(|variant| variant.adapter);
+        let (state, reason) = match adapter {
+            Some(crate::capabilities::RuntimeAdapter::Compute(
+                crate::capabilities::ComputeAdapter::ExistingHost,
+            )) => (
                 "registry",
                 "physical local hosts are represented in host_registry, not a cloud VM fleet",
             ),
-            "box" => (
+            Some(crate::capabilities::RuntimeAdapter::Compute(
+                crate::capabilities::ComputeAdapter::Box
+                | crate::capabilities::ComputeAdapter::VastHost,
+            )) => (
                 "external",
-                "box capacity is externally owned and has no standing Stado VM inventory",
+                "externally owned capacity has no standing Stado VM inventory",
             ),
-            other => (
+            _ => (
                 "unsupported",
-                if other.is_empty() {
+                if provider.is_empty() {
                     "empty provider name"
                 } else {
                     "this compute variant has no provider-neutral resource enumerator"
@@ -444,10 +466,10 @@ async fn inspect_gcp(enabled: bool, primary: &Endpoint, backup: Option<&Endpoint
 }
 
 async fn inspect_billing(configured: &BTreeSet<String>) -> SourceReport {
-    let billed: Vec<&str> = ["gcp", "azure"]
+    let billed = billing::providers()
         .into_iter()
         .filter(|provider| configured.contains(*provider))
-        .collect();
+        .collect::<Vec<_>>();
     if billed.is_empty() {
         return SourceReport {
             name: "billing",
@@ -508,25 +530,12 @@ async fn inspect_billing(configured: &BTreeSet<String>) -> SourceReport {
 }
 
 fn coverage_gaps(configured: &BTreeSet<String>) -> Vec<String> {
-    let mut gaps = Vec::new();
-    if configured.contains("aws") {
-        gaps.push(
-            "AWS: agent VM inventory is complete; EBS, Elastic IP, reservations, non-Stado resources, and AWS cost data are not enumerated"
-                .to_string(),
-        );
-    }
-    if configured.contains("azure") {
-        gaps.push(
-            "Azure: agent VM inventory is complete; managed disks, public IPs, reservations and non-Stado resources are not enumerated"
-                .to_string(),
-        );
-    }
-    if configured.contains("box") {
-        gaps.push(
-            "Box: externally owned marketplace capacity has no standing VM inventory".to_string(),
-        );
-    }
-    gaps
+    configured
+        .iter()
+        .filter_map(|name| crate::capabilities::provider(name))
+        .filter_map(crate::capabilities::ProviderId::inventory_limitation)
+        .map(str::to_string)
+        .collect()
 }
 
 fn print_human(report: &ResourcesReport) {
@@ -548,7 +557,7 @@ fn print_human(report: &ResourcesReport) {
                     text(storage, "error"),
                 ]
             })
-            .collect(),
+            .collect::<Vec<Vec<String>>>(),
     );
 
     let providers: Vec<Value> = report
@@ -589,7 +598,7 @@ fn print_human(report: &ResourcesReport) {
                     text(provider, "error"),
                 ]
             })
-            .collect(),
+            .collect::<Vec<Vec<String>>>(),
     );
 
     let instance_rows: Vec<Vec<String>> = providers
@@ -655,22 +664,29 @@ fn print_human(report: &ResourcesReport) {
                         text(probe, "error"),
                     ]
                 })
-                .collect(),
+                .collect::<Vec<Vec<String>>>(),
         );
     }
 
-    let billing_rows: Vec<Vec<String>> = ["gcp", "azure"]
+    let billing_rows: Vec<Vec<String>> = crate::capabilities::get("billing")
         .into_iter()
-        .filter_map(|provider| {
+        .flat_map(|capability| capability.variants)
+        .filter_map(|variant| {
+            let provider = variant.provider?.as_str();
             let section = report.billing.data.get(provider)?;
+            let metric = match variant.adapter {
+                crate::capabilities::RuntimeAdapter::Billing(
+                    crate::capabilities::BillingAdapter::Gcp,
+                ) => "latest_month_net_usd",
+                crate::capabilities::RuntimeAdapter::Billing(
+                    crate::capabilities::BillingAdapter::Azure,
+                ) => "available_balance",
+                _ => return None,
+            };
             Some(vec![
                 provider.to_uppercase(),
                 text(section, "status"),
-                if provider == "gcp" {
-                    text(section, "latest_month_net_usd")
-                } else {
-                    text(section, "available_balance")
-                },
+                text(section, metric),
                 text(section, "currency"),
                 text(section, "detail"),
             ])

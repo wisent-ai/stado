@@ -58,6 +58,7 @@ pub async fn create(args: &ScheduleCreateArgs) -> Result<(), CmdError> {
     sched.vram_gb = args.vram_gb;
     sched.machine_type = args.machine_type.clone();
     sched.repo = args.repo.clone();
+    sched.repo_ref = args.repo_ref.clone();
     sched.repo_workdir = args.repo_workdir.clone();
     sched.repo_extras = args.repo_extras.clone();
     sched.pre_command = args.pre_command.clone();

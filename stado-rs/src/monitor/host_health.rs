@@ -115,7 +115,7 @@ pub async fn load_host_health(
         None => registry.lookup_self(identity)?,
     };
     let target = target.ok_or_else(|| HostHealthError::UnknownTarget(identity.to_string()))?;
-    if target.kind != "local" {
+    if !target.is_provider(crate::capabilities::ProviderId::Local) {
         return Err(HostHealthError::NotLocal(target.name.clone()));
     }
 
@@ -266,25 +266,40 @@ pub fn format_host_health(report: &HostHealthReport) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{future::Future, sync::Arc};
 
     use super::*;
     use crate::queue::LocalBackend;
 
-    /// Serve the bundled registry document through the GCS downloader seam
-    /// so target resolution (Python source="gcs") stays hermetic offline.
-    async fn with_bundled_registry<F, T>(f: F) -> T
+    /// Serve a minimal registry document through the remote-registry seam so
+    /// host resolution is hermetic and cannot drift with the bundled registry.
+    async fn with_registry_fixture<F, T>(f: F) -> T
     where
-        F: std::future::Future<Output = T>,
+        F: Future<Output = T>,
     {
+        const REGISTRY: &str = r#"{
+            "targets": [
+                {
+                    "name": "control-host",
+                    "kind": "local",
+                    "hostnames": ["control-host.local"]
+                },
+                {
+                    "name": "operator-host",
+                    "kind": "local",
+                    "hostnames": ["lukaszs-macbook-pro.local"]
+                },
+                {
+                    "name": "gcp-spot-t4",
+                    "kind": "gcp"
+                }
+            ],
+            "coordinators": []
+        }"#;
         let _guard = crate::testutil::GLOBAL_STATE_LOCK.lock().await;
         targets::set_registry_downloader_for_testing(Some(Arc::new(|| {
-            Box::pin(async {
-                Ok(Some(
-                    std::fs::read_to_string(targets::bundled_registry_path())
-                        .expect("bundled registry"),
-                ))
-            }) as futures::future::BoxFuture<'static, Result<Option<String>, String>>
+            Box::pin(async { Ok(Some(REGISTRY.to_string())) })
+                as futures::future::BoxFuture<'static, Result<Option<String>, String>>
         })));
         targets::clear_registry_cache();
         let out = f.await;
@@ -317,8 +332,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn loads_beacon_for_bundled_local_target() {
-        with_bundled_registry(async {
+    async fn loads_beacon_for_fixture_local_target() {
+        with_registry_fixture(async {
             let (_dir, store) = store();
             store
                 .upload_text("host_health/control-host.json", &beacon_json())
@@ -358,7 +373,7 @@ mod tests {
 
     #[tokio::test]
     async fn resolves_via_hostname_alias_and_falls_through_slugs() {
-        with_bundled_registry(async {
+        with_registry_fixture(async {
             let (_dir, store) = store();
             // Only the full-hostname slug exists; the first-label slug is tried
             // first and missed.
@@ -379,7 +394,7 @@ mod tests {
 
     #[tokio::test]
     async fn format_renders_all_lines() {
-        with_bundled_registry(async {
+        with_registry_fixture(async {
             let (_dir, store) = store();
             store
                 .upload_text("host_health/control-host.json", &beacon_json())
@@ -433,7 +448,7 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_identity_and_non_local_target_errors() {
-        with_bundled_registry(async {
+        with_registry_fixture(async {
             let (_dir, store) = store();
             let err = load_host_health(&store, "no-such-box")
                 .await
@@ -456,7 +471,7 @@ mod tests {
 
     #[tokio::test]
     async fn missing_beacon_lists_checked_paths() {
-        with_bundled_registry(async {
+        with_registry_fixture(async {
             let (_dir, store) = store();
             let err = load_host_health(&store, "operator-host")
                 .await
@@ -467,11 +482,11 @@ mod tests {
                 "{message}"
             );
             assert!(
-                message.contains("host_health/operator-host.json"),
+                message.contains("host_health/lukaszs-macbook-pro.json"),
                 "{message}"
             );
             assert!(
-                message.contains("host_health/operator-host.local.json"),
+                message.contains("host_health/lukaszs-macbook-pro.local.json"),
                 "{message}"
             );
             assert!(
@@ -484,7 +499,7 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_beacon_json_and_non_object_errors() {
-        with_bundled_registry(async {
+        with_registry_fixture(async {
             let (_dir, store) = store();
             store
                 .upload_text("host_health/control-host.json", "{not json")

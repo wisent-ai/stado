@@ -26,12 +26,9 @@
 //! empty registry. The coordinator logs the storage failure and keeps
 //! ticking; only a registry that was actually read may revoke the daemon.
 //!
-//! Deviations from coordinator.py (all deliberate):
-//! 1. Self-update: Python does PyPI drift-detect + `pip install --upgrade`
-//!    + `os.execv` each tick. The Rust binary cannot pip-upgrade itself, so
-//!      drift only logs a warning (same stance as
-//!      providers/local/version_check.rs). TODO(phase-4): binary self-update.
-//! 2. Billing: coordinator.py's daemon tick never collected billing (only
+//! Release drift is resolved only from the exact configured Stado release
+//! coordinate. No package-index channel participates in selection or update.
+//! Billing: coordinator.py's daemon tick never collected billing (only
 //!    the CF did). Per the port spec the tick includes the billing
 //!    collector (fault-isolated, matching the CF), behind a flag so tests
 //!    stay hermetic.
@@ -40,8 +37,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::Utc;
-use serde_json::Value;
+use base64::Engine as _;
+use chrono::{DateTime, Utc};
 
 use crate::config;
 use crate::monitor::billing::collect_billing;
@@ -51,7 +48,9 @@ use crate::providers::{get_provider, BoxProvider, Provider};
 use crate::queue::{JobStorage, StorageError};
 use crate::scheduler::dispatch::r#box::run_box_tick;
 use crate::scheduler::makespan::assign_jobs;
-use crate::scheduler::scheduler::{schedule_queued_jobs, SchedulerError};
+use crate::scheduler::scheduler::{
+    schedule_queued_jobs, schedule_queued_jobs_routed, SchedulerError,
+};
 use crate::schedules::fire_due_schedules;
 use crate::targets::{fetch_registry_remote, load_registry_auto, Coordinator};
 
@@ -145,64 +144,64 @@ fn nodename() -> String {
 /// Internal scheduler-map key for the Azure agent grant. This deliberately is
 /// not an environment-variable name and is never eligible for startup-script
 /// substitution; the Azure provider consumes it only as protected settings.
-pub(crate) const AZURE_AGENT_PROTECTED_GRANT: &str =
-    "stado.protected-settings.azure-agent-grant";
+pub(crate) const AZURE_AGENT_PROTECTED_GRANT: &str = "stado.protected-settings.azure-agent-grant";
 
-/// Validate the dedicated Azure-agent grant and return its opaque token.
+/// Base64-encoded scoped workload grant projected only into non-Azure agent
+/// templates. Azure receives the same grant through protected settings.
+pub(crate) const AGENT_WORKLOAD_GRANT_B64: &str = "STADO_AGENT_SKARBIEC_GRANT_B64";
+
+/// Validate the dedicated remote workload grant and return its opaque token.
 ///
-/// The grant exposes only the configured S3 failover credential and explicit
-/// workload-secret items. The token is delivered separately from customData
-/// through an encrypted Azure VM extension.
-/// `None` means this deployment does not dispatch Azure agents.
-pub(crate) async fn agent_backup_grant() -> Result<Option<String>, crate::skarbiec::SkarbiecError> {
+/// The grant exposes only the configured workload-secret items. Azure receives
+/// it through encrypted protected settings; other cloud startup templates
+/// materialize the same scoped token into a root-only tmpfs file.
+pub(crate) async fn agent_workload_grant() -> Result<Option<String>, crate::skarbiec::SkarbiecError>
+{
     use crate::skarbiec::SkarbiecError;
 
-    let azure_agents = config::wc_providers().iter().any(|name| name == "azure");
-    if !azure_agents {
+    let remote_agents = config::wc_providers().iter().any(|name| {
+        crate::capabilities::execution_adapter(name)
+            .is_some_and(|adapter| adapter != crate::capabilities::ExecutionAdapter::Local)
+    });
+    if !remote_agents {
         return Ok(None);
     }
     let url = config::agent_skarbiec_url();
     if url.is_empty() {
         return Err(SkarbiecError::Deployment(
-            "WC_AGENT_SKARBIEC_URL is required for Azure workload agents; set it to an HTTPS \
-             Skarbiec endpoint reachable from the VM"
+            "WC_AGENT_SKARBIEC_URL is required for remote workload agents; set it to an HTTPS \
+             Skarbiec endpoint reachable from every agent VM"
                 .to_string(),
         ));
     }
     if !url.starts_with("https://") {
         return Err(SkarbiecError::Deployment(format!(
-            "WC_AGENT_SKARBIEC_URL={url:?} is not HTTPS; a remote VM grant must never cross \
-             plaintext HTTP"
+            "WC_AGENT_SKARBIEC_URL={url:?} is not HTTPS; a remote workload grant must never \
+             cross plaintext HTTP"
         )));
     }
     let consumer = config::agent_skarbiec_consumer();
-    if consumer != "stado-azure-agent" {
+    if consumer.is_empty()
+        || !consumer.ends_with("-agent")
+        || matches!(
+            consumer,
+            "stado-control-plane" | "stado-local-agent" | "stado-azure-agent"
+        )
+    {
         return Err(SkarbiecError::Deployment(format!(
-            "WC_AGENT_SKARBIEC_CONSUMER must be stado-azure-agent, got {consumer:?}"
+            "WC_AGENT_SKARBIEC_CONSUMER={consumer:?} must be a scoped remote workload \
+             identity ending in -agent and distinct from control-plane/legacy identities"
         )));
     }
     let token_file = config::agent_skarbiec_token_file();
     if token_file.is_empty() {
         return Err(SkarbiecError::Deployment(
-            "WC_AGENT_SKARBIEC_TOKEN_FILE is required; use the owner-only \
-             ~/.stado/azure-agent-skarbiec-token grant"
+            "WC_AGENT_SKARBIEC_TOKEN_FILE is required; use an owner-only workload grant"
                 .to_string(),
         ));
     }
     let agent_token = crate::skarbiec::read_grant(token_file)?;
     let agent_vault = crate::skarbiec::Client::new(url, consumer, token_file)?;
-    if config::wc_backup_storage_backend() == "s3" {
-        let aws = agent_vault.read_item("stado-aws").await?;
-        for field in ["access_key_id", "secret_access_key"] {
-            if !aws
-                .get(field)
-                .and_then(Value::as_str)
-                .is_some_and(|value| !value.is_empty())
-            {
-                return Err(SkarbiecError::MissingValue(format!("stado-aws/{field}")));
-            }
-        }
-    }
     let mut visible: Vec<String> = agent_vault
         .list_items()
         .await?
@@ -213,6 +212,14 @@ pub(crate) async fn agent_backup_grant() -> Result<Option<String>, crate::skarbi
     let mut expected = config::agent_skarbiec_items().to_vec();
     expected.sort();
     expected.dedup();
+    if expected
+        .iter()
+        .any(|item| matches!(item.as_str(), "stado-aws" | "stado-azure" | "stado-gcp"))
+    {
+        return Err(SkarbiecError::Deployment(
+            "agent.skarbiec.items must not contain cloud-provider credential items".to_string(),
+        ));
+    }
     for reference in config::agent_skarbiec_secret_fields() {
         let Some((item, field)) = reference.split_once('#') else {
             return Err(SkarbiecError::Deployment(format!(
@@ -228,32 +235,42 @@ pub(crate) async fn agent_backup_grant() -> Result<Option<String>, crate::skarbi
             )));
         }
     }
-    if config::wc_backup_storage_backend() == "s3"
-        && !expected.iter().any(|item| item == "stado-aws")
-    {
-        return Err(SkarbiecError::Deployment(
-            "agent.skarbiec.items must include stado-aws for S3 failover".to_string(),
-        ));
-    }
     if visible != expected {
         return Err(SkarbiecError::Deployment(format!(
-            "consumer {consumer:?} can list {visible:?}; the Azure-agent grant must expose \
-             only its S3 failover credential and workload-secret items"
+            "consumer {consumer:?} can list {visible:?}; the remote workload grant must expose \
+             exactly the configured workload-secret items"
         )));
     }
     Ok(Some(agent_token))
 }
 
-/// Resolve credentials needed by provider dispatch.
+/// Resolve the dedicated workload grant needed by agent dispatch.
 ///
-/// The Azure grant is stored under an internal, non-shell key. The renderer
-/// excludes it, and only `Provider::create_agent_instance` may consume it via
-/// Azure encrypted protected settings.
+/// Azure consumes the raw token only through protected settings. Other remote
+/// providers receive a base64 projection for root-only tmpfs materialization;
+/// the renderer never logs the rendered script or any secret value.
 pub(crate) async fn secrets_from_skarbiec(
 ) -> Result<BTreeMap<String, String>, crate::skarbiec::SkarbiecError> {
     let mut secrets = BTreeMap::new();
-    if let Some(agent_token) = agent_backup_grant().await? {
-        secrets.insert(AZURE_AGENT_PROTECTED_GRANT.to_string(), agent_token);
+    if let Some(agent_token) = agent_workload_grant().await? {
+        let mut azure = false;
+        let mut inline = false;
+        for provider in config::wc_providers() {
+            match crate::capabilities::execution_adapter(provider) {
+                Some(crate::capabilities::ExecutionAdapter::Azure) => azure = true,
+                Some(crate::capabilities::ExecutionAdapter::Local) | None => {}
+                Some(_) => inline = true,
+            }
+        }
+        if azure {
+            secrets.insert(AZURE_AGENT_PROTECTED_GRANT.to_string(), agent_token.clone());
+        }
+        if inline {
+            secrets.insert(
+                AGENT_WORKLOAD_GRANT_B64.to_string(),
+                base64::engine::general_purpose::STANDARD.encode(agent_token.as_bytes()),
+            );
+        }
     }
     Ok(secrets)
 }
@@ -267,25 +284,244 @@ pub(crate) async fn secrets_from_skarbiec(
 pub fn resolve_providers() -> Vec<ResolvedProvider> {
     let mut out = Vec::new();
     for name in config::wc_providers() {
-        match name.as_str() {
-            "local" => continue,
-            "box" | "box-ascii" => match BoxProvider::from_env() {
+        let Some(variant) =
+            crate::capabilities::variant(crate::capabilities::RuntimeFacet::Compute, name)
+        else {
+            log(&format!(
+                "provider {name} tick failed: capability is not registered"
+            ));
+            continue;
+        };
+        match variant.adapter {
+            crate::capabilities::RuntimeAdapter::Compute(
+                crate::capabilities::ComputeAdapter::ExistingHost,
+            ) => continue,
+            crate::capabilities::RuntimeAdapter::Compute(
+                crate::capabilities::ComputeAdapter::Box,
+            ) => match BoxProvider::from_env() {
                 Ok(provider) => out.push(ResolvedProvider::Box {
-                    name: name.clone(),
+                    name: variant.id.to_string(),
                     provider: Arc::new(provider),
                 }),
-                Err(exc) => log(&format!("provider {name} tick failed: {exc}")),
+                Err(exc) => log(&format!("provider {} tick failed: {exc}", variant.id)),
             },
-            _ => match get_provider(name) {
+            crate::capabilities::RuntimeAdapter::Compute(
+                crate::capabilities::ComputeAdapter::Gcp
+                | crate::capabilities::ComputeAdapter::Aws
+                | crate::capabilities::ComputeAdapter::Azure,
+            ) => match get_provider(variant.id) {
                 Ok(provider) => out.push(ResolvedProvider::Cloud {
-                    name: name.clone(),
+                    name: variant.id.to_string(),
                     provider,
                 }),
-                Err(exc) => log(&format!("provider {name} tick failed: {exc}")),
+                Err(exc) => log(&format!("provider {} tick failed: {exc}", variant.id)),
             },
+            _ => log(&format!(
+                "provider {} tick failed: no coordinator adapter",
+                variant.id
+            )),
         }
     }
     out
+}
+
+pub(crate) async fn run_autonomy_once(
+    store: &JobStorage,
+    providers: &[ResolvedProvider],
+    mut policy: crate::autonomy::AutonomyPolicy,
+    log: &dyn Fn(&str),
+) -> Result<(), StorageError> {
+    let now = Utc::now();
+    let control = crate::autonomy::storage::load_control(store).await?;
+    let circuit_open = control.circuit_open_at(now);
+    if circuit_open {
+        log(&format!(
+            "autonomy circuit breaker open until {} after {} consecutive mutation failures: {}",
+            control.circuit_open_until.as_deref().unwrap_or("unknown"),
+            control.consecutive_mutation_failures,
+            control.last_mutation_error.as_deref().unwrap_or("unknown"),
+        ));
+    }
+    policy.emergency_paused |= control.emergency_paused || circuit_open;
+    let prices_path = "autonomy/cost/prices.json";
+    let prices: crate::autonomy::cost::PriceBook = match crate::autonomy::storage::read_json::<
+        crate::autonomy::cost::PriceBook,
+    >(store, prices_path)
+    .await?
+    {
+        Some(book)
+            if timestamp_fresh(
+                &book.created_at,
+                policy.freshness.pricing_max_age_seconds,
+                now,
+            ) =>
+        {
+            book
+        }
+        _ => crate::autonomy::cost::refresh_prices(&policy).await,
+    };
+    let cached = crate::autonomy::storage::load_latest_inventory(store).await?;
+    let mut inventory = match cached {
+        Some(snapshot)
+            if policy.mode == crate::autonomy::AutonomyMode::Report
+                && timestamp_fresh(
+                    &snapshot.created_at,
+                    policy.freshness.inventory_max_age_seconds,
+                    now,
+                ) =>
+        {
+            snapshot
+        }
+        _ => crate::autonomy::inventory::collect(store).await?,
+    };
+    let prior_snapshot_id = inventory.snapshot_id.clone();
+    crate::autonomy::cost::enrich_inventory(&mut inventory, &prices);
+    crate::autonomy::inventory::reseal(&mut inventory)?;
+    if inventory.snapshot_id != prior_snapshot_id
+        || crate::autonomy::storage::load_latest_inventory(store)
+            .await?
+            .is_none_or(|latest| latest.snapshot_id != inventory.snapshot_id)
+    {
+        crate::autonomy::storage::publish_inventory(store, &inventory).await?;
+    }
+    let budget_allocation = crate::autonomy::cost::build_allocation(store, &inventory).await?;
+    let budget_billing = crate::autonomy::cost::load_billing_snapshot(store).await?;
+    let budget_forecast =
+        crate::autonomy::cost::forecast(&budget_allocation, &policy, budget_billing.as_ref(), now);
+    let new_cloud_allowed = !budget_forecast.budget_exceeded;
+    let hours_per_day = (crate::monitor::billing::SECONDS_PER_DAY
+        / crate::monitor::billing::SECONDS_PER_HOUR) as f64;
+    let daily_hourly_limit = policy.budgets.daily_usd.map(|limit| limit / hours_per_day);
+    let hourly_limit = match (policy.budgets.hourly_usd, daily_hourly_limit) {
+        (Some(hourly), Some(daily)) => Some(hourly.min(daily)),
+        (Some(hourly), None) => Some(hourly),
+        (None, Some(daily)) => Some(daily),
+        (None, None) => None,
+    };
+    let mut new_cloud_hourly_budget_usd =
+        hourly_limit.map(|limit| (limit - budget_forecast.current_hourly_usd).max(f64::default()));
+    let mut new_cloud_cost_budget_usd = policy
+        .budgets
+        .monthly_usd
+        .map(|limit| (limit - budget_forecast.end_of_month_usd).max(f64::default()));
+    if !new_cloud_allowed || policy.mode != crate::autonomy::AutonomyMode::EnforceOwned {
+        new_cloud_hourly_budget_usd = Some(f64::default());
+        new_cloud_cost_budget_usd = Some(f64::default());
+    }
+    if !new_cloud_allowed {
+        log(&format!(
+            "autonomy budget guard: hourly overrun ${:.2}, daily overrun ${:.2}, monthly overrun ${:.2}; new cloud placement blocked",
+            budget_forecast.hourly_overrun_usd,
+            budget_forecast.daily_overrun_usd,
+            budget_forecast.projected_overrun_usd,
+        ));
+    }
+
+    if policy.mode != crate::autonomy::AutonomyMode::Report && inventory.complete {
+        let cloud: Vec<(String, Arc<dyn Provider>)> = providers
+            .iter()
+            .filter_map(|provider| match provider {
+                ResolvedProvider::Cloud { name, provider } => {
+                    Some((name.clone(), Arc::clone(provider)))
+                }
+                ResolvedProvider::Box { .. } => None,
+            })
+            .collect();
+        let placement = crate::autonomy::optimizer::plan_queued(
+            store,
+            &cloud,
+            &policy,
+            &prices,
+            &inventory.snapshot_id,
+            log,
+            new_cloud_hourly_budget_usd,
+            new_cloud_cost_budget_usd,
+        )
+        .await?;
+        log(&format!(
+            "autonomy placement: considered={} decided={} changed={} blocked={}",
+            placement.considered_jobs,
+            placement.decided_jobs,
+            placement.changed_jobs,
+            placement.no_eligible_target
+        ));
+    } else if policy.mode != crate::autonomy::AutonomyMode::Report {
+        log("autonomy placement blocked: inventory is incomplete");
+    }
+
+    let fingerprint = crate::cli::resources::planner::configuration_fingerprint()
+        .map_err(|error| StorageError::Other(error.to_string()))?;
+    let reconciliation =
+        crate::autonomy::reconciler::reconcile(store, &inventory, &policy, &fingerprint, log)
+            .await?;
+    if reconciliation.findings > usize::default() {
+        log(&format!(
+            "autonomy reconciliation: findings={} actions={} executed={}",
+            reconciliation.findings, reconciliation.automatic_actions, reconciliation.executed
+        ));
+    }
+    let advice =
+        crate::autonomy::advisor::publish_recommendations(store, &inventory, &policy, now).await?;
+    if advice.rightsizing > usize::default()
+        || advice.schedules > usize::default()
+        || advice.storage_lifecycle > usize::default()
+        || advice.network > usize::default()
+        || advice.commitments > usize::default()
+    {
+        log(&format!(
+            "autonomy advice: rightsizing={} schedules={} storage={} network={} commitments={}",
+            advice.rightsizing,
+            advice.schedules,
+            advice.storage_lifecycle,
+            advice.network,
+            advice.commitments
+        ));
+    }
+
+    let allocation = crate::autonomy::cost::build_allocation(store, &inventory).await?;
+    let billing = crate::autonomy::cost::load_billing_snapshot(store).await?;
+    let forecast = crate::autonomy::cost::forecast(&allocation, &policy, billing.as_ref(), now);
+    let anomalies = crate::autonomy::cost::detect_anomalies(&allocation, &inventory, &forecast);
+    crate::autonomy::cost::persist_reports(store, &prices, &allocation, &forecast, &anomalies)
+        .await?;
+    let outcomes = crate::autonomy::cost::measure_outcomes(store).await?;
+    if outcomes.feedback_written > usize::default() || outcomes.savings_measured > usize::default()
+    {
+        log(&format!(
+            "autonomy outcomes: feedback={} savings-measured={}",
+            outcomes.feedback_written, outcomes.savings_measured
+        ));
+    }
+    let savings = crate::autonomy::storage::list_savings(store).await?;
+    let measurements = crate::autonomy::storage::list_savings_measurements(store).await?;
+    let savings_summary =
+        crate::autonomy::cost::summarize_savings_with_measurements(&savings, &measurements);
+    crate::autonomy::storage::write_json(
+        store,
+        "autonomy/cost/savings.json",
+        &savings_summary,
+        false,
+    )
+    .await?;
+    let lifecycle = crate::autonomy::lifecycle::enforce(store, &policy, now).await?;
+    if lifecycle.deleted > usize::default() {
+        log(&format!(
+            "autonomy lifecycle: deleted={} bytes={} capped={}",
+            lifecycle.deleted, lifecycle.deleted_bytes, lifecycle.capped
+        ));
+    }
+    Ok(())
+}
+
+fn timestamp_fresh(raw: &str, max_age_seconds: u64, now: chrono::DateTime<Utc>) -> bool {
+    DateTime::parse_from_rfc3339(raw)
+        .map(|stamp| {
+            now.signed_duration_since(stamp.with_timezone(&Utc))
+                .num_seconds()
+        })
+        .is_ok_and(|age| {
+            age >= i64::default() && age <= i64::try_from(max_age_seconds).unwrap_or(i64::MAX)
+        })
 }
 
 /// One scheduling cycle across every provider (Python
@@ -333,15 +569,31 @@ pub async fn run_tick(
             "sizing: corrected {n_sized} stale queue gpu_mem_gb values"
         ));
     }
-    // Centralized makespan-minimizing matcher. Writes assigned_to back to
-    // the queue blob; the agent side refuses jobs pinned to a different
-    // agent. Priority stays user-controlled — it's a queue-order knob,
-    // not a fleet-routing one.
-    let n_assigned = assign_jobs(store, log).await?;
-    if n_assigned > 0 {
-        log(&format!(
-            "assignment: matched {n_assigned} queued jobs to agents"
-        ));
+    let autonomy_requires_routing = match crate::autonomy::storage::load_policy(store).await {
+        Ok(policy) => {
+            let routed = policy.mode != crate::autonomy::AutonomyMode::Report;
+            if let Err(error) = run_autonomy_once(store, providers, policy, log).await {
+                log(&format!("autonomy tick degraded: {error}"));
+            }
+            routed
+        }
+        Err(error) => {
+            log(&format!(
+                "autonomy policy unreadable; fail-closing unpinned dispatch: {error}"
+            ));
+            true
+        }
+    };
+    if !autonomy_requires_routing {
+        // Report mode preserves the legacy makespan matcher. Enforced
+        // autonomy has already selected a provider/consumer atomically;
+        // running this matcher afterwards would overwrite that decision.
+        let n_assigned = assign_jobs(store, log).await?;
+        if n_assigned > usize::default() {
+            log(&format!(
+                "assignment: matched {n_assigned} queued jobs to agents"
+            ));
+        }
     }
     let mut total: i64 = 0;
     for arm in providers {
@@ -359,7 +611,11 @@ pub async fn run_tick(
                 if reaped > 0 {
                     log(&format!("{name}: reaped {reaped} dead-agent VM(s)"));
                 }
-                total += schedule_queued_jobs(store, provider.as_ref(), name, secrets).await?;
+                total += if autonomy_requires_routing {
+                    schedule_queued_jobs_routed(store, provider.as_ref(), name, secrets).await?
+                } else {
+                    schedule_queued_jobs(store, provider.as_ref(), name, secrets).await?
+                };
             }
         }
     }
@@ -414,7 +670,10 @@ pub async fn run(target: Option<&str>, once: bool) -> Result<i32, String> {
         .await
         .map_err(|err| err.to_string())?;
     loop {
-        if !config::release_base_url().is_empty() {
+        if !config::stado_release_api_url().is_empty()
+            && !config::stado_release_version().is_empty()
+            && !config::stado_release_platform().is_empty()
+        {
             let mut update_log = |message: &str| log(message);
             match crate::self_update::self_update(&mut update_log).await {
                 Ok(crate::self_update::UpdateOutcome::Updated { from, to }) => {
@@ -568,10 +827,8 @@ mod tests {
         sched.next_due_at = past.clone();
         write_schedule(&store, &sched).await.unwrap();
 
-        // Queued job. Provider name "azure" has no live quota source
-        // (TODO(phase-3) arm) and the store has no overlay blob, so
-        // schedule_queued_jobs finds zero slots and the job stays queued —
-        // deterministic and offline.
+        // Unknown fake provider has neither a live quota adapter nor a store
+        // overlay, so scheduling sees zero slots and remains hermetic.
         let queued = Job::new("queuejob1", "echo hello");
         store.write_job("queue", &queued).await.unwrap();
 
@@ -598,7 +855,7 @@ mod tests {
             deletes: Mutex::new(Vec::new()),
         });
         let providers = vec![ResolvedProvider::Cloud {
-            name: "azure".to_string(),
+            name: "fake".to_string(),
             provider: fake.clone(),
         }];
 
@@ -664,6 +921,6 @@ mod tests {
 
         // 5. Coordinator log lines.
         let logs = logs.lock().unwrap();
-        assert!(logs.iter().any(|m| m == "azure: reaped 1 dead-agent VM(s)"));
+        assert!(logs.iter().any(|m| m == "fake: reaped 1 dead-agent VM(s)"));
     }
 }

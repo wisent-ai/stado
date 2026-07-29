@@ -237,213 +237,259 @@ fn unresolved_placeholders(value: &Value, path: &str, problems: &mut Vec<String>
     }
 }
 
+fn catalog_variant(
+    kind: crate::capabilities::RuntimeFacet,
+    value: Option<&Value>,
+    label: &str,
+    problems: &mut Vec<String>,
+) -> Option<&'static crate::capabilities::CapabilityVariant> {
+    let value = value.filter(|value| !value.is_null())?;
+    let variant = value
+        .as_str()
+        .and_then(|name| crate::capabilities::configurable_variant(kind, name));
+    if variant.is_none() {
+        let choices = crate::capabilities::configurable_ids(kind)
+            .collect::<Vec<_>>()
+            .join("|");
+        problems.push(format!("{label} must be {choices}, got {value:?}"));
+    }
+    variant
+}
+
+fn validate_variant_config(
+    root: &Map<String, Value>,
+    variant: &crate::capabilities::CapabilityVariant,
+    backup: bool,
+    problems: &mut Vec<String>,
+) {
+    for field in variant.config {
+        let required = if backup {
+            field.backup_required
+        } else {
+            field.required
+        };
+        let path = if backup {
+            field.backup_path
+        } else {
+            Some(field.path)
+        };
+        if !required {
+            continue;
+        }
+        let configured = path
+            .and_then(|path| get_in(root, path))
+            .is_some_and(py_truthy);
+        let fallback = (!backup)
+            .then_some(field.fallback_path)
+            .flatten()
+            .and_then(|path| get_in(root, path))
+            .is_some_and(py_truthy);
+        if !configured && !fallback {
+            problems.push(format!(
+                "{}.backend={} needs {}",
+                if backup { "storage.backup" } else { "storage" },
+                variant.id,
+                path.unwrap_or(field.path)
+            ));
+        }
+    }
+}
+
 /// Structural validation of a config dict; returns a list of problems.
 pub fn validate(data: &Value) -> Vec<String> {
-    let mut problems = Vec::new();
+    let mut problems = crate::capabilities::validate_catalog();
     let empty = Map::new();
     let root = data.as_object().unwrap_or(&empty);
     unresolved_placeholders(data, "", &mut problems);
-    let storage = root.get("storage").and_then(Value::as_object);
-    let backend = storage.and_then(|s| s.get("backend"));
-    if let Some(backend) = backend.filter(|b| !b.is_null()) {
-        let ok = backend.as_str().is_some_and(|name| {
-            crate::capabilities::configurable_variant(
-                crate::capabilities::CapabilityKind::Storage,
-                name,
-            )
-            .is_some()
-        });
-        if !ok {
-            let choices =
-                crate::capabilities::configurable_ids(crate::capabilities::CapabilityKind::Storage)
-                    .collect::<Vec<_>>()
-                    .join("|");
+    let primary_field = crate::capabilities::STORAGE_BACKEND_CONFIG;
+    let primary = catalog_variant(
+        crate::capabilities::RuntimeFacet::Storage,
+        get_in(root, primary_field.path),
+        primary_field.path,
+        &mut problems,
+    );
+    if let Some(variant) = primary {
+        validate_variant_config(root, variant, false, &mut problems);
+    }
+
+    let backup_path = primary_field
+        .backup_path
+        .expect("storage backend catalog entry must define its backup path");
+    let backup_variant = catalog_variant(
+        crate::capabilities::RuntimeFacet::Storage,
+        get_in(root, backup_path),
+        backup_path,
+        &mut problems,
+    );
+    if let Some(variant) = backup_variant {
+        validate_variant_config(root, variant, true, &mut problems);
+    }
+
+    let primary_adapter = primary.and_then(|variant| match variant.adapter {
+        crate::capabilities::RuntimeAdapter::Storage(adapter) => Some(adapter),
+        _ => None,
+    });
+    let backup_adapter = backup_variant.and_then(|variant| match variant.adapter {
+        crate::capabilities::RuntimeAdapter::Storage(adapter) => Some(adapter),
+        _ => None,
+    });
+    if let Some(required) = primary_adapter.and_then(|adapter| adapter.required_backup()) {
+        if backup_adapter != Some(required) {
             problems.push(format!(
-                "storage.backend must be {choices}, got {backend:?}"
+                "{} cutover requires storage.backup.backend={}; the replica is read fallback only and is never promoted automatically",
+                primary.map(|variant| variant.id).unwrap_or("selected storage"),
+                required.id()
             ));
         }
     }
-    if backend.and_then(Value::as_str) == Some("azure") {
-        let account = storage
-            .and_then(|s| s.get("azure"))
-            .and_then(Value::as_object)
-            .and_then(|azure| azure.get("account"));
-        let container = storage
-            .and_then(|s| s.get("azure"))
-            .and_then(Value::as_object)
-            .and_then(|azure| azure.get("container"));
-        if !account.is_some_and(py_truthy) {
-            problems.push(
-                "storage.backend=azure needs storage.azure.account; provision the Azure storage \
-                 account before cutover"
-                    .to_string(),
-            );
+    let configured_providers = match get_in(root, crate::capabilities::PROVIDERS_CONFIG.path)
+        .filter(|value| !value.is_null())
+    {
+        Some(Value::Array(providers)) if providers.is_empty() => {
+            problems
+                .push("providers must be a non-empty list of enabled provider names".to_string());
+            &[]
         }
-        if !container.is_some_and(py_truthy) {
-            problems.push("storage.backend=azure needs storage.azure.container".to_string());
+        Some(Value::Array(providers)) => providers.as_slice(),
+        Some(_) => {
+            problems.push("providers must be an array of enabled provider names".to_string());
+            &[]
         }
-    }
-    if backend.and_then(Value::as_str) == Some("gcs") {
-        let gcs_bucket = storage
-            .and_then(|s| s.get("gcs"))
-            .and_then(Value::as_object)
-            .and_then(|g| g.get("bucket"));
-        let top_bucket = root.get("bucket");
-        if !gcs_bucket.is_some_and(py_truthy) && !top_bucket.is_some_and(py_truthy) {
-            problems.push("storage.backend=gcs needs storage.gcs.bucket".to_string());
+        None => &[],
+    };
+    let disabled_providers = match get_in(root, crate::capabilities::DISABLED_PROVIDERS_CONFIG.path)
+        .filter(|value| !value.is_null())
+    {
+        Some(Value::Array(providers)) => providers.as_slice(),
+        Some(_) => {
+            problems
+                .push("providers_disabled must be an array of fenced provider names".to_string());
+            &[]
         }
-    }
-    if backend.and_then(Value::as_str) == Some("s3") {
-        let s3_bucket = storage
-            .and_then(|s| s.get("s3"))
-            .and_then(Value::as_object)
-            .and_then(|g| g.get("bucket"));
-        if !s3_bucket.is_some_and(py_truthy) {
-            problems.push("storage.backend=s3 needs storage.s3.bucket".to_string());
+        None => &[],
+    };
+    let mut enabled = std::collections::BTreeSet::new();
+    let mut enabled_names = std::collections::BTreeSet::new();
+    for provider in configured_providers {
+        let Some(name) = provider.as_str() else {
+            problems.push("providers entries must be provider names".to_string());
+            continue;
+        };
+        if !enabled_names.insert(name) {
+            problems.push(format!("providers contains duplicate provider {name:?}"));
+            continue;
         }
-    }
-    let backup = storage
-        .and_then(|s| s.get("backup"))
-        .and_then(Value::as_object);
-    let backup_backend = backup
-        .and_then(|value| value.get("backend"))
-        .and_then(Value::as_str);
-    if let Some(kind) = backup_backend {
-        if crate::capabilities::configurable_variant(
-            crate::capabilities::CapabilityKind::Storage,
-            kind,
+        let Some(canonical) = crate::capabilities::configurable_variant(
+            crate::capabilities::RuntimeFacet::Compute,
+            name,
         )
-        .is_none()
-        {
-            let choices =
-                crate::capabilities::configurable_ids(crate::capabilities::CapabilityKind::Storage)
-                    .collect::<Vec<_>>()
-                    .join("|");
+        .and_then(|variant| variant.provider) else {
+            problems.push(format!("unknown provider: {provider:?}"));
+            continue;
+        };
+        if !enabled.insert(canonical) {
             problems.push(format!(
-                "storage.backup.backend must be {choices}, got {kind:?}"
+                "providers entries {name:?} and an earlier alias identify the same provider"
             ));
         }
     }
-    if backend.and_then(Value::as_str) == Some("azure") && backup_backend != Some("s3") {
-        problems.push(
-            "Azure cutover requires storage.backup.backend=s3; the replica is read fallback only \
-             and is never promoted automatically"
-                .to_string(),
-        );
-    }
-    if backup_backend == Some("s3") {
-        let bucket = backup.and_then(|value| value.get("bucket"));
-        let region = backup
-            .and_then(|value| value.get("s3"))
-            .and_then(Value::as_object)
-            .and_then(|value| value.get("region"));
-        if !bucket.is_some_and(py_truthy) {
-            problems.push(
-                "storage.backup.backend=s3 needs storage.backup.bucket; provision the bucket \
-                 before deployment"
-                    .to_string(),
-            );
-        }
-        if !region.is_some_and(py_truthy) {
-            problems.push("storage.backup.backend=s3 needs storage.backup.s3.region".to_string());
-        }
-    }
-    if let Some(providers) = root.get("providers").filter(|p| !p.is_null()) {
-        match providers.as_array() {
-            Some(list) if !list.is_empty() => {
-                for provider in list {
-                    let ok = provider.as_str().is_some_and(|name| {
-                        crate::capabilities::configurable_variant(
-                            crate::capabilities::CapabilityKind::Compute,
-                            name,
-                        )
-                        .is_some()
-                    });
-                    if !ok {
-                        problems.push(format!("unknown provider: {provider:?}"));
-                    }
-                }
-            }
-            _ => problems.push("providers must be a non-empty list".to_string()),
-        }
-    }
-    let configured_providers = root
-        .get("providers")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default();
-    let disabled_providers = root
-        .get("providers_disabled")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default();
-    for disabled in disabled_providers {
-        let Some(name) = disabled.as_str() else {
+    let mut disabled = std::collections::BTreeSet::new();
+    let mut disabled_names = std::collections::BTreeSet::new();
+    for provider in disabled_providers {
+        let Some(name) = provider.as_str() else {
             problems.push("providers_disabled entries must be provider names".to_string());
             continue;
         };
-        if !configured_providers
-            .iter()
-            .any(|provider| provider.as_str() == Some(name))
-        {
+        if !disabled_names.insert(name) {
             problems.push(format!(
-                "providers_disabled contains {name:?}, but providers does not"
+                "providers_disabled contains duplicate provider {name:?}"
+            ));
+            continue;
+        }
+        let Some(canonical) = crate::capabilities::configurable_variant(
+            crate::capabilities::RuntimeFacet::Compute,
+            name,
+        )
+        .and_then(|variant| variant.provider) else {
+            problems.push(format!("unknown disabled provider: {provider:?}"));
+            continue;
+        };
+        if !disabled.insert(canonical) {
+            problems.push(format!(
+                "providers_disabled entries {name:?} and an earlier alias identify the same provider"
             ));
         }
     }
-    if !configured_providers.is_empty()
-        && configured_providers.iter().all(|provider| {
-            disabled_providers
-                .iter()
-                .any(|disabled| disabled == provider)
-        })
-    {
-        problems.push("providers_disabled fences every configured provider".to_string());
+    for provider in enabled.intersection(&disabled) {
+        problems.push(format!(
+            "provider {provider:?} cannot be both enabled in providers and fenced in providers_disabled"
+        ));
     }
-    let azure_provider = configured_providers
-        .iter()
-        .any(|provider| provider.as_str() == Some("azure"))
-        && !disabled_providers
-            .iter()
-            .any(|provider| provider.as_str() == Some("azure"));
-    if azure_provider {
-        for (key, remedy) in [
-            (
-                "azure.subscription_id",
-                "azure provider needs azure.subscription_id for ARM",
-            ),
-            (
-                "azure.vm_identity_id",
-                "azure provider needs azure.vm_identity_id; provision a user-assigned identity \
-                 with Blob Data Contributor and VM self-delete rights",
-            ),
-            (
-                "azure.ssh_public_key",
-                "azure provider needs azure.ssh_public_key for VM creation",
-            ),
-        ] {
-            if !get_in(root, key).is_some_and(py_truthy) {
-                problems.push(remedy.to_string());
+    let active_providers = enabled.iter().copied().collect::<Vec<_>>();
+    for provider in &active_providers {
+        let Some(variant) = crate::capabilities::variant(
+            crate::capabilities::RuntimeFacet::Compute,
+            provider.as_str(),
+        ) else {
+            continue;
+        };
+        for field in variant.config.iter().filter(|field| field.required) {
+            let configured = get_in(root, field.path).is_some_and(py_truthy)
+                || field
+                    .fallback_path
+                    .and_then(|path| get_in(root, path))
+                    .is_some_and(py_truthy);
+            if !configured {
+                problems.push(format!(
+                    "{} provider needs {} (environment override {})",
+                    provider, field.path, field.env
+                ));
             }
         }
+    }
+    let cloud_agent_provider = [
+        crate::capabilities::ProviderId::Gcp,
+        crate::capabilities::ProviderId::Aws,
+        crate::capabilities::ProviderId::Azure,
+    ]
+    .iter()
+    .any(|provider| active_providers.contains(provider));
+    if cloud_agent_provider {
+        let release_api = get_in(root, "release.api_url")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if release_api.is_empty() {
+            problems.push(
+                "cloud agents need explicit release.api_url for the public Stado release endpoint"
+                    .to_string(),
+            );
+        } else if !release_api.starts_with("https://") {
+            problems.push("release.api_url must use HTTPS".to_string());
+        }
+        for key in ["release.version", "release.platform"] {
+            let value = get_in(root, key)
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if value.is_empty()
+                || value.trim() != value
+                || !value
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+            {
+                problems.push(format!(
+                    "{key} must be an exact non-empty release coordinate containing only letters, digits, '.', '_' or '-'"
+                ));
+            }
+        }
+    }
+    let azure_provider = active_providers.contains(&crate::capabilities::ProviderId::Azure);
+    if azure_provider {
         if !get_in(root, "deployment.id").is_some_and(py_truthy) {
             problems.push(
                 "Azure control plane needs deployment.id for dashboard RLS and trusted-proxy \
                  deployment binding"
                     .to_string(),
             );
-        }
-        let release_base = get_in(root, "release.base_url")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if release_base.is_empty() {
-            problems.push(
-                "Azure control plane needs explicit release.base_url; publish the Rust release \
-                 tree before cutover"
-                    .to_string(),
-            );
-        } else if !release_base.starts_with("https://") {
-            problems.push("release.base_url must be HTTPS for Azure cutover".to_string());
         }
         for (key, remedy) in [
             (
@@ -487,17 +533,22 @@ pub fn validate(data: &Value) -> Vec<String> {
                     .to_string(),
             );
         }
-        if agent_consumer != "stado-azure-agent" {
+        if agent_consumer.is_empty()
+            || matches!(
+                agent_consumer,
+                "stado-control-plane" | "stado-local-agent" | "stado-azure-agent"
+            )
+        {
             problems.push(
-                "agent.skarbiec.consumer must be stado-azure-agent with exact read scopes \
-                 matching agent.skarbiec.items"
+                "Azure dispatch requires a newly scoped workload-agent consumer distinct from \
+                 control-plane, local-agent, and revoked legacy Azure-agent grants"
                     .to_string(),
             );
         }
         if !get_in(root, "agent.skarbiec.token_file").is_some_and(py_truthy) {
             problems.push(
                 "agent.skarbiec.token_file is required; Stado cannot dispatch Azure VMs \
-                 without the operator-provided owner-only grant"
+                 without an operator-provided owner-only workload grant"
                     .to_string(),
             );
         }
@@ -505,15 +556,15 @@ pub fn validate(data: &Value) -> Vec<String> {
             .and_then(Value::as_array)
             .filter(|items| !items.is_empty());
         if !agent_items.is_some_and(|items| {
-            items
-                .iter()
-                .all(|item| item.as_str().is_some_and(|name| !name.is_empty()))
-                && (backup_backend != Some("s3")
-                    || items.iter().any(|item| item.as_str() == Some("stado-aws")))
+            items.iter().all(|item| {
+                item.as_str().is_some_and(|name| {
+                    !name.is_empty() && !matches!(name, "stado-aws" | "stado-azure" | "stado-gcp")
+                })
+            })
         }) {
             problems.push(
-                "agent.skarbiec.items must be a non-empty string array and include stado-aws \
-                 when S3 backup is enabled; mint stado-azure-agent with exactly these scopes"
+                "agent.skarbiec.items must be a non-empty workload-only string array and must \
+                 not contain cloud-provider credential items"
                     .to_string(),
             );
         }
@@ -560,10 +611,12 @@ pub fn validate(data: &Value) -> Vec<String> {
                     "stado-aws"
                         | "stado-azure"
                         | "stado-gcp"
-                        | "stado-object-api"
                         | "stado-machine-api"
                         | "stado-service-api"
-                ) {
+                        | "stado-host-health-api"
+                ) || item.ends_with("-object-api")
+                    || item.ends_with("-release-publisher")
+                {
                     problems.push(format!(
                         "agent.skarbiec.secret_fields must not expose infrastructure item {item:?} to jobs"
                     ));
@@ -574,12 +627,514 @@ pub fn validate(data: &Value) -> Vec<String> {
             "agent.skarbiec.secret_fields must be an array of item#field strings".to_string(),
         ),
     }
-    let local_provider = configured_providers
-        .iter()
-        .any(|provider| provider.as_str() == Some("local"))
-        && !disabled_providers
+    let messaging = get_in(root, "backend.messaging.skarbiec").and_then(Value::as_object);
+    let messaging_consumer = messaging
+        .and_then(|section| section.get("consumer"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if messaging_consumer != "wisent-backend-business-messaging" {
+        problems.push(
+            "backend.messaging.skarbiec.consumer must be the dedicated wisent-backend-business-messaging consumer"
+                .to_string(),
+        );
+    }
+    let messaging_token_file = messaging
+        .and_then(|section| section.get("token_file"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if messaging_token_file.is_empty() {
+        problems.push(
+            "backend.messaging.skarbiec.token_file must name the owner-only messaging grant file"
+                .to_string(),
+        );
+    }
+    for other_path in [
+        "secrets.skarbiec.token_file",
+        "agent.skarbiec.token_file",
+        "object_api.skarbiec.token_file",
+        "release_api.skarbiec.token_file",
+        "service_api.skarbiec.token_file",
+    ] {
+        if !messaging_token_file.is_empty()
+            && get_in(root, other_path).and_then(Value::as_str) == Some(messaging_token_file)
+        {
+            problems.push(format!(
+                "backend.messaging.skarbiec.token_file must be distinct from {other_path}"
+            ));
+        }
+    }
+    let required_messaging_items = [
+        "wisent-backend-apns",
+        "wisent-backend-fcm",
+        "stado-supabase",
+    ];
+    let optional_email_item = "wisent-backend-email-provider";
+    let messaging_items = messaging
+        .and_then(|section| section.get("items"))
+        .and_then(Value::as_array);
+    if !messaging_items.is_some_and(|items| {
+        required_messaging_items
             .iter()
-            .any(|provider| provider.as_str() == Some("local"));
+            .all(|expected| items.iter().any(|item| item.as_str() == Some(expected)))
+            && items.iter().all(|item| {
+                item.as_str().is_some_and(|item| {
+                    required_messaging_items.contains(&item) || item == optional_email_item
+                })
+            })
+            && items.iter().enumerate().all(|(index, item)| {
+                items
+                    .iter()
+                    .skip(index.saturating_add(usize::from(true)))
+                    .all(|later| later != item)
+            })
+    }) {
+        problems.push(
+            "backend.messaging.skarbiec.items must contain exactly wisent-backend-apns, wisent-backend-fcm, and stado-supabase; wisent-backend-email-provider is optional"
+                .to_string(),
+        );
+    }
+    if messaging.is_some_and(|section| section.contains_key("token")) {
+        problems.push(
+            "backend.messaging.skarbiec.token is forbidden; store the grant only in its owner-only token_file"
+                .to_string(),
+        );
+    }
+    if let Err(push_problems) =
+        crate::config::parse_backend_push_clients(get_in(root, "backend.push_clients"))
+    {
+        problems.extend(push_problems);
+    }
+    let push_skarbiec = get_in(root, "backend.push_skarbiec").and_then(Value::as_object);
+    if push_skarbiec
+        .and_then(|section| section.get("url"))
+        .is_some_and(|url| !py_truthy(url))
+    {
+        problems.push(
+            "backend.push_skarbiec.url, when set, must be a non-empty verifier endpoint"
+                .to_string(),
+        );
+    }
+    if push_skarbiec
+        .and_then(|section| section.get("consumer"))
+        .and_then(Value::as_str)
+        != Some(crate::config::BACKEND_PUSH_API_VERIFIER_CONSUMER)
+    {
+        problems.push(format!(
+            "backend.push_skarbiec.consumer must be the dedicated verifier {:?}",
+            crate::config::BACKEND_PUSH_API_VERIFIER_CONSUMER
+        ));
+    }
+    let push_token_file = push_skarbiec
+        .and_then(|section| section.get("token_file"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if push_token_file.is_empty() {
+        problems.push(
+            "backend.push_skarbiec.token_file must name the owner-only push verifier grant file"
+                .to_string(),
+        );
+    }
+    for other_path in [
+        "secrets.skarbiec.token_file",
+        "agent.skarbiec.token_file",
+        "backend.messaging.skarbiec.token_file",
+        "object_api.skarbiec.token_file",
+        "release_api.skarbiec.token_file",
+        "machine_api.skarbiec.token_file",
+        "service_api.skarbiec.token_file",
+        "rate_limit.skarbiec.token_file",
+    ] {
+        if !push_token_file.is_empty()
+            && get_in(root, other_path).and_then(Value::as_str) == Some(push_token_file)
+        {
+            problems.push(format!(
+                "backend.push_skarbiec.token_file must be distinct from {other_path}"
+            ));
+        }
+    }
+    if push_skarbiec.is_some_and(|section| section.contains_key("token")) {
+        problems.push(
+            "backend.push_skarbiec.token is forbidden; store the grant only in its owner-only token_file"
+                .to_string(),
+        );
+    }
+    for item in ["wisent-app-push-router", "wisent-backend-push-router"] {
+        if configured_items
+            .iter()
+            .any(|configured| configured.as_str() == Some(item))
+        {
+            problems.push(format!(
+                "agent.skarbiec.items must not expose push verifier item {item:?} to jobs"
+            ));
+        }
+    }
+    let rate_limit = root.get("rate_limit").and_then(Value::as_object);
+    if let Err(problem) = crate::rate_limit::parse_clients(
+        rate_limit
+            .and_then(|section| section.get("clients"))
+            .cloned(),
+    ) {
+        problems.push(problem);
+    }
+    let rate_skarbiec = rate_limit
+        .and_then(|section| section.get("skarbiec"))
+        .and_then(Value::as_object);
+    if rate_skarbiec
+        .and_then(|section| section.get("url"))
+        .is_some_and(|url| !py_truthy(url))
+    {
+        problems.push(
+            "rate_limit.skarbiec.url, when set, must be a non-empty verifier endpoint".to_string(),
+        );
+    }
+    if rate_skarbiec
+        .and_then(|section| section.get("consumer"))
+        .and_then(Value::as_str)
+        != Some(crate::config::RATE_LIMIT_API_VERIFIER_CONSUMER)
+    {
+        problems.push(format!(
+            "rate_limit.skarbiec.consumer must be the dedicated verifier {:?}",
+            crate::config::RATE_LIMIT_API_VERIFIER_CONSUMER
+        ));
+    }
+    let rate_token_file = rate_skarbiec
+        .and_then(|section| section.get("token_file"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if rate_token_file.is_empty() {
+        problems.push(
+            "rate_limit.skarbiec.token_file must name the owner-only rate-limit verifier grant file"
+                .to_string(),
+        );
+    }
+    for other_path in [
+        "secrets.skarbiec.token_file",
+        "agent.skarbiec.token_file",
+        "backend.messaging.skarbiec.token_file",
+        "backend.push_skarbiec.token_file",
+        "object_api.skarbiec.token_file",
+        "release_api.skarbiec.token_file",
+        "machine_api.skarbiec.token_file",
+        "service_api.skarbiec.token_file",
+    ] {
+        if !rate_token_file.is_empty()
+            && get_in(root, other_path).and_then(Value::as_str) == Some(rate_token_file)
+        {
+            problems.push(format!(
+                "rate_limit.skarbiec.token_file must be distinct from {other_path}"
+            ));
+        }
+    }
+    if rate_skarbiec.is_some_and(|section| section.contains_key("token")) {
+        problems.push(
+            "rate_limit.skarbiec.token is forbidden; store the grant only in its owner-only token_file"
+                .to_string(),
+        );
+    }
+    if configured_items
+        .iter()
+        .any(|configured| configured.as_str() == Some("trading-autonomy-rate-limit-api"))
+    {
+        problems.push(
+            "agent.skarbiec.items must not expose rate-limit verifier items to jobs".to_string(),
+        );
+    }
+    let integration = root.get("integration").and_then(Value::as_object);
+    let integration_clients =
+        crate::config::parse_integration_clients(get_in(root, "integration.clients"));
+    match &integration_clients {
+        Ok(clients) => {
+            for item in clients.values().map(|client| client.item()) {
+                if configured_items
+                    .iter()
+                    .any(|configured| configured.as_str() == Some(item))
+                {
+                    problems.push(format!(
+                        "agent.skarbiec.items must not expose integration verifier item {item:?} to jobs"
+                    ));
+                }
+            }
+        }
+        Err(integration_problems) => problems.extend(integration_problems.iter().cloned()),
+    }
+    if integration.is_some_and(|section| section.contains_key("providers")) {
+        if let Err(provider_problems) =
+            crate::config::parse_integration_providers(get_in(root, "integration.providers"))
+        {
+            problems.extend(provider_problems);
+        }
+    }
+    let integration_skarbiec = integration
+        .and_then(|section| section.get("skarbiec"))
+        .and_then(Value::as_object);
+    if integration_skarbiec
+        .and_then(|section| section.get("url"))
+        .is_some_and(|url| !py_truthy(url))
+    {
+        problems.push(
+            "integration.skarbiec.url, when set, must be a non-empty verifier endpoint".to_string(),
+        );
+    }
+    if integration_skarbiec
+        .and_then(|section| section.get("consumer"))
+        .and_then(Value::as_str)
+        != Some(crate::config::INTEGRATION_API_VERIFIER_CONSUMER)
+    {
+        problems.push(format!(
+            "integration.skarbiec.consumer must be the dedicated verifier {:?}",
+            crate::config::INTEGRATION_API_VERIFIER_CONSUMER
+        ));
+    }
+    let integration_token_file = integration_skarbiec
+        .and_then(|section| section.get("token_file"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if integration_token_file.is_empty() {
+        problems.push(
+            "integration.skarbiec.token_file must name the owner-only integration verifier grant file"
+                .to_string(),
+        );
+    }
+    for other_path in [
+        "secrets.skarbiec.token_file",
+        "agent.skarbiec.token_file",
+        "backend.messaging.skarbiec.token_file",
+        "backend.push_skarbiec.token_file",
+        "rate_limit.skarbiec.token_file",
+        "object_api.skarbiec.token_file",
+        "release_api.skarbiec.token_file",
+        "machine_api.skarbiec.token_file",
+        "service_api.skarbiec.token_file",
+    ] {
+        if !integration_token_file.is_empty()
+            && get_in(root, other_path).and_then(Value::as_str) == Some(integration_token_file)
+        {
+            problems.push(format!(
+                "integration.skarbiec.token_file must be distinct from {other_path}"
+            ));
+        }
+    }
+    if integration_skarbiec.is_some_and(|section| section.contains_key("token")) {
+        problems.push(
+            "integration.skarbiec.token is forbidden; store the verifier grant only in its owner-only token_file"
+                .to_string(),
+        );
+    }
+    let object_api = root.get("object_api").and_then(Value::as_object);
+    if let Err(object_problems) = crate::config::parse_object_api_namespaces(
+        object_api.and_then(|section| section.get("namespaces")),
+    ) {
+        problems.extend(object_problems);
+    }
+    let object_skarbiec = object_api
+        .and_then(|section| section.get("skarbiec"))
+        .and_then(Value::as_object);
+    if object_skarbiec
+        .and_then(|section| section.get("url"))
+        .is_some_and(|url| !py_truthy(url))
+    {
+        problems.push(
+            "object_api.skarbiec.url, when set, must be a non-empty verifier endpoint".to_string(),
+        );
+    }
+    if object_skarbiec
+        .and_then(|section| section.get("consumer"))
+        .and_then(Value::as_str)
+        != Some(crate::config::OBJECT_API_VERIFIER_CONSUMER)
+    {
+        problems.push(format!(
+            "object_api.skarbiec.consumer must be the dedicated least-privilege consumer {:?}",
+            crate::config::OBJECT_API_VERIFIER_CONSUMER
+        ));
+    }
+    let object_token_file = object_skarbiec
+        .and_then(|section| section.get("token_file"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if object_token_file.is_empty() {
+        problems.push(
+            "object_api.skarbiec.token_file must name the owner-only verifier grant file"
+                .to_string(),
+        );
+    }
+    let control_token_file = get_in(root, "secrets.skarbiec.token_file")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !object_token_file.is_empty() && object_token_file == control_token_file {
+        problems.push(
+            "object_api.skarbiec.token_file must be distinct from the coordinator Skarbiec grant"
+                .to_string(),
+        );
+    }
+    if object_skarbiec.is_some_and(|section| section.contains_key("token")) {
+        problems.push(
+            "object_api.skarbiec.token is forbidden; store the verifier grant only in its owner-only token_file"
+                .to_string(),
+        );
+    }
+    let release_api = root.get("release_api").and_then(Value::as_object);
+    if let Err(release_problems) = crate::config::parse_release_publishers(
+        release_api.and_then(|section| section.get("publishers")),
+    ) {
+        problems.extend(release_problems);
+    }
+    let release_skarbiec = release_api
+        .and_then(|section| section.get("skarbiec"))
+        .and_then(Value::as_object);
+    if release_skarbiec
+        .and_then(|section| section.get("url"))
+        .is_some_and(|url| !py_truthy(url))
+    {
+        problems.push(
+            "release_api.skarbiec.url, when set, must be a non-empty verifier endpoint".to_string(),
+        );
+    }
+    if release_skarbiec
+        .and_then(|section| section.get("consumer"))
+        .and_then(Value::as_str)
+        != Some(crate::config::RELEASE_API_VERIFIER_CONSUMER)
+    {
+        problems.push(format!(
+            "release_api.skarbiec.consumer must be the dedicated least-privilege consumer {:?}",
+            crate::config::RELEASE_API_VERIFIER_CONSUMER
+        ));
+    }
+    let release_token_file = release_skarbiec
+        .and_then(|section| section.get("token_file"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if release_token_file.is_empty() {
+        problems.push(
+            "release_api.skarbiec.token_file must name the owner-only release verifier grant file"
+                .to_string(),
+        );
+    }
+    if !release_token_file.is_empty()
+        && (release_token_file == control_token_file || release_token_file == object_token_file)
+    {
+        problems.push(
+            "release_api.skarbiec.token_file must be distinct from coordinator and product-object verifier grants"
+                .to_string(),
+        );
+    }
+    if release_skarbiec.is_some_and(|section| section.contains_key("token")) {
+        problems.push(
+            "release_api.skarbiec.token is forbidden; store the verifier grant only in its owner-only token_file"
+                .to_string(),
+        );
+    }
+    let machine_api = root.get("machine_api").and_then(Value::as_object);
+    if let Err(machine_problems) = crate::config::parse_machine_api_clients(
+        machine_api.and_then(|section| section.get("clients")),
+    ) {
+        problems.extend(machine_problems);
+    }
+    let machine_skarbiec = machine_api
+        .and_then(|section| section.get("skarbiec"))
+        .and_then(Value::as_object);
+    if machine_skarbiec
+        .and_then(|section| section.get("url"))
+        .is_some_and(|url| !py_truthy(url))
+    {
+        problems.push(
+            "machine_api.skarbiec.url, when set, must be a non-empty verifier endpoint".to_string(),
+        );
+    }
+    if machine_skarbiec
+        .and_then(|section| section.get("consumer"))
+        .and_then(Value::as_str)
+        != Some(crate::config::MACHINE_API_VERIFIER_CONSUMER)
+    {
+        problems.push(format!(
+            "machine_api.skarbiec.consumer must be the dedicated least-privilege consumer {:?}",
+            crate::config::MACHINE_API_VERIFIER_CONSUMER
+        ));
+    }
+    let machine_token_file = machine_skarbiec
+        .and_then(|section| section.get("token_file"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if machine_token_file.is_empty() {
+        problems.push(
+            "machine_api.skarbiec.token_file must name the owner-only machine verifier grant file"
+                .to_string(),
+        );
+    }
+    if !machine_token_file.is_empty()
+        && (machine_token_file == control_token_file
+            || machine_token_file == object_token_file
+            || machine_token_file == release_token_file
+            || machine_token_file
+                == get_in(root, "agent.skarbiec.token_file")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default())
+    {
+        problems.push(
+            "machine_api.skarbiec.token_file must be distinct from coordinator, workload-agent, object, and release verifier grants"
+                .to_string(),
+        );
+    }
+    if machine_skarbiec.is_some_and(|section| section.contains_key("token")) {
+        problems.push(
+            "machine_api.skarbiec.token is forbidden; store the verifier grant only in its owner-only token_file"
+                .to_string(),
+        );
+    }
+    let service_api = root.get("service_api").and_then(Value::as_object);
+    if let Err(service_problems) = crate::config::parse_service_deployers(
+        service_api.and_then(|section| section.get("deployers")),
+    ) {
+        problems.extend(service_problems);
+    }
+    let service_skarbiec = service_api
+        .and_then(|section| section.get("skarbiec"))
+        .and_then(Value::as_object);
+    if service_skarbiec
+        .and_then(|section| section.get("url"))
+        .is_some_and(|url| !py_truthy(url))
+    {
+        problems.push(
+            "service_api.skarbiec.url, when set, must be a non-empty verifier endpoint".to_string(),
+        );
+    }
+    if service_skarbiec
+        .and_then(|section| section.get("consumer"))
+        .and_then(Value::as_str)
+        != Some(crate::config::SERVICE_API_VERIFIER_CONSUMER)
+    {
+        problems.push(format!(
+            "service_api.skarbiec.consumer must be the dedicated least-privilege consumer {:?}",
+            crate::config::SERVICE_API_VERIFIER_CONSUMER
+        ));
+    }
+    let service_token_file = service_skarbiec
+        .and_then(|section| section.get("token_file"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if service_token_file.is_empty() {
+        problems.push(
+            "service_api.skarbiec.token_file must name the owner-only service verifier grant file"
+                .to_string(),
+        );
+    }
+    if !service_token_file.is_empty()
+        && (service_token_file == control_token_file
+            || service_token_file == object_token_file
+            || service_token_file == release_token_file
+            || service_token_file == machine_token_file)
+    {
+        problems.push(
+            "service_api.skarbiec.token_file must be distinct from coordinator, product-object, release, and machine verifier grants"
+                .to_string(),
+        );
+    }
+    if service_skarbiec.is_some_and(|section| section.contains_key("token")) {
+        problems.push(
+            "service_api.skarbiec.token is forbidden; store the verifier grant only in its owner-only token_file"
+                .to_string(),
+        );
+    }
+    let local_provider = active_providers.contains(&crate::capabilities::ProviderId::Local);
     let has_workload_fields = get_in(root, "agent.skarbiec.secret_fields")
         .and_then(Value::as_array)
         .is_some_and(|fields| !fields.is_empty());
@@ -620,62 +1175,238 @@ pub fn validate(data: &Value) -> Vec<String> {
 
 /// A commented starting-point config, mirroring Python `template()`.
 pub fn template() -> Value {
+    let local = crate::capabilities::ProviderId::Local.as_str();
+    let disabled =
+        crate::capabilities::configurable_ids(crate::capabilities::RuntimeFacet::Compute)
+            .filter(|provider| *provider != local)
+            .collect::<Vec<_>>();
     serde_json::json!({
-        "providers": ["azure", "aws", "gcp"],
-        "providers_disabled": ["aws", "gcp"],
+        "providers": [local],
+        "providers_disabled": disabled,
         "storage": {
-            "backend": "azure",
-            "azure": {"account": "<storage-account>", "container": "stado"},
+            "backend": "local",
+            "local": {"path": "~/.stado/local-storage"},
             "backup": {
-                "backend": "s3",
-                "bucket": "<backup-bucket>",
-                "s3": {"region": "<backup-region>"}
+                "backend": "local",
+                "local": {"path": "~/.stado/local-backup"}
             },
         },
-        "azure": {
-            "subscription_id": "",
-            "resource_group": "wisent-compute",
-            "locations": ["eastus", "westus3"],
-            "vnet": "wisent-compute-vnet",
-            "subnet": "wisent-compute-subnet",
-            "nsg": "wisent-compute-nsg",
-            "image_urn": "microsoft-dsvm:ubuntu-hpc:2204:latest",
-            "vm_username": "wisent",
-            "ssh_public_key": "",
-            "vm_identity_id": "<managed-identity-resource-id>",
+        "deployment": {"id": "local-control-plane"},
+        "backend": {
+            "messaging": {
+                "skarbiec": {
+                    "consumer": "wisent-backend-business-messaging",
+                    "token_file": "~/.stado/wisent-backend-business-messaging-skarbiec-token",
+                    "items": [
+                        "wisent-backend-apns",
+                        "wisent-backend-fcm",
+                        "stado-supabase"
+                    ]
+                }
+            },
+            "push_skarbiec": {
+                "consumer": "stado-backend-push-api-verifier",
+                "token_file": "~/.stado/stado-backend-push-api-verifier-skarbiec-token"
+            },
+            "push_clients": {
+                "wisent-app": {
+                    "item": "wisent-app-push-router",
+                    "actions": ["register", "send", "status", "unregister"],
+                    "paths": ["/api/backend/push/inactivity", "/api/backend/push/reachability", "/api/backend/push/register", "/api/backend/push/unregister"]
+                },
+                "wisent-backend": {
+                    "item": "wisent-backend-push-router",
+                    "actions": ["send"],
+                    "paths": ["/api/backend/push/inactivity"]
+                }
+            }
         },
-        "deployment": {"id": "azure-control-plane"},
-        "release": {
-            "base_url": "https://<storage-account>.blob.core.windows.net/stado/releases/stado"
+        "rate_limit": {
+            "skarbiec": {
+                "consumer": "stado-rate-limit-api-verifier",
+                "token_file": "~/.stado/stado-rate-limit-api-verifier-skarbiec-token"
+            },
+            "clients": {
+                "trading-autonomy": {
+                    "consumer": "trading-autonomy-rate-limit-client",
+                    "item": "trading-autonomy-rate-limit-api",
+                    "namespaces": ["trading-autonomy"],
+                    "actions": ["consume"]
+                }
+            }
         },
+        "integration": {
+            "skarbiec": {
+                "consumer": "stado-integration-api-verifier",
+                "token_file": "~/.stado/stado-integration-api-verifier-skarbiec-token"
+            },
+            "clients": {
+                "content-platform-production": {"item": "content-platform-production-integration-api", "allowed_actions": ["content/umami.accounts", "content/umami.report", "content/umami.website.ensure", "content/resend.email.send", "content/resend.receiving.list", "content/resend.receiving.get", "content/resend.verification.code", "content/resend.deliverability.canary", "content/juicysms.number.order", "content/juicysms.order.status", "content/juicysms.order.cancel", "content/juicysms.balance", "content/stripe.account", "content/stripe.revenue.report", "content/stripe.transfer.create", "content/stripe.webhook.verify", "content/google.analytics.properties", "content/google.analytics.report", "content/google.firebase.apps", "content/media.external.import", "content/apify.tiktok.trends", "content/apify.instagram.search", "content/apify.twitter.search", "content/apify.youtube.search", "content/apify.pinterest.search", "content/apify.video.download", "content/apify.tiktok.metrics", "content/apify.tiktok.hashtag", "content/github.research.tex", "content/github.research.index", "content/reddit.top.images", "content/pinterest.search", "content/tokchart.sounds", "content/tokchart.hashtags", "content/gofile.resolve", "content/mega.resolve"]},
+                "echo-production": {"item": "echo-production-integration-api", "allowed_actions": ["content/google.analytics.properties", "content/google.analytics.report", "content/google.firebase.apps", "content/resend.email.send", "content/resend.receiving.list", "content/resend.receiving.get", "content/resend.verification.code", "content/resend.deliverability.canary", "content/juicysms.number.order", "content/juicysms.order.status", "content/juicysms.order.cancel", "content/juicysms.balance", "content/apify.tiktok.trends", "content/apify.instagram.search", "content/apify.twitter.search", "content/apify.youtube.search", "content/apify.pinterest.search", "content/apify.video.download", "content/apify.tiktok.metrics", "content/apify.tiktok.hashtag", "content/serper.search", "content/github.research.tex", "content/github.research.index", "content/reddit.top.images", "content/pinterest.search", "content/tokchart.sounds", "content/tokchart.hashtags", "content/gofile.resolve", "content/mega.resolve", "echo-paid-ads/accounts.list", "echo-paid-ads/accounts.connect", "echo-paid-ads/campaigns.list", "echo-paid-ads/campaigns.get", "echo-paid-ads/campaigns.create", "echo-paid-ads/campaigns.mutate", "echo-paid-ads/entities.list", "echo-paid-ads/entities.create", "echo-paid-ads/entities.mutate", "echo-paid-ads/metrics.report", "echo-paid-ads/conversions.upload", "echo-paid-ads/webhook.verify", "echo-paid-ads/attribution.resolve"]},
+                "wisent-backend-admin": {"item": "wisent-backend-admin-integration-api", "allowed_actions": ["backend/admin-jwt.verify"]},
+                "wisent-backend": {"item": "wisent-backend-integration-api", "allowed_actions": ["backend/email.send", "backend/twilio.sms-send", "backend/twilio.sms-status", "backend/twilio.whatsapp-send", "backend/twilio.whatsapp-template", "backend/twilio.webhook-verify", "backend/content.pose-recipes", "backend/content.visual-profiles"]},
+                "trading-tools": {"item": "trading-tools-integration-api", "allowed_actions": ["trading/send-whatsapp", "trading/verify-whatsapp-webhook"]},
+                "most-service": {"item": "most-service-integration-api", "allowed_actions": ["most/send-sms"]},
+                "oko": {"item": "oko-integration-api", "allowed_actions": ["oko/analytics.mobile.collect", "oko/experiments.assign"]},
+                "people-rotator": {"item": "people-rotator-integration-api", "allowed_actions": ["people/prerequisites", "people/github.org.invite_member", "people/github.team.add_member", "people/github.repo.remove_collaborator", "people/github.org.remove_member", "people/github.membership.check", "people/github.org.revoke_fine_grained_pat_grants", "people/github.repo.transfer", "people/slack.user.invite", "people/slack.user.deactivate", "people/supabase.auth.invite_user", "people/supabase.auth.ban_user", "people/supabase.credentials.rotate", "people/weles.queue.enqueue"]},
+                "singularity": {"item": "singularity-integration-api", "allowed_actions": ["singularity/resend_send_email", "singularity/sendgrid_send_email", "singularity/stripe_create_payment_link", "singularity/stripe_get_balance", "singularity/stripe_list_payments", "singularity/stripe_create_product", "singularity/stripe_refund_payment", "singularity/github_create_repo", "singularity/github_create_issue", "singularity/github_search_repos", "singularity/github_search_issues", "singularity/github_fork_repo", "singularity/github_star_repo", "singularity/github_get_user", "singularity/github_create_gist", "singularity/vercel_list_projects", "singularity/vercel_get_project", "singularity/vercel_create_project", "singularity/vercel_deploy", "singularity/vercel_list_deployments", "singularity/vercel_get_deployment", "singularity/vercel_list_domains", "singularity/vercel_add_domain", "singularity/vercel_remove_domain", "singularity/vercel_delete_project", "singularity/vercel_get_user", "singularity/twitter_post_tweet", "singularity/twitter_search_tweets", "singularity/twitter_get_mentions", "singularity/twitter_follow_user", "singularity/twitter_send_dm", "singularity/twitter_get_user_info", "singularity/twitter_like_tweet", "singularity/twitter_retweet", "singularity/namecheap_check_domain", "singularity/namecheap_register_domain", "singularity/namecheap_list_domains", "singularity/namecheap_get_dns", "singularity/namecheap_set_dns", "singularity/captcha_solve_recaptcha_v2", "singularity/captcha_solve_recaptcha_v3", "singularity/captcha_solve_hcaptcha", "singularity/captcha_solve_turnstile", "singularity/captcha_solve_image", "singularity/captcha_solve_funcaptcha", "singularity/huggingface_publish_dataset"]}
+            }
+        },
+        "release": {"api_url": "", "version": "", "platform": ""},
         "secrets": {
             "skarbiec": {
-                "url": "<control-plane-skarbiec-url>",
                 "consumer": "stado-control-plane",
                 "token_file": "~/.stado/control-plane-skarbiec-token"
             }
         },
+        "object_api": {
+            "skarbiec": {
+                "consumer": "stado-object-api-verifier",
+                "token_file": "~/.stado/stado-object-api-verifier-skarbiec-token"
+            },
+            "namespaces": {
+                "entitlements-rotator": {"item": "entitlements-rotator-object-api", "prefixes": ["skarbiec.vault.json"], "actions": ["get", "put"]},
+                "echo": {"item": "echo-object-api", "prefix_policies": [
+                    {"prefix": "aesthetics/", "actions": ["get", "stat"]},
+                    {"prefix": "audio/", "actions": ["get", "put"]},
+                    {"prefix": "batch-heroes/", "actions": ["get", "put"]},
+                    {"prefix": "batch-videos/", "actions": ["delete", "get", "list", "put", "stat"]},
+                    {"prefix": "body-horror-requests/", "actions": ["get", "list", "stat"]},
+                    {"prefix": "captions/", "actions": ["get", "put"]},
+                    {"prefix": "civitai-references/", "actions": ["delete", "get", "list", "put", "stat"]},
+                    {"prefix": "daily-fill/", "actions": ["get", "list", "stat"]},
+                    {"prefix": "eval-rejections/", "actions": ["get", "put"]},
+                    {"prefix": "explainer/", "actions": ["get", "put"]},
+                    {"prefix": "external-assets/", "actions": ["get", "put"]},
+                    {"prefix": "gateway-output/", "actions": ["get", "list", "stat"]},
+                    {"prefix": "lifestyle/", "actions": ["get", "put", "stat"]},
+                    {"prefix": "lipsync/", "actions": ["get", "put", "stat"]},
+                    {"prefix": "lora-compare/", "actions": ["get", "put", "stat"]},
+                    {"prefix": "lora-training/", "actions": ["delete", "get", "list", "put", "stat"]},
+                    {"prefix": "loras/", "actions": ["get", "list", "put", "stat"]},
+                    {"prefix": "needher/", "actions": ["get", "list", "put", "stat"]},
+                    {"prefix": "needher-captions/", "actions": ["get", "put", "stat"]},
+                    {"prefix": "needher-lifestyle/", "actions": ["get", "put", "stat"]},
+                    {"prefix": "needher-watermarked/", "actions": ["get", "list", "put", "stat"]},
+                    {"prefix": "passion-poses/", "actions": ["get", "put", "stat"]},
+                    {"prefix": "pose-videos/", "actions": ["delete", "get", "list", "put", "stat"]},
+                    {"prefix": "scail/", "actions": ["delete", "get", "list", "put", "stat"]},
+                    {"prefix": "scene-videos/", "actions": ["get", "put", "stat"]},
+                    {"prefix": "smoothmix/", "actions": ["delete", "get", "list", "put", "stat"]},
+                    {"prefix": "training-images/", "actions": ["get", "list", "put", "stat"]},
+                    {"prefix": "uploads/", "actions": ["get", "put"]}
+                ]},
+                "content-platform": {"item": "content-platform-object-api", "prefixes": ["ad-pipeline/", "aesthetics/", "batch-videos/", "caption-series/", "checkpoints/", "civitai-references/", "daily-fill/", "generated-days/", "generated-images/", "generated-videos/", "lifestyle/", "locations/", "lora-compare/", "passion/", "passion-poses/", "pipeline/", "pose-recipes/", "pose-videos/", "probierz/", "test/", "training/", "training-images/", "ugc/"], "actions": ["delete", "get", "list", "put", "stat"]},
+                "growth-tactics": {"item": "growth-tactics-object-api", "prefixes": ["jobs/"], "actions": ["get", "list", "put"]},
+                "needher": {"item": "needher-object-api", "prefixes": ["avatars/", "covers/", "daily-fill/", "daily-fill-alt-flash/", "daily-fill-noir-bw/", "feed-snapshot.json", "needher-captions/", "needher-lifestyle/", "needher-watermarked/", "pose-previews/", "pose-videos/"], "actions": ["get", "put", "stat"]},
+                "oko": {"item": "oko-object-api", "prefixes": ["transcripts/"], "actions": ["get", "list", "put", "stat"]},
+                "openenv": {"item": "openenv-object-api", "prefixes": ["datasets/", "models/", "pipeline/", "training/"], "actions": ["get", "put"]},
+                "probierz": {"item": "probierz-object-api", "prefixes": ["capacity/", "inputs/", "results/"], "actions": ["get", "list", "put"]},
+                "trading-autonomy": {"item": "trading-autonomy-object-api", "prefixes": ["agents/", "billing/", "media/"], "actions": ["delete", "get", "put"]},
+                "trading-tools": {"item": "trading-tools-object-api", "prefixes": ["stock-context/"]},
+                "weles": {"item": "weles-object-api", "prefixes": ["recordings/"]},
+                "wisent-app": {"item": "wisent-app-object-api", "prefixes": ["character-previews/", "character-videos/", "characters/", "classifiers/", "dual-video/", "generation-inputs/", "generation-jobs/", "lora_tests/", "loras/", "manual-jobs/", "media/", "processing/", "rooms/", "training-inputs/", "verification/"], "actions": ["delete", "get", "list", "put"]},
+                "wisent-backend": {"item": "wisent-backend-object-client", "prefixes": ["__healthcheck__", "activations/", "benchmarks/", "characters/", "contrastive_pairs/", "control_vectors/", "datasets/", "evaluation_results/", "images/", "optimization/", "personas/", "profiles/", "representations/", "state/", "traits/", "unique_personas/", "vector_stores/"], "actions": ["delete", "get", "list", "put", "stat"]},
+                "wisent-images": {"item": "wisent-images-object-api", "prefixes": ["images/generated/", "models/base/sha256/", "models/loras/sha256/"], "actions": ["get", "put", "stat"]},
+                "wisent-tools": {"item": "wisent-tools-object-api", "prefixes": ["activation-pairs/", "activations/", "datasets/", "evaluations/", "jobs/", "models/", "sweeps/"], "actions": ["delete", "get", "list", "put"]},
+                "wisent-trade": {"item": "wisent-trade-object-api", "prefixes": ["agents/"]}
+            }
+        },
+        "machine_api": {
+            "skarbiec": {
+                "consumer": "stado-machine-api-verifier",
+                "token_file": "~/.stado/stado-machine-api-verifier-skarbiec-token"
+            },
+            "clients": {
+                "echo": {
+                    "item": "echo-machine-api",
+                    "actions": ["cancel", "status", "submit"],
+                    "targets": ["local"]
+                }
+            }
+        },
+        "release_api": {
+            "skarbiec": {
+                "consumer": "stado-release-api-verifier",
+                "token_file": "~/.stado/stado-release-api-verifier-skarbiec-token"
+            },
+            "publishers": {
+                "brama": {"item": "brama-release-publisher", "prefix": "brama/"},
+                "compute-marketplace": {"item": "compute-marketplace-release-publisher", "prefix": "compute-marketplace/"},
+                "image-video-router": {"item": "image-video-router-release-publisher", "prefix": "image-video-router/"},
+                "jeden": {"item": "jeden-release-publisher", "prefix": "jeden/"},
+                "oko": {"item": "oko-release-publisher", "prefix": "oko/"},
+                "skarbiec": {"item": "skarbiec-release-publisher", "prefix": "skarbiec/"},
+                "stado": {"item": "stado-release-publisher", "prefix": "stado/"},
+                "trading-autonomy": {"item": "trading-autonomy-release-publisher", "prefix": "trading-autonomy/"},
+                "wisent-backend": {"item": "wisent-backend-release-publisher", "prefix": "wisent-backend/"},
+                "wisent-images": {"item": "wisent-images-release-publisher", "prefix": "wisent-images/"}
+            }
+        },
+        "service_api": {
+            "skarbiec": {
+                "consumer": "stado-service-api-verifier",
+                "token_file": "~/.stado/stado-service-api-verifier-skarbiec-token"
+            },
+            "deployers": {
+                "weles": {
+                    "consumer": "weles-service-deployer",
+                    "item": "weles-service-deployer",
+                    "services": ["com.wisent.weles-api"],
+                    "actions": ["status", "restart"]
+                },
+                "compute-marketplace": {
+                    "consumer": "compute-marketplace-service-deployer",
+                    "item": "compute-marketplace-service-deployer",
+                    "services": ["compute-marketplace-backend", "compute-marketplace-frontend"],
+                    "actions": ["status", "restart"]
+                },
+                "wisent-backend": {
+                    "consumer": "wisent-backend-release-deployer",
+                    "item": "wisent-backend-release-deployer",
+                    "services": ["wisent-backend"],
+                    "actions": ["status", "restart"]
+                }
+            }
+        },
         "agent": {
             "skarbiec": {
-                "url": "https://<skarbiec-host>",
-                "consumer": "stado-azure-agent",
-                "token_file": "~/.stado/azure-agent-skarbiec-token",
+                "consumer": "stado-local-agent",
+                "token_file": "~/.stado/local-agent-skarbiec-token",
                 "items": [
-                    "stado-aws",
+                    "compute-marketplace-agent",
                     "trading-autonomy-agent-auth",
                     "trading-autonomy-media-router",
                     "trading-autonomy-model-router",
-                    "wisent-trade-agent-anthropic",
+                    "wisent-backend-alert-router",
+                    "wisent-backend-data-router",
+                    "wisent-backend-inactivity-webhook",
+                    "wisent-backend-media-router",
+                    "wisent-backend-model-router",
+                    "wisent-backend-object-client",
+                    "wisent-backend-object-signing",
+                    "wisent-backend-release-runner",
+                    "wisent-backend-scheduler",
                     "wisent-trade-agent-email",
-                    "wisent-trade-agent-openai"
+                    "wisent-trade-agent-model-router"
                 ],
                 "secret_fields": [
+                    "compute-marketplace-agent#token",
                     "trading-autonomy-agent-auth#agent_auth_secret",
                     "trading-autonomy-media-router#token",
                     "trading-autonomy-model-router#token",
-                    "wisent-trade-agent-anthropic#api-key",
+                    "wisent-backend-alert-router#token",
+                    "wisent-backend-data-router#token",
+                    "wisent-backend-inactivity-webhook#secret",
+                    "wisent-backend-media-router#token",
+                    "wisent-backend-model-router#token",
+                    "wisent-backend-object-client#token",
+                    "wisent-backend-object-signing#key",
+                    "wisent-backend-release-runner#token",
+                    "wisent-backend-scheduler#token",
                     "wisent-trade-agent-email#api-key",
-                    "wisent-trade-agent-openai#api-key"
+                    "wisent-trade-agent-model-router#token",
+                    "wisent-trade-agent-model-router#url"
                 ]
             }
         },
@@ -795,10 +1526,16 @@ mod tests {
                 .iter()
                 .any(|p| p.contains("dashboard.port"))
         );
-        // Top-level "bucket" satisfies the gcs backend requirement.
-        assert!(validate(&serde_json::json!({
+        // Top-level "bucket" satisfies the GCS backend requirement even when
+        // unrelated mandatory product-boundary sections are absent.
+        let problems = validate(&serde_json::json!({
             "storage": {"backend": "gcs"}, "bucket": "stado"
-        }))
-        .is_empty());
+        }));
+        assert!(
+            !problems
+                .iter()
+                .any(|problem| problem.contains("storage.gcs.bucket")),
+            "{problems:?}"
+        );
     }
 }

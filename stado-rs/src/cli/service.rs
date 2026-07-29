@@ -19,7 +19,7 @@
 //!   invalid registry is refused with nothing uploaded.
 
 use clap::Subcommand;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::deploy::service::{
     self, ManagedService, ServiceEnv, ServiceLog, ServiceStatus, SOURCE_RECOVERY,
@@ -59,6 +59,76 @@ pub enum ServiceCommands {
         /// is managed.
         #[arg(long)]
         host: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Synchronize one Skarbiec field into a service's runtime env file.
+    ///
+    /// The value is read through the isolated service-verifier grant and carried
+    /// in the SSH request body. It is never printed or placed in argv.
+    SecretSync {
+        /// Service name, or the host's own name for the unit.
+        name: String,
+        /// The single registry host to update.
+        #[arg(long)]
+        host: String,
+        /// Skarbiec item containing the secret.
+        #[arg(long)]
+        item: String,
+        /// Exact string field in the Skarbiec item.
+        #[arg(long, default_value = "token")]
+        field: String,
+        /// Environment variable to replace.
+        #[arg(long)]
+        variable: String,
+        /// Runtime env file on the target, absolute or rooted at $HOME.
+        #[arg(long)]
+        env_file: String,
+        /// Restart the service after a successful atomic sync.
+        #[arg(long)]
+        restart: bool,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Verify a managed service's bearer against a read-only loopback endpoint.
+    ///
+    /// With `--repair`, a failed check atomically synchronizes the secret,
+    /// restarts the unit, and checks the endpoint once more.
+    AuthCheck {
+        /// Service name, or the host's own name for the unit.
+        name: String,
+        /// The single registry host to check.
+        #[arg(long)]
+        host: String,
+        /// Skarbiec item containing the bearer.
+        #[arg(long)]
+        item: String,
+        /// Exact string field in the Skarbiec item.
+        #[arg(long, default_value = "token")]
+        field: String,
+        /// Read-only loopback HTTP endpoint that requires authentication.
+        #[arg(long)]
+        url: String,
+        /// Send an empty JSON POST instead of a GET; useful for auth-first APIs.
+        #[arg(long)]
+        post_empty_json: bool,
+        /// Treat this exact HTTP status as proof that authentication passed.
+        #[arg(long)]
+        expect_status: Option<u16>,
+        /// On failure, synchronize the secret, restart, and check again.
+        #[arg(long)]
+        repair: bool,
+        /// If repair still fails, stop the unmanaged process owning the URL port.
+        #[arg(long, requires = "repair")]
+        take_over_listener: bool,
+        /// Environment variable to replace when repairing.
+        #[arg(long, requires = "repair")]
+        variable: Option<String>,
+        /// Runtime env file to update when repairing.
+        #[arg(long, requires = "repair")]
+        env_file: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -155,6 +225,58 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
         ServiceCommands::Status { name, json } => status(&name, json).await,
         ServiceCommands::Restart { name, host, json } => {
             restart(&name, host.as_deref(), json).await
+        }
+        ServiceCommands::SecretSync {
+            name,
+            host,
+            item,
+            field,
+            variable,
+            env_file,
+            restart,
+            json,
+        } => {
+            secret_sync(SecretSyncOptions {
+                name: &name,
+                host: &host,
+                item: &item,
+                field: &field,
+                variable: &variable,
+                env_file: &env_file,
+                restart_after_sync: restart,
+                as_json: json,
+            })
+            .await
+        }
+        ServiceCommands::AuthCheck {
+            name,
+            host,
+            item,
+            field,
+            url,
+            repair,
+            take_over_listener,
+            post_empty_json,
+            expect_status,
+            variable,
+            env_file,
+            json,
+        } => {
+            auth_check(AuthCheckOptions {
+                name: &name,
+                host: &host,
+                item: &item,
+                field: &field,
+                url: &url,
+                post_empty_json,
+                expect_status,
+                repair,
+                take_over_listener,
+                variable: variable.as_deref(),
+                env_file: env_file.as_deref(),
+                as_json: json,
+            })
+            .await
         }
         ServiceCommands::Adopt { unit, host, json } => adopt(&unit, &host, json).await,
         ServiceCommands::Retire { unit, host, json } => retire(&unit, &host, json).await,
@@ -336,6 +458,296 @@ async fn restart(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdEr
         table::print(&["HOST", "UNIT", "STATUS", "DETAIL"], &cells);
     }
     fail_if_any(&failures, "restart")
+}
+
+async fn service_secret(item: &str, field: &str) -> Result<String, CmdError> {
+    let vault = crate::skarbiec::Client::service_verifier()
+        .map_err(|err| CmdError::click(err.to_string()))?;
+    let stored = vault
+        .read_item(item)
+        .await
+        .map_err(|err| CmdError::click(err.to_string()))?;
+    stored
+        .as_object()
+        .and_then(|object| object.get(field))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "Skarbiec item {item:?} has no non-empty string field {field:?}"
+            ))
+        })
+}
+
+struct SecretSyncOptions<'a> {
+    name: &'a str,
+    host: &'a str,
+    item: &'a str,
+    field: &'a str,
+    variable: &'a str,
+    env_file: &'a str,
+    restart_after_sync: bool,
+    as_json: bool,
+}
+
+async fn secret_sync(options: SecretSyncOptions<'_>) -> Result<(), CmdError> {
+    let SecretSyncOptions {
+        name,
+        host,
+        item,
+        field,
+        variable,
+        env_file,
+        restart_after_sync,
+        as_json,
+    } = options;
+    let secret = service_secret(item, field).await?;
+
+    let services = declared_matching(name, Some(host)).await?;
+    let runner = production_runner();
+    let mut payload: Vec<Value> = Vec::new();
+    let mut cells: Vec<Vec<String>> = Vec::new();
+    let mut failures: Vec<String> = Vec::new();
+
+    for declared in &services {
+        let target = host_channel::canonical_target(&declared.host)
+            .await
+            .map_err(click)?;
+        let synced =
+            service::sync_service_secret(&target, declared, env_file, variable, &secret, &runner)
+                .await
+                .map_err(click)?;
+        let sync_ok = synced.succeeded("secret_synced");
+        if !sync_ok {
+            failures.push(format!("{}: {}", declared.host, synced.failure()));
+        }
+
+        let restarted = if sync_ok && restart_after_sync {
+            Some(
+                service::restart_service(&target, declared, &runner)
+                    .await
+                    .map_err(click)?,
+            )
+        } else {
+            None
+        };
+        if let Some(report) = &restarted {
+            if !report.succeeded("restarted") {
+                failures.push(format!("{}: {}", declared.host, report.failure()));
+            }
+        }
+
+        let restart_status = match &restarted {
+            Some(report) => dash(&report.status),
+            None if restart_after_sync => "skipped".to_string(),
+            None => "-".to_string(),
+        };
+        let detail = restarted
+            .as_ref()
+            .map(|report| report.detail.as_str())
+            .filter(|detail| !detail.is_empty())
+            .unwrap_or(&synced.detail);
+        cells.push(vec![
+            declared.host.clone(),
+            declared.unit_id().to_string(),
+            dash(&synced.status),
+            restart_status,
+            dash(detail),
+        ]);
+        payload.push(json!({
+            "host": declared.host,
+            "unit": declared.unit_id(),
+            "item": item,
+            "field": field,
+            "variable": variable,
+            "env_file": env_file,
+            "sync": synced.to_json(),
+            "restart": restarted.as_ref().map(|report| report.to_json()),
+        }));
+    }
+    drop(secret);
+
+    if as_json {
+        print_json(&Value::Array(payload))?;
+    } else {
+        table::print(&["HOST", "UNIT", "SYNC", "RESTART", "DETAIL"], &cells);
+    }
+    fail_if_any(&failures, "secret sync")
+}
+
+struct AuthCheckOptions<'a> {
+    name: &'a str,
+    host: &'a str,
+    item: &'a str,
+    field: &'a str,
+    url: &'a str,
+    post_empty_json: bool,
+    expect_status: Option<u16>,
+    repair: bool,
+    take_over_listener: bool,
+    variable: Option<&'a str>,
+    env_file: Option<&'a str>,
+    as_json: bool,
+}
+
+async fn auth_check(options: AuthCheckOptions<'_>) -> Result<(), CmdError> {
+    let AuthCheckOptions {
+        name,
+        host,
+        item,
+        field,
+        url,
+        post_empty_json,
+        expect_status,
+        repair,
+        take_over_listener,
+        variable,
+        env_file,
+        as_json,
+    } = options;
+    let repair_target = if repair {
+        Some((
+            variable.ok_or_else(|| CmdError::click("--repair requires --variable"))?,
+            env_file.ok_or_else(|| CmdError::click("--repair requires --env-file"))?,
+        ))
+    } else {
+        None
+    };
+    let secret = service_secret(item, field).await?;
+    let services = declared_matching(name, Some(host)).await?;
+    let runner = production_runner();
+    let mut payload: Vec<Value> = Vec::new();
+    let mut cells: Vec<Vec<String>> = Vec::new();
+    let mut failures: Vec<String> = Vec::new();
+
+    for declared in &services {
+        let target = host_channel::canonical_target(&declared.host)
+            .await
+            .map_err(click)?;
+        let initial = service::check_service_bearer(
+            &target,
+            declared,
+            url,
+            &secret,
+            post_empty_json,
+            expect_status,
+            &runner,
+        )
+        .await
+        .map_err(click)?;
+        let mut final_report = initial.clone();
+        let mut synced = None;
+        let mut restarted = None;
+        let mut listener_reset = None;
+
+        if !initial.succeeded("auth_ok") {
+            if let Some((variable, env_file)) = repair_target {
+                let sync_report = service::sync_service_secret(
+                    &target, declared, env_file, variable, &secret, &runner,
+                )
+                .await
+                .map_err(click)?;
+                let sync_ok = sync_report.succeeded("secret_synced");
+                synced = Some(sync_report);
+                if sync_ok {
+                    let restart_report = service::restart_service(&target, declared, &runner)
+                        .await
+                        .map_err(click)?;
+                    let restart_ok = restart_report.succeeded("restarted");
+                    restarted = Some(restart_report);
+                    if restart_ok {
+                        final_report = service::check_service_bearer(
+                            &target,
+                            declared,
+                            url,
+                            &secret,
+                            post_empty_json,
+                            expect_status,
+                            &runner,
+                        )
+                        .await
+                        .map_err(click)?;
+                    }
+                }
+            }
+        }
+
+        if repair
+            && take_over_listener
+            && !final_report.succeeded("auth_ok")
+            && synced
+                .as_ref()
+                .is_some_and(|report| report.succeeded("secret_synced"))
+        {
+            let reset_report = service::reset_service_listener(&target, declared, url, &runner)
+                .await
+                .map_err(click)?;
+            let reset_ok = reset_report.succeeded("listener_stopped")
+                || reset_report.succeeded("listener_absent");
+            listener_reset = Some(reset_report);
+            if reset_ok {
+                let restart_report = service::restart_service(&target, declared, &runner)
+                    .await
+                    .map_err(click)?;
+                let restart_ok = restart_report.succeeded("restarted");
+                restarted = Some(restart_report);
+                if restart_ok {
+                    final_report = service::check_service_bearer(
+                        &target,
+                        declared,
+                        url,
+                        &secret,
+                        post_empty_json,
+                        expect_status,
+                        &runner,
+                    )
+                    .await
+                    .map_err(click)?;
+                }
+            }
+        }
+
+        let ok = final_report.succeeded("auth_ok");
+        if !ok {
+            failures.push(format!("{}: {}", declared.host, final_report.failure()));
+        }
+        let repair_status = listener_reset
+            .as_ref()
+            .or(synced.as_ref())
+            .map(|report| report.status.as_str())
+            .unwrap_or("-");
+        cells.push(vec![
+            declared.host.clone(),
+            declared.unit_id().to_string(),
+            dash(&final_report.status),
+            dash(repair_status),
+            dash(&final_report.detail),
+        ]);
+        payload.push(json!({
+            "host": declared.host,
+            "unit": declared.unit_id(),
+            "item": item,
+            "field": field,
+            "url": url,
+            "post_empty_json": post_empty_json,
+            "expect_status": expect_status,
+            "initial": initial.to_json(),
+            "sync": synced.as_ref().map(|report| report.to_json()),
+            "restart": restarted.as_ref().map(|report| report.to_json()),
+            "listener_reset": listener_reset.as_ref().map(|report| report.to_json()),
+            "final": final_report.to_json(),
+            "ok": ok,
+        }));
+    }
+    drop(secret);
+
+    if as_json {
+        print_json(&Value::Array(payload))?;
+    } else {
+        table::print(&["HOST", "UNIT", "AUTH", "REPAIR", "DETAIL"], &cells);
+    }
+    fail_if_any(&failures, "authentication check")
 }
 
 /// Report a partial failure after the per-host results have been printed,

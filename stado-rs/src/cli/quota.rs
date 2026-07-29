@@ -135,17 +135,7 @@ async fn show(as_json: bool) -> Result<(), CmdError> {
 
 /// Python `quota_catalog`: full GPU catalog per provider (or --json).
 async fn catalog(providers_arg: &str, as_json: bool) -> Result<(), CmdError> {
-    let providers: Vec<String> = providers_arg
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .collect();
-    let providers = if providers.is_empty() {
-        crate::config::wc_providers().to_vec()
-    } else {
-        providers
-    };
+    let providers = parse_providers(providers_arg)?;
     let cats = quota_skus::all_catalogs(&providers, None)
         .await
         .map_err(|err| CmdError::click(err.to_string()))?;
@@ -171,7 +161,7 @@ async fn catalog(providers_arg: &str, as_json: bool) -> Result<(), CmdError> {
             }
             continue;
         }
-        if provider == "gcp" {
+        if quota_adapter(provider) == Some(crate::capabilities::QuotaAdapter::Gcp) {
             println!(
                 "  {:<52} {:<20} {:<16} {:>6}",
                 "QUOTA_ID", "FAMILY", "REGION", "LIMIT"
@@ -208,7 +198,7 @@ async fn catalog(providers_arg: &str, as_json: bool) -> Result<(), CmdError> {
                     limit
                 );
             }
-        } else if provider == "azure" {
+        } else if quota_adapter(provider) == Some(crate::capabilities::QuotaAdapter::Azure) {
             let mut seen_fam: std::collections::BTreeMap<
                 String,
                 std::collections::BTreeSet<String>,
@@ -243,17 +233,61 @@ async fn catalog(providers_arg: &str, as_json: bool) -> Result<(), CmdError> {
 
 /// Python's CSV-flag parse (`[p.strip() for p in arg.split(",") if
 /// p.strip()] or WC_PROVIDERS`).
-fn parse_providers(arg: &str) -> Vec<String> {
-    let parsed: Vec<String> = arg
+fn parse_providers(arg: &str) -> Result<Vec<String>, CmdError> {
+    let parsed = arg
         .split(',')
         .map(str::trim)
-        .filter(|s| !s.is_empty())
+        .filter(|name| !name.is_empty())
         .map(str::to_string)
-        .collect();
-    if parsed.is_empty() {
-        crate::config::wc_providers().to_vec()
-    } else {
+        .collect::<Vec<_>>();
+    let explicit = !parsed.is_empty();
+    let names = if explicit {
         parsed
+    } else {
+        crate::config::wc_providers().to_vec()
+    };
+    let selectable = |variant: &crate::capabilities::CapabilityVariant| {
+        variant
+            .provider
+            .is_some_and(|provider| provider.as_str() == variant.id)
+    };
+    let mut providers = Vec::new();
+    for name in names {
+        let variant = crate::capabilities::variant(crate::capabilities::RuntimeFacet::Quota, &name)
+            .filter(|variant| selectable(variant));
+        match variant {
+            Some(variant)
+                if !providers
+                    .iter()
+                    .any(|provider: &String| provider.as_str() == variant.id) =>
+            {
+                providers.push(variant.id.to_string());
+            }
+            Some(_) | None if !explicit => {}
+            None => {
+                let choices = crate::capabilities::get("quota")
+                    .into_iter()
+                    .flat_map(|capability| capability.variants)
+                    .filter(|variant| selectable(variant))
+                    .map(|variant| variant.id)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(CmdError::usage(format!(
+                    "provider {name:?} has no quota adapter; use one of: {choices}"
+                )));
+            }
+            Some(_) => {}
+        }
+    }
+    Ok(providers)
+}
+
+fn quota_adapter(name: &str) -> Option<crate::capabilities::QuotaAdapter> {
+    match crate::capabilities::variant(crate::capabilities::RuntimeFacet::Quota, name)
+        .map(|variant| variant.adapter)
+    {
+        Some(crate::capabilities::RuntimeAdapter::Quota(adapter)) => Some(adapter),
+        _ => None,
     }
 }
 
@@ -295,14 +329,17 @@ async fn request(
     email_arg: &str,
     as_json: bool,
 ) -> Result<(), CmdError> {
+    let providers = parse_providers(providers_arg)?;
     let email = contact_email(email_arg);
-    if email.is_empty() {
+    if email.is_empty()
+        && providers
+            .iter()
+            .any(|provider| quota_adapter(provider) == Some(crate::capabilities::QuotaAdapter::Gcp))
+    {
         return Err(CmdError::click(
-            "--email is required (or set WC_QUOTA_CONTACT_EMAIL); the GCP \
-             Cloud Quotas API requires a contact email on every preference.",
+            "--email is required for GCP (or set WC_QUOTA_CONTACT_EMAIL); the Cloud Quotas API requires a contact email on every preference.",
         ));
     }
-    let providers = parse_providers(providers_arg);
     let regions = parse_regions(regions_arg);
     let results = quota_request::request_quota_increases(
         None,
@@ -361,10 +398,14 @@ async fn request_all(
     email_arg: &str,
     as_json: bool,
 ) -> Result<(), CmdError> {
-    let providers = parse_providers(providers_arg);
+    let providers = parse_providers(providers_arg)?;
     let explicit_regions = parse_regions(regions_arg).unwrap_or_default();
     let email = contact_email(email_arg);
-    if email.is_empty() && providers.iter().any(|p| p == "gcp") {
+    if email.is_empty()
+        && providers
+            .iter()
+            .any(|provider| quota_adapter(provider) == Some(crate::capabilities::QuotaAdapter::Gcp))
+    {
         return Err(CmdError::click(
             "--email is required for GCP (or set WC_QUOTA_CONTACT_EMAIL); \
              the Cloud Quotas API mandates a contact email on every preference.",
@@ -372,8 +413,8 @@ async fn request_all(
     }
     let mut results: Vec<Value> = Vec::new();
     for provider in &providers {
-        match provider.as_str() {
-            "gcp" => {
+        match quota_adapter(provider) {
+            Some(crate::capabilities::QuotaAdapter::Gcp) => {
                 // Default = no region filter = every applicable_region the
                 // catalog reports per family. The bulk submitter intersects
                 // against this only if explicit_regions is non-empty. Don't
@@ -394,13 +435,13 @@ async fn request_all(
                     .map_err(|err| CmdError::click(err.to_string()))?,
                 );
             }
-            "azure" => {
+            Some(crate::capabilities::QuotaAdapter::Azure) => {
                 results.extend(
                     quota_skus::azure_request_all_families(new_limit, &explicit_regions).await,
                 );
             }
-            other => results.push(serde_json::json!({
-                "provider": other,
+            _ => results.push(serde_json::json!({
+                "provider": provider,
                 "ok": false,
                 "error": "no request-all impl for this provider",
             })),
@@ -457,7 +498,13 @@ async fn request_all(
 
 /// The GCP project the write side targets (env-only, like the Python).
 fn gcp_project_env() -> String {
-    std::env::var("GCP_PROJECT").unwrap_or_else(|_| "wisent-480400".to_string())
+    let env = crate::capabilities::config_env(
+        crate::capabilities::RuntimeFacet::Compute,
+        crate::capabilities::ProviderId::Gcp.as_str(),
+        "project",
+    )
+    .expect("GCP project binding is missing from the capability catalog");
+    std::env::var(env).unwrap_or_else(|_| "wisent-480400".to_string())
 }
 
 /// Python `quota_requests`: cross-provider in-flight requests + support
@@ -468,13 +515,13 @@ async fn requests(
     awaiting_customer: bool,
     as_json: bool,
 ) -> Result<(), CmdError> {
-    let providers = parse_providers(providers_arg);
+    let providers = parse_providers(providers_arg)?;
     // Insertion-ordered payload (Python dict in `providers` order); the
     // --json dump sorts keys anyway.
     let mut payload: Vec<(String, Vec<Value>)> = Vec::new();
     for provider in &providers {
-        match provider.as_str() {
-            "gcp" => {
+        match quota_adapter(provider) {
+            Some(crate::capabilities::QuotaAdapter::Gcp) => {
                 let client = quota_skus::CloudQuotasClient::new(&gcp_project_env())
                     .await
                     .map_err(|err| CmdError::click(err.to_string()))?;
@@ -484,9 +531,9 @@ async fn requests(
                 if !state_filter.is_empty() {
                     rows.retain(|r| r.get("state").and_then(Value::as_str) == Some(state_filter));
                 }
-                payload.push(("gcp".to_string(), rows));
+                payload.push((provider.clone(), rows));
             }
-            "azure" => {
+            Some(crate::capabilities::QuotaAdapter::Azure) => {
                 let mut rows =
                     quota_replies::list_open_azure_tickets(&quota_replies::SystemAzRunner)
                         .map_err(|err| CmdError::click(err.to_string()))?;
@@ -495,7 +542,7 @@ async fn requests(
                         r.get("awaiting_customer").and_then(Value::as_bool) == Some(true)
                     });
                 }
-                payload.push(("azure".to_string(), rows));
+                payload.push((provider.clone(), rows));
             }
             _ => {}
         }
@@ -514,7 +561,7 @@ async fn requests(
             println!("  (empty)");
             continue;
         }
-        if provider == "gcp" {
+        if quota_adapter(provider) == Some(crate::capabilities::QuotaAdapter::Gcp) {
             let mut buckets: std::collections::BTreeMap<String, usize> = Default::default();
             for r in rows {
                 *buckets
@@ -574,7 +621,7 @@ async fn requests(
                     take(region, 14),
                 );
             }
-        } else if provider == "azure" {
+        } else if quota_adapter(provider) == Some(crate::capabilities::QuotaAdapter::Azure) {
             let ms_n = rows
                 .iter()
                 .filter(|r| r.get("awaiting_customer").and_then(Value::as_bool) == Some(true))

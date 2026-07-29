@@ -75,7 +75,14 @@ impl LocalBackend {
     }
 
     fn metadata_path(&self, path: &str) -> PathBuf {
-        self.metadata.join(format!("{path}.json"))
+        if Path::new(path)
+            .extension()
+            .is_some_and(|extension| extension == "json")
+        {
+            self.metadata.join(path)
+        } else {
+            self.metadata.join(format!("{path}.json"))
+        }
     }
 
     /// Whether a filesystem path lives under `.locks/` or `.metadata/`
@@ -121,7 +128,8 @@ impl LocalBackend {
         })?;
         fs::create_dir_all(parent)?;
         let name = target.file_name().unwrap_or_default().to_string_lossy();
-        let mut tmp = NamedTempFile::with_prefix_in(format!(".{name}."), parent)?;
+        let prefix = format!(".{}.", name.trim_start_matches('.'));
+        let mut tmp = NamedTempFile::with_prefix_in(prefix, parent)?;
         tmp.write_all(data)?;
         tmp.as_file().sync_all()?;
         tmp.persist(target).map_err(|err| err.error)?;
