@@ -99,17 +99,17 @@ The source and deployment map below contains **53 distinct named non-VM resource
 
 This is a count of names referenced by code or migration records, not a live GCP count. It includes resources recorded as migrated, legacy, optional, or referenced by an endpoint; billing-disabled APIs prevent confirming which 53 still exist. MIGs and instance templates are counted in the stale compute snapshot instead of being counted again here.
 
-### Desired Stado topology in the bundled registry
+### Active Stado topology in the bundled registry
 
 | Asset | Kind | Intended use |
 |---|---|---|
-| `stado-coordinator` | Cloud Run coordinator | sole queue scheduler/control plane |
+| `local-control-plane` | local daemon coordinator | sole queue scheduler and Stado control plane, exposed through `stado.wisent.com` |
 | `control-host` | local target | primary Weles browser worker; pinned placement |
 | `gpu-host` | local GPU target | two RTX Pro 6000 slots for external/ComfyUI workloads |
 | `operator-host` | local CPU target | two slots for CPU/TUI and Probierz remote jobs |
-| `gcp-spot-t4` | GCP target pool | T4 Spot dispatcher, maximum 20 concurrent instances |
 
-This is desired topology, not live heartbeat data.
+Cloud providers remain explicitly fenced. This topology is authoritative
+declaration, not live heartbeat evidence.
 
 ## VM-by-VM usage map
 
@@ -251,7 +251,10 @@ These are named resources declared by deploy code or previously recorded as crea
 | `image-gen-comfyui` | custom image family | `content-platform` | baked ComfyUI, Z-Image, models, and LoRAs |
 | `wisent-agent` | custom image family | `wisent-compute` | baked Stado cloud-agent VM image |
 
-Observed drift: `gcp_setup.sh` and `deploy_stado_rust.sh` use `wisent-compute-alerts`, while the Rust default is `stado-alerts`. The deploy-time environment currently wins, but both resources and names remain part of the failure domain.
+The retired `gcp_setup.sh` path used `wisent-compute-alerts`, while the Rust
+default is `stado-alerts`. That direct cloud-CLI provisioning path has been
+removed; any explicitly enabled GCP adapter now consumes only pre-provisioned
+resources named in the authoritative deployment profile.
 
 The legacy Gen2 function `wisent-compute-tick` is explicitly deleted during Rust coordinator deployment. Treat it as retired unless live inventory proves otherwise.
 

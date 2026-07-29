@@ -51,7 +51,7 @@ use crate::providers;
 use crate::queue::{control, copy::Endpoint, JobStorage};
 use crate::scheduler::dispatch::agent;
 use crate::scheduler::quota;
-use crate::self_update::{self, HttpReleaseFetcher, ReleaseFetcher};
+use crate::self_update;
 use crate::targets;
 
 /// Prefix the storage round-trip probe writes under. Not a queue-state
@@ -62,7 +62,17 @@ pub const PROBE_PREFIX: &str = "diagnostics/";
 /// Provider name of the device-local deployment, which has no cloud API to
 /// authenticate against and no agent VMs to dispatch.
 /// `crate::coordinator::resolve_providers` skips it for the same reason.
-const LOCAL_PROVIDER: &str = "local";
+const LOCAL_PROVIDER: &str = crate::capabilities::ProviderId::Local.as_str();
+
+fn provider_enabled(provider: crate::capabilities::ProviderId) -> bool {
+    config::wc_providers()
+        .iter()
+        .any(|name| provider.matches(name))
+}
+
+fn storage_adapter(name: &str) -> Option<crate::capabilities::StorageAdapter> {
+    crate::capabilities::storage_adapter(name)
+}
 
 /// Ceiling on ONE probe. Bounds the command against a black-holed endpoint
 /// — the failure mode of an unreachable release channel or a firewalled
@@ -409,21 +419,8 @@ fn check_config() -> Check {
     let backend = config::wc_storage_backend();
     let mut findings = Findings::default();
 
-    let locator = match backend {
-        "gcs" => format!("bucket={}", config::bucket()),
-        "azure" => format!(
-            "account={:?} container={:?}",
-            config::wc_azure_storage_account(),
-            config::wc_azure_container()
-        ),
-        "s3" => format!(
-            "bucket={:?} region={}",
-            config::wc_s3_bucket(),
-            config::wc_s3_region()
-        ),
-        "local" => format!("path={}", config::wc_local_storage_path()),
-        _ => "no locator (backend is not one of gcs/azure/s3/local)".to_string(),
-    };
+    let endpoint = Endpoint::configured_primary();
+    let locator = endpoint.describe();
     let config_file = match config_file::config_path() {
         Ok(Some(path)) => path.display().to_string(),
         Ok(None) => "none (env and built-in defaults only)".to_string(),
@@ -439,7 +436,7 @@ fn check_config() -> Check {
     );
 
     if crate::capabilities::constructible_variant(
-        crate::capabilities::CapabilityKind::Storage,
+        crate::capabilities::RuntimeFacet::Storage,
         backend,
     )
     .is_none()
@@ -449,39 +446,30 @@ fn check_config() -> Check {
             format!("WC_STORAGE_BACKEND={backend:?} is not a backend this build can construct"),
         );
         let choices =
-            crate::capabilities::configurable_ids(crate::capabilities::CapabilityKind::Storage)
+            crate::capabilities::configurable_ids(crate::capabilities::RuntimeFacet::Storage)
                 .collect::<Vec<_>>()
                 .join(", ");
         findings.remedy(format!("set storage.backend to one of {choices} in config"));
     }
 
-    if backend == "azure" {
-        if config::wc_azure_storage_account().is_empty() {
-            // `queue::azure_blob::AzureBlobBackend::new` hard-errors on
-            // this, so every store-backed command dies at construction.
-            findings.note(
-                Status::Fail,
-                "WC_AZURE_STORAGE_ACCOUNT is empty while the azure backend is selected; \
-                 AzureBlobBackend cannot be constructed, so every queue read and write \
-                 fails before it starts"
-                    .to_string(),
-            );
-            findings.remedy(
-                "set storage.azure.account to the provisioned account in the Stado deployment \
-                 config",
-            );
-        }
-        if config::wc_azure_container().is_empty() {
-            findings.note(
-                Status::Fail,
-                "WC_AZURE_CONTAINER is unresolved while Azure primary storage is selected; \
-                 every queue and object operation would target no container"
-                    .to_string(),
-            );
-            findings.remedy(
-                "set storage.azure.container to the provisioned private container in the Stado \
-                 deployment config",
-            );
+    if let Some(variant) = crate::capabilities::constructible_variant(
+        crate::capabilities::RuntimeFacet::Storage,
+        backend,
+    ) {
+        for field in variant.config.iter().filter(|field| field.required) {
+            if endpoint.locator_value(field.key).is_none_or(str::is_empty) {
+                findings.note(
+                    Status::Fail,
+                    format!(
+                        "{} is unresolved while {:?} primary storage is selected",
+                        field.env, variant.id
+                    ),
+                );
+                findings.remedy(format!(
+                    "set {} in the Stado deployment config ({})",
+                    field.path, field.env
+                ));
+            }
         }
     }
 
@@ -503,9 +491,9 @@ fn check_config() -> Check {
 const STORAGE_ID: &str = "storage";
 const STORAGE_TITLE: &str = "Storage round trip";
 const STORAGE_REMEDY: &str =
-    "the store is selected by WC_STORAGE_BACKEND and its locator vars; GCS and \
-     Azure prefer managed identity and otherwise use stado-gcp/stado-azure in \
-     Skarbiec; S3 uses stado-aws in Skarbiec";
+    "the store is selected by WC_STORAGE_BACKEND and its locator vars; provider \
+     adapters use their configured workload identity and never fall back to a cloud CLI \
+     or a provider-key grant";
 
 /// Object name for one round trip. Unique per run, so two operators
 /// running `stado doctor` at once cannot delete each other's probe, and
@@ -612,18 +600,17 @@ async fn check_storage_round_trip(store: Option<&JobStorage>, store_error: &str)
 const BACKUP_ID: &str = "backup";
 const BACKUP_TITLE: &str = "Disaster-recovery replica";
 const BACKUP_REMEDY: &str =
-    "set storage.backup backend/bucket/S3 region; put access_key_id and secret_access_key in \
-     Skarbiec item stado-aws; set agent.skarbiec.items to exact dedicated read:<item> scopes \
-     and agent.skarbiec.secret_fields to the smaller workload item#field set, then mint \
-     stado-azure-agent with no additional items";
+    "set storage.backup backend/bucket/region and provision the provider adapter's \
+     workload identity; backup credentials must not be exposed through agent.skarbiec.items \
+     or agent.skarbiec.secret_fields";
 
 async fn check_backup(store_error: &str) -> Check {
-    let azure_cutover = config::wc_storage_backend() == "azure"
-        || config::wc_providers()
-            .iter()
-            .any(|provider| provider == "azure");
-    if !azure_cutover && config::wc_storage_backend() == "local" {
-        if config::wc_backup_storage_backend() != "local"
+    let primary_adapter = storage_adapter(config::wc_storage_backend());
+    let backup_adapter = storage_adapter(config::wc_backup_storage_backend());
+    let azure_cutover = primary_adapter == Some(crate::capabilities::StorageAdapter::AzureBlob)
+        || provider_enabled(crate::capabilities::ProviderId::Azure);
+    if !azure_cutover && primary_adapter == Some(crate::capabilities::StorageAdapter::Local) {
+        if backup_adapter != Some(crate::capabilities::StorageAdapter::Local)
             || config::wc_backup_local_storage_path().is_empty()
             || config::wc_backup_local_storage_path() == config::wc_local_storage_path()
         {
@@ -701,7 +688,7 @@ async fn check_backup(store_error: &str) -> Check {
             BACKUP_REMEDY,
         );
     }
-    if config::wc_backup_storage_backend() != "s3" {
+    if backup_adapter != Some(crate::capabilities::StorageAdapter::S3) {
         return Check::fail(
             BACKUP_ID,
             BACKUP_TITLE,
@@ -739,10 +726,7 @@ async fn check_backup(store_error: &str) -> Check {
             return Check::fail(
                 BACKUP_ID,
                 BACKUP_TITLE,
-                format!(
-                    "S3 replica credentials could not be resolved from Skarbiec item \
-                     stado-aws: {error}"
-                ),
+                format!("S3 replica provider identity could not be resolved: {error}"),
                 BACKUP_REMEDY,
             )
         }
@@ -755,7 +739,7 @@ async fn check_backup(store_error: &str) -> Check {
             BACKUP_ID,
             BACKUP_TITLE,
             format!(
-                "S3 replica bucket is absent or stado-aws lacks list access at {}: {error}",
+                "S3 replica provider identity lacks list access at {}: {error}",
                 endpoint.describe()
             ),
             BACKUP_REMEDY,
@@ -766,19 +750,19 @@ async fn check_backup(store_error: &str) -> Check {
             BACKUP_ID,
             BACKUP_TITLE,
             format!(
-                "Azure primary plus S3 backup could not be constructed; backup bucket, \
-                 coordinator credentials, or primary identity is unresolved: {store_error}"
+                "Azure primary plus S3 backup could not be constructed; backup provider \
+                 identity, bucket, or primary managed identity is unresolved: {store_error}"
             ),
             BACKUP_REMEDY,
         );
     }
-    match coordinator::agent_backup_grant().await {
+    match coordinator::agent_workload_grant().await {
         Ok(Some(_)) => Check::pass(
             BACKUP_ID,
             BACKUP_TITLE,
             format!(
-                "coordinator can list S3 replica s3://{} in {}; dedicated agent consumer {:?} \
-                 can read exactly stado-aws",
+                "provider adapter can list S3 replica s3://{} in {}; dedicated agent consumer \
+                 {:?} exposes exactly its provider-neutral workload items",
                 config::wc_backup_bucket(),
                 config::wc_backup_s3_region(),
                 config::agent_skarbiec_consumer()
@@ -788,54 +772,74 @@ async fn check_backup(store_error: &str) -> Check {
         Ok(None) => Check::fail(
             BACKUP_ID,
             BACKUP_TITLE,
-            "Azure-agent S3 grant was not resolved; dispatch would create a VM with no readable \
-             failover store"
-                .to_string(),
+            "Azure workload grant was not resolved; dispatch is fenced".to_string(),
             BACKUP_REMEDY,
         ),
         Err(error) => Check::fail(
             BACKUP_ID,
             BACKUP_TITLE,
-            format!("Azure-agent S3 grant is absent, unreachable, or overbroad: {error}"),
+            format!("Azure workload grant is absent, unreachable, or overbroad: {error}"),
             BACKUP_REMEDY,
         ),
     }
 }
 
 const OBJECT_AUTH_ID: &str = "object-auth";
-const OBJECT_AUTH_TITLE: &str = "Object gateway auth";
+const OBJECT_AUTH_TITLE: &str = "Object, release, machine, and service gateway auth";
 const OBJECT_AUTH_REMEDY: &str =
-    "grant stado-control-plane scope stado-object-api:read; verify its non-empty field with \
-     `stado secrets get stado-object-api --field token`; only trusted publisher/server \
-     deployments receive the same value as their server-side STADO_API_TOKEN";
+    "configure object_api.namespaces, release_api.publishers, machine_api.clients, and \
+     service_api.deployers; install their distinct owner-only verifier grants and scope each \
+     verifier to exactly its mapped items; every mapped item must contain a distinct non-empty \
+     token field";
 
 async fn check_object_auth() -> Check {
-    match crate::skarbiec::read_string("stado-object-api", "token").await {
-        Ok(Some(token)) if !token.is_empty() => Check::pass(
-            OBJECT_AUTH_ID,
-            OBJECT_AUTH_TITLE,
-            "coordinator service grant can read field token from item stado-object-api; no token \
-             is stored in deployment environment"
-                .to_string(),
-            OBJECT_AUTH_REMEDY,
-        ),
-        Ok(_) => Check::fail(
-            OBJECT_AUTH_ID,
-            OBJECT_AUTH_TITLE,
-            "field token in Skarbiec item stado-object-api is missing or empty; object routes \
-             fail closed"
-                .to_string(),
-            OBJECT_AUTH_REMEDY,
-        ),
-        Err(error) => Check::fail(
+    let objects = crate::skarbiec::validate_object_verifier().await;
+    let releases = crate::skarbiec::validate_release_verifier().await;
+    let machines = crate::skarbiec::validate_machine_verifier().await;
+    let services = crate::skarbiec::validate_service_verifier().await;
+    match (objects, releases, machines, services) {
+        (
+            Ok(namespace_count),
+            Ok(publisher_count),
+            Ok(machine_client_count),
+            Ok(deployer_count),
+        ) => Check::pass(
             OBJECT_AUTH_ID,
             OBJECT_AUTH_TITLE,
             format!(
-                "coordinator service grant cannot read field token from item stado-object-api; \
-                 object routes fail closed: {error}"
+                "product verifier exposes exactly {namespace_count} namespace items, release \
+                 verifier exposes exactly {publisher_count} publisher items, machine verifier \
+                 exposes exactly {machine_client_count} client items, and service verifier \
+                 exposes exactly {deployer_count} deployer items; tokens are present and \
+                 distinct; namespace, prefix, client, target, service, and action policy is valid"
             ),
             OBJECT_AUTH_REMEDY,
         ),
+        (object_result, release_result, machine_result, service_result) => {
+            let mut failures = Vec::new();
+            if let Err(error) = object_result {
+                failures.push(format!("product verifier: {error}"));
+            }
+            if let Err(error) = release_result {
+                failures.push(format!("release verifier: {error}"));
+            }
+            if let Err(error) = machine_result {
+                failures.push(format!("machine verifier: {error}"));
+            }
+            if let Err(error) = service_result {
+                failures.push(format!("service verifier: {error}"));
+            }
+            Check::fail(
+                OBJECT_AUTH_ID,
+                OBJECT_AUTH_TITLE,
+                format!(
+                    "authorization fails closed because mapping, verifier grant, or mapped token \
+                     validation failed: {}",
+                    failures.join("; ")
+                ),
+                OBJECT_AUTH_REMEDY,
+            )
+        }
     }
 }
 
@@ -846,9 +850,9 @@ async fn check_object_auth() -> Check {
 const PROVIDERS_ID: &str = "providers";
 const PROVIDERS_TITLE: &str = "Provider auth";
 const PROVIDERS_REMEDY: &str =
-    "each provider uses workload identity or its Skarbiec item: stado-gcp for \
-     GCP, stado-azure plus AZURE_SUBSCRIPTION_ID for Azure, and stado-aws plus \
-     AWS_REGION for AWS";
+    "run each cloud provider only behind its adapter's managed workload identity; static \
+     provider keys, cloud CLI sessions, and provider credential items in control-plane or \
+     agent grants are unsupported";
 
 /// The cheapest authenticated call each provider offers: list what it is
 /// already running. Reports the exact upstream error, because "the
@@ -894,7 +898,13 @@ async fn check_provider_auth() -> Check {
             Status::Fail,
             "WC_PROVIDERS lists no provider to check".to_string(),
         );
-        findings.remedy("export WC_PROVIDERS=gcp (or azure, aws, local, comma-separated)");
+        let choices =
+            crate::capabilities::configurable_ids(crate::capabilities::RuntimeFacet::Compute)
+                .collect::<Vec<_>>()
+                .join(", ");
+        findings.remedy(format!(
+            "set WC_PROVIDERS to one or more comma-separated providers: {choices}"
+        ));
     }
     findings.into_check(PROVIDERS_ID, PROVIDERS_TITLE, PROVIDERS_REMEDY)
 }
@@ -993,77 +1003,100 @@ async fn check_quota(store: Option<&JobStorage>, store_error: &str) -> Check {
 
 const RELEASE_ID: &str = "release";
 const RELEASE_TITLE: &str = "Release channel";
-const RELEASE_REMEDY: &str =
-    "point WC_RELEASE_BASE_URL (config key release.base_url) at a channel that serves \
-     latest.json plus <version>/<platform>/; on azure that is \
-     https://<account>.blob.core.windows.net/<container>/releases/stado, and the container \
-     must be readable by the identity in AZURE_VM_IDENTITY_ID";
+const RELEASE_REMEDY: &str = "set STADO_RELEASE_API_URL plus exact STADO_RELEASE_VERSION and \
+     STADO_RELEASE_PLATFORM (config keys release.api_url, release.version, and \
+     release.platform); publish both the binary and SHA256SUMS at the canonical \
+     stado://releases/stado/<version>/<platform>/ prefix";
 
-/// GET `latest.json` through [`HttpReleaseFetcher`] — the same fetcher,
-/// URL and auth an agent's self-install uses. An unreachable channel is a
-/// hard FAIL: cloud-init downloads the binary from here, so the VM aborts
-/// before the agent starts while still billing for the instance.
+/// GET the exact release checksum manifest through the same public Stado route
+/// used by agent startup. A missing coordinate, route failure, malformed
+/// manifest, or absent binary checksum is a hard failure before dispatch.
 async fn check_release_channel() -> Check {
-    let base = config::release_base_url();
-    if base.is_empty()
-        && config::wc_providers()
-            .iter()
-            .all(|provider| provider == LOCAL_PROVIDER)
-    {
+    let api = config::stado_release_api_url();
+    let version = config::stado_release_version();
+    let platform = config::stado_release_platform();
+    let local_only = config::wc_providers()
+        .iter()
+        .all(|provider| provider == LOCAL_PROVIDER);
+    if local_only && api.is_empty() && version.is_empty() && platform.is_empty() {
         return Check::pass(
             RELEASE_ID,
             RELEASE_TITLE,
-            "local-only outage profile uses the installed Rust binary; no cloud VM release \
-             channel is active"
+            "local-only outage profile uses the installed Rust binary; no cloud VM release is active"
                 .to_string(),
             RELEASE_REMEDY,
         );
     }
-    let fetcher = HttpReleaseFetcher::new();
+
     let mut findings = Findings::default();
-    match fetcher.fetch(self_update::LATEST_JSON_NAME).await {
-        Err(err) => {
-            findings.note(Status::Fail, err.to_string());
-            findings.remedy(RELEASE_REMEDY);
-        }
-        Ok(None) => {
+    if !api.starts_with("https://") || version.is_empty() || platform.is_empty() {
+        findings.note(
+            Status::Fail,
+            "the public release API, exact version, and exact platform must all be configured"
+                .to_string(),
+        );
+        findings.remedy(RELEASE_REMEDY);
+        return findings.into_check(RELEASE_ID, RELEASE_TITLE, RELEASE_REMEDY);
+    }
+
+    let uri = format!("stado://releases/stado/{version}/{platform}/SHA256SUMS");
+    let endpoint = format!("{api}/api/release/object");
+    let response = match reqwest::Client::new()
+        .get(&endpoint)
+        .query(&[("uri", uri.as_str())])
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
             findings.note(
                 Status::Fail,
-                format!(
-                    "{base}/{} does not exist; agent VMs have nothing to install and cloud-init \
-                     aborts before the agent starts",
-                    self_update::LATEST_JSON_NAME
-                ),
+                format!("exact release manifest {uri} is unreachable: {error}"),
+            );
+            findings.remedy(RELEASE_REMEDY);
+            return findings.into_check(RELEASE_ID, RELEASE_TITLE, RELEASE_REMEDY);
+        }
+    };
+    if !response.status().is_success() {
+        findings.note(
+            Status::Fail,
+            format!(
+                "exact release manifest {uri} returned HTTP {}",
+                response.status()
+            ),
+        );
+        findings.remedy(RELEASE_REMEDY);
+        return findings.into_check(RELEASE_ID, RELEASE_TITLE, RELEASE_REMEDY);
+    }
+    let body = match response.text().await {
+        Ok(body) => body,
+        Err(error) => {
+            findings.note(
+                Status::Fail,
+                format!("cannot read exact release manifest {uri}: {error}"),
+            );
+            findings.remedy(RELEASE_REMEDY);
+            return findings.into_check(RELEASE_ID, RELEASE_TITLE, RELEASE_REMEDY);
+        }
+    };
+    match self_update::parse_sha256sums(&body) {
+        Ok(sums) if sums.contains_key("stado") => findings.note(
+            Status::Pass,
+            format!("{uri} is immutable, reachable, and supplies the stado checksum"),
+        ),
+        Ok(_) => {
+            findings.note(
+                Status::Fail,
+                format!("{uri} has no checksum for stado; agent installation fails closed"),
             );
             findings.remedy(RELEASE_REMEDY);
         }
-        Ok(Some(body)) => {
-            match std::str::from_utf8(&body)
-                .ok()
-                .and_then(self_update::parse_latest_json)
-            {
-                Some(latest) => findings.note(
-                    Status::Pass,
-                    format!(
-                        "{base}/{} -> version {} on channel {}",
-                        self_update::LATEST_JSON_NAME,
-                        latest.version,
-                        latest.channel
-                    ),
-                ),
-                None => {
-                    findings.note(
-                        Status::Fail,
-                        format!(
-                            "{base}/{} is reachable but is not a release pointer; the agent's \
-                             drift check reads an unparseable pointer as absent and never \
-                             installs",
-                            self_update::LATEST_JSON_NAME
-                        ),
-                    );
-                    findings.remedy(RELEASE_REMEDY);
-                }
-            }
+        Err(error) => {
+            findings.note(
+                Status::Fail,
+                format!("{uri} is not a valid checksum manifest: {error}"),
+            );
+            findings.remedy(RELEASE_REMEDY);
         }
     }
     findings.into_check(RELEASE_ID, RELEASE_TITLE, RELEASE_REMEDY)
@@ -1075,12 +1108,10 @@ async fn check_release_channel() -> Check {
 
 const TEMPLATE_ID: &str = "template";
 const TEMPLATE_TITLE: &str = "Agent template";
-const TEMPLATE_REMEDY: &str =
-    "credential placeholders come from Skarbiec items stado-huggingface and \
-     stado-supabase; deployment placeholders come from \
-     scheduler::dispatch::agent::deployment_substitutions, i.e. WC_STORAGE_BACKEND, \
-     WC_AZURE_STORAGE_ACCOUNT, WC_AZURE_CONTAINER, WC_RELEASE_BASE_URL, WC_S3_BUCKET, \
-     AWS_REGION";
+const TEMPLATE_REMEDY: &str = "publish one immutable Python/model runtime bundle and configure \
+     STADO_AGENT_RUNTIME_BUNDLE_URI + STADO_AGENT_RUNTIME_BUNDLE_SHA256; \
+     configure deployment storage/backup and dedicated agent.skarbiec settings. \
+     Every template must export the full scheduler-owned placeholder contract";
 
 /// A representative accelerator for `provider`: the smallest VRAM tier of
 /// its [`GPU_SIZING`] ladder. Deterministic (`BTreeMap` order) and real,
@@ -1125,7 +1156,6 @@ async fn check_agent_template() -> Check {
             )
         }
     };
-    let deployment = agent::deployment_substitutions();
     let mut findings = Findings::default();
     for name in config::wc_providers() {
         let Some(accel) = representative_accel(name) else {
@@ -1135,12 +1165,21 @@ async fn check_agent_template() -> Check {
             );
             continue;
         };
-        let template = agent::bundled_template_for(name);
-        match agent::render_startup_script(template, accel, &secrets, &deployment) {
+        let Some(template) = agent::bundled_template_for(name) else {
+            findings.note(
+                Status::Fail,
+                format!("{name}: no execution template registered in the capability catalog"),
+            );
+            findings.remedy(TEMPLATE_REMEDY);
+            continue;
+        };
+        let deployment = agent::deployment_substitutions(name);
+        match agent::render_agent_startup_script(name, template, accel, &secrets, &deployment) {
             Ok(script) => findings.note(
                 Status::Pass,
                 format!(
-                    "{name}: rendered {} byte(s) for {accel} with no unresolved placeholder",
+                    "{name}: rendered {} byte(s) with complete storage, scoped-grant, and \
+                     immutable-runtime exports for {accel}",
                     script.len()
                 ),
             ),
@@ -1171,7 +1210,7 @@ const IDENTITY_REMEDY: &str =
 /// agent can then neither read the queue nor self-delete, so it bills
 /// until an operator happens to notice.
 fn check_vm_identity() -> Check {
-    if !config::wc_providers().iter().any(|name| name == "azure") {
+    if !provider_enabled(crate::capabilities::ProviderId::Azure) {
         return Check::pass(
             IDENTITY_ID,
             IDENTITY_TITLE,
@@ -1363,8 +1402,9 @@ async fn check_alerts() -> Check {
     // "On GCP" means there is still a GCP surface a Pub/Sub publish could
     // plausibly authenticate against: the GCS queue store or the GCP
     // dispatch provider. The billing outage removed both at once.
-    let on_gcp = config::wc_storage_backend() == "gcs"
-        || config::wc_providers().iter().any(|name| name == "gcp");
+    let on_gcp = storage_adapter(config::wc_storage_backend())
+        == Some(crate::capabilities::StorageAdapter::Gcs)
+        || provider_enabled(crate::capabilities::ProviderId::Gcp);
     let mut findings = Findings::default();
 
     if configured.is_empty() {

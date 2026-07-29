@@ -1,16 +1,16 @@
 //! Backend-independent artifact manifest validation.
 //!
-//! Artifact locations accept the provider-neutral `stado://` namespace plus
-//! external immutable sources (HF/HTTPS). Legacy provider schemes remain
-//! readable while manifests are migrated.
+//! Artifact locations accept the provider-neutral `stado://` namespace,
+//! provider-native object locators used by the multi-cloud lifecycle, and
+//! immutable external sources. Credentials remain forbidden in every URI.
 
 use regex::Regex;
 use url::Url;
 
 use crate::artifacts_models::{ArtifactLocation, ArtifactManifest};
 
-/// Python `_ALLOWED_SCHEMES`.
-const ALLOWED_SCHEMES: &[&str] = &["stado", "az", "gs", "hf", "https"];
+/// Schemes emitted by the artifact and storage providers.
+const ALLOWED_SCHEMES: &[&str] = &["stado", "az", "gs", "s3", "hf", "https"];
 
 fn sensitive_query_key() -> &'static Regex {
     use std::sync::OnceLock;
@@ -172,8 +172,9 @@ mod tests {
     #[test]
     fn valid_manifest_has_no_issues() {
         assert_eq!(validate_manifest(&valid_manifest()), Vec::<String>::new());
-        // Every allowed scheme passes the scheme check.
-        for scheme in ["az", "gs", "hf", "https"] {
+        // Provider-neutral, provider-native, and external immutable sources
+        // all pass the scheme check.
+        for scheme in ["stado", "az", "gs", "s3", "hf", "https"] {
             let m = manifest_with_uris(&[format!("{scheme}://bucket/path").as_str()]);
             assert_eq!(
                 validate_manifest(&m),
@@ -185,10 +186,10 @@ mod tests {
 
     #[test]
     fn unsupported_and_missing_schemes_are_rejected() {
-        let m = manifest_with_uris(&["s3://bucket/demo"]);
+        let m = manifest_with_uris(&["ftp://bucket/demo"]);
         assert_eq!(
             validate_manifest(&m),
-            vec!["locations[0].uri uses unsupported scheme: s3".to_string()]
+            vec!["locations[0].uri uses unsupported scheme: ftp".to_string()]
         );
         let m = manifest_with_uris(&["relative/path"]);
         assert_eq!(

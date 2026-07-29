@@ -19,7 +19,7 @@ fn resolve_target<'a>(
             py_str_repr(target_name)
         )));
     };
-    if target.kind != "local" {
+    if !target.is_provider(crate::capabilities::ProviderId::Local) {
         return Err(DeployError(format!(
             "target {} is not a local host",
             py_str_repr(target_name)

@@ -5,7 +5,7 @@
 //! audit logging. Stado retains no local or cloud-secret-manager fallback.
 
 use std::io::{Read, Write};
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
 use clap::Subcommand;
 use serde_json::{json, Value};
@@ -57,6 +57,22 @@ pub enum SecretsCommands {
         #[arg(long)]
         json: bool,
     },
+    /// List nonsecret item metadata from one owner-controlled local vault file.
+    #[command(name = "inspect-vault")]
+    InspectVault {
+        /// Encrypted Skarbiec vault file.
+        vault: String,
+        /// Emit JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Recreate Weles internal authorities from surviving owner credentials.
+    #[command(name = "bootstrap-weles")]
+    BootstrapWeles {
+        /// Emit only the recreated item names as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Inventory credentials recoverable from agent transcripts. Reports names
     /// and counts, never values.
     Harvest {
@@ -83,6 +99,8 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
         // a grant, a token and a live service, which is exactly the set of
         // things this verb is for when one of them is what broke.
         SecretsCommands::Doctor { json } => doctor(json),
+        SecretsCommands::InspectVault { vault, json } => inspect_vault(&vault, json),
+        SecretsCommands::BootstrapWeles { json } => bootstrap_weles(json),
         // Same reasoning as `doctor`: the transcripts are readable when the
         // vault is not, which is the only reason this verb is worth having.
         SecretsCommands::Harvest { json, restore, all } => harvest(json, restore.as_deref(), all),
@@ -363,6 +381,277 @@ fn key_doctor_report(binary: &std::path::Path) -> Result<Value, CmdError> {
             String::from_utf8_lossy(&output.stderr).trim()
         ))
     })
+}
+
+fn inspect_vault(path: &str, json: bool) -> Result<(), CmdError> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    let unsafe_bits = u32::from_str_radix("077", u8::BITS).unwrap_or_default();
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.mode() & unsafe_bits != u32::default()
+    {
+        return Err(CmdError::click(
+            "vault must be an owner-only regular local file",
+        ));
+    }
+    let launcher = skarbiec_launcher()?;
+    let output = std::process::Command::new(&launcher)
+        .arg("list")
+        .arg("--all")
+        .env("SKARBIEC_VAULT_FILE", path)
+        .output()?;
+    if !output.status.success() {
+        return Err(CmdError::click(format!(
+            "{} could not inspect {}: {}",
+            launcher.display(),
+            path,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    let items: Vec<Value> = serde_json::from_slice(&output.stdout)
+        .map_err(|_| CmdError::click("Skarbiec inventory was not a JSON array"))?;
+    let grants_output = std::process::Command::new(&launcher)
+        .arg("tokens")
+        .env("SKARBIEC_VAULT_FILE", path)
+        .output()?;
+    if !grants_output.status.success() {
+        return Err(CmdError::click(format!(
+            "{} could not inspect grants in {}: {}",
+            launcher.display(),
+            path,
+            String::from_utf8_lossy(&grants_output.stderr).trim()
+        )));
+    }
+    let grants: Vec<Value> = serde_json::from_slice(&grants_output.stdout)
+        .map_err(|_| CmdError::click("Skarbiec grant inventory was not a JSON array"))?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "vault": path,
+                "items": items,
+                "count": items.len(),
+                "grants": grants,
+            }))?
+        );
+        return Ok(());
+    }
+    let rows = items
+        .iter()
+        .map(|item| {
+            vec![
+                item.get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                item.get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                item.get("updated_at")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                item.get("deleted")
+                    .and_then(Value::as_bool)
+                    .unwrap_or_default()
+                    .to_string(),
+            ]
+        })
+        .collect::<Vec<Vec<String>>>();
+    table::print(&["NAME", "TYPE", "UPDATED", "DELETED"], &rows);
+    println!(
+        "{} item(s), {} grant(s) in {}",
+        items.len(),
+        grants.len(),
+        path
+    );
+    Ok(())
+}
+
+fn launcher_json(
+    binary: &std::path::Path,
+    vault: &std::path::Path,
+    arguments: &[&str],
+) -> Result<Value, CmdError> {
+    let output = std::process::Command::new(binary)
+        .args(arguments)
+        .env("SKARBIEC_VAULT_FILE", vault)
+        .env_remove("SKARBIEC_UNLOCK")
+        .env_remove("SKARBIEC_UNLOCK_FILE")
+        .output()?;
+    if !output.status.success() {
+        return Err(CmdError::click(format!(
+            "{} {} failed: {}",
+            binary.display(),
+            arguments.first().copied().unwrap_or("command"),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    serde_json::from_slice(&output.stdout)
+        .map_err(|_| CmdError::click("Skarbiec returned a malformed local JSON report"))
+}
+
+fn generated_authority(
+    binary: &std::path::Path,
+    vault: &std::path::Path,
+) -> Result<String, CmdError> {
+    launcher_json(
+        binary,
+        vault,
+        &[
+            "generate", "--length", "64", "--lower", "--upper", "--digits",
+        ],
+    )?
+    .get("password")
+    .and_then(Value::as_str)
+    .filter(|secret| !secret.is_empty())
+    .map(str::to_string)
+    .ok_or_else(|| CmdError::click("Skarbiec generator returned no authority value"))
+}
+
+fn store_local_json(
+    binary: &std::path::Path,
+    vault: &std::path::Path,
+    item: &str,
+    value: &Value,
+) -> Result<(), CmdError> {
+    let mut child = std::process::Command::new(binary)
+        .arg("set-json")
+        .arg(item)
+        .arg("--type")
+        .arg("internal-authority")
+        .env("SKARBIEC_VAULT_FILE", vault)
+        .env_remove("SKARBIEC_UNLOCK")
+        .env_remove("SKARBIEC_UNLOCK_FILE")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin.write_all(serde_json::to_string(value)?.as_bytes())?;
+    }
+    let output = child.wait_with_output()?;
+    if !output.status.success() {
+        return Err(CmdError::click(format!(
+            "Skarbiec could not store {item}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(())
+}
+
+fn bootstrap_weles(json_output: bool) -> Result<(), CmdError> {
+    let binary = skarbiec_binary()?;
+    let home = std::env::var("HOME").map_err(|_| CmdError::click("HOME is not set"))?;
+    let vault = std::path::Path::new(&home)
+        .join(".stado")
+        .join("weles-skarbiec.vault.json");
+    if !vault.try_exists()? {
+        let output = std::process::Command::new(&binary)
+            .arg("init")
+            .arg("weles-skarbiec-owner")
+            .env("SKARBIEC_VAULT_FILE", &vault)
+            .env_remove("SKARBIEC_UNLOCK")
+            .env_remove("SKARBIEC_UNLOCK_FILE")
+            .output()?;
+        if !output.status.success() {
+            return Err(CmdError::click(format!(
+                "Skarbiec could not initialize the Weles recovery vault: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+    }
+    let database_role = crate::transcripts::value_for("WELES_SUPABASE_SERVICE_ROLE_KEY")
+        .ok_or_else(|| {
+            CmdError::click(
+                "WELES_SUPABASE_SERVICE_ROLE_KEY is not recoverable from incident history",
+            )
+        })?;
+    let operator_token =
+        crate::transcripts::value_for("WELES_CONSOLE_API_TOKEN").ok_or_else(|| {
+            CmdError::click("WELES_CONSOLE_API_TOKEN is not recoverable from incident history")
+        })?;
+    let model_router_token = generated_authority(&binary, &vault)?;
+    let database_url = "https://rbqjqnouluslojmmnuqi.supabase.co";
+    let agent_id = "weles";
+    let items = vec![
+        (
+            "weles-database",
+            json!({"url": database_url, "service_role_key": database_role}),
+        ),
+        (
+            "weles-object-api",
+            json!({"token": generated_authority(&binary, &vault)?}),
+        ),
+        ("weles-model-router", json!({"token": model_router_token})),
+        (
+            "weles-model-agent-auth",
+            json!({
+                "id": agent_id,
+                "agent_auth_secret": generated_authority(&binary, &vault)?,
+            }),
+        ),
+        (
+            "weles-artifact-delivery",
+            json!({"token": generated_authority(&binary, &vault)?}),
+        ),
+        (
+            "weles-artifact-signing",
+            json!({"signing_secret": generated_authority(&binary, &vault)?}),
+        ),
+        (
+            "oko-weles-subscriptions",
+            json!({"token": generated_authority(&binary, &vault)?}),
+        ),
+        (
+            "weles-content-diagnostics",
+            json!({"token": generated_authority(&binary, &vault)?}),
+        ),
+        (
+            "weles-trading-tools-ingest",
+            json!({
+                "token": generated_authority(&binary, &vault)?,
+                "hmac_secret": generated_authority(&binary, &vault)?,
+            }),
+        ),
+        (
+            "weles-operator-cdp",
+            json!({
+                "url": "http://127.0.0.1:8788",
+                "token": operator_token,
+            }),
+        ),
+        (
+            "echo-weles-api",
+            json!({"token": generated_authority(&binary, &vault)?}),
+        ),
+        (
+            "weles-keyword-planner-model-router",
+            json!({"token": generated_authority(&binary, &vault)?}),
+        ),
+    ];
+    let mut stored = Vec::with_capacity(items.len());
+    for (item, value) in &items {
+        store_local_json(&binary, &vault, item, value)?;
+        stored.push(*item);
+    }
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "status": "recreated",
+                "vault": vault,
+                "items": stored,
+            }))?
+        );
+    } else {
+        println!(
+            "recreated {} Weles internal authority item(s)",
+            stored.len()
+        );
+    }
+    Ok(())
 }
 
 /// Report which keys can still open the vault, and which key files a restore

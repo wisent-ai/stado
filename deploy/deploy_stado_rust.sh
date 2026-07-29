@@ -18,7 +18,7 @@ if [ -n "$RELEASE_DIR" ]; then
         false
     fi
     mkdir -p "$INSTALL_DIR"
-    for name in stado wc stado-coverage stado-fix stado-watchdog stado-mcp; do
+    for name in stado stado-coverage stado-fix stado-watchdog stado-mcp; do
         [ -f "$RELEASE_DIR/$name" ] || continue
         cp "$RELEASE_DIR/$name" "$INSTALL_DIR/$name.new"
         chmod u=rwx,go= "$INSTALL_DIR/$name.new"

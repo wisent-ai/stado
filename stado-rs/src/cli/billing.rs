@@ -119,8 +119,20 @@ fn print_human(document: &Value) {
             .and_then(Value::as_str)
             .unwrap_or("unknown")
     );
-    print_gcp(&document["gcp"]);
-    print_azure(&document["azure"]);
+    if let Some(capability) = crate::capabilities::get("billing") {
+        for variant in capability.variants {
+            let section = &document[variant.id];
+            match variant.adapter {
+                crate::capabilities::RuntimeAdapter::Billing(
+                    crate::capabilities::BillingAdapter::Gcp,
+                ) => print_gcp(section),
+                crate::capabilities::RuntimeAdapter::Billing(
+                    crate::capabilities::BillingAdapter::Azure,
+                ) => print_azure(section),
+                _ => println!("{}: unsupported billing adapter", variant.id),
+            }
+        }
+    }
 }
 
 fn print_gcp(section: &Value) {

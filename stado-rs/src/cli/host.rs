@@ -4,7 +4,12 @@
 //! through six (`uptime`, `ping`, `disk`, `cleanup --dry-run`, `exec`),
 //! which have no Python original and live in `crate::deploy::host_*`.
 
-use serde_json::Value;
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+use std::io::Read;
+use std::os::unix::fs::MetadataExt;
+
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 use super::CmdError;
 use crate::deploy::host_users::{provision_users, ProvisionOptions};
@@ -16,7 +21,9 @@ use crate::targets::{ComputeTarget, Registry};
 /// keep registry and beacon objects in the configured JobStorage, so a GCS
 /// locator must never be reinterpreted as an Azure container or S3 bucket.
 pub(crate) async fn beacon_store() -> Result<crate::queue::JobStorage, CmdError> {
-    if crate::config::wc_storage_backend() != "gcs" {
+    let gcs_backend = crate::capabilities::storage_adapter(crate::config::wc_storage_backend())
+        == Some(crate::capabilities::StorageAdapter::Gcs);
+    if !gcs_backend {
         return Ok(crate::queue::JobStorage::new().await?);
     }
     let bucket = crate::targets::GCS_REGISTRY_URI
@@ -43,6 +50,173 @@ pub async fn health(target: &str, json: bool) -> Result<(), CmdError> {
         );
     }
     Ok(())
+}
+/// `stado host publish-beacon FILE` — publish a locally collected health
+/// document through the dedicated, route-scoped Stado control API.
+///
+/// This command deliberately has no direct-storage mode and does not consult
+/// provider credentials. Missing URL/token configuration, an insecure remote
+/// URL, an over-broad token file, malformed JSON, and an inconsistent server
+/// acknowledgement all fail closed.
+pub async fn publish_beacon(source: &str) -> Result<(), CmdError> {
+    let bytes = if source == "-" {
+        let mut bytes = Vec::new();
+        std::io::stdin().lock().read_to_end(&mut bytes)?;
+        bytes
+    } else {
+        std::fs::read(source)?
+    };
+    if bytes.is_empty() || bytes.len() > usize::from(u16::MAX) {
+        return Err(CmdError::click(
+            "host beacon must contain between one and 65535 bytes",
+        ));
+    }
+    let document: Value = serde_json::from_slice(&bytes)
+        .map_err(|error| CmdError::click(format!("host beacon is not valid JSON: {error}")))?;
+    let host = document
+        .as_object()
+        .and_then(|value| value.get("host"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| CmdError::click("host beacon must be an object with a string host"))?;
+    if !valid_beacon_host(host) {
+        return Err(CmdError::click(
+            "host beacon host must be a lowercase DNS label",
+        ));
+    }
+    if document
+        .get("reported_at")
+        .and_then(Value::as_str)
+        .is_none()
+        || document.get("units").and_then(Value::as_object).is_none()
+    {
+        return Err(CmdError::click(
+            "host beacon requires string reported_at and object units fields",
+        ));
+    }
+
+    let mut endpoint = host_health_api_url()?;
+    {
+        let mut segments = endpoint.path_segments_mut().map_err(|()| {
+            CmdError::click("STADO_HOST_HEALTH_API_URL cannot be used as an HTTP API base URL")
+        })?;
+        segments.pop_if_empty();
+        segments.push("api");
+        segments.push("host-health");
+    }
+    endpoint.query_pairs_mut().append_pair("host", host);
+
+    let token = host_health_api_token().await?;
+    let response = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?
+        .put(endpoint)
+        .bearer_auth(&token)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(bytes)
+        .send()
+        .await?;
+    let status = response.status();
+    let response_bytes = response.bytes().await?;
+    if !status.is_success() {
+        let detail = String::from_utf8_lossy(&response_bytes).replace(&token, "[REDACTED]");
+        return Err(CmdError::click(format!(
+            "Stado host-health API returned HTTP {status}: {}",
+            detail.trim()
+        )));
+    }
+    let payload: Value = serde_json::from_slice(&response_bytes).map_err(|error| {
+        CmdError::click(format!(
+            "Stado host-health API returned invalid JSON: {error}"
+        ))
+    })?;
+    let expected_path = format!("{}/{host}.json", crate::monitor::host_health::HEALTH_PREFIX);
+    if payload
+        != json!({
+            "state": "stored",
+            "host": host,
+            "path": expected_path,
+        })
+    {
+        return Err(CmdError::click(
+            "Stado host-health API returned an inconsistent publish response",
+        ));
+    }
+    println!("{host}");
+    Ok(())
+}
+
+fn valid_beacon_host(host: &str) -> bool {
+    let bytes = host.as_bytes();
+    !bytes.is_empty()
+        && bytes.first().is_some_and(u8::is_ascii_alphanumeric)
+        && bytes.last().is_some_and(u8::is_ascii_alphanumeric)
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+}
+
+fn host_health_api_url() -> Result<url::Url, CmdError> {
+    let raw = std::env::var("STADO_HOST_HEALTH_API_URL")
+        .map_err(|_| CmdError::click("STADO_HOST_HEALTH_API_URL is required"))?;
+    let url = url::Url::parse(raw.trim())
+        .map_err(|error| CmdError::click(format!("invalid STADO_HOST_HEALTH_API_URL: {error}")))?;
+    let host = url
+        .host_str()
+        .ok_or_else(|| CmdError::click("STADO_HOST_HEALTH_API_URL must be an absolute URL"))?;
+    let loopback = host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback());
+    if url.scheme() != "https" && !(url.scheme() == "http" && loopback) {
+        return Err(CmdError::click(
+            "STADO_HOST_HEALTH_API_URL must use HTTPS unless its host is loopback",
+        ));
+    }
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(CmdError::click(
+            "STADO_HOST_HEALTH_API_URL must not contain credentials, query, or fragment",
+        ));
+    }
+    Ok(url)
+}
+
+async fn host_health_api_token() -> Result<String, CmdError> {
+    let url = std::env::var("STADO_HOST_HEALTH_SKARBIEC_URL")
+        .map_err(|_| CmdError::click("STADO_HOST_HEALTH_SKARBIEC_URL is required"))?;
+    let consumer = std::env::var("STADO_HOST_HEALTH_SKARBIEC_CONSUMER")
+        .map_err(|_| CmdError::click("STADO_HOST_HEALTH_SKARBIEC_CONSUMER is required"))?;
+    if consumer != "stado-host-health-beacon" {
+        return Err(CmdError::click(
+            "STADO_HOST_HEALTH_SKARBIEC_CONSUMER must be stado-host-health-beacon",
+        ));
+    }
+    let raw = std::env::var("STADO_HOST_HEALTH_SKARBIEC_TOKEN_FILE")
+        .map_err(|_| CmdError::click("STADO_HOST_HEALTH_SKARBIEC_TOKEN_FILE is required"))?;
+    let token_file = crate::config_file::expand_tilde(raw.trim())
+        .to_string_lossy()
+        .into_owned();
+    let client = crate::skarbiec::Client::new(url.trim(), &consumer, &token_file)
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let item = client
+        .read_item("stado-host-health-api")
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let token = item
+        .get("token")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if token.is_empty() {
+        return Err(CmdError::click(
+            "Skarbiec item stado-host-health-api field token is required",
+        ));
+    }
+    Ok(token)
 }
 
 /// `stado host recover TARGET` — recover a registry-managed macOS host
@@ -350,7 +524,7 @@ pub async fn weles_recordings_dir(target: &str, path: &str) -> Result<(), CmdErr
 
     let weles = entry
         .entry("weles")
-        .or_insert_with(|| json!({"enabled": true, "actions": ["*"]}))
+        .or_insert_with(|| json!({"enabled": false, "actions": []}))
         .as_object_mut()
         .ok_or_else(|| CmdError::click("weles must be an object"))?;
     weles.insert(
@@ -774,4 +948,532 @@ pub async fn exec(target: &str, words: Vec<String>, json: bool) -> Result<(), Cm
         eprint!("{stderr}");
     }
     report_outcome(&report, expected)
+}
+
+/// `stado host install-helper TARGET SOURCE NAME` — transfer one bounded,
+/// owner-executable operator helper without opening an arbitrary remote shell.
+pub async fn install_helper(
+    target: &str,
+    source: &str,
+    name: &str,
+    json: bool,
+) -> Result<(), CmdError> {
+    if name.is_empty()
+        || name
+            .bytes()
+            .any(|byte| !(byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')))
+    {
+        return Err(CmdError::usage(
+            "helper name must be a non-empty basename containing only letters, digits, '.', '_' or '-'",
+        ));
+    }
+    let bytes = std::fs::read(source)?;
+    if bytes.is_empty() || bytes.len() > usize::from(u16::MAX) {
+        return Err(CmdError::click(
+            "host helper must contain between one and 65535 bytes",
+        ));
+    }
+    let payload = STANDARD.encode(&bytes);
+    let remote_name = crate::deploy::shlex_quote(name);
+    let script = format!(
+        r#"set -euo pipefail
+name={remote_name}
+case "$name" in
+  ""|*[!A-Za-z0-9._-]*) printf '%s\n' 'invalid helper name' >&2; exit 1 ;;
+esac
+dir="$HOME/.stado/bin"
+tmp="$dir/.${{name}}.stado-install.$$"
+trap 'rm -f "$tmp"' EXIT
+/bin/mkdir -p "$dir"
+/bin/chmod 700 "$dir"
+if [ "$(/usr/bin/uname -s)" = "Darwin" ]; then decode=-D; else decode=--decode; fi
+printf '%s' '{payload}' | /usr/bin/base64 "$decode" > "$tmp"
+/bin/chmod 700 "$tmp"
+/bin/mv "$tmp" "$dir/$name"
+trap - EXIT
+printf '%s\n' "$dir/$name"
+"#
+    );
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let output = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if !output.ok() {
+        return Err(CmdError::click(format!(
+            "{target}: helper installation failed: {}",
+            crate::deploy::host_channel::last_error_line(&output, "remote helper write failed")
+        )));
+    }
+    let path = format!("$HOME/.stado/bin/{name}");
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": target,
+                "source": source,
+                "path": path,
+                "bytes": bytes.len(),
+                "status": "installed",
+            }))?
+        );
+    } else {
+        println!("{target}: installed {path} ({} bytes)", bytes.len());
+    }
+    Ok(())
+}
+/// Transfer one opaque owner credential without exposing it in argv, stdout,
+/// logs, a remote environment variable, or a general-purpose remote shell.
+pub async fn install_secret(
+    target: &str,
+    source: &str,
+    name: &str,
+    json: bool,
+) -> Result<(), CmdError> {
+    release_component("secret file name", name)?;
+    let metadata = std::fs::symlink_metadata(source)?;
+    let unsafe_bits = u32::from_str_radix("077", u8::BITS).unwrap_or_default();
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.mode() & unsafe_bits != u32::default()
+    {
+        return Err(CmdError::usage(
+            "secret source must be a regular owner-only file without group or other permission bits",
+        ));
+    }
+    let bytes = std::fs::read(source)?;
+    if bytes.is_empty() || bytes.len() > usize::from(u16::MAX) {
+        return Err(CmdError::click(
+            "host secret must contain between one and 65535 bytes",
+        ));
+    }
+    let mut digest = Sha256::new();
+    digest.update(&bytes);
+    let expected_sha256 = hex::encode(digest.finalize());
+    let payload = STANDARD.encode(&bytes);
+    let remote_name = crate::deploy::shlex_quote(name);
+    let remote_expected = crate::deploy::shlex_quote(&expected_sha256);
+    let script = format!(
+        r#"set -euo pipefail
+name={remote_name}
+expected={remote_expected}
+case "$name" in
+  ""|*[!A-Za-z0-9._-]*) printf '%s\n' 'invalid secret file name' >&2; exit 1 ;;
+esac
+dir="$HOME/.stado"
+tmp="$dir/.${{name}}.stado-secret.$$"
+trap 'rm -f "$tmp"' EXIT
+/bin/mkdir -p "$dir"
+/bin/chmod 700 "$dir"
+if [ "$(/usr/bin/uname -s)" = "Darwin" ]; then decode=-D; else decode=--decode; fi
+printf '%s' '{payload}' | /usr/bin/base64 "$decode" > "$tmp"
+/bin/chmod 600 "$tmp"
+/bin/mv "$tmp" "$dir/$name"
+line=$(/usr/bin/openssl dgst -sha256 -r "$dir/$name")
+actual="${{line%% *}}"
+if [ "$actual" != "$expected" ]; then
+  printf '%s\n' 'secret transfer checksum mismatch' > /dev/stderr
+  false
+fi
+trap - EXIT
+printf '%s\n' "$dir/$name"
+"#
+    );
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let output = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if !output.ok() {
+        return Err(CmdError::click(format!(
+            "{target}: secret installation failed: {}",
+            crate::deploy::host_channel::last_error_line(&output, "remote secret write failed")
+        )));
+    }
+    let path = format!("$HOME/.stado/{name}");
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": target,
+                "source": source,
+                "path": path,
+                "bytes": bytes.len(),
+                "integrity": "sha256",
+                "status": "installed",
+            }))?
+        );
+    } else {
+        println!(
+            "{target}: installed owner-only {path} ({} bytes)",
+            bytes.len()
+        );
+    }
+    Ok(())
+}
+
+/// Run one helper previously placed in the remote owner-only Stado directory.
+/// No arguments are accepted: the helper is the reviewed deployment program,
+/// not an arbitrary shell escape.
+pub async fn run_helper(target: &str, name: &str, json: bool) -> Result<(), CmdError> {
+    release_component("helper name", name)?;
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let remote_name = crate::deploy::shlex_quote(name);
+    let script = format!(
+        r#"set -euo pipefail
+helper="$HOME/.stado/bin/"{remote_name}
+if [ ! -f "$helper" ] || [ -L "$helper" ] || [ ! -x "$helper" ]; then
+  printf '%s\n' "missing executable regular Stado helper: $helper" > /dev/stderr
+  false
+fi
+exec "$helper"
+"#
+    );
+    let argv = if crate::deploy::host_channel::target_is_this_host(&resolved) {
+        vec!["/bin/bash".to_string(), "-s".to_string()]
+    } else {
+        let ssh = resolved
+            .ssh
+            .as_deref()
+            .ok_or_else(|| CmdError::click("registry target has no SSH destination"))?;
+        crate::deploy::host_channel::ssh_script_argv(ssh)
+    };
+    let runner = crate::deploy::production_runner();
+    let output = runner(crate::deploy::CommandSpec {
+        argv,
+        stdin: Some(script),
+        timeout: Some(std::time::Duration::from_secs(
+            crate::monitor::billing::SECONDS_PER_HOUR,
+        )),
+    })
+    .await
+    .map_err(CmdError::click)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": target,
+                "helper": name,
+                "status": if output.ok() { "completed" } else { "failed" },
+                "exit_code": output.code,
+                "stdout": output.stdout,
+                "stderr": output.stderr,
+            }))?
+        );
+    } else {
+        print!("{}", output.stdout);
+        eprint!("{}", output.stderr);
+    }
+    if !output.ok() {
+        return Err(CmdError::click(format!(
+            "{target}: helper {name} failed: {}",
+            crate::deploy::host_channel::last_error_line(&output, "remote helper failed")
+        )));
+    }
+    Ok(())
+}
+
+/// Open a background reverse SSH forward using the exact registry channel.
+/// Both ends bind loopback; SSH supplies transport encryption and refuses to
+/// report success until the remote listener exists.
+pub async fn forward_local(
+    target: &str,
+    name: &str,
+    remote_port: u16,
+    local_port: u16,
+    json: bool,
+) -> Result<(), CmdError> {
+    if remote_port == u16::default() || local_port == u16::default() {
+        return Err(CmdError::usage("forwarding ports must be nonzero"));
+    }
+    release_component("forward name", name)?;
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if crate::deploy::host_channel::target_is_this_host(&resolved) {
+        return Err(CmdError::usage(
+            "forward-local requires a remote registry target",
+        ));
+    }
+    let ssh = resolved
+        .ssh
+        .as_deref()
+        .ok_or_else(|| CmdError::click("registry target has no SSH destination"))?;
+    let mut argv = crate::deploy::host_channel::ssh_options(ssh);
+    let destination = argv
+        .pop()
+        .ok_or_else(|| CmdError::click("SSH channel has no destination"))?;
+    argv.extend([
+        "-f".to_string(),
+        "-N".to_string(),
+        "-o".to_string(),
+        "ExitOnForwardFailure=yes".to_string(),
+        "-o".to_string(),
+        "ServerAliveInterval=30".to_string(),
+        "-o".to_string(),
+        "ServerAliveCountMax=3".to_string(),
+        "-R".to_string(),
+        format!("127.0.0.1:{remote_port}:127.0.0.1:{local_port}"),
+        destination,
+    ]);
+    let (program, arguments) = argv
+        .split_first()
+        .ok_or_else(|| CmdError::click("SSH channel is empty"))?;
+    let output = tokio::process::Command::new(program)
+        .args(arguments)
+        .kill_on_drop(true)
+        .output()
+        .await?;
+    if !output.status.success() {
+        return Err(CmdError::click(format!(
+            "{target}: reverse SSH forwarding failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+                .lines()
+                .next_back()
+                .unwrap_or("ssh forwarding failed")
+        )));
+    }
+    let endpoint = format!("http://127.0.0.1:{remote_port}");
+    let marker = format!("$HOME/.stado/forwards/{name}.url");
+    let marker_script = format!(
+        "set -euo pipefail\ndirectory=\"$HOME/.stado/forwards\"\n/bin/mkdir -p \"$directory\"\n/bin/chmod u=rwx,go= \"$directory\"\nprintf '%s\\n' {endpoint} > \"$directory/\"{name}\".url\"\n/bin/chmod u=rw,go= \"$directory/\"{name}\".url\"\n",
+        endpoint = crate::deploy::shlex_quote(&endpoint),
+        name = crate::deploy::shlex_quote(name),
+    );
+    let runner = crate::deploy::production_runner();
+    let marked = crate::deploy::host_channel::run_script(&resolved, &marker_script, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if !marked.ok() {
+        return Err(CmdError::click(format!(
+            "{target}: forwarding is live but its endpoint marker failed: {}",
+            crate::deploy::host_channel::last_error_line(&marked, "remote endpoint marker failed")
+        )));
+    }
+    let home = std::env::var("HOME").map_err(|_| CmdError::click("HOME is not set"))?;
+    let local_marker_directory = std::path::Path::new(&home).join(".stado").join("forwards");
+    std::fs::create_dir_all(&local_marker_directory)?;
+    let local_marker_path = local_marker_directory.join(format!("{name}.local"));
+    std::fs::write(
+        &local_marker_path,
+        format!("http://127.0.0.1:{local_port}\n"),
+    )?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": target,
+                "remote": format!("127.0.0.1:{remote_port}"),
+                "local": format!("127.0.0.1:{local_port}"),
+                "marker": marker,
+                "local_marker": local_marker_path,
+                "transport": "ssh",
+                "status": "forwarding",
+            }))?
+        );
+    } else {
+        println!(
+            "{target}: forwarding 127.0.0.1:{remote_port} to local 127.0.0.1:{local_port} over SSH"
+        );
+    }
+    Ok(())
+}
+
+fn release_component(kind: &str, value: &str) -> Result<(), CmdError> {
+    if value.is_empty()
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(CmdError::usage(format!(
+            "{kind} must contain only letters, digits, '.', '_' or '-'"
+        )));
+    }
+    Ok(())
+}
+
+fn release_archive_hash(path: &std::path::Path) -> Result<(u64, String), CmdError> {
+    let mut file = std::fs::File::open(path)?;
+    let bytes = file.metadata()?.len();
+    if bytes == u64::default() {
+        return Err(CmdError::click("release archive is empty"));
+    }
+    let mut hasher = Sha256::new();
+    let mut buffer = [u8::MIN; u16::MAX as usize];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == usize::default() {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok((bytes, hex::encode(hasher.finalize())))
+}
+
+/// Transfer one immutable release archive through Stado's registry-authorized
+/// SSH channel. The remote side verifies the local digest before create-only
+/// publication into its owner-only staging tree.
+pub async fn install_release(
+    target: &str,
+    source: &str,
+    family: &str,
+    version: &str,
+    platform: &str,
+    json: bool,
+) -> Result<(), CmdError> {
+    release_component("family", family)?;
+    release_component("version", version)?;
+    release_component("platform", platform)?;
+    let asset = match family {
+        "weles-worker" => "weles-worker.tar.gz",
+        "weles-chromium" => "weles-chromium.tar.gz",
+        "weles-firefox" => "weles-firefox.tar.gz",
+        _ => {
+            return Err(CmdError::usage(
+                "release family must be weles-worker, weles-chromium, or weles-firefox",
+            ))
+        }
+    };
+    let source_path = std::path::Path::new(source);
+    if !source_path.is_file() || source_path.is_symlink() {
+        return Err(CmdError::click(format!(
+            "release source must be a regular file: {}",
+            source_path.display()
+        )));
+    }
+    let (bytes, sha256) = release_archive_hash(source_path)?;
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let relative = format!(".stado/releases/{family}/{version}/{platform}");
+    let temporary = format!(".{asset}.stado-{}", uuid::Uuid::new_v4().simple());
+    let prepare = format!(
+        "set -euo pipefail\ndirectory=\"$HOME/{relative}\"\n/bin/mkdir -p \"$directory\"\n/bin/chmod u=rwx,go= \"$directory\"\nprintf '%s\\n' \"$HOME\"\n"
+    );
+    let runner = crate::deploy::production_runner();
+    let prepared = crate::deploy::host_channel::run_script(&resolved, &prepare, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if !prepared.ok() {
+        return Err(CmdError::click(format!(
+            "{target}: cannot prepare release staging: {}",
+            crate::deploy::host_channel::last_error_line(
+                &prepared,
+                "remote release directory creation failed"
+            )
+        )));
+    }
+    let remote_home = prepared.stdout.trim();
+    if !remote_home.starts_with('/')
+        || remote_home.bytes().any(|byte| {
+            !(byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'_' | b'-'))
+        })
+    {
+        return Err(CmdError::click(
+            "target returned an unsafe or non-absolute home directory",
+        ));
+    }
+    let remote_temporary = format!("{remote_home}/{relative}/{temporary}");
+    let remote_final = format!("{remote_home}/{relative}/{asset}");
+    if crate::deploy::host_channel::target_is_this_host(&resolved) {
+        std::fs::copy(source_path, &remote_temporary)?;
+    } else {
+        let ssh = resolved
+            .ssh
+            .as_deref()
+            .ok_or_else(|| CmdError::click("registry target has no SSH destination"))?;
+        let destination = format!("{ssh}:{remote_temporary}");
+        let transferred = tokio::process::Command::new("scp")
+            .arg("-q")
+            .arg("-o")
+            .arg("BatchMode=yes")
+            .arg("-o")
+            .arg("ConnectTimeout=15")
+            .arg("-o")
+            .arg("StrictHostKeyChecking=accept-new")
+            .arg(source_path)
+            .arg(&destination)
+            .kill_on_drop(true)
+            .output()
+            .await?;
+        if !transferred.status.success() {
+            return Err(CmdError::click(format!(
+                "{target}: release transfer failed: {}",
+                String::from_utf8_lossy(&transferred.stderr)
+                    .lines()
+                    .next_back()
+                    .unwrap_or("scp failed")
+            )));
+        }
+    }
+    let verify = format!(
+        r#"set -euo pipefail
+temporary={temporary}
+final={final}
+expected={expected}
+trap '/bin/rm -f "$temporary"' EXIT
+line=$(/usr/bin/openssl dgst -sha256 -r "$temporary")
+actual="${{line%% *}}"
+if [ "$actual" != "$expected" ]; then
+  printf '%s\n' "release checksum mismatch: expected=$expected actual=$actual" > /dev/stderr
+  false
+fi
+if [ -e "$final" ]; then
+  line=$(/usr/bin/openssl dgst -sha256 -r "$final")
+  existing="${{line%% *}}"
+  if [ "$existing" != "$expected" ]; then
+    printf '%s\n' "immutable release path already contains a different archive" > /dev/stderr
+    false
+  fi
+  /bin/rm -f "$temporary"
+else
+  /bin/mv "$temporary" "$final"
+fi
+/bin/chmod u=rw,go=r "$final"
+trap - EXIT
+printf '%s\n' "$final"
+"#,
+        temporary = crate::deploy::shlex_quote(&remote_temporary),
+        final = crate::deploy::shlex_quote(&remote_final),
+        expected = crate::deploy::shlex_quote(&sha256),
+    );
+    let verified = crate::deploy::host_channel::run_script(&resolved, &verify, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if !verified.ok() {
+        return Err(CmdError::click(format!(
+            "{target}: release verification failed: {}",
+            crate::deploy::host_channel::last_error_line(
+                &verified,
+                "remote release verification failed"
+            )
+        )));
+    }
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": target,
+                "source": source,
+                "family": family,
+                "version": version,
+                "platform": platform,
+                "path": format!("$HOME/{relative}/{asset}"),
+                "bytes": bytes,
+                "sha256": sha256,
+                "status": "installed",
+            }))?
+        );
+    } else {
+        println!(
+            "{target}: installed {family}/{version}/{platform}/{asset} ({bytes} bytes, sha256={sha256})"
+        );
+    }
+    Ok(())
 }

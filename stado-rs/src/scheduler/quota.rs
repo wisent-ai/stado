@@ -147,7 +147,13 @@ pub async fn fetch_quotas_azure(
 /// config.PROJECT (which also reads the config file). Kept env-only for
 /// parity.
 fn gcp_project_env() -> String {
-    std::env::var("GCP_PROJECT").unwrap_or_else(|_| "wisent-480400".to_string())
+    let env = crate::capabilities::config_env(
+        crate::capabilities::RuntimeFacet::Compute,
+        crate::capabilities::ProviderId::Gcp.as_str(),
+        "project",
+    )
+    .expect("GCP project binding is missing from the capability catalog");
+    std::env::var(env).unwrap_or_else(|_| "wisent-480400".to_string())
 }
 
 /// Python `_load_overlay`: read the optional reservations file from the
@@ -164,38 +170,54 @@ pub async fn load_overlay(store: &JobStorage) -> Result<Value, QuotaError> {
     Ok(serde_json::from_str(&raw)?)
 }
 
+/// The canonical overlay/live-quota key for a configured provider variant.
+fn quota_provider_key(provider_name: &str) -> &str {
+    crate::capabilities::variant(crate::capabilities::RuntimeFacet::Quota, provider_name)
+        .map_or(provider_name, |variant| variant.id)
+}
+
+/// Compose an already-fetched live limit map with the storage-backed
+/// reservation overlay. An empty live map deliberately passes the complete
+/// overlay through unchanged for offline/dev operation.
+async fn load_quotas_from_live(
+    store: &JobStorage,
+    provider_name: &str,
+    live: BTreeMap<String, i64>,
+) -> Result<Value, QuotaError> {
+    let overlay = load_overlay(store).await?;
+    if live.is_empty() {
+        return Ok(overlay);
+    }
+    let provider_key = quota_provider_key(provider_name);
+    let overlay_p = overlay.get(provider_key).cloned().unwrap_or(json!({}));
+    let mut provider_rows = serde_json::Map::new();
+    for (accel, total) in live {
+        let reserved = py_int(overlay_p.get(&accel).and_then(|cfg| cfg.get("reserved")));
+        provider_rows.insert(accel, json!({"total": total, "reserved": reserved}));
+    }
+    Ok(json!({ provider_key: Value::Object(provider_rows) }))
+}
+
 /// Compose live cloud quota limits with the storage-backed reservation
 /// overlay (Python `load_quotas`).
 ///
 /// Source of truth for `total` is the live cloud API — never the storage
 /// file. The storage file only contributes `reserved` slots per accel.
-/// Falls through to the storage file's `total` if the live API call
-/// returns nothing (offline / dev).
+/// Falls through to the storage file's `total` if the live API returns
+/// nothing (offline / dev).
 pub async fn load_quotas(store: &JobStorage, provider_name: &str) -> Result<Value, QuotaError> {
-    load_quotas_with_client(store, provider_name, None).await
-}
-
-/// [`load_quotas`] with an injectable GCE client (loopback mocks in
-/// tests). `None` resolves a live client when the gcp arm needs one.
-pub async fn load_quotas_with_client(
-    store: &JobStorage,
-    provider_name: &str,
-    client: Option<&GceClient>,
-) -> Result<Value, QuotaError> {
-    let overlay = load_overlay(store).await?;
-    let live: BTreeMap<String, i64> = match provider_name {
-        "gcp" => {
-            let owned;
-            let client = match client {
-                Some(client) => client,
-                None => {
-                    owned = GceClient::new(&gcp_project_env()).await?;
-                    &owned
-                }
-            };
-            fetch_quotas_gcp(client, config::regions()).await?
+    let variant =
+        crate::capabilities::variant(crate::capabilities::RuntimeFacet::Quota, provider_name);
+    let live = match variant.map(|variant| variant.adapter) {
+        Some(crate::capabilities::RuntimeAdapter::Quota(
+            crate::capabilities::QuotaAdapter::Gcp,
+        )) => {
+            let client = GceClient::new(&gcp_project_env()).await?;
+            fetch_quotas_gcp(&client, config::regions()).await?
         }
-        "azure" => {
+        Some(crate::capabilities::RuntimeAdapter::Quota(
+            crate::capabilities::QuotaAdapter::Azure,
+        )) => {
             let subscription = config::azure_subscription_id();
             if subscription.is_empty() {
                 return Err(AzureError::Auth("AZURE_SUBSCRIPTION_ID is required".into()).into());
@@ -205,16 +227,7 @@ pub async fn load_quotas_with_client(
         }
         _ => BTreeMap::new(),
     };
-    if live.is_empty() {
-        return Ok(overlay);
-    }
-    let mut provider_rows = serde_json::Map::new();
-    let overlay_p = overlay.get(provider_name).cloned().unwrap_or(json!({}));
-    for (accel, total) in live {
-        let reserved = py_int(overlay_p.get(&accel).and_then(|cfg| cfg.get("reserved")));
-        provider_rows.insert(accel, json!({"total": total, "reserved": reserved}));
-    }
-    Ok(json!({ provider_name: Value::Object(provider_rows) }))
+    load_quotas_from_live(store, provider_name, live).await
 }
 
 /// Count available GPU slots: total - reserved - running (Python
@@ -224,18 +237,19 @@ pub async fn get_available_slots(
     provider: &dyn Provider,
     provider_name: &str,
 ) -> Result<BTreeMap<String, i64>, QuotaError> {
-    get_available_slots_with_client(store, provider, provider_name, None).await
+    let quotas = load_quotas(store, provider_name).await?;
+    available_slots_from_quotas(provider, provider_name, &quotas).await
 }
 
-/// [`get_available_slots`] with an injectable GCE client (tests).
-pub async fn get_available_slots_with_client(
-    store: &JobStorage,
+async fn available_slots_from_quotas(
     provider: &dyn Provider,
     provider_name: &str,
-    client: Option<&GceClient>,
+    quotas: &Value,
 ) -> Result<BTreeMap<String, i64>, QuotaError> {
-    let quotas = load_quotas_with_client(store, provider_name, client).await?;
-    let provider_quotas = quotas.get(provider_name).cloned().unwrap_or(json!({}));
+    let provider_quotas = quotas
+        .get(quota_provider_key(provider_name))
+        .cloned()
+        .unwrap_or(json!({}));
     let running_counts = provider.list_running_instances().await?;
 
     let mut available = BTreeMap::new();
@@ -245,8 +259,11 @@ pub async fn get_available_slots_with_client(
     for (accel_type, cfg) in rows {
         let total = py_int(cfg.get("total"));
         let reserved = py_int(cfg.get("reserved"));
-        let used = running_counts.get(accel_type).copied().unwrap_or(0);
-        available.insert(accel_type.clone(), (total - reserved - used).max(0));
+        let used = running_counts.get(accel_type).copied().unwrap_or_default();
+        available.insert(
+            accel_type.clone(),
+            (total - reserved - used).max(i64::default()),
+        );
     }
     Ok(available)
 }
@@ -280,8 +297,9 @@ pub struct QuotaRow {
 pub async fn summarize_quotas(
     store: &JobStorage,
 ) -> Result<BTreeMap<String, BTreeMap<String, QuotaRow>>, QuotaError> {
+    let provider_names = config::wc_providers().to_vec();
     let mut providers: BTreeMap<String, Arc<dyn Provider>> = BTreeMap::new();
-    for name in config::wc_providers() {
+    for name in &provider_names {
         // A provider whose constructor throws (creds missing) is skipped
         // here; its running count then defaults to {} below, like Python's
         // `except Exception: running = {}`.
@@ -289,20 +307,36 @@ pub async fn summarize_quotas(
             providers.insert(name.clone(), provider);
         }
     }
-    summarize_quotas_with(store, None, &providers).await
+    summarize_quotas_with(store, &provider_names, None, &providers).await
 }
 
-/// [`summarize_quotas`] with injectable GCE client and provider instances
-/// (loopback mocks in tests).
-pub async fn summarize_quotas_with(
+/// Summary implementation with an explicit provider list and optional live
+/// quota fixture. Production passes `None` and retains live provider reads;
+/// tests inject per-provider maps and never consult ambient provider config or
+/// cloud authentication.
+async fn summarize_quotas_with(
     store: &JobStorage,
-    client: Option<&GceClient>,
+    provider_names: &[String],
+    live_by_provider: Option<&BTreeMap<String, BTreeMap<String, i64>>>,
     providers: &BTreeMap<String, Arc<dyn Provider>>,
 ) -> Result<BTreeMap<String, BTreeMap<String, QuotaRow>>, QuotaError> {
     let mut out: BTreeMap<String, BTreeMap<String, QuotaRow>> = BTreeMap::new();
-    for provider_name in config::wc_providers() {
-        let quotas = load_quotas_with_client(store, provider_name, client).await?;
-        let provider_quotas = quotas.get(provider_name).cloned().unwrap_or(json!({}));
+    for provider_name in provider_names {
+        let quotas = match live_by_provider {
+            Some(live) => {
+                load_quotas_from_live(
+                    store,
+                    provider_name,
+                    live.get(provider_name).cloned().unwrap_or_default(),
+                )
+                .await?
+            }
+            None => load_quotas(store, provider_name).await?,
+        };
+        let provider_quotas = quotas
+            .get(quota_provider_key(provider_name))
+            .cloned()
+            .unwrap_or(json!({}));
         let Some(rows) = provider_quotas.as_object() else {
             out.insert(provider_name.clone(), BTreeMap::new());
             continue;
@@ -319,14 +353,14 @@ pub async fn summarize_quotas_with(
         for (accel, cfg) in rows {
             let total = py_int(cfg.get("total"));
             let reserved = py_int(cfg.get("reserved"));
-            let used = running.get(accel).copied().unwrap_or(0);
+            let used = running.get(accel).copied().unwrap_or_default();
             summary_rows.insert(
                 accel.clone(),
                 QuotaRow {
                     total,
                     reserved,
                     used,
-                    available: (total - reserved - used).max(0),
+                    available: (total - reserved - used).max(i64::default()),
                 },
             );
         }
@@ -436,18 +470,12 @@ mod tests {
             )
             .await
             .unwrap();
-        // One mock region per configured config::regions() entry (5 by
-        // default); each contributes 8 T4 / 0 A100.
-        let responses = (0..config::regions().len())
-            .map(|_| http_response(200, "OK", &region_body(8.0, 0.0)))
-            .collect();
-        let server = mock_http(responses).await;
-        let client = gcp_mock(&server);
-        let quotas = load_quotas_with_client(&store, "gcp", Some(&client))
-            .await
-            .unwrap();
-        server.stop();
-        let expected_total = 8 * config::regions().len() as i64;
+        let expected_total: i64 = "40".parse().unwrap();
+        let live = BTreeMap::from([
+            ("nvidia-tesla-t4".to_string(), expected_total),
+            ("nvidia-tesla-a100".to_string(), i64::default()),
+        ]);
+        let quotas = load_quotas_from_live(&store, "gcp", live).await.unwrap();
         assert_eq!(
             quotas,
             json!({"gcp": {
@@ -465,13 +493,17 @@ mod tests {
             .upload_text("config/quotas.json", overlay)
             .await
             .unwrap();
-        // The Azure live path is a stub contributing zero, so the overlay
-        // passes through unchanged (Python parity for offline/dev).
-        let quotas = load_quotas(&store, "azure").await.unwrap();
+        // An explicitly injected empty Azure live map exercises the offline
+        // overlay fallback without consulting ARM auth, environment, or cloud.
+        let quotas = load_quotas_from_live(&store, "azure", BTreeMap::new())
+            .await
+            .unwrap();
         assert_eq!(quotas, serde_json::from_str::<Value>(overlay).unwrap());
 
-        // Unknown provider: live is {} too.
-        let quotas = load_quotas(&store, "dcloud").await.unwrap();
+        // Unknown providers have no live quota source either.
+        let quotas = load_quotas_from_live(&store, "dcloud", BTreeMap::new())
+            .await
+            .unwrap();
         assert_eq!(quotas, serde_json::from_str::<Value>(overlay).unwrap());
     }
 
@@ -503,7 +535,10 @@ mod tests {
                 ("nvidia-l4".to_string(), 3),
             ]),
         };
-        let available = get_available_slots(&store, &provider, "azure")
+        let quotas = load_quotas_from_live(&store, "azure", BTreeMap::new())
+            .await
+            .unwrap();
+        let available = available_slots_from_quotas(&provider, "azure", &quotas)
             .await
             .unwrap();
         assert_eq!(
@@ -525,24 +560,23 @@ mod tests {
             )
             .await
             .unwrap();
-        // Default WC_PROVIDERS is ["gcp"]. Live fetch is stubbed out by
-        // pointing the overlay-only path: "gcp" with no client would try
-        // real auth, so inject a mock client serving one region body per
-        // configured region.
-        let responses = (0..config::regions().len())
-            .map(|_| http_response(200, "OK", &region_body(8.0, 0.0)))
-            .collect();
-        let server = mock_http(responses).await;
-        let client = gcp_mock(&server);
+        let provider_names = vec!["gcp".to_string()];
+        let expected_total: i64 = "40".parse().unwrap();
+        let used: i64 = "2".parse().unwrap();
+        let live = BTreeMap::from([(
+            "gcp".to_string(),
+            BTreeMap::from([
+                ("nvidia-tesla-t4".to_string(), expected_total),
+                ("nvidia-tesla-a100".to_string(), i64::default()),
+            ]),
+        )]);
         let fake: Arc<dyn Provider> = Arc::new(FakeProvider {
-            running: BTreeMap::from([("nvidia-tesla-t4".to_string(), 2)]),
+            running: BTreeMap::from([("nvidia-tesla-t4".to_string(), used)]),
         });
         let providers = BTreeMap::from([("gcp".to_string(), fake)]);
-        let summary = summarize_quotas_with(&store, Some(&client), &providers)
+        let summary = summarize_quotas_with(&store, &provider_names, Some(&live), &providers)
             .await
             .unwrap();
-        server.stop();
-        let expected_total = 8 * config::regions().len() as i64;
         let gcp = &summary["gcp"];
         assert_eq!(
             gcp["nvidia-tesla-t4"],

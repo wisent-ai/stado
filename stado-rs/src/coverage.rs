@@ -154,41 +154,29 @@ impl Verifier for URIExistsVerifier {
     }
 }
 
-/// Existence check for `gs://<bucket>/<path>` via [`JobStorage`] (Python
-/// `GCSBlobExistsVerifier`).
-pub struct GCSBlobExistsVerifier {
+/// Existence check for a provider-neutral `stado://<namespace>/<key>` object
+/// through the backend selected by `STADO_CONFIG`.
+pub struct StadoObjectExistsVerifier {
     store: JobStorage,
 }
 
-impl GCSBlobExistsVerifier {
+impl StadoObjectExistsVerifier {
     pub fn new(store: JobStorage) -> Self {
         Self { store }
     }
 
-    /// Python `GCSBlobExistsVerifier()` — the verifier constructs
-    /// `JobStorage(BUCKET)` itself when no store is passed.
+    /// Resolve the configured Stado store without accepting a provider locator.
     pub async fn with_default_store() -> Result<Self, CoverageError> {
-        Ok(Self::new(JobStorage::with_bucket(config::bucket()).await?))
+        Ok(Self::new(JobStorage::new().await?))
     }
 }
 
 #[async_trait]
-impl Verifier for GCSBlobExistsVerifier {
+impl Verifier for StadoObjectExistsVerifier {
     async fn check(&self, expected_uri: &str) -> Result<String, CoverageError> {
-        let Some(rest) = expected_uri.strip_prefix("gs://") else {
-            return Err(
-                format!("GCSBlobExistsVerifier expects gs:// URI, got {expected_uri}").into(),
-            );
-        };
-        let (bucket, path) = rest.split_once('/').unwrap_or((rest, ""));
-        if bucket != self.store.bucket_name() {
-            return Err(format!(
-                "verifier bound to bucket {} but URI is {bucket}",
-                self.store.bucket_name()
-            )
-            .into());
-        }
-        let txt = self.store.download_text(path).await?;
+        let object = crate::object_store::ObjectRef::parse(expected_uri)
+            .map_err(|error| CoverageError::Other(error.to_string()))?;
+        let txt = self.store.download_text(&object.storage_path()).await?;
         Ok(if txt.is_some() {
             PRESENT.to_string()
         } else {
@@ -1022,6 +1010,10 @@ mod tests {
                             continue;
                         }
                     };
+                    // Darwin propagates O_NONBLOCK from the listening socket
+                    // to accepted sockets. Request reads and response writes
+                    // must be blocking or a short write yields IncompleteMessage.
+                    stream.set_nonblocking(false).unwrap();
                     let mut reader = BufReader::new(stream.try_clone().unwrap());
                     let mut request_line = String::new();
                     if reader.read_line(&mut request_line).is_err() {
@@ -1130,37 +1122,43 @@ mod tests {
         );
     }
 
-    // --- GCSBlobExistsVerifier ----------------------------------------------
+    // --- StadoObjectExistsVerifier ------------------------------------------
 
     #[tokio::test]
-    async fn gcs_verifier_checks_blob_existence() {
+    async fn stado_object_verifier_checks_object_existence() {
         let dir = tempfile::tempdir().unwrap();
         let store = local_store(dir.path(), "mybucket");
-        store.upload_text("outputs/e1.txt", "done").await.unwrap();
-        let verifier = GCSBlobExistsVerifier::new(store);
+        store
+            .upload_text("ecosystem/coverage/outputs/e1.txt", "done")
+            .await
+            .unwrap();
+        let verifier = StadoObjectExistsVerifier::new(store);
         assert_eq!(
             verifier
-                .check("gs://mybucket/outputs/e1.txt")
+                .check("stado://coverage/outputs/e1.txt")
                 .await
                 .unwrap(),
             PRESENT
         );
         assert_eq!(
             verifier
-                .check("gs://mybucket/outputs/nope.txt")
+                .check("stado://coverage/outputs/nope.txt")
                 .await
                 .unwrap(),
             MISSING
         );
-        let err = verifier.check("https://example.com/x").await.unwrap_err();
+        let err = verifier
+            .check("gs://mybucket/outputs/e1.txt")
+            .await
+            .unwrap_err();
         assert_eq!(
             err.to_string(),
-            "GCSBlobExistsVerifier expects gs:// URI, got https://example.com/x"
+            "Stado object namespace must contain only lowercase letters, digits, and '-'"
         );
-        let err = verifier.check("gs://other-bucket/x").await.unwrap_err();
+        let err = verifier.check("stado://public/x").await.unwrap_err();
         assert_eq!(
             err.to_string(),
-            "verifier bound to bucket mybucket but URI is other-bucket"
+            "the stado://public namespace is retired; use authenticated product namespaces or the dedicated stado://releases software channel"
         );
     }
 

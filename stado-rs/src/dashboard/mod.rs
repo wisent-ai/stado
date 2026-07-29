@@ -11,12 +11,22 @@
 //! GET/PUT/DELETE /api/object?uri=stado://... - product object data plane
 //! GET /api/object/list?namespace=...&prefix=... - product object listing
 //! GET /api/object/stat?uri=stado://... - product object metadata
+//! GET/PUT /api/object/delivery - short-lived HMAC-bound product object delivery
+//! POST /api/backend/auth/verify - locally verify an application session JWT
+//! POST /api/backend/data/query - durable provider-neutral application data adapter
+//! POST /api/backend/alerts - durable local operational alert sink
+//! POST /api/backend/email - authenticated Resend delivery with durable outcome state
+//! POST /api/backend/push/inactivity - APNs/FCM delivery via the scoped device registry
+//! POST /api/backend/push/{register,unregister,reachability} - scoped device-registry lifecycle
+//! POST/DELETE /api/backend/schedules[/id] - durable one-shot callback scheduler
+//! PUT /api/host-health?host=... - route-scoped authenticated host beacon publication
 //! GET /api/release/object?uri=stado://releases/... - public software release download
 //! POST /api/machine/submit - submit a canonical machine request
 //! GET /api/machine/status?job_id=... - read canonical machine status
 //! POST /api/machine/cancel?job_id=... - durably cancel a machine job
 //! GET /api/service/status?name=... - read one managed service's beacon status
 //! POST /api/service/restart?name=... - restart one managed service on every declared host
+//! POST /api/rate-limit/consume - authenticated shared atomic rate-limit consume
 //! GET /healthz           - liveness (before auth, after the Host guard)
 //! GET /livez             - Cloud Run liveness alias
 //!
@@ -34,10 +44,14 @@
 //!   rather than a process-local lock, so concurrent dashboard revisions
 //!   cannot overwrite each other.
 
+mod backend;
+mod integration;
+mod outbound;
 pub mod policy;
 pub mod summary;
 pub mod web_view;
 
+use futures::stream::{FuturesUnordered, StreamExt};
 use std::io::Write;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
@@ -58,6 +72,7 @@ use crate::providers::local::disk_cleanup::{
 };
 use crate::queue::submit::json_dumps_sorted_compact;
 use crate::queue::{python_json_dumps, JobStorage, StorageError};
+use crate::rate_limit::{self, ConsumeRequest, RateLimitError, RateLimiter};
 use crate::targets;
 
 /// Dashboard serve/refresh failure.
@@ -82,10 +97,61 @@ pub enum DashboardError {
 /// (`_summarize`) downloads every job blob, so it never runs inline with a
 /// request; we serve the last cached snapshot and refresh in the
 /// background.
+#[derive(Clone, Copy, Default)]
+struct BoundaryAvailability {
+    object: bool,
+    release: bool,
+    machine: bool,
+    backend_push: bool,
+    service: bool,
+    rate_limit_verifier: bool,
+    rate_limit_state: bool,
+    integration: bool,
+}
+
+impl BoundaryAvailability {
+    fn json(self) -> Value {
+        json!({
+            "object": self.object,
+            "release": self.release,
+            "machine": self.machine,
+            "backend_push": self.backend_push,
+            "service": self.service,
+            "rate_limit_verifier": self.rate_limit_verifier,
+            "rate_limit_state": self.rate_limit_state,
+            "integration": self.integration,
+        })
+    }
+
+    fn all_ready(self) -> bool {
+        self.object
+            && self.release
+            && self.machine
+            && self.backend_push
+            && self.service
+            && self.rate_limit_verifier
+            && self.rate_limit_state
+            && self.integration
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone)]
+struct OperatorAuthOverride {
+    supabase_url: url::Url,
+    anon_key: String,
+}
+
 #[derive(Clone)]
 pub struct Dashboard {
     store: JobStorage,
     state: Arc<RwLock<Value>>,
+    rate_limiter: RateLimiter,
+    boundaries: Arc<RwLock<BoundaryAvailability>>,
+    #[cfg(test)]
+    deployment_id_override: Option<String>,
+    #[cfg(test)]
+    operator_auth_override: Option<OperatorAuthOverride>,
     refresh_seconds: i64,
 }
 
@@ -112,13 +178,65 @@ fn initial_state(bucket: &str) -> Value {
     })
 }
 
+async fn autonomy_summary(store: &JobStorage) -> Value {
+    let result = async {
+        let policy = crate::autonomy::storage::load_policy(store).await?;
+        let control = crate::autonomy::storage::load_control(store).await?;
+        let inventory = crate::autonomy::storage::load_latest_inventory(store).await?;
+        let decisions = crate::autonomy::storage::list_decisions(store).await?;
+        let forecast =
+            crate::autonomy::storage::read_json::<Value>(store, "autonomy/cost/forecast.json")
+                .await?;
+        let anomalies =
+            crate::autonomy::storage::read_json::<Value>(store, "autonomy/cost/anomalies.json")
+                .await?;
+        let savings =
+            crate::autonomy::storage::read_json::<Value>(store, "autonomy/cost/savings.json")
+                .await?;
+        let circuit_open = control.circuit_open_at(chrono::Utc::now());
+        Ok::<Value, crate::queue::StorageError>(json!({
+            "mode": policy.mode,
+            "policy_version": policy.policy_version,
+            "emergency_paused": policy.emergency_paused || control.emergency_paused,
+            "pause_reason": control.reason,
+            "circuit_open": circuit_open,
+            "circuit_open_until": control.circuit_open_until,
+            "consecutive_mutation_failures": control.consecutive_mutation_failures,
+            "last_mutation_error": control.last_mutation_error,
+            "inventory": inventory.map(|snapshot| json!({
+                "snapshot_id": snapshot.snapshot_id,
+                "created_at": snapshot.created_at,
+                "complete": snapshot.complete,
+                "resources": snapshot.resources.len(),
+                "sources": snapshot.sources.iter().map(|source| json!({
+                    "provider": source.provider,
+                    "state": source.state,
+                    "error": source.upstream_error,
+                })).collect::<Vec<_>>(),
+            })),
+            "decisions": decisions.len(),
+            "forecast": forecast,
+            "anomalies": anomalies,
+            "savings": savings,
+        }))
+    }
+    .await;
+    result.unwrap_or_else(|error| json!({"error": error.to_string()}))
+}
+
 impl Dashboard {
     /// Bind the dashboard to a storage facade. The auto-refresh interval
     /// comes from `config::dashboard_refresh_seconds()`.
     pub fn new(store: JobStorage) -> Self {
         Self {
+            rate_limiter: RateLimiter::new(store.clone()),
+            boundaries: Arc::new(RwLock::new(BoundaryAvailability::default())),
             state: Arc::new(RwLock::new(initial_state(store.bucket_name()))),
             store,
+            #[cfg(test)]
+            deployment_id_override: None,
+            #[cfg(test)]
+            operator_auth_override: None,
             refresh_seconds: config::dashboard_refresh_seconds(),
         }
     }
@@ -127,6 +245,21 @@ impl Dashboard {
     /// DASHBOARD_REFRESH_SECONDS to the refresher thread).
     pub fn with_refresh_seconds(mut self, seconds: i64) -> Self {
         self.refresh_seconds = seconds;
+        self
+    }
+
+    #[cfg(test)]
+    fn with_test_operator_auth(
+        mut self,
+        deployment_id: &str,
+        metadata: Option<(url::Url, String)>,
+    ) -> Self {
+        self.deployment_id_override = Some(deployment_id.to_string());
+        self.operator_auth_override =
+            metadata.map(|(supabase_url, anon_key)| OperatorAuthOverride {
+                supabase_url,
+                anon_key,
+            });
         self
     }
 
@@ -177,6 +310,14 @@ impl Dashboard {
                 .expect("state object")
                 .insert("artifacts".to_string(), Value::Array(artifacts));
         }
+        let autonomy = autonomy_summary(&self.store).await;
+        {
+            let mut state = self.state.write().expect("dashboard state lock");
+            state
+                .as_object_mut()
+                .expect("state object")
+                .insert("autonomy".to_string(), autonomy);
+        }
         let full = summary::summarize(&self.store).await?;
         let mut state = self.state.write().expect("dashboard state lock");
         let state = state.as_object_mut().expect("state object");
@@ -219,6 +360,73 @@ impl Dashboard {
                 "refusing plaintext dashboard bind on non-loopback address {local_addr}; terminate TLS in a loopback reverse proxy"
             )));
         }
+        let startup_timeout = Duration::from_secs(
+            "15".parse::<u64>()
+                .expect("static boundary startup timeout"),
+        );
+        let (
+            object,
+            release,
+            machine,
+            backend_push,
+            service,
+            rate_verifier,
+            rate_state,
+            integration,
+        ) = tokio::join!(
+            tokio::time::timeout(startup_timeout, crate::skarbiec::validate_object_verifier()),
+            tokio::time::timeout(
+                startup_timeout,
+                crate::skarbiec::validate_release_verifier()
+            ),
+            tokio::time::timeout(
+                startup_timeout,
+                crate::skarbiec::validate_machine_verifier()
+            ),
+            tokio::time::timeout(
+                startup_timeout,
+                crate::skarbiec::validate_backend_push_verifier(),
+            ),
+            tokio::time::timeout(
+                startup_timeout,
+                crate::skarbiec::validate_service_verifier()
+            ),
+            tokio::time::timeout(startup_timeout, rate_limit::validate_verifier()),
+            tokio::time::timeout(startup_timeout, self.rate_limiter.restore()),
+            tokio::time::timeout(startup_timeout, integration::validate_startup()),
+        );
+        let boundaries = BoundaryAvailability {
+            object: matches!(object, Ok(Ok(_))),
+            release: matches!(release, Ok(Ok(_))),
+            machine: matches!(machine, Ok(Ok(_))),
+            backend_push: matches!(backend_push, Ok(Ok(_))),
+            service: matches!(service, Ok(Ok(_))),
+            rate_limit_verifier: matches!(rate_verifier, Ok(Ok(_))),
+            rate_limit_state: matches!(rate_state, Ok(Ok(_))),
+            integration: matches!(integration, Ok(Ok(()))),
+        };
+        for (ready, name) in [
+            (boundaries.object, "object authorization"),
+            (boundaries.release, "release publication"),
+            (boundaries.machine, "machine authorization"),
+            (boundaries.backend_push, "backend push authorization"),
+            (boundaries.service, "service authorization"),
+            (boundaries.rate_limit_verifier, "rate-limit authorization"),
+            (boundaries.rate_limit_state, "rate-limit state"),
+            (boundaries.integration, "integration authorization"),
+        ] {
+            if !ready {
+                eprintln!("[dashboard] {name} boundary unavailable");
+            }
+        }
+        *self
+            .boundaries
+            .write()
+            .expect("dashboard boundary state lock") = boundaries;
+        let schedule_store = self.store.clone();
+        tokio::spawn(async move {
+            backend::run_schedule_loop(schedule_store).await;
+        });
         // The refresh loop's future trips a `&str` lifetime-generalization
         // issue in the artifact-listing chain (Send "not general enough"),
         // so — like Python's daemon refresher thread — it runs on its own
@@ -241,14 +449,20 @@ impl Dashboard {
     /// Accept loop on an already-bound listener (tests bind 127.0.0.1:0).
     /// One task per connection — the ThreadingHTTPServer equivalent.
     pub async fn serve_on(&self, listener: TcpListener) -> Result<(), DashboardError> {
+        let mut connections = FuturesUnordered::new();
         loop {
-            let (stream, _) = listener.accept().await?;
-            let dashboard = self.clone();
-            tokio::spawn(async move {
-                if let Err(exc) = dashboard.handle_connection(stream).await {
-                    eprintln!("[dashboard] connection error: {exc}");
+            tokio::select! {
+                accepted = listener.accept() => {
+                    let (stream, _) = accepted?;
+                    let dashboard = self.clone();
+                    connections.push(async move {
+                        if let Err(exc) = dashboard.handle_connection(stream).await {
+                            eprintln!("[dashboard] connection error: {exc}");
+                        }
+                    });
                 }
-            });
+                _ = connections.next(), if !connections.is_empty() => {}
+            }
         }
     }
 
@@ -256,7 +470,9 @@ impl Dashboard {
         let Some(mut request) = read_request(&mut stream).await? else {
             return Ok(());
         };
-        let is_object_put = request.method == "PUT" && request.path.starts_with("/api/object?");
+        let is_object_put = request.method == "PUT"
+            && (request.path.starts_with("/api/object?")
+                || request.path.starts_with("/api/object/delivery?"));
         if is_object_put {
             if let Some(response) = self.object_put_preflight(&request).await {
                 stream.write_all(&response.bytes).await?;
@@ -278,6 +494,49 @@ impl Dashboard {
     }
 
     async fn route(&self, request: &Request) -> Response {
+        let path = request.path.split('?').next().unwrap_or("");
+        if path.starts_with("/api/integration/") {
+            if !self
+                .trusted_request_host(request.header("host"), request.header("x-forwarded-proto"))
+            {
+                return send_json(http_status("403"), &json!({"error": "forbidden"}));
+            }
+            let available = self
+                .boundaries
+                .read()
+                .expect("dashboard boundary state lock")
+                .integration;
+            let state = self.snapshot();
+            return integration::handle(request, available, &self.store, &state).await;
+        }
+        if config::BACKEND_PUSH_PATHS.contains(&path) {
+            if !self
+                .trusted_request_host(request.header("host"), request.header("x-forwarded-proto"))
+            {
+                return send_json(http_status("403"), &json!({"error": "forbidden"}));
+            }
+            if !self
+                .boundaries
+                .read()
+                .expect("dashboard boundary state lock")
+                .backend_push
+            {
+                return send_json(
+                    http_status("503"),
+                    &json!({"error": "backend push unavailable"}),
+                );
+            }
+        }
+        if backend::is_route(path) {
+            if !self
+                .trusted_request_host(request.header("host"), request.header("x-forwarded-proto"))
+            {
+                return send_json(http_status("403"), &json!({"error": "forbidden"}));
+            }
+            if let Some(response) = backend::handle(self, request).await {
+                return response;
+            }
+        }
         match request.method.as_str() {
             "" => empty_response(400, "Bad Request"),
             "GET" => self.do_get(request).await,
@@ -289,21 +548,67 @@ impl Dashboard {
         }
     }
     async fn object_put_preflight(&self, request: &Request) -> Option<Response> {
-        if !trusted_request_host(request.header("host"), request.header("x-forwarded-proto")) {
+        if !self.trusted_request_host(request.header("host"), request.header("x-forwarded-proto")) {
             return Some(send_json(
                 http_status("403"),
                 &json!({"error": "forbidden"}),
             ));
         }
-        let path = request.path.split('?').next().unwrap_or("");
+        let (path, query) = request
+            .path
+            .split_once('?')
+            .unwrap_or((request.path.as_str(), ""));
+        if path == "/api/object/delivery" {
+            return backend::delivery_put_preflight(request, query).await;
+        }
         if path != "/api/object" {
             return Some(empty_response(http_status("404"), "Not Found"));
         }
-        if !authorized(request, "object:write").await {
+        let object = match object_from_query(query) {
+            Ok(object) => object,
+            Err(response) => return Some(response),
+        };
+        let boundary_ready = {
+            let boundaries = self
+                .boundaries
+                .read()
+                .expect("dashboard boundary state lock");
+            if object.namespace() == "releases" {
+                boundaries.release
+            } else {
+                boundaries.object
+            }
+        };
+        if !boundary_ready {
             return Some(send_json(
-                http_status("401"),
-                &json!({"error": "unauthorized"}),
+                http_status("503"),
+                &json!({"error": "object authorization unavailable"}),
             ));
+        }
+        let authorized = if object.namespace() == "releases" {
+            let immutable = query_value(&parse_qs(query), "if_absent").as_deref() == Some("true");
+            if immutable {
+                authorize_release(request, object.key(), false).await
+            } else {
+                Ok(false)
+            }
+        } else {
+            authorize_object(request, object.namespace(), object.key(), false, "put").await
+        };
+        match authorized {
+            Ok(true) => {}
+            Ok(false) => {
+                return Some(send_json(
+                    http_status("401"),
+                    &json!({"error": "unauthorized or non-immutable release write"}),
+                ))
+            }
+            Err(()) => {
+                return Some(send_json(
+                    http_status("503"),
+                    &json!({"error": "object authorization unavailable"}),
+                ))
+            }
         }
         None
     }
@@ -312,7 +617,7 @@ impl Dashboard {
         let path_no_query = request.path.split('?').next().unwrap_or("");
         let control_route =
             path_no_query == "/api/machine/status" || path_no_query == "/api/service/status";
-        if !trusted_request_host(request.header("host"), request.header("x-forwarded-proto")) {
+        if !self.trusted_request_host(request.header("host"), request.header("x-forwarded-proto")) {
             return if control_route {
                 send_json(http_status("403"), &json!({"error": "forbidden"}))
             } else {
@@ -320,23 +625,127 @@ impl Dashboard {
             };
         }
         if path_no_query == "/healthz" || path_no_query == "/livez" {
-            return send_json(http_status("200"), &json!({"ok": true}));
+            let boundaries = *self
+                .boundaries
+                .read()
+                .expect("dashboard boundary state lock");
+            return send_json(
+                http_status("200"),
+                &json!({
+                    "ok": true,
+                    "degraded": !boundaries.all_ready(),
+                    "boundaries": boundaries.json(),
+                }),
+            );
         }
         let release_object_route = path_no_query == "/api/release/object";
         let object_route = path_no_query == "/api/object"
             || path_no_query == "/api/object/list"
             || path_no_query == "/api/object/stat";
-        if !release_object_route {
-            let permission = if path_no_query == "/api/machine/status" {
-                "machine:status"
-            } else if path_no_query == "/api/service/status" {
-                "service:status"
-            } else if object_route {
-                "object:read"
+        if object_route {
+            let query = request
+                .path
+                .split_once('?')
+                .map(|(_, query)| query)
+                .unwrap_or("");
+            let scope = if path_no_query == "/api/object/list" {
+                object_list_from_query(query).map(|(namespace, prefix)| (namespace, prefix, true))
             } else {
-                "view"
+                object_from_query(query).map(|object| {
+                    (
+                        object.namespace().to_string(),
+                        object.key().to_string(),
+                        false,
+                    )
+                })
             };
-            if !authorized(request, permission).await {
+            let (namespace, key_or_prefix, list) = match scope {
+                Ok(scope) => scope,
+                Err(response) => return response,
+            };
+            let boundary_ready = {
+                let boundaries = self
+                    .boundaries
+                    .read()
+                    .expect("dashboard boundary state lock");
+                if namespace == "releases" {
+                    boundaries.release
+                } else {
+                    boundaries.object
+                }
+            };
+            if !boundary_ready {
+                return send_json(
+                    http_status("503"),
+                    &json!({"error": "object authorization unavailable"}),
+                );
+            }
+            let action = if list {
+                "list"
+            } else if path_no_query == "/api/object/stat" {
+                "stat"
+            } else {
+                "get"
+            };
+            let authorized = if namespace == "releases" {
+                authorize_release(request, &key_or_prefix, list).await
+            } else {
+                authorize_object(request, &namespace, &key_or_prefix, list, action).await
+            };
+            match authorized {
+                Ok(true) => {}
+                Ok(false) => {
+                    return send_json(http_status("401"), &json!({"error": "unauthorized"}))
+                }
+                Err(()) => {
+                    return send_json(
+                        http_status("503"),
+                        &json!({"error": "object authorization unavailable"}),
+                    )
+                }
+            }
+        } else if !release_object_route {
+            let boundaries = *self
+                .boundaries
+                .read()
+                .expect("dashboard boundary state lock");
+            if path_no_query == "/api/service/status" && !boundaries.service {
+                return send_json(
+                    http_status("503"),
+                    &json!({"error": "service authorization unavailable"}),
+                );
+            }
+            if path_no_query == "/api/machine/status" && !boundaries.machine {
+                return send_json(
+                    http_status("503"),
+                    &json!({"error": "machine authorization unavailable"}),
+                );
+            }
+            if path_no_query == "/api/service/status" {
+                let query = request
+                    .path
+                    .split_once('?')
+                    .map(|(_, query)| query)
+                    .unwrap_or("");
+                let service = match service_name(query) {
+                    Ok(service) => service,
+                    Err(response) => return response,
+                };
+                match authorize_service(request, service, "status").await {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        return send_json(http_status("401"), &json!({"error": "unauthorized"}))
+                    }
+                    Err(()) => {
+                        return send_json(
+                            http_status("503"),
+                            &json!({"error": "service authorization unavailable"}),
+                        )
+                    }
+                }
+            } else if path_no_query != "/api/machine/status"
+                && !self.authorized(request, "view").await
+            {
                 return send_json(http_status("401"), &json!({"error": "unauthorized"}));
             }
         }
@@ -344,9 +753,7 @@ impl Dashboard {
             Ok(response) => response,
             // Python: a failing /api/cleanup.json answers the safe cleanup
             // envelope; every other route answers 500 "dashboard error".
-            Err(_) if request.path == "/api/cleanup.json" => {
-                cleanup_failure(http_status("500"))
-            }
+            Err(_) if request.path == "/api/cleanup.json" => cleanup_failure(http_status("500")),
             Err(_) => Response::text(
                 http_status("500"),
                 "Internal Server Error",
@@ -511,15 +918,22 @@ impl Dashboard {
     }
 
     async fn list_objects(&self, query: &str) -> Result<Response, DashboardError> {
-        let values = parse_qs(query);
-        let namespace = query_value(&values, "namespace").unwrap_or_default();
-        let prefix = query_value(&values, "prefix").unwrap_or_default();
-        if namespace.is_empty() {
+        let (namespace, requested_prefix) = match object_list_from_query(query) {
+            Ok(scope) => scope,
+            Err(response) => return Ok(response),
+        };
+        let prefix = if namespace == "releases" {
+            config::release_publisher_for_list(&requested_prefix).map(|(_, authorized)| authorized)
+        } else {
+            config::object_api_namespace(&namespace)
+                .and_then(|policy| policy.authorized_list_prefix(&requested_prefix, "list"))
+        };
+        let Some(prefix) = prefix else {
             return Ok(send_json(
-                http_status("400"),
-                &json!({"error": "namespace is required"}),
+                http_status("401"),
+                &json!({"error": "unauthorized"}),
             ));
-        }
+        };
         let storage_prefix = crate::object_store::ObjectRef::namespace_prefix(&namespace, &prefix)?;
         let objects = self
             .store
@@ -573,21 +987,37 @@ impl Dashboard {
     }
 
     fn machine_facade(&self) -> MachineFacade {
-        MachineFacade::with_store(
-            self.store.clone(),
-            self.store.bucket_name().to_string(),
-        )
+        MachineFacade::with_store(self.store.clone(), self.store.bucket_name().to_string())
     }
 
     async fn get_machine_status(&self, request: &Request, query: &str) -> Response {
         if request.content_length != usize::default() || !request.body.is_empty() {
             return invalid_machine_request("machine status does not accept a request body");
         }
+        let client = match authenticate_machine_client(request, "status").await {
+            Ok(Some(client)) => client,
+            Ok(None) => return send_json(http_status("401"), &json!({"error": "unauthorized"})),
+            Err(()) => {
+                return send_json(
+                    http_status("503"),
+                    &json!({"error": "machine authorization unavailable"}),
+                )
+            }
+        };
         let job_id = match machine_job_id(query) {
             Ok(job_id) => job_id,
             Err(response) => return response,
         };
-        machine_result_response(self.machine_facade().status(job_id).await)
+        let result = self.machine_facade().status(job_id).await;
+        let target_allowed = result
+            .as_ref()
+            .ok()
+            .and_then(machine_result_target)
+            .is_some_and(|target| client.allows_target(target));
+        if !target_allowed {
+            return send_json(http_status("401"), &json!({"error": "unauthorized"}));
+        }
+        machine_result_response(result)
     }
 
     async fn post_machine_submit(&self, request: &Request) -> Response {
@@ -607,7 +1037,7 @@ impl Dashboard {
         {
             return invalid_machine_request("invalid JSON request framing");
         }
-        let payload: Value = match serde_json::from_slice(&request.body) {
+        let mut payload: Value = match serde_json::from_slice(&request.body) {
             Ok(payload) => payload,
             Err(error) => {
                 return invalid_machine_request(format!("cannot read request JSON: {error}"))
@@ -616,6 +1046,35 @@ impl Dashboard {
         if let Err(error) = validate_remote_machine_request(&payload) {
             return machine_result_response(Err(error));
         }
+        let client = match authenticate_machine_client(request, "submit").await {
+            Ok(Some(client)) => client,
+            Ok(None) => return send_json(http_status("401"), &json!({"error": "unauthorized"})),
+            Err(()) => {
+                return send_json(
+                    http_status("503"),
+                    &json!({"error": "machine authorization unavailable"}),
+                )
+            }
+        };
+        let requested = payload
+            .get("provider")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let target = if requested.is_empty() {
+            let [target] = client.targets() else {
+                return send_json(http_status("401"), &json!({"error": "unauthorized"}));
+            };
+            target.clone()
+        } else if client.allows_target(requested) {
+            requested.to_string()
+        } else {
+            return send_json(http_status("401"), &json!({"error": "unauthorized"}));
+        };
+        let Some(object) = payload.as_object_mut() else {
+            return invalid_machine_request("machine request must be an object");
+        };
+        object.insert("provider".to_string(), Value::String(target));
+        object.insert("pin_to_provider".to_string(), Value::Bool(true));
         machine_result_response(self.machine_facade().submit_request(&payload).await)
     }
 
@@ -626,10 +1085,29 @@ impl Dashboard {
         {
             return invalid_machine_request("machine cancel does not accept a request body");
         }
+        let client = match authenticate_machine_client(request, "cancel").await {
+            Ok(Some(client)) => client,
+            Ok(None) => return send_json(http_status("401"), &json!({"error": "unauthorized"})),
+            Err(()) => {
+                return send_json(
+                    http_status("503"),
+                    &json!({"error": "machine authorization unavailable"}),
+                )
+            }
+        };
         let job_id = match machine_job_id(query) {
             Ok(job_id) => job_id,
             Err(response) => return response,
         };
+        let status = self.machine_facade().status(job_id).await;
+        let target_allowed = status
+            .as_ref()
+            .ok()
+            .and_then(machine_result_target)
+            .is_some_and(|target| client.allows_target(target));
+        if !target_allowed {
+            return send_json(http_status("401"), &json!({"error": "unauthorized"}));
+        }
         machine_result_response(self.machine_facade().cancel_job(job_id).await)
     }
 
@@ -644,12 +1122,7 @@ impl Dashboard {
         let store = match service_beacon_store().await {
             Ok(store) => store,
             Err(message) => {
-                return service_failure(
-                    http_status("503"),
-                    "SERVICE_STATUS_FAILED",
-                    message,
-                    true,
-                )
+                return service_failure(http_status("503"), "SERVICE_STATUS_FAILED", message, true)
             }
         };
         let rows = match service::find_services(&store, name).await {
@@ -690,12 +1163,7 @@ impl Dashboard {
         let services = match declared_services_matching(name).await {
             Ok(services) => services,
             Err(message) => {
-                return service_failure(
-                    http_status("503"),
-                    "SERVICE_RESTART_FAILED",
-                    message,
-                    true,
-                )
+                return service_failure(http_status("503"), "SERVICE_RESTART_FAILED", message, true)
             }
         };
         if services.is_empty() {
@@ -750,11 +1218,12 @@ impl Dashboard {
         service_success(Value::Array(result))
     }
 
-    async fn put_object(&self, request: &Request, query: &str) -> Result<Response, DashboardError> {
-        let object = match object_from_query(query) {
-            Ok(object) => object,
-            Err(response) => return Ok(response),
-        };
+    async fn put_object(
+        &self,
+        request: &Request,
+        object: &crate::object_store::ObjectRef,
+        query: &str,
+    ) -> Result<Response, DashboardError> {
         let values = parse_qs(query);
         let if_absent = query_value(&values, "if_absent").as_deref() == Some("true");
         let path = object.storage_path();
@@ -778,7 +1247,7 @@ impl Dashboard {
             .header("content-type")
             .unwrap_or("application/octet-stream")
             .to_string();
-        let metadata = crate::object_store::metadata(&object, &content_type);
+        let metadata = crate::object_store::metadata(object, &content_type);
         self.store.backend().set_metadata(&path, &metadata).await?;
         let landed = self.store.backend().list_blobs_with_meta(&path).await?;
         let Some(blob) = landed.into_iter().find(|blob| blob.name == path) else {
@@ -805,6 +1274,52 @@ impl Dashboard {
         ))
     }
 
+    async fn post_rate_limit_consume(&self, request: &Request) -> Response {
+        let content_type = request
+            .header("content-type")
+            .and_then(|value| value.split(';').next())
+            .map(str::trim);
+        if content_type != Some("application/json") {
+            return send_json(
+                http_status("415"),
+                &json!({"error": "content-type must be application/json"}),
+            );
+        }
+        let supplied = request
+            .header("authorization")
+            .and_then(|value| value.trim().strip_prefix("Bearer "))
+            .unwrap_or_default();
+        let client = match rate_limit::authenticate(supplied).await {
+            Ok(Some(client)) => client,
+            Ok(None) => return send_json(http_status("401"), &json!({"error": "unauthorized"})),
+            Err(_) => {
+                return send_json(
+                    http_status("503"),
+                    &json!({"error": "rate limiting unavailable"}),
+                )
+            }
+        };
+        let payload = match serde_json::from_slice::<ConsumeRequest>(&request.body) {
+            Ok(payload) => payload,
+            Err(_) => {
+                return send_json(
+                    http_status("400"),
+                    &json!({"error": "invalid rate-limit request"}),
+                )
+            }
+        };
+        match self.rate_limiter.consume(client, &payload).await {
+            Ok(response) => send_json(http_status("200"), &json!(response)),
+            Err(RateLimitError::InvalidRequest(message)) => {
+                send_json(http_status("400"), &json!({"error": message}))
+            }
+            Err(_) => send_json(
+                http_status("503"),
+                &json!({"error": "rate limiting unavailable"}),
+            ),
+        }
+    }
+
     async fn do_post(&self, request: &Request) -> Response {
         let (path, query) = request
             .path
@@ -812,30 +1327,60 @@ impl Dashboard {
             .unwrap_or((request.path.as_str(), ""));
         let control_route = path == "/api/machine/submit"
             || path == "/api/machine/cancel"
-            || path == "/api/service/restart";
-        if !trusted_request_host(request.header("host"), request.header("x-forwarded-proto")) {
+            || path == "/api/service/restart"
+            || path == "/api/rate-limit/consume";
+        if !self.trusted_request_host(request.header("host"), request.header("x-forwarded-proto")) {
             return if control_route {
                 send_json(http_status("403"), &json!({"error": "forbidden"}))
             } else {
                 cleanup_failure(http_status("403"))
             };
         }
+        let boundaries = *self
+            .boundaries
+            .read()
+            .expect("dashboard boundary state lock");
+        let unavailable = (path == "/api/rate-limit/consume"
+            && (!boundaries.rate_limit_verifier || !boundaries.rate_limit_state))
+            || (matches!(path, "/api/machine/submit" | "/api/machine/cancel")
+                && !boundaries.machine)
+            || (path == "/api/service/restart" && !boundaries.service);
+        if unavailable {
+            return send_json(
+                http_status("503"),
+                &json!({"error": "authorization boundary unavailable"}),
+            );
+        }
+        if path == "/api/rate-limit/consume" {
+            return self.post_rate_limit_consume(request).await;
+        }
         if control_route {
-            let permission = match path {
-                "/api/machine/submit" => "machine:submit",
-                "/api/machine/cancel" => "machine:cancel",
-                _ => "service:restart",
-            };
-            if !authorized(request, permission).await {
-                return send_json(http_status("401"), &json!({"error": "unauthorized"}));
+            if path == "/api/service/restart" {
+                let service = match service_name(query) {
+                    Ok(service) => service,
+                    Err(response) => return response,
+                };
+                match authorize_service(request, service, "restart").await {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        return send_json(http_status("401"), &json!({"error": "unauthorized"}))
+                    }
+                    Err(()) => {
+                        return send_json(
+                            http_status("503"),
+                            &json!({"error": "service authorization unavailable"}),
+                        )
+                    }
+                }
+                return self.post_service_restart(request, query).await;
             }
-            return match path {
-                "/api/machine/submit" => self.post_machine_submit(request).await,
-                "/api/machine/cancel" => self.post_machine_cancel(request, query).await,
-                _ => self.post_service_restart(request, query).await,
+            return if path == "/api/machine/submit" {
+                self.post_machine_submit(request).await
+            } else {
+                self.post_machine_cancel(request, query).await
             };
         }
-        if !authorized(request, "operate").await {
+        if !self.authorized(request, "operate").await {
             return send_json(http_status("401"), &json!({"error": "unauthorized"}));
         }
         if path == "/api/registry/policy" {
@@ -855,27 +1400,73 @@ impl Dashboard {
     }
 
     async fn do_put(&self, request: &Request) -> Response {
-        if !trusted_request_host(request.header("host"), request.header("x-forwarded-proto")) {
+        if !self.trusted_request_host(request.header("host"), request.header("x-forwarded-proto")) {
             return send_json(http_status("403"), &json!({"error": "forbidden"}));
         }
         let (path, query) = request
             .path
             .split_once('?')
             .unwrap_or((request.path.as_str(), ""));
+        if path == "/api/host-health" {
+            return self.put_host_health(request, query).await;
+        }
         if path != "/api/object" {
             return empty_response(http_status("404"), "Not Found");
         }
-        if !authorized(request, "object:write").await {
-            return send_json(http_status("401"), &json!({"error": "unauthorized"}));
+        let object = match object_from_query(query) {
+            Ok(object) => object,
+            Err(response) => return response,
+        };
+        let boundary_ready = {
+            let boundaries = self
+                .boundaries
+                .read()
+                .expect("dashboard boundary state lock");
+            if object.namespace() == "releases" {
+                boundaries.release
+            } else {
+                boundaries.object
+            }
+        };
+        if !boundary_ready {
+            return send_json(
+                http_status("503"),
+                &json!({"error": "object authorization unavailable"}),
+            );
         }
-        match self.put_object(request, query).await {
+        let authorized = if object.namespace() == "releases" {
+            let immutable = query_value(&parse_qs(query), "if_absent").as_deref() == Some("true");
+            if immutable {
+                authorize_release(request, object.key(), false).await
+            } else {
+                Ok(false)
+            }
+        } else {
+            authorize_object(request, object.namespace(), object.key(), false, "put").await
+        };
+        match authorized {
+            Ok(true) => {}
+            Ok(false) => {
+                return send_json(
+                    http_status("401"),
+                    &json!({"error": "unauthorized or non-immutable release write"}),
+                )
+            }
+            Err(()) => {
+                return send_json(
+                    http_status("503"),
+                    &json!({"error": "object authorization unavailable"}),
+                )
+            }
+        }
+        match self.put_object(request, &object, query).await {
             Ok(response) => response,
             Err(error) => send_json(http_status("500"), &json!({"error": error.to_string()})),
         }
     }
 
     async fn do_delete(&self, request: &Request) -> Response {
-        if !trusted_request_host(request.header("host"), request.header("x-forwarded-proto")) {
+        if !self.trusted_request_host(request.header("host"), request.header("x-forwarded-proto")) {
             return send_json(http_status("403"), &json!({"error": "forbidden"}));
         }
         let (path, query) = request
@@ -885,23 +1476,120 @@ impl Dashboard {
         if path != "/api/object" {
             return empty_response(http_status("404"), "Not Found");
         }
-        if !authorized(request, "object:write").await {
+        let object = match object_from_query(query) {
+            Ok(object) => object,
+            Err(response) => return response,
+        };
+        if object.namespace() == "releases" {
+            return send_json(
+                http_status("403"),
+                &json!({"error": "release objects are immutable and cannot be deleted"}),
+            );
+        }
+        if !self
+            .boundaries
+            .read()
+            .expect("dashboard boundary state lock")
+            .object
+        {
+            return send_json(
+                http_status("503"),
+                &json!({"error": "object authorization unavailable"}),
+            );
+        }
+        match authorize_object(request, object.namespace(), object.key(), false, "delete").await {
+            Ok(true) => {}
+            Ok(false) => return send_json(http_status("401"), &json!({"error": "unauthorized"})),
+            Err(()) => {
+                return send_json(
+                    http_status("503"),
+                    &json!({"error": "object authorization unavailable"}),
+                )
+            }
+        }
+        let result = self.store.delete_blob(&object.storage_path()).await;
+        match result {
+            Ok(()) => send_json(
+                http_status("200"),
+                &json!({"state": "absent", "uri": object.to_string()}),
+            ),
+            Err(error) => send_json(http_status("500"), &json!({"error": error.to_string()})),
+        }
+    }
+
+    async fn put_host_health(&self, request: &Request, query: &str) -> Response {
+        if !self.authorized(request, "host-health:publish").await {
             return send_json(http_status("401"), &json!({"error": "unauthorized"}));
         }
-        match object_from_query(query) {
-            Ok(object) => {
-                let result = self.store.delete_blob(&object.storage_path()).await;
-                match result {
-                    Ok(()) => send_json(
-                        http_status("200"),
-                        &json!({"state": "absent", "uri": object.to_string()}),
-                    ),
-                    Err(error) => {
-                        send_json(http_status("500"), &json!({"error": error.to_string()}))
-                    }
-                }
+        let values = parse_qs(query);
+        let host = match values.as_slice() {
+            [(key, value)] if key == "host" => value.clone(),
+            _ => {
+                return send_json(
+                    http_status("400"),
+                    &json!({"error": "exactly one host query parameter is required"}),
+                )
             }
-            Err(response) => response,
+        };
+        if !valid_beacon_host(&host) {
+            return send_json(
+                http_status("400"),
+                &json!({"error": "host must be a lowercase DNS label"}),
+            );
+        }
+        let content_type = request
+            .header("content-type")
+            .unwrap_or("")
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim();
+        let content_length = request
+            .header("content-length")
+            .and_then(|value| value.parse::<usize>().ok());
+        if content_type != "application/json"
+            || content_length != Some(request.body.len())
+            || request.body.is_empty()
+        {
+            return send_json(
+                http_status("400"),
+                &json!({"error": "invalid JSON request framing"}),
+            );
+        }
+        let payload: Value = match serde_json::from_slice(&request.body) {
+            Ok(value) => value,
+            Err(error) => {
+                return send_json(
+                    http_status("400"),
+                    &json!({"error": format!("invalid JSON: {error}")}),
+                )
+            }
+        };
+        let Some(document) = payload.as_object() else {
+            return send_json(
+                http_status("400"),
+                &json!({"error": "host beacon must be a JSON object"}),
+            );
+        };
+        if document.get("host").and_then(Value::as_str) != Some(host.as_str())
+            || document
+                .get("reported_at")
+                .and_then(Value::as_str)
+                .is_none()
+            || document.get("units").and_then(Value::as_object).is_none()
+        {
+            return send_json(
+                http_status("400"),
+                &json!({"error": "beacon host must match the query and reported_at/units are required"}),
+            );
+        }
+        let path = format!("{}/{host}.json", crate::monitor::host_health::HEALTH_PREFIX);
+        match self.store.upload_bytes(&path, &request.body).await {
+            Ok(()) => send_json(
+                http_status("200"),
+                &json!({"state": "stored", "host": host, "path": path}),
+            ),
+            Err(error) => send_json(http_status("500"), &json!({"error": error.to_string()})),
         }
     }
 
@@ -950,6 +1638,83 @@ impl Dashboard {
             ),
         }
     }
+    fn deployment_id(&self) -> String {
+        #[cfg(test)]
+        if let Some(deployment_id) = &self.deployment_id_override {
+            return deployment_id.clone();
+        }
+        config::stado_deployment_id()
+    }
+
+    fn trusted_request_host(&self, value: Option<&str>, forwarded_proto: Option<&str>) -> bool {
+        trusted_request_host(value, forwarded_proto, !self.deployment_id().is_empty())
+    }
+
+    async fn operator_auth_metadata(&self) -> Result<(url::Url, String), ()> {
+        #[cfg(test)]
+        if let Some(metadata) = &self.operator_auth_override {
+            return Ok((metadata.supabase_url.clone(), metadata.anon_key.clone()));
+        }
+        outbound::operator_auth_metadata().await.map_err(|_| ())
+    }
+
+    /// Validate host-health publication or a Wisent session/deployment grant.
+    /// Machine clients are authorized separately through exact client policies;
+    /// this path has no global machine bearer.
+    async fn authorized(&self, request: &Request, permission: &str) -> bool {
+        if permission == "host-health:publish" {
+            let expected =
+                match crate::skarbiec::read_string("stado-host-health-api", "token").await {
+                    Ok(Some(value)) => value,
+                    Ok(None) | Err(_) => String::new(),
+                };
+            let authorization = request.header("authorization").unwrap_or("").trim();
+            let supplied = authorization.strip_prefix("Bearer ").unwrap_or_default();
+            return !expected.is_empty()
+                && constant_time_eq(expected.as_bytes(), supplied.as_bytes());
+        }
+        let deployment_id = self.deployment_id();
+        if deployment_id.is_empty() {
+            return false;
+        }
+        let (supabase_url, anon_key) = match self.operator_auth_metadata().await {
+            Ok(metadata) => metadata,
+            Err(()) => return false,
+        };
+        let authorization = request.header("authorization").unwrap_or("").trim();
+        if !authorization.starts_with("Bearer ") {
+            return false;
+        }
+        let body = json!({
+            "target_deployment_id": deployment_id,
+            "requested_permission": permission,
+        });
+        let endpoint = match supabase_url.join("/rest/v1/rpc/stado_can_access") {
+            Ok(endpoint) => endpoint,
+            Err(_) => return false,
+        };
+        let result = reqwest::Client::new()
+            .post(endpoint)
+            .header("apikey", anon_key)
+            .header("Authorization", authorization)
+            .header("Content-Type", "application/json")
+            .body(body.to_string())
+            .timeout(Duration::from_secs(
+                "5".parse::<u64>().expect("static auth timeout"),
+            ))
+            .send()
+            .await;
+        let Ok(response) = result else { return false };
+        if response.status() != reqwest::StatusCode::OK {
+            return false;
+        }
+        response
+            .json::<Value>()
+            .await
+            .map(|value| value == Value::Bool(true))
+            .unwrap_or(false)
+    }
+
     async fn post_cleanup_run(&self, request: &Request) -> Result<Response, DashboardError> {
         if request.header("x-stado-action") != Some("cleanup") {
             return Ok(cleanup_failure(403));
@@ -1022,7 +1787,6 @@ static MACHINE_JOB_ID_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLoc
     regex::Regex::new(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
         .expect("static machine job ID regex compiles")
 });
-
 
 struct Request {
     method: String,
@@ -1110,7 +1874,8 @@ async fn read_request(stream: &mut TcpStream) -> std::io::Result<Option<Request>
         .iter()
         .find(|(name, _)| name == "content-length")
         .map(|(_, value)| value.as_str());
-    let object_put = method == "PUT" && path.starts_with("/api/object?");
+    let object_put = method == "PUT"
+        && (path.starts_with("/api/object?") || path.starts_with("/api/object/delivery?"));
     let content_length = match content_length_header {
         Some(value) => value.parse::<usize>().map_err(|_| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid Content-Length")
@@ -1125,6 +1890,10 @@ async fn read_request(stream: &mut TcpStream) -> std::io::Result<Option<Request>
     };
     let max_body_bytes = if object_put {
         crate::object_store::max_object_bytes()
+    } else if path.starts_with("/api/integration/") {
+        "4194304"
+            .parse::<usize>()
+            .expect("static integration request cap")
     } else {
         MAX_HEAD_BYTES
     };
@@ -1265,11 +2034,8 @@ fn invalid_machine_request(message: impl Into<String>) -> Response {
 }
 
 fn machine_job_id(query: &str) -> Result<&str, Response> {
-    let invalid = || {
-        invalid_machine_request(
-            "query must contain exactly one path-safe job_id parameter",
-        )
-    };
+    let invalid =
+        || invalid_machine_request("query must contain exactly one path-safe job_id parameter");
     if query.is_empty() || query.contains('&') {
         return Err(invalid());
     }
@@ -1310,9 +2076,7 @@ async fn service_beacon_store() -> Result<JobStorage, String> {
         .map_err(|error| error.to_string())
 }
 
-async fn declared_services_matching(
-    name: &str,
-) -> Result<Vec<service::ManagedService>, String> {
+async fn declared_services_matching(name: &str) -> Result<Vec<service::ManagedService>, String> {
     let registry = targets::fetch_registry_remote()
         .await
         .map_err(|error| error.to_string())?;
@@ -1351,12 +2115,7 @@ fn service_failure(
 }
 
 fn invalid_service_request(message: impl Into<String>) -> Response {
-    service_failure(
-        http_status("400"),
-        "INVALID_REQUEST",
-        message,
-        false,
-    )
+    service_failure(http_status("400"), "INVALID_REQUEST", message, false)
 }
 
 fn validate_remote_machine_request(request: &Value) -> Result<(), MachineError> {
@@ -1431,6 +2190,27 @@ fn object_from_query(query: &str) -> Result<crate::object_store::ObjectRef, Resp
         .map_err(|error| send_json(http_status("400"), &json!({"error": error.to_string()})))
 }
 
+fn object_list_from_query(query: &str) -> Result<(String, String), Response> {
+    let values = parse_qs(query);
+    let raw_namespace = query_value(&values, "namespace").unwrap_or_default();
+    if raw_namespace.is_empty() {
+        return Err(send_json(
+            http_status("400"),
+            &json!({"error": "namespace is required"}),
+        ));
+    }
+    let sentinel = crate::object_store::ObjectRef::new(&raw_namespace, "sentinel")
+        .map_err(|error| send_json(http_status("400"), &json!({"error": error.to_string()})))?;
+    let namespace = sentinel.namespace().to_string();
+    let prefix = query_value(&values, "prefix")
+        .unwrap_or_default()
+        .trim_matches('/')
+        .to_string();
+    crate::object_store::ObjectRef::namespace_prefix(&namespace, &prefix)
+        .map_err(|error| send_json(http_status("400"), &json!({"error": error.to_string()})))?;
+    Ok((namespace, prefix))
+}
+
 fn url_decode(input: &str) -> String {
     let bytes = input.as_bytes();
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
@@ -1474,14 +2254,17 @@ fn url_decode(input: &str) -> String {
 /// HTTPS reverse proxy may forward either DNS or IP Host values; because the
 /// listener itself is loopback-only, `X-Forwarded-Proto` cannot be supplied
 /// by external plaintext ingress.
-fn trusted_request_host(value: Option<&str>, forwarded_proto: Option<&str>) -> bool {
+fn trusted_request_host(
+    value: Option<&str>,
+    forwarded_proto: Option<&str>,
+    reverse_proxy_enabled: bool,
+) -> bool {
     let Some(value) = value else { return false };
     if value.is_empty() {
         return false;
     }
     // Malformed authorities always fail closed.
-    let proxy_https =
-        !config::stado_deployment_id().is_empty() && forwarded_proto == Some("https");
+    let proxy_https = reverse_proxy_enabled && forwarded_proto == Some("https");
 
     // authority = [userinfo@]host[:port]; path/query/fragment split off.
     let (authority, has_suffix) = match value.find(['/', '?', '#']) {
@@ -1546,6 +2329,16 @@ fn trusted_request_host(value: Option<&str>, forwarded_proto: Option<&str>) -> b
     }
 }
 
+fn valid_beacon_host(host: &str) -> bool {
+    let bytes = host.as_bytes();
+    !bytes.is_empty()
+        && bytes.first().is_some_and(u8::is_ascii_alphanumeric)
+        && bytes.last().is_some_and(u8::is_ascii_alphanumeric)
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+}
+
 fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     let left = Sha256::digest(left);
     let right = Sha256::digest(right);
@@ -1556,75 +2349,118 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     difference == u8::default()
 }
 
-/// Validate a route-specific service token or the Wisent session/deployment
-/// grant through Supabase RLS. Machine, managed-service, and object tokens are
-/// isolated. Machine and managed-service routes always fail closed and never
-/// fall back to another service token or Supabase.
-async fn authorized(request: &Request, permission: &str) -> bool {
-    let control_item = if permission.starts_with("machine:") {
-        Some("stado-machine-api")
-    } else if permission.starts_with("service:") {
-        Some("stado-service-api")
-    } else {
-        None
+/// Accept a bearer only after the request has resolved to one canonical
+/// namespace and key boundary. Out-of-scope requests and bearer mismatches are
+/// unauthorized; invalid configuration or an unavailable exact item is
+/// reported separately so the route can return a redacted 503.
+async fn authorize_object(
+    request: &Request,
+    namespace: &str,
+    key_or_prefix: &str,
+    list: bool,
+    action: &str,
+) -> Result<bool, ()> {
+    let namespaces = config::object_api_namespaces().map_err(|_| ())?;
+    let Some(policy) = namespaces.get(namespace) else {
+        return Ok(false);
     };
-    if let Some(item) = control_item {
-        let expected = match crate::skarbiec::read_string(item, "token").await {
-            Ok(Some(value)) => value,
-            Ok(None) | Err(_) => String::new(),
-        };
-        let authorization = request.header("authorization").unwrap_or("").trim();
-        let supplied = authorization.strip_prefix("Bearer ").unwrap_or_default();
-        return !expected.is_empty()
-            && constant_time_eq(expected.as_bytes(), supplied.as_bytes());
+    let in_scope = if list {
+        policy
+            .authorized_list_prefix(key_or_prefix, action)
+            .is_some()
+    } else {
+        policy.allows_object_action(key_or_prefix, action)
+    };
+    if !in_scope {
+        return Ok(false);
     }
-    let deployment_id = config::stado_deployment_id();
-    if permission.starts_with("object:") {
-        let expected = match crate::skarbiec::read_string("stado-object-api", "token").await {
-            Ok(Some(value)) => value,
-            Ok(None) | Err(_) => String::new(),
-        };
-        let authorization = request.header("authorization").unwrap_or("").trim();
-        let supplied = authorization.strip_prefix("Bearer ").unwrap_or_default();
-        if !expected.is_empty() && constant_time_eq(expected.as_bytes(), supplied.as_bytes()) {
-            return true;
+    let expected = crate::skarbiec::read_object_token(policy.item(), "token")
+        .await
+        .map_err(|_| ())?
+        .filter(|value| !value.is_empty())
+        .ok_or(())?;
+    let authorization = request.header("authorization").unwrap_or("").trim();
+    let supplied = authorization.strip_prefix("Bearer ").unwrap_or_default();
+    Ok(constant_time_eq(expected.as_bytes(), supplied.as_bytes()))
+}
+
+/// Authenticate one immutable release publisher after resolving the exact
+/// product prefix inside `stado://releases`. The former global object token is
+/// never consulted.
+async fn authorize_release(request: &Request, key_or_prefix: &str, list: bool) -> Result<bool, ()> {
+    config::release_api_publishers().map_err(|_| ())?;
+    let policy = if list {
+        config::release_publisher_for_list(key_or_prefix).map(|(policy, _)| policy)
+    } else {
+        config::release_publisher_for_key(key_or_prefix)
+    };
+    let Some(policy) = policy else {
+        return Ok(false);
+    };
+    let expected = crate::skarbiec::read_release_token(policy.item(), "token")
+        .await
+        .map_err(|_| ())?
+        .filter(|value| !value.is_empty())
+        .ok_or(())?;
+    let authorization = request.header("authorization").unwrap_or("").trim();
+    let supplied = authorization.strip_prefix("Bearer ").unwrap_or_default();
+    Ok(constant_time_eq(expected.as_bytes(), supplied.as_bytes()))
+}
+
+async fn authorize_service(request: &Request, service: &str, action: &str) -> Result<bool, ()> {
+    config::service_api_deployers().map_err(|_| ())?;
+    let Some(policy) = config::service_deployer_for(service, action) else {
+        return Ok(false);
+    };
+    let expected = crate::skarbiec::read_service_token(policy.item(), "token")
+        .await
+        .map_err(|_| ())?
+        .filter(|value| !value.is_empty())
+        .ok_or(())?;
+    let authorization = request.header("authorization").unwrap_or("").trim();
+    let supplied = authorization.strip_prefix("Bearer ").unwrap_or_default();
+    Ok(constant_time_eq(expected.as_bytes(), supplied.as_bytes()))
+}
+
+fn machine_result_target(value: &Value) -> Option<&str> {
+    value
+        .get("job")
+        .and_then(Value::as_object)
+        .and_then(|job| job.get("provider"))
+        .and_then(Value::as_str)
+        .filter(|target| !target.is_empty())
+}
+
+async fn authenticate_machine_client(
+    request: &Request,
+    action: &str,
+) -> Result<Option<&'static config::MachineApiClient>, ()> {
+    let Some(supplied) = request
+        .header("authorization")
+        .and_then(|value| value.trim().strip_prefix("Bearer "))
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    let clients = config::machine_api_clients().map_err(|_| ())?;
+    let mut matched = None;
+    for client in clients
+        .values()
+        .filter(|client| client.allows_action(action))
+    {
+        let expected = crate::skarbiec::read_machine_token(client.item(), "token")
+            .await
+            .map_err(|_| ())?
+            .filter(|value| !value.is_empty())
+            .ok_or(())?;
+        if constant_time_eq(expected.as_bytes(), supplied.as_bytes()) {
+            if matched.is_some() {
+                return Ok(None);
+            }
+            matched = Some(client);
         }
     }
-    if deployment_id.is_empty() {
-        return false;
-    }
-    let supabase_url = std::env::var("SUPABASE_URL").unwrap_or_default();
-    let supabase_url = supabase_url.trim_end_matches('/');
-    let anon_key = match crate::skarbiec::read_string("stado-supabase", "anon_key").await {
-        Ok(Some(value)) => value,
-        Ok(None) | Err(_) => return false,
-    };
-    let authorization = request.header("authorization").unwrap_or("").trim();
-    if supabase_url.is_empty() || anon_key.is_empty() || !authorization.starts_with("Bearer ") {
-        return false;
-    }
-    let body = json!({
-        "target_deployment_id": deployment_id,
-        "requested_permission": permission,
-    });
-    let result = reqwest::Client::new()
-        .post(format!("{supabase_url}/rest/v1/rpc/stado_can_access"))
-        .header("apikey", anon_key)
-        .header("Authorization", authorization)
-        .header("Content-Type", "application/json")
-        .body(body.to_string())
-        .timeout(Duration::from_secs(5))
-        .send()
-        .await;
-    let Ok(response) = result else { return false };
-    if response.status() != reqwest::StatusCode::OK {
-        return false;
-    }
-    response
-        .json::<Value>()
-        .await
-        .map(|value| value == Value::Bool(true))
-        .unwrap_or(false)
+    Ok(matched)
 }
 
 #[cfg(test)]
@@ -1645,77 +2481,132 @@ mod tests {
         (dir, store)
     }
 
-    /// Bind a dashboard on a loopback ephemeral port and spawn the accept
-    /// loop; returns the base URL plus the dashboard handle (refresh is NOT
-    /// auto-started — tests call `refresh_once` explicitly).
-    async fn spawn_server(dashboard: &Dashboard) -> String {
+    /// Bound loopback test server. Dropping it aborts the accept loop, so no
+    /// listener or background task leaks into another test.
+    struct TestServer {
+        base_url: String,
+        shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl std::fmt::Display for TestServer {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            self.base_url.fmt(formatter)
+        }
+    }
+
+    impl Drop for TestServer {
+        fn drop(&mut self) {
+            if let Some(shutdown) = self.shutdown.take() {
+                let _ = shutdown.send(());
+            }
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
+        }
+    }
+
+    async fn spawn_server(dashboard: &Dashboard) -> TestServer {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("addr");
         let server = dashboard.clone();
-        tokio::spawn(async move {
-            let _ = server.serve_on(listener).await;
-        });
-        format!("http://{addr}")
-    }
-
-    /// Save/restore env vars mutated by the auth tests.
-    struct EnvGuard(Vec<(&'static str, Option<String>)>);
-
-    impl EnvGuard {
-        fn set(vars: &[(&'static str, &str)]) -> Self {
-            let saved = vars
-                .iter()
-                .map(|(key, _)| (*key, std::env::var(key).ok()))
-                .collect();
-            for (key, value) in vars {
-                std::env::set_var(key, value);
-            }
-            Self(saved)
-        }
-
-        fn unset(vars: &[&'static str]) -> Self {
-            let saved = vars
-                .iter()
-                .map(|key| (*key, std::env::var(key).ok()))
-                .collect();
-            for key in vars {
-                std::env::remove_var(key);
-            }
-            Self(saved)
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            for (key, value) in &self.0 {
-                match value {
-                    Some(value) => std::env::set_var(key, value),
-                    None => std::env::remove_var(key),
+        let (shutdown, stopped) = tokio::sync::oneshot::channel();
+        let thread = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("test runtime");
+            runtime.block_on(async move {
+                tokio::select! {
+                    _ = server.serve_on(listener) => {}
+                    _ = stopped => {}
                 }
-            }
+            });
+        });
+        TestServer {
+            base_url: format!("http://{addr}"),
+            shutdown: Some(shutdown),
+            thread: Some(thread),
         }
+    }
+
+    fn auth_responses(outcomes: &[bool]) -> Vec<String> {
+        outcomes
+            .iter()
+            .map(|allowed| {
+                crate::testutil::http_response(
+                    http_status("200"),
+                    "OK",
+                    if *allowed { "true" } else { "false" },
+                )
+            })
+            .collect()
+    }
+
+    fn dashboard_with_operator_auth(
+        store: JobStorage,
+        supabase: &crate::testutil::MockHttp,
+    ) -> Dashboard {
+        Dashboard::new(store)
+            .with_test_operator_auth(
+                "dep-1",
+                Some((
+                    url::Url::parse(&supabase.base_url).expect("mock URL"),
+                    "anon-key".to_string(),
+                )),
+            )
+            .with_refresh_seconds(
+                "10".parse::<i64>()
+                    .expect("static dashboard refresh interval"),
+            )
+    }
+
+    fn dashboard_without_operator_auth(store: JobStorage) -> Dashboard {
+        Dashboard::new(store)
+            .with_test_operator_auth("", None)
+            .with_refresh_seconds(
+                "10".parse::<i64>()
+                    .expect("static dashboard refresh interval"),
+            )
     }
 
     #[tokio::test]
     async fn healthz_and_state_json_shape() {
         let _guard = lock().await;
-        let _env = EnvGuard::unset(&["STADO_DEPLOYMENT_ID"]);
+        let supabase = crate::testutil::mock_http(auth_responses(&[true, true, true])).await;
         let (_dir, store) = store();
         // One fabricated queued job so fast counts are non-trivial.
         let job = crate::models::Job::new("job00001", "echo hi");
         store.write_job("queue", &job).await.unwrap();
 
-        let dashboard = Dashboard::new(store).with_refresh_seconds(10);
+        let dashboard = dashboard_with_operator_auth(store, &supabase);
         dashboard.refresh_once().await.expect("refresh");
         let base = spawn_server(&dashboard).await;
         let client = reqwest::Client::new();
 
         let health = client.get(format!("{base}/healthz")).send().await.unwrap();
         assert_eq!(health.status(), 200);
-        assert_eq!(health.json::<Value>().await.unwrap(), json!({"ok": true}));
+        assert_eq!(
+            health.json::<Value>().await.unwrap(),
+            json!({
+                "ok": true,
+                "degraded": true,
+                "boundaries": {
+                    "object": false,
+                    "release": false,
+                    "machine": false,
+                    "backend_push": false,
+                    "service": false,
+                    "rate_limit_verifier": false,
+                    "rate_limit_state": false,
+                    "integration": false,
+                },
+            })
+        );
 
         let state = client
             .get(format!("{base}/api/state.json"))
+            .header("Authorization", "Bearer test-token")
             .send()
             .await
             .unwrap();
@@ -1731,11 +2622,21 @@ mod tests {
         assert!(state["last_refresh_seconds"].is_number());
 
         // Unknown path -> 404.
-        let missing = client.get(format!("{base}/nope")).send().await.unwrap();
+        let missing = client
+            .get(format!("{base}/nope"))
+            .header("Authorization", "Bearer test-token")
+            .send()
+            .await
+            .unwrap();
         assert_eq!(missing.status(), 404);
 
         // GET / serves the operator HTML.
-        let html = client.get(format!("{base}/")).send().await.unwrap();
+        let html = client
+            .get(format!("{base}/"))
+            .header("Authorization", "Bearer test-token")
+            .send()
+            .await
+            .unwrap();
         assert_eq!(html.status(), 200);
         let body = html.text().await.unwrap();
         assert!(body.contains("Stado Control Center"));
@@ -1744,7 +2645,7 @@ mod tests {
     #[tokio::test]
     async fn artifacts_endpoints_over_fabricated_manifests() {
         let _guard = lock().await;
-        let _env = EnvGuard::unset(&["STADO_DEPLOYMENT_ID"]);
+        let supabase = crate::testutil::mock_http(auth_responses(&[true, true, true])).await;
         let (_dir, store) = store();
         // Upload the manifest blob directly (publish() would run validation).
         let reference = ArtifactRef::parse("activations/wisent/acts@v1").unwrap();
@@ -1757,13 +2658,14 @@ mod tests {
             .await
             .unwrap();
 
-        let dashboard = Dashboard::new(store).with_refresh_seconds(10);
+        let dashboard = dashboard_with_operator_auth(store, &supabase);
         dashboard.refresh_once().await.expect("refresh");
         let base = spawn_server(&dashboard).await;
         let client = reqwest::Client::new();
 
         let list = client
             .get(format!("{base}/api/artifacts.json"))
+            .header("Authorization", "Bearer test-token")
             .send()
             .await
             .unwrap();
@@ -1775,6 +2677,7 @@ mod tests {
             .get(format!(
                 "{base}/api/artifact.json?ref=activations/wisent/acts@v1"
             ))
+            .header("Authorization", "Bearer test-token")
             .send()
             .await
             .unwrap();
@@ -1785,6 +2688,7 @@ mod tests {
         // Missing ref -> 400.
         let missing = client
             .get(format!("{base}/api/artifact.json"))
+            .header("Authorization", "Bearer test-token")
             .send()
             .await
             .unwrap();
@@ -1794,9 +2698,8 @@ mod tests {
     #[tokio::test]
     async fn host_header_guard_rejects_dns_names_without_deployment() {
         let _guard = lock().await;
-        let _env = EnvGuard::unset(&["STADO_DEPLOYMENT_ID"]);
         let (_dir, store) = store();
-        let dashboard = Dashboard::new(store).with_refresh_seconds(10);
+        let dashboard = dashboard_without_operator_auth(store);
         let base = spawn_server(&dashboard).await;
         let client = reqwest::Client::new();
 
@@ -1826,18 +2729,9 @@ mod tests {
     #[tokio::test]
     async fn auth_gate_with_loopback_supabase_mock() {
         let _guard = lock().await;
-        let supabase = crate::testutil::mock_http(vec![
-            crate::testutil::http_response(200, "OK", "true"),
-            crate::testutil::http_response(200, "OK", "false"),
-        ])
-        .await;
-        let _env = EnvGuard::set(&[
-            ("STADO_DEPLOYMENT_ID", "dep-1"),
-            ("SUPABASE_URL", &supabase.base_url),
-            ("SUPABASE_ANON_KEY", "anon-key"),
-        ]);
+        let supabase = crate::testutil::mock_http(auth_responses(&[true, false])).await;
         let (_dir, store) = store();
-        let dashboard = Dashboard::new(store).with_refresh_seconds(10);
+        let dashboard = dashboard_with_operator_auth(store, &supabase);
         let base = spawn_server(&dashboard).await;
         let client = reqwest::Client::new();
 
@@ -1884,19 +2778,29 @@ mod tests {
     #[tokio::test]
     async fn post_routes_unknown_and_cleanup_run_guards() {
         let _guard = lock().await;
-        let _env = EnvGuard::unset(&["STADO_DEPLOYMENT_ID"]);
+        let supabase = crate::testutil::mock_http(auth_responses(&[true, true, true, true])).await;
         let (_dir, store) = store();
-        let dashboard = Dashboard::new(store).with_refresh_seconds(10);
+        let dashboard = dashboard_with_operator_auth(store, &supabase);
         let base = spawn_server(&dashboard).await;
         let client = reqwest::Client::new();
 
-        // Unknown POST path -> 404.
+        // Authentication is evaluated before route disclosure.
         let response = client.post(format!("{base}/nope")).send().await.unwrap();
-        assert_eq!(response.status(), 404);
+        assert_eq!(response.status(), http_status("401"));
+
+        // Once authorized, the unknown route is reported as missing.
+        let response = client
+            .post(format!("{base}/nope"))
+            .header("Authorization", "Bearer test-token")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), http_status("404"));
 
         // /api/cleanup/run with a query string -> 400 cleanup envelope.
         let response = client
             .post(format!("{base}/api/cleanup/run?force=1"))
+            .header("Authorization", "Bearer test-token")
             .send()
             .await
             .unwrap();
@@ -1906,6 +2810,7 @@ mod tests {
         // Missing X-Stado-Action -> 403 cleanup envelope.
         let response = client
             .post(format!("{base}/api/cleanup/run"))
+            .header("Authorization", "Bearer test-token")
             .send()
             .await
             .unwrap();
@@ -1916,6 +2821,7 @@ mod tests {
         let response = client
             .post(format!("{base}/api/cleanup/run"))
             .header("X-Stado-Action", "cleanup")
+            .header("Authorization", "Bearer test-token")
             .body("{}")
             .send()
             .await
@@ -1925,41 +2831,53 @@ mod tests {
 
     #[test]
     fn trusted_request_host_matrix() {
-        let _guard = crate::testutil::GLOBAL_STATE_LOCK.blocking_lock();
-        let _env = EnvGuard::unset(&["STADO_DEPLOYMENT_ID"]);
-        // IPs pass; DNS names fail without a deployment.
-        assert!(trusted_request_host(Some("127.0.0.1"), None));
-        assert!(trusted_request_host(Some("127.0.0.1:8765"), None));
-        assert!(trusted_request_host(Some("[::1]:8765"), None));
-        assert!(!trusted_request_host(Some("evil.example.com"), None));
-        assert!(!trusted_request_host(Some("evil.example.com:8765"), None));
-        assert!(!trusted_request_host(None, None));
-        assert!(!trusted_request_host(Some(""), None));
+        // Loopback IPs pass; DNS and non-loopback IPs fail without a trusted proxy.
+        assert!(trusted_request_host(Some("127.0.0.1"), None, false));
+        assert!(trusted_request_host(Some("127.0.0.1:8765"), None, false));
+        assert!(trusted_request_host(Some("[::1]:8765"), None, false));
+        assert!(!trusted_request_host(Some("evil.example.com"), None, false));
+        assert!(!trusted_request_host(
+            Some("evil.example.com:8765"),
+            None,
+            false
+        ));
+        assert!(!trusted_request_host(Some("10.0.0.1"), None, false));
+        assert!(!trusted_request_host(None, None, false));
+        assert!(!trusted_request_host(Some(""), None, false));
         // userinfo / path / query are hard rejects even for IPs.
-        assert!(!trusted_request_host(Some("u:p@127.0.0.1"), None));
-        assert!(!trusted_request_host(Some("127.0.0.1/path"), None));
-        assert!(!trusted_request_host(Some("127.0.0.1?q=1"), None));
-        // Bad port on an IP: ValueError -> DNS branch -> false here.
-        assert!(!trusted_request_host(Some("127.0.0.1:notaport"), None));
-        assert!(!trusted_request_host(Some("127.0.0.1:99999"), None));
+        assert!(!trusted_request_host(Some("u:p@127.0.0.1"), None, false));
+        assert!(!trusted_request_host(Some("127.0.0.1/path"), None, false));
+        assert!(!trusted_request_host(Some("127.0.0.1?q=1"), None, false));
+        // Bad ports are always rejected.
+        assert!(!trusted_request_host(
+            Some("127.0.0.1:notaport"),
+            None,
+            false
+        ));
+        assert!(!trusted_request_host(Some("127.0.0.1:99999"), None, false));
     }
 
     #[test]
     fn trusted_request_host_reverse_proxy_branch() {
-        let _guard = crate::testutil::GLOBAL_STATE_LOCK.blocking_lock();
-        let _env = EnvGuard::set(&[("STADO_DEPLOYMENT_ID", "dep-1")]);
-        // DNS names pass only with the deployment set AND https forwarding.
+        // DNS and non-loopback IP values pass only through an explicitly
+        // configured HTTPS reverse proxy.
         assert!(trusted_request_host(
             Some("dashboard.example.com"),
-            Some("https")
+            Some("https"),
+            true
+        ));
+        assert!(trusted_request_host(Some("10.0.0.1"), Some("https"), true));
+        assert!(!trusted_request_host(
+            Some("dashboard.example.com"),
+            Some("http"),
+            true
         ));
         assert!(!trusted_request_host(
             Some("dashboard.example.com"),
-            Some("http")
+            None,
+            true
         ));
-        assert!(!trusted_request_host(Some("dashboard.example.com"), None));
-        // IPs still pass regardless.
-        assert!(trusted_request_host(Some("10.0.0.1"), None));
+        assert!(!trusted_request_host(Some("10.0.0.1"), None, true));
     }
 
     #[test]

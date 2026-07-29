@@ -31,17 +31,6 @@ use super::{storage, CmdError};
 const BILLING_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 const CLOUD_BILLING_BASE: &str = "https://cloudbilling.googleapis.com/v1/projects";
 const FENCE_REASON: &str = "fenced by stado recovery migrate";
-const ROUTING_OVERRIDES: &[&str] = &[
-    "WC_STORAGE_BACKEND",
-    "WC_BUCKET",
-    "WC_AZURE_STORAGE_ACCOUNT",
-    "WC_AZURE_CONTAINER",
-    "WC_S3_BUCKET",
-    "WC_S3_REGION",
-    "WC_LOCAL_STORAGE_PATH",
-    "WC_PROVIDERS",
-    "WC_DISABLED_PROVIDERS",
-];
 
 #[derive(Subcommand, Debug)]
 pub enum RecoveryCommands {
@@ -277,24 +266,15 @@ fn validate_args(
     }
     let mut providers = BTreeSet::new();
     for provider in &args.enable_providers {
-        if provider == "gcp" {
-            return Err(CmdError::usage(
-                "--enable-provider gcp is forbidden during recovery migration",
-            ));
-        }
-        if crate::capabilities::configurable_variant(
-            crate::capabilities::CapabilityKind::Compute,
+        let variant = crate::capabilities::configurable_variant(
+            crate::capabilities::RuntimeFacet::Compute,
             provider,
         )
-        .is_none()
-        {
+        .ok_or_else(|| CmdError::usage(format!("unknown compute provider {provider:?}")))?;
+        if !providers.insert(variant.id) {
             return Err(CmdError::usage(format!(
-                "unknown compute provider {provider:?}"
-            )));
-        }
-        if !providers.insert(provider) {
-            return Err(CmdError::usage(format!(
-                "--enable-provider {provider} was repeated"
+                "--enable-provider {} was repeated",
+                variant.id
             )));
         }
     }
@@ -304,7 +284,8 @@ fn validate_args(
         ));
     }
     if args.manage_gcp_billing {
-        if source.kind != "gcs" {
+        let gcs_source = source.adapter() == Some(crate::capabilities::StorageAdapter::Gcs);
+        if !gcs_source {
             return Err(CmdError::usage(
                 "--manage-gcp-billing is valid only when --from gcs",
             ));
@@ -334,11 +315,19 @@ fn validate_args(
 }
 
 fn validate_endpoint(endpoint: &Endpoint, label: &str) -> Result<(), CmdError> {
-    let missing = match endpoint.kind.as_str() {
-        "gcs" | "s3" if endpoint.bucket.is_empty() => Some("bucket"),
-        "azure" if endpoint.account.is_empty() => Some("storage account"),
-        "azure" if endpoint.container.is_empty() => Some("container"),
-        "local" if endpoint.path.is_empty() => Some("path"),
+    let missing = match endpoint.adapter() {
+        Some(
+            crate::capabilities::StorageAdapter::Gcs | crate::capabilities::StorageAdapter::S3,
+        ) if endpoint.bucket.is_empty() => Some("bucket"),
+        Some(crate::capabilities::StorageAdapter::AzureBlob) if endpoint.account.is_empty() => {
+            Some("storage account")
+        }
+        Some(crate::capabilities::StorageAdapter::AzureBlob) if endpoint.container.is_empty() => {
+            Some("container")
+        }
+        Some(crate::capabilities::StorageAdapter::Local) if endpoint.path.is_empty() => {
+            Some("path")
+        }
         _ => None,
     };
     if let Some(locator) = missing {
@@ -458,7 +447,17 @@ async fn resolve_services(args: &RecoveryMigrateArgs) -> Result<Vec<ResolvedServ
         if !environment.environment_files.is_empty() {
             return Err(CmdError::click(format!("{} uses EnvironmentFile entries; Stado cannot prove they do not override storage routing", reference)));
         }
-        for override_name in ROUTING_OVERRIDES {
+        let routing_overrides = [
+            crate::capabilities::PROVIDERS_CONFIG.env,
+            crate::capabilities::DISABLED_PROVIDERS_CONFIG.env,
+            crate::capabilities::STORAGE_BACKEND_CONFIG.env,
+        ]
+        .into_iter()
+        .chain(crate::capabilities::STORAGE_BACKEND_CONFIG.backup_env)
+        .chain(crate::capabilities::config_envs(
+            crate::capabilities::RuntimeFacet::Storage,
+        ));
+        for override_name in routing_overrides {
             if environment
                 .env
                 .iter()
@@ -579,49 +578,52 @@ fn set_storage_destination(
         .or_insert_with(|| Value::Object(Map::new()))
         .as_object_mut()
         .ok_or_else(|| CmdError::click("config storage must be an object"))?;
-    storage.insert(
-        "backend".to_string(),
-        Value::String(destination.kind.clone()),
-    );
-    let (section, fields): (&str, Vec<(&str, &str)>) = match destination.kind.as_str() {
-        "gcs" => ("gcs", vec![("bucket", &destination.bucket)]),
-        "azure" => (
-            "azure",
-            vec![
-                ("account", &destination.account),
-                ("container", &destination.container),
-            ],
-        ),
-        "s3" => (
-            "s3",
-            vec![
-                ("bucket", &destination.bucket),
-                ("region", &destination.region),
-            ],
-        ),
-        "local" => ("local", vec![("path", &destination.path)]),
-        other => {
-            return Err(CmdError::usage(format!(
-                "unsupported destination {other:?}"
-            )))
-        }
-    };
+    let variant = crate::capabilities::constructible_variant(
+        crate::capabilities::RuntimeFacet::Storage,
+        &destination.kind,
+    )
+    .ok_or_else(|| CmdError::usage(format!("unsupported destination {:?}", destination.kind)))?;
+    storage.insert("backend".to_string(), Value::String(variant.id.to_string()));
+    let section = variant
+        .config
+        .first()
+        .and_then(|field| field.path.strip_prefix("storage."))
+        .and_then(|path| path.split_once('.'))
+        .map(|(section, _)| section)
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "storage catalog variant {:?} has no locator section",
+                variant.id
+            ))
+        })?;
     let locator = storage
         .entry(section.to_string())
         .or_insert_with(|| Value::Object(Map::new()))
         .as_object_mut()
         .ok_or_else(|| CmdError::click(format!("config storage.{section} must be an object")))?;
-    for (name, value) in fields {
-        locator.insert(name.to_string(), Value::String(value.to_string()));
+    for field in variant.config {
+        let value = destination.locator_value(field.key).ok_or_else(|| {
+            CmdError::click(format!(
+                "storage catalog field {:?} has no endpoint locator",
+                field.key
+            ))
+        })?;
+        locator.insert(field.key.to_string(), Value::String(value.to_string()));
     }
-    if storage
+    let backup_is_gcs = storage
         .get("backup")
         .and_then(Value::as_object)
         .and_then(|backup| backup.get("backend"))
         .and_then(Value::as_str)
-        == Some("gcs")
-        && destination.kind != "gcs"
-    {
+        .and_then(|backend| {
+            crate::capabilities::canonical_id(crate::capabilities::RuntimeFacet::Storage, backend)
+        })
+        == Some(crate::capabilities::StorageAdapter::Gcs.id());
+    let destination_is_gcs = matches!(
+        variant.adapter,
+        crate::capabilities::RuntimeAdapter::Storage(crate::capabilities::StorageAdapter::Gcs)
+    );
+    if backup_is_gcs && !destination_is_gcs {
         storage.remove("backup");
     }
     Ok(())

@@ -100,6 +100,34 @@ pub async fn apply_shutdown(args: &ApplyArgs) -> Result<(), CmdError> {
     execute(&plan, selected, Vec::new(), args.json).await
 }
 
+pub(crate) async fn execute_autonomous(plan: &Plan) -> Result<(), CmdError> {
+    if plan.intent != Intent::AutonomousReconcile {
+        return Err(CmdError::click(
+            "autonomous executor requires an autonomous_reconcile plan",
+        ));
+    }
+    plan.validate()?;
+    if planner::configuration_fingerprint()? != plan.configuration_fingerprint {
+        return Err(CmdError::click(
+            "Stado configuration changed after autonomous planning; refusing execution",
+        ));
+    }
+    let selected: BTreeSet<String> = plan
+        .actions
+        .iter()
+        .filter(|action| action.authorization == Authorization::Automatic)
+        .map(|action| action.id.clone())
+        .collect();
+    let irreversible = plan
+        .actions
+        .iter()
+        .filter(|action| selected.contains(action.id.as_str()))
+        .filter(|action| action.reversibility == Reversibility::Irreversible)
+        .map(|action| action.id.clone())
+        .collect();
+    execute(plan, selected, irreversible, false).await
+}
+
 pub async fn verify(args: &VerifyArgs) -> Result<(), CmdError> {
     let journal = Journal::open().await?;
     let plan = journal.load_plan(&args.operation).await?;

@@ -135,13 +135,183 @@ fn show() -> Result<(), CmdError> {
         Value::from(config::azure_vm_identity_id()),
     );
     resolved.insert(
-        "release_base_url".into(),
-        Value::from(config::release_base_url()),
+        "stado_release_api_url".into(),
+        Value::from(config::stado_release_api_url()),
+    );
+    resolved.insert(
+        "stado_release_version".into(),
+        Value::from(config::stado_release_version()),
+    );
+    resolved.insert(
+        "stado_release_platform".into(),
+        Value::from(config::stado_release_platform()),
     );
     resolved.insert(
         "stado_deployment_id".into(),
         Value::from(config::stado_deployment_id()),
     );
+    resolved.insert(
+        "object_skarbiec_url".into(),
+        Value::from(config::object_skarbiec_url()),
+    );
+    resolved.insert(
+        "object_skarbiec_consumer".into(),
+        Value::from(config::object_skarbiec_consumer()),
+    );
+    resolved.insert(
+        "object_skarbiec_token_file".into(),
+        Value::from(config::object_skarbiec_token_file()),
+    );
+    let object_namespaces = match config::object_api_namespaces() {
+        Ok(namespaces) => Value::Object(
+            namespaces
+                .iter()
+                .map(|(namespace, policy)| {
+                    (
+                        namespace.clone(),
+                        Value::Object(Map::from_iter([
+                            ("item".into(), Value::from(policy.item())),
+                            (
+                                "prefix_policies".into(),
+                                Value::Array(
+                                    policy
+                                        .prefix_policies()
+                                        .iter()
+                                        .map(|prefix_policy| {
+                                            Value::Object(Map::from_iter([
+                                                (
+                                                    "prefix".into(),
+                                                    Value::from(prefix_policy.prefix()),
+                                                ),
+                                                (
+                                                    "actions".into(),
+                                                    Value::Array(
+                                                        prefix_policy
+                                                            .actions()
+                                                            .iter()
+                                                            .map(|action| {
+                                                                Value::from(action.as_str())
+                                                            })
+                                                            .collect(),
+                                                    ),
+                                                ),
+                                            ]))
+                                        })
+                                        .collect(),
+                                ),
+                            ),
+                        ])),
+                    )
+                })
+                .collect(),
+        ),
+        Err(problems) => Value::Object(Map::from_iter([(
+            "errors".into(),
+            Value::Array(
+                problems
+                    .iter()
+                    .map(|problem| Value::from(problem.as_str()))
+                    .collect(),
+            ),
+        )])),
+    };
+    resolved.insert("object_api_namespaces".into(), object_namespaces);
+    resolved.insert(
+        "release_skarbiec_url".into(),
+        Value::from(config::release_skarbiec_url()),
+    );
+    resolved.insert(
+        "release_skarbiec_consumer".into(),
+        Value::from(config::release_skarbiec_consumer()),
+    );
+    resolved.insert(
+        "release_skarbiec_token_file".into(),
+        Value::from(config::release_skarbiec_token_file()),
+    );
+    let release_publishers = match config::release_api_publishers() {
+        Ok(publishers) => Value::Object(
+            publishers
+                .iter()
+                .map(|(product, policy)| {
+                    (
+                        product.clone(),
+                        Value::Object(Map::from_iter([
+                            ("item".into(), Value::from(policy.item())),
+                            ("prefix".into(), Value::from(policy.prefix())),
+                        ])),
+                    )
+                })
+                .collect(),
+        ),
+        Err(problems) => Value::Object(Map::from_iter([(
+            "errors".into(),
+            Value::Array(
+                problems
+                    .iter()
+                    .map(|problem| Value::from(problem.as_str()))
+                    .collect(),
+            ),
+        )])),
+    };
+    resolved.insert("release_api_publishers".into(), release_publishers);
+    resolved.insert(
+        "service_skarbiec_url".into(),
+        Value::from(config::service_skarbiec_url()),
+    );
+    resolved.insert(
+        "service_skarbiec_consumer".into(),
+        Value::from(config::service_skarbiec_consumer()),
+    );
+    resolved.insert(
+        "service_skarbiec_token_file".into(),
+        Value::from(config::service_skarbiec_token_file()),
+    );
+    let service_deployers = match config::service_api_deployers() {
+        Ok(deployers) => Value::Object(
+            deployers
+                .iter()
+                .map(|(product, policy)| {
+                    (
+                        product.clone(),
+                        Value::Object(Map::from_iter([
+                            ("consumer".into(), Value::from(policy.consumer())),
+                            ("item".into(), Value::from(policy.item())),
+                            (
+                                "services".into(),
+                                Value::Array(
+                                    policy
+                                        .services()
+                                        .iter()
+                                        .map(|service| Value::from(service.as_str()))
+                                        .collect(),
+                                ),
+                            ),
+                            (
+                                "actions".into(),
+                                Value::Array(
+                                    policy
+                                        .actions()
+                                        .iter()
+                                        .map(|action| Value::from(action.as_str()))
+                                        .collect(),
+                                ),
+                            ),
+                        ])),
+                    )
+                })
+                .collect(),
+        ),
+        Err(problems) => Value::Object(Map::from_iter([(
+            "errors".into(),
+            Value::Array(
+                problems
+                    .iter()
+                    .map(|problem| Value::from(problem.as_str()))
+                    .collect(),
+            ),
+        )])),
+    };
+    resolved.insert("service_api_deployers".into(), service_deployers);
     resolved.insert(
         "agent_skarbiec_url".into(),
         Value::from(config::agent_skarbiec_url()),

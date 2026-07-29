@@ -276,18 +276,18 @@ pub async fn gcp_fanout(
                 .await
                 {
                     Ok(r) => {
-                        let mut row = json!({"provider": "gcp", "region": region, "ok": true});
+                        let mut row = json!({"provider": crate::capabilities::ProviderId::Gcp.as_str(), "region": region, "ok": true});
                         merge_object(&mut row, r);
                         row
                     }
                     Err(err) => json!({
-                        "provider": "gcp", "region": region, "ok": false,
+                    "provider": crate::capabilities::ProviderId::Gcp.as_str(), "region": region, "ok": false,
                         "error": format!("{}: {err}", py_type_name(&err)),
                     }),
                 }
             }
             None => json!({
-                "provider": "gcp", "region": region, "ok": false,
+                "provider": crate::capabilities::ProviderId::Gcp.as_str(), "region": region, "ok": false,
                 "error": "DefaultCredentialsError: Cloud Quotas client construction failed",
             }),
         };
@@ -308,7 +308,7 @@ pub async fn azure_fanout(accel: &str, new_limit: i64, regions: Option<&[String]
     families.sort_unstable();
     if families.is_empty() {
         return vec![json!({
-            "provider": "azure", "ok": false,
+            "provider": crate::capabilities::ProviderId::Azure.as_str(), "ok": false,
             "error": format!("no Azure compute family matches accel '{accel}'"),
         })];
     }
@@ -321,17 +321,16 @@ pub async fn azure_fanout(accel: &str, new_limit: i64, regions: Option<&[String]
         for fam in &families {
             let row = match azure_request_increase(subscription, loc, fam, new_limit).await {
                 Ok(r) if r.get("available").and_then(Value::as_bool) == Some(false) => json!({
-                    "provider": "azure", "location": loc, "family": fam, "ok": false,
+                    "provider": crate::capabilities::ProviderId::Azure.as_str(), "location": loc, "family": fam, "ok": false,
                     "error": r.get("reason").and_then(Value::as_str).unwrap_or("not available"),
                 }),
                 Ok(r) => {
-                    let mut row =
-                        json!({"provider": "azure", "location": loc, "family": fam, "ok": true});
+                    let mut row = json!({"provider": crate::capabilities::ProviderId::Azure.as_str(), "location": loc, "family": fam, "ok": true});
                     merge_object(&mut row, r);
                     row
                 }
                 Err(err) => json!({
-                    "provider": "azure", "location": loc, "family": fam, "ok": false,
+                    "provider": crate::capabilities::ProviderId::Azure.as_str(), "location": loc, "family": fam, "ok": false,
                     "error": format!("AzureError: {err}"),
                 }),
             };
@@ -361,8 +360,13 @@ pub async fn request_quota_increases(
 ) -> Vec<Value> {
     let mut out = Vec::new();
     for provider in providers {
-        match provider.as_str() {
-            "gcp" => out.extend(
+        let adapter =
+            crate::capabilities::variant(crate::capabilities::RuntimeFacet::Quota, provider)
+                .map(|variant| variant.adapter);
+        match adapter {
+            Some(crate::capabilities::RuntimeAdapter::Quota(
+                crate::capabilities::QuotaAdapter::Gcp,
+            )) => out.extend(
                 gcp_fanout(
                     gcp_client,
                     accel,
@@ -373,9 +377,11 @@ pub async fn request_quota_increases(
                 )
                 .await,
             ),
-            "azure" => out.extend(azure_fanout(accel, new_limit, regions).await),
-            other => out.push(json!({
-                "provider": other, "ok": false,
+            Some(crate::capabilities::RuntimeAdapter::Quota(
+                crate::capabilities::QuotaAdapter::Azure,
+            )) => out.extend(azure_fanout(accel, new_limit, regions).await),
+            _ => out.push(json!({
+                "provider": provider, "ok": false,
                 "error": "no quota-increase impl for this provider",
             })),
         }

@@ -101,6 +101,18 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               weles-api agent shows up in",
     },
     ApprovedCommand {
+        argv: &[
+            "/bin/ps", "ax", "-o", "pid", "-o", "ppid", "-o", "etime", "-o", "comm",
+        ],
+        why: "lists process identifiers, elapsed time, and executable names without command \
+              arguments or environment values; it is read-only and cannot expose secret argv",
+    },
+    ApprovedCommand {
+        argv: &["/usr/sbin/netstat", "-anv", "-p", "tcp"],
+        why: "reads the kernel TCP socket table without connecting to any endpoint; fixed \
+              flags expose listeners and owning processes but accept no remote address",
+    },
+    ApprovedCommand {
         argv: &["/usr/bin/uname", "-a"],
         why: "prints kernel identification; -a only widens the fields, and there is no input \
               to interpret",

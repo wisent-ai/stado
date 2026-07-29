@@ -77,8 +77,6 @@ pub fn ssh_hostname(value: &str) -> String {
 /// `_REGISTRY_VERSION`).
 pub const REGISTRY_SCHEMA_VERSION: i64 = 2;
 
-const VALID_KINDS: [&str; 3] = ["gcp", "local", "vast"];
-
 /// Raised when a registry does not satisfy the version 2 contract.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{0}")]
@@ -130,10 +128,10 @@ fn validate_action_list(value: &Value, location: &str) -> Result<(), RegistryVal
                 ))
             }
         };
-        if action != "*" && !is_action(action) {
+        if !is_action(action) {
             return Err(verr(
                 &item_location,
-                "must be '*' or an exact lowercase action identifier",
+                "must be an exact lowercase action identifier; wildcard grants are forbidden",
             ));
         }
         if !seen.insert(action) {
@@ -142,9 +140,6 @@ fn validate_action_list(value: &Value, location: &str) -> Result<(), RegistryVal
                 &format!("duplicate action '{action}'"),
             ));
         }
-    }
-    if seen.contains("*") && seen.len() != 1 {
-        return Err(verr(location, "wildcard '*' must be the only action"));
     }
     Ok(())
 }
@@ -391,6 +386,9 @@ pub fn validate_registry(data: &Value) -> Result<(), RegistryValidationError> {
 
     let mut names: HashSet<&str> = HashSet::new();
     let mut identities: HashMap<String, String> = HashMap::new();
+    let valid_kinds =
+        crate::capabilities::configurable_ids(crate::capabilities::RuntimeFacet::HostTarget)
+            .collect::<Vec<_>>();
     for (index, target) in targets.iter().enumerate() {
         let location = format!("registry.targets[{index}]");
         let target = target
@@ -415,16 +413,16 @@ pub fn validate_registry(data: &Value) -> Result<(), RegistryValidationError> {
         }
 
         let kind = target.get("kind").and_then(Value::as_str).unwrap_or("");
-        if !VALID_KINDS.contains(&kind) {
+        if !valid_kinds.contains(&kind) {
             return Err(verr(
                 &format!("{location}.kind"),
-                &format!("must be one of {}", py_list_repr(&VALID_KINDS)),
+                &format!("must be one of {}", py_list_repr(&valid_kinds)),
             ));
         }
 
         if let Some(weles) = target.get("weles") {
             let weles_location = format!("{location}.weles");
-            if kind != "local" {
+            if !crate::capabilities::ProviderId::Local.matches(kind) {
                 return Err(verr(&weles_location, "is allowed only for kind='local'"));
             }
             let weles = weles
@@ -467,7 +465,7 @@ pub fn validate_registry(data: &Value) -> Result<(), RegistryValidationError> {
         }
 
         if let Some(cleanup) = target.get("disk_cleanup") {
-            if kind != "local" {
+            if !crate::capabilities::ProviderId::Local.matches(kind) {
                 return Err(verr(
                     &format!("{location}.disk_cleanup"),
                     "is allowed only for kind='local'",
@@ -669,7 +667,7 @@ fn default_interval_seconds() -> i64 {
 }
 
 fn default_state_uri() -> String {
-    "gs://wisent-compute".to_string()
+    "stado://system/registry".to_string()
 }
 
 /// Tolerate explicit JSON null where Python does `d.get(key) or <default>`.
@@ -772,6 +770,17 @@ pub struct ComputeTarget {
     pub pinned_only: bool,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+impl ComputeTarget {
+    pub fn provider(&self) -> Option<crate::capabilities::ProviderId> {
+        crate::capabilities::variant(crate::capabilities::RuntimeFacet::HostTarget, &self.kind)
+            .and_then(|variant| variant.provider)
+    }
+
+    pub fn is_provider(&self, provider: crate::capabilities::ProviderId) -> bool {
+        self.provider() == Some(provider)
+    }
 }
 
 /// Where the scheduling tick runs.
@@ -985,7 +994,9 @@ pub struct RegistryStore {
 impl RegistryStore {
     /// Bind to the store that holds the canonical registry.
     pub async fn open() -> Result<Self, StorageError> {
-        if crate::config::wc_storage_backend() == "gcs" {
+        let gcs_backend = crate::capabilities::storage_adapter(crate::config::wc_storage_backend())
+            == Some(crate::capabilities::StorageAdapter::Gcs);
+        if gcs_backend {
             let uri = GCS_REGISTRY_URI
                 .strip_prefix("gs://")
                 .unwrap_or(GCS_REGISTRY_URI);
@@ -1129,9 +1140,13 @@ pub enum RegistryFetchError {
 /// actually wrote instead of a hardcoded bucket
 /// (`cli/registry.rs::push`).
 pub fn registry_location() -> String {
-    match crate::config::wc_storage_backend() {
-        "gcs" => GCS_REGISTRY_URI.to_string(),
-        other => format!("{other}:{REGISTRY_BLOB}"),
+    let backend = crate::config::wc_storage_backend();
+    if crate::capabilities::storage_adapter(backend)
+        == Some(crate::capabilities::StorageAdapter::Gcs)
+    {
+        GCS_REGISTRY_URI.to_string()
+    } else {
+        format!("{backend}:{REGISTRY_BLOB}")
     }
 }
 
@@ -1196,7 +1211,10 @@ impl Registry {
 
     /// Subset of targets with kind='local'. Used by wc bootstrap.
     pub fn local_targets(&self) -> Vec<&ComputeTarget> {
-        self.targets.iter().filter(|t| t.kind == "local").collect()
+        self.targets
+            .iter()
+            .filter(|target| target.is_provider(crate::capabilities::ProviderId::Local))
+            .collect()
     }
 
     /// Return the named coordinator entry.
@@ -1251,19 +1269,16 @@ mod tests {
     #[test]
     fn bundled_registry_loads() {
         let registry = load_bundled_registry().unwrap();
-        assert_eq!(registry.targets.len(), 4);
-        let coordinator = registry.lookup_coordinator("gcp-cloud-function").unwrap();
+        assert_eq!(registry.local_targets().len(), registry.targets.len());
+        let coordinator = registry.lookup_coordinator("local-control-plane").unwrap();
         assert!(coordinator.active);
-        assert_eq!(coordinator.runtime, "gcp_cloud_function");
-        assert_eq!(coordinator.interval_seconds, 180);
-        assert_eq!(coordinator.state_uri, "gs://wisent-compute");
+        assert_eq!(coordinator.runtime, "daemon");
+        assert_eq!(coordinator.state_uri, "stado://system/registry");
 
-        let spot = registry.lookup("gcp-spot-t4").unwrap();
-        assert_eq!(spot.kind, "gcp");
-        assert_eq!(spot.slots, 1);
-        assert!(!spot.pinned_only);
+        let workstation = registry.lookup("gpu-host").unwrap();
+        assert_eq!(workstation.kind, "local");
+        assert!(!workstation.pinned_only);
 
-        assert_eq!(registry.local_targets().len(), 3);
         let mac_mini = registry.lookup("control-host").unwrap();
         let cleanup = mac_mini.disk_cleanup.as_ref().unwrap();
         assert!(cleanup.cleaners.contains_key("huggingface_cache"));
@@ -1382,7 +1397,7 @@ mod tests {
         .unwrap_err();
         assert!(err.0.contains("kind='local'"), "{}", err.0);
 
-        // Wildcard must be the only action.
+        // Every grant must be an exact action identifier; wildcard grants are forbidden.
         let err = validate_registry(&serde_json::json!({
             "schema_version": 2,
             "targets": [{"name": "ok", "kind": "local",
@@ -1390,7 +1405,7 @@ mod tests {
         }))
         .unwrap_err();
         assert!(
-            err.0.contains("wildcard '*' must be the only action"),
+            err.0.contains("exact lowercase action identifier"),
             "{}",
             err.0
         );
@@ -1536,7 +1551,7 @@ mod tests {
             async {
                 // source="auto": GCS failure falls back to the bundled file.
                 let auto = load_registry_auto().await.unwrap();
-                assert_eq!(auto.targets.len(), 4);
+                assert_eq!(auto, load_bundled_registry().unwrap());
                 // The fleet-survival path must see the FAILURE, never an
                 // empty registry: "unreachable" is not "you were revoked".
                 assert!(matches!(
@@ -1555,7 +1570,7 @@ mod tests {
                 // holding no registry document is equally non-authoritative
                 // — an un-seeded Azure container looks exactly like this.
                 let auto = load_registry_auto().await.unwrap();
-                assert_eq!(auto.targets.len(), 4);
+                assert_eq!(auto, load_bundled_registry().unwrap());
                 assert!(matches!(
                     fetch_registry_remote().await,
                     Err(RegistryFetchError::Absent { .. })
@@ -1577,7 +1592,10 @@ mod tests {
                     fetch_registry_remote().await,
                     Err(RegistryFetchError::Invalid { .. })
                 ));
-                assert_eq!(load_registry_auto().await.unwrap().targets.len(), 4);
+                assert_eq!(
+                    load_registry_auto().await.unwrap(),
+                    load_bundled_registry().unwrap()
+                );
             },
         )
         .await;

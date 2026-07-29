@@ -16,44 +16,16 @@ concurrency:
 
 jobs:
   release:
-    if: ${{ vars.STADO_ENABLE_AZURE_DEPLOY == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, stado-control-plane]
     permissions:
       contents: read
-      id-token: write
     env:
-      AZURE_STORAGE_ACCOUNT: ${{ vars.STADO_AZURE_STORAGE_ACCOUNT }}
-      AZURE_STORAGE_CONTAINER: ${{ vars.STADO_AZURE_STORAGE_CONTAINER }}
-      AZURE_CLIENT_ID: ${{ secrets.STADO_AZURE_PUBLISHER_CLIENT_ID }}
-      AZURE_TENANT_ID: ${{ secrets.STADO_AZURE_TENANT_ID }}
-      AZURE_SUBSCRIPTION_ID: ${{ secrets.STADO_AZURE_SUBSCRIPTION_ID }}
+      STADO_API_URL: https://stado.wisent.com
+      WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
+      WC_SKARBIEC_CONSUMER: stado-release-publisher
+      WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-skarbiec-token
     steps:
       - uses: actions/checkout@v4
-
-      - name: Require pre-provisioned Azure release resources
-        run: |
-          for name in AZURE_STORAGE_ACCOUNT AZURE_STORAGE_CONTAINER AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID; do
-            value="${!name:-}"
-            if [ -z "$value" ]; then
-              echo "::error::$name is unresolved. Provision the Azure container and federated publisher identity."
-              false
-            fi
-          done
-
-      - name: Authenticate Azure publisher with GitHub OIDC
-        run: |
-          federated_token="$(curl -fsSL -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=api://AzureADTokenExchange" | jq -r .value)"
-          if [ -z "$federated_token" ] || [ "$federated_token" = null ]; then
-            echo "::error::GitHub did not issue an Azure federated token."
-            false
-          fi
-          az login --service-principal \
-            --username "$AZURE_CLIENT_ID" \
-            --tenant "$AZURE_TENANT_ID" \
-            --federated-token "$federated_token" >/dev/null
-          az account set --subscription "$AZURE_SUBSCRIPTION_ID"
-          unset federated_token
 
       - name: Build provider-neutral Rust release
         run: |
@@ -69,43 +41,43 @@ jobs:
             echo "::error::Cargo release version is unresolved."
             false
           fi
-          printf '{"version": "%s", "channel": "stable"}\n' "$version" > "$RUNNER_TEMP/latest.json"
           echo "STADO_VERSION=$version" >> "$GITHUB_ENV"
 
-      - name: Publish release and control-plane config to Azure Blob
+      - name: Create immutable Linux release through Stado
         run: |
-          az storage blob upload-batch \
-            --auth-mode login \
-            --account-name "$AZURE_STORAGE_ACCOUNT" \
-            --destination "$AZURE_STORAGE_CONTAINER" \
-            --destination-path "releases/stado/$STADO_VERSION/linux-amd64" \
-            --source "$RUNNER_TEMP/stado-release" \
-            --overwrite >/dev/null
-          az storage blob upload \
-            --auth-mode login \
-            --account-name "$AZURE_STORAGE_ACCOUNT" \
-            --container-name "$AZURE_STORAGE_CONTAINER" \
-            --name config/quotas.json \
-            --file config/quotas.json \
-            --overwrite >/dev/null
+          stado_bin="$HOME/.stado/bin/stado"
+          test -x "$stado_bin"
+          test -n "$WC_SKARBIEC_URL"
+          STADO_API_TOKEN="$("$stado_bin" secrets get stado-release-publisher --field token)"
+          export STADO_API_TOKEN
+          for source in "$RUNNER_TEMP"/stado-release/*; do
+            name="${source##*/}"
+            uri="stado://releases/stado/$STADO_VERSION/linux-amd64/$name"
+            if "$stado_bin" storage put "$uri" "$source" --if-absent; then
+              continue
+            fi
+            existing="$RUNNER_TEMP/existing-$name"
+            "$stado_bin" storage get "$uri" "$existing"
+            if ! cmp --silent "$source" "$existing"; then
+              echo "::error::Immutable release collision at $uri"
+              false
+            fi
+          done
 
   deploy-control-plane:
     needs: release
-    if: ${{ always() && (needs.release.result == 'success' || needs.release.result == 'skipped') }}
     runs-on: [self-hosted, stado-control-plane]
     permissions:
       contents: read
-      id-token: write
     env:
       STADO_ENABLE_AZURE_DEPLOY: ${{ vars.STADO_ENABLE_AZURE_DEPLOY }}
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
       COORD_TARGET: ${{ vars.STADO_COORDINATOR_TARGET }}
+      STADO_API_URL: https://stado.wisent.com
+      WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
+      WC_SKARBIEC_CONSUMER: stado-release-publisher
+      WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-skarbiec-token
       STADO_CONTROL_PLATFORM: ${{ vars.STADO_CONTROL_PLATFORM }}
-      AZURE_STORAGE_ACCOUNT: ${{ vars.STADO_AZURE_STORAGE_ACCOUNT }}
-      AZURE_STORAGE_CONTAINER: ${{ vars.STADO_AZURE_STORAGE_CONTAINER }}
-      AZURE_CLIENT_ID: ${{ secrets.STADO_AZURE_PUBLISHER_CLIENT_ID }}
-      AZURE_TENANT_ID: ${{ secrets.STADO_AZURE_TENANT_ID }}
-      AZURE_SUBSCRIPTION_ID: ${{ secrets.STADO_AZURE_SUBSCRIPTION_ID }}
       STADO_API_HOST: stado.wisent.com
       STADO_DASHBOARD_UPSTREAM: ${{ vars.STADO_DASHBOARD_UPSTREAM }}
     steps:
@@ -118,15 +90,9 @@ jobs:
             "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
             "$source_dir"
           git -C "$source_dir" remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          git -C "$source_dir" checkout "$GITHUB_SHA"
+          git -C "$source_dir" checkout --detach "$GITHUB_SHA"
+          test "$(git -C "$source_dir" rev-parse HEAD)" = "$GITHUB_SHA"
           echo "STADO_SOURCE_DIR=$source_dir" >> "$GITHUB_ENV"
-          if [ "$STADO_ENABLE_AZURE_DEPLOY" != true ]; then
-            persistent_config="$HOME/.config/stado/config.json"
-            mkdir -p "${persistent_config%/*}"
-            cp "$source_dir/deploy/local/stado.config.json" "$persistent_config"
-            chmod u=rw,go= "$persistent_config"
-            echo "STADO_CONFIG=$persistent_config" >> "$GITHUB_ENV"
-          fi
 
       - name: Build native Rust control plane
         run: |
@@ -136,80 +102,50 @@ jobs:
       - name: Validate selected deployment profile
         run: |
           if [ -z "$STADO_CONFIG" ] || [ ! -r "$STADO_CONFIG" ]; then
-            echo "::error::STADO_CONFIG must name a readable, persistent deployment profile."
+            echo "::error::STADO_CONFIG must name the persistent profile installed by SecretStateRepair."
             false
           fi
           if [ "$STADO_ENABLE_AZURE_DEPLOY" = true ]; then
             backend="$(jq -er '.storage.backend' "$STADO_CONFIG")"
-            if [ "$backend" != azure ]; then
-              echo "::error::Azure deployment requires an Azure-primary STADO_CONFIG."
-              false
-            fi
-            if jq -e '.providers_disabled // [] | index("azure") != null' "$STADO_CONFIG" >/dev/null; then
-              echo "::error::Azure deployment profile explicitly disables Azure."
-              false
-            fi
-            if ! jq -e '.providers // [] | index("azure") != null' "$STADO_CONFIG" >/dev/null; then
-              echo "::error::Azure deployment profile has no Azure compute provider."
-              false
-            fi
+            test "$backend" = azure
+            ! jq -e '.providers_disabled // [] | index("azure") != null' "$STADO_CONFIG" >/dev/null
+            jq -e '.providers // [] | index("azure") != null' "$STADO_CONFIG" >/dev/null
           fi
 
-      - name: Publish, install and bootstrap native Rust Stado
+      - name: Create immutable native release through Stado
         run: |
           release_dir="$RUNNER_TEMP/stado-native-release"
           mkdir -p "$release_dir"
           for name in stado stado-coverage stado-fix stado-watchdog stado-mcp; do
             cp "$STADO_SOURCE_DIR/stado-rs/target/release/$name" "$release_dir/$name"
           done
-          cp "$release_dir/stado" "$release_dir/wc"
           (
             cd "$release_dir"
-            for name in stado wc stado-coverage stado-fix stado-watchdog stado-mcp; do
+            for name in stado stado-coverage stado-fix stado-watchdog stado-mcp; do
               digest="$(openssl dgst -sha256 "$name")"
               printf '%s  %s\n' "${digest##* }" "$name"
             done > SHA256SUMS
           )
-          if [ "$STADO_ENABLE_AZURE_DEPLOY" = true ]; then
-            version_line="$(sed -n '/^version = /p' "$STADO_SOURCE_DIR/stado-rs/Cargo.toml")"
-            version="${version_line#*\"}"
-            version="${version%%\"*}"
-            platform="${STADO_CONTROL_PLATFORM:-darwin-arm64}"
-            federated_token="$(curl -fsSL -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
-              "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=api://AzureADTokenExchange" | jq -r .value)"
-            if [ -z "$version" ] || [ -z "$federated_token" ] || [ "$federated_token" = null ]; then
-              echo "::error::Native release version or Azure federated token is unresolved."
+          version_line="$(sed -n '/^version = /p' "$STADO_SOURCE_DIR/stado-rs/Cargo.toml")"
+          version="${version_line#*\"}"
+          version="${version%%\"*}"
+          platform="${STADO_CONTROL_PLATFORM:?set the native release platform}"
+          stado_bin="$HOME/.stado/bin/stado"
+          STADO_API_TOKEN="$("$stado_bin" secrets get stado-release-publisher --field token)"
+          export STADO_API_TOKEN
+          for source in "$release_dir"/*; do
+            name="${source##*/}"
+            uri="stado://releases/stado/$version/$platform/$name"
+            if "$stado_bin" storage put "$uri" "$source" --if-absent; then
+              continue
+            fi
+            existing="$RUNNER_TEMP/existing-native-$name"
+            "$stado_bin" storage get "$uri" "$existing"
+            if ! cmp --silent "$source" "$existing"; then
+              echo "::error::Immutable release collision at $uri"
               false
             fi
-            az login --service-principal \
-              --username "$AZURE_CLIENT_ID" \
-              --tenant "$AZURE_TENANT_ID" \
-              --federated-token "$federated_token" >/dev/null
-            az account set --subscription "$AZURE_SUBSCRIPTION_ID"
-            unset federated_token
-            az storage blob upload-batch \
-              --auth-mode login \
-              --account-name "$AZURE_STORAGE_ACCOUNT" \
-              --destination "$AZURE_STORAGE_CONTAINER" \
-              --destination-path "releases/stado/$version/$platform" \
-              --source "$release_dir" \
-              --overwrite >/dev/null
-            printf '{"version": "%s", "channel": "stable"}\n' "$version" \
-              > "$RUNNER_TEMP/latest.json"
-            az storage blob upload \
-              --auth-mode login \
-              --account-name "$AZURE_STORAGE_ACCOUNT" \
-              --container-name "$AZURE_STORAGE_CONTAINER" \
-              --name releases/stado/latest.json \
-              --file "$RUNNER_TEMP/latest.json" \
-              --overwrite >/dev/null
-          else
-            mkdir -p "$HOME/.stado/local-storage" "$HOME/.stado/local-backup"
-            if [ ! -f "$HOME/.stado/local-storage/registry.json" ]; then
-              cp "$STADO_SOURCE_DIR/stado-rs/data/registry.json" \
-                "$HOME/.stado/local-storage/registry.json"
-            fi
-          fi
+          done
           STADO_RELEASE_DIR="$release_dir" bash "$STADO_SOURCE_DIR/deploy/deploy_stado_rust.sh"
 
       - name: Reload TLS reverse proxy

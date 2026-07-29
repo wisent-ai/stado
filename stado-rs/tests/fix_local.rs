@@ -3,6 +3,7 @@
 //! state at failure_fixes/<jid>.json, and a stubbed `claude` CLI on PATH
 //! for the --execute dispatch path.
 
+use std::io::{BufRead, Read, Write};
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -182,13 +183,56 @@ fn execute_dispatches_via_local_claude_cli() {
     let storage = dir.path();
     write_failed_blob(storage);
 
+    let listener = std::net::TcpListener::bind("localhost:0").unwrap();
+    let skarbiec_url = format!("http://{}", listener.local_addr().unwrap());
+    let skarbiec = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+        let mut content_length = usize::MIN;
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            if line == "\r\n" {
+                break;
+            }
+            if let Some(value) = line
+                .to_ascii_lowercase()
+                .strip_prefix("content-length:")
+                .map(str::trim)
+            {
+                content_length = value.parse().unwrap();
+            }
+        }
+        let mut request_body = vec![u8::MIN; content_length];
+        reader.read_exact(&mut request_body).unwrap();
+        assert!(String::from_utf8(request_body)
+            .unwrap()
+            .contains(r#""id":"stado-anthropic""#));
+        let body = r#"{"value":{"api_key":"test-anthropic-key"}}"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .unwrap();
+    });
+    let grant_file = dir.path().join("skarbiec-grant");
+    std::fs::write(&grant_file, "test-grant").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let owner_only = u32::from_str_radix("600", u8::BITS).unwrap();
+        std::fs::set_permissions(&grant_file, std::fs::Permissions::from_mode(owner_only)).unwrap();
+    }
+
     // Stub `claude` on PATH: record the argv, print canned output.
     let bin_dir = dir.path().join("bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
     let claude = bin_dir.join("claude");
     std::fs::write(
         &claude,
-        "#!/bin/sh\nprintf '%s\\n' \"$1\" > \"$CLAUDE_STUB_DIR/argv.txt\"\nprintf 'fixed it\\n'\n",
+        "#!/bin/sh\nprintf '%s\\n' \"$1\" > \"$CLAUDE_STUB_DIR/argv.txt\"\nprintf '%s\\n' \"$ANTHROPIC_API_KEY\" > \"$CLAUDE_STUB_DIR/anthropic-key.txt\"\nprintf 'fixed it\\n'\n",
     )
     .unwrap();
     #[cfg(unix)]
@@ -206,8 +250,12 @@ fn execute_dispatches_via_local_claude_cli() {
         .env("STADO_CONFIG", storage.join("no-such-config.json"))
         .env("PATH", &path)
         .env("CLAUDE_STUB_DIR", dir.path())
+        .env("WC_SKARBIEC_URL", skarbiec_url)
+        .env("WC_SKARBIEC_CONSUMER", "stado-control-plane")
+        .env("WC_SKARBIEC_TOKEN_FILE", &grant_file)
         .output()
         .expect("stado-fix binary runs");
+    skarbiec.join().unwrap();
     assert!(out.status.success(), "{}", stderr(&out));
     let result: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
     assert_eq!(result["status"], "dispatched");
@@ -218,6 +266,10 @@ fn execute_dispatches_via_local_claude_cli() {
     assert_eq!(
         std::fs::read_to_string(dir.path().join("argv.txt")).unwrap(),
         "-p\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("anthropic-key.txt")).unwrap(),
+        "test-anthropic-key\n"
     );
 
     // Per-job state landed at failure_fixes/<jid>.json.

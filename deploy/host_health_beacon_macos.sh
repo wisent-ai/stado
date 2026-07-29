@@ -1,34 +1,25 @@
 #!/bin/bash
-# macOS variant of host_health_beacon.sh.
+# macOS host health writer for the configured Stado backend.
 #
-# Writes gs://wisent-compute/host_health/<host>.json every tick. Same
-# schema as the Linux version so the Vercel HostHealthCard renders both
-# uniformly. Differences:
-#   - Uses `launchctl print gui/<uid>/<label>` for unit state instead of
-#     systemctl.
-#   - df parsing differs from Linux's (BSD df).
-#
-# Invoked from a LaunchAgent (rendered by install_macos_coordinator.sh)
-# with StartInterval=60.
+# Unit state is collected through launchctl and publication is delegated to
+# the authenticated `stado host publish-beacon` control route. No provider
+# SDK, cloud CLI, application-default credential, or direct-storage path is
+# available to this LaunchAgent.
 
-set -u
+set -euo pipefail
 
-PROJECT="wisent-480400"
-BUCKET="stado"
+STADO_BIN="${STADO_BIN:-$HOME/.stado/bin/stado}"
 HOST_SLUG=$(/bin/hostname -s 2>/dev/null | /usr/bin/tr '[:upper:]' '[:lower:]')
-ADC_PATH="${GOOGLE_APPLICATION_CREDENTIALS:-$HOME/.config/gcloud/application_default_credentials.json}"
-# The macOS gcloud CLI tries to write OAuth tokens to the user keychain
-# and crashes from non-interactive launchd contexts with
-# errSecInteractionNotAllowed (-25308). Use the wisent-compute venv's
-# google-cloud-storage Python client directly (it honors ADC via
-# $GOOGLE_APPLICATION_CREDENTIALS without going through keychain).
-VENV_PY="${WC_VENV_PYTHON:-$HOME/.venvs/wisent-compute/bin/python}"
-[ -x "$VENV_PY" ] || exit 1
+if [ ! -x "$STADO_BIN" ]; then
+    echo "host_health_beacon: Rust stado binary unavailable at $STADO_BIN" > /dev/stderr
+    false
+fi
+PYTHON_BIN="${PYTHON_BIN:-/usr/bin/python3}"
 
-# Use the existing health schedule for a bounded, best-effort policy pass.
-WC_BIN="${WC_BIN:-$HOME/.venvs/wisent-compute/bin/wc}"
+# Preserve the bounded, best-effort disk recovery pass.
+WC_BIN="${WC_BIN:-$STADO_BIN}"
 if [ -x "$WC_BIN" ]; then
-    GOOGLE_APPLICATION_CREDENTIALS="$ADC_PATH" "$VENV_PY" - "$WC_BIN" <<'CLEANUPPY' >/dev/null 2>&1
+    if ! "$PYTHON_BIN" - "$WC_BIN" <<'CLEANUPPY' &>/dev/null
 import subprocess
 import sys
 
@@ -44,7 +35,7 @@ try:
 except (OSError, subprocess.SubprocessError):
     raise SystemExit(1)
 CLEANUPPY
-    if [ "$?" -ne 0 ]; then
+    then
         echo "host_health_beacon: wc disk-cleanup did not complete; leaving disk state unchanged" >&2
     fi
 else
@@ -59,12 +50,16 @@ read -r disk_used_kb disk_avail_kb disk_pct_str <<<"$disk_line"
 disk_pct="${disk_pct_str%%%}"
 disk_avail_gb=$(( ${disk_avail_kb:-0} / 1024 / 1024 ))
 
-# LaunchAgent labels we expect on the mac mini.
-LABELS="${WC_HEALTH_UNITS:-com.wisent.compute.auto-deployer com.wisent.compute.dashboard com.wisent.hf-refresh com.wisent.weles-auto-deploy com.wisent.weles-worker com.wisent.weles-keyword-planner-api}"
+# Weles lifecycle is observable only through the authenticated Stado service
+# API; raw launchd labels are forbidden here.
+LABELS="${WC_HEALTH_UNITS:-com.wisent.compute.dashboard com.wisent.hf-refresh}"
 GUI_DOMAIN="gui/$(/usr/bin/id -u)"
 
 units_json=""
 for lbl in $LABELS; do
+    case "$lbl" in
+        *weles*) echo "host_health_beacon: raw Weles launchd lifecycle is forbidden"; false ;;
+    esac
     if /bin/launchctl print "${GUI_DOMAIN}/${lbl}" >/dev/null 2>&1; then
         # Pull "last exit code" + "state" + "pid" from the print
         # output. State "running" with last_exit=0 = active.
@@ -88,6 +83,7 @@ done
 
 
 tmpfile=$(/usr/bin/mktemp)
+trap '/bin/rm -f "$tmpfile"' EXIT
 cat > "$tmpfile" <<EOF
 {
   "host": "${HOST_SLUG}",
@@ -98,13 +94,4 @@ cat > "$tmpfile" <<EOF
 }
 EOF
 
-GOOGLE_APPLICATION_CREDENTIALS="$ADC_PATH" \
-    "$VENV_PY" - "$tmpfile" "$BUCKET" "host_health/${HOST_SLUG}.json" "$PROJECT" <<'PYEOF' >/dev/null 2>&1
-import sys
-from google.cloud import storage
-src, bucket, blob, project = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-data = open(src, "rb").read()
-client = storage.Client(project=project)
-client.bucket(bucket).blob(blob).upload_from_string(data, content_type="application/json")
-PYEOF
-/bin/rm -f "$tmpfile"
+"$STADO_BIN" host publish-beacon "$tmpfile" >/dev/null

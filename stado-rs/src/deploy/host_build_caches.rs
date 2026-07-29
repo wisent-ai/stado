@@ -152,22 +152,9 @@ pub fn parse_report(stdout: &str) -> Vec<CacheEntry> {
     entries
 }
 
-/// True when the registry entry names this machine, matched the way the
-/// registry matches identities elsewhere: case-insensitively, on the short
-/// name as well as the fully qualified one.
-fn target_is_local(target: &ComputeTarget) -> bool {
-    let hostname = crate::providers::vast::system_hostname().to_lowercase();
-    if hostname.is_empty() {
-        return false;
-    }
-    let short = hostname.split('.').next().unwrap_or_default().to_string();
-    target.hostnames.iter().any(|candidate| {
-        let candidate = candidate.to_lowercase();
-        candidate == hostname
-            || candidate == short
-            || candidate.split('.').next().unwrap_or_default() == short
-    })
-}
+/// Re-exported from [`crate::deploy::host_channel`], which now owns the one
+/// definition of "this machine" the whole deploy family shares.
+use crate::deploy::host_channel::target_is_this_host as target_is_local;
 
 /// Report or prune on one registry host.
 pub async fn run_on_host(

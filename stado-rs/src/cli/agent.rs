@@ -53,7 +53,7 @@ async fn apply_registry_target(
             .await
             .map_err(|e| CmdError::click(e.to_string()))?
             .ok_or_else(|| CmdError::click(format!("target '{target}' not found in registry")))?;
-        if t.kind != "local" {
+        if !crate::capabilities::ProviderId::Local.matches(&t.kind) {
             return Err(CmdError::click(format!(
                 "target '{target}' kind={}, expected local",
                 t.kind
@@ -91,20 +91,20 @@ pub async fn run(
     vast_price_gpu: f64,
     vast_max_duration_s: i64,
 ) -> Result<(), CmdError> {
-    if crate::capabilities::configurable_variant(
-        crate::capabilities::CapabilityKind::Execution,
+    let execution = crate::capabilities::configurable_variant(
+        crate::capabilities::RuntimeFacet::Execution,
         &kind,
     )
-    .is_none()
-    {
+    .ok_or_else(|| {
         let choices =
-            crate::capabilities::configurable_ids(crate::capabilities::CapabilityKind::Execution)
+            crate::capabilities::configurable_ids(crate::capabilities::RuntimeFacet::Execution)
                 .collect::<Vec<_>>()
                 .join(", ");
-        return Err(CmdError::usage(format!(
+        CmdError::usage(format!(
             "unknown agent kind {kind:?}; use one of: {choices}"
-        )));
-    }
+        ))
+    })?;
+    let kind = execution.id.to_string();
     let gpu_type = apply_registry_target(gpu_type, target.as_deref(), auto).await?;
 
     // Auto-enable the Vast bridge when stado-vast/api_key exists in
@@ -118,8 +118,11 @@ pub async fn run(
     let explicit_off = matches!(auto_list_env.as_str(), "0" | "false" | "no" | "off");
     let explicit_on = matches!(auto_list_env.as_str(), "1" | "true" | "yes" | "on");
     let env_has_api_key = vast::vast_api_key_available().await;
-    let effective_vast =
-        vast_auto_list || explicit_on || (kind == "local" && env_has_api_key && !explicit_off);
+    let effective_vast = vast_auto_list
+        || explicit_on
+        || (crate::capabilities::ProviderId::Local.matches(&kind)
+            && env_has_api_key
+            && !explicit_off);
     if effective_vast {
         // Spawn the Vast.ai auto-listing daemon as a background task so
         // one `stado agent --vast-auto-list` invocation gives the operator both

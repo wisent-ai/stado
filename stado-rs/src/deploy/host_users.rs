@@ -220,7 +220,10 @@ pub fn select_targets<'a>(
     } else {
         let selected: Vec<&ComputeTarget> = targets
             .iter()
-            .filter(|t| t.kind == "local" && t.ssh.as_deref().is_some_and(|s| !s.is_empty()))
+            .filter(|target| {
+                target.is_provider(crate::capabilities::ProviderId::Local)
+                    && target.ssh.as_deref().is_some_and(|ssh| !ssh.is_empty())
+            })
             .copied()
             .collect();
         if selected.is_empty() {
@@ -232,7 +235,7 @@ pub fn select_targets<'a>(
     };
 
     for target in &selected {
-        if target.kind != "local" {
+        if !target.is_provider(crate::capabilities::ProviderId::Local) {
             return Err(DeployError(format!(
                 "target {} is not kind=local",
                 super::py_str_repr(&target.name)

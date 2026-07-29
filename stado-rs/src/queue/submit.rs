@@ -49,7 +49,9 @@ pub struct SubmitOptions {
     pub max_cost_per_hour_usd: f64,
     pub pin_to_provider: bool,
     pub priority: i64,
+    pub deadline_at: Option<String>,
     pub repo: String,
+    pub repo_ref: String,
     pub repo_workdir: String,
     pub repo_extras: String,
     pub gpu_type: String,
@@ -84,7 +86,9 @@ impl Default for SubmitOptions {
             max_cost_per_hour_usd: 0.0,
             pin_to_provider: false,
             priority: 0,
+            deadline_at: None,
             repo: String::new(),
+            repo_ref: String::new(),
             repo_workdir: String::new(),
             repo_extras: "train".into(),
             gpu_type: String::new(),
@@ -284,6 +288,24 @@ pub async fn submit_job(command: &str, options: &SubmitOptions) -> Result<Job, S
                 .into(),
         ));
     }
+    let repo = options.repo.trim();
+    let repo_ref = options.repo_ref.trim();
+    let full_commit_len = "0000000000000000000000000000000000000000".len();
+    if repo.is_empty() {
+        if !repo_ref.is_empty() {
+            return Err(SubmitError::Validation(
+                "repo_ref is valid only when repo is set".into(),
+            ));
+        }
+    } else if repo_ref.len() != full_commit_len
+        || !repo_ref
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(SubmitError::Validation(
+            "repository workloads require repo_ref as a full lowercase 40-hex commit".into(),
+        ));
+    }
     let reason = deprecated_activation_command_reason(command);
     if !reason.is_empty() {
         return Err(SubmitError::Validation(reason.into()));
@@ -397,12 +419,14 @@ async fn submit_to_queue(command: &str, options: &SubmitOptions) -> Result<Job, 
     job.max_cost_per_hour_usd = options.max_cost_per_hour_usd;
     job.pin_to_provider = options.pin_to_provider;
     job.priority = options.priority;
+    job.deadline_at = options.deadline_at.clone();
     job.submitted_by = submitter();
     job.submitted_from = hostname();
     job.submitted_via = "cli".into();
     job.run_id = options.run_id.clone();
     job.submitter_app = std::env::var("WC_SUBMITTER_APP").unwrap_or_default();
     job.repo = options.repo.clone();
+    job.repo_ref = options.repo_ref.clone();
     job.repo_workdir = options.repo_workdir.clone();
     job.repo_extras = options.repo_extras.clone();
     job.pre_command = options.pre_command.clone();
@@ -503,26 +527,25 @@ mod tests {
     #[tokio::test]
     async fn template_rendering_substitutes_only_known_variables() {
         let script = render_template(
-            "startup_cpu.sh",
+            "startup_gpu_agent.sh",
             &[
-                ("JOB_ID".into(), "deadbeef".into()),
-                ("COMMAND".into(), "echo hello".into()),
-                ("HF_TOKEN".into(), String::new()),
-                ("GH_TOKEN".into(), String::new()),
-                ("WISENT_VERSION".into(), "latest".into()),
-                ("REPO_BLOCK".into(), String::new()),
-                ("PRE_COMMAND".into(), String::new()),
-                ("APT_PACKAGES".into(), String::new()),
-                ("ARTIFACT_INPUTS_B64".into(), "e30=".into()),
-                ("OUTPUT_URI".into(), String::new()),
+                ("WC_BUCKET".into(), "fixture-bucket".into()),
+                ("STADO_RELEASE_VERSION".into(), "fixture-release".into()),
             ],
         )
         .unwrap();
-        assert!(script.contains("job=deadbeef"), "{script}");
-        assert!(script.contains("eval \"echo hello\""), "{script}");
-        assert!(!script.contains("${JOB_ID}"), "{script}");
-        // ${STATUS_BUCKET} has no variable — left untouched, like Python.
-        assert!(script.contains("${STATUS_BUCKET}"), "{script}");
+        assert!(
+            script.contains("export WC_BUCKET=\"fixture-bucket\""),
+            "{script}"
+        );
+        assert!(
+            script.contains("RELEASE_VERSION=\"fixture-release\""),
+            "{script}"
+        );
+        assert!(!script.contains("${WC_BUCKET}"), "{script}");
+        assert!(!script.contains("${STADO_RELEASE_VERSION}"), "{script}");
+        // A placeholder without a supplied variable stays untouched.
+        assert!(script.contains("${WC_STORAGE_BACKEND}"), "{script}");
     }
 
     #[tokio::test]
