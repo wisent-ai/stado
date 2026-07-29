@@ -96,28 +96,36 @@ impl LocalBackend {
         hex::encode(Sha256::digest(data))
     }
 
-    /// Create `path` with `O_WRONLY|O_CREAT|O_EXCL` (mode 0600), fsync, and
-    /// report whether we won the create race.
+    /// Publish `path` only if absent, and only whole: the bytes are written to a
+    /// sibling temporary file, fsynced, and then linked into place. `link` fails
+    /// with `EEXIST` when the target exists, so the create race is still decided by
+    /// the kernel and the answer is still "did we win".
+    ///
+    /// Creating the target first and writing into it afterwards — which is what
+    /// this did — left a window where a crash produced an object that exists and is
+    /// truncated. For a mutable blob that is repairable. For a release object it is
+    /// not: create-only means the coordinate can never be rewritten, so a partial
+    /// object would burn that version permanently. Either the object is complete or
+    /// it is absent, and absent is republishable.
+    ///
+    /// The temporary file is created 0600 by `tempfile`, matching what the previous
+    /// explicit mode requested.
     fn create_if_absent(&self, path: &str, data: &[u8]) -> Result<bool, StorageError> {
         let target = self.path(path)?;
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent)?;
+        let parent = target.parent().ok_or_else(|| {
+            StorageError::Other(format!("no parent directory for {}", target.display()))
+        })?;
+        fs::create_dir_all(parent)?;
+        let name = target.file_name().unwrap_or_default().to_string_lossy();
+        let prefix = format!(".{}.", name.trim_start_matches('.'));
+        let mut tmp = NamedTempFile::with_prefix_in(prefix, parent)?;
+        tmp.write_all(data)?;
+        tmp.as_file().sync_all()?;
+        match tmp.persist_noclobber(&target) {
+            Ok(_) => Ok(true),
+            Err(err) if err.error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+            Err(err) => Err(err.error.into()),
         }
-        let mut opts = OpenOptions::new();
-        opts.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        let mut file = match opts.open(&target) {
-            Ok(file) => file,
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
-            Err(err) => return Err(err.into()),
-        };
-        file.write_all(data)?;
-        file.sync_all()?;
-        Ok(true)
     }
 
     /// Write via tempfile in the target directory + fsync + rename, so a
