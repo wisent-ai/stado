@@ -264,11 +264,63 @@ impl Surface {
         }
     }
 
-    /// Read a surface from a product's `help` output: `{"commands": [...]}`.
+    /// Read a surface from whatever shape a product's `help` produces.
     ///
-    /// A product that cannot describe itself this way gets an error naming what
-    /// was expected, rather than an empty surface that would silently classify
-    /// every release as internal.
+    /// Two shapes exist across this fleet and both are contracts. Products that
+    /// emit `{"commands": [...]}` are read as JSON. Products built on clap print a
+    /// `Commands:` section instead, which is how Stado itself describes its own
+    /// surface — and until this read both shapes, the classifier could only be
+    /// pointed at one product in a fleet of ten.
+    ///
+    /// A build that answers with neither gets an error naming what was expected,
+    /// rather than an empty surface that would silently classify every release as
+    /// internal.
+    pub fn from_help(body: &str) -> Result<Self, String> {
+        match Self::from_help_json(body) {
+            Ok(surface) => Ok(surface),
+            Err(json_error) => Self::from_clap_help(body).map_err(|clap_error| {
+                format!("{json_error}; and not a clap command list either: {clap_error}")
+            }),
+        }
+    }
+
+    /// Parse the `Commands:` section clap prints, taking the first token of each
+    /// indented line.
+    ///
+    /// `help` itself is skipped: clap injects it into every application, so it can
+    /// never represent a change anyone made.
+    pub fn from_clap_help(body: &str) -> Result<Self, String> {
+        let mut names = BTreeSet::new();
+        let mut inside = false;
+        for line in body.lines() {
+            if line.trim() == "Commands:" {
+                inside = true;
+                continue;
+            }
+            if !inside {
+                continue;
+            }
+            // The section ends at the blank line before the next heading, and any
+            // unindented line is that heading arriving early.
+            if line.trim().is_empty() || !line.starts_with(char::is_whitespace) {
+                break;
+            }
+            let Some(name) = line.split_whitespace().next() else {
+                continue;
+            };
+            let name = name.trim_end_matches(',');
+            if name == "help" {
+                continue;
+            }
+            names.insert(name.to_string());
+        }
+        if names.is_empty() {
+            return Err("no \"Commands:\" section with indented entries".to_string());
+        }
+        Ok(Self { commands: names })
+    }
+
+    /// Read a surface from a product's `help` output: `{"commands": [...]}`.
     pub fn from_help_json(body: &str) -> Result<Self, String> {
         let parsed: serde_json::Value =
             serde_json::from_str(body).map_err(|err| format!("help output is not JSON: {err}"))?;

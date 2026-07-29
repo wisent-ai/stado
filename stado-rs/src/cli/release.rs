@@ -79,7 +79,7 @@ fn read_surface(binary: &str, surface_command: &str) -> Result<Surface, CmdError
         )));
     }
     let body = String::from_utf8_lossy(&output.stdout);
-    Surface::from_help_json(&body)
+    Surface::from_help(&body)
         .map_err(|err| CmdError::click(format!("{binary} {surface_command}: {err}")))
 }
 
