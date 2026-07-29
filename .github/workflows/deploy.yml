@@ -67,9 +67,57 @@ jobs:
         # downstream, including the native release in deploy-control-plane, is gated
         # through this job's `needs`.
         run: |
+          set -euo pipefail
+
+          # Into a virtual environment under RUNNER_TEMP, because this control-plane
+          # runner carries no global pip, and invoked by ABSOLUTE path below rather
+          # than through PATH -- so there is no name for a stranger to answer to.
           python3 -m venv "$RUNNER_TEMP/autoversion"
-          "$RUNNER_TEMP/autoversion/bin/pip" install --quiet \
+          "$RUNNER_TEMP/autoversion/bin/python" -m pip install --quiet \
             "git+https://github.com/lbartoszcze/AutoVersion@v0.1.0"
+          rule="$RUNNER_TEMP/autoversion/bin/autoversion"
+
+          # Nothing so far has asked whether what was installed can still answer, and
+          # a liveness probe would not settle it: a rule that replied a constant
+          # `internal` satisfies every branch below, because with the declared version
+          # equal to the baseline's, `internal` IS the passing branch. This gate stands
+          # in front of create-only release objects, so a fabricated verdict here is
+          # not correctable afterwards. Demand two answers no constant can give, built
+          # from the COMMITTED baseline rather than from a synthetic pair, so the same
+          # step also proves the frozen file is readable and is the one reaching the
+          # decision. It consults only that file and writes only to RUNNER_TEMP, so it
+          # cannot touch the release channel.
+          jq '{surface: (.surface - [(.surface | sort | first)])}' released-surface.json \
+            > "$RUNNER_TEMP/arm-removed.json"
+          jq '{surface: .surface}' released-surface.json > "$RUNNER_TEMP/arm-identical.json"
+          if [ "$(jq -r '.surface | length' "$RUNNER_TEMP/arm-removed.json")" = \
+               "$(jq -r '.surface | length' released-surface.json)" ]; then
+            echo "::error::the removal arm removed nothing, so it would prove nothing"
+            false
+          fi
+          baseline_version="$(jq -r .version released-surface.json)"
+          for arm in removed:breaking identical:internal; do
+            name="${arm%%:*}"
+            want="${arm##*:}"
+            # Into a file, with the status tested on its own line: inside a command
+            # substitution containing a pipeline the rule's status is discarded and
+            # `set -e` does not reach, so a dead rule would read as an empty answer.
+            if ! "$rule" decide --current "$baseline_version" \
+                 --published-surface released-surface.json \
+                 --candidate-surface "$RUNNER_TEMP/arm-$name.json" --json \
+                 > "$RUNNER_TEMP/verdict-$name.json"; then
+              echo "::error::the rule just installed failed outright on the $name arm," \
+                   "so whether this gate can refuse is unknown"
+              false
+            fi
+            got="$(jq -r .change "$RUNNER_TEMP/verdict-$name.json")"
+            echo "self-test: $name -> $got (wanted $want)"
+            if [ "$got" != "$want" ]; then
+              echo "::error::the rule at $rule called the $name arm '$got' and not '$want'," \
+                   "so no verdict of its about this release can be trusted"
+              false
+            fi
+          done
 
           # Ask the exact bytes about to be published what they offer. Reading
           # src/cli/mod.rs instead would count the variants marked `hide = true`,
