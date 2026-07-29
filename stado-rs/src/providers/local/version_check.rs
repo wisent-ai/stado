@@ -4,62 +4,37 @@
 //! Port of `stado/providers/local/version_check.py`, with the phase-4
 //! DEVIATION below.
 //!
-//! Without this, an agent installed at boot time keeps running its
-//! original version forever — newer releases never reach the running fleet
-//! until GCE preempts the VM, idle_shutdown fires (which only triggers
-//! when the queue stops yielding work), or an operator manually deletes
-//! the VM. The class of bugs this surfaces is "fixes shipped but not
-//! running": e.g. wisent-compute 0.4.59's verify_command hook, wisent
-//! 0.11.23's batched HF commits, wisent-tools 0.1.16's
-//! exit-non-zero-on-strategy-failure — all on PyPI but ignored by 32
-//! already-running pre-fix VMs on 2026-05-06 producing fake-COMPLETED jobs
-//! at ~80/hour.
+//! A running agent compares its compiled version only with the operator-pinned
+//! [`crate::config::stado_release_version`]. No channel pointer, package index,
+//! or public "latest" resolver is compiled into production builds.
 //!
-//! DEVIATION (intended): the Rust binary is not pip-installed, so
-//!   * drift DETECTION compares the crate version (CARGO_PKG_VERSION)
-//!     against the release channel's `latest.json` pointer — the
-//!     release channel the Rust binaries actually ship through (see
-//!     [`crate::self_update`]). PyPI is deliberately NOT consulted: the
-//!     `stado` PyPI package tracks the Python implementation, whose
-//!     version numbers no longer describe the running Rust binary. The
-//!     PyPI helpers below ([`pypi_latest`], [`latest_release_from_json`])
-//!     are retained for reference and their tests but no longer feed
-//!     detection. `wisent` / `wisent-tools` drift of the agent's Python
-//!     venv is NOT tracked here either (the venv smoke test below still
-//!     covers a broken venv);
-//!   * remediation on a local-kind agent IS ported as binary self-update
-//!     (Python's `pip_upgrade_and_exec`: `pip install --upgrade stado` +
-//!     `os.execv`): [`crate::self_update::self_update`] downloads the new
-//!     release from `<version>/<platform>/` under the configured release
-//!     channel ([`crate::config::release_base_url`], any HTTPS backend),
+//! DEVIATION (intended): the Rust binary is an immutable Stado artifact:
+//!   * drift detection compares `CARGO_PKG_VERSION` with the operator-pinned
+//!     release coordinate;
+//!   * remediation on a local-kind agent downloads the exact configured
+//!     version and platform through the public Stado release object route,
 //!     verifies every binary against SHA256SUMS, atomically replaces the
-//!     running binary + same-dir siblings, then [`crate::self_update::reexec`]
-//!     replaces the process image. On ANY failure the error is logged and
-//!     the agent keeps running the old binary
-//!     ([`DriftOutcome::DriftDetected`]);
+//!     running binary and installed siblings, then re-execs. Any failure is
+//!     logged and the old binary continues running;
+//!   * cloud agents exit after recording a provider-neutral termination
+//!     intent, and the coordinator reaps and replaces them through the owning
+//!     provider adapter.
 //!   * `WC_SKIP_VERSION_CHECK=1` still short-circuits the whole check —
 //!     detection AND remediation;
-//!   * the cloud-agent self-terminate-on-drift path IS kept (calls
-//!     [`super::self_terminate`], which routes to the GCE or Azure
-//!     deleter by agent kind); the dispatcher creates a fresh VM whose
-//!     startup installs the new version before the agent starts.
+//!   * the cloud-agent terminate-on-drift path exits after recording a
+//!     provider-neutral intent through [`super::self_terminate`]; the
+//!     coordinator reaps the machine through its owning provider adapter and
+//!     dispatches a replacement with the configured exact release.
 
+#[cfg(test)]
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
-/// Legacy PyPI-era package list (Python `_PACKAGES`, reduced to the
-/// binary itself). Retained for the PyPI helpers below; drift DETECTION
-/// no longer consults PyPI (see the module-docs deviation).
-pub const PACKAGES: [&str; 1] = ["stado"];
-
 const IMPORT_OK_TTL: Duration = Duration::from_secs(300);
 const IMPORT_BAD_TTL: Duration = Duration::from_secs(30);
-// In-process cache TTL for the retained PyPI helper. (When PyPI fed
-// drift detection this was lowered from 300s so a fresh release reached
-// agents within one loop iteration; detection now reads GCS latest.json
-// per tick, so this only throttles the legacy helper.)
-const CACHE_TTL: Duration = Duration::from_secs(30);
+#[cfg(test)]
+const CACHE_TTL: Duration = IMPORT_BAD_TTL;
 
 /// One token of Python `_version_tuple`: (0, int) for numeric tokens,
 /// (1, str) otherwise — numeric tokens always sort before string tokens.
@@ -109,6 +84,7 @@ pub fn version_newer(installed: &str, latest: &str) -> bool {
 
 /// Pure: newest release key of a PyPI /pypi/<pkg>/json payload.
 /// None when there are no releases (Python `if not releases: return None`).
+#[cfg(test)]
 pub fn latest_release_from_json(body: &serde_json::Value) -> Option<String> {
     let releases = body.get("releases")?.as_object()?;
     if releases.is_empty() {
@@ -120,19 +96,20 @@ pub fn latest_release_from_json(body: &serde_json::Value) -> Option<String> {
         .cloned()
 }
 
+#[cfg(test)]
 static PYPI_CACHE: LazyLock<Mutex<HashMap<String, (Instant, String)>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// Python `_pypi_latest`: 30s in-process cache; network/JSON failures fall
-/// back to the cached value (or None). LEGACY: no longer consulted for
-/// drift detection (that reads GCS latest.json now); retained for
-/// reference and its tests.
+/// Python `_pypi_latest`: cached legacy helper retained for reference and
+/// offline compatibility tests. Drift detection never consults it.
+#[cfg(test)]
 pub async fn pypi_latest(pkg: &str) -> Option<String> {
     pypi_latest_at(&format!("https://pypi.org/pypi/{pkg}/json"), pkg).await
 }
 
 /// [`pypi_latest`] against an explicit URL (tests inject a loopback server
 /// or fabricate failures offline).
+#[cfg(test)]
 pub async fn pypi_latest_at(url: &str, pkg: &str) -> Option<String> {
     let cached = PYPI_CACHE
         .lock()
@@ -173,15 +150,18 @@ pub async fn pypi_latest_at(url: &str, pkg: &str) -> Option<String> {
     }
 }
 
-/// (installed, latest) when the release channel's latest version is
-/// strictly newer than the installed version; None = no drift. Python
-/// `detect_drift`, with the detection source switched from PyPI to
-/// the release channel's `latest.json` pointer (see the module-docs
-/// deviation — PyPI tracks the Python package, not these binaries).
+/// `(installed, desired)` when the exact configured Stado release version is
+/// strictly newer than this binary; `None` when the coordinate is absent,
+/// malformed, or not newer.
 pub async fn detect_drift() -> Option<(String, String)> {
     let installed = env!("CARGO_PKG_VERSION").to_string();
-    let latest = crate::self_update::check_latest().await?.version;
-    version_newer(&installed, &latest).then_some((installed, latest))
+    let desired = crate::config::stado_release_version();
+    let canonical = !desired.is_empty()
+        && desired.trim() == desired
+        && desired
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'));
+    (canonical && version_newer(&installed, &desired)).then_some((installed, desired))
 }
 
 static IMPORT_CACHE: LazyLock<Mutex<Option<(Instant, bool, String)>>> =
@@ -190,11 +170,9 @@ static IMPORT_CACHE: LazyLock<Mutex<Option<(Instant, bool, String)>>> =
 /// Smoke-test `import wisent` in a subprocess of the agent's job-runtime
 /// Python. Returns (ok, error_message). Python `wisent_import_ok`.
 ///
-/// Run before claiming a job so a broken venv (e.g. PyPI ships a wheel
-/// whose __init__.py imports a name that the same release forgot to
-/// re-export, as wisent 0.11.36 did with ImageAdapter) triggers
-/// remediation rather than claiming jobs that will fail their first
-/// `python -m wisent...` line.
+/// Run before claiming a job so a corrupt or incompatible immutable runtime
+/// bundle triggers remediation rather than claiming jobs that will fail their
+/// first `python -m wisent...` line.
 ///
 /// Deviation: Python uses `sys.executable`; the Rust binary is not a
 /// Python interpreter, so it invokes `python3` from the agent's PATH (the
@@ -260,24 +238,18 @@ pub enum DriftOutcome {
 /// Python `maybe_drain_or_upgrade(slots, log_fn, kind)` — `slots_active`
 /// stands in for the drained-slots check (`if slots:` / `if not slots:`).
 ///
-/// Two triggers for remediation:
-///   1. the release channel's `latest.json` naming a release
-///      strictly newer than the installed version ([`detect_drift`]).
-///   2. `import wisent` raises in the venv (broken wheel published to
-///      PyPI — happened with wisent 0.11.36's missing ImageAdapter
-///      re-export; agents booted at exactly the wrong moment cached the
-///      bad install and accepted+failed 5+ jobs in a row before this
-///      check existed).
+///   1. the exact configured release version is strictly newer than the
+///      installed version ([`detect_drift`]).
+///   2. `import wisent` raises in the selected immutable runtime bundle.
 ///
 /// Cloud agents (kind != "local") DO NOT upgrade in place on drift; they
 /// self-terminate so the dispatcher creates a fresh VM with the new
 /// version baked in — no in-process file race possible (that race
 /// produced the zombie 1778695548-{2,3,5} VMs on 2026-05-13).
 ///
-/// Local agents remediate drift with [`crate::self_update`]: download +
-/// verify + atomically replace, then re-exec (Python's
-/// pip_upgrade_and_exec semantics). A broken venv is NOT fixable by
-/// replacing the Rust binary, so that path keeps the old log-and-report
+/// Local agents remediate binary drift with [`crate::self_update`]: download,
+/// verify, atomically replace, then re-exec. A broken Python runtime requires
+/// selecting a replacement bundle, so that path keeps the log-and-report
 /// behavior.
 ///
 /// Caller MUST advance slots BEFORE calling this so a drained slots list
@@ -293,10 +265,8 @@ pub async fn maybe_drain_or_upgrade(
     {
         return DriftOutcome::Clean;
     }
-    // If a job is active, drift cannot be applied yet. Avoid making the
-    // release bucket a liveness dependency for running work; a transient
-    // GCS reset must not raise out of detect_drift() and crash the agent
-    // while a slot is active.
+    // Active work defers drift handling. Exact configuration resolution is
+    // local and does not create a network liveness dependency.
     if slots_active {
         let (ok, err) = wisent_import_ok().await;
         if ok {
@@ -311,7 +281,9 @@ pub async fn maybe_drain_or_upgrade(
         return DriftOutcome::Clean;
     }
     // Slots are drained past this point (Python `if not slots:`).
-    if kind != "local" {
+    if crate::capabilities::execution_adapter(kind)
+        != Some(crate::capabilities::ExecutionAdapter::Local)
+    {
         log_fn(&format!(
             "cloud agent {kind} drift={drift:?} ok={ok}; self-terminate \
              so dispatcher creates a fresh VM with new version baked in"
@@ -324,14 +296,13 @@ pub async fn maybe_drain_or_upgrade(
         // Rust binary cannot fix it, so keep the log-and-report stance.
         log_fn(&format!("venv broken: {err}"));
         log_fn(
-            "venv remediation needs the Python environment; the Rust agent \
-             cannot pip-install itself — repair the venv and restart the agent",
+            "venv remediation requires publishing and selecting a replacement immutable \
+             runtime bundle; restart the agent after updating that exact coordinate",
         );
         return DriftOutcome::DriftDetected;
     }
-    // Binary self-update (Python pip_upgrade_and_exec: `pip install
-    // --upgrade stado` + os.execv): download + verify + atomically
-    // replace, then re-exec. On success reexec never returns.
+    // Binary self-update downloads the exact configured release, verifies it,
+    // atomically replaces the executable, then re-execs.
     match crate::self_update::self_update(log_fn).await {
         Ok(crate::self_update::UpdateOutcome::Updated { from, to }) => {
             log_fn(&format!(
@@ -343,9 +314,7 @@ pub async fn maybe_drain_or_upgrade(
             ));
         }
         Ok(crate::self_update::UpdateOutcome::UpToDate { .. }) => {
-            // latest.json moved between detect_drift and self_update
-            // (or detect raced a republish): nothing to do.
-            log_fn("drift resolved before self-update ran (latest.json no longer newer)");
+            log_fn("configured release is no longer newer than the installed binary");
             return DriftOutcome::Clean;
         }
         Err(update_err) => {

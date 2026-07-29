@@ -29,6 +29,7 @@ pub fn new_plan(
     let prefix = match intent {
         Intent::RationalizationCleanup => "rationalize",
         Intent::Shutdown => "shutdown",
+        Intent::AutonomousReconcile => "autonomy",
     };
     let plan = Plan {
         schema_version: SCHEMA_VERSION,

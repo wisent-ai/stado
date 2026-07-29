@@ -17,7 +17,8 @@
 //!   construction and issues no ssh at all, because the moment you most
 //!   need to ask "what is supposed to be running here" is the moment the
 //!   host has stopped answering.
-//! - **Write side.** [`restart_service`], [`retire_service`],
+//! - **Write side.** [`restart_service`], [`sync_service_secret`],
+//!   [`check_service_bearer`], [`reset_service_listener`], [`retire_service`],
 //!   [`deploy_service`], [`probe_service`], [`tail_logs`] and
 //!   [`fetch_unit_file`] ride the shared channel of
 //!   `deploy/host_channel.rs` — whose ssh option set is derived from
@@ -44,9 +45,10 @@
 //! `stado bootstrap --local` and `stado install-disk-cleanup` use, so a
 //! service deployed remotely is byte-identical to one installed locally.
 
-use std::path::Path;
+use std::path::{Component, Path};
 use std::sync::LazyLock;
 
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use regex::Regex;
 use serde_json::{json, Map, Value};
 
@@ -593,6 +595,73 @@ fn quote_unit_path(path: &str) -> Result<String, DeployError> {
     )))
 }
 
+/// Validate the remote environment file independently of shell quoting.
+///
+/// The command deliberately supports only an absolute path or a path rooted
+/// at the target user's home. The value travels base64-encoded, but rejecting
+/// parent traversal keeps a typo from turning a credential sync into an
+/// unrelated file rewrite.
+fn validate_env_path(path: &str) -> Result<(), DeployError> {
+    let local = path.strip_prefix("$HOME/").unwrap_or(path);
+    let rooted = path.starts_with('/') || path.starts_with("$HOME/");
+    let usable_file = Path::new(local).file_name().is_some();
+    let traverses_parent = Path::new(local)
+        .components()
+        .any(|part| matches!(part, Component::ParentDir));
+    if rooted && usable_file && !traverses_parent && !path.chars().any(char::is_control) {
+        return Ok(());
+    }
+    Err(DeployError(format!(
+        "environment file {} must be an absolute or home-relative file path without parent traversal",
+        py_str_repr(path)
+    )))
+}
+
+fn validate_env_variable(variable: &str) -> Result<(), DeployError> {
+    let mut chars = variable.chars();
+    let head_ok = chars
+        .next()
+        .is_some_and(|ch| ch == '_' || ch.is_ascii_uppercase());
+    let tail_ok = chars.all(|ch| ch == '_' || ch.is_ascii_uppercase() || ch.is_ascii_digit());
+    if head_ok && tail_ok {
+        return Ok(());
+    }
+    Err(DeployError(format!(
+        "environment variable {} must match [A-Z_][A-Z0-9_]*",
+        py_str_repr(variable)
+    )))
+}
+
+fn validate_secret_value(value: &str) -> Result<(), DeployError> {
+    if !value.is_empty() && !value.chars().any(char::is_control) {
+        return Ok(());
+    }
+    Err(DeployError(
+        "secret value must be non-empty and single-line".to_string(),
+    ))
+}
+
+fn validate_loopback_probe_url(raw: &str) -> Result<(), DeployError> {
+    let parsed = url::Url::parse(raw)
+        .map_err(|error| DeployError(format!("invalid service probe URL: {error}")))?;
+    let loopback = parsed
+        .host_str()
+        .is_some_and(|host| matches!(host, "127.0.0.1" | "localhost" | "::1"));
+    if parsed.scheme() == "http"
+        && loopback
+        && parsed.port().is_some()
+        && parsed.username().is_empty()
+        && parsed.password().is_none()
+        && parsed.fragment().is_none()
+    {
+        return Ok(());
+    }
+    Err(DeployError(format!(
+        "service probe URL {} must be an explicit loopback HTTP endpoint without credentials or a fragment",
+        py_str_repr(raw)
+    )))
+}
+
 /// A body line equal to the heredoc delimiter would end the heredoc early
 /// and hand the rest of the unit to the shell as commands. Nothing this
 /// crate renders contains such a line; refuse rather than assume.
@@ -728,8 +797,18 @@ const RESTART_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
       fi
     fi
     if ! /bin/launchctl print \"$domain/$unit\" >/dev/null && [ -n \"$program\" ]; then
-      /usr/bin/nohup \"$program\" </dev/null &>/dev/null &
-      say 'restarted' \"direct process $!\"
+      log=$(/usr/bin/plutil -extract StandardOutPath raw -o - \"$unit_path\")
+      if [ -z \"$log\" ]; then log=\"$HOME/.stado/logs/$unit.log\"; fi
+      /bin/mkdir -p \"$(/usr/bin/dirname \"$log\")\"
+      /usr/bin/perl -e 'my $program = shift @ARGV; my $log = shift @ARGV; open STDIN, \"<\", \"/dev/null\" or die $!; open STDOUT, \">>\", $log or die $!; open STDERR, \">&STDOUT\" or die $!; exec {$program} $program;' \"$program\" \"$log\" &
+      direct_pid=$!
+      /bin/sleep \"${#rc}\"
+      if /bin/kill -s CONT \"$direct_pid\" >/dev/null; then
+        say 'restarted' \"direct process $direct_pid\"
+      else
+        detail=$(/usr/bin/tail -n \"${#rc}\" \"$log\")
+        say 'restart_failed' \"$detail\"
+      fi
       exit
     fi
     if [ \"$rc\" -ne 0 ]; then
@@ -763,7 +842,6 @@ fi
 say 'stopped' \"$unit_path\"
 ";
 
-
 /// `service adopt`: a read-only probe. Adoption claims an existing unit, so
 /// the host has to agree the unit is there before the registry says Stado
 /// owns it — that check is the whole difference between adoption and
@@ -786,10 +864,15 @@ say 'probed' \"$unit_path\"
 /// bootout/disable pair across both domains mirrors the way
 /// `host_recovery`'s script decommissions the obsolete coordinator.
 const RETIRE_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
+  recovery_unit=\"${unit}-recovery\"
   /bin/launchctl bootout \"$gui/$unit\" >/dev/null 2>&1 || true
   /bin/launchctl bootout \"$user_domain/$unit\" >/dev/null 2>&1 || true
+  /bin/launchctl bootout \"$gui/$recovery_unit\" >/dev/null 2>&1 || true
+  /bin/launchctl bootout \"$user_domain/$recovery_unit\" >/dev/null 2>&1 || true
   /bin/launchctl disable \"$gui/$unit\" >/dev/null 2>&1 || true
   /bin/launchctl disable \"$user_domain/$unit\" >/dev/null 2>&1 || true
+  /bin/launchctl disable \"$gui/$recovery_unit\" >/dev/null 2>&1 || true
+  /bin/launchctl disable \"$user_domain/$recovery_unit\" >/dev/null 2>&1 || true
 else
   /usr/bin/systemctl --user disable --now \"$unit\" >/dev/null 2>&1 || true
 fi
@@ -800,16 +883,61 @@ say 'retired' \"$unit_path\"
 /// renderings travel in the same program and the host picks, so a deploy
 /// costs one round trip and never depends on a local guess about the
 /// remote OS.
-const DEPLOY_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
-  /bin/mkdir -p \"$HOME/Library/LaunchAgents\" >/dev/null 2>&1 || true
-  /bin/cat > \"$unit_path\" <<'@HEREDOC@'
+const DEPLOY_BODY: &str = "program=@PROGRAM@
+if [ ! -f \"$program\" ]; then
+  say 'program_missing' \"$program\"
+  exit 0
+fi
+if [ ! -x \"$program\" ]; then
+  /bin/chmod u+x \"$program\" || {
+    say 'program_not_executable' \"$program\"
+    exit 0
+  }
+fi
+if [ \"$os\" = \"Darwin\" ]; then
+  /bin/mkdir -p \"$HOME/Library/LaunchAgents\" \"$HOME/.stado/logs\" >/dev/null 2>&1 || exit 1
+  /bin/chmod u=rwx,go= \"$HOME/.stado/logs\" || exit 1
+  log=\"$HOME/.stado/logs/$unit.log\"
+  : >> \"$log\" || exit 1
+  /bin/chmod u=rw,go= \"$log\" || exit 1
+  template=\"$unit_path.template.$$\"
+  /bin/cat > \"$template\" <<'@HEREDOC@'
 @DARWIN_UNIT@
 @HEREDOC@
+  escaped_home=$(/usr/bin/printf '%s' \"$HOME\" | /usr/bin/sed 's/[\\/&]/\\\\&/g')
+  /usr/bin/sed \"s/__STADO_HOME__/$escaped_home/g\" \"$template\" > \"$unit_path\" || exit 1
+  /bin/rm -f \"$template\"
+  /bin/chmod u=rw,go= \"$unit_path\" || exit 1
   /bin/launchctl bootout \"$domain/$unit\" >/dev/null 2>&1 || true
   detail=$(/bin/launchctl bootstrap \"$domain\" \"$unit_path\" 2>&1)
   rc=$?
+  if [ \"$rc\" -ne 0 ] && [ \"$domain\" = \"$gui\" ]; then
+    /bin/launchctl bootout \"$user_domain/$unit\" >/dev/null 2>&1 || true
+    detail=$(/bin/launchctl bootstrap \"$user_domain\" \"$unit_path\" 2>&1)
+    rc=$?
+    if [ \"$rc\" -eq 0 ]; then domain=\"$user_domain\"; fi
+  fi
   if [ \"$rc\" -ne 0 ]; then
-    say 'bootstrap_failed' \"$rc $detail\"
+    /bin/launchctl bootout \"$gui/$unit\" >/dev/null 2>&1 || true
+    detail=$(/bin/launchctl asuser \"$uid\" /bin/launchctl bootstrap \"$gui\" \"$unit_path\" 2>&1)
+    rc=$?
+    if [ \"$rc\" -eq 0 ]; then domain=\"$gui\"; fi
+  fi
+  if [ \"$rc\" -ne 0 ]; then
+    recovery_unit=\"${unit}-recovery\"
+    /bin/launchctl submit -l \"$recovery_unit\" -- \"$program\" >/dev/null 2>&1 || true
+    if /bin/launchctl print \"$gui/$recovery_unit\" >/dev/null 2>&1 || /bin/launchctl print \"$user_domain/$recovery_unit\" >/dev/null 2>&1; then
+      say 'deployed' \"launchctl submit $recovery_unit\"
+      exit 0
+    fi
+    /usr/bin/nohup \"$program\" >>\"$log\" 2>&1 </dev/null &
+    direct_pid=$!
+    /bin/sleep 1
+    if /bin/kill -0 \"$direct_pid\" >/dev/null 2>&1; then
+      say 'deployed' \"direct process $direct_pid\"
+    else
+      say 'bootstrap_failed' \"$rc $detail\"
+    fi
     exit 0
   fi
   /bin/launchctl enable \"$domain/$unit\" >/dev/null 2>&1 || true
@@ -828,15 +956,14 @@ fi
 ";
 
 /// `service logs`: tail the unit's own log. On launchd the log path comes
-/// from the unit file itself (`StandardOutPath`), so an adopted unit that
-/// logs somewhere of its own choosing is tailed correctly instead of
-/// silently reporting an empty file under `/tmp` that never existed.
+/// from the unit file itself, so an adopted unit keeps its chosen destination.
+/// A unit without one falls back to the account's owner-only Stado log path.
 const LOGS_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   log=''
   if [ -f \"$unit_path\" ]; then
     log=$(/usr/bin/plutil -extract StandardOutPath raw -o - \"$unit_path\" 2>/dev/null)
   fi
-  if [ -z \"$log\" ]; then log=\"/tmp/$unit.log\"; fi
+  if [ -z \"$log\" ]; then log=\"$HOME/.stado/logs/$unit.log\"; fi
   if [ -f \"$log\" ]; then
     printf 'STADO_LOG\\t%s\\n' \"$log\"
     /usr/bin/tail -n @LINES@ \"$log\"
@@ -859,6 +986,121 @@ const UNIT_FILE_BODY: &str = "if [ -f \"$unit_path\" ]; then
 else
   say 'missing_unit_file' \"$unit_path\"
 fi
+";
+
+/// Replace one assignment in an owner-only runtime environment file.
+///
+/// The secret rides inside the SSH request body as base64, never argv. The
+/// remote shell decodes a complete shell-quoted assignment, removes prior
+/// assignments of the same variable, and atomically renames a mode-600 file.
+/// Existing unrelated variables stay on the host and never cross back to the
+/// operator.
+const SECRET_SYNC_BODY: &str = "fail_sync() {
+  say 'secret_sync_failed' \"$1\"
+  exit 0
+}
+if [ \"$os\" = \"Darwin\" ]; then decode_flag=-D; else decode_flag=--decode; fi
+env_path=$(printf '%s' '@ENV_PATH_B64@' | /usr/bin/base64 \"$decode_flag\") || fail_sync 'invalid environment path payload'
+case \"$env_path\" in
+  \\$HOME/*) env_path=\"$HOME/${env_path#\\$HOME/}\" ;;
+  /*) ;;
+  *) fail_sync 'environment path is not rooted' ;;
+esac
+variable=@VARIABLE@
+assignment=$(printf '%s' '@ASSIGNMENT_B64@' | /usr/bin/base64 \"$decode_flag\") || fail_sync 'invalid assignment payload'
+parent=$(/usr/bin/dirname \"$env_path\") || fail_sync 'environment parent unavailable'
+/bin/mkdir -p \"$parent\" || fail_sync 'cannot create environment parent'
+tmp=\"$env_path.stado-secret-sync.$$\"
+trap '/bin/rm -f \"$tmp\"' EXIT HUP INT TERM
+if [ -f \"$env_path\" ]; then
+  /usr/bin/awk -v key=\"$variable\" '
+    $0 ~ \"^[[:space:]]*(export[[:space:]]+)?\" key \"=\" { next }
+    { print }
+  ' \"$env_path\" > \"$tmp\" || fail_sync 'cannot filter environment file'
+else
+  : > \"$tmp\" || fail_sync 'cannot create environment file'
+fi
+printf '%s\\n' \"$assignment\" >> \"$tmp\" || fail_sync 'cannot append assignment'
+/bin/chmod 600 \"$tmp\" || fail_sync 'cannot protect environment file'
+/bin/mv -f \"$tmp\" \"$env_path\" || fail_sync 'cannot install environment file'
+trap - EXIT HUP INT TERM
+say 'secret_synced' \"$variable $env_path\"
+";
+
+/// Authenticate one read-only loopback request from the managed host.
+///
+/// The bearer is staged in an owner-only curl header file, never argv. Both
+/// the header and response body are removed before the marker is emitted.
+const AUTH_CHECK_BODY: &str = "fail_check() {
+  say 'auth_check_failed' \"$1\"
+  exit 0
+}
+if [ \"$os\" = \"Darwin\" ]; then decode_flag=-D; else decode_flag=--decode; fi
+probe_url=$(printf '%s' '@PROBE_URL_B64@' | /usr/bin/base64 \"$decode_flag\") || fail_check 'invalid probe URL payload'
+token=$(printf '%s' '@TOKEN_B64@' | /usr/bin/base64 \"$decode_flag\") || fail_check 'invalid token payload'
+post_empty=@POST_EMPTY@
+expected_status=@EXPECTED_STATUS@
+probe_dir=\"$HOME/.stado/auth-check\"
+/bin/mkdir -p \"$probe_dir\" || fail_check 'cannot create probe directory'
+/bin/chmod 700 \"$probe_dir\" || fail_check 'cannot protect probe directory'
+header=\"$probe_dir/header.$$\"
+response=\"$probe_dir/response.$$\"
+error_file=\"$probe_dir/error.$$\"
+trap '/bin/rm -f \"$header\" \"$response\" \"$error_file\"' EXIT HUP INT TERM
+printf 'Authorization: Bearer %s\\n' \"$token\" > \"$header\" || fail_check 'cannot stage authorization header'
+unset token
+/bin/chmod 600 \"$header\" || fail_check 'cannot protect authorization header'
+if [ \"$post_empty\" = yes ]; then
+  status=$(/usr/bin/curl --silent --show-error --max-time 15 --output \"$response\" --write-out '%{http_code}' --request POST --header 'Content-Type: application/json' --header \"@$header\" --data '{}' \"$probe_url\" 2>\"$error_file\")
+  rc=$?
+else
+  status=$(/usr/bin/curl --silent --show-error --max-time 15 --output \"$response\" --write-out '%{http_code}' --header \"@$header\" \"$probe_url\" 2>\"$error_file\")
+  rc=$?
+fi
+/bin/rm -f \"$header\" \"$response\" \"$error_file\"
+trap - EXIT HUP INT TERM
+if [ \"$rc\" -ne 0 ]; then
+  say 'auth_unreachable' \"curl exit $rc\"
+elif [ -n \"$expected_status\" ] && [ \"$status\" = \"$expected_status\" ]; then
+  say 'auth_ok' \"HTTP $status\"
+elif [ -z \"$expected_status\" ] && [ \"$status\" -ge 200 ] 2>/dev/null && [ \"$status\" -lt 300 ] 2>/dev/null; then
+  say 'auth_ok' \"HTTP $status\"
+elif [ \"$status\" = 401 ] || [ \"$status\" = 403 ]; then
+  say 'auth_rejected' \"HTTP $status\"
+else
+  say 'auth_failed' \"HTTP $status\"
+fi
+";
+
+/// Stop the process currently owning a checked loopback port.
+///
+/// This is deliberately Darwin-only and separate from ordinary restart:
+/// launchd cannot replace an unmanaged fallback process that still owns the
+/// service port.
+const LISTENER_RESET_BODY: &str = "if [ \"$os\" != \"Darwin\" ]; then
+  say 'listener_reset_unsupported' \"$os\"
+  exit 0
+fi
+port=@PORT@
+pids=$(/usr/sbin/lsof -nP -tiTCP:\"$port\" -sTCP:LISTEN 2>/dev/null)
+if [ -z \"$pids\" ]; then
+  say 'listener_absent' \"$port\"
+  exit 0
+fi
+listener_detail=\"$port\"
+for pid in $pids; do
+  case \"$pid\" in *[!0-9]*) say 'listener_reset_failed' 'invalid pid'; exit 0 ;; esac
+  owner=$(/bin/ps -p \"$pid\" -o ppid=,comm= 2>/dev/null | /usr/bin/tr '\t\r\n' ' ')
+  listener_detail=\"$listener_detail pid=$pid $owner\"
+  /bin/kill -TERM \"$pid\" >/dev/null 2>&1 || true
+done
+/bin/sleep 1
+for pid in $pids; do
+  if /bin/kill -0 \"$pid\" >/dev/null 2>&1; then
+    /bin/kill -KILL \"$pid\" >/dev/null 2>&1 || true
+  fi
+done
+say 'listener_stopped' \"$listener_detail\"
 ";
 
 /// Assemble a remote program: the shared prelude with this unit spliced in,
@@ -888,6 +1130,73 @@ pub async fn restart_service(
     runner: &Runner,
 ) -> Result<RemoteReport, DeployError> {
     let script = remote_script(service.unit_id(), "", &service.path, RESTART_BODY)?;
+    run_remote(target, script, runner).await
+}
+
+/// Atomically replace one runtime secret assignment for a managed service.
+pub async fn sync_service_secret(
+    target: &ComputeTarget,
+    service: &ManagedService,
+    env_path: &str,
+    variable: &str,
+    secret: &str,
+    runner: &Runner,
+) -> Result<RemoteReport, DeployError> {
+    validate_env_path(env_path)?;
+    validate_env_variable(variable)?;
+    validate_secret_value(secret)?;
+
+    let assignment = format!("{variable}={}\n", shlex_quote(secret));
+    let body = SECRET_SYNC_BODY
+        .replace("@ENV_PATH_B64@", &STANDARD.encode(env_path.as_bytes()))
+        .replace("@VARIABLE@", &shlex_quote(variable))
+        .replace("@ASSIGNMENT_B64@", &STANDARD.encode(assignment.as_bytes()));
+    let script = remote_script(service.unit_id(), "", &service.path, &body)?;
+    run_remote(target, script, runner).await
+}
+
+/// Verify that one bearer reaches an authenticated loopback endpoint.
+pub async fn check_service_bearer(
+    target: &ComputeTarget,
+    service: &ManagedService,
+    probe_url: &str,
+    token: &str,
+    post_empty_json: bool,
+    expected_status: Option<u16>,
+    runner: &Runner,
+) -> Result<RemoteReport, DeployError> {
+    validate_loopback_probe_url(probe_url)?;
+    validate_secret_value(token)?;
+    let body = AUTH_CHECK_BODY
+        .replace("@PROBE_URL_B64@", &STANDARD.encode(probe_url.as_bytes()))
+        .replace("@TOKEN_B64@", &STANDARD.encode(token.as_bytes()))
+        .replace("@POST_EMPTY@", if post_empty_json { "yes" } else { "no" })
+        .replace(
+            "@EXPECTED_STATUS@",
+            &shlex_quote(
+                &expected_status
+                    .map(|status| status.to_string())
+                    .unwrap_or_default(),
+            ),
+        );
+    let script = remote_script(service.unit_id(), "", &service.path, &body)?;
+    run_remote(target, script, runner).await
+}
+
+/// Stop an unmanaged process that prevents launchd from reclaiming the probe port.
+pub async fn reset_service_listener(
+    target: &ComputeTarget,
+    service: &ManagedService,
+    probe_url: &str,
+    runner: &Runner,
+) -> Result<RemoteReport, DeployError> {
+    validate_loopback_probe_url(probe_url)?;
+    let port = url::Url::parse(probe_url)
+        .map_err(|error| DeployError(format!("invalid service probe URL: {error}")))?
+        .port()
+        .ok_or_else(|| DeployError("service probe URL has no explicit port".to_string()))?;
+    let body = LISTENER_RESET_BODY.replace("@PORT@", &shlex_quote(&port.to_string()));
+    let script = remote_script(service.unit_id(), "", &service.path, &body)?;
     run_remote(target, script, runner).await
 }
 
@@ -931,18 +1240,20 @@ pub struct DeployPlan {
     pub label: String,
     /// The systemd unit name (`<label>.service`).
     pub unit: String,
+    /// Absolute program path on the target host.
+    pub program: String,
     pub darwin_unit: String,
     pub linux_unit: String,
 }
 
 /// Render both unit spellings for a new managed service.
 ///
-/// Both come from `local_install::InstallPlan`, the renderer
-/// `stado bootstrap --local` uses, so a service deployed from here is
-/// byte-identical to one installed on the box by hand. `$HOME` stands in
-/// for the remote home directory in the destination path; the remote shell
-/// expands it, the same idiom `host_recovery::MANAGED_AGENTS` uses for its
-/// plists.
+/// Both come from `local_install::InstallPlan`, the renderer used by
+/// `stado bootstrap --local`. The Darwin spelling carries a reserved
+/// home placeholder that the remote installer replaces before launchd reads
+/// the plist; this keeps logs in the remote account's owner-only Stado directory.
+const REMOTE_HOME_PLACEHOLDER: &str = "__STADO_HOME__";
+
 pub fn plan_deploy(name: &str, program: &str) -> Result<DeployPlan, DeployError> {
     validate_service_name(name)?;
     validate_program(program)?;
@@ -962,11 +1273,13 @@ pub fn plan_deploy(name: &str, program: &str) -> Result<DeployPlan, DeployError>
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| label.clone());
+    let remote_home = Path::new(REMOTE_HOME_PLACEHOLDER);
     let plan = DeployPlan {
         label,
         unit,
-        darwin_unit: darwin.content(),
-        linux_unit: linux.content(),
+        program: program.to_string(),
+        darwin_unit: darwin.content(remote_home),
+        linux_unit: linux.content(remote_home),
     };
     guard_heredoc(&plan.darwin_unit)?;
     guard_heredoc(&plan.linux_unit)?;
@@ -986,6 +1299,7 @@ pub async fn deploy_service(
     // byte-identical to what `local_install` writes locally.
     let body = DEPLOY_BODY
         .replace("@HEREDOC@", UNIT_HEREDOC)
+        .replace("@PROGRAM@", &shlex_quote(&plan.program))
         .replace("@DARWIN_UNIT@", plan.darwin_unit.trim_end_matches('\n'))
         .replace("@LINUX_UNIT@", plan.linux_unit.trim_end_matches('\n'));
     // The path is derived remotely from the unit id, which differs per OS,

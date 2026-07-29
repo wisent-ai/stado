@@ -3,6 +3,78 @@
 All commands accept `--help` for the canonical option list. The package
 installs a `wc` entry point.
 
+## Failures and exit codes
+
+Every command that fails prints three things and then exits.
+
+```
+Error: GCS API error HTTP 503: backend unavailable
+infrastructure we depend on is unreachable — our failure [infra_down]; retry later
+2026-07-27T18:22:03.114Z ERROR stado::failure: infrastructure we depend on is unreachable
+  failure_point="cli.status" error_code="infra_down" service="queue" retryable=true
+  severity="critical" detail="GCS API error HTTP 503: backend unavailable"
+```
+
+The first line is the command's own message, verbatim and unabridged — these
+are operator tools, and hiding the upstream body or the variable name from the
+person who has to fix it would only cost them a round trip. The second line is
+the classification. The third is the structured record a log shipper picks up;
+its fields (`failure_point`, `error_code`, `service`, `retryable`) are the same
+ones every other Wisent service writes. Nothing on this path makes a network
+call: a CLI that phones an analytics collector while the network is already
+suspect has simply acquired a second way to hang.
+
+`error_code` is the ecosystem failure contract's code set:
+
+| Code | Meaning | Whose problem |
+|---|---|---|
+| `config` | Our deployment configuration is incomplete or wrong — an unset variable, a tool that is not installed. | Ours |
+| `auth` | The credentials the command used were rejected. | Yours |
+| `not_found` | The job, object or target named does not exist. | Yours |
+| `rate_limit` | An upstream is throttling us, or a quota is exhausted. | Ours |
+| `timeout` | An upstream did not answer in time. | Ours |
+| `infra_down` | Storage, a provider API or the network is unreachable. | Ours |
+| `unknown` | The failure could not be attributed. | Unclear |
+
+An infrastructure failure is never reported as `not_found`, and never as a
+clean exit. When a message carries an upstream HTTP status, that status decides
+the code, so a 503 mentioning "not found" in its body still classifies as
+`infra_down` — collapsing 5xx into "nothing there" is what once let a storage
+outage read as an empty queue.
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Success. |
+| `1` | The command ran and failed, and running it again will not help: `config`, `auth`, `not_found`, `unknown`. |
+| `2` | Usage error — bad arguments, or a command that is not implemented. Argument errors exit here regardless of what the message reads like. |
+| `69` | `sysexits.h` `EX_UNAVAILABLE`. The failure is transient: `infra_down`, `timeout`, `rate_limit`. Retrying later can work. |
+
+`69` is the one code that was added, and it is the only signal a retry loop
+needs; `0`, `1` and `2` mean exactly what they always did. The split is
+retryability, not blame — a rate limit is ours but waiting clears it, while a
+missing environment variable is also ours and no amount of retrying will fix
+it. Commands with their own richer exit contract keep it: `storage stat`
+still distinguishes "the question was answered" from "it was not", and
+`job watch` still exits with the job's own outcome.
+
+```bash
+# The retry wrapper this makes possible.
+for attempt in 1 2 3; do
+  wc submit --profile default -- python train.py && break
+  [ $? -eq 69 ] || exit $?   # not transient: stop, do not hammer it
+  sleep $((attempt * 30))
+done
+```
+
+The same classification backs `stado`'s alert delivery: when a Slack, Telegram,
+SendGrid or Pub/Sub channel cannot deliver, the failure is logged as a
+structured row with `failure_point="monitor.alerts.deliver"` and never
+propagated — an alert must not be the thing that kills the process it is
+reporting on — so a silently dead alert path is now something a log query
+finds rather than an absence someone has to notice.
+
 ## `stado overview [--json]`
 
 Single operator snapshot for the whole control plane: queue counts, fresh
@@ -96,14 +168,15 @@ mentions, action status, and a Gmail link. `analyze` additionally aggregates
 message counts, categories, unique monetary amounts, and messages requiring
 action. Classification is deterministic; message text is not sent to an LLM.
 
-Authentication uses `WC_GMAIL_ACCESS_TOKEN` (preferred),
-`GOOGLE_OAUTH_ACCESS_TOKEN`, or gcloud Application Default Credentials
-authorized for the `gmail.readonly` scope. Only metadata, snippets, extracted
-signals, and links are emitted; full message bodies are not printed.
+Authentication is resolved only through the scoped `stado-gmail` Skarbiec
+item, using either its short-lived access token or centrally stored OAuth
+refresh fields. The command never reads ambient OAuth variables, ADC, or a
+cloud CLI session. Only metadata, snippets, extracted signals, and links are
+emitted; full message bodies are not printed.
 
 ## `wc submit`
 
-Submit a job (or a batch) to the GCS-backed queue.
+Submit a job (or a batch) to the store selected by the authoritative Stado profile.
 
 | Option | What it does |
 |---|---|
@@ -119,7 +192,7 @@ Submit a job (or a batch) to the GCS-backed queue.
 | `wc submit --machine-type STR` | Pin the GCE/Azure machine type verbatim (`g2-standard-8`, `Standard_NC8ads_A10_v4`, ...). For SKUs not in the catalog. |
 | `wc submit --pre-command STR` | Shell snippet placed before the command in the same bash shell — `export FOO=...` reaches the subprocess. Joined via `&&` so a non-zero exit in the prelude aborts the job. |
 | `wc submit --apt PKG[,PKG...]` | Apt packages installed via `sudo -n apt-get install -y --no-install-recommends` before the subprocess spawns. Cloud-kind agents only; local-kind agents refuse the job. |
-| `wc submit --output-uri gs://...` | Additional destination mirrored to after job completion. Additive — `status/<id>/output/` is always written too. |
+| `wc submit --output-uri stado://NAMESPACE/KEY` | Additional provider-neutral object destination mirrored after job completion. Additive — canonical job output is always written too. |
 | `wc submit --verify STR` | Post-success shell command. Non-zero exit reverses `COMPLETED → FAILED`. Catches silent-success failure modes (e.g. wisent's `extract_and_upload` reporting "5/7 strategies failed" but exiting 0). |
 
 Workload credentials are declared as `secret_env` item/field references and
@@ -144,8 +217,8 @@ wcomp submit \
   --apt libgl1,git-lfs,build-essential,libglib2.0-0 \
   --repo https://github.com/ostris/ai-toolkit.git --repo-workdir ai-toolkit --repo-extras "" \
   --pre-command 'TORCH_NVDIR=$(python3 -c "import os,nvidia; print(os.path.dirname(nvidia.__file__))"); export LD_LIBRARY_PATH=$(ls -d $TORCH_NVDIR/*/lib|paste -sd:):$LD_LIBRARY_PATH' \
-  --output-uri "gs://wisent-images-bucket/Jakubs-lora/zimage_lora_run03_$(date +%F)/" \
-  --verify 'gsutil -q stat gs://wisent-images-bucket/Jakubs-lora/zimage_lora_run03_*/checkpoints/zimage_lora_run03.safetensors' \
+  --output-uri "stado://wisent-images/training/zimage-lora/run03" \
+  --verify 'test -s output/checkpoints/zimage_lora_run03.safetensors' \
   "cd ai-toolkit && python run.py /opt/zimage-lora/configs/run.yaml"
 ```
 
@@ -153,7 +226,7 @@ Or, collapsed via a profile (see `wc profiles` below):
 
 ```bash
 wcomp submit --profile ai_toolkit_zimage \
-  --output-uri "gs://wisent-images-bucket/Jakubs-lora/zimage_lora_run03_$(date +%F)/" \
+  --output-uri "stado://wisent-images/training/zimage-lora/run03" \
   "cd ai-toolkit && python run.py /opt/zimage-lora/configs/run.yaml"
 ```
 
@@ -167,9 +240,11 @@ wcomp submit --profile ai_toolkit_zimage \
 A profile is a JSON file under `stado/profiles/` (bundled with
 the wheel) or `$WC_PROFILES_DIR/` (operator-local override). It bundles
 the `wc submit` flags for a recurring workflow — `gpu_type`, `vram_gb`,
-`apt`, `pre_command`, `repo`, `repo_workdir`, `repo_extras`,
+`apt`, `pre_command`, `repo`, `repo_ref`, `repo_workdir`, `repo_extras`,
 `output_uri`, `verify`, `priority`, `spot`, `max_cost_per_hour`,
-`provider`, `pin_provider`. Every field is optional.
+`provider`, `pin_provider`. A repository requires `repo_ref` as its full
+lowercase commit hash; branches, tags, short hashes, and missing refs fail
+before queue creation.
 
 Discovery order:
 
@@ -191,15 +266,16 @@ To add a new bundled profile: drop a JSON file in `stado/profiles/` and bump the
 
 ## `wc status [filter]`
 
-Tab-separated table of queue / running / completed / failed jobs. With
-`COMPUTE_API_KEY` set, hits `compute.wisent.com`; otherwise reads GCS
-directly. Optional filter narrows by job-id or batch-id substring.
+`wc status` reads the canonical queue through the backend resolved by
+`STADO_CONFIG`; infrastructure failures remain distinct from absent jobs.
+The optional filter narrows by job-id or batch-id substring. It has no direct
+GCS or legacy `COMPUTE_API_KEY` path.
 
 ## `wc cancel <job_id> [--terminate]`
 
-Remove a queued job from `gs://$WC_BUCKET/queue/<id>.json`, or terminate
-a running instance via the provider's `delete_instance(...)` and move
-the job to `failed/` with `error="cancelled"`.
+Remove a queued job from the canonical configured store, or terminate a
+running instance through its enabled provider adapter and move the job to
+`failed/` with `error="cancelled"`.
 
 Plain `cancel` reads the instance reference from the job document and
 nowhere else, so the two states where a VM exists but the document does
@@ -267,13 +343,14 @@ goes to stderr, so stdout stays a single parseable object.
 
 ## `wc results <job_id> <dir>`
 
-`gsutil -m cp -r 'gs://$WC_BUCKET/status/<job_id>/output/*' '<dir>/'`.
+Downloads canonical output through the configured Stado `BlobBackend`; it
+never shells out to a provider CLI or exposes a provider-native locator.
 
 ## `wc agent`
 
-Run a long-lived GPU agent. Polls `gs://$WC_BUCKET/queue/`, claims any
-job whose `gpu_mem_gb <= free_vram_gb` AND passes `_job_eligible`, spawns
-the job as a subprocess, and tracks completion.
+Run a long-lived GPU agent. It polls the queue through the store selected by
+the authoritative Stado profile, claims an eligible job, spawns it as a
+subprocess, and tracks completion.
 
 | Flag | Behavior |
 |---|---|
@@ -305,6 +382,7 @@ unavailable.
 |---|---|
 | `stado host health <target>` | Print the latest registry-managed host beacon, disk state, service states, log tail, and backing-object timestamp/generation. |
 | `stado host health <target> --json` | Emit the same read-only report as JSON for automation and MCP. |
+| `stado host publish-beacon <file-or-dash>` | Validate and publish one locally collected beacon through the route-scoped authenticated Stado API. It requires the dedicated host-health Skarbiec grant and has no direct-storage or provider credential fallback. |
 | `stado host reboot <target>` | Graceful reboot through the approved channel. Reports `reboot_requested` or the host's own refusal — usually sudo wanting a password. |
 | `stado host uptime <target>` | Uptime, load averages and logged-in users. Load is read from the kernel, not scraped from the `uptime` line, whose shape differs between macOS and Linux. |
 | `stado host ping <target>` | One verdict from two signals: ssh reachability and health-beacon age. The worse signal decides, so a box answering ssh with a stale beacon fails. |
@@ -312,8 +390,8 @@ unavailable.
 | `stado host cleanup <target> --dry-run` | Preview what the registry cleanup would delete. `--dry-run` is mandatory; it drives the janitor's own planning phase and writes no state. |
 | `stado host exec <target> -- CMD` | Run one approved read-only command. An allowlist, not a shell: the operator's words select a fixed argv entry and never join the command line. A refusal prints the allowlist. |
 
-Every one of these resolves its target from the canonical registry and
-refuses a target that is unknown, not a local host, or has no registry-managed
+Diagnostic and recovery commands resolve their target from the canonical registry and
+refuse a target that is unknown, not a local host, or has no registry-managed
 ssh destination. They share one channel, `deploy/host_channel.rs`, which
 derives its ssh options from `host reboot`'s rather than copying them, so the
 commands cannot drift apart. All accept `--json`.
@@ -370,10 +448,18 @@ beacon is expected. The "has not reported in days" detector.
 | `stado storage stat PATH` | One object: `present`, `absent` or `unreachable`, with size, timestamp, metadata and version token. |
 | `stado storage cat PATH` | Write one object's body to stdout. |
 | `stado storage verify` | Compare two stores object-for-object. Read-only. |
+| `stado storage put URI SOURCE [--if-absent]` | Write a provider-neutral product object. `stado://releases/...` is always create-only. |
+| `stado storage get URI DESTINATION` | Read a product object; releases use the dedicated public GET route when remote. |
+| `stado storage objects NAMESPACE [PREFIX]` | List mapped product objects. |
+| `stado storage rm URI` | Delete a product object; release deletion is always rejected. |
+| `stado storage url URI` | Render the authenticated object URL or dedicated release URL. |
 
-Everything except `copy` is read-only. `ls`, `stat` and `cat` inspect the
-one store `WC_STORAGE_BACKEND` selects; `copy` and `verify` take both
-stores as explicit flags.
+Queue inspection commands read the one store selected by `STADO_CONFIG`;
+`copy` and `verify` take both stores as explicit operator-only flags. Product
+commands use `stado://` names and the Stado API when `STADO_API_URL` is set.
+The direct CLI cannot overwrite or delete a release object: PUT implies
+create-if-absent for the `releases` namespace and RM fails before any backend
+or remote request.
 
 **Absent is not unreachable.** During the GCP-billing outage nobody could
 answer "is the queue empty, or is the store gone?", because the Azure
@@ -753,49 +839,30 @@ actions at schema validation time.
 
 ## `stado secrets put|get|ls|rm`
 
-Application credentials in the separate Skarbiec service. `put` reads from
-STDIN only — there is deliberately no `--value` flag because argv is visible
-in process listings and shell history. Use distinct runtime and operator
-consumer grants:
+Application credentials live in the separate Skarbiec service. `put` reads
+from STDIN only—there is deliberately no `--value` flag because argv is
+visible in process listings and shell history. Each service receives its own
+finite consumer grant; do not mint wildcard runtime grants.
 
-```bash
-skarbiec token-mint stado-runtime \
-  --scopes read:stado-*,read:wisent-azure-billing-sp
-skarbiec token-mint stado-operator \
-  --scopes read:*,write:*,delete:*
-# Save the selected consumer token in ~/.stado/skarbiec-token, chmod 600 it,
-# set WC_SKARBIEC_CONSUMER to the matching consumer, then:
-skarbiec serve
-WC_SKARBIEC_CONSUMER=stado-operator stado secrets put stado-aws < aws.json
-```
+Product object verification uses `stado-object-api-verifier`, whose visible
+items exactly match `object_api.namespaces`. Release creation uses the
+distinct `stado-release-api-verifier`, whose visible items exactly match
+`release_api.publishers`. Managed-service status/restart uses
+`stado-service-api-verifier`, whose visible items exactly match
+`service_api.deployers`; each consuming deployment owns only its mapped
+deployer item token. Local and Azure workload agents use separate consumers
+and may list only the application items declared in `agent.skarbiec.items`;
+`secret_fields` is the smaller item/field projection available to jobs.
 
 `get` is the only Stado subcommand that renders a value; `ls` reads metadata
 alone. `put` creates an encrypted Skarbiec version and `rm` performs a
 recoverable soft delete. Each action requires a matching action-qualified
 grant scope and is recorded in Skarbiec's tamper-evident audit journal.
 
-Canonical application-credential items:
+Cloud provider credentials are never workload-agent items. GCP, Azure, and AWS
+resource access belongs to the enabled provider adapter's exact plugin identity
+and SDK chain; agent grants containing `stado-gcp`, `stado-azure`, or
+`stado-aws` fail profile validation. Application model, media, data, email,
+push, object, scheduling, and release functions use their dedicated router or
+client items rather than generic provider keys.
 
-| Item | JSON fields |
-|---|---|
-| `stado-compute` | `api_key` |
-| `stado-huggingface` | `token`, optionally `write_token` |
-| `stado-github` | `token` |
-| `stado-supabase` | `access_token`, optionally `anon_key` |
-| `stado-box` | `api_key` |
-| `stado-vast` | `api_key` |
-| `stado-gcp` | `service_account` (JSON object or encoded JSON string; managed identity is preferred on GCP) |
-| `stado-azure` | `tenant_id`, `client_id`, `client_secret` (managed identity is preferred on Azure) |
-| `stado-aws` | `access_key_id`, `secret_access_key`, optionally `session_token` (IMDSv2 is preferred on EC2) |
-| `stado-gmail` | `access_token`, or `client_id` + `client_secret` + `refresh_token` |
-| `stado-anthropic` | `api_key` |
-| `stado-alerts` | `slack_webhook`, `telegram_bot_token`, `telegram_chat_id`, `sendgrid_api_key` |
-| `wisent-azure-billing-sp` | `tenant_id`, `client_id`, `client_secret`, `billing_account`, optionally `billing_profile_system_id`, `subscription_id` |
-
-Cloud workload identity remains the transport identity for GCP, Azure and AWS
-resource APIs; those short-lived platform identities are not application
-credential values and are never persisted by Stado.
-
-The billing collector reads its Azure service principal from this item and
-nowhere else. This removes the cross-cloud coupling that previously turned a
-closed GCP billing account into loss of Azure credit visibility.

@@ -39,9 +39,15 @@ pub struct SubmitArgs {
     /// Higher = scheduled first within FIFO bucket.
     #[arg(long, default_value_t = 0)]
     priority: i64,
+    /// Hard RFC 3339 completion deadline used by autonomous placement.
+    #[arg(long, default_value = "")]
+    deadline_at: String,
     /// Optional git URL to clone before running command (no auth).
     #[arg(long, default_value = "")]
     repo: String,
+    /// Exact full lowercase commit to fetch; required with --repo.
+    #[arg(long, default_value = "")]
+    repo_ref: String,
     /// Override cloned-repo dir; default = repo basename.
     #[arg(long, default_value = "")]
     repo_workdir: String,
@@ -70,8 +76,8 @@ pub struct SubmitArgs {
     /// cloud-kind agents only — local-kind agents refuse the job for safety.
     #[arg(long, default_value = "")]
     apt: String,
-    /// Additional gs:// destination for job output. Additive — canonical
-    /// status/<id>/output/ path is always written too.
+    /// Additional provider-neutral stado:// destination for job output.
+    /// Additive — canonical status/<id>/output/ is always written too.
     #[arg(long, default_value = "")]
     output_uri: String,
     /// Shell command that must exit 0 after the job succeeds; non-zero
@@ -257,6 +263,7 @@ fn cli_kwargs_json(
         ),
         ("pre_command".into(), Value::from(args.pre_command.as_str())),
         ("repo".into(), Value::from(args.repo.as_str())),
+        ("repo_ref".into(), Value::from(args.repo_ref.as_str())),
         (
             "repo_workdir".into(),
             Value::from(args.repo_workdir.as_str()),
@@ -266,6 +273,7 @@ fn cli_kwargs_json(
         ("verify_command".into(), Value::from(args.verify.as_str())),
         ("exclusive".into(), Value::from(args.exclusive)),
         ("priority".into(), Value::from(args.priority)),
+        ("deadline_at".into(), Value::from(args.deadline_at.as_str())),
         ("preemptible".into(), Value::from(spot)),
         (
             "max_cost_per_hour_usd".into(),
@@ -332,12 +340,14 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
     let mut machine_type = args.machine_type.clone();
     let mut pre_command = args.pre_command.clone();
     let mut repo = args.repo.clone();
+    let mut repo_ref = args.repo_ref.clone();
     let mut repo_workdir = args.repo_workdir.clone();
     let mut repo_extras = args.repo_extras.clone();
     let mut output_uri = args.output_uri.clone();
     let mut verify_command = args.verify.clone();
     let mut exclusive = args.exclusive;
     let mut priority = args.priority;
+    let mut deadline_at = args.deadline_at.clone();
     let mut spot = args.spot && !args.no_spot;
     let mut max_cost_per_hour = args.max_cost_per_hour;
     let mut any_provider = !args.pin_provider;
@@ -359,12 +369,14 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
         apt_list = get_str_list(&merged, "apt_packages");
         pre_command = get_str(&merged, "pre_command");
         repo = get_str(&merged, "repo");
+        repo_ref = get_str(&merged, "repo_ref");
         repo_workdir = get_str(&merged, "repo_workdir");
         repo_extras = get_str(&merged, "repo_extras");
         output_uri = get_str(&merged, "output_uri");
         verify_command = get_str(&merged, "verify_command");
         exclusive = get_bool(&merged, "exclusive");
         priority = get_i64(&merged, "priority");
+        deadline_at = get_str(&merged, "deadline_at");
         spot = get_bool(&merged, "preemptible");
         max_cost_per_hour = get_f64(&merged, "max_cost_per_hour_usd");
         provider = get_str(&merged, "provider");
@@ -376,6 +388,17 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
         let description: String = description.chars().take(80).collect();
         println!("Profile '{}' applied: {description}", args.profile);
     }
+    let deadline_at = if deadline_at.trim().is_empty() {
+        None
+    } else {
+        let parsed = chrono::DateTime::parse_from_rfc3339(&deadline_at)
+            .map_err(|error| CmdError::click(format!("--deadline-at must be RFC 3339: {error}")))?;
+        let parsed = parsed.with_timezone(&chrono::Utc);
+        if parsed <= chrono::Utc::now() {
+            return Err(CmdError::click("--deadline-at must be in the future"));
+        }
+        Some(parsed.to_rfc3339())
+    };
 
     let mut pinned_host = args.pinned_host.clone();
     if !pinned_host.is_empty() {
@@ -412,7 +435,9 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
         max_cost_per_hour_usd: max_cost_per_hour,
         pin_to_provider: !any_provider,
         priority,
+        deadline_at: deadline_at.clone(),
         repo,
+        repo_ref,
         repo_workdir,
         repo_extras,
         gpu_type,
@@ -454,6 +479,9 @@ pub async fn run(args: &SubmitArgs) -> Result<(), CmdError> {
     }
     if options.priority != 0 {
         flags.push(format!("priority={}", options.priority));
+    }
+    if let Some(deadline) = &options.deadline_at {
+        flags.push(format!("deadline={deadline}"));
     }
     if !options.gpu_type.is_empty() {
         flags.push(format!("gpu={}", options.gpu_type));

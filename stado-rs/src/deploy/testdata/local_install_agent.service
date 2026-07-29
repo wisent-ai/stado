@@ -6,9 +6,11 @@ Wants=network-online.target
 [Service]
 Type=simple
 Environment=PYTHONUNBUFFERED=1
-Environment=WC_PYTHON=/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12
-Environment=HF_TOKEN=hf_secret
-Environment=HUGGING_FACE_HUB_TOKEN=hf_secret
+Environment=WC_SKARBIEC_URL=https://skarbiec.invalid
+Environment=WC_SKARBIEC_CONSUMER=stado-local-agent
+Environment=WC_SKARBIEC_TOKEN_FILE=/Users/u/.stado/local-agent-skarbiec-token
+Environment=WC_PYTHON=/usr/bin/python
+Environment=PATH=/usr/bin:/bin
 ExecStart=/Users/u/.stado/bin/stado agent --auto
 Restart=on-failure
 RestartSec=30

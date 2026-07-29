@@ -11,8 +11,8 @@
 //!
 //! One dispatch per failed job_id. No fingerprint clustering.
 //!
-//! Authentication is via the local `claude` CLI's OAuth credentials. No
-//! model-router POST, no HMAC, no trade_agents shoehorn.
+//! Authentication is resolved from `stado-anthropic/api_key` through the
+//! control-plane Skarbiec grant and injected only into the Claude child.
 //!
 //! STALE DOCS NOTE (ported faithfully from `failure_fixer/cli.py`): the
 //! Python CLI's help strings still say "HMAC-sign + POST to model-router"

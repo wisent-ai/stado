@@ -28,10 +28,6 @@ use crate::queue::{JobStorage, StorageError};
 
 /// Python `_VAST_BASE`.
 pub const VAST_BASE: &str = "https://console.vast.ai/api/v0";
-#[cfg(test)]
-pub const SECRET_NAME: &str = "vast-api-key";
-#[cfg(test)]
-const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 
 /// Python `_AUTO_LIST_THREAD_RUNNING` — set true when the auto-list loop
 /// starts; read by the capacity broadcast (`vast_bridge_active`, phase-3).
@@ -75,15 +71,6 @@ impl VastError {
 // Credential resolution
 // ---------------------------------------------------------------------------
 
-/// The env half of `resolve_vast_api_key`, split out for tests: stripped,
-/// empty treated as missing.
-pub fn env_vast_api_key(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-}
-
 /// Resolve the Vast API key only from Skarbiec. A missing item means that the
 /// provider is unavailable; authorization and transport failures are logged
 /// rather than mistaken for an absent credential.
@@ -100,37 +87,6 @@ pub async fn resolve_vast_api_key() -> String {
 /// Python `vast_api_key_available`.
 pub async fn vast_api_key_available() -> bool {
     !resolve_vast_api_key().await.is_empty()
-}
-
-#[cfg(test)]
-/// Secret Manager `projects/{p}/secrets/vast-api-key/versions/latest:access`
-/// over REST, authenticated like [`crate::queue::gcs::GcsBackend`]. Any
-/// failure maps to None (Python's blanket `except Exception: return ""`).
-async fn fetch_secret_manager_key(project: &str) -> Option<String> {
-    let auth = gcp_auth::provider().await.ok()?;
-    let token = auth.token(&[CLOUD_PLATFORM_SCOPE]).await.ok()?;
-    let url = format!(
-        "https://secretmanager.googleapis.com/v1/projects/{project}/secrets/{SECRET_NAME}/versions/latest:access"
-    );
-    let response = reqwest::Client::new()
-        .get(url)
-        .header(
-            reqwest::header::AUTHORIZATION,
-            format!("Bearer {}", token.as_str()),
-        )
-        .send()
-        .await
-        .ok()?;
-    if !response.status().is_success() {
-        return None;
-    }
-    let payload: Value = response.json().await.ok()?;
-    let data = payload.get("payload")?.get("data")?.as_str()?;
-    use base64::Engine;
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(data)
-        .ok()?;
-    String::from_utf8(bytes).ok().map(|s| s.trim().to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -775,10 +731,6 @@ mod tests {
 
     #[test]
     fn env_parsing_helpers() {
-        assert_eq!(env_vast_api_key(Some("  key9  ")), Some("key9".to_string()));
-        assert_eq!(env_vast_api_key(Some("   ")), None);
-        assert_eq!(env_vast_api_key(None), None);
-
         assert_eq!(parse_machine_id_env(Some(" 42 ")).unwrap(), Some(42));
         assert_eq!(parse_machine_id_env(Some("")).unwrap(), None);
         assert_eq!(parse_machine_id_env(None).unwrap(), None);

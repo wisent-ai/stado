@@ -1,75 +1,16 @@
 #!/bin/bash
-# GCE startup template: install wisent-compute, start the agent in idle-shutdown
-# mode. The agent reads its own VRAM via nvidia-smi and packs as many queued
-# jobs as fit — no constant slot count. Self-deletes the VM when the queue
-# stops yielding eligible work.
-set -euxo pipefail
+# Provider-neutral GPU startup template: install immutable Stado runtime and
+# start the agent. The scheduler releases the machine through its selected
+# provider adapter after the agent exits.
+set -euo pipefail
 exec > /var/log/wisent-agent.log 2>&1
 
 echo "Wisent agent VM start: $(date -u)"
 
-# Ship the agent's own stdout+stderr to GCS continuously. /var/log/
-# wisent-agent.log is VM-local; before this, an agent crash was
-# invisible: the reaper deletes the VM (and this log) when capacity +
-# job heartbeat go stale, and only the training subprocess's
-# command_output.log survived (synced by the agent itself, which is
-# gone once it crashes). That is why agent deaths never surfaced an
-# error. Now: a background loop mirrors this log to
-# gs://wisent-compute/agent_logs/<instance>.log every 20s, and an EXIT
-# trap does a final flush so the crash traceback is captured even on
-# abnormal exit. Best-effort: never let logging failure abort the VM.
-_WC_INST="$(curl -s -H 'Metadata-Flavor: Google' \
-  'http://metadata.google.internal/computeMetadata/v1/instance/name' \
-  2>/dev/null || hostname)"
-# CRITICAL: this function and the shipper loop MUST run with xtrace
-# off. Line 6 sets `set -euxo pipefail` (xtrace global). Without the
-# `local -; set +x` here and the `set +x` in the subshell below, the
-# 20s shipper loop emits `+ _wc_ship_log / + gsutil -q cp ... /
-# + sleep 20 / + true` into /var/log/wisent-agent.log — the very file
-# it ships — every 20s. Over a multi-hour agent life that is tens of
-# thousands of xtrace lines that bury the real agent stdout/stderr
-# (job claims, training progress, death tracebacks): the exact signal
-# this shipper exists to surface. `local -` scopes the set change to
-# the function so the main agent path keeps xtrace; the subshell
-# `set +x` silences the loop's while/sleep/true.
-_wc_ship_log() {
-  local -
-  set +x
-  gsutil -q cp /var/log/wisent-agent.log \
-    "gs://wisent-compute/agent_logs/${_WC_INST}.log" 2>/dev/null \
-  || gcloud storage cp /var/log/wisent-agent.log \
-    "gs://wisent-compute/agent_logs/${_WC_INST}.log" 2>/dev/null || true
-}
-_wc_shutdown_log_shipper() {
-  local -
-  set +x
-  _wc_ship_log
-  if [ -n "${_WC_LOG_SHIPPER_PID:-}" ]; then
-    kill "${_WC_LOG_SHIPPER_PID}" 2>/dev/null || true
-  fi
-}
-trap '_wc_shutdown_log_shipper' EXIT
-( set +x; while true; do _wc_ship_log; sleep 20; done ) &
-_WC_LOG_SHIPPER_PID=$!
-
-    while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
-        echo "Waiting for apt lock..."
-    done
-    apt-get update
-    apt-get install -y python3-venv python3-pip git ca-certificates curl gnupg
-
-    WORK=/opt/wisent-agent
-    rm -rf "$WORK"
-    mkdir -p "$WORK"
-    cd "$WORK"
-    python3 -m venv .venv
-    source .venv/bin/activate
-    pip install --upgrade pip
-    pip install --upgrade wisent wisent-extractors wisent-evaluators wisent-tools \
-        lm-eval optuna matplotlib word2number evaluate
-    pip install --upgrade --force-reinstall 'transformers>=4.55,<5.0' 'tokenizers>=0.20,<0.22'
-    pip install --upgrade --force-reinstall 'datasets>=2.18,<3.0' 'huggingface-hub>=0.34.0,<1.0'
-    if pip show hf-xet >/dev/null 2>&1; then pip uninstall -y hf-xet; fi
+WORK=/opt/wisent-agent
+rm -rf "$WORK"
+mkdir -p "$WORK"
+cd "$WORK"
 
 export WISENT_DTYPE=auto
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
@@ -81,102 +22,131 @@ export WC_LOCAL_SLOTS=0
 # rewrite raises 'Cannot set NUMBA_NUM_THREADS once threads have been
 # launched'. Setting it in the agent's own env propagates to subprocesses.
 export NUMBA_NUM_THREADS=1
-# Slow HF API calls so we don't hit the 1000-requests-per-5min limit when
-# 20+ cloud agents all hit ArabicMMLU/etc dataset metadata at once.
-export HF_HUB_DOWNLOAD_TIMEOUT=120
-# Kill telemetry/analytics pings — they count against the 1000/5min ceiling.
-export HF_HUB_DISABLE_TELEMETRY=1
-# When a file IS present in cache, transformers/huggingface_hub still issues
-# a HEAD to refresh the etag and re-validate. With cache-first loading in
-# wisent>=0.11.20 this normally won't fire, but if some path still bypasses
-# local_files_only we want the etag check to fail fast (1s) and fall back
-# to cache rather than block waiting on a rate-limited Hub.
-export HF_HUB_ETAG_TIMEOUT=1
 
-# Pre-warm the small auxiliary models so extraction jobs can skip the
-# download. Do not fail startup on Hugging Face rate limits: the agent can
-# still run non-HF jobs and cached-model jobs, while a hard failure prevents
-# it from publishing capacity or claiming anything.
-_hf_prewarm() {
-    local target="$1"
-    shift
-    if ! huggingface-cli download "$target" "$@"; then
-        echo "WARN: HF prewarm failed for ${target}; continuing agent startup"
-    fi
+# The dispatcher exports the complete primary/backup storage contract so the
+# agent constructs the same JobStorage as the control plane.
+export WC_STORAGE_BACKEND="${WC_STORAGE_BACKEND}"
+export WC_BUCKET="${WC_BUCKET}"
+export WC_AZURE_STORAGE_ACCOUNT="${WC_AZURE_STORAGE_ACCOUNT}"
+export WC_AZURE_CONTAINER="${WC_AZURE_CONTAINER}"
+export WC_S3_BUCKET="${WC_S3_BUCKET}"
+export WC_S3_REGION="${WC_S3_REGION}"
+export WC_LOCAL_STORAGE_PATH="${WC_LOCAL_STORAGE_PATH}"
+export WC_BACKUP_STORAGE_BACKEND="${WC_BACKUP_STORAGE_BACKEND}"
+export WC_BACKUP_BUCKET="${WC_BACKUP_BUCKET}"
+export WC_BACKUP_AZURE_STORAGE_ACCOUNT="${WC_BACKUP_AZURE_STORAGE_ACCOUNT}"
+export WC_BACKUP_AZURE_CONTAINER="${WC_BACKUP_AZURE_CONTAINER}"
+export WC_BACKUP_S3_REGION="${WC_BACKUP_S3_REGION}"
+export WC_BACKUP_LOCAL_STORAGE_PATH="${WC_BACKUP_LOCAL_STORAGE_PATH}"
+
+# Materialize only the dedicated workload-agent grant, never the coordinator
+# grant, into root-only tmpfs for secret_env resolution.
+export WC_AGENT_SKARBIEC_URL="${WC_AGENT_SKARBIEC_URL}"
+export WC_AGENT_SKARBIEC_CONSUMER="${WC_AGENT_SKARBIEC_CONSUMER}"
+export WC_AGENT_SKARBIEC_ITEMS="${WC_AGENT_SKARBIEC_ITEMS}"
+export WC_AGENT_SKARBIEC_SECRET_FIELDS="${WC_AGENT_SKARBIEC_SECRET_FIELDS}"
+_wc_agent_grant_dir=/run/stado-agent-credentials
+_wc_agent_grant_file="$_wc_agent_grant_dir/skarbiec-token"
+mkdir -p "$_wc_agent_grant_dir"
+chmod u=rwx,go= "$_wc_agent_grant_dir"
+umask u=rw,go=
+printf '%s' "${STADO_AGENT_SKARBIEC_GRANT_B64}" | base64 --decode > "$_wc_agent_grant_file"
+chmod u=rw,go= "$_wc_agent_grant_file"
+unset STADO_AGENT_SKARBIEC_GRANT_B64
+export WC_AGENT_SKARBIEC_TOKEN_FILE="$_wc_agent_grant_file"
+export WC_SKARBIEC_URL="$WC_AGENT_SKARBIEC_URL"
+export WC_SKARBIEC_CONSUMER="$WC_AGENT_SKARBIEC_CONSUMER"
+export WC_SKARBIEC_TOKEN_FILE="$_wc_agent_grant_file"
+case "$WC_SKARBIEC_URL" in
+    https://*) ;;
+    *) echo "FATAL: WC_AGENT_SKARBIEC_URL must use HTTPS"; false ;;
+esac
+
+# Install the exact Rust orchestration release through Stado's public,
+# provider-neutral software endpoint. The dispatcher supplies every immutable
+# coordinate; missing or malformed coordinates abort startup. Both objects are
+# downloaded before install, and a missing checksum entry is a hard failure.
+RELEASE_API="${STADO_RELEASE_API_URL}"
+RELEASE_VERSION="${STADO_RELEASE_VERSION}"
+RELEASE_PLATFORM="${STADO_RELEASE_PLATFORM}"
+case "$RELEASE_API" in
+    https://*) ;;
+    *) echo "FATAL: STADO_RELEASE_API_URL must use HTTPS"; false ;;
+esac
+case "$RELEASE_VERSION" in
+    *[![:alnum:]._-]*|"") echo "FATAL: invalid STADO_RELEASE_VERSION"; false ;;
+esac
+case "$RELEASE_PLATFORM" in
+    *[![:alnum:]._-]*|"") echo "FATAL: invalid STADO_RELEASE_PLATFORM"; false ;;
+esac
+RELEASE_API="${RELEASE_API%/}"
+
+# The Python environment and all boot-time model assets are one immutable
+# release object. The archive must contain .venv/bin/python and huggingface/.
+RUNTIME_URI="${STADO_AGENT_RUNTIME_BUNDLE_URI}"
+RUNTIME_SHA256="${STADO_AGENT_RUNTIME_BUNDLE_SHA256}"
+case "$RUNTIME_URI" in
+    stado://releases/*/*/*/*) ;;
+    *) echo "FATAL: STADO_AGENT_RUNTIME_BUNDLE_URI must be an exact stado://releases/<product>/<version>/<platform>/<object> URI"; false ;;
+esac
+case "$RUNTIME_SHA256" in
+    *[![:xdigit:]]*|"") echo "FATAL: STADO_AGENT_RUNTIME_BUNDLE_SHA256 must be a SHA-256 hex digest"; false ;;
+esac
+RUNTIME_ARCHIVE="$(mktemp)"
+trap 'rm -f "$RUNTIME_ARCHIVE"' EXIT
+curl -fsSL --get --data-urlencode "uri=$RUNTIME_URI" \
+    "$RELEASE_API/api/release/object" -o "$RUNTIME_ARCHIVE"
+printf '%s  %s\n' "$RUNTIME_SHA256" "$RUNTIME_ARCHIVE" | sha256sum -c -
+RUNTIME_ROOT="$WORK/runtime"
+mkdir -p "$RUNTIME_ROOT"
+tar -xzf "$RUNTIME_ARCHIVE" --no-same-owner -C "$RUNTIME_ROOT"
+rm -f "$RUNTIME_ARCHIVE"
+trap - EXIT
+[ -x "$RUNTIME_ROOT/.venv/bin/python" ] || {
+    echo "FATAL: immutable agent runtime bundle must contain executable .venv/bin/python"
+    false
 }
-_hf_prewarm cross-encoder/nli-deberta-v3-small
-_hf_prewarm sentence-transformers/all-MiniLM-L6-v2
-
-# Pre-fetch tokenizer files for every extraction model. Without this,
-# each agent first-fetches the tokenizer at job-time; an interrupted
-# download leaves a zero-byte tokenizer.model and transformers' slow
-# SentencePiece path then calls sentencepiece.LoadFromFile(None/empty)
-# and dies with `TypeError: not a string` mid-extraction (observed live
-# on the winogrande Llama-2-7b-chat-hf role_play strategy on 2026-05-15).
-# Only the tokenizer config is needed here — model weights download on
-# first job claim. Hard-error on download failure so the VM recycles
-# rather than running with a half-fetched tokenizer.
-for _model in \
-    "meta-llama/Llama-3.2-1B-Instruct" \
-    "meta-llama/Llama-2-7b-chat-hf" \
-    "Qwen/Qwen3-8B" \
-    "openai/gpt-oss-20b"; do
-    _hf_prewarm "${_model}" \
-        --include "tokenizer*" "*.json" "special_tokens_map.json"
-done
-
-# Install the Rust orchestration binary from the release bucket. Job
-# payloads still run as Python from the venv above (exported as WC_PYTHON
-# for the agent's probes), but the control plane has no Python fallback:
-# an unavailable or invalid Rust release aborts startup instead of silently
-# restoring the retired Python orchestrator. This template is the one that
-# INTENTIONALLY stays on GCS instead of resolving WC_RELEASE_BASE_URL: a
-# GCE VM cannot exist without a live GCP project, so a portable release
-# URL would buy it nothing, and leaving the lines untouched keeps the
-# GCS path byte-identical. Shell-locals use $VAR (never the braced form)
-# so the dispatcher's placeholder substitution leaves them alone.
+[ -d "$RUNTIME_ROOT/huggingface/hub" ] || {
+    echo "FATAL: immutable agent runtime bundle must contain huggingface/hub model cache"
+    false
+}
+export PATH="$RUNTIME_ROOT/.venv/bin:$PATH"
+export HF_HOME="$RUNTIME_ROOT/huggingface"
+export HF_HUB_OFFLINE=true
+export HF_DATASETS_OFFLINE=true
+export TRANSFORMERS_OFFLINE=true
 AGENT_BIN=/opt/wisent-agent/bin/stado
+_wc_release_get() {
+    curl -fsSL --get \
+        --data-urlencode "uri=stado://releases/stado/$RELEASE_VERSION/$RELEASE_PLATFORM/$RELEASE_OBJECT" \
+        "$RELEASE_API/api/release/object" \
+        -o "$RELEASE_DESTINATION"
+}
 _wc_install_agent_binary() {
-    mkdir -p /opt/wisent-agent/bin || return 1
-    local version
-    version="$(gcloud storage cp gs://wisent-compute/releases/stado/latest.json - 2>/dev/null \
-        | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin)["version"])')" || return 1
-    [ -n "$version" ] || return 1
-    local prefix="gs://wisent-compute/releases/stado/$version/linux-amd64"
-    local tmp
-    tmp="$(mktemp -d)" || return 1
-    gcloud storage cp "$prefix/stado" "$prefix/SHA256SUMS" "$tmp/" 2>/dev/null || { rm -rf "$tmp"; return 1; }
-    grep -E '[ *]stado$' "$tmp/SHA256SUMS" > "$tmp/stado.sha256" || { rm -rf "$tmp"; return 1; }
-    (cd "$tmp" && sha256sum -c stado.sha256) || { rm -rf "$tmp"; return 1; }
-    chmod 755 "$tmp/stado" || { rm -rf "$tmp"; return 1; }
-    mv "$tmp/stado" /opt/wisent-agent/bin/stado || { rm -rf "$tmp"; return 1; }
+    mkdir -p /opt/wisent-agent/bin || return
+    local tmp rc
+    tmp="$(mktemp -d)" || return
+    RELEASE_OBJECT=stado
+    RELEASE_DESTINATION="$tmp/stado"
+    _wc_release_get || { rc=$?; rm -rf "$tmp"; return "$rc"; }
+    RELEASE_OBJECT=SHA256SUMS
+    RELEASE_DESTINATION="$tmp/SHA256SUMS"
+    _wc_release_get || { rc=$?; rm -rf "$tmp"; return "$rc"; }
+    grep -E '[ *]stado$' "$tmp/SHA256SUMS" > "$tmp/stado.sha256" || { rc=$?; rm -rf "$tmp"; return "$rc"; }
+    (cd "$tmp" && sha256sum -c stado.sha256) || { rc=$?; rm -rf "$tmp"; return "$rc"; }
+    chmod u=rwx,go= "$tmp/stado" || { rc=$?; rm -rf "$tmp"; return "$rc"; }
+    mv "$tmp/stado" /opt/wisent-agent/bin/stado || { rc=$?; rm -rf "$tmp"; return "$rc"; }
     rm -rf "$tmp"
-    echo "Installed stado $version (linux-amd64) -> /opt/wisent-agent/bin/stado"
+    echo "Installed stado $RELEASE_VERSION ($RELEASE_PLATFORM) -> /opt/wisent-agent/bin/stado"
 }
 _wc_install_agent_binary
-export WC_PYTHON=/opt/wisent-agent/.venv/bin/python
+export WC_PYTHON="$RUNTIME_ROOT/.venv/bin/python"
 
-# Run the agent. --idle-shutdown makes it exit + self-delete the VM when the
-# queue holds nothing this VM can run. No timer, no slot constant — pure
-# condition-driven on (slots empty AND no eligible queued job).
-"$AGENT_BIN" agent --kind gcp --gpu-type "${ACCEL_TYPE}" --idle-shutdown
+# Run until idle. Machine deletion is deliberately not a guest-script action:
+# the scheduler owns the provider lease and cleans it up through the selected
+# provider adapter.
+"$AGENT_BIN" agent --kind "${PROVIDER_KIND}" --gpu-type "${ACCEL_TYPE}" --idle-shutdown
 EXIT=$?
 echo "Agent exited with $EXIT at $(date -u)"
 
-# Always recycle this VM after the agent exits, regardless of status. The
-# agent's own self_terminate() (called from the idle-shutdown path and
-# from the cloud-agent drift handler in version_check.maybe_drain_or_upgrade)
-# normally handles delete cleanly, but if the agent crashed before reaching
-# either path, the VM would stay RUNNING forever as a zombie — that's the
-# exact failure pattern that produced 1778695548-{2,3,5} on 2026-05-13:
-# capacity blob published once at boot, agent silent thereafter, VM still
-# alive. By force-deleting here we make zombification structurally
-# impossible: any path that ends the script ends the VM. The dispatcher
-# creates fresh VMs from the latest Rust release, so this is also the
-# upgrade path for cloud agents (drift detected -> agent exits -> VM
-# deleted -> dispatcher launches fresh VM with new code).
-INSTANCE_NAME=$(curl -fs -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/name)
-INSTANCE_ZONE=$(curl -fs -H "Metadata-Flavor: Google" http://metadata.google.internal/computeMetadata/v1/instance/zone | awk -F/ '{print $NF}')
-echo "Force-deleting self: $INSTANCE_NAME in $INSTANCE_ZONE (exit was $EXIT)"
-gcloud compute instances delete "$INSTANCE_NAME" --zone="$INSTANCE_ZONE" --quiet &
 exit $EXIT

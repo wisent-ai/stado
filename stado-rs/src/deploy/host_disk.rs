@@ -129,7 +129,7 @@ pub fn parse_output(stdout: &str, policy_interval_seconds: Option<i64>) -> DiskR
                 });
             }
             ["STADO_CLEANUP_STATE", payload] => {
-                reading.state = parse_state(*payload, policy_interval_seconds);
+                reading.state = parse_state(payload, policy_interval_seconds);
             }
             ["STADO_CLEANUP_STATE_MISSING", path] => {
                 reading.state = CleanupState {

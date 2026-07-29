@@ -48,8 +48,8 @@ pub struct S3Backend {
 }
 
 impl S3Backend {
-    /// Build a backend for `bucket`, resolving static AWS credentials from the
-    /// `stado-aws` Skarbiec item. Empty `bucket` is the Python RuntimeError
+    /// Build a backend for `bucket` using the AWS adapter host's IMDSv2
+    /// identity. Empty `bucket` is the Python RuntimeError
     /// ("WC_S3_BUCKET is required for S3 storage"). Empty `region` lets the SDK
     /// choose its default region.
     pub async fn new(bucket: &str, region: &str) -> Result<Self, StorageError> {

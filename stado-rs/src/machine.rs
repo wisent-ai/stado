@@ -52,6 +52,7 @@ const REQUEST_FIELDS: &[&str] = &[
     "pin_to_provider",
     "priority",
     "repo",
+    "repo_ref",
     "repo_workdir",
     "repo_extras",
     "pre_command",
@@ -76,6 +77,8 @@ static ENV_NAME_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
 static SECRET_PART_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(r"^[A-Za-z0-9][A-Za-z0-9._-]*$").expect("static regex compiles")
 });
+static REPO_REF_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"^[0-9a-f]{40}$").expect("static repo ref regex compiles"));
 
 /// Structured failure emitted by every facade operation. Serialized by the
 /// CLI layer as `{"code","message","retryable"}`.
@@ -467,6 +470,7 @@ pub fn validate_request(request: &Value) -> Result<Map<String, Value>, MachineEr
     normalized.insert("pin_to_provider".into(), Value::from(false));
     normalized.insert("priority".into(), Value::from(0));
     normalized.insert("repo".into(), Value::from(""));
+    normalized.insert("repo_ref".into(), Value::from(""));
     normalized.insert("repo_workdir".into(), Value::from(""));
     normalized.insert("repo_extras".into(), Value::from("train"));
     normalized.insert("pre_command".into(), Value::from(""));
@@ -485,6 +489,7 @@ pub fn validate_request(request: &Value) -> Result<Map<String, Value>, MachineEr
         "provider",
         "gpu_type",
         "repo",
+        "repo_ref",
         "repo_workdir",
         "repo_extras",
         "pre_command",
@@ -495,6 +500,17 @@ pub fn validate_request(request: &Value) -> Result<Map<String, Value>, MachineEr
         if !normalized[name].is_string() {
             return Err(invalid(format!("{name} must be a string")));
         }
+    }
+    let repo = normalized["repo"].as_str().unwrap_or_default();
+    let repo_ref = normalized["repo_ref"].as_str().unwrap_or_default();
+    if repo.is_empty() {
+        if !repo_ref.is_empty() {
+            return Err(invalid("repo_ref is valid only when repo is set"));
+        }
+    } else if !REPO_REF_RE.is_match(repo_ref) {
+        return Err(invalid(
+            "repo_ref is required with repo and must be a full 40-character lowercase hexadecimal commit",
+        ));
     }
     // Python rejects bool explicitly because bool is an int subclass; JSON
     // booleans never deserialize as i64/f64 here, so as_i64/as_f64 suffices.
@@ -766,6 +782,7 @@ impl MachineFacade {
             pin_to_provider: request["pin_to_provider"].as_bool().unwrap_or_default(),
             priority: request["priority"].as_i64().unwrap_or_default(),
             repo: str_field("repo"),
+            repo_ref: str_field("repo_ref"),
             repo_workdir: str_field("repo_workdir"),
             repo_extras: str_field("repo_extras"),
             pre_command: str_field("pre_command"),
@@ -841,6 +858,7 @@ impl MachineFacade {
                 format!("{bootstrap}\n{caller_pre_command}")
             };
             options.repo = String::new();
+            options.repo_ref = String::new();
             options.repo_workdir = String::new();
             options.repo_extras = String::new();
         }
@@ -1263,7 +1281,7 @@ mod tests {
         // Defaults merge; max_cost normalizes to float for the digest.
         let ok = validate_request(&serde_json::json!({"client_request_id": "r1", "command": "x"}))
             .unwrap();
-        assert_eq!(ok["provider"], Value::from("gcp"));
+        assert_eq!(ok["provider"], Value::from(""));
         assert_eq!(ok["repo_extras"], Value::from("train"));
         assert_eq!(ok["max_cost_per_hour_usd"], Value::from(0.0));
         let int_cost =

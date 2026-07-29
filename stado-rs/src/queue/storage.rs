@@ -13,12 +13,15 @@ use std::sync::Arc;
 
 use chrono::Utc;
 
+use crate::capabilities::{RuntimeAdapter, RuntimeFacet, StorageAdapter};
 use crate::config;
 use crate::models::Job;
 
+#[cfg(test)]
+use super::local_file::LocalBackend;
 use super::{
-    azure_blob::AzureBlobBackend, gcs::GcsBackend, listing, local_file::LocalBackend,
-    s3::S3Backend, tombstone, BlobBackend, BlobInfo, StorageError, VersionedText,
+    construct_backend, listing, tombstone, BackendLocator, BlobBackend, BlobInfo, StorageError,
+    VersionedText,
 };
 
 /// Job-level storage facade over a [`BlobBackend`]. Cheap to clone.
@@ -48,70 +51,46 @@ impl JobStorage {
     /// — but keeps it as `bucket_name` like Python `JobStorage(bucket)`.
     pub async fn with_bucket(bucket: &str) -> Result<Self, StorageError> {
         let configured_backend = config::wc_storage_backend();
-        let backend = crate::capabilities::constructible_variant(
-            crate::capabilities::CapabilityKind::Storage,
-            configured_backend,
+        let variant =
+            crate::capabilities::constructible_variant(RuntimeFacet::Storage, configured_backend)
+                .ok_or_else(|| {
+                let choices = crate::capabilities::configurable_ids(RuntimeFacet::Storage)
+                    .collect::<Vec<_>>()
+                    .join("\", \"");
+                StorageError::Other(format!(
+                    "WC_STORAGE_BACKEND={configured_backend} is not supported (use \"{choices}\")"
+                ))
+            })?;
+        let RuntimeAdapter::Storage(adapter) = variant.adapter else {
+            return Err(StorageError::Other(format!(
+                "storage variant {:?} has no storage adapter",
+                variant.id
+            )));
+        };
+
+        // Python: S3Backend(WC_S3_BUCKET or bucket_name, WC_S3_REGION).
+        // The configured bucket wins, while the facade retains its caller's
+        // bucket_name for wire compatibility.
+        let configured_s3_bucket = config::wc_s3_bucket();
+        let endpoint_bucket = if adapter == StorageAdapter::S3 && !configured_s3_bucket.is_empty() {
+            configured_s3_bucket
+        } else {
+            bucket
+        };
+        let backend = construct_backend(
+            adapter,
+            BackendLocator {
+                bucket: endpoint_bucket,
+                account: config::wc_azure_storage_account(),
+                container: config::wc_azure_container(),
+                region: config::wc_s3_region(),
+                path: config::wc_local_storage_path(),
+            },
         )
-        .map(|variant| variant.id)
-        .unwrap_or(configured_backend);
-        let storage = match backend {
-            "local" => {
-                let backend = LocalBackend::new(config::wc_local_storage_path())?;
-                Ok(Self::with_backend_and_bucket(
-                    Arc::new(backend),
-                    "local",
-                    bucket,
-                ))
-            }
-            "gcs" => {
-                let backend = GcsBackend::new(bucket).await?;
-                Ok(Self::with_backend_and_bucket(
-                    Arc::new(backend),
-                    "gcs",
-                    bucket,
-                ))
-            }
-            "azure" => {
-                let backend = AzureBlobBackend::new(
-                    config::wc_azure_storage_account(),
-                    config::wc_azure_container(),
-                )?;
-                Ok(Self::with_backend_and_bucket(
-                    Arc::new(backend),
-                    "azure",
-                    bucket,
-                ))
-            }
-            "s3" => {
-                // Python: S3Backend(WC_S3_BUCKET or bucket_name, WC_S3_REGION)
-                // — the configured bucket wins, the facade bucket fills in
-                // when WC_S3_BUCKET is empty. `bucket_name` on the facade
-                // stays the passed bucket either way (Python parity).
-                let configured = config::wc_s3_bucket();
-                let s3_bucket = if configured.is_empty() {
-                    bucket
-                } else {
-                    configured
-                };
-                let backend = S3Backend::new(s3_bucket, config::wc_s3_region()).await?;
-                Ok(Self::with_backend_and_bucket(
-                    Arc::new(backend),
-                    "s3",
-                    bucket,
-                ))
-            }
-            other => {
-                let choices = crate::capabilities::configurable_ids(
-                    crate::capabilities::CapabilityKind::Storage,
-                )
-                .collect::<Vec<_>>()
-                .join("\", \"");
-                Err(StorageError::Other(format!(
-                    "WC_STORAGE_BACKEND={other} is not supported (use \"{choices}\")"
-                )))
-            }
-        }?;
-        storage.with_configured_read_failover().await
+        .await?;
+        Self::with_backend_and_bucket(backend, variant.id, bucket)
+            .with_configured_read_failover()
+            .await
     }
 
     async fn with_configured_read_failover(mut self) -> Result<Self, StorageError> {
@@ -275,21 +254,36 @@ impl JobStorage {
     // ---- job operations ----
 
     /// Write the job JSON to `{prefix}/{job_id}.json`, stamp filter metadata
-    /// (`gpu_mem_gb`, `priority`, `gpu_type`), and — for priority>0 jobs in
-    /// `queue/` — write the `queue_priority/` index marker.
+    /// (`gpu_mem_gb`, `priority`, `gpu_type`, provider routing), and — for
+    /// priority>0 jobs in `queue/` — write the `queue_priority/` index marker.
     pub async fn write_job(&self, prefix: &str, job: &Job) -> Result<(), StorageError> {
         let blob_path = format!("{}/{}.json", prefix, job.job_id);
         self.backend.upload_text(&blob_path, &job.to_json()).await?;
-        let meta = BTreeMap::from([
-            ("gpu_mem_gb".to_string(), job.gpu_mem_gb.to_string()),
-            ("priority".to_string(), job.priority.to_string()),
-            ("gpu_type".to_string(), job.gpu_type.clone()),
-        ]);
+        let meta = Self::job_metadata(job);
         self.backend.set_metadata(&blob_path, &meta).await?;
         if prefix == "queue" && job.priority > 0 {
             self.write_priority_marker(job).await?;
         }
         Ok(())
+    }
+    pub async fn refresh_job_metadata(&self, prefix: &str, job: &Job) -> Result<(), StorageError> {
+        let blob_path = format!("{}/{}.json", prefix, job.job_id);
+        self.backend
+            .set_metadata(&blob_path, &Self::job_metadata(job))
+            .await
+    }
+
+    fn job_metadata(job: &Job) -> BTreeMap<String, String> {
+        BTreeMap::from([
+            ("gpu_mem_gb".to_string(), job.gpu_mem_gb.to_string()),
+            ("priority".to_string(), job.priority.to_string()),
+            ("gpu_type".to_string(), job.gpu_type.clone()),
+            ("provider".to_string(), job.provider.clone()),
+            (
+                "pin_to_provider".to_string(),
+                job.pin_to_provider.to_string(),
+            ),
+        ])
     }
 
     /// Read a job blob; `None` when absent. Corrupt JSON propagates as an
@@ -512,6 +506,8 @@ mod tests {
                 ("gpu_mem_gb".into(), "24".into()),
                 ("priority".into(), "0".into()),
                 ("gpu_type".into(), "nvidia-l4".into()),
+                ("provider".into(), "gcp".into()),
+                ("pin_to_provider".into(), "false".into()),
             ])
         );
     }

@@ -110,7 +110,9 @@ pub async fn run_local(host: &str, port: i64, interval: i64) -> Result<(), Contr
     let store = JobStorage::new().await?;
     // The local storage backend is intentionally loopback-only. Selecting a
     // cloud target is required before workers on other devices can join.
-    if store.backend_name() != "local" {
+    let local_storage = crate::capabilities::storage_adapter(store.backend_name())
+        == Some(crate::capabilities::StorageAdapter::Local);
+    if !local_storage {
         return Err(ControlPlaneError::Other(
             "local-control-plane requires WC_STORAGE_BACKEND=local".to_string(),
         ));

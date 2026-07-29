@@ -104,7 +104,7 @@ pub fn parse_output(stdout: &str) -> PreviewOutcome {
     for line in stdout.lines() {
         match host_channel::marker_fields(line).as_slice() {
             ["STADO_PREVIEW_BIN", path] => outcome.binary = Some((*path).to_string()),
-            ["STADO_PREVIEW", "ok", payload] => match serde_json::from_str(*payload) {
+            ["STADO_PREVIEW", "ok", payload] => match serde_json::from_str(payload) {
                 Ok(plan) => outcome.plan = Some(plan),
                 // The janitor prints one line of canonical JSON. Anything
                 // else means the remote binary is not the one we think it

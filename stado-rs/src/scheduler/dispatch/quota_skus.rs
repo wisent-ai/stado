@@ -286,7 +286,13 @@ impl CloudQuotasClient {
 /// `os.environ.get("GCP_PROJECT", "wisent-480400")` — env only, NOT
 /// config.PROJECT. Kept env-only for parity.
 pub(crate) fn gcp_project_env() -> String {
-    std::env::var("GCP_PROJECT").unwrap_or_else(|_| "wisent-480400".to_string())
+    let env = crate::capabilities::config_env(
+        crate::capabilities::RuntimeFacet::Compute,
+        crate::capabilities::ProviderId::Gcp.as_str(),
+        "project",
+    )
+    .expect("GCP project binding is missing from the capability catalog");
+    std::env::var(env).unwrap_or_else(|_| "wisent-480400".to_string())
 }
 
 /// Enumerate every GPU-related compute.googleapis.com QuotaInfo in the
@@ -351,7 +357,7 @@ pub async fn gcp_catalog(client: &CloudQuotasClient) -> Result<Vec<Value>, Catal
             };
             for loc in locations {
                 out.push(json!({
-                    "provider": "gcp",
+                    "provider": crate::capabilities::ProviderId::Gcp.as_str(),
                     "quota_id": qid,
                     "metric": metric,
                     "gpu_family": gpu_family,
@@ -380,7 +386,7 @@ pub fn azure_rows_from_skus(skus: &[Value]) -> Vec<Value> {
         if let Some(locations) = sku.get("locations").and_then(Value::as_array) {
             for loc in locations.iter().filter_map(Value::as_str) {
                 out.push(json!({
-                    "provider": "azure",
+                    "provider": crate::capabilities::ProviderId::Azure.as_str(),
                     "family": family,
                     "sku": name,
                     "location": loc,
@@ -398,7 +404,7 @@ pub async fn azure_catalog() -> Vec<Value> {
     let subscription = crate::config::azure_subscription_id();
     if subscription.is_empty() {
         return vec![json!({
-            "provider": "azure",
+            "provider": crate::capabilities::ProviderId::Azure.as_str(),
             "ok": false,
             "error": "AZURE_SUBSCRIPTION_ID is required",
         })];
@@ -414,7 +420,7 @@ pub async fn azure_catalog() -> Vec<Value> {
         Ok(token) => token,
         Err(err) => {
             return vec![json!({
-                "provider": "azure",
+                "provider": crate::capabilities::ProviderId::Azure.as_str(),
                 "ok": false,
                 "error": err.to_string(),
             })];
@@ -429,7 +435,7 @@ pub async fn azure_catalog() -> Vec<Value> {
             Ok(response) => response,
             Err(err) => {
                 return vec![json!({
-                    "provider": "azure",
+                    "provider": crate::capabilities::ProviderId::Azure.as_str(),
                     "ok": false,
                     "error": err.to_string(),
                 })];
@@ -440,7 +446,7 @@ pub async fn azure_catalog() -> Vec<Value> {
             Ok(body) => body,
             Err(err) => {
                 return vec![json!({
-                    "provider": "azure",
+                    "provider": crate::capabilities::ProviderId::Azure.as_str(),
                     "ok": false,
                     "error": err.to_string(),
                 })];
@@ -448,7 +454,7 @@ pub async fn azure_catalog() -> Vec<Value> {
         };
         if !status.is_success() {
             return vec![json!({
-                "provider": "azure",
+                "provider": crate::capabilities::ProviderId::Azure.as_str(),
                 "ok": false,
                 "error": format!("Azure Compute SKU list returned HTTP {status}: {body}"),
             })];
@@ -476,8 +482,12 @@ pub async fn provider_catalog(
     provider: &str,
     gcp_client: Option<&CloudQuotasClient>,
 ) -> Result<Vec<Value>, CatalogError> {
-    match provider {
-        "gcp" => {
+    let adapter = crate::capabilities::variant(crate::capabilities::RuntimeFacet::Quota, provider)
+        .map(|variant| variant.adapter);
+    match adapter {
+        Some(crate::capabilities::RuntimeAdapter::Quota(
+            crate::capabilities::QuotaAdapter::Gcp,
+        )) => {
             let owned;
             let client = match gcp_client {
                 Some(client) => client,
@@ -488,9 +498,11 @@ pub async fn provider_catalog(
             };
             gcp_catalog(client).await
         }
-        "azure" => Ok(azure_catalog().await),
-        other => Ok(vec![json!({
-            "provider": other,
+        Some(crate::capabilities::RuntimeAdapter::Quota(
+            crate::capabilities::QuotaAdapter::Azure,
+        )) => Ok(azure_catalog().await),
+        _ => Ok(vec![json!({
+            "provider": provider,
             "ok": false,
             "error": "no catalog impl for this provider",
         })]),
@@ -633,14 +645,14 @@ pub async fn gcp_request_all_families(
             {
                 Ok(r) => {
                     let mut row = json!({
-                        "provider": "gcp", "region": region,
+                        "provider": crate::capabilities::ProviderId::Gcp.as_str(), "region": region,
                         "gpu_family": fam, "ok": true,
                     });
                     super::quota_request::merge_object(&mut row, r);
                     out.push(row);
                 }
                 Err(err) => out.push(json!({
-                    "provider": "gcp", "region": region,
+                    "provider": crate::capabilities::ProviderId::Gcp.as_str(), "region": region,
                     "gpu_family": fam, "ok": false,
                     "error": format!("GoogleAPICallError: {err}"),
                 })),
@@ -696,18 +708,18 @@ pub async fn azure_request_all_families(new_limit: i64, locations: &[String]) ->
             .await
             {
                 Ok(r) if r.get("available").and_then(Value::as_bool) == Some(false) => json!({
-                    "provider": "azure", "location": loc, "family": fam, "ok": false,
+                    "provider": crate::capabilities::ProviderId::Azure.as_str(), "location": loc, "family": fam, "ok": false,
                     "error": r.get("reason").and_then(Value::as_str).unwrap_or("not available"),
                 }),
                 Ok(r) => {
                     let mut row = json!({
-                        "provider": "azure", "location": loc, "family": fam, "ok": true,
+                        "provider": crate::capabilities::ProviderId::Azure.as_str(), "location": loc, "family": fam, "ok": true,
                     });
                     super::quota_request::merge_object(&mut row, r);
                     row
                 }
                 Err(err) => json!({
-                    "provider": "azure", "location": loc, "family": fam, "ok": false,
+                    "provider": crate::capabilities::ProviderId::Azure.as_str(), "location": loc, "family": fam, "ok": false,
                     "error": format!("AzureError: {err}"),
                 }),
             };

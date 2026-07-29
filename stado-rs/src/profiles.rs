@@ -1,17 +1,15 @@
 //! Job profiles — named bundles of submit flags for recurring workflows.
 //!
-//! Port of `stado/profiles/__init__.py`. A profile is a JSON file under the
-//! crate's `data/profiles/` directory (or under the operator-supplied
-//! `$WC_PROFILES_DIR`). It declares the same fields that `stado submit`
-//! takes as CLI flags — gpu_type, vram_gb, apt, pre_command, repo, etc. —
-//! so a recurring workflow ("Z-Image LoRA training on ai-toolkit",
-//! "lm-eval on vLLM", ...) can be invoked with a single `--profile NAME`
-//! flag instead of a 20-line one-shot command.
+//! Bundled profiles are embedded in the executable so installed binaries do
+//! not depend on the build machine's `CARGO_MANIFEST_DIR`. Operators may add
+//! or override profiles beside the installed binary or through
+//! `$WC_PROFILES_DIR`.
 //!
 //! Discovery order (first hit wins):
 //!
-//!   1. $WC_PROFILES_DIR/<name>.json     operator-local profiles
-//!   2. <crate data>/profiles/<name>.json   bundled with the crate
+//!   1. $WC_PROFILES_DIR/<name>.json
+//!   2. <installed executable directory>/profiles/<name>.json
+//!   3. profiles embedded in the executable
 //!
 //! CLI flags ALWAYS override profile values. The profile is a default
 //! template, not a hard contract.
@@ -23,23 +21,32 @@ use std::path::PathBuf;
 
 use serde_json::{Map, Value};
 
-/// The directory the bundled profiles ship in (Python `PACKAGE_PROFILES_DIR`
-/// = `stado/profiles/`).
+const BUNDLED_PROFILES: &[(&str, &str)] = &[(
+    "ai_toolkit_zimage",
+    include_str!("../data/profiles/ai_toolkit_zimage.json"),
+)];
+
+/// Runtime-adjacent profile directory for operator-managed installations.
+/// Bundled profiles themselves are embedded in [`BUNDLED_PROFILES`].
 pub fn package_profiles_dir() -> PathBuf {
-    crate::data_dir().join("profiles")
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|parent| parent.join("profiles")))
+        .unwrap_or_else(|| PathBuf::from("profiles"))
 }
 
 /// Maps profile JSON keys to submit kwarg names. Keeps the JSON
 /// user-friendly (e.g. `apt` instead of `apt_packages`) while the
 /// downstream code stays explicit. Ordered exactly like the Python dict
 /// (irrelevant to semantics, kept for diff-friendliness).
-pub const PROFILE_KEY_TO_KWARG: [(&str, &str); 16] = [
+pub const PROFILE_KEY_TO_KWARG: &[(&str, &str)] = &[
     ("gpu_type", "gpu_type"),
     ("vram_gb", "vram_gb"),
     ("machine_type", "machine_type"),
     ("apt", "apt_packages"),
     ("pre_command", "pre_command"),
     ("repo", "repo"),
+    ("repo_ref", "repo_ref"),
     ("repo_workdir", "repo_workdir"),
     ("repo_extras", "repo_extras"),
     ("output_uri", "output_uri"),
@@ -63,6 +70,7 @@ fn kwarg_defaults() -> Vec<(&'static str, Value)> {
         ("apt_packages", Value::Array(vec![])),
         ("pre_command", Value::from("")),
         ("repo", Value::from("")),
+        ("repo_ref", Value::from("")),
         ("repo_workdir", Value::from("")),
         ("repo_extras", Value::from("train")),
         ("output_uri", Value::from("")),
@@ -135,6 +143,11 @@ pub fn list_profiles() -> Vec<String> {
             }
         }
     }
+    for (name, _) in BUNDLED_PROFILES {
+        if !seen.iter().any(|visible| visible == name) {
+            seen.push((*name).to_string());
+        }
+    }
     seen
 }
 
@@ -175,6 +188,24 @@ pub fn load_profile(name: &str) -> Result<Map<String, Value>, ProfileError> {
                 .or_insert_with(|| Value::from(name));
             return Ok(map);
         }
+    }
+    if let Some((_, text)) = BUNDLED_PROFILES
+        .iter()
+        .find(|(bundled_name, _)| *bundled_name == name)
+    {
+        let data: Value = serde_json::from_str(text)?;
+        let mut map = match data {
+            Value::Object(map) => map,
+            other => {
+                return Err(ProfileError::Invalid(format!(
+                    "profile {name}: expected JSON object, got {}",
+                    python_type_name(&other)
+                )));
+            }
+        };
+        map.entry("name".to_string())
+            .or_insert_with(|| Value::from(name));
+        return Ok(map);
     }
     let available = list_profiles().join(", ");
     let available = if available.is_empty() {
@@ -217,7 +248,7 @@ pub fn merge_into_kwargs(
     cli: &Map<String, Value>,
 ) -> Map<String, Value> {
     let mut out = cli.clone();
-    for (pkey, kwarg) in PROFILE_KEY_TO_KWARG {
+    for &(pkey, kwarg) in PROFILE_KEY_TO_KWARG {
         let Some(profile_value) = profile.get(pkey) else {
             continue;
         };
