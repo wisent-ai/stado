@@ -62,7 +62,7 @@ fn submit_status_cancel_flow() {
         "{}",
         stdout(&out)
     );
-    assert!(stdout(&out).contains("via GCS"), "{}", stdout(&out));
+    assert!(stdout(&out).contains("via Stado"), "{}", stdout(&out));
     assert!(stdout(&out).contains("priority=3"), "{}", stdout(&out));
 
     // Status (fast path, exact job id) shows it queued.
@@ -194,6 +194,7 @@ fn submit_with_profile_applies_profile_defaults() {
         vec!["libgl1", "libglib2.0-0", "git-lfs", "build-essential"]
     );
     assert_eq!(job.repo, "https://github.com/ostris/ai-toolkit.git");
+    assert_eq!(job.repo_ref, "b677cdb02666320f1b03c747f5037a41e5a7515e");
 }
 
 #[test]
@@ -201,7 +202,11 @@ fn config_validate_passes_on_temp_config() {
     let dir = tempfile::tempdir().unwrap();
     let storage = dir.path().join("storage");
     let config_path = dir.path().join("stado-config.json");
-    std::fs::write(&config_path, r#"{"storage": {"backend": "local"}}"#).unwrap();
+    std::fs::write(
+        &config_path,
+        serde_json::to_vec_pretty(&stado::config_file::template()).unwrap(),
+    )
+    .unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_stado"))
         .args(["config", "validate"])
         .env("STADO_CONFIG", &config_path)
@@ -241,16 +246,16 @@ fn config_validate_passes_on_temp_config() {
 }
 
 #[test]
-fn unimplemented_command_exits_2() {
+fn weles_recordings_dir_rejects_relative_path_before_storage_access() {
     let dir = tempfile::tempdir().unwrap();
     let storage = dir.path().join("storage");
     let out = stado(
         storage.as_path(),
-        &["host", "weles-recordings-dir", "somehost", "/data/rec"],
+        &["host", "weles-recordings-dir", "somehost", "relative/rec"],
     );
-    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(out.status.code(), Some(i32::from(true)));
     assert!(
-        stderr(&out).contains("not yet implemented"),
+        stderr(&out).contains("PATH must be absolute"),
         "{}",
         stderr(&out)
     );
@@ -289,8 +294,10 @@ async fn submit_job_writes_roundtrippable_queue_blob() {
     let options = SubmitOptions {
         priority: 7,
         vram_gb: 22,
+        provider: "gcp".into(),
         preemptible: true,
         repo: "https://github.com/org/repo.git".into(),
+        repo_ref: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
         apt_packages: vec!["htop".into(), "git-lfs".into()],
         pre_command: "export FOO=bar".into(),
         yieldable: true,
@@ -333,22 +340,4 @@ async fn submit_job_writes_roundtrippable_queue_blob() {
     assert_eq!(parsed.yield_grace_seconds, 60);
     assert_eq!(parsed.batch_id, "batch-test");
     assert_eq!(parsed.submitted_via, "cli");
-
-    // The startup script was uploaded alongside and picked the GPU template.
-    let script =
-        std::fs::read_to_string(storage.join("scripts").join(format!("{}.sh", job.job_id)))
-            .expect("startup script written");
-    assert!(
-        script.contains("Wisent GPU startup:"),
-        "GPU template expected:\n{script}"
-    );
-    assert!(script.contains(&job.job_id), "{script}");
-    assert!(
-        script.contains("git clone --depth 1 https://github.com/org/repo.git repo"),
-        "{script}"
-    );
-    assert!(
-        script.contains("apt-get install -y --no-install-recommends htop git-lfs"),
-        "{script}"
-    );
 }

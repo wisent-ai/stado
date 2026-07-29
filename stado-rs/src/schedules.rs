@@ -287,6 +287,8 @@ pub struct Schedule {
     #[serde(default)]
     pub repo: String,
     #[serde(default)]
+    pub repo_ref: String,
+    #[serde(default)]
     pub repo_workdir: String,
     #[serde(default = "default_repo_extras")]
     pub repo_extras: String,
@@ -369,6 +371,7 @@ impl Schedule {
             max_cost_per_hour_usd: self.max_cost_per_hour_usd,
             pin_to_provider: self.pin_to_provider,
             repo: self.repo.clone(),
+            repo_ref: self.repo_ref.clone(),
             repo_workdir: self.repo_workdir.clone(),
             repo_extras: self.repo_extras.clone(),
             pre_command: self.pre_command.clone(),

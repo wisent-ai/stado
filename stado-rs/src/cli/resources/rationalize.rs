@@ -121,18 +121,19 @@ async fn build_report(args: &AuditArgs) -> Result<RationalizationReport, CmdErro
         }),
     }];
 
-    let fleet_providers: Vec<String> = ["gcp", "azure", "aws"]
-        .into_iter()
-        .filter(|provider| configured.contains(*provider))
-        .map(str::to_string)
-        .collect();
+    let fleet_providers: Vec<String> =
+        crate::capabilities::provider_ids(crate::capabilities::RuntimeFacet::Inventory)
+            .into_iter()
+            .map(|provider| provider.as_str().to_string())
+            .filter(|provider| configured.contains(provider))
+            .collect();
     if fleet_providers.is_empty() {
         sources.push(SourceReport {
             name: "agent-vm-ownership".to_string(),
             state: "skipped",
             detail: json!({"reason": "no enumerable cloud or marketplace compute provider is configured"}),
         });
-    } else if primary.kind == "local" {
+    } else if primary.adapter() == Some(crate::capabilities::StorageAdapter::Local) {
         sources.push(SourceReport {
             name: "agent-vm-ownership".to_string(),
             state: "blocked",
@@ -184,54 +185,58 @@ async fn build_report(args: &AuditArgs) -> Result<RationalizationReport, CmdErro
         }
     }
 
-    if configured.contains("gcp") {
-        let options = blast_radius::gcp_inventory_options(&primary, backup.as_ref());
-        let report = gcp_inventory::inspect(options).await;
-        sources.push(SourceReport {
-            name: "gcp-resource-inventory".to_string(),
-            state: if report.summary.state == "ok" {
-                "ok"
-            } else {
-                "degraded"
-            },
-            detail: json!({
-                "project": report.project,
-                "summary": report.summary,
+    for variant in crate::capabilities::get("inventory")
+        .into_iter()
+        .flat_map(|capability| capability.variants)
+    {
+        let Some(provider) = variant.provider else {
+            continue;
+        };
+        let provider_configured = configured.iter().any(|name| provider.matches(name));
+        match variant.adapter {
+            crate::capabilities::RuntimeAdapter::Inventory(
+                crate::capabilities::InventoryAdapter::Gcp,
+            ) if provider_configured => {
+                let options = blast_radius::gcp_inventory_options(&primary, backup.as_ref());
+                let report = gcp_inventory::inspect(options).await;
+                sources.push(SourceReport {
+                    name: format!("{}-resource-inventory", variant.id),
+                    state: if report.summary.state == "ok" {
+                        "ok"
+                    } else {
+                        "degraded"
+                    },
+                    detail: json!({
+                        "project": report.project,
+                        "summary": report.summary,
+                    }),
+                });
+                findings.extend(gcp_findings(
+                    &report,
+                    args.min_age,
+                    now,
+                    disabled.iter().any(|name| provider.matches(name)),
+                ));
+            }
+            crate::capabilities::RuntimeAdapter::Inventory(
+                crate::capabilities::InventoryAdapter::Gcp,
+            ) => sources.push(SourceReport {
+                name: format!("{}-resource-inventory", variant.id),
+                state: "skipped",
+                detail: json!({"reason": format!("{} is absent from providers and providers_disabled", provider)}),
             }),
-        });
-        findings.extend(gcp_findings(
-            &report,
-            args.min_age,
-            now,
-            disabled.iter().any(|provider| provider == "gcp"),
-        ));
-    } else {
-        sources.push(SourceReport {
-            name: "gcp-resource-inventory".to_string(),
-            state: "skipped",
-            detail: json!({"reason": "GCP is absent from providers and providers_disabled"}),
-        });
-    }
-
-    if configured.contains("aws") {
-        sources.push(SourceReport {
-            name: "aws-resource-inventory".to_string(),
-            state: "unsupported",
-            detail: json!({
-                "reason": "EC2 VM ownership is covered, but EBS, Elastic IP and reservation inventory is not yet exposed",
-                "remedy": "review AWS Cost Explorer and Resource Explorer before accepting this report as complete",
-            }),
-        });
-    }
-    if configured.contains("azure") {
-        sources.push(SourceReport {
-            name: "azure-resource-inventory".to_string(),
-            state: "unsupported",
-            detail: json!({
-                "reason": "Azure VM ownership is covered, but managed disks, public IPs and reservation inventory is not yet exposed",
-                "remedy": "review Azure Advisor cost recommendations before accepting this report as complete",
-            }),
-        });
+            crate::capabilities::RuntimeAdapter::Inventory(_) if provider_configured => {
+                sources.push(SourceReport {
+                    name: format!("{}-resource-inventory", variant.id),
+                    state: "unsupported",
+                    detail: json!({
+                        "reason": provider.inventory_limitation().unwrap_or(variant.summary),
+                        "remedy": format!("review the {provider} provider console before accepting this report as complete"),
+                    }),
+                });
+            }
+            _ => {}
+        }
     }
 
     findings.sort_by(|left, right| {
@@ -526,7 +531,7 @@ fn recovery_snapshot_name(disk_name: &str) -> String {
         .simple()
         .to_string()
         .chars()
-        .take(u64::BYTES as usize)
+        .take((u64::BITS / u8::BITS) as usize)
         .collect();
     let suffix = format!("-{}-{nonce}", Utc::now().format("%Y%m%d%H%M%S"));
     let maximum = (u64::BITS as usize).saturating_sub(true as usize);
@@ -612,15 +617,8 @@ fn irreversible_action(
 }
 
 fn locator(finding: &Finding) -> ResourceLocator {
-    let provider = match finding.provider.as_str() {
-        "gcp" => ProviderKind::Gcp,
-        "azure" => ProviderKind::Azure,
-        "aws" => ProviderKind::Aws,
-        "local" => ProviderKind::Local,
-        "vast" => ProviderKind::Vast,
-        "box" => ProviderKind::Box,
-        _ => ProviderKind::Stado,
-    };
+    let provider = crate::capabilities::provider(&finding.provider)
+        .unwrap_or(crate::capabilities::ProviderId::Stado);
     let (name, location) = finding
         .resource
         .rsplit_once('@')
@@ -655,6 +653,7 @@ fn configuration_findings(
     disabled: &[String],
 ) -> Vec<Finding> {
     let mut findings = Vec::new();
+    let primary_local = primary.adapter() == Some(crate::capabilities::StorageAdapter::Local);
     let backup_config = configured_backup_value();
     if let Some(backup) = backup {
         if primary.describe() == backup.describe() {
@@ -673,13 +672,15 @@ fn configuration_findings(
                     "backup_config": backup_config.clone(),
                 }),
             ));
-        } else if primary.kind == "local" && backup.kind == "local" {
+        } else if primary_local
+            && backup.adapter() == Some(crate::capabilities::StorageAdapter::Local)
+        {
             findings.push(finding(
                 "storage-local-only-backup",
                 "medium",
                 "move",
                 "high",
-                "local",
+                crate::capabilities::ProviderId::Local.as_str(),
                 "storage-backup",
                 backup.describe(),
                 "a local primary and local backup remain in the same device failure domain; move the backup off-host or disable the misleading replica",
@@ -695,9 +696,9 @@ fn configuration_findings(
     let active_remote: Vec<&str> = active
         .iter()
         .map(String::as_str)
-        .filter(|provider| *provider != "local")
+        .filter(|provider| !crate::capabilities::ProviderId::Local.matches(provider))
         .collect();
-    if primary.kind == "local" && !active_remote.is_empty() {
+    if primary_local && !active_remote.is_empty() {
         findings.push(finding(
             "local-storage-with-remote-compute",
             "high",
@@ -776,7 +777,7 @@ fn gcp_findings(
             "medium",
             "review-delete",
             "medium",
-            "gcp",
+            crate::capabilities::ProviderId::Gcp.as_str(),
             "persistent-disk",
             resource_at(&name, &location),
             "the persistent disk is unattached and older than the audit grace period; inspect its labels and snapshots before deletion",
@@ -802,7 +803,7 @@ fn gcp_findings(
             "medium",
             "review-release",
             "medium",
-            "gcp",
+            crate::capabilities::ProviderId::Gcp.as_str(),
             "static-address",
             resource_at(&name, &region),
             "the static address is reserved, has no users and is older than the audit grace period",
@@ -826,7 +827,7 @@ fn gcp_findings(
             "medium",
             "review-delete",
             "medium",
-            "gcp",
+            crate::capabilities::ProviderId::Gcp.as_str(),
             "managed-instance-group",
             resource_at(&name, &location),
             "the Stado/Wisent managed instance group has target size zero and is older than the audit grace period",
@@ -846,7 +847,7 @@ fn gcp_findings(
                 "medium",
                 "review-release",
                 "medium",
-                "gcp",
+                crate::capabilities::ProviderId::Gcp.as_str(),
                 "compute-reservation",
                 resource_at(&name, &zone),
                 "GCP scheduling is disabled while this reservation remains; release it after confirming that no non-Stado workload consumes it",
@@ -1027,21 +1028,4 @@ fn print_human(report: &RationalizationReport) {
         "\n{} recommendation(s); {} incomplete source(s); read-only, no changes applied.",
         report.summary.findings, report.summary.incomplete_sources
     );
-}
-
-fn parse_age_seconds(raw: &str) -> Result<u64, String> {
-    let raw = raw.trim();
-    let (digits, multiplier) = match raw.as_bytes().last().copied() {
-        Some(b's') => (&raw[..raw.len() - 1], 1_u64),
-        Some(b'm') => (&raw[..raw.len() - 1], 60),
-        Some(b'h') => (&raw[..raw.len() - 1], 60 * 60),
-        Some(b'd') => (&raw[..raw.len() - 1], 24 * 60 * 60),
-        _ => return Err("age must include a unit: s, m, h or d (for example 24h)".to_string()),
-    };
-    let count = digits
-        .parse::<u64>()
-        .map_err(|_| format!("invalid age {raw:?}"))?;
-    count
-        .checked_mul(multiplier)
-        .ok_or_else(|| format!("age {raw:?} is too large"))
 }

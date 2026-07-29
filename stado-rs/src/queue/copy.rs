@@ -1,12 +1,10 @@
 //! Backend-to-backend copy of the whole queue store.
 //!
 //! NO Python original: this module is new in the Rust runtime, so there is
-//! no parity note to make. Everything that already existed copies within a
-//! single backend — `queue/migrations.rs` is an in-store schema backfill,
-//! `deploy/migrate_to_stado.sh` is a `gsutil rsync` between two GCS
-//! buckets, and `deploy/gcs_copy_adc.py` rewrites objects inside GCS. None
-//! of them move queue state ACROSS backends, which is exactly what losing
-//! the GCS project to a billing shutdown forces.
+//! no parity note to make. In-store migrations handle schema changes, while
+//! this command is the sole supported cross-backend transfer path. It builds
+//! both explicit endpoints inside their provider adapters and never relies on
+//! an operator cloud CLI or ambient ADC copier.
 //!
 //! Both ends are built from explicit locators through [`Endpoint::build`],
 //! never through [`crate::queue::JobStorage`]: the facade resolves its
@@ -46,10 +44,8 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 
-use super::{
-    azure_blob::AzureBlobBackend, gcs::GcsBackend, local_file::LocalBackend, s3::S3Backend,
-    BlobBackend, BlobInfo, StorageError,
-};
+use super::{construct_backend, BackendLocator, BlobBackend, BlobInfo, StorageError};
+use crate::capabilities::{RuntimeFacet, StorageAdapter};
 
 /// Every prefix that makes up the queue store, in copy order.
 ///
@@ -133,52 +129,70 @@ pub struct Endpoint {
 }
 
 impl Endpoint {
+    pub fn adapter(&self) -> Option<StorageAdapter> {
+        crate::capabilities::storage_adapter(&self.kind)
+    }
+
     /// Build the backend directly from the locators — the same constructors
     /// `JobStorage::with_bucket` uses, without its `WC_STORAGE_BACKEND`
     /// lookup, so a source and a destination of different kinds coexist in
     /// one process.
     pub async fn build(&self) -> Result<Arc<dyn BlobBackend>, StorageError> {
-        let kind = crate::capabilities::constructible_variant(
-            crate::capabilities::CapabilityKind::Storage,
-            &self.kind,
-        )
-        .map_or(self.kind.as_str(), |variant| variant.id);
-        let backend: Arc<dyn BlobBackend> = match kind {
-            "gcs" => {
-                if self.bucket.is_empty() {
-                    return Err(StorageError::Other(
-                        "the gcs endpoint needs a bucket (--from-bucket / --to-bucket)".into(),
-                    ));
-                }
-                Arc::new(GcsBackend::new(&self.bucket).await?)
-            }
-            // AzureBlobBackend::new / S3Backend::new / LocalBackend::new
-            // already reject their own empty locators.
-            "azure" => Arc::new(AzureBlobBackend::new(&self.account, &self.container)?),
-            "s3" => Arc::new(S3Backend::new(&self.bucket, &self.region).await?),
-            "local" => Arc::new(LocalBackend::new(&self.path)?),
-            other => {
-                let choices = crate::capabilities::configurable_ids(
-                    crate::capabilities::CapabilityKind::Storage,
-                )
-                .collect::<Vec<_>>()
-                .join("\", \"");
-                return Err(StorageError::Other(format!(
-                    "unknown storage backend {other:?} (use \"{choices}\")"
-                )));
-            }
+        let variant = crate::capabilities::constructible_variant(RuntimeFacet::Storage, &self.kind)
+            .ok_or_else(|| {
+                let choices = crate::capabilities::configurable_ids(RuntimeFacet::Storage)
+                    .collect::<Vec<_>>()
+                    .join("\", \"");
+                StorageError::Other(format!(
+                    "unknown storage backend {:?} (use \"{choices}\")",
+                    self.kind
+                ))
+            })?;
+        let Some(adapter) = self.adapter() else {
+            return Err(StorageError::Other(format!(
+                "storage variant {:?} has no storage adapter",
+                variant.id
+            )));
         };
-        Ok(backend)
+        if adapter == StorageAdapter::Gcs && self.bucket.is_empty() {
+            return Err(StorageError::Other(
+                "the gcs endpoint needs a bucket (--from-bucket / --to-bucket)".into(),
+            ));
+        }
+        construct_backend(
+            adapter,
+            BackendLocator {
+                bucket: &self.bucket,
+                account: &self.account,
+                container: &self.container,
+                region: &self.region,
+                path: &self.path,
+            },
+        )
+        .await
     }
 
     /// Operator-readable locator for the report header.
     pub fn describe(&self) -> String {
-        match self.kind.as_str() {
-            "gcs" => format!("gcs://{}", self.bucket),
-            "azure" => format!("azure://{}/{}", self.account, self.container),
-            "s3" => format!("s3://{}", self.bucket),
-            "local" => format!("local://{}", self.path),
-            other => other.to_string(),
+        match self.adapter() {
+            Some(StorageAdapter::Gcs) => format!("gcs://{}", self.bucket),
+            Some(StorageAdapter::AzureBlob) => {
+                format!("azure://{}/{}", self.account, self.container)
+            }
+            Some(StorageAdapter::S3) => format!("s3://{}", self.bucket),
+            Some(StorageAdapter::Local) => format!("local://{}", self.path),
+            None => self.kind.clone(),
+        }
+    }
+
+    pub fn locator_value(&self, key: &str) -> Option<&str> {
+        match key {
+            "bucket" => Some(&self.bucket),
+            "account" => Some(&self.account),
+            "container" => Some(&self.container),
+            "region" => Some(&self.region),
+            "path" => Some(&self.path),
+            _ => None,
         }
     }
 

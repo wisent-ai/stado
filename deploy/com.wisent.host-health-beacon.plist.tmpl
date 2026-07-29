@@ -1,0 +1,32 @@
+<plist version="{PLIST_VERSION}">
+<dict>
+    <key>Label</key>
+    <string>com.wisent.host-health-beacon</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>{SCRIPT_PATH}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartInterval</key>
+    <integer>{INTERVAL_SECONDS}</integer>
+    <key>StandardOutPath</key>
+    <string>{LOG_PATH}</string>
+    <key>StandardErrorPath</key>
+    <string>{LOG_PATH}</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>STADO_BIN</key>
+        <string>{STADO_BIN}</string>
+        <key>STADO_HOST_HEALTH_API_URL</key>
+        <string>{STADO_HOST_HEALTH_API_URL}</string>
+        <key>STADO_HOST_HEALTH_SKARBIEC_URL</key>
+        <string>{STADO_HOST_HEALTH_SKARBIEC_URL}</string>
+        <key>STADO_HOST_HEALTH_SKARBIEC_CONSUMER</key>
+        <string>stado-host-health-beacon</string>
+        <key>STADO_HOST_HEALTH_SKARBIEC_TOKEN_FILE</key>
+        <string>{HOME}/.stado/host-health-beacon-skarbiec-token</string>
+    </dict>
+</dict>
+</plist>

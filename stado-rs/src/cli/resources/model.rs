@@ -14,20 +14,11 @@ pub const SCHEMA_VERSION: u8 = true as u8;
 #[serde(rename_all = "snake_case")]
 pub enum Intent {
     RationalizationCleanup,
+    AutonomousReconcile,
     Shutdown,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ProviderKind {
-    Stado,
-    Local,
-    Gcp,
-    Azure,
-    Aws,
-    Vast,
-    Box,
-}
+pub use crate::capabilities::ProviderId as ProviderKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -87,6 +78,10 @@ impl ActionKind {
                     | Self::DeleteManagedInstanceGroup
                     | Self::ReleaseReservation
                     | Self::DisableStorageBackup
+            ),
+            Intent::AutonomousReconcile => matches!(
+                self,
+                Self::DeleteInstance | Self::StopInstance | Self::StartInstance
             ),
             Intent::Shutdown => matches!(
                 self,
@@ -258,6 +253,7 @@ impl Plan {
                 | ActionKind::PauseScheduler
                 | ActionKind::ResizeManagedInstanceGroup
                 | ActionKind::StopInstance
+                | ActionKind::StartInstance
                 | ActionKind::SuspendCloudSql => Reversibility::Reversible,
                 rollback => {
                     return Err(CmdError::click(format!(
@@ -285,6 +281,21 @@ impl Plan {
                     "rationalization action {} requires explicit authorization",
                     action.id
                 )));
+            }
+            if self.intent == Intent::AutonomousReconcile {
+                let ownership = action
+                    .parameters
+                    .get("ownership")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if action.authorization != Authorization::Automatic
+                    || !matches!(ownership, "owned" | "adopted")
+                {
+                    return Err(CmdError::click(format!(
+                        "autonomous action {} requires automatic authorization and owned/adopted ownership",
+                        action.id
+                    )));
+                }
             }
             if self.intent == Intent::Shutdown && action.authorization != Authorization::Automatic {
                 return Err(CmdError::click(format!(
@@ -401,7 +412,21 @@ fn validate_action_locator(action: &Action) -> Result<(), CmdError> {
                     .is_some_and(Value::is_object)
         }
         ActionKind::PauseScheduler => valid_gcp_locator(action, "scheduler-job", &["region"]),
-        ActionKind::StopInstance => valid_gcp_locator(action, "instance", &["zone"]),
+        ActionKind::StopInstance => {
+            (action.resource.resource_type == "agent-vm"
+                && matches!(
+                    action.resource.provider,
+                    ProviderKind::Gcp | ProviderKind::Azure | ProviderKind::Aws
+                ))
+                || valid_gcp_locator(action, "instance", &["zone"])
+        }
+        ActionKind::StartInstance => {
+            action.resource.resource_type == "agent-vm"
+                && matches!(
+                    action.resource.provider,
+                    ProviderKind::Gcp | ProviderKind::Azure | ProviderKind::Aws
+                )
+        }
         ActionKind::SuspendCloudSql => valid_gcp_locator(action, "cloud-sql-instance", &["global"]),
         rollback => {
             return Err(CmdError::click(format!(
@@ -486,7 +511,8 @@ fn validate_rollback(action: &Action, rollback: &Rollback) -> Result<(), CmdErro
             .get("backup")
             .is_some_and(|value| value.is_object()),
         (ActionKind::PauseScheduler, ActionKind::ResumeScheduler)
-        | (ActionKind::StopInstance, ActionKind::StartInstance) => rollback
+        | (ActionKind::StopInstance, ActionKind::StartInstance)
+        | (ActionKind::StartInstance, ActionKind::StopInstance) => rollback
             .parameters
             .as_object()
             .is_some_and(serde_json::Map::is_empty),
@@ -535,6 +561,7 @@ fn rollback_pair(action: ActionKind, rollback: ActionKind) -> bool {
                 ActionKind::ResizeManagedInstanceGroup
             )
             | (ActionKind::StopInstance, ActionKind::StartInstance)
+            | (ActionKind::StartInstance, ActionKind::StopInstance)
             | (ActionKind::SuspendCloudSql, ActionKind::RestoreCloudSql)
     )
 }

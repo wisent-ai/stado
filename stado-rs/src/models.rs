@@ -178,6 +178,9 @@ pub struct Job {
     // Optional source repo to git clone before running command.
     #[serde(default)]
     pub repo: String,
+    /// Exact source commit. Repository workloads must pin a full lowercase SHA-1.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub repo_ref: String,
     #[serde(default)]
     pub repo_workdir: String,
     /// pip-install extras name; "" to skip install.
@@ -258,7 +261,7 @@ pub struct Job {
     #[serde(default)]
     pub prompt_reasoning_effort: String,
     /// Explicit per-job environment variables backed by scoped Skarbiec fields.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub secret_env: BTreeMap<String, JobSecretRef>,
     // Named, reproducible artifact inputs.
     #[serde(default)]
@@ -267,6 +270,9 @@ pub struct Job {
     pub resolved_input_artifacts: Map<String, Value>,
     #[serde(default)]
     pub artifact_paths: Vec<String>,
+    /// Hard completion deadline for autonomous placement (RFC 3339 UTC).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline_at: Option<String>,
 }
 
 impl Job {

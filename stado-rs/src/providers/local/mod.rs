@@ -10,9 +10,8 @@
 //!   disk/gate.py         -> [`disk_gate`] (admission-only disk diagnostics)
 //!   disk/cleanup.py      -> [`disk_cleanup`] (registry-authorized janitor)
 //!   disk/staging.py      -> [`disk_staging`] (tmpfs /tmp TMPDIR redirect)
-//!   gcp_self.py          -> [`gcp_self`]  (GCE metadata + self-terminate)
-//!   (no Python source)   -> [`azure_self`] (Azure IMDS + self-delete; the
-//!                           Azure half of what gcp_self does for GCE)
+//!   gcp_self.py          -> [`gcp_self`]  (retired guest-side GCE adapter)
+//!   (no Python source)   -> [`azure_self`] (retired guest-side Azure adapter)
 //!   version_check.py     -> [`version_check`] (PyPI drift; see deviations)
 //!   hf_rate.py           -> [`hf_rate`]   (GCS-backed HF token buckets)
 //!   fleet_flush.py       -> [`fleet_flush`] (rotation + detached flush spawn)
@@ -80,25 +79,14 @@ impl Slot {
     }
 }
 
-/// Delete the cloud VM this agent is running on, so an ephemeral agent
-/// that exits for want of work stops costing money. Best-effort: each
-/// backend logs and swallows its own failures, and the caller exits
-/// either way.
+/// Signal provider-neutral termination by ending the agent process.
 ///
-/// Dispatch is on the agent `kind` — the `--kind` consumer label the
-/// startup templates pass ("gcp", "azure", "aws", "vast", or the default
-/// "local") — rather than on a probe, so a workstation agent issues no
-/// metadata request at all and a cloud agent issues only its own
-/// provider's, never two link-local timeouts back to back. Labels with no
-/// Azure counterpart keep the historical GCE probe, which self-guards
-/// with [`gcp_self::on_gcp`].
+/// The coordinator observes the disappeared capacity heartbeat and invokes
+/// `Provider::delete_instance` through the owning adapter. Guest runtimes never
+/// receive provider credentials or call provider deletion APIs, including on
+/// idle shutdown and release drift.
 pub async fn self_terminate(kind: &str, log_fn: &mut dyn FnMut(&str)) {
-    match kind {
-        // A physical box or a rented Vast.ai instance is not ours to
-        // delete: Vast teardown is the fleet's `vast destroy`, and the
-        // workstation must survive a misconfigured --idle-shutdown.
-        "local" | "vast" => {}
-        "azure" => azure_self::self_terminate(log_fn).await,
-        _ => gcp_self::self_terminate(log_fn).await,
-    }
+    log_fn(&format!(
+        "termination requested for {kind}; scheduler/provider adapter cleanup owns the machine"
+    ));
 }

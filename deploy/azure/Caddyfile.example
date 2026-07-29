@@ -5,8 +5,9 @@
 #   STADO_DASHBOARD_UPSTREAM dashboard listener, including host and port
 #
 # Rust permits bearer-free GET only on /api/release/object and only for the
-# stado://releases software namespace. Product object, machine, service, and
-# dashboard routes enforce their own application authorization.
+# stado://releases software namespace. Product object, machine, service,
+# host-health publication, and dashboard routes enforce distinct application
+# authorization.
 {$STADO_API_HOST:stado.wisent.com} {
     # Caddy supplies X-Forwarded-Proto for the Rust trusted-proxy check.
     reverse_proxy {$STADO_DASHBOARD_UPSTREAM}

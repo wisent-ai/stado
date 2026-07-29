@@ -1,14 +1,15 @@
 //! Registry-authorized recovery for a managed macOS host.
 //!
-//! Port of `stado/deploy/host_recovery.py`. The remote program is fixed
-//! and deliberately narrow: run the canonical disk cleanup, disable the
-//! obsolete local coordinator, and reload known LaunchAgents. Registry
-//! data selects only the host; it cannot supply shell fragments.
+//! The remote program is fixed and deliberately narrow: run the canonical
+//! Rust disk cleanup, disable the obsolete local coordinator, and reload the
+//! one registry-managed health agent after validating its scoped Skarbiec
+//! configuration. Registry data selects only the host; it cannot supply shell
+//! fragments.
 //!
 //! The tab-delimited `STADO_*` marker protocol (script emission in
-//! [`remote_script`], parsing in [`parse_output`]) is byte-exact with the
-//! Python — including the deliberate mix of literal `\t` / `\n` escape
-//! sequences and real control characters in the printf format strings.
+//! [`remote_script`], parsing in [`parse_output`]) deliberately preserves the
+//! mix of literal `\t` / `\n` escape sequences and real control characters
+//! consumed by the recovery report parser.
 
 use std::time::Duration;
 
@@ -20,42 +21,21 @@ use crate::targets::{normalize_hostname, ssh_hostname, ComputeTarget, Registry};
 /// Python `_TIMEOUT_SECONDS`.
 pub const TIMEOUT_SECONDS: u64 = 120;
 
-/// Python `_WC_CANDIDATES`.
-pub const WC_CANDIDATES: [&str; 3] = [
-    "$HOME/.venvs/wisent-compute/bin/wc",
-    "$HOME/.local/bin/wc",
-    "/opt/homebrew/bin/wc",
-];
+/// Rust Stado cleanup binary. Recovery has no Python-package fallback.
+pub const WC_CANDIDATES: &[&str] = &["$HOME/.stado/bin/stado"];
 
-/// Python `_MANAGED_AGENTS` (label, plist path) pairs, in order.
-pub const MANAGED_AGENTS: [(&str, &str); 5] = [
-    (
-        "com.wisent.compute.auto-deployer",
-        "$HOME/Library/LaunchAgents/com.wisent.compute.auto-deployer.plist",
-    ),
-    (
-        "com.wisent.weles-auto-deploy",
-        "$HOME/Library/LaunchAgents/com.wisent.weles-auto-deploy.plist",
-    ),
-    (
-        "com.wisent.weles-worker",
-        "$HOME/Library/LaunchAgents/com.wisent.weles-worker.plist",
-    ),
-    (
-        "com.wisent.weles-keyword-planner-api",
-        "$HOME/Library/LaunchAgents/com.wisent.weles-keyword-planner-api.plist",
-    ),
-    (
-        "com.wisent.host-health-beacon",
-        "$HOME/Library/LaunchAgents/com.wisent.host-health-beacon.plist",
-    ),
-];
+/// LaunchAgents whose recovery remains host-scoped. Weles lifecycle is owned
+/// exclusively by the authenticated Stado service API.
+pub const MANAGED_AGENTS: &[(&str, &str)] = &[(
+    "com.wisent.host-health-beacon",
+    "$HOME/Library/LaunchAgents/com.wisent.host-health-beacon.plist",
+)];
 
 /// The fixed remote program with `@IDENTITY_WORDS@` / `@WC_WORDS@` /
-/// `@AGENT_ROWS@` substitution points. Written with explicit escapes so it
-/// is byte-exact with the Python f-string render: `\t` / `\r` / `\n` are
-/// real control characters, `\\t` / `\\n` are literal backslash sequences
-/// (the Python source mixes both on purpose).
+/// `@AGENT_ROWS@` substitution points. Written with explicit escapes so
+/// `\t` / `\r` / `\n` are real control characters while `\\t` / `\\n`
+/// remain literal backslash sequences where the marker protocol requires
+/// them.
 const REMOTE_SCRIPT_TEMPLATE: &str = "set -u
 host=$(/bin/hostname -s 2>/dev/null | /usr/bin/tr '[:upper:]' '[:lower:]')
 identity_ok=0
@@ -109,6 +89,21 @@ recover_agent() {
   if [ ! -f \"$plist\" ]; then
     printf 'STADO_AGENT\\t%s\\tmissing_plist\\n' \"$label\"
     return
+  fi
+  if [ \"$label\" = \"com.wisent.host-health-beacon\" ]; then
+    api_url=$(/usr/bin/plutil -extract EnvironmentVariables.STADO_HOST_HEALTH_API_URL raw -o - \"$plist\" || true)
+    vault_url=$(/usr/bin/plutil -extract EnvironmentVariables.STADO_HOST_HEALTH_SKARBIEC_URL raw -o - \"$plist\" || true)
+    consumer=$(/usr/bin/plutil -extract EnvironmentVariables.STADO_HOST_HEALTH_SKARBIEC_CONSUMER raw -o - \"$plist\" || true)
+    grant_file=$(/usr/bin/plutil -extract EnvironmentVariables.STADO_HOST_HEALTH_SKARBIEC_TOKEN_FILE raw -o - \"$plist\" || true)
+    stado_bin=$(/usr/bin/plutil -extract EnvironmentVariables.STADO_BIN raw -o - \"$plist\" || true)
+    if [ -z \"$api_url\" ] || [ -z \"$vault_url\" ] || [ -z \"$grant_file\" ] || [ -z \"$stado_bin\" ] || [ \"$consumer\" != \"stado-host-health-beacon\" ]; then
+      printf 'STADO_AGENT\\t%s\\tinvalid_scoped_health_config\\n' \"$label\"
+      return
+    fi
+    if /usr/bin/plutil -extract EnvironmentVariables.GOOGLE_APPLICATION_CREDENTIALS raw -o - \"$plist\" >/dev/null || /usr/bin/plutil -extract EnvironmentVariables.STADO_HOST_HEALTH_API_TOKEN raw -o - \"$plist\" >/dev/null; then
+      printf 'STADO_AGENT\\t%s\\tforbidden_ambient_health_credential\\n' \"$label\"
+      return
+    fi
   fi
   /bin/launchctl bootout \"$gui/$label\" >/dev/null 2>&1 || true
   /bin/launchctl bootout \"$user_domain/$label\" >/dev/null 2>&1 || true
@@ -168,6 +163,7 @@ pub fn remote_script(target: &ComputeTarget) -> String {
         .replace("@IDENTITY_WORDS@", &identity_words)
         .replace("@WC_WORDS@", &wc_words)
         .replace("@AGENT_ROWS@", &agent_rows)
+        .replace("/usr/bin/tr '\t\r\n' ' '", r"/usr/bin/tr '\t\r\n' ' '")
 }
 
 /// Python `recover_host` ssh argv (note the -o order: BatchMode,
@@ -257,9 +253,19 @@ fn resolve_target<'a>(
             py_str_repr(target_name)
         )));
     };
-    if target.kind != "local" {
+    if !target.is_provider(crate::capabilities::ProviderId::Local) {
         return Err(DeployError(format!(
             "target {} is not a local host",
+            py_str_repr(target_name)
+        )));
+    }
+    if target
+        .weles
+        .as_ref()
+        .is_some_and(|policy| policy.actions.iter().any(|action| action == "*"))
+    {
+        return Err(DeployError(format!(
+            "target {} carries forbidden wildcard recovery state",
             py_str_repr(target_name)
         )));
     }
@@ -368,7 +374,7 @@ mod tests {
     }
 
     #[test]
-    fn remote_script_matches_python_golden() {
+    fn remote_script_matches_secure_golden() {
         assert_eq!(
             remote_script(&target()),
             include_str!("testdata/host_recovery_remote_script.sh")

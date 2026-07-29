@@ -1,39 +1,53 @@
 # Configuration
 
-## Environment variables
+## Deployment profile and bounded overrides
 
-| Var | Purpose | Read at |
-|---|---|---|
-| `GCP_PROJECT` | GCP project ID. | `config.py` (default `wisent-480400`) |
-| `WC_BUCKET` | GCS bucket for queue + state. | `config.py` (default `wisent-compute`) |
-| `GCP_REGION` | Region for VM creation + quota fetch. | `config.py`, `quota.py:_fetch_gcp_quotas` |
-| `WC_ALERTS_TOPIC` | Pub/Sub topic for the alert publisher. | `config.py` |
-| `WC_LOCAL_SLOTS` | Optional hard cap on local-agent concurrency. `0` = uncapped (default). | `local_agent.py` |
-| `COMPUTE_API_KEY` | If set, `wc submit` / `wc status` route through the `compute.wisent.com` HTTPS API instead of GCS. | `cli.py:_api_key` |
-| `COMPUTE_API_URL` | Overrides the default `https://compute.wisent.com`. | `queue/submit.py` |
-| `WC_SLACK_WEBHOOK`, `WC_TELEGRAM_BOT_TOKEN`, `WC_TELEGRAM_CHAT_ID`, `WC_SENDGRID_API_KEY`, `WC_EMAIL_TO`, `WC_EMAIL_FROM` | Alert sinks for `monitor/alerts.py`. | optional |
-| `WC_PROVIDERS` | Comma-separated scheduler providers. Add `box` to enable Box dispatch; default remains `gcp`. | `config.py`, coordinator entry points |
-| `BOX_API_KEY` | Box Public API bearer credential. Required only when `box` is enabled. | `providers/box` |
-| `BOX_API_URL` | Box Public API base; normally the official version-one HTTPS endpoint. | `providers/box` |
-| `BOX_API_TIMEOUT_SECONDS` | Per-request timeout for bounded Box API operations. | `providers/box` |
-| `BOX_TTL_SECONDS` | Automatic archival lifetime renewed only while a Box job is provisioning, starting, or running. | `providers/box`, Box dispatcher |
-| `BOX_RELEASE_MODE` | `stop` archives for later resume/fork; `delete` permanently removes the Box after output persistence. | `providers/box` |
+`STADO_CONFIG` selects the authoritative JSON profile. The shipped
+`deploy/local/stado.config.json` is the active outage profile;
+`deploy/azure/stado.config.json` is a fenced production template. Provider
+order, explicit provider fences, storage, object/release/service verifiers, and
+the workload-agent allowlist live in that profile rather than in cloud CLI state.
 
-Box jobs must set `provider=box` and `pin_to_provider=true`. The target is a
-fixed Linux/x86-64 sandbox with four shared CPUs, eight GB memory, eighty GB
-disk, and no accelerator. Unsupported GPU, custom-region, preemptible, and
-provider-managed package requests fail admission before allocation. Queue
-state must use an SDK-backed GCS or Azure backend because provider leases rely
-on conditional generations/entity tags; the command-line object-store fallback
-cannot provide fencing.
+Only route-local or process-local values should be overridden:
+
+| Var | Purpose |
+|---|---|
+| `STADO_CONFIG` | Readable deployment profile path. |
+| `STADO_API_URL` | Stado HTTPS control origin; plain HTTP is accepted only on loopback. |
+| `STADO_API_TOKEN` | Dedicated caller token for its mapped object namespace. |
+| `STADO_MACHINE_API_TOKEN` | Machine submit/status/cancel token. |
+| `STADO_SERVICE_API_TOKEN` | Caller-specific deployer token; accepted only for mapped service names/actions. |
+| `STADO_RELEASE_API_URL` | Public HTTPS Stado origin serving `/api/release/object`. |
+| `STADO_RELEASE_VERSION` | Required exact immutable Stado runtime version. |
+| `STADO_RELEASE_PLATFORM` | Required exact Stado runtime platform for dispatched agents. |
+| `WC_LOCAL_SLOTS` | Optional local-agent concurrency cap; `0` is uncapped. |
+| `STADO_HOST_HEALTH_API_URL` | Authenticated Stado host-health origin. |
+| `STADO_HOST_HEALTH_SKARBIEC_URL` | Skarbiec origin for the route-only host-health publisher. |
+| `STADO_HOST_HEALTH_SKARBIEC_CONSUMER` | Exactly `stado-host-health-beacon`. |
+| `STADO_HOST_HEALTH_SKARBIEC_TOKEN_FILE` | Owner-only grant scoped only to `stado-host-health-api`. |
+
+Cloud-provider locators and credentials are not caller overrides. An enabled
+provider adapter receives its exact profile and provider-plugin identity; a
+workload-agent grant contains only the provider-neutral application items in
+`agent.skarbiec.items`. It must never contain `stado-gcp`, `stado-azure`, or
+`stado-aws`, and no bootstrap, health, recovery, or release path invokes
+`gcloud`, `gsutil`, or `az`.
+
+Product data enters through `stado://<namespace>/<key>` and the authenticated
+Stado object boundary. Immutable artifact manifests may additionally reference
+provider-native `az://`, `gs://`, and `s3://` locations, plus `hf://` and
+HTTPS; access still resolves through authenticated provider adapters, and
+embedded credentials or sensitive query parameters are rejected.
 
 ## Registry
 
-`stado/targets/registry.example.json` is the template.
-Operators ship their own `stado/targets/registry.json`
-(gitignored) or `gsutil cp` it directly to
-`gs://$WC_BUCKET/registry.json` — running agents re-fetch every poll
-so edits propagate without restart.
+`stado-rs/data/registry.json` is the canonical create-if-absent seed. It
+declares the sole `local-control-plane` coordinator and only current,
+host-backed local targets. Fenced Azure/GCP coordinators and cloud spot targets
+must not remain marked active. Operators use `stado registry push` and
+`stado registry pull`; both resolve the backend from `STADO_CONFIG`, preserve
+generation fencing, and surface an unreachable store as failure rather than
+silently switching providers.
 
 Each target entry:
 
@@ -54,11 +68,11 @@ A coordinator entry pins the scheduling-tick driver:
 
 ```jsonc
 {
-  "name": "gcp-cloud-function",
-  "runtime": "gcp_cloud_function",
-  "host": null,
+  "name": "local-control-plane",
+  "runtime": "daemon",
+  "host": "https://stado.wisent.com",
   "interval_seconds": 180,
-  "state_uri": "gs://$WC_BUCKET",
+  "state_uri": "stado://system/registry",
   "active": true
 }
 ```
@@ -67,8 +81,8 @@ A coordinator entry pins the scheduling-tick driver:
 
 Live limits come from the GCP regions API
 (`compute_v1.RegionsClient().get(project, region)`).
-`gs://$WC_BUCKET/config/quotas.json` is *reservations only*:
-
+The provider-neutral `config/quotas.json` object in the configured Stado store
+contains *reservations only*:
 ```json
 {
   "gcp": {
@@ -93,18 +107,18 @@ _GCP_METRIC_TO_ACCEL = {
 }
 ```
 
-## GCP setup
+## Optional GCP adapter prerequisites
 
-`deploy/gcp_setup.sh` is a one-time bootstrap (creates the SA, grants
-project roles, creates the bucket and the Pub/Sub topic). Re-runs are
-idempotent. Operators set `GCP_PROJECT` and `GCP_REGION` env vars first.
+Stado does not ship an infrastructure-provisioning shell path. An operator who
+explicitly enables the GCP provider adapter must supply an already provisioned
+project, shared store, identity, quota overlay, networking, and alert sink in
+the deployment profile. Runtime compute and storage operations then remain
+inside the Rust provider adapter; install, bootstrap, release, health, and
+recovery paths never invoke a cloud CLI or consume ambient ADC.
 
-`deploy/redeploy_function.sh` redeploys just the Cloud Function — used
-by CI on every push to `main` (see `.github/workflows/deploy.yml`).
-
-For workload-identity federation from GitHub Actions: edit the
-`workload_identity_provider` and `service_account` lines in
-`deploy.yml` to match your project's pool / SA.
+The active deploy workflow publishes through Stado and installs the native
+coordinator. It has no Cloud Function redeploy, provider CLI authentication,
+workload-identity publisher, or ambient ADC path.
 
 ## Per-machine-type zone rotation
 

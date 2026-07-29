@@ -164,6 +164,7 @@ fn rerun_options(original: &Job) -> SubmitOptions {
         pin_to_provider: original.pin_to_provider,
         priority: original.priority,
         repo: original.repo.clone(),
+        repo_ref: original.repo_ref.clone(),
         repo_workdir: original.repo_workdir.clone(),
         repo_extras: original.repo_extras.clone(),
         pre_command: original.pre_command.clone(),

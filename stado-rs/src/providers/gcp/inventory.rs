@@ -1071,6 +1071,22 @@ fn cloud_run_service_detail(value: &Value) -> (&'static str, Option<usize>, Valu
         && latest_ready.is_some()
         && latest_ready == latest_created;
     let mut environment = BTreeMap::new();
+    let catalog_environment = [
+        crate::capabilities::config_env(
+            crate::capabilities::RuntimeFacet::Compute,
+            crate::capabilities::ProviderId::Gcp.as_str(),
+            "project",
+        )
+        .expect("GCP project binding is missing from the capability catalog"),
+        crate::capabilities::config_env(
+            crate::capabilities::RuntimeFacet::Storage,
+            crate::capabilities::StorageAdapter::Gcs.id(),
+            "bucket",
+        )
+        .expect("GCS bucket binding is missing from the capability catalog"),
+        crate::capabilities::PROVIDERS_CONFIG.env,
+        crate::capabilities::STORAGE_BACKEND_CONFIG.env,
+    ];
     for container in value
         .pointer("/template/containers")
         .and_then(Value::as_array)
@@ -1086,18 +1102,18 @@ fn cloud_run_service_detail(value: &Value) -> (&'static str, Option<usize>, Valu
             let Some(name) = variable.get("name").and_then(Value::as_str) else {
                 continue;
             };
-            if matches!(
-                name,
-                "GCP_PROJECT"
-                    | "GOOGLE_CLOUD_PROJECT"
-                    | "WC_BUCKET"
-                    | "WC_ALERTS_TOPIC"
-                    | "WC_COORDINATOR_ID"
-                    | "STADO_DEPLOYMENT_ID"
-                    | "WC_RELEASE_BASE_URL"
-                    | "WC_PROVIDERS"
-                    | "WC_STORAGE_BACKEND"
-            ) {
+            if catalog_environment.contains(&name)
+                || matches!(
+                    name,
+                    "GOOGLE_CLOUD_PROJECT"
+                        | "WC_ALERTS_TOPIC"
+                        | "WC_COORDINATOR_ID"
+                        | "STADO_DEPLOYMENT_ID"
+                        | "STADO_RELEASE_API_URL"
+                        | "STADO_RELEASE_VERSION"
+                        | "STADO_RELEASE_PLATFORM"
+                )
+            {
                 environment.insert(name, variable.get("value").and_then(Value::as_str));
             }
         }
