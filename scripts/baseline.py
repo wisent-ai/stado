@@ -67,6 +67,10 @@ PLATFORMS = {
     ("Linux", "x86_64"): "linux-amd64",
 }
 
+# Any release coordinate serves as the reachability probe; deploy.yml publishes this
+# one for every version, so it is the coordinate most likely to exist if anything does.
+PROBE_PLATFORM = PLATFORMS[("Linux", "x86_64")]
+
 
 class Unreachable(SystemExit):
     """A tier that exists but cannot be recovered here. Never degrade past it."""
@@ -96,32 +100,30 @@ def host_platform() -> str:
 
 
 def assert_refs_visible() -> None:
-    """Refuse to rank tiers from a clone that cannot see refs.
+    """Refuse to rank tiers from a clone that cannot see the refs it is ranking.
 
     `actions/checkout` produces a shallow, tagless clone, and such a clone answers
     `git tag --list` with nothing however many tags the remote holds. A tier ranked
-    there is not evidence: it would silently call the last-resort tier the best one
-    and pass, which is a check asleep rather than a check. Shallowness also breaks
-    `git archive <tag>`, whose tree is simply absent. The workflow fetches tags and
-    unshallows before the version check for exactly this reason; this refuses instead
-    of guessing when someone forgets.
+    there is not evidence: it would call the last-resort tier the best one and pass,
+    blind to exactly the tag it exists to notice. Shallowness breaks `git archive
+    <tag>` separately, because the tag's tree is simply absent.
+
+    Visibility is settled against the remote, not against local config: `--no-tags` in
+    a clone's config means future fetches skip tags, not that the tags fetched since
+    are missing, so refusing on config alone would refuse a clone that can see
+    everything. `git ls-remote` asks the only party that knows.
     """
     if run(["git", "rev-parse", "--is-shallow-repository"], cwd=REPOSITORY).strip() == "true":
         raise Unreachable(
-            "this clone is shallow, so tags and their trees are invisible and no tier "
-            "can be ranked; run: git fetch --force --tags --unshallow"
+            "this clone is shallow, so tag trees are absent and no tier can be "
+            "recovered; run: git fetch --force --tags --unshallow"
         )
-    tag_option = subprocess.run(
-        ["git", "config", "--get", "remote.origin.tagOpt"],
-        cwd=REPOSITORY,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if tag_option.stdout.strip() == "--no-tags":
+    if run(["git", "tag", "--list"], cwd=REPOSITORY).split():
+        return
+    if run(["git", "ls-remote", "--tags", "origin"], cwd=REPOSITORY).split():
         raise Unreachable(
-            "this clone is configured --no-tags, so it never fetches a tag and the "
-            "tier ranking would be blind; run: git fetch --force --tags"
+            "the remote publishes tags this clone cannot see, so the tier ranking "
+            "would be blind; run: git fetch --force --tags"
         )
 
 
@@ -141,6 +143,26 @@ def as_triple(version: str) -> tuple:
     return tuple(int(part) for part in parts)
 
 
+def assert_channel_readable(stado: str) -> None:
+    """Refuse to read silence as absence.
+
+    An empty listing and an unreachable store are the same silence, and the wrong
+    answer is the one that passes: a baseline would claim nothing is published because
+    it failed to ask. `stat` is the positive control, because it distinguishes absent
+    from unreachable; the probe object does not need to exist.
+    """
+    probe = (
+        f"stado://{NAMESPACE}/{PRODUCT}/{declared_version(REPOSITORY)}"
+        f"/{PROBE_PLATFORM}/{BINARY}"
+    )
+    state = json.loads(run([stado, "storage", "stat", probe, "--json"]))["state"]
+    if state == "unreachable":
+        raise Unreachable(
+            f"the release channel is unreachable ({probe}), so the absence of a "
+            "published release cannot be established; refusing to assume one way"
+        )
+
+
 def published(stado: str) -> dict:
     """Published versions of this product mapped to the platforms they carry."""
     listing = json.loads(
@@ -155,6 +177,8 @@ def published(stado: str) -> dict:
         if not as_triple(version):
             continue
         versions.setdefault(version, {}).setdefault(platform_name, set()).add(name)
+    if not versions:
+        assert_channel_readable(stado)
     return versions
 
 
