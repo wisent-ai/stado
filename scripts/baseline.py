@@ -95,6 +95,36 @@ def host_platform() -> str:
     return PLATFORMS[key]
 
 
+def assert_refs_visible() -> None:
+    """Refuse to rank tiers from a clone that cannot see refs.
+
+    `actions/checkout` produces a shallow, tagless clone, and such a clone answers
+    `git tag --list` with nothing however many tags the remote holds. A tier ranked
+    there is not evidence: it would silently call the last-resort tier the best one
+    and pass, which is a check asleep rather than a check. Shallowness also breaks
+    `git archive <tag>`, whose tree is simply absent. The workflow fetches tags and
+    unshallows before the version check for exactly this reason; this refuses instead
+    of guessing when someone forgets.
+    """
+    if run(["git", "rev-parse", "--is-shallow-repository"], cwd=REPOSITORY).strip() == "true":
+        raise Unreachable(
+            "this clone is shallow, so tags and their trees are invisible and no tier "
+            "can be ranked; run: git fetch --force --tags --unshallow"
+        )
+    tag_option = subprocess.run(
+        ["git", "config", "--get", "remote.origin.tagOpt"],
+        cwd=REPOSITORY,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if tag_option.stdout.strip() == "--no-tags":
+        raise Unreachable(
+            "this clone is configured --no-tags, so it never fetches a tag and the "
+            "tier ranking would be blind; run: git fetch --force --tags"
+        )
+
+
 def declared_version(tree: pathlib.Path) -> str:
     """The version one source tree declares in its crate manifest."""
     for line in (tree / MANIFEST).read_text(encoding="utf-8").splitlines():
@@ -140,7 +170,14 @@ def channel_surface(stado: str, version: str, platform_name: str) -> list:
 
 
 def build_surface(ref: str) -> list:
-    """The surface of a committed tree: export it, build it, ask the binary."""
+    """The surface of a committed tree: export it, build it, ask the binary.
+
+    A Rust command list cannot be read statically — it is what the built binary
+    prints — so the tree has to be built. `--locked` is what keeps the answer a
+    property of the commit rather than of this machine: the archive carries that
+    commit's own Cargo.lock, and the build fails rather than resolving a dependency to
+    whatever the local registry cache happens to hold.
+    """
     target = pathlib.Path(os.environ.get("CARGO_TARGET_DIR") or DEFAULT_TARGET_CACHE)
     with tempfile.TemporaryDirectory() as scratch:
         tree = pathlib.Path(scratch)
@@ -216,6 +253,7 @@ def best_identity(stado: str) -> str:
     a head sha moves with every commit and comparing it would demand a regenerated
     baseline per commit, forever.
     """
+    assert_refs_visible()
     releases = published(stado)
     if releases:
         return f"{MARKER_CHANNEL}{newest(releases)}"
@@ -227,6 +265,7 @@ def best_identity(stado: str) -> str:
 
 def document(stado: str) -> dict:
     """The baseline, from the best tier that actually exists."""
+    assert_refs_visible()
     releases = published(stado)
     if releases:
         version = newest(releases)
