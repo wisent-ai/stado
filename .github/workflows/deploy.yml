@@ -43,6 +43,41 @@ jobs:
           fi
           echo "STADO_VERSION=$version" >> "$GITHUB_ENV"
 
+      - name: Refuse a release whose version disagrees with its contract
+        # The public contract of this product is the command list `stado help`
+        # advertises. The rule that turns a surface change into a version lives in one
+        # place for the whole fleet and is not copied here:
+        # https://github.com/lbartoszcze/AutoVersion. This step supplies only what
+        # this repository knows — the surface of the artifact built above, and the
+        # version that artifact declares.
+        #
+        # It sits in front of the first `storage put` on purpose. Release objects are
+        # create-only, so a version published wrongly cannot be corrected afterwards;
+        # a check behind the publish would only describe the damage. Everything
+        # downstream, including the native release in deploy-control-plane, is gated
+        # through this job's `needs`.
+        run: |
+          python3 -m venv "$RUNNER_TEMP/autoversion"
+          "$RUNNER_TEMP/autoversion/bin/pip" install --quiet \
+            "git+https://github.com/lbartoszcze/AutoVersion@v0.1.0"
+
+          # Ask the exact bytes about to be published what they offer. Reading
+          # src/cli/mod.rs instead would count the variants marked `hide = true`,
+          # which dispatch but are not offered, and inflate the contract. The image
+          # is used rather than the copied-out binary so this works whatever the
+          # runner's own platform is.
+          docker run --rm --entrypoint /out/stado stado-rust-release help \
+            > "$RUNNER_TEMP/stado-help.txt"
+          python3 scripts/surface.py --help-text "$RUNNER_TEMP/stado-help.txt" \
+            > "$RUNNER_TEMP/candidate-surface.json"
+
+          stado_bin="$HOME/.stado/bin/stado"
+          STADO_API_TOKEN="$("$stado_bin" secrets get stado-release-publisher --field token)"
+          export STADO_API_TOKEN
+          AUTOVERSION="$RUNNER_TEMP/autoversion/bin/autoversion" \
+            STADO_BIN="$stado_bin" \
+            scripts/version_check.sh "$RUNNER_TEMP/candidate-surface.json"
+
       - name: Create immutable Linux release through Stado
         run: |
           stado_bin="$HOME/.stado/bin/stado"
