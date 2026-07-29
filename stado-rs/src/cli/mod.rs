@@ -38,7 +38,6 @@ pub mod queue;
 pub mod quota;
 pub mod recovery;
 pub mod registry;
-pub mod release;
 pub mod resources;
 pub mod results;
 pub mod schedule;
@@ -168,11 +167,53 @@ impl From<crate::providers::ProviderError> for CmdError {
     }
 }
 
+const ONBOARDING: &str = "\
+Stado — one queue for every machine.
+
+Stado needs three things:
+- state storage for the queue and results,
+- at least one compute provider,
+- a running worker that can claim jobs.
+
+Fastest path: local mode. `stado config init` creates:
+- provider: local
+- queue storage: ~/.stado/local-storage
+- backup storage: ~/.stado/local-backup
+
+No cloud account or credentials are required for local mode.
+The worker host must already have the shell, runtime, and GPU driver required by the workload.
+
+1. Create the local configuration:
+   stado config init
+
+2. Check the installation:
+   stado config validate
+   stado doctor --fix-hints
+
+3. Start the local control plane:
+   stado local-control-plane
+
+Open http://127.0.0.1:8765
+
+Submit your first job:
+   stado submit \"python -c 'print(\\\"hello from Stado\\\")'\"
+
+Already configured? Run:
+   stado overview
+
+More commands:
+   stado --help
+";
+
+fn print_onboarding() {
+    print!("{ONBOARDING}");
+}
+
 #[derive(Parser)]
 #[command(about = "Wisent Compute — GPU job queue management.")]
 pub struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -435,10 +476,6 @@ enum Commands {
     /// adopt, retire, deploy, logs, env.
     #[command(subcommand)]
     Service(service::ServiceCommands),
-    /// Decide the next release version from what a build's command surface gained
-    /// or lost, rather than from whoever is publishing remembering the rule.
-    #[command(subcommand)]
-    Release(release::ReleaseCommands),
     /// Ordered deployment preflight: config, storage, provider auth, quota,
     /// release channel, agent template, VM identity, registry, queue pause
     /// state and alert channels. Exits non-zero if any check FAILs.
@@ -1308,7 +1345,11 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             catalog_problems.join("; ")
         )));
     }
-    match cli.command {
+    let Some(command) = cli.command else {
+        print_onboarding();
+        return Ok(());
+    };
+    match command {
         Commands::PackageRoot => {
             // Python prints the installed package source root; the Rust
             // equivalent is the crate data directory (profiles, templates,
@@ -1518,7 +1559,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Secrets(sub) => secrets::dispatch(sub).await,
         Commands::Queue(sub) => queue::dispatch(sub).await,
         Commands::Service(sub) => service::dispatch(sub).await,
-        Commands::Release(sub) => release::dispatch(sub).await,
         Commands::Doctor(args) => doctor::dispatch(args).await,
     }
 }
