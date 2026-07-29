@@ -39,6 +39,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use clap::{Args, Subcommand};
 use futures::StreamExt;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 use crate::queue::copy::{
     self, CopyOptions, CopyPlan, CopyReport, Endpoint, Outcome, CANONICAL_PREFIXES,
@@ -63,6 +64,8 @@ pub enum StorageCommands {
     Cat(StorageCatArgs),
     /// Compare two stores object-for-object. Read-only; copies nothing.
     Verify(Box<StorageVerifyArgs>),
+    /// Package one directory as a deterministic gzip-compressed release archive.
+    Archive(StorageArchiveArgs),
     /// Upload a product object through the provider-neutral Stado namespace.
     /// Release objects are always create-only, even without --if-absent.
     Put(StoragePutArgs),
@@ -77,15 +80,27 @@ pub enum StorageCommands {
     Url(StorageUrlArgs),
 }
 
+fn parse_storage_kind(raw: &str) -> Result<String, String> {
+    crate::capabilities::configurable_variant(crate::capabilities::RuntimeFacet::Storage, raw)
+        .map(|variant| variant.id.to_string())
+        .ok_or_else(|| {
+            let choices =
+                crate::capabilities::configurable_ids(crate::capabilities::RuntimeFacet::Storage)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+            format!("unknown storage backend {raw:?}; use one of: {choices}")
+        })
+}
+
 /// The locator flags shared by `copy` and `verify`, so both commands
 /// address a pair of stores with an identical flag set.
 #[derive(Args, Debug)]
 pub struct EndpointArgs {
     /// Source backend.
-    #[arg(long, value_parser = ["gcs", "azure", "s3", "local"])]
+    #[arg(long, value_parser = parse_storage_kind)]
     pub(crate) from: String,
     /// Destination backend.
-    #[arg(long, value_parser = ["gcs", "azure", "s3", "local"])]
+    #[arg(long, value_parser = parse_storage_kind)]
     pub(crate) to: String,
 
     /// Source bucket (gcs, s3).
@@ -259,6 +274,16 @@ pub struct StorageUrlArgs {
 }
 
 #[derive(Args, Debug)]
+pub struct StorageArchiveArgs {
+    /// Directory whose contents become the archive root.
+    source: String,
+    /// New .tar.gz output path. Refuses to overwrite.
+    output: String,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args, Debug)]
 pub struct StorageVerifyArgs {
     #[command(flatten)]
     ends: EndpointArgs,
@@ -293,12 +318,87 @@ pub async fn dispatch(command: StorageCommands) -> Result<(), CmdError> {
         StorageCommands::Stat(args) => stat(&args).await,
         StorageCommands::Cat(args) => cat(&args).await,
         StorageCommands::Verify(args) => verify(&args).await,
+        StorageCommands::Archive(args) => archive(&args),
         StorageCommands::Put(args) => put(&args).await,
         StorageCommands::Get(args) => get(&args).await,
         StorageCommands::Objects(args) => objects(&args).await,
         StorageCommands::Rm(args) => rm(&args).await,
         StorageCommands::Url(args) => object_url(&args),
     }
+}
+
+fn archive(args: &StorageArchiveArgs) -> Result<(), CmdError> {
+    let source = std::path::Path::new(&args.source);
+    let metadata = std::fs::symlink_metadata(source)?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(CmdError::click(format!(
+            "archive source must be a real directory: {}",
+            source.display()
+        )));
+    }
+    let source = source.canonicalize()?;
+    let output = std::path::Path::new(&args.output);
+    if output.try_exists()? {
+        return Err(CmdError::click(format!(
+            "refusing to overwrite archive {}",
+            output.display()
+        )));
+    }
+    let output_parent = output
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .canonicalize()?;
+    if output_parent.starts_with(&source) {
+        return Err(CmdError::click(
+            "archive output must be outside the source directory",
+        ));
+    }
+    let create_result = (|| -> std::io::Result<()> {
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(output)?;
+        let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+        let mut archive = tar::Builder::new(encoder);
+        archive.mode(tar::HeaderMode::Deterministic);
+        archive.append_dir_all(".", &source)?;
+        let encoder = archive.into_inner()?;
+        let file = encoder.finish()?;
+        file.sync_all()
+    })();
+    if let Err(error) = create_result {
+        let _ = std::fs::remove_file(output);
+        return Err(CmdError::click(format!(
+            "cannot create release archive {}: {error}",
+            output.display()
+        )));
+    }
+    let mut file = std::fs::File::open(output)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [u8::MIN; u16::MAX as usize];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == usize::default() {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    let bytes = file.metadata()?.len();
+    let sha256 = hex::encode(hasher.finalize());
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "source": source,
+                "output": output,
+                "bytes": bytes,
+                "sha256": sha256,
+            }))?
+        );
+    } else {
+        println!("{} bytes sha256={} {}", bytes, sha256, output.display());
+    }
+    Ok(())
 }
 
 // ---- copy ----
@@ -1675,10 +1775,7 @@ pub(crate) async fn verify_between(
     let missing: usize = diffs.iter().map(|diff| diff.missing.len()).sum();
     let extra: usize = diffs.iter().map(|diff| diff.extra.len()).sum();
     let gaps: usize = diffs.iter().map(|diff| diff.metadata_gaps.len()).sum();
-    let body_mismatches: usize = diffs
-        .iter()
-        .map(|diff| diff.body_mismatches.len())
-        .sum();
+    let body_mismatches: usize = diffs.iter().map(|diff| diff.body_mismatches.len()).sum();
     let body_errors: usize = diffs.iter().map(|diff| diff.body_errors.len()).sum();
     let diverging = diffs.iter().filter(|diff| diff.diverged()).count();
     let divergent = diffs.iter().any(PrefixDiff::diverged);

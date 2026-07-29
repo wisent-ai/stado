@@ -13,6 +13,7 @@ use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 
 pub mod agent;
 pub mod artifact;
+pub mod autonomy_cmd;
 pub mod azure;
 pub mod billing;
 pub mod blast_radius;
@@ -35,8 +36,8 @@ pub mod overview;
 pub mod profiles_cmd;
 pub mod queue;
 pub mod quota;
-pub mod registry;
 pub mod recovery;
+pub mod registry;
 pub mod resources;
 pub mod results;
 pub mod schedule;
@@ -62,10 +63,8 @@ pub struct CmdError {
 
 /// click `ClickException`'s exit code: "it ran and failed". Every runtime
 /// failure has used it since the Python original, and it stays the default —
-/// only a retryable failure is remapped, in [`main_entry`]. Written as a
-/// ratio of one width constant to itself rather than a bare literal, the
-/// same way [`CmdError::usage`] spells click's 2.
-pub const CLICK_ERROR_CODE: i32 = (u8::BITS / u8::BITS) as i32;
+/// only a retryable failure is remapped, in [`main_entry`].
+pub const CLICK_ERROR_CODE: i32 = true as i32;
 
 impl CmdError {
     /// click `ClickException`: "Error: {msg}" on stderr, exit 1.
@@ -204,6 +203,9 @@ enum Commands {
     /// Inventory, plan, execute, verify, and restore resource operations.
     #[command(subcommand)]
     Resources(resources::ResourcesCommands),
+    /// Inspect and control autonomous placement and resource reconciliation.
+    #[command(subcommand)]
+    Optimize(autonomy_cmd::OptimizeCommands),
 
     /// Inspect or refresh cross-cloud costs, grants, burn, and credit balances.
     #[command(subcommand)]
@@ -845,6 +847,26 @@ pub(crate) enum CostCommands {
     Report,
     /// Project total $ for a batch file using observed per-job cost.
     Estimate { batch_file: String },
+    /// Show the attributed provider/owner/workload cost ledger.
+    Allocation {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show current burn, month-end projection, budget, and credit runway.
+    Forecast {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show active cost and resource anomalies.
+    Anomalies {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show predicted versus realized savings.
+    Savings {
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -880,6 +902,19 @@ enum RegistryCommands {
     },
 }
 
+fn parse_target_kind(raw: &str) -> Result<String, String> {
+    crate::capabilities::configurable_variant(crate::capabilities::RuntimeFacet::HostTarget, raw)
+        .map(|variant| variant.id.to_string())
+        .ok_or_else(|| {
+            let choices = crate::capabilities::configurable_ids(
+                crate::capabilities::RuntimeFacet::HostTarget,
+            )
+            .collect::<Vec<_>>()
+            .join(", ");
+            format!("unknown target kind {raw:?}; use one of: {choices}")
+        })
+}
+
 #[derive(Subcommand)]
 enum RegistryHostCommands {
     /// Onboard HOST into the canonical registry, validated.
@@ -889,7 +924,7 @@ enum RegistryHostCommands {
         #[arg(long)]
         ssh: String,
         /// Registry target kind.
-        #[arg(long, default_value = "local", value_parser = ["gcp", "local", "vast"])]
+        #[arg(long, default_value = "local", value_parser = parse_target_kind)]
         kind: String,
     },
 }
@@ -953,6 +988,73 @@ enum HostCommands {
         #[arg(long)]
         dry_run: bool,
         /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Install one small operator helper in TARGET's owner-only Stado bin directory.
+    #[command(name = "install-helper")]
+    InstallHelper {
+        target: String,
+        /// Local helper file to transfer.
+        source: String,
+        /// Safe basename under $HOME/.stado/bin on the target.
+        name: String,
+        /// Emit the transfer report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Install one owner-only opaque credential file on TARGET.
+    #[command(name = "install-secret")]
+    InstallSecret {
+        target: String,
+        /// Owner-only regular local file to transfer.
+        source: String,
+        /// Safe basename under $HOME/.stado on the target.
+        name: String,
+        /// Emit the transfer report as JSON; credential content is never emitted.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Transfer one immutable Weles release archive through the registry SSH channel.
+    #[command(name = "install-release")]
+    InstallRelease {
+        target: String,
+        /// Local .tar.gz release archive.
+        source: String,
+        /// Release family: weles-worker, weles-chromium, or weles-firefox.
+        family: String,
+        /// Immutable release version.
+        version: String,
+        /// Target platform.
+        #[arg(long, default_value = "darwin-arm64")]
+        platform: String,
+        /// Emit the transfer report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run one previously installed owner-only helper and wait for its result.
+    #[command(name = "run-helper")]
+    RunHelper {
+        target: String,
+        /// Safe basename under $HOME/.stado/bin on the target.
+        name: String,
+        /// Emit the execution report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Open an encrypted reverse SSH forwarding channel to TARGET.
+    #[command(name = "forward-local")]
+    ForwardLocal {
+        target: String,
+        /// Safe name for the remote endpoint marker.
+        name: String,
+        /// Loopback port exposed on TARGET.
+        #[arg(long)]
+        remote_port: u16,
+        /// Loopback port served by this control-plane host.
+        #[arg(long)]
+        local_port: u16,
+        /// Emit the forwarding report as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -1169,19 +1271,38 @@ fn failure_service(matches: &clap::ArgMatches) -> &'static str {
     match matches.subcommand_name().unwrap_or_default() {
         "submit" | "status" | "cancel" | "results" | "job" | "machine" | "queue" | "storage"
         | "artifact" => "queue",
-        "host" | "registry" | "service" | "instances" | "resources" | "recovery" | "bootstrap"
-        | "doctor" | "disk-cleanup" | "install-disk-cleanup" => "fleet",
+        "host"
+        | "registry"
+        | "service"
+        | "instances"
+        | "resources"
+        | "recovery"
+        | "bootstrap"
+        | "doctor"
+        | "disk-cleanup"
+        | "install-disk-cleanup" => "fleet",
         "secrets" => "skarbiec",
         "billing" | "cost" | "quota" => "billing",
         "mail" => "mail",
         "azure" | "vast" | "blast-radius" => "provider",
-        "coordinator" | "dashboard" | "schedule" | "agent" | "local-control-plane"
+        "coordinator"
+        | "dashboard"
+        | "schedule"
+        | "agent"
+        | "local-control-plane"
         | "cloud-control-plane" => "control-plane",
         _ => "stado",
     }
 }
 
 async fn dispatch(cli: Cli) -> Result<(), CmdError> {
+    let catalog_problems = crate::capabilities::validate_catalog();
+    if !catalog_problems.is_empty() {
+        return Err(CmdError::click(format!(
+            "capability catalog is invalid: {}",
+            catalog_problems.join("; ")
+        )));
+    }
     match cli.command {
         Commands::PackageRoot => {
             // Python prints the installed package source root; the Rust
@@ -1196,6 +1317,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Overview { json } => overview::run(json).await,
         Commands::BlastRadius(args) => blast_radius::run(&args).await,
         Commands::Resources(command) => resources::dispatch(command).await,
+        Commands::Optimize(command) => autonomy_cmd::dispatch_optimize(command).await,
         Commands::Billing(sub) => billing::dispatch(&sub).await,
         Commands::Azure(sub) => azure::dispatch(sub).await,
         Commands::Mail(sub) => mail::dispatch(&sub).await,
@@ -1344,6 +1466,36 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 dry_run,
                 json,
             } => host::cleanup(&target, dry_run, json).await,
+            HostCommands::InstallHelper {
+                target,
+                source,
+                name,
+                json,
+            } => host::install_helper(&target, &source, &name, json).await,
+            HostCommands::InstallSecret {
+                target,
+                source,
+                name,
+                json,
+            } => host::install_secret(&target, &source, &name, json).await,
+            HostCommands::InstallRelease {
+                target,
+                source,
+                family,
+                version,
+                platform,
+                json,
+            } => host::install_release(&target, &source, &family, &version, &platform, json).await,
+            HostCommands::RunHelper { target, name, json } => {
+                host::run_helper(&target, &name, json).await
+            }
+            HostCommands::ForwardLocal {
+                target,
+                name,
+                remote_port,
+                local_port,
+                json,
+            } => host::forward_local(&target, &name, remote_port, local_port, json).await,
             HostCommands::Exec {
                 target,
                 json,

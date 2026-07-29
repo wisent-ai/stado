@@ -9,9 +9,9 @@
 //! - Blob:    scope `https://storage.azure.com/.default`,
 //!   resource `https://storage.azure.com`
 //!
-//! Sources, in order: (a) Azure IMDS managed identity, then (b) the
-//! `stado-azure` service principal in Skarbiec. Process-environment secrets,
-//! local credential files and Azure CLI sessions are not credential sources.
+//! The sole credential source is Azure IMDS managed identity. Static service
+//! principals, process-environment secrets, local credential files, and Azure
+//! CLI sessions are not credential sources.
 //! Tokens are cached per scope with their expiry and refreshed early.
 
 use std::collections::HashMap;
@@ -138,71 +138,23 @@ fn az_cli_expires_in(expires_on: &str, now_unix: i64) -> Option<i64> {
     Some(local.timestamp() - now_unix)
 }
 
-/// Managed identity first; an off-platform service principal comes only from
-/// the `stado-azure` Skarbiec item.
+/// Azure access is available only through the adapter host's managed identity.
+/// Static service-principal keys, Azure CLI sessions, and workload-agent grants
+/// are deliberately unsupported provider credential sources.
 async fn fetch_token(
     http: &reqwest::Client,
-    scope: &str,
+    _scope: &str,
     resource: &str,
 ) -> Result<TokenGrant, TokenError> {
-    if let Ok(grant) = imds_token(http, resource).await {
-        return Ok(grant);
-    }
-    let value = crate::skarbiec::Client::configured_item("stado-azure")
-        .await
-        .map_err(|err| TokenError::Auth(err.to_string()))?;
-    let field = |name: &str| {
-        value
-            .get(name)
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                TokenError::Auth(format!(
-                    "Skarbiec item stado-azure field {name} is required"
-                ))
-            })
-    };
-    let tenant_id = field("tenant_id")?;
-    let client_id = field("client_id")?;
-    let client_secret = field("client_secret")?;
-    let response = http
-        .post(format!(
-            "https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+    imds_token(http, resource).await.map_err(|error| {
+        TokenError::Auth(format!(
+            "Azure adapter managed identity is unavailable: {error}"
         ))
-        .form(&[
-            ("grant_type", "client_credentials"),
-            ("client_id", client_id),
-            ("client_secret", client_secret),
-            ("scope", scope),
-        ])
-        .send()
-        .await?;
-    let status = response.status();
-    let body: Value = response.json().await.unwrap_or(Value::Null);
-    if !status.is_success() {
-        return Err(TokenError::Auth(format!(
-            "Azure OAuth token exchange failed with HTTP {status}: {}",
-            body.to_string()
-                .chars()
-                .take(usize::from(u8::MAX))
-                .collect::<String>()
-        )));
-    }
-    let access_token = body
-        .get("access_token")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| TokenError::Auth("Azure OAuth response has no access_token".into()))?
-        .to_string();
-    let expires_in = json_i64(body.get("expires_in")).unwrap_or_else(|| i64::from(u16::MAX));
-    Ok(TokenGrant {
-        access_token,
-        expires_in,
     })
 }
 
 /// Fresh bearer token for `scope` (OAuth) / `resource` (IMDS naming for the
-/// same audience), from cache or the managed-identity/Skarbiec chain.
+/// same audience), from cache or the managed identity.
 pub(crate) async fn bearer_token(
     http: &reqwest::Client,
     scope: &str,

@@ -8,6 +8,14 @@
 //! {err}` and the remaining channels still fire. Missing Skarbiec items or
 //! non-secret routing config disable only their channel. A gcp_auth failure for
 //! Pub/Sub likewise logs and skips.
+//!
+//! That swallowing is correct — an alert must never be the thing that kills
+//! the process it is reporting on — but it used to leave nothing queryable
+//! behind, so "the alerts have been silently failing for a week" was only
+//! ever discovered by noticing the silence. Every channel failure now also
+//! emits the fleet's structured failure line ([`crate::failure`]) with the
+//! same classification the CLI uses, so a dead alert path is a row an
+//! operator can find rather than an absence they have to infer.
 
 use serde_json::{json, Value};
 
@@ -24,6 +32,24 @@ const DEFAULT_EMAIL_FROM: &str = "compute@example.com";
 
 fn log(msg: &str) {
     eprintln!("[alert] {msg}");
+}
+
+/// One channel could not deliver. Logged twice on purpose and fatal never:
+/// the `[alert]` line is what a human tailing the monitor reads, and the
+/// structured line is what a log query finds a week later.
+fn channel_failed(channel: &str, error: &str) {
+    let code = crate::failure::classify_message(error);
+    tracing::error!(
+        failure_point = "monitor.alerts.deliver",
+        error_code = code.as_str(),
+        service = "alerts",
+        retryable = code.retryable(),
+        severity = code.severity().as_str(),
+        channel = channel,
+        detail = %crate::failure::bounded_detail(error),
+        "alert channel delivery failed; the remaining channels still fire"
+    );
+    log(&format!("{channel} failed: {error}"));
 }
 
 /// Telegram channel config (Skarbiec bot token + configured chat id).
@@ -239,8 +265,9 @@ fn email_subject<'a>(subject: &'a str, message: &'a str) -> String {
 }
 
 /// Send an alert to every configured channel. Each channel is fault-isolated
-/// (see module docs): a failure logs `[alert] <channel> failed: {err}` and
-/// the remaining channels still fire.
+/// (see module docs): a failure goes through [`channel_failed`] — the
+/// `[alert] <channel> failed: {err}` line plus one structured, classified
+/// failure row — and the remaining channels still fire.
 pub async fn send_alert_with(channels: &AlertChannels, message: &str, subject: &str) {
     log(message);
     let client = reqwest::Client::new();
@@ -248,26 +275,26 @@ pub async fn send_alert_with(channels: &AlertChannels, message: &str, subject: &
     if let Some(url) = &channels.slack_webhook {
         match send_slack(&client, url, message).await {
             Ok(()) => log("Slack sent"),
-            Err(err) => log(&format!("slack failed: {err}")),
+            Err(err) => channel_failed("slack", &err),
         }
     }
     if let Some(telegram) = &channels.telegram {
         match send_telegram(&client, telegram, message).await {
             Ok(()) => log("Telegram sent"),
-            Err(err) => log(&format!("telegram failed: {err}")),
+            Err(err) => channel_failed("telegram", &err),
         }
     }
     if let Some(sendgrid) = &channels.sendgrid {
         let subject = email_subject(subject, message);
         match send_email(&client, sendgrid, &subject, message).await {
             Ok(()) => log("Email sent"),
-            Err(err) => log(&format!("email failed: {err}")),
+            Err(err) => channel_failed("email", &err),
         }
     }
     if let Some(pubsub) = &channels.pubsub {
         match send_pubsub(&client, pubsub, message).await {
             Ok(()) => log("Pub/Sub sent"),
-            Err(err) => log(&format!("pubsub failed: {err}")),
+            Err(err) => channel_failed("pubsub", &err),
         }
     }
 }

@@ -37,7 +37,6 @@ pub const COMPUTE_API_BASE: &str = "https://compute.googleapis.com/compute/v1";
 /// OAuth scope matching the Python google-cloud-compute client.
 const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 
-
 /// Python `_log`.
 fn log(msg: &str) {
     eprintln!("[gcp] {msg}");
@@ -477,10 +476,8 @@ impl GcpProvider {
         Ok((parts[0], parts[1]))
     }
 
-    /// One zone attempt of the Python create loop: pre-delete any existing
-    /// (terminated) instance with the same name — NotFound is the desired
-    /// terminal state; anything else propagates — then insert and wait for
-    /// the zone operation.
+    /// One zone insert attempt after the caller has confirmed any stale
+    /// same-name instance is absent. The insert operation is then awaited.
     #[allow(clippy::too_many_arguments)]
     async fn attempt_zone(
         client: &GceClient,
@@ -494,16 +491,6 @@ impl GcpProvider {
         startup_script: &str,
         preemptible: bool,
     ) -> Result<(), GceError> {
-        let instance_path = format!(
-            "/projects/{}/zones/{zone}/instances/{name}",
-            client.project()
-        );
-        client
-            .delete_allow_404(
-                &instance_path,
-                &format!("delete stale instance {name}@{zone}"),
-            )
-            .await?;
         let body = instance_body(
             name,
             zone,
@@ -612,7 +599,6 @@ impl Provider for GcpProvider {
         let client = &state.client;
         let store = &state.store;
 
-
         let zones = config::machine_type_zones()
             .get(machine_type)
             .cloned()
@@ -649,6 +635,19 @@ impl Provider for GcpProvider {
                 ));
                 continue;
             }
+            // A non-404 delete failure leaves the old VM's existence
+            // ambiguous. Abort instead of trying another zone and risking
+            // two live VMs writing the same job paths.
+            let instance_path = format!(
+                "/projects/{}/zones/{zone}/instances/{name}",
+                client.project()
+            );
+            client
+                .delete_allow_404(
+                    &instance_path,
+                    &format!("delete stale instance {name}@{zone}"),
+                )
+                .await?;
             match Self::attempt_zone(
                 client,
                 zone,
@@ -735,6 +734,34 @@ impl Provider for GcpProvider {
         state
             .client
             .delete_allow_404(&path, &format!("delete {instance_ref}"))
+            .await?;
+        Ok(())
+    }
+
+    async fn stop_instance(&self, instance_ref: &str) -> Result<(), ProviderError> {
+        let state = self.state().await?;
+        let (name, zone) = Self::parse_ref(instance_ref)?;
+        let path = format!(
+            "/projects/{}/zones/{zone}/instances/{name}/stop",
+            state.client.project()
+        );
+        state
+            .client
+            .post(&path, &json!({}), &format!("stop {instance_ref}"))
+            .await?;
+        Ok(())
+    }
+
+    async fn start_instance(&self, instance_ref: &str) -> Result<(), ProviderError> {
+        let state = self.state().await?;
+        let (name, zone) = Self::parse_ref(instance_ref)?;
+        let path = format!(
+            "/projects/{}/zones/{zone}/instances/{name}/start",
+            state.client.project()
+        );
+        state
+            .client
+            .post(&path, &json!({}), &format!("start {instance_ref}"))
             .await?;
         Ok(())
     }
@@ -837,6 +864,28 @@ mod tests {
         server.requests.lock().unwrap().clone()
     }
 
+    fn candidate_zones(machine_type: &str) -> Vec<String> {
+        config::machine_type_zones()
+            .get(machine_type)
+            .cloned()
+            .unwrap_or_else(|| config::zone_rotation().to_vec())
+    }
+
+    fn request_lines(server: &MockHttp) -> Vec<String> {
+        request_bodies(server)
+            .iter()
+            .map(|request| request.lines().next().unwrap_or("").to_string())
+            .collect()
+    }
+
+    fn assert_request_lines(server: &MockHttp, expected: &[String]) {
+        assert_eq!(request_lines(server), expected);
+    }
+
+    fn request_line(method: &str, path: impl std::fmt::Display) -> String {
+        format!("{method} {path} HTTP/1.1")
+    }
+
     #[test]
     fn instance_body_spot_and_on_demand_shapes() {
         let spot = instance_body(
@@ -913,12 +962,11 @@ mod tests {
     async fn create_instance_happy_path_spot() {
         let _guard = stockout::test_lock().await;
         let (_dir, store) = store();
+        let zone = candidate_zones("n1-standard-4")
+            .into_iter()
+            .next()
+            .expect("zone rotation is non-empty");
         let server = mock_http(vec![
-            http_response(
-                404,
-                "Not Found",
-                r#"{"error": {"code": 404, "message": "not found"}}"#,
-            ),
             http_response(
                 404,
                 "Not Found",
@@ -942,59 +990,47 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(result.as_deref(), Some("vm1@us-central1-b"));
+        assert_eq!(result, Some(format!("vm1@{zone}")));
 
+        assert_request_lines(
+            &server,
+            &[
+                request_line(
+                    "DELETE",
+                    format_args!("/projects/test-project/zones/{zone}/instances/vm1"),
+                ),
+                request_line(
+                    "POST",
+                    format_args!("/projects/test-project/zones/{zone}/instances"),
+                ),
+                request_line(
+                    "GET",
+                    format_args!("/projects/test-project/zones/{zone}/operations/operation-1"),
+                ),
+            ],
+        );
         let requests = request_bodies(&server);
-        assert_eq!(requests.len(), 4, "{requests:?}");
-        // The mock server replaces the whole API base URL, so paths start
-        // at /projects/... (no /compute/v1 prefix).
+        let insert = requests
+            .iter()
+            .find(|request| request.starts_with("POST "))
+            .expect("insert request");
+        assert!(insert.contains(r#""provisioningModel":"SPOT""#), "{insert}");
         assert!(
-            requests[0]
-                .starts_with("GET /projects/test-project/global/images/family/wisent-agent "),
-            "{}",
-            requests[0]
-        );
-        assert!(
-            requests[1]
-                .starts_with("DELETE /projects/test-project/zones/us-central1-b/instances/vm1 "),
-            "{}",
-            requests[1]
-        );
-        assert!(
-            requests[2].starts_with("POST /projects/test-project/zones/us-central1-b/instances "),
-            "{}",
-            requests[2]
-        );
-        assert!(
-            requests[2].contains(r#""provisioningModel":"SPOT""#),
-            "{}",
-            requests[2]
-        );
-        assert!(
-            requests[2].contains(r#""startup-script","value":"echo hi""#),
-            "{}",
-            requests[2]
-        );
-        assert!(
-            requests[3].starts_with(
-                "GET /projects/test-project/zones/us-central1-b/operations/operation-1 "
-            ),
-            "{}",
-            requests[3]
+            insert.contains(r#""startup-script","value":"echo hi""#),
+            "{insert}"
         );
         server.stop();
     }
 
     #[tokio::test]
-    async fn create_instance_prefers_baked_image_family() {
+    async fn create_instance_uses_requested_image() {
         let _guard = stockout::test_lock().await;
         let (_dir, store) = store();
+        let zone = candidate_zones("n1-standard-4")
+            .into_iter()
+            .next()
+            .expect("zone rotation is non-empty");
         let server = mock_http(vec![
-            http_response(
-                200,
-                "OK",
-                r#"{"name": "wisent-agent-20260501", "status": "READY"}"#,
-            ),
             http_response(404, "Not Found", r#"{"error": {"code": 404}}"#),
             http_response(200, "OK", PENDING),
             http_response(200, "OK", DONE),
@@ -1014,14 +1050,34 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(result.as_deref(), Some("vm1@us-central1-b"));
+        assert_eq!(result, Some(format!("vm1@{zone}")));
+        assert_request_lines(
+            &server,
+            &[
+                request_line(
+                    "DELETE",
+                    format_args!("/projects/test-project/zones/{zone}/instances/vm1"),
+                ),
+                request_line(
+                    "POST",
+                    format_args!("/projects/test-project/zones/{zone}/instances"),
+                ),
+                request_line(
+                    "GET",
+                    format_args!("/projects/test-project/zones/{zone}/operations/operation-1"),
+                ),
+            ],
+        );
         let requests = request_bodies(&server);
+        let insert = requests
+            .iter()
+            .find(|request| request.starts_with("POST "))
+            .expect("insert request");
         assert!(
-            requests[2].contains(
-                r#""sourceImage":"projects/test-project/global/images/wisent-agent-20260501""#
+            insert.contains(
+                r#""sourceImage":"projects/deeplearning-platform-release/global/images/base-image""#
             ),
-            "{}",
-            requests[2]
+            "{insert}"
         );
         server.stop();
     }
@@ -1030,11 +1086,17 @@ mod tests {
     async fn quota_exceeded_skips_the_rest_of_the_region() {
         let _guard = stockout::test_lock().await;
         let (_dir, store) = store();
-        // us-central1-b fails with a QUOTA_EXCEEDED LRO error; every other
-        // us-central1 zone must be skipped without an API call, and the
-        // loop resumes at europe-west4-a.
+        let zones = candidate_zones("n1-standard-4");
+        let (first_zone, remaining_zones) =
+            zones.split_first().expect("zone rotation is non-empty");
+        let first_region = region_of_zone(first_zone);
+        let next_region_zone = remaining_zones
+            .iter()
+            .find(|zone| region_of_zone(zone) != first_region)
+            .expect("zone rotation contains a fallback region");
+        // The first zone fails with a regional QUOTA_EXCEEDED LRO error.
+        // Every remaining zone in that region is skipped without an API call.
         let server = mock_http(vec![
-            http_response(404, "Not Found", r#"{"error": {"code": 404}}"#),
             http_response(404, "Not Found", r#"{"error": {"code": 404}}"#),
             http_response(200, "OK", PENDING),
             http_response(
@@ -1063,22 +1125,43 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(result.as_deref(), Some("vm1@europe-west4-a"));
-        let requests = request_bodies(&server);
-        assert_eq!(requests.len(), 8, "{requests:?}");
-        assert!(
-            requests[5]
-                .starts_with("DELETE /projects/test-project/zones/europe-west4-a/instances/vm1 "),
-            "{}",
-            requests[5]
-        );
-        assert!(
-            !requests.iter().any(|r| r.contains("us-central1-a")),
-            "{requests:?}"
-        );
-        assert!(
-            !requests.iter().any(|r| r.contains("us-central1-c")),
-            "{requests:?}"
+        assert_eq!(result, Some(format!("vm1@{next_region_zone}")));
+        assert_request_lines(
+            &server,
+            &[
+                request_line(
+                    "DELETE",
+                    format_args!("/projects/test-project/zones/{first_zone}/instances/vm1"),
+                ),
+                request_line(
+                    "POST",
+                    format_args!("/projects/test-project/zones/{first_zone}/instances"),
+                ),
+                request_line(
+                    "GET",
+                    format_args!(
+                        "/projects/test-project/zones/{first_zone}/operations/operation-1"
+                    ),
+                ),
+                request_line(
+                    "GET",
+                    format_args!("/projects/test-project/zones/{first_zone}/instances/vm1"),
+                ),
+                request_line(
+                    "DELETE",
+                    format_args!("/projects/test-project/zones/{next_region_zone}/instances/vm1"),
+                ),
+                request_line(
+                    "POST",
+                    format_args!("/projects/test-project/zones/{next_region_zone}/instances"),
+                ),
+                request_line(
+                    "GET",
+                    format_args!(
+                        "/projects/test-project/zones/{next_region_zone}/operations/operation-2"
+                    ),
+                ),
+            ],
         );
         // The cross-call quota cache was marked for (region, accel).
         let blob = store
@@ -1086,7 +1169,10 @@ mod tests {
             .await
             .unwrap()
             .expect("quota blob written");
-        assert!(blob.contains("us-central1:nvidia-tesla-t4"), "{blob}");
+        assert!(
+            blob.contains(&format!("{first_region}:nvidia-tesla-t4")),
+            "{blob}"
+        );
         server.stop();
     }
 
@@ -1094,14 +1180,16 @@ mod tests {
     async fn stockout_cache_skips_zone_and_marks_new_stockouts() {
         let _guard = stockout::test_lock().await;
         let (_dir, store) = store();
-        // Pre-mark us-central1-b as stocked out; the loop's first API call
-        // must target us-central1-a. That zone then stockouts live and the
-        // cache picks it up.
-        stockout::mark_zone_stockout(&store, "us-central1-b")
+        let zones = candidate_zones("n1-standard-4");
+        let [cached_zone, stockout_zone, success_zone, ..] = zones.as_slice() else {
+            panic!("zone rotation needs at least three zones");
+        };
+        // The first candidate is pre-cached; the next zone stocks out live
+        // and the following candidate succeeds.
+        stockout::mark_zone_stockout(&store, cached_zone)
             .await
             .unwrap();
         let server = mock_http(vec![
-            http_response(404, "Not Found", r#"{"error": {"code": 404}}"#),
             http_response(404, "Not Found", r#"{"error": {"code": 404}}"#),
             http_response(200, "OK", PENDING),
             http_response(
@@ -1130,20 +1218,48 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(result.as_deref(), Some("vm1@us-central1-c"));
-        let requests = request_bodies(&server);
-        assert_eq!(requests.len(), 8, "{requests:?}");
-        // First instance call went to us-central1-a (b was cache-skipped).
-        assert!(
-            requests[1].contains("zones/us-central1-a/instances/vm1"),
-            "{}",
-            requests[1]
+        assert_eq!(result, Some(format!("vm1@{success_zone}")));
+        assert_request_lines(
+            &server,
+            &[
+                request_line(
+                    "DELETE",
+                    format_args!("/projects/test-project/zones/{stockout_zone}/instances/vm1"),
+                ),
+                request_line(
+                    "POST",
+                    format_args!("/projects/test-project/zones/{stockout_zone}/instances"),
+                ),
+                request_line(
+                    "GET",
+                    format_args!(
+                        "/projects/test-project/zones/{stockout_zone}/operations/operation-1"
+                    ),
+                ),
+                request_line(
+                    "GET",
+                    format_args!("/projects/test-project/zones/{stockout_zone}/instances/vm1"),
+                ),
+                request_line(
+                    "DELETE",
+                    format_args!("/projects/test-project/zones/{success_zone}/instances/vm1"),
+                ),
+                request_line(
+                    "POST",
+                    format_args!("/projects/test-project/zones/{success_zone}/instances"),
+                ),
+                request_line(
+                    "GET",
+                    format_args!(
+                        "/projects/test-project/zones/{success_zone}/operations/operation-2"
+                    ),
+                ),
+            ],
         );
-        // The live stockout of us-central1-a was marked.
-        assert!(stockout::zone_recently_stocked_out(&store, "us-central1-a")
+        assert!(stockout::zone_recently_stocked_out(&store, stockout_zone)
             .await
             .unwrap());
-        assert!(stockout::zone_recently_stocked_out(&store, "us-central1-b")
+        assert!(stockout::zone_recently_stocked_out(&store, cached_zone)
             .await
             .unwrap());
         server.stop();
@@ -1153,8 +1269,11 @@ mod tests {
     async fn already_exists_returns_the_ref() {
         let _guard = stockout::test_lock().await;
         let (_dir, store) = store();
+        let zone = candidate_zones("n1-standard-4")
+            .into_iter()
+            .next()
+            .expect("zone rotation is non-empty");
         let server = mock_http(vec![
-            http_response(404, "Not Found", r#"{"error": {"code": 404}}"#),
             http_response(404, "Not Found", r#"{"error": {"code": 404}}"#),
             http_response(
                 409,
@@ -1177,7 +1296,20 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(result.as_deref(), Some("vm1@us-central1-b"));
+        assert_eq!(result, Some(format!("vm1@{zone}")));
+        assert_request_lines(
+            &server,
+            &[
+                request_line(
+                    "DELETE",
+                    format_args!("/projects/test-project/zones/{zone}/instances/vm1"),
+                ),
+                request_line(
+                    "POST",
+                    format_args!("/projects/test-project/zones/{zone}/instances"),
+                ),
+            ],
+        );
         server.stop();
     }
 
@@ -1185,11 +1317,14 @@ mod tests {
     async fn poll_failure_probes_and_recovers_live_instance() {
         let _guard = stockout::test_lock().await;
         let (_dir, store) = store();
+        let zone = candidate_zones("n1-standard-4")
+            .into_iter()
+            .next()
+            .expect("zone rotation is non-empty");
         // The operation poll fails AFTER the insert was accepted; the probe
         // finds the VM STAGING and the ref is returned instead of spawning
         // a duplicate in another zone.
         let server = mock_http(vec![
-            http_response(404, "Not Found", r#"{"error": {"code": 404}}"#),
             http_response(404, "Not Found", r#"{"error": {"code": 404}}"#),
             http_response(200, "OK", PENDING),
             http_response(
@@ -1214,8 +1349,28 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(result.as_deref(), Some("vm1@us-central1-b"));
-        assert_eq!(request_bodies(&server).len(), 5);
+        assert_eq!(result, Some(format!("vm1@{zone}")));
+        assert_request_lines(
+            &server,
+            &[
+                request_line(
+                    "DELETE",
+                    format_args!("/projects/test-project/zones/{zone}/instances/vm1"),
+                ),
+                request_line(
+                    "POST",
+                    format_args!("/projects/test-project/zones/{zone}/instances"),
+                ),
+                request_line(
+                    "GET",
+                    format_args!("/projects/test-project/zones/{zone}/operations/operation-1"),
+                ),
+                request_line(
+                    "GET",
+                    format_args!("/projects/test-project/zones/{zone}/instances/vm1"),
+                ),
+            ],
+        );
         server.stop();
     }
 
@@ -1223,8 +1378,11 @@ mod tests {
     async fn probe_miss_falls_through_to_the_next_zone() {
         let _guard = stockout::test_lock().await;
         let (_dir, store) = store();
+        let zones = candidate_zones("n1-standard-4");
+        let [first_zone, second_zone, ..] = zones.as_slice() else {
+            panic!("zone rotation needs at least two zones");
+        };
         let server = mock_http(vec![
-            http_response(404, "Not Found", r#"{"error": {"code": 404}}"#),
             http_response(404, "Not Found", r#"{"error": {"code": 404}}"#),
             http_response(200, "OK", PENDING),
             http_response(
@@ -1252,7 +1410,44 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(result.as_deref(), Some("vm1@us-central1-a"));
+        assert_eq!(result, Some(format!("vm1@{second_zone}")));
+        assert_request_lines(
+            &server,
+            &[
+                request_line(
+                    "DELETE",
+                    format_args!("/projects/test-project/zones/{first_zone}/instances/vm1"),
+                ),
+                request_line(
+                    "POST",
+                    format_args!("/projects/test-project/zones/{first_zone}/instances"),
+                ),
+                request_line(
+                    "GET",
+                    format_args!(
+                        "/projects/test-project/zones/{first_zone}/operations/operation-1"
+                    ),
+                ),
+                request_line(
+                    "GET",
+                    format_args!("/projects/test-project/zones/{first_zone}/instances/vm1"),
+                ),
+                request_line(
+                    "DELETE",
+                    format_args!("/projects/test-project/zones/{second_zone}/instances/vm1"),
+                ),
+                request_line(
+                    "POST",
+                    format_args!("/projects/test-project/zones/{second_zone}/instances"),
+                ),
+                request_line(
+                    "GET",
+                    format_args!(
+                        "/projects/test-project/zones/{second_zone}/operations/operation-2"
+                    ),
+                ),
+            ],
+        );
         server.stop();
     }
 
@@ -1260,14 +1455,13 @@ mod tests {
     async fn all_zones_unavailable_returns_none() {
         let _guard = stockout::test_lock().await;
         let (_dir, store) = store();
-        // Stockout-cache every rotation zone: no zone is even attempted, so
-        // the only HTTP call is the image-family lookup. Capacity
-        // exhaustion is Ok(None), not an error.
+        // Stockout-cache every candidate zone. Capacity exhaustion is
+        // Ok(None), and no GCE request is made.
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs_f64();
-        let map: BTreeMap<String, f64> = config::zone_rotation()
+        let map: BTreeMap<String, f64> = candidate_zones("n1-standard-4")
             .iter()
             .map(|z| (z.clone(), now))
             .collect();
@@ -1278,10 +1472,12 @@ mod tests {
             )
             .await
             .unwrap();
+        // Keep one sentinel response queued: an unexpected request is
+        // recorded and therefore fails the empty-request assertion below.
         let server = mock_http(vec![http_response(
-            404,
-            "Not Found",
-            r#"{"error": {"code": 404}}"#,
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+            "Internal Server Error",
+            r#"{"error": {"message": "unexpected request"}}"#,
         )])
         .await;
         let provider = provider_for(&server, &store);
@@ -1299,14 +1495,18 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result, None);
-        assert_eq!(request_bodies(&server).len(), 1);
+        assert!(request_bodies(&server).is_empty());
         server.stop();
     }
 
     #[tokio::test]
-    async fn family_lookup_failure_is_an_error_not_capacity_exhaustion() {
+    async fn stale_instance_delete_failure_is_an_error_not_capacity_exhaustion() {
         let _guard = stockout::test_lock().await;
         let (_dir, store) = store();
+        let zone = candidate_zones("n1-standard-4")
+            .into_iter()
+            .next()
+            .expect("zone rotation is non-empty");
         let server = mock_http(vec![http_response(
             500,
             "Internal Server Error",
@@ -1328,6 +1528,13 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("HTTP 500"), "{err}");
+        assert_request_lines(
+            &server,
+            &[request_line(
+                "DELETE",
+                format_args!("/projects/test-project/zones/{zone}/instances/vm1"),
+            )],
+        );
         server.stop();
     }
 

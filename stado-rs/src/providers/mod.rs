@@ -20,6 +20,7 @@ pub mod vast;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use crate::capabilities::{ComputeAdapter, RuntimeAdapter, RuntimeFacet};
 use async_trait::async_trait;
 
 pub use r#box::BoxProvider;
@@ -115,6 +116,20 @@ pub trait Provider: Send + Sync {
     /// Delete instance by ref. NotFound is an idempotent success.
     async fn delete_instance(&self, instance_ref: &str) -> Result<(), ProviderError>;
 
+    /// Stop an existing instance while preserving its disks and identity.
+    async fn stop_instance(&self, _instance_ref: &str) -> Result<(), ProviderError> {
+        Err(ProviderError::NotImplemented(
+            "provider does not support stopping instances".to_string(),
+        ))
+    }
+
+    /// Start a previously stopped instance.
+    async fn start_instance(&self, _instance_ref: &str) -> Result<(), ProviderError> {
+        Err(ProviderError::NotImplemented(
+            "provider does not support starting instances".to_string(),
+        ))
+    }
+
     /// Check if instance is alive (RUNNING/STAGING/PROVISIONING).
     ///
     /// Returns false for TERMINATED, STOPPED, or missing instances. Use
@@ -152,19 +167,21 @@ pub trait Provider: Send + Sync {
 /// clients resolve on the first API call, so the factory itself stays
 /// cheap and infallible (see the gcp/aws/azure module docs).
 pub fn get_provider(name: &str) -> Result<Arc<dyn Provider>, ProviderError> {
-    let variant = crate::capabilities::constructible_variant(
-        crate::capabilities::CapabilityKind::Compute,
-        name,
-    )
-    .ok_or_else(|| ProviderError::Value(format!("Unknown provider: {name}")))?;
-    match variant.id {
-        "box" => Ok(Arc::new(BoxProvider::from_env()?)),
+    let variant = crate::capabilities::constructible_variant(RuntimeFacet::Compute, name)
+        .ok_or_else(|| ProviderError::Value(format!("Unknown provider: {name}")))?;
+    match variant.adapter {
+        RuntimeAdapter::Compute(ComputeAdapter::Box) => Ok(Arc::new(BoxProvider::from_env()?)),
         // Lazy: credentials + storage resolve on the first API call, so the
         // factory itself stays cheap and infallible (see gcp module docs).
-        "gcp" => Ok(Arc::new(gcp::GcpProvider::from_env())),
-        "aws" => Ok(Arc::new(aws::AwsProvider::from_env())),
-        "azure" => Ok(Arc::new(azure::AzureProvider::from_env())),
-        other => Err(ProviderError::Value(format!("Unknown provider: {other}"))),
+        RuntimeAdapter::Compute(ComputeAdapter::Gcp) => Ok(Arc::new(gcp::GcpProvider::from_env())),
+        RuntimeAdapter::Compute(ComputeAdapter::Aws) => Ok(Arc::new(aws::AwsProvider::from_env())),
+        RuntimeAdapter::Compute(ComputeAdapter::Azure) => {
+            Ok(Arc::new(azure::AzureProvider::from_env()))
+        }
+        _ => Err(ProviderError::Value(format!(
+            "Provider {} has no constructible compute adapter",
+            variant.id
+        ))),
     }
 }
 

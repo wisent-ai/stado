@@ -231,6 +231,36 @@ impl ArmClient {
             .map_err(|err| AzureError::Api(format!("Azure {desc} -> invalid JSON: {err}")))
     }
 
+    /// POST one JSON request and decode the JSON response. Resource Graph,
+    /// Cost Management, and Monitor use POST query endpoints even for
+    /// read-only operations; exposing the typed transport keeps their
+    /// authentication path identical to VM lifecycle calls.
+    pub async fn post_json(
+        &self,
+        path: &str,
+        body: &Value,
+        desc: &str,
+    ) -> Result<Value, AzureError> {
+        let response = self.send(reqwest::Method::POST, path, Some(body)).await?;
+        if !response.status().is_success() {
+            return Err(Self::api_error(response, desc).await);
+        }
+        let text = response.text().await.unwrap_or_default();
+        serde_json::from_str(&text)
+            .map_err(|err| AzureError::Api(format!("Azure {desc} -> invalid JSON: {err}")))
+    }
+
+    /// POST a lifecycle action whose successful ARM response may have an
+    /// empty body (for example VM start/deallocate).
+    pub async fn post_action(&self, path: &str, desc: &str) -> Result<(), AzureError> {
+        let body = json!({});
+        let response = self.send(reqwest::Method::POST, path, Some(&body)).await?;
+        if !response.status().is_success() {
+            return Err(Self::api_error(response, desc).await);
+        }
+        Ok(())
+    }
+
     /// GET that maps 404 to `None` (Python's `except ResourceNotFoundError`).
     pub async fn get_allow_404(&self, path: &str, desc: &str) -> Result<Option<Value>, AzureError> {
         let response = self.send(reqwest::Method::GET, path, None).await?;
@@ -263,11 +293,7 @@ impl ArmClient {
     /// DELETE a resource and wait for Azure's operation to finish. Protected
     /// extension deletion uses this stronger form so decrypted handler
     /// settings are removed before dispatch is reported successful.
-    async fn delete_lro_allow_404(
-        &self,
-        path: &str,
-        desc: &str,
-    ) -> Result<bool, AzureError> {
+    async fn delete_lro_allow_404(&self, path: &str, desc: &str) -> Result<bool, AzureError> {
         let response = self.send(reqwest::Method::DELETE, path, None).await?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(false);
@@ -965,6 +991,42 @@ impl Provider for AzureProvider {
         // idempotent success, and failures are best-effort log-only
         // inside delete_nic (Python network.py swallows all exceptions).
         network::delete_nic(&state.client, rg, name).await;
+        Ok(())
+    }
+
+    async fn stop_instance(&self, instance_ref: &str) -> Result<(), ProviderError> {
+        let state = self.state().await?;
+        let name = Self::parse_ref(instance_ref)?;
+        let path = format!(
+            "{}/deallocate?api-version={COMPUTE_API_VERSION}",
+            vm_path(
+                state.client.subscription(),
+                config::azure_resource_group(),
+                name,
+            )
+        );
+        state
+            .client
+            .post_action(&path, &format!("deallocate VM {name}"))
+            .await?;
+        Ok(())
+    }
+
+    async fn start_instance(&self, instance_ref: &str) -> Result<(), ProviderError> {
+        let state = self.state().await?;
+        let name = Self::parse_ref(instance_ref)?;
+        let path = format!(
+            "{}/start?api-version={COMPUTE_API_VERSION}",
+            vm_path(
+                state.client.subscription(),
+                config::azure_resource_group(),
+                name,
+            )
+        );
+        state
+            .client
+            .post_action(&path, &format!("start VM {name}"))
+            .await?;
         Ok(())
     }
 

@@ -5,8 +5,8 @@
 //! per-user service that runs `stado agent` (for kind=local targets) or
 //! `stado coordinator` (for runtime=daemon coordinators) so it persists
 //! across reboots without sudo or ssh. Units ExecStart the release
-//! binaries in `~/.stado/bin/` (populated from the release channel,
-//! [`crate::config::release_base_url`], by [`ensure_bins`] when missing)
+//! binaries in `~/.stado/bin/` (populated from the exact immutable release
+//! exposed by the public Stado API, by [`ensure_bins`] when missing)
 //! and the agent unit exports WC_PYTHON so the Rust agent's Python probes
 //! and job payloads use the host's job-environment interpreter.
 //!
@@ -19,6 +19,8 @@
 //! (which is the `kind == "disk-cleanup"` slice of this module — see
 //! `cli/disk_cleanup.rs`).
 
+use std::fs::{self, OpenOptions};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -118,16 +120,14 @@ fn release_platform() -> Result<&'static str, DeployError> {
     }
 }
 
-/// Populate `~/.stado/bin/` from the release channel
-/// ([`crate::config::release_base_url`]) when any service binary is
-/// missing. Every binary is checksum-verified against the release's
-/// SHA256SUMS before anything is installed; a fully populated dir is a
-/// no-op.
+/// Populate `~/.stado/bin/` from the exact release configured by
+/// [`crate::config::stado_release_version`] when any service binary is
+/// missing. Every binary is checksum-verified against that immutable release's
+/// SHA256SUMS before anything is installed; a fully populated dir is a no-op.
 ///
-/// Fetched over plain HTTPS rather than shelled out to `gcloud storage
-/// cp`: the box being provisioned is exactly the box that may have
-/// neither gcloud nor GCP credentials, and gcloud cannot read a release
-/// channel hosted anywhere but GCS.
+/// Objects are fetched through the provider-neutral public Stado release API.
+/// Local install never discovers a cloud CLI, SDK credential, project, bucket,
+/// or mutable channel pointer.
 pub async fn ensure_bins(home: &Path, echo: &mut dyn FnMut(&str)) -> Result<(), DeployError> {
     ensure_bins_with(home, &crate::self_update::HttpReleaseFetcher::new(), echo).await
 }
@@ -138,11 +138,19 @@ pub async fn ensure_bins_with(
     fetcher: &impl crate::self_update::ReleaseFetcher,
     echo: &mut dyn FnMut(&str),
 ) -> Result<(), DeployError> {
+    let version = crate::config::stado_release_version();
+    ensure_bins_at_version_with(home, &version, fetcher, echo).await
+}
+
+async fn ensure_bins_at_version_with(
+    home: &Path,
+    version: &str,
+    fetcher: &impl crate::self_update::ReleaseFetcher,
+    echo: &mut dyn FnMut(&str),
+) -> Result<(), DeployError> {
     use std::os::unix::fs::PermissionsExt;
 
-    use crate::self_update::{
-        parse_latest_json, parse_sha256sums, sha256_hex, LATEST_JSON_NAME, SHA256SUMS_NAME,
-    };
+    use crate::self_update::{parse_sha256sums, sha256_hex, SHA256SUMS_NAME};
     let bin_dir = home.join(".stado").join("bin");
     if LOCAL_BINARIES
         .iter()
@@ -152,20 +160,16 @@ pub async fn ensure_bins_with(
     }
     let platform = release_platform()?;
     std::fs::create_dir_all(&bin_dir).map_err(|exc| DeployError(exc.to_string()))?;
-    let latest = fetcher
-        .fetch(LATEST_JSON_NAME)
-        .await
-        .map_err(|exc| DeployError(format!("release lookup failed: {exc}")))?
-        .ok_or_else(|| {
-            DeployError(format!(
-                "release lookup failed: {LATEST_JSON_NAME} is missing"
-            ))
-        })?;
-    let latest = String::from_utf8(latest)
-        .map_err(|exc| DeployError(format!("release lookup failed: {exc}")))?;
-    let release = parse_latest_json(latest.trim())
-        .ok_or_else(|| DeployError(format!("malformed {LATEST_JSON_NAME}: {}", latest.trim())))?;
-    let prefix = format!("{}/{platform}", release.version);
+    if version.is_empty()
+        || !version
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+    {
+        return Err(DeployError(
+            "STADO_RELEASE_VERSION must be an exact immutable release coordinate".to_string(),
+        ));
+    }
+    let prefix = format!("{version}/{platform}");
     let sums_bytes = fetcher
         .fetch(&format!("{prefix}/{SHA256SUMS_NAME}"))
         .await
@@ -214,7 +218,7 @@ pub async fn ensure_bins_with(
     }
     echo(&format!(
         "[install] downloaded stado {} ({platform}) -> {}",
-        release.version,
+        version,
         bin_dir.display()
     ));
     Ok(())
@@ -225,6 +229,14 @@ pub fn label(kind: &str, name: &str) -> String {
     format!("{LABEL_PREFIX}.{kind}.{name}")
 }
 
+fn local_control_plane_configured() -> bool {
+    crate::capabilities::storage_adapter(crate::config::wc_storage_backend())
+        == Some(crate::capabilities::StorageAdapter::Local)
+        && crate::config::wc_providers()
+            .iter()
+            .all(|provider| crate::capabilities::ProviderId::Local.matches(provider))
+}
+
 /// Python `_exec_args_for(entry, kind)`.
 pub fn exec_args_for(bins: &Bins, kind: &str, _name: &str) -> Result<Vec<String>, DeployError> {
     match kind {
@@ -233,12 +245,7 @@ pub fn exec_args_for(bins: &Bins, kind: &str, _name: &str) -> Result<Vec<String>
             "agent".to_string(),
             "--auto".to_string(),
         ]),
-        "coordinator"
-            if crate::config::wc_storage_backend() == "local"
-                && crate::config::wc_providers()
-                    .iter()
-                    .all(|provider| provider == "local") =>
-        {
+        "coordinator" if local_control_plane_configured() => {
             Ok(vec![bins.stado.clone(), "local-control-plane".to_string()])
         }
         "coordinator" => Ok(vec![
@@ -302,15 +309,6 @@ pub fn default_wc_python() -> String {
     "python3".to_string()
 }
 
-/// Path of the Skarbiec-materialized service-account transport file, if one
-/// exists. GCP managed-identity hosts intentionally have no such file.
-pub fn adc_path(home: &Path) -> String {
-    let path = home.join(".config/gcloud/application_default_credentials.json");
-    path.is_file()
-        .then(|| path.to_string_lossy().into_owned())
-        .unwrap_or_default()
-}
-
 /// Central write-scoped Hugging Face token from
 /// `stado-huggingface/write_token` in Skarbiec. Missing credentials,
 /// authorization and transport failures are explicit; there is no alternate
@@ -330,21 +328,11 @@ pub fn production_hf_fetcher() -> TokenFetcher {
     Arc::new(|| Box::pin(async { fetch_hf_write_token().await.map_err(|exc| exc.0) }))
 }
 
-/// Process-environment inputs to [`build_env`] (Python's `os.environ`
-/// reads), separated so tests never depend on the developer's env.
+/// Explicit inputs used by the provider-neutral unit renderer.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct EnvInputs<'a> {
-    pub adc: &'a str,
-    pub hf_token: &'a str,
     pub wc_python: &'a str,
     pub path: Option<&'a str>,
-    pub google_cloud_project: Option<&'a str>,
-    pub gcp_project: Option<&'a str>,
-    pub wc_bucket: Option<&'a str>,
-}
-
-fn non_empty(value: Option<&str>) -> Option<&str> {
-    value.filter(|v| !v.is_empty())
 }
 
 /// The unit environment, in Python dict insertion order (the plist/unit
@@ -379,7 +367,10 @@ pub fn build_env(kind: &str, inputs: &EnvInputs) -> Vec<(String, String)> {
         skarbiec_token_file.to_string(),
     ));
     if kind == "agent" {
-        env.push(("WC_AGENT_SKARBIEC_URL".to_string(), skarbiec_url.to_string()));
+        env.push((
+            "WC_AGENT_SKARBIEC_URL".to_string(),
+            skarbiec_url.to_string(),
+        ));
         env.push((
             "WC_AGENT_SKARBIEC_CONSUMER".to_string(),
             skarbiec_consumer.to_string(),
@@ -400,12 +391,8 @@ pub fn build_env(kind: &str, inputs: &EnvInputs) -> Vec<(String, String)> {
     // The standalone agent and the outage-safe local control plane both
     // execute Python probes and job payloads. Preserve the operator PATH so
     // child jobs see the same toolchain as an interactive Stado invocation.
-    let runs_local_agent = kind == "agent"
-        || (kind == "coordinator"
-            && crate::config::wc_storage_backend() == "local"
-            && crate::config::wc_providers()
-                .iter()
-                .all(|provider| provider == "local"));
+    let runs_local_agent =
+        kind == "agent" || (kind == "coordinator" && local_control_plane_configured());
     if runs_local_agent {
         if !inputs.wc_python.is_empty() {
             env.push(("WC_PYTHON".to_string(), inputs.wc_python.to_string()));
@@ -415,61 +402,29 @@ pub fn build_env(kind: &str, inputs: &EnvInputs) -> Vec<(String, String)> {
             .unwrap_or("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin");
         env.push(("PATH".to_string(), path.to_string()));
     }
-    if kind == "disk-cleanup" {
-        let project = non_empty(inputs.google_cloud_project)
-            .or(non_empty(inputs.gcp_project))
-            .unwrap_or_else(|| crate::config::project());
-        env.push(("GOOGLE_CLOUD_PROJECT".to_string(), project.to_string()));
-    }
-    // Failure-fixer receives its Anthropic credential directly from Skarbiec
-    // when spawning Claude. PATH locates the executable; project and bucket
-    // values are non-secret routing configuration used by maintenance jobs.
+    // Failure-fixer and watchdog resolve credentials and backend routing
+    // through Stado config and Skarbiec. Only PATH is inherited here.
     if kind == "failure-fixer" || kind == "watchdog" {
         let path = inputs
             .path
             .unwrap_or("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin");
         env.push(("PATH".to_string(), path.to_string()));
-        if let Some(v) = non_empty(inputs.google_cloud_project) {
-            env.push(("GOOGLE_CLOUD_PROJECT".to_string(), v.to_string()));
-        }
-        if let Some(v) = non_empty(inputs.gcp_project) {
-            env.push(("GCP_PROJECT".to_string(), v.to_string()));
-        }
-        let bucket = non_empty(inputs.wc_bucket).unwrap_or("wisent-compute");
-        env.push(("WC_BUCKET".to_string(), bucket.to_string()));
     }
     env
 }
 
-/// [`build_env`] with inputs probed from the process environment and the
-/// filesystem (Python's direct `os.environ` / `Path.home()` reads).
-///
-/// Skarbiec routing metadata is included in every installed service.
-/// `adc` remains an input only for renderer compatibility and is never
-/// exported as a credential source.
+/// [`build_env`] with the provider-neutral process inputs used by installed
+/// services. Backend routing comes only from `STADO_CONFIG`.
 pub fn install_env(
-    home: &Path,
+    _home: &Path,
     kind: &str,
-    hf_token: &str,
+    _hf_token: &str,
     wc_python: &str,
 ) -> Vec<(String, String)> {
-    let adc = if crate::config::wc_storage_backend() == "gcs" {
-        adc_path(home)
-    } else {
-        String::new()
-    };
     let path = std::env::var("PATH").ok();
-    let google_cloud_project = std::env::var("GOOGLE_CLOUD_PROJECT").ok();
-    let gcp_project = std::env::var("GCP_PROJECT").ok();
-    let wc_bucket = std::env::var("WC_BUCKET").ok();
     let inputs = EnvInputs {
-        adc: &adc,
-        hf_token,
         wc_python,
         path: path.as_deref(),
-        google_cloud_project: google_cloud_project.as_deref(),
-        gcp_project: gcp_project.as_deref(),
-        wc_bucket: wc_bucket.as_deref(),
     };
     let mut env = build_env(kind, &inputs);
     if let Ok(Some(path)) = crate::config_file::config_path() {
@@ -485,9 +440,13 @@ pub fn install_env(
     env
 }
 
-/// Python `_plist_text` (raw interpolation, exactly like the Python — no
-/// XML escaping, same as the source).
-pub fn plist_text(label: &str, exec_args: &[String], env: &[(String, String)]) -> String {
+/// Render a launchd plist with an explicit owner-controlled log path.
+pub fn plist_text(
+    label: &str,
+    exec_args: &[String],
+    env: &[(String, String)],
+    log: &Path,
+) -> String {
     let args_xml: String = exec_args
         .iter()
         .map(|a| format!("        <string>{a}</string>\n"))
@@ -497,7 +456,7 @@ pub fn plist_text(label: &str, exec_args: &[String], env: &[(String, String)]) -
         .filter(|(_, v)| !v.is_empty())
         .map(|(k, v)| format!("        <key>{k}</key>\n        <string>{v}</string>\n"))
         .collect();
-    let log = format!("/tmp/{label}.log");
+    let log = log.to_string_lossy();
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -577,10 +536,18 @@ impl InstallPlan {
         }
     }
 
-    /// The file content to install (byte-exact with the Python renderers).
-    pub fn content(&self) -> String {
+    /// The plist (Darwin) or unit (Linux) content for an account home.
+    pub fn content(&self, home: &Path) -> String {
         match self.os {
-            LocalOs::Darwin => plist_text(&self.label, &self.exec_args, &self.env),
+            LocalOs::Darwin => plist_text(
+                &self.label,
+                &self.exec_args,
+                &self.env,
+                &home
+                    .join(".stado")
+                    .join("logs")
+                    .join(format!("{}.log", self.label)),
+            ),
             LocalOs::Linux => systemd_user_unit(&self.description(), &self.exec_args, &self.env),
         }
     }
@@ -666,6 +633,48 @@ pub fn current_uid() -> u32 {
     // SAFETY: getuid cannot fail.
     unsafe { nix::libc::getuid() }
 }
+fn prepare_owner_log(home: &Path, label: &str) -> Result<PathBuf, DeployError> {
+    let directory = home.join(".stado").join("logs");
+    match fs::symlink_metadata(&directory) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err(DeployError(format!(
+                "refusing non-directory agent log path {}",
+                directory.display()
+            )));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir_all(&directory).map_err(|error| DeployError(error.to_string()))?;
+        }
+        Err(error) => return Err(DeployError(error.to_string())),
+    }
+    let directory_mode = nix::libc::S_IRWXU as u32;
+    fs::set_permissions(&directory, fs::Permissions::from_mode(directory_mode))
+        .map_err(|error| DeployError(error.to_string()))?;
+
+    let log = directory.join(format!("{label}.log"));
+    match fs::symlink_metadata(&log) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            return Err(DeployError(format!(
+                "refusing non-file agent log path {}",
+                log.display()
+            )));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(DeployError(error.to_string())),
+    }
+    let file_mode = (nix::libc::S_IRUSR | nix::libc::S_IWUSR) as u32;
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(file_mode)
+        .open(&log)
+        .map_err(|error| DeployError(error.to_string()))?;
+    fs::set_permissions(&log, fs::Permissions::from_mode(file_mode))
+        .map_err(|error| DeployError(error.to_string()))?;
+    Ok(log)
+}
 
 /// Persistent headless-mac fallback when launchctl refuses bootstrap from
 /// an SSH audit session. Cron starts the same generated environment on boot,
@@ -680,7 +689,7 @@ async fn install_cron_fallback(
         .join(".stado")
         .join("bin")
         .join(format!("run-{}.sh", plan.label));
-    let log = format!("/tmp/{}.log", plan.label);
+    let log = prepare_owner_log(home, &plan.label)?;
     let mut content = String::from("#!/bin/sh\n");
     for (key, value) in &plan.env {
         if !value.is_empty() {
@@ -698,7 +707,7 @@ async fn install_cron_fallback(
     let wrapper_arg = shlex_quote(&wrapper.to_string_lossy());
     let cron_line = format!(
         "@reboot /bin/sh {wrapper_arg} >> {} 2>&1",
-        shlex_quote(&log)
+        shlex_quote(&log.to_string_lossy())
     );
     let cron_script = format!(
         "{{ crontab -l 2>/dev/null | grep -Fv -- {wrapper_arg} || true; printf '%s\\n' {}; }} | crontab -",
@@ -722,7 +731,7 @@ async fn install_cron_fallback(
         "-c".to_string(),
         format!(
             "nohup /bin/sh {wrapper_arg} >> {} 2>&1 </dev/null &",
-            shlex_quote(&log)
+            shlex_quote(&log.to_string_lossy())
         ),
     ]))
     .await
@@ -734,8 +743,9 @@ async fn install_cron_fallback(
         )));
     }
     echo(&format!(
-        "[ok]   installed headless cron job {} (logs: {log})",
-        plan.label
+        "[ok]   installed headless cron job {} (logs: {})",
+        plan.label,
+        log.display()
     ));
     Ok(())
 }
@@ -753,8 +763,13 @@ pub async fn execute_plan(
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|exc| DeployError(exc.to_string()))?;
     }
+    let log = if plan.os == LocalOs::Darwin {
+        Some(prepare_owner_log(home, &plan.label)?)
+    } else {
+        None
+    };
     let written =
-        write_if_changed(&path, &plan.content()).map_err(|exc| DeployError(exc.to_string()))?;
+        write_if_changed(&path, &plan.content(home)).map_err(|exc| DeployError(exc.to_string()))?;
     let verb = if written { "wrote" } else { "unchanged" };
     match plan.os {
         LocalOs::Darwin => {
@@ -844,9 +859,13 @@ pub async fn execute_plan(
                     .map_err(DeployError)?;
                 }
             }
+            let Some(log) = log.as_ref() else {
+                return Err(DeployError("launchd log path was not prepared".to_string()));
+            };
             echo(&format!(
-                "[ok]   loaded launchd job {} (logs: /tmp/{}.log)",
-                plan.label, plan.label
+                "[ok]   loaded launchd job {} (logs: {})",
+                plan.label,
+                log.display()
             ));
         }
         LocalOs::Linux => {
@@ -907,14 +926,18 @@ mod tests {
 
     fn fake_runner(outputs: Vec<CommandOutput>) -> (Runner, Arc<Mutex<Vec<CommandSpec>>>) {
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let queue = Arc::new(Mutex::new(outputs));
+        let queue = Arc::new(Mutex::new(std::collections::VecDeque::from(outputs)));
         let calls2 = Arc::clone(&calls);
         let runner = super::super::runner_fn(move |spec| {
             let calls = Arc::clone(&calls2);
             let queue = Arc::clone(&queue);
             async move {
                 calls.lock().unwrap().push(spec);
-                Ok(queue.lock().unwrap().remove(0))
+                queue
+                    .lock()
+                    .map_err(|_| "fake runner output queue poisoned".to_string())?
+                    .pop_front()
+                    .ok_or_else(|| "fake runner output queue exhausted".to_string())
             }
         });
         (runner, calls)
@@ -949,12 +972,7 @@ mod tests {
         );
         assert_eq!(
             exec_args_for(&bins, "coordinator", "main").unwrap(),
-            vec![
-                "/Users/u/.stado/bin/stado",
-                "coordinator",
-                "--target",
-                "main"
-            ]
+            vec!["/Users/u/.stado/bin/stado", "local-control-plane"]
         );
         assert_eq!(
             exec_args_for(&bins, "disk-cleanup", "disk-cleanup").unwrap(),
@@ -986,76 +1004,108 @@ mod tests {
     }
 
     #[test]
-    fn build_env_agent_order_and_hf_token() {
+    fn build_env_agent_is_skarbiec_scoped_without_ambient_secrets() {
         let env = build_env(
             "agent",
             &EnvInputs {
-                adc: "/home/u/adc.json",
-                hf_token: "hf_secret",
                 wc_python: FRAMEWORK_PYTHON,
-                ..Default::default()
+                path: Some("/opt/homebrew/bin:/usr/bin"),
             },
         );
+        let agent_url = crate::config::agent_skarbiec_url();
+        let skarbiec_url = if agent_url.is_empty() {
+            crate::config::skarbiec_url()
+        } else {
+            agent_url
+        };
+        let token_file = crate::config::agent_skarbiec_token_file();
         assert_eq!(
             env,
             vec![
                 ("PYTHONUNBUFFERED".to_string(), "1".to_string()),
+                ("WC_SKARBIEC_URL".to_string(), skarbiec_url.to_string()),
                 (
-                    "GOOGLE_APPLICATION_CREDENTIALS".to_string(),
-                    "/home/u/adc.json".to_string()
+                    "WC_SKARBIEC_CONSUMER".to_string(),
+                    "stado-local-agent".to_string()
+                ),
+                ("WC_SKARBIEC_TOKEN_FILE".to_string(), token_file.to_string()),
+                (
+                    "WC_AGENT_SKARBIEC_URL".to_string(),
+                    skarbiec_url.to_string()
+                ),
+                (
+                    "WC_AGENT_SKARBIEC_CONSUMER".to_string(),
+                    "stado-local-agent".to_string()
+                ),
+                (
+                    "WC_AGENT_SKARBIEC_TOKEN_FILE".to_string(),
+                    token_file.to_string()
+                ),
+                (
+                    "WC_AGENT_SKARBIEC_ITEMS".to_string(),
+                    crate::config::agent_skarbiec_items().join(",")
+                ),
+                (
+                    "WC_AGENT_SKARBIEC_SECRET_FIELDS".to_string(),
+                    crate::config::agent_skarbiec_secret_fields().join(",")
                 ),
                 ("WC_PYTHON".to_string(), FRAMEWORK_PYTHON.to_string()),
-                ("HF_TOKEN".to_string(), "hf_secret".to_string()),
-                (
-                    "HUGGING_FACE_HUB_TOKEN".to_string(),
-                    "hf_secret".to_string()
-                ),
+                ("PATH".to_string(), "/opt/homebrew/bin:/usr/bin".to_string()),
             ]
         );
-        // Missing token (blob absent) leaves no HF keys at all.
-        let env = build_env("agent", &EnvInputs::default());
-        assert_eq!(env, vec![("PYTHONUNBUFFERED".to_string(), "1".to_string())]);
-        // Non-agent kinds never carry WC_PYTHON, even when resolved.
-        let env = build_env(
-            "coordinator",
-            &EnvInputs {
-                wc_python: FRAMEWORK_PYTHON,
-                ..Default::default()
-            },
+        assert!(
+            token_file.ends_with("/.stado/local-agent-skarbiec-token"),
+            "{token_file}"
         );
-        assert!(!env.iter().any(|(k, _)| k == "WC_PYTHON"));
+        for forbidden in [
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "HF_TOKEN",
+            "HUGGING_FACE_HUB_TOKEN",
+        ] {
+            assert!(!env.iter().any(|(key, _)| key == forbidden), "{forbidden}");
+        }
     }
 
     #[test]
-    fn build_env_disk_cleanup_never_carries_hf_token() {
-        let env = build_env(
-            "disk-cleanup",
-            &EnvInputs {
-                hf_token: "hf_secret",
-                google_cloud_project: Some("proj"),
-                ..Default::default()
-            },
-        );
+    fn build_env_disk_cleanup_is_control_plane_scoped() {
+        let env = build_env("disk-cleanup", &EnvInputs::default());
+        let token_file = crate::config::skarbiec_token_file();
         assert_eq!(
             env,
             vec![
                 ("PYTHONUNBUFFERED".to_string(), "1".to_string()),
-                ("GOOGLE_CLOUD_PROJECT".to_string(), "proj".to_string()),
+                (
+                    "WC_SKARBIEC_URL".to_string(),
+                    crate::config::skarbiec_url().to_string()
+                ),
+                (
+                    "WC_SKARBIEC_CONSUMER".to_string(),
+                    "stado-control-plane".to_string()
+                ),
+                ("WC_SKARBIEC_TOKEN_FILE".to_string(), token_file.to_string()),
             ]
         );
-        assert!(!env.iter().any(|(k, _)| k.contains("HF")));
+        assert!(
+            token_file.ends_with("/.stado/control-plane-skarbiec-token"),
+            "{token_file}"
+        );
+        for forbidden in [
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "GOOGLE_CLOUD_PROJECT",
+            "GCP_PROJECT",
+            "HF_TOKEN",
+            "HUGGING_FACE_HUB_TOKEN",
+        ] {
+            assert!(!env.iter().any(|(key, _)| key == forbidden), "{forbidden}");
+        }
     }
 
     #[test]
-    fn build_env_failure_fixer_forwards_path_and_bucket() {
+    fn build_env_failure_fixer_forwards_only_path_beside_skarbiec_scope() {
         let env = build_env(
             "failure-fixer",
             &EnvInputs {
-                hf_token: "hf_secret",
                 path: Some("/opt/homebrew/bin:/usr/bin"),
-                google_cloud_project: Some("proj"),
-                gcp_project: None,
-                wc_bucket: None,
                 ..Default::default()
             },
         );
@@ -1063,28 +1113,51 @@ mod tests {
             env,
             vec![
                 ("PYTHONUNBUFFERED".to_string(), "1".to_string()),
-                ("HF_TOKEN".to_string(), "hf_secret".to_string()),
                 (
-                    "HUGGING_FACE_HUB_TOKEN".to_string(),
-                    "hf_secret".to_string()
+                    "WC_SKARBIEC_URL".to_string(),
+                    crate::config::skarbiec_url().to_string()
+                ),
+                (
+                    "WC_SKARBIEC_CONSUMER".to_string(),
+                    "stado-control-plane".to_string()
+                ),
+                (
+                    "WC_SKARBIEC_TOKEN_FILE".to_string(),
+                    crate::config::skarbiec_token_file().to_string()
                 ),
                 ("PATH".to_string(), "/opt/homebrew/bin:/usr/bin".to_string()),
-                ("GOOGLE_CLOUD_PROJECT".to_string(), "proj".to_string()),
-                ("WC_BUCKET".to_string(), "wisent-compute".to_string()),
             ]
         );
+        for forbidden in [
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "GOOGLE_CLOUD_PROJECT",
+            "GCP_PROJECT",
+            "WC_BUCKET",
+            "HF_TOKEN",
+            "HUGGING_FACE_HUB_TOKEN",
+        ] {
+            assert!(!env.iter().any(|(key, _)| key == forbidden), "{forbidden}");
+        }
     }
 
     #[test]
     fn renderings_match_goldens() {
         let env = vec![
             ("PYTHONUNBUFFERED".to_string(), "1".to_string()),
-            ("WC_PYTHON".to_string(), FRAMEWORK_PYTHON.to_string()),
-            ("HF_TOKEN".to_string(), "hf_secret".to_string()),
             (
-                "HUGGING_FACE_HUB_TOKEN".to_string(),
-                "hf_secret".to_string(),
+                "WC_SKARBIEC_URL".to_string(),
+                "https://skarbiec.invalid".to_string(),
             ),
+            (
+                "WC_SKARBIEC_CONSUMER".to_string(),
+                "stado-local-agent".to_string(),
+            ),
+            (
+                "WC_SKARBIEC_TOKEN_FILE".to_string(),
+                "/Users/u/.stado/local-agent-skarbiec-token".to_string(),
+            ),
+            ("WC_PYTHON".to_string(), "/usr/bin/python".to_string()),
+            ("PATH".to_string(), "/usr/bin:/bin".to_string()),
         ];
         let args = vec![
             "/Users/u/.stado/bin/stado".to_string(),
@@ -1092,7 +1165,12 @@ mod tests {
             "--auto".to_string(),
         ];
         assert_eq!(
-            plist_text("com.wisent.compute.agent.mini-one", &args, &env),
+            plist_text(
+                "com.wisent.compute.agent.mini-one",
+                &args,
+                &env,
+                Path::new("/Users/u/.stado/logs/com.wisent.compute.agent.mini-one.log"),
+            ),
             include_str!("testdata/local_install_agent.plist")
         );
         assert_eq!(
@@ -1115,8 +1193,15 @@ mod tests {
             ],
             env: vec![
                 ("PYTHONUNBUFFERED".to_string(), "1".to_string()),
+                (
+                    "WC_SKARBIEC_CONSUMER".to_string(),
+                    "stado-local-agent".to_string(),
+                ),
+                (
+                    "WC_SKARBIEC_TOKEN_FILE".to_string(),
+                    "/Users/u/.stado/local-agent-skarbiec-token".to_string(),
+                ),
                 ("WC_PYTHON".to_string(), FRAMEWORK_PYTHON.to_string()),
-                ("HF_TOKEN".to_string(), "hf_secret".to_string()),
             ],
         };
         assert_eq!(
@@ -1125,7 +1210,7 @@ mod tests {
                 "[dry-run] agent=mini-one on Darwin".to_string(),
                 "  exec: /Users/u/.stado/bin/stado agent --auto".to_string(),
                 format!(
-                    "  env:  {{'PYTHONUNBUFFERED': '1', 'WC_PYTHON': '{FRAMEWORK_PYTHON}', 'HF_TOKEN': 'hf_secret'}}"
+                    "  env:  {{'PYTHONUNBUFFERED': '1', 'WC_SKARBIEC_CONSUMER': 'stado-local-agent', 'WC_SKARBIEC_TOKEN_FILE': '/Users/u/.stado/local-agent-skarbiec-token', 'WC_PYTHON': '{FRAMEWORK_PYTHON}'}}"
                 ),
             ]
         );
@@ -1209,7 +1294,10 @@ mod tests {
         .await
         .unwrap();
         let plist = plan.unit_path(home.path());
-        assert_eq!(std::fs::read_to_string(&plist).unwrap(), plan.content());
+        assert_eq!(
+            std::fs::read_to_string(&plist).unwrap(),
+            plan.content(home.path())
+        );
         let calls = calls.lock().unwrap();
         assert_eq!(calls.len(), 4); // bootout, bootstrap(fail), bootstrap(ok), kickstart
         assert_eq!(calls[1], calls[2]);
@@ -1218,7 +1306,14 @@ mod tests {
             lines,
             vec![
                 format!("[plist] wrote {}", plist.display()),
-                "[ok]   loaded launchd job com.wisent.compute.agent.mini-one (logs: /tmp/com.wisent.compute.agent.mini-one.log)".to_string(),
+                format!(
+                    "[ok]   loaded launchd job com.wisent.compute.agent.mini-one (logs: {})",
+                    home.path()
+                        .join(".stado")
+                        .join("logs")
+                        .join("com.wisent.compute.agent.mini-one.log")
+                        .display()
+                ),
             ]
         );
     }
@@ -1248,9 +1343,18 @@ mod tests {
     #[tokio::test]
     async fn execute_darwin_bootstrap_failure_is_click_style_error() {
         let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(".stado").join("bin")).unwrap();
         let plan = darwin_plan();
         let mut outputs = vec![out(0, "", "")];
         outputs.extend(std::iter::repeat_n(out(37, "", "Boot-out failed"), 5));
+        let failure = outputs.last().cloned().expect("bootstrap failure fixture");
+        outputs.extend([
+            out(i32::default(), "", ""),
+            failure.clone(),
+            failure.clone(),
+            failure,
+        ]);
+        let expected_calls = outputs.len();
         let (runner, calls) = fake_runner(outputs);
         let mut lines: Vec<String> = Vec::new();
         let err = execute_plan(&plan, home.path(), 501, &runner, &mut |l| {
@@ -1258,8 +1362,8 @@ mod tests {
         })
         .await
         .unwrap_err();
-        assert_eq!(err.0, "launchctl bootstrap failed: Boot-out failed");
-        assert_eq!(calls.lock().unwrap().len(), 6); // bootout + 5 attempts
+        assert_eq!(err.0, "crontab install failed: Boot-out failed");
+        assert_eq!(calls.lock().unwrap().len(), expected_calls);
     }
 
     #[tokio::test]
@@ -1283,12 +1387,11 @@ mod tests {
         );
     }
 
-    /// Offline release channel: `latest.json`, a SHA256SUMS over
-    /// `binaries`, and every binary under `<version>/<platform>/`.
+    /// Offline immutable release: a SHA256SUMS over `binaries`, and every
+    /// binary under `<version>/<platform>/`.
     struct ReleaseFixture {
         objects: std::collections::HashMap<String, Vec<u8>>,
-        /// When set, every fetch is a transport failure instead of a
-        /// lookup — the unreachable-channel case.
+        /// When set, every fetch is a transport failure.
         error: Option<String>,
     }
 
@@ -1311,12 +1414,8 @@ mod tests {
         binaries: &[(&str, &[u8])],
         tamper: Option<&str>,
     ) -> ReleaseFixture {
-        use crate::self_update::{sha256_hex, LATEST_JSON_NAME, SHA256SUMS_NAME};
+        use crate::self_update::{sha256_hex, SHA256SUMS_NAME};
         let mut objects = std::collections::HashMap::new();
-        objects.insert(
-            LATEST_JSON_NAME.to_string(),
-            format!(r#"{{"version": "{version}", "channel": "stable"}}"#).into_bytes(),
-        );
         let sums = binaries
             .iter()
             .map(|(name, bytes)| format!("{}  {}", sha256_hex(bytes), name))
@@ -1353,9 +1452,11 @@ mod tests {
             None,
         );
         let mut lines: Vec<String> = Vec::new();
-        ensure_bins_with(home.path(), &fetcher, &mut |l| lines.push(l.to_string()))
-            .await
-            .unwrap();
+        ensure_bins_at_version_with(home.path(), "9.9.9", &fetcher, &mut |l| {
+            lines.push(l.to_string())
+        })
+        .await
+        .unwrap();
         let bin_dir = home.path().join(".stado").join("bin");
         assert_eq!(std::fs::read(bin_dir.join("stado")).unwrap(), b"new-stado");
         assert_eq!(
@@ -1382,16 +1483,18 @@ mod tests {
                 bin_dir.display()
             )]
         );
-        // Fully populated: an empty channel proves no-op — any fetch
-        // would miss and fail the install.
+        // Fully populated: an empty release fixture proves no-op — any
+        // fetch would miss and fail the install.
         let fetcher = ReleaseFixture {
             objects: std::collections::HashMap::new(),
             error: None,
         };
         let mut lines: Vec<String> = Vec::new();
-        ensure_bins_with(home.path(), &fetcher, &mut |l| lines.push(l.to_string()))
-            .await
-            .unwrap();
+        ensure_bins_at_version_with(home.path(), "9.9.9", &fetcher, &mut |l| {
+            lines.push(l.to_string())
+        })
+        .await
+        .unwrap();
         assert!(lines.is_empty());
     }
 
@@ -1412,9 +1515,11 @@ mod tests {
             Some("stado-fix"),
         );
         let mut lines: Vec<String> = Vec::new();
-        let err = ensure_bins_with(home.path(), &fetcher, &mut |l| lines.push(l.to_string()))
-            .await
-            .unwrap_err();
+        let err = ensure_bins_at_version_with(home.path(), "9.9.9", &fetcher, &mut |l| {
+            lines.push(l.to_string())
+        })
+        .await
+        .unwrap_err();
         assert!(err.0.starts_with("sha256 mismatch for stado-fix"), "{err}");
         assert!(!home
             .path()
@@ -1425,17 +1530,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ensure_bins_release_lookup_failure_is_error() {
+    async fn ensure_bins_immutable_release_download_failure_is_error() {
         let home = tempfile::tempdir().unwrap();
         let fetcher = ReleaseFixture {
             objects: std::collections::HashMap::new(),
-            error: Some("channel unreachable".to_string()),
+            error: Some("release unavailable".to_string()),
         };
         let mut lines: Vec<String> = Vec::new();
-        let err = ensure_bins_with(home.path(), &fetcher, &mut |l| lines.push(l.to_string()))
-            .await
-            .unwrap_err();
-        assert!(err.0.starts_with("release lookup failed:"), "{err}");
-        assert!(err.0.contains("channel unreachable"), "{err}");
+        let err = ensure_bins_at_version_with(home.path(), "9.9.9", &fetcher, &mut |l| {
+            lines.push(l.to_string())
+        })
+        .await
+        .unwrap_err();
+        assert!(
+            err.0.starts_with("release download failed for SHA256SUMS:"),
+            "{err}"
+        );
+        assert!(err.0.contains("release unavailable"), "{err}");
     }
 }

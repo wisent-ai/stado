@@ -7,6 +7,7 @@
   "apt": ["libgl1", "libglib2.0-0", "git-lfs", "build-essential"],
   "pre_command": "TORCH_NVDIR=$(python3 -c \"import os,nvidia; print(os.path.dirname(nvidia.__file__))\"); export LD_LIBRARY_PATH=$(ls -d $TORCH_NVDIR/*/lib 2>/dev/null | paste -sd:):$LD_LIBRARY_PATH",
   "repo": "https://github.com/ostris/ai-toolkit.git",
+  "repo_ref": "b677cdb02666320f1b03c747f5037a41e5a7515e",
   "repo_workdir": "ai-toolkit",
   "repo_extras": ""
 }
