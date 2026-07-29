@@ -30,6 +30,9 @@ pub enum ReleaseCommands {
     /// `.stado-release.json`. The same procedure for every product, so none of it
     /// has to be reimplemented per repository.
     Publish(PublishArgs),
+    /// Generate this product's `.stado-release.json` from what the repository
+    /// already says about itself, so nobody writes release wiring by hand.
+    Init(InitArgs),
 }
 
 #[derive(Args)]
@@ -46,6 +49,18 @@ pub struct PublishArgs {
     /// Resolve and report, building and publishing nothing.
     #[arg(long)]
     dry_run: bool,
+    /// Product root; defaults to the working directory.
+    #[arg(long)]
+    root: Option<PathBuf>,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args)]
+pub struct InitArgs {
+    /// Product prefix in the channel; defaults to the package name.
+    #[arg(long)]
+    product: Option<String>,
     /// Product root; defaults to the working directory.
     #[arg(long)]
     root: Option<PathBuf>,
@@ -91,7 +106,86 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
         ReleaseCommands::Next(args) => next(&args),
         ReleaseCommands::Surface(args) => surface(&args),
         ReleaseCommands::Publish(args) => publish(&args).await,
+        ReleaseCommands::Init(args) => init(&args),
     }
+}
+
+/// Generate the manifest from what the repository already declares.
+///
+/// A product joining the channel should not have to write release logic, and it
+/// should not have to write release wiring either: the facts are already in its
+/// package manifest. Only stacks this can read honestly are generated — inventing
+/// a build command for a stack it does not recognise would produce a manifest that
+/// looks complete and publishes the wrong bytes.
+fn init(args: &InitArgs) -> Result<(), CmdError> {
+    let root = match &args.root {
+        Some(path) => path.clone(),
+        None => std::env::current_dir()?,
+    };
+    let target = root.join(crate::release::manifest::MANIFEST_NAME);
+    if target.exists() {
+        return Err(CmdError::click(format!(
+            "{} already exists; edit it rather than regenerating, so a deliberate \
+             change is never silently replaced",
+            target.display()
+        )));
+    }
+
+    let cargo = root.join("Cargo.toml");
+    if !cargo.is_file() {
+        return Err(CmdError::click(format!(
+            "no Cargo.toml in {}: this generator only reads stacks it can read \
+             honestly. Declare the manifest by hand — product, version_file, build, \
+             artifact, and optionally surface_command, release_uri_env, commit_env",
+            root.display()
+        )));
+    }
+    let body = std::fs::read_to_string(&cargo)
+        .map_err(|err| CmdError::click(format!("{}: {err}", cargo.display())))?;
+    let package = crate::release::manifest::first_toml_string(&body, "name")
+        .ok_or_else(|| CmdError::click(format!("{} declares no package name", cargo.display())))?;
+    let product = args.product.clone().unwrap_or_else(|| package.clone());
+    let stamp_prefix = product.to_ascii_uppercase().replace('-', "_");
+
+    let manifest = json!({
+        "_comment": "Facts about this product's releases. The procedure - guards, \
+                     classification, checksum, create-only upload - lives in \
+                     `stado release publish`, so it is not reimplemented here and \
+                     cannot drift from what other products do.",
+        "product": product,
+        "version_file": "Cargo.toml",
+        "build": ["cargo", "build", "--release", "--quiet"],
+        "artifact": format!("target/release/{package}"),
+        "surface_command": "help",
+        "release_uri_env": format!("{stamp_prefix}_RELEASE_URI"),
+        "commit_env": format!("{stamp_prefix}_RELEASE_COMMIT"),
+    });
+    let rendered = format!("{}\n", serde_json::to_string_pretty(&manifest)?);
+    std::fs::write(&target, &rendered)
+        .map_err(|err| CmdError::click(format!("{}: {err}", target.display())))?;
+
+    // A product absent from the publisher map can still publish to a local store,
+    // but an authenticated write would have nothing to authorize. Better said now
+    // than discovered during a release.
+    let known = crate::config::ACTIVE_RELEASE_PUBLISHERS.contains(&product.as_str());
+    if args.json {
+        return echo_json(&json!({
+            "written": target.display().to_string(),
+            "product": product,
+            "registered_publisher": known,
+        }));
+    }
+    println!("wrote {}", target.display());
+    print!("{rendered}");
+    if !known {
+        println!(
+            "\nNote: {product:?} is not in the release publisher map. Local publishing \
+             works, but an authenticated write through a remote origin would have no \
+             grant to authorize it."
+        );
+    }
+    println!("\nNext: `stado release publish --dry-run`, then `--against <published> --bump`.");
+    Ok(())
 }
 
 /// Run a command in the product root and return its stdout, failing loudly.
