@@ -92,25 +92,35 @@ pub fn hourly_rate_usd(gpu_type: &str, preemptible: bool, machine_type: &str) ->
 
 /// local | gcp | azure | aws | unknown.
 ///
-/// instance_ref shape (`name@zone-or-location`) doesn't disambiguate cloud
-/// providers, so we trust job.provider when set and fall back to the
-/// "anything-but-local@ -> gcp" heuristic for older records that predate
-/// multi-provider support.
+/// Explicit provider metadata wins. Legacy GCE records are recognized only
+/// when their location has the unambiguous `region-zone` suffix; arbitrary
+/// non-local references are never silently relabeled as GCP.
 ///
 /// Python `_target_kind`.
 pub fn target_kind(job: &Job) -> String {
     let reference = job.instance_ref.as_deref().unwrap_or("");
-    if reference.starts_with("local@") {
-        return "local".into();
+    if crate::capabilities::ProviderId::infer_from_instance_reference(reference)
+        == Some(crate::capabilities::ProviderId::Local)
+    {
+        return crate::capabilities::ProviderId::Local.as_str().to_string();
     }
-    let provider = job.provider.trim();
-    if matches!(provider, "azure" | "aws" | "gcp") {
-        return provider.into();
+    let configured = crate::capabilities::variant(
+        crate::capabilities::RuntimeFacet::Compute,
+        job.provider.trim(),
+    )
+    .filter(|variant| {
+        matches!(
+            variant.adapter,
+            crate::capabilities::RuntimeAdapter::Compute(adapter)
+                if adapter.tracks_cloud_cost()
+        )
+    });
+    if let Some(variant) = configured {
+        return variant.id.to_string();
     }
-    if !reference.is_empty() {
-        return "gcp".into();
-    }
-    "unknown".into()
+    crate::capabilities::ProviderId::infer_from_instance_reference(reference)
+        .map(|provider| provider.as_str().to_string())
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 /// Best-effort: extract --model 'X' out of the command line.
@@ -230,6 +240,69 @@ pub async fn collect_completed(store: &JobStorage) -> Result<Vec<CostRow>, Stora
                 rate_usd_hr: rate,
                 cost_usd: cost,
                 target_kind: target_kind(&job),
+                model: model_from_command(&job.command),
+            });
+        }
+    }
+    Ok(rows)
+}
+
+/// Dynamic-price attribution for the autonomous control plane. Unlike the
+/// legacy parity report, this never substitutes catalog constants for a live
+/// cloud quote: an unpriced cloud row remains unmeasured.
+pub async fn collect_completed_dynamic(store: &JobStorage) -> Result<Vec<CostRow>, StorageError> {
+    let Some(prices) = crate::autonomy::storage::read_json::<crate::autonomy::cost::PriceBook>(
+        store,
+        "autonomy/cost/prices.json",
+    )
+    .await?
+    else {
+        return Ok(Vec::new());
+    };
+    let mut rows = Vec::new();
+    for state in ["completed", "failed"] {
+        for job in store.list_jobs(state, usize::default()).await? {
+            let Some(wall) = wall_seconds(&job) else {
+                continue;
+            };
+            let target = target_kind(&job);
+            let provider = match target.as_str() {
+                "gcp" => crate::capabilities::ProviderId::Gcp,
+                "aws" => crate::capabilities::ProviderId::Aws,
+                "azure" => crate::capabilities::ProviderId::Azure,
+                "local" => crate::capabilities::ProviderId::Local,
+                "box" => crate::capabilities::ProviderId::Box,
+                "vast" => crate::capabilities::ProviderId::Vast,
+                _ => continue,
+            };
+            let rate = if provider == crate::capabilities::ProviderId::Local {
+                f64::default()
+            } else {
+                let Some(quote) = prices.find_hourly(
+                    provider,
+                    Some(job.region.as_str()).filter(|region| !region.is_empty()),
+                    &job.machine_type,
+                    &job.gpu_type,
+                    job.preemptible,
+                ) else {
+                    continue;
+                };
+                quote.hourly_usd
+            };
+            let cost = wall / crate::monitor::billing::SECONDS_PER_HOUR as f64 * rate;
+            rows.push(CostRow {
+                job_id: job.job_id.clone(),
+                state: state.into(),
+                gpu_type: if job.gpu_type.is_empty() {
+                    "cpu".into()
+                } else {
+                    job.gpu_type.clone()
+                },
+                preemptible: job.preemptible,
+                wall_s: wall,
+                rate_usd_hr: rate,
+                cost_usd: cost,
+                target_kind: target,
                 model: model_from_command(&job.command),
             });
         }

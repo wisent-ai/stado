@@ -6,7 +6,7 @@
 //! process. Stado has no environment, queue-storage, cloud-secret-manager, or
 //! local credential fallback.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::io::Read;
 use std::path::Path;
 use std::sync::{LazyLock, Mutex};
@@ -14,6 +14,7 @@ use std::sync::{LazyLock, Mutex};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SkarbiecError {
@@ -150,6 +151,245 @@ impl Client {
             crate::config::skarbiec_url(),
             crate::config::skarbiec_consumer(),
             crate::config::skarbiec_token_file(),
+        )
+    }
+
+    /// Dedicated verifier used only for namespace-scoped product object
+    /// bearers. It never reuses the coordinator's broader Skarbiec grant.
+    pub fn object_verifier() -> Result<Self, SkarbiecError> {
+        if crate::config::object_skarbiec_consumer() != crate::config::OBJECT_API_VERIFIER_CONSUMER
+        {
+            return Err(SkarbiecError::Deployment(format!(
+                "object verifier consumer must be {:?}",
+                crate::config::OBJECT_API_VERIFIER_CONSUMER
+            )));
+        }
+        if crate::config::object_skarbiec_token_file() == crate::config::skarbiec_token_file() {
+            return Err(SkarbiecError::Deployment(
+                "object verifier token file must be distinct from the coordinator grant"
+                    .to_string(),
+            ));
+        }
+        Self::new(
+            crate::config::object_skarbiec_url(),
+            crate::config::object_skarbiec_consumer(),
+            crate::config::object_skarbiec_token_file(),
+        )
+    }
+
+    /// Dedicated verifier for immutable authenticated release publication.
+    pub fn release_verifier() -> Result<Self, SkarbiecError> {
+        if crate::config::release_skarbiec_consumer()
+            != crate::config::RELEASE_API_VERIFIER_CONSUMER
+        {
+            return Err(SkarbiecError::Deployment(format!(
+                "release verifier consumer must be {:?}",
+                crate::config::RELEASE_API_VERIFIER_CONSUMER
+            )));
+        }
+        let token_file = crate::config::release_skarbiec_token_file();
+        if token_file == crate::config::skarbiec_token_file()
+            || token_file == crate::config::object_skarbiec_token_file()
+        {
+            return Err(SkarbiecError::Deployment(
+                "release verifier token file must be distinct from coordinator and product-object verifier grants"
+                    .to_string(),
+            ));
+        }
+        Self::new(
+            crate::config::release_skarbiec_url(),
+            crate::config::release_skarbiec_consumer(),
+            token_file,
+        )
+    }
+
+    /// Dedicated verifier for exact machine client bearers.
+    pub fn machine_verifier() -> Result<Self, SkarbiecError> {
+        if crate::config::machine_skarbiec_consumer()
+            != crate::config::MACHINE_API_VERIFIER_CONSUMER
+        {
+            return Err(SkarbiecError::Deployment(format!(
+                "machine verifier consumer must be {:?}",
+                crate::config::MACHINE_API_VERIFIER_CONSUMER
+            )));
+        }
+        let token_file = crate::config::machine_skarbiec_token_file();
+        if token_file == crate::config::skarbiec_token_file()
+            || token_file == crate::config::agent_skarbiec_token_file()
+            || token_file == crate::config::object_skarbiec_token_file()
+            || token_file == crate::config::release_skarbiec_token_file()
+            || token_file == crate::config::service_skarbiec_token_file()
+        {
+            return Err(SkarbiecError::Deployment(
+                "machine verifier token file must be distinct from coordinator, workload-agent, object, release, and service verifier grants"
+                    .to_string(),
+            ));
+        }
+        Self::new(
+            crate::config::machine_skarbiec_url(),
+            crate::config::machine_skarbiec_consumer(),
+            token_file,
+        )
+    }
+
+    /// Dedicated verifier for exact Stado push ingress client bearers.
+    pub fn backend_push_verifier() -> Result<Self, SkarbiecError> {
+        if crate::config::backend_push_skarbiec_consumer()
+            != crate::config::BACKEND_PUSH_API_VERIFIER_CONSUMER
+        {
+            return Err(SkarbiecError::Deployment(format!(
+                "backend push verifier consumer must be {:?}",
+                crate::config::BACKEND_PUSH_API_VERIFIER_CONSUMER
+            )));
+        }
+        let token_file = crate::config::backend_push_skarbiec_token_file();
+        if token_file == crate::config::skarbiec_token_file()
+            || token_file == crate::config::agent_skarbiec_token_file()
+            || token_file == crate::config::object_skarbiec_token_file()
+            || token_file == crate::config::release_skarbiec_token_file()
+            || token_file == crate::config::machine_skarbiec_token_file()
+            || token_file == crate::config::service_skarbiec_token_file()
+            || token_file == crate::config::rate_limit_skarbiec_token_file()
+            || token_file == crate::config::backend_messaging_skarbiec_token_file()
+        {
+            return Err(SkarbiecError::Deployment(
+                "backend push verifier token file must be distinct from every control, workload, messaging, and API verifier grant"
+                    .to_string(),
+            ));
+        }
+        Self::new(
+            crate::config::backend_push_skarbiec_url(),
+            crate::config::backend_push_skarbiec_consumer(),
+            token_file,
+        )
+    }
+
+    /// Dedicated verifier for exact managed-service deployer bearers.
+    pub fn service_verifier() -> Result<Self, SkarbiecError> {
+        if crate::config::service_skarbiec_consumer()
+            != crate::config::SERVICE_API_VERIFIER_CONSUMER
+        {
+            return Err(SkarbiecError::Deployment(format!(
+                "service verifier consumer must be {:?}",
+                crate::config::SERVICE_API_VERIFIER_CONSUMER
+            )));
+        }
+        let token_file = crate::config::service_skarbiec_token_file();
+        if token_file == crate::config::skarbiec_token_file()
+            || token_file == crate::config::object_skarbiec_token_file()
+            || token_file == crate::config::release_skarbiec_token_file()
+            || token_file == crate::config::machine_skarbiec_token_file()
+        {
+            return Err(SkarbiecError::Deployment(
+                "service verifier token file must be distinct from coordinator, product-object, and release verifier grants"
+                    .to_string(),
+            ));
+        }
+        Self::new(
+            crate::config::service_skarbiec_url(),
+            crate::config::service_skarbiec_consumer(),
+            token_file,
+        )
+    }
+
+    /// Dedicated verifier for shared rate-limit client bearers.
+    pub fn rate_limit_verifier() -> Result<Self, SkarbiecError> {
+        if crate::config::rate_limit_skarbiec_consumer()
+            != crate::config::RATE_LIMIT_API_VERIFIER_CONSUMER
+        {
+            return Err(SkarbiecError::Deployment(format!(
+                "rate-limit verifier consumer must be {:?}",
+                crate::config::RATE_LIMIT_API_VERIFIER_CONSUMER
+            )));
+        }
+        let token_file = crate::config::rate_limit_skarbiec_token_file();
+        if token_file == crate::config::skarbiec_token_file()
+            || token_file == crate::config::object_skarbiec_token_file()
+            || token_file == crate::config::release_skarbiec_token_file()
+            || token_file == crate::config::machine_skarbiec_token_file()
+            || token_file == crate::config::service_skarbiec_token_file()
+            || token_file == crate::config::agent_skarbiec_token_file()
+            || token_file == crate::config::backend_push_skarbiec_token_file()
+            || token_file == crate::config::backend_messaging_skarbiec_token_file()
+        {
+            return Err(SkarbiecError::Deployment(
+                "rate-limit verifier token file must be distinct from every other verifier grant"
+                    .to_string(),
+            ));
+        }
+        Self::new(
+            crate::config::rate_limit_skarbiec_url(),
+            crate::config::rate_limit_skarbiec_consumer(),
+            token_file,
+        )
+    }
+
+    /// Dedicated verifier for finite integration client bearers.
+    pub fn integration_verifier() -> Result<Self, SkarbiecError> {
+        if crate::config::integration_skarbiec_consumer()
+            != crate::config::INTEGRATION_API_VERIFIER_CONSUMER
+        {
+            return Err(SkarbiecError::Deployment(format!(
+                "integration verifier consumer must be {:?}",
+                crate::config::INTEGRATION_API_VERIFIER_CONSUMER
+            )));
+        }
+        let token_file = crate::config::integration_skarbiec_token_file();
+        if [
+            crate::config::skarbiec_token_file(),
+            crate::config::agent_skarbiec_token_file(),
+            crate::config::object_skarbiec_token_file(),
+            crate::config::release_skarbiec_token_file(),
+            crate::config::machine_skarbiec_token_file(),
+            crate::config::service_skarbiec_token_file(),
+            crate::config::rate_limit_skarbiec_token_file(),
+            crate::config::backend_push_skarbiec_token_file(),
+            crate::config::backend_messaging_skarbiec_token_file(),
+        ]
+        .contains(&token_file)
+        {
+            return Err(SkarbiecError::Deployment(
+                "integration verifier token file must be distinct from control-plane, workload-agent, messaging, and every other verifier grant"
+                    .to_string(),
+            ));
+        }
+        Self::new(
+            crate::config::integration_skarbiec_url(),
+            crate::config::integration_skarbiec_consumer(),
+            token_file,
+        )
+    }
+
+    /// Exact provider grant for one finite integration domain.
+    pub fn integration_provider(domain: &str) -> Result<Self, SkarbiecError> {
+        let provider = crate::config::integration_provider(domain).ok_or_else(|| {
+            SkarbiecError::Deployment(format!(
+                "integration provider domain {domain:?} is not configured"
+            ))
+        })?;
+        let token_file = provider.token_file();
+        if [
+            crate::config::skarbiec_token_file(),
+            crate::config::agent_skarbiec_token_file(),
+            crate::config::integration_skarbiec_token_file(),
+            crate::config::object_skarbiec_token_file(),
+            crate::config::release_skarbiec_token_file(),
+            crate::config::machine_skarbiec_token_file(),
+            crate::config::service_skarbiec_token_file(),
+            crate::config::rate_limit_skarbiec_token_file(),
+            crate::config::backend_push_skarbiec_token_file(),
+            crate::config::backend_messaging_skarbiec_token_file(),
+        ]
+        .contains(&token_file)
+        {
+            return Err(SkarbiecError::Deployment(format!(
+                "integration provider token file for domain {domain:?} is not isolated"
+            )));
+        }
+        Self::new(
+            crate::config::integration_provider_skarbiec_url(),
+            provider.consumer(),
+            token_file,
         )
     }
 
@@ -297,24 +537,559 @@ pub async fn read_string(id: &str, field: &str) -> Result<Option<String>, Skarbi
     Client::configured()?.read_string(id, field).await
 }
 
-/// GCP authentication without ADC files, process credentials, or gcloud
-/// sessions. Prefer an on-platform managed identity; off GCP, resolve the
-/// `service_account` JSON field from the `stado-gcp` Skarbiec item.
-pub async fn gcp_provider() -> Result<std::sync::Arc<dyn gcp_auth::TokenProvider>, SkarbiecError> {
-    if let Ok(identity) = gcp_auth::MetadataServiceAccount::new().await {
-        return Ok(std::sync::Arc::new(identity));
+pub async fn read_integration_token(
+    item: &str,
+    field: &str,
+) -> Result<Option<String>, SkarbiecError> {
+    Client::integration_verifier()?
+        .read_string(item, field)
+        .await
+}
+
+/// Validate the auth verifier independently from all provider domains.
+pub async fn validate_integration_verifier() -> Result<usize, SkarbiecError> {
+    let clients = crate::config::integration_clients().map_err(|problems| {
+        SkarbiecError::Deployment(format!(
+            "invalid integration.clients: {}",
+            problems.join("; ")
+        ))
+    })?;
+    let verifier = Client::integration_verifier()?;
+    let expected = clients
+        .values()
+        .map(|policy| policy.item().to_string())
+        .collect::<BTreeSet<_>>();
+    let visible = verifier
+        .list_items()
+        .await?
+        .into_iter()
+        .filter(|item| item.deleted != Some(true))
+        .map(|item| item.id)
+        .collect::<BTreeSet<_>>();
+    if visible != expected {
+        return Err(SkarbiecError::Deployment(
+            "integration verifier grant item set mismatch".to_string(),
+        ));
     }
-    let value = Client::configured_item("stado-gcp").await?;
-    let service_account = value
-        .get("service_account")
-        .ok_or_else(|| SkarbiecError::MissingValue("stado-gcp/service_account".into()))?;
-    let encoded = match service_account {
-        Value::String(value) => value.clone(),
-        value => {
-            serde_json::to_string(value).map_err(|err| SkarbiecError::GcpAuth(err.to_string()))?
+
+    let verifier_grant = read_grant(crate::config::integration_skarbiec_token_file())?;
+    let verifier_digest = Sha256::digest(verifier_grant.as_bytes()).to_vec();
+    let mut bearer_digests = BTreeSet::new();
+    for (name, policy) in clients {
+        let bearer = verifier
+            .read_string(policy.item(), "token")
+            .await?
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                SkarbiecError::Deployment(format!(
+                    "integration bearer item is missing for client {name:?}"
+                ))
+            })?;
+        let digest = Sha256::digest(bearer.as_bytes()).to_vec();
+        if digest == verifier_digest || !bearer_digests.insert(digest) {
+            return Err(SkarbiecError::Deployment(
+                "integration verifier and all client bearer values must be distinct".to_string(),
+            ));
         }
-    };
-    let identity = gcp_auth::CustomServiceAccount::from_json(&encoded)
-        .map_err(|err| SkarbiecError::GcpAuth(err.to_string()))?;
-    Ok(std::sync::Arc::new(identity))
+    }
+    Ok(clients.len())
+}
+
+pub async fn validate_integration_provider(domain: &str) -> Result<usize, SkarbiecError> {
+    let policy = crate::config::integration_provider(domain).ok_or_else(|| {
+        SkarbiecError::Deployment(format!(
+            "integration provider domain {domain:?} is not configured"
+        ))
+    })?;
+    let provider = Client::integration_provider(domain)?;
+    let expected = policy.items().iter().cloned().collect::<BTreeSet<_>>();
+    let visible = provider
+        .list_items()
+        .await?
+        .into_iter()
+        .filter(|item| item.deleted != Some(true))
+        .map(|item| item.id)
+        .collect::<BTreeSet<_>>();
+    if visible != expected {
+        return Err(SkarbiecError::Deployment(format!(
+            "integration provider grant item set mismatch for domain {domain:?}"
+        )));
+    }
+    Ok(expected.len())
+}
+
+pub async fn validate_integration_boundary() -> Result<usize, SkarbiecError> {
+    let mut total = validate_integration_verifier().await?;
+    let providers = crate::config::integration_providers().map_err(|problems| {
+        SkarbiecError::Deployment(format!(
+            "invalid integration.providers: {}",
+            problems.join("; ")
+        ))
+    })?;
+    for domain in providers.keys() {
+        total += validate_integration_provider(domain).await?;
+    }
+    Ok(total)
+}
+
+/// Resolve one product object bearer through the dedicated verifier grant.
+/// Callers must select `item` from the canonical namespace policy first.
+pub async fn read_object_token(item: &str, field: &str) -> Result<Option<String>, SkarbiecError> {
+    Client::object_verifier()?.read_string(item, field).await
+}
+
+/// Startup/doctor validation for the complete object authorization boundary.
+/// The verifier grant must expose exactly the mapped items, every token must
+/// be present, and tokens must be pairwise distinct so no bearer can cross a
+/// namespace even after an accidental duplicate secret rotation.
+pub async fn validate_object_verifier() -> Result<usize, SkarbiecError> {
+    let namespaces = crate::config::object_api_namespaces().map_err(|problems| {
+        SkarbiecError::Deployment(format!(
+            "invalid object_api.namespaces: {}",
+            problems.join("; ")
+        ))
+    })?;
+    let client = Client::object_verifier()?;
+    let expected = namespaces
+        .values()
+        .map(|policy| policy.item().to_string())
+        .collect::<BTreeSet<_>>();
+    let visible = client
+        .list_items()
+        .await?
+        .into_iter()
+        .filter(|item| item.deleted != Some(true))
+        .map(|item| item.id)
+        .collect::<BTreeSet<_>>();
+    if visible != expected {
+        let missing = expected
+            .difference(&visible)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(",");
+        let unexpected = visible
+            .difference(&expected)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(",");
+        return Err(SkarbiecError::Deployment(format!(
+            "object verifier grant item set mismatch (missing=[{missing}], unexpected=[{unexpected}])"
+        )));
+    }
+
+    let mut token_owners = HashMap::<Vec<u8>, &str>::new();
+    for (namespace, policy) in namespaces {
+        let token = client
+            .read_string(policy.item(), "token")
+            .await?
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                SkarbiecError::Deployment(format!(
+                    "Skarbiec item {}/token is missing or empty for namespace {namespace}",
+                    policy.item()
+                ))
+            })?;
+        let digest = Sha256::digest(token.as_bytes()).to_vec();
+        if let Some(other) = token_owners.insert(digest, namespace.as_str()) {
+            return Err(SkarbiecError::Deployment(format!(
+                "object bearer values for namespaces {other} and {namespace} must be distinct"
+            )));
+        }
+    }
+    Ok(namespaces.len())
+}
+
+pub async fn read_release_token(item: &str, field: &str) -> Result<Option<String>, SkarbiecError> {
+    Client::release_verifier()?.read_string(item, field).await
+}
+
+/// Validate the immutable release-publisher verifier and ensure its bearers
+/// cannot collide with any product object bearer.
+pub async fn validate_release_verifier() -> Result<usize, SkarbiecError> {
+    let publishers = crate::config::release_api_publishers().map_err(|problems| {
+        SkarbiecError::Deployment(format!(
+            "invalid release_api.publishers: {}",
+            problems.join("; ")
+        ))
+    })?;
+    let client = Client::release_verifier()?;
+    let expected = publishers
+        .values()
+        .map(|policy| policy.item().to_string())
+        .collect::<BTreeSet<_>>();
+    let visible = client
+        .list_items()
+        .await?
+        .into_iter()
+        .filter(|item| item.deleted != Some(true))
+        .map(|item| item.id)
+        .collect::<BTreeSet<_>>();
+    if visible != expected {
+        let missing = expected
+            .difference(&visible)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(",");
+        let unexpected = visible
+            .difference(&expected)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(",");
+        return Err(SkarbiecError::Deployment(format!(
+            "release verifier grant item set mismatch (missing=[{missing}], unexpected=[{unexpected}])"
+        )));
+    }
+
+    let object_namespaces = crate::config::object_api_namespaces().map_err(|problems| {
+        SkarbiecError::Deployment(format!(
+            "invalid object_api.namespaces: {}",
+            problems.join("; ")
+        ))
+    })?;
+    let object_client = Client::object_verifier()?;
+    let mut token_owners = HashMap::<Vec<u8>, String>::new();
+    for (namespace, policy) in object_namespaces {
+        let token = object_client
+            .read_string(policy.item(), "token")
+            .await?
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                SkarbiecError::Deployment(format!(
+                    "Skarbiec item {}/token is missing or empty for namespace {namespace}",
+                    policy.item()
+                ))
+            })?;
+        token_owners.insert(
+            Sha256::digest(token.as_bytes()).to_vec(),
+            format!("object namespace {namespace}"),
+        );
+    }
+    for (product, policy) in publishers {
+        let token = client
+            .read_string(policy.item(), "token")
+            .await?
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                SkarbiecError::Deployment(format!(
+                    "Skarbiec item {}/token is missing or empty for release publisher {product}",
+                    policy.item()
+                ))
+            })?;
+        let digest = Sha256::digest(token.as_bytes()).to_vec();
+        if let Some(other) = token_owners.insert(digest, format!("release publisher {product}")) {
+            return Err(SkarbiecError::Deployment(format!(
+                "bearer values for {other} and release publisher {product} must be distinct"
+            )));
+        }
+    }
+    Ok(publishers.len())
+}
+
+pub async fn read_machine_token(item: &str, field: &str) -> Result<Option<String>, SkarbiecError> {
+    Client::machine_verifier()?.read_string(item, field).await
+}
+
+/// Validate the complete machine-client authorization boundary. The verifier
+/// sees exactly the mapped client items, every bearer is present, and machine
+/// bearers are distinct from every other ingress bearer.
+pub async fn validate_machine_verifier() -> Result<usize, SkarbiecError> {
+    let clients = crate::config::machine_api_clients().map_err(|problems| {
+        SkarbiecError::Deployment(format!(
+            "invalid machine_api.clients: {}",
+            problems.join("; ")
+        ))
+    })?;
+    let client = Client::machine_verifier()?;
+    let expected = clients
+        .values()
+        .map(|policy| policy.item().to_string())
+        .collect::<BTreeSet<_>>();
+    let visible = client
+        .list_items()
+        .await?
+        .into_iter()
+        .filter(|item| item.deleted != Some(true))
+        .map(|item| item.id)
+        .collect::<BTreeSet<_>>();
+    if visible != expected {
+        let missing = expected
+            .difference(&visible)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(",");
+        let unexpected = visible
+            .difference(&expected)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(",");
+        return Err(SkarbiecError::Deployment(format!(
+            "machine verifier grant item set mismatch (missing=[{missing}], unexpected=[{unexpected}])"
+        )));
+    }
+
+    let mut token_owners = HashMap::<Vec<u8>, String>::new();
+    let object_client = Client::object_verifier()?;
+    let namespaces = crate::config::object_api_namespaces().map_err(|problems| {
+        SkarbiecError::Deployment(format!(
+            "invalid object_api.namespaces while validating machine bearers: {}",
+            problems.join("; ")
+        ))
+    })?;
+    for (namespace, policy) in namespaces {
+        if let Some(token) = object_client.read_string(policy.item(), "token").await? {
+            token_owners.insert(
+                Sha256::digest(token.as_bytes()).to_vec(),
+                format!("object namespace {namespace}"),
+            );
+        }
+    }
+    let release_client = Client::release_verifier()?;
+    let publishers = crate::config::release_api_publishers().map_err(|problems| {
+        SkarbiecError::Deployment(format!(
+            "invalid release_api.publishers while validating machine bearers: {}",
+            problems.join("; ")
+        ))
+    })?;
+    for (product, policy) in publishers {
+        if let Some(token) = release_client.read_string(policy.item(), "token").await? {
+            token_owners.insert(
+                Sha256::digest(token.as_bytes()).to_vec(),
+                format!("release publisher {product}"),
+            );
+        }
+    }
+    let service_client = Client::service_verifier()?;
+    let deployers = crate::config::service_api_deployers().map_err(|problems| {
+        SkarbiecError::Deployment(format!(
+            "invalid service_api.deployers while validating machine bearers: {}",
+            problems.join("; ")
+        ))
+    })?;
+    for (product, policy) in deployers {
+        if let Some(token) = service_client.read_string(policy.item(), "token").await? {
+            token_owners.insert(
+                Sha256::digest(token.as_bytes()).to_vec(),
+                format!("service deployer {product}"),
+            );
+        }
+    }
+    for (name, policy) in clients {
+        let token = client
+            .read_string(policy.item(), "token")
+            .await?
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                SkarbiecError::Deployment(format!(
+                    "Skarbiec item {}/token is missing or empty for machine client {name}",
+                    policy.item()
+                ))
+            })?;
+        let digest = Sha256::digest(token.as_bytes()).to_vec();
+        if let Some(other) = token_owners.insert(digest, format!("machine client {name}")) {
+            return Err(SkarbiecError::Deployment(format!(
+                "bearer values for {other} and machine client {name} must be distinct"
+            )));
+        }
+    }
+    Ok(clients.len())
+}
+
+pub async fn read_backend_push_token(
+    item: &str,
+    field: &str,
+) -> Result<Option<String>, SkarbiecError> {
+    Client::backend_push_verifier()?
+        .read_string(item, field)
+        .await
+}
+
+/// Validate exact push-client visibility and reject any reused client bearer.
+pub async fn validate_backend_push_verifier() -> Result<usize, SkarbiecError> {
+    let clients = crate::config::backend_push_clients().map_err(|problems| {
+        SkarbiecError::Deployment(format!(
+            "invalid backend.push_clients: {}",
+            problems.join("; ")
+        ))
+    })?;
+    let client = Client::backend_push_verifier()?;
+    let expected = clients
+        .values()
+        .map(|policy| policy.item().to_string())
+        .collect::<BTreeSet<_>>();
+    let visible = client
+        .list_items()
+        .await?
+        .into_iter()
+        .filter(|item| item.deleted != Some(true))
+        .map(|item| item.id)
+        .collect::<BTreeSet<_>>();
+    if visible != expected {
+        let missing = expected
+            .difference(&visible)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(",");
+        let unexpected = visible
+            .difference(&expected)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(",");
+        return Err(SkarbiecError::Deployment(format!(
+            "backend push verifier grant item set mismatch (missing=[{missing}], unexpected=[{unexpected}])"
+        )));
+    }
+    let mut token_owners = HashMap::<Vec<u8>, String>::new();
+    for (name, policy) in clients {
+        let token = client
+            .read_string(policy.item(), "token")
+            .await?
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                SkarbiecError::Deployment(format!(
+                    "Skarbiec item {}/token is missing or empty for backend push client {name}",
+                    policy.item()
+                ))
+            })?;
+        let digest = Sha256::digest(token.as_bytes()).to_vec();
+        if let Some(other) = token_owners.insert(digest, format!("backend push client {name}")) {
+            return Err(SkarbiecError::Deployment(format!(
+                "bearer values for {other} and backend push client {name} must be distinct"
+            )));
+        }
+    }
+    Ok(clients.len())
+}
+
+pub async fn read_service_token(item: &str, field: &str) -> Result<Option<String>, SkarbiecError> {
+    Client::service_verifier()?.read_string(item, field).await
+}
+
+/// Validate the complete managed-service authorization boundary. The verifier
+/// sees exactly the mapped deployer items, each token is non-empty, and no
+/// service bearer collides with another service, object, or release bearer.
+pub async fn validate_service_verifier() -> Result<usize, SkarbiecError> {
+    let deployers = crate::config::service_api_deployers().map_err(|problems| {
+        SkarbiecError::Deployment(format!(
+            "invalid service_api.deployers: {}",
+            problems.join("; ")
+        ))
+    })?;
+    let client = Client::service_verifier()?;
+    let expected = deployers
+        .values()
+        .map(|policy| policy.item().to_string())
+        .collect::<BTreeSet<_>>();
+    let visible = client
+        .list_items()
+        .await?
+        .into_iter()
+        .filter(|item| item.deleted != Some(true))
+        .map(|item| item.id)
+        .collect::<BTreeSet<_>>();
+    if visible != expected {
+        let missing = expected
+            .difference(&visible)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(",");
+        let unexpected = visible
+            .difference(&expected)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(",");
+        return Err(SkarbiecError::Deployment(format!(
+            "service verifier grant item set mismatch (missing=[{missing}], unexpected=[{unexpected}])"
+        )));
+    }
+    let mut token_owners = HashMap::<Vec<u8>, String>::new();
+    let object_client = Client::object_verifier()?;
+    let namespaces = crate::config::object_api_namespaces().map_err(|problems| {
+        SkarbiecError::Deployment(format!(
+            "invalid object_api.namespaces while validating service bearers: {}",
+            problems.join("; ")
+        ))
+    })?;
+    for (namespace, policy) in namespaces {
+        if let Some(token) = object_client.read_string(policy.item(), "token").await? {
+            token_owners.insert(
+                Sha256::digest(token.as_bytes()).to_vec(),
+                format!("object namespace {namespace}"),
+            );
+        }
+    }
+    let release_client = Client::release_verifier()?;
+    let publishers = crate::config::release_api_publishers().map_err(|problems| {
+        SkarbiecError::Deployment(format!(
+            "invalid release_api.publishers while validating service bearers: {}",
+            problems.join("; ")
+        ))
+    })?;
+    for (product, policy) in publishers {
+        if let Some(token) = release_client.read_string(policy.item(), "token").await? {
+            token_owners.insert(
+                Sha256::digest(token.as_bytes()).to_vec(),
+                format!("release publisher {product}"),
+            );
+        }
+    }
+    for (product, policy) in deployers {
+        let token = client
+            .read_string(policy.item(), "token")
+            .await?
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                SkarbiecError::Deployment(format!(
+                    "Skarbiec item {}/token is missing or empty for service deployer {product}",
+                    policy.item()
+                ))
+            })?;
+        let digest = Sha256::digest(token.as_bytes()).to_vec();
+        if let Some(other) = token_owners.insert(digest, format!("service deployer {product}")) {
+            return Err(SkarbiecError::Deployment(format!(
+                "bearer values for {other} and service deployer {product} must be distinct"
+            )));
+        }
+    }
+    Ok(deployers.len())
+}
+
+/// GCP authentication through the adapter host's metadata identity or the
+/// adapter's scoped `stado-gcp` Skarbiec item. Static ADC files, gcloud
+/// sessions, process-environment credentials, and workload-agent grants are
+/// deliberately unsupported provider credential sources.
+pub async fn gcp_provider() -> Result<std::sync::Arc<dyn gcp_auth::TokenProvider>, SkarbiecError> {
+    match gcp_auth::MetadataServiceAccount::new().await {
+        Ok(identity) => Ok(std::sync::Arc::new(identity)),
+        Err(metadata_error) => {
+            let item = Client::configured_item("stado-gcp").await.map_err(|error| {
+                SkarbiecError::GcpAuth(format!(
+                    "GCP metadata identity is unavailable ({metadata_error}); scoped stado-gcp read failed: {error}"
+                ))
+            })?;
+            let credential_json = item
+                .get("service_account_json")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .or_else(|| {
+                    (item.get("client_email").is_some() && item.get("private_key").is_some())
+                        .then(|| serde_json::to_string(&item))
+                        .transpose()
+                        .ok()
+                        .flatten()
+                })
+                .ok_or_else(|| {
+                    SkarbiecError::GcpAuth(
+                        "stado-gcp must contain service_account_json or a service-account JSON object"
+                            .to_string(),
+                    )
+                })?;
+            let identity =
+                gcp_auth::CustomServiceAccount::from_json(&credential_json).map_err(|error| {
+                    SkarbiecError::GcpAuth(format!(
+                        "stado-gcp service-account JSON is invalid: {error}"
+                    ))
+                })?;
+            Ok(std::sync::Arc::new(identity))
+        }
+    }
 }

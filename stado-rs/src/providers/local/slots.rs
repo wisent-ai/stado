@@ -355,6 +355,14 @@ fn inherit_safe_agent_environment(command: &mut tokio::process::Command) {
         "VIRTUAL_ENV",
         "CONDA_PREFIX",
         "PYTHONPATH",
+        "HF_HOME",
+        "HF_HUB_OFFLINE",
+        "HF_DATASETS_OFFLINE",
+        "TRANSFORMERS_OFFLINE",
+        "WISENT_DTYPE",
+        "PYTORCH_CUDA_ALLOC_CONF",
+        "PYTHONUNBUFFERED",
+        "NUMBA_NUM_THREADS",
         "LD_LIBRARY_PATH",
         "SSL_CERT_FILE",
         "SSL_CERT_DIR",
@@ -402,8 +410,7 @@ async fn resolve_job_secret_environment(
             crate::config::agent_skarbiec_consumer(),
             agent_token_file,
         )
-    } else if crate::config::skarbiec_consumer()
-        == crate::config::agent_skarbiec_consumer()
+    } else if crate::config::skarbiec_consumer() == crate::config::agent_skarbiec_consumer()
         && crate::config::skarbiec_token_file() == agent_token_file
         && crate::config::skarbiec_consumer().ends_with("-agent")
     {
@@ -520,10 +527,18 @@ pub async fn install_apt_packages(job: &Job, kind: &str, log_fn: &mut dyn FnMut(
     if job.apt_packages.is_empty() {
         return true;
     }
-    if kind == "local" {
+    let system_packages_allowed =
+        crate::capabilities::variant(crate::capabilities::RuntimeFacet::Execution, kind)
+            .is_some_and(|variant| {
+                matches!(
+                    variant.adapter,
+                    crate::capabilities::RuntimeAdapter::Execution(adapter)
+                        if adapter.allows_job_system_packages()
+                )
+            });
+    if !system_packages_allowed {
         log_fn(&format!(
-            "refuse {}: apt_packages={} requested but agent kind=local; \
-             install manually or submit to a cloud-kind agent",
+            "refuse {}: apt_packages={} requested but agent kind={kind} has no managed-system-package capability",
             job.job_id,
             py_list_repr(&job.apt_packages)
         ));
@@ -1367,8 +1382,8 @@ mod tests {
         assert_eq!(
             lines,
             vec![format!(
-                "refuse {id}: apt_packages=['htop', 'tmux'] requested but agent kind=local; \
-                 install manually or submit to a cloud-kind agent"
+                "refuse {id}: apt_packages=['htop', 'tmux'] requested but agent kind=local \
+                 has no managed-system-package capability"
             )]
         );
     }

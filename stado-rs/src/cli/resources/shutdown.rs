@@ -186,7 +186,10 @@ fn parse_selector(project: &str, selector: &str) -> Result<Action, CmdError> {
     let provider = parts.next().unwrap_or_default();
     let resource_type = parts.next().unwrap_or_default();
     let locator = parts.next().unwrap_or_default();
-    if provider != "gcp" || resource_type.is_empty() || locator.is_empty() {
+    if !crate::capabilities::ProviderId::Gcp.matches(provider)
+        || resource_type.is_empty()
+        || locator.is_empty()
+    {
         return Err(CmdError::usage(format!(
             "resource {selector:?} must use gcp:TYPE:LOCATION/NAME"
         )));

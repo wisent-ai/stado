@@ -156,7 +156,7 @@ pub async fn dispatch_box_jobs(
         .list_jobs_priority_first("queue", QUEUE_SCAN_CAP)
         .await?
     {
-        if !matches!(job.provider.as_str(), "box" | "box-ascii") {
+        if !crate::capabilities::ProviderId::Box.matches(&job.provider) {
             continue;
         }
         if !job.secret_env.is_empty() {
@@ -188,7 +188,7 @@ pub async fn dispatch_box_jobs(
             let mut acquired = leases
                 .acquire(
                     &job.job_id,
-                    "box",
+                    crate::capabilities::ProviderId::Box.as_str(),
                     owner_id,
                     OWNER_TTL_SECONDS,
                     resource_ttl,
@@ -416,7 +416,7 @@ pub async fn reconcile_box_jobs(
     let runtime = BoxRuntime::new(store, provider, &leases);
     let mut changed: i64 = 0;
     for mut job in store.list_jobs("running", 0).await? {
-        if !matches!(job.provider.as_str(), "box" | "box-ascii") {
+        if !crate::capabilities::ProviderId::Box.matches(&job.provider) {
             continue;
         }
         let ttl = if job.box_ttl_seconds != 0 {
@@ -425,7 +425,13 @@ pub async fn reconcile_box_jobs(
             provider.ttl_seconds
         };
         let mut lease = match leases
-            .acquire(&job.job_id, "box", owner_id, OWNER_TTL_SECONDS, ttl)
+            .acquire(
+                &job.job_id,
+                crate::capabilities::ProviderId::Box.as_str(),
+                owner_id,
+                OWNER_TTL_SECONDS,
+                ttl,
+            )
             .await
         {
             Ok(lease) => Some(lease),
@@ -464,7 +470,13 @@ pub async fn cancel_box_job(
         provider.ttl_seconds
     };
     let mut lease = leases
-        .acquire(&job.job_id, "box", &session_owner, OWNER_TTL_SECONDS, ttl)
+        .acquire(
+            &job.job_id,
+            crate::capabilities::ProviderId::Box.as_str(),
+            &session_owner,
+            OWNER_TTL_SECONDS,
+            ttl,
+        )
         .await?;
     let runtime = BoxRuntime::new(store, provider, &leases);
     let result = runtime.cancel(job, &mut lease).await;
@@ -490,7 +502,13 @@ pub async fn cancel_box_for_legacy_move(
         provider.ttl_seconds
     };
     let mut lease = leases
-        .acquire(&job.job_id, "box", &session_owner, OWNER_TTL_SECONDS, ttl)
+        .acquire(
+            &job.job_id,
+            crate::capabilities::ProviderId::Box.as_str(),
+            &session_owner,
+            OWNER_TTL_SECONDS,
+            ttl,
+        )
         .await?;
     let runtime = BoxRuntime::new(store, provider, &leases);
     runtime.interrupt(job, &lease).await?;

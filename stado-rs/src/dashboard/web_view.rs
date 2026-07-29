@@ -356,6 +356,14 @@ fn policy_script() -> &'static str {
 pub fn render_html(state: &Value, cleanup: &Value, refresh: i64) -> String {
     let counts = as_obj(state.get("counts"));
     let throughput = as_obj(state.get("throughput"));
+    let autonomy = as_obj(state.get("autonomy"));
+    let forecast = as_obj(autonomy.and_then(|value| value.get("forecast")));
+    let savings = as_obj(autonomy.and_then(|value| value.get("savings")));
+    let anomaly_count = autonomy
+        .and_then(|value| value.get("anomalies"))
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or_default();
 
     let mut model_rows = String::new();
     let empty_models = Map::new();
@@ -537,6 +545,30 @@ pub fn render_html(state: &Value, cleanup: &Value, refresh: i64) -> String {
     out.push_str(&cleanup_card(cleanup));
     out.push('\n');
     out.push_str(policy_card());
+    out.push_str("\n<h2>autonomy &amp; FinOps</h2><div class=\"cleanup-card\">");
+    out.push_str("<div>mode <strong>");
+    out.push_str(&e_get(autonomy, "mode", "report"));
+    out.push_str("</strong> &middot; emergency pause <strong>");
+    out.push_str(&e_get(autonomy, "emergency_paused", "false"));
+    out.push_str("</strong> &middot; circuit breaker <strong>");
+    out.push_str(&e_get(autonomy, "circuit_open", "false"));
+    out.push_str("</strong> &middot; mutation failures <strong>");
+    out.push_str(&e_get(autonomy, "consecutive_mutation_failures", "none"));
+    out.push_str("</strong> &middot; decisions <strong>");
+    out.push_str(&e_get(autonomy, "decisions", "0"));
+    out.push_str("</strong></div><div>current burn <strong>$");
+    out.push_str(&e_get(forecast, "current_hourly_usd", "0"));
+    out.push_str("/h</strong> &middot; month-end <strong>$");
+    out.push_str(&e_get(forecast, "end_of_month_usd", "0"));
+    out.push_str("</strong> &middot; projected overrun <strong>$");
+    out.push_str(&e_get(forecast, "projected_overrun_usd", "0"));
+    out.push_str("</strong></div><div>predicted savings <strong>$");
+    out.push_str(&e_get(savings, "predicted_savings_usd", "0"));
+    out.push_str("</strong> &middot; realized savings <strong>$");
+    out.push_str(&e_get(savings, "realized_savings_usd", "0"));
+    out.push_str("</strong> &middot; active anomalies <strong>");
+    out.push_str(&anomaly_count.to_string());
+    out.push_str("</strong></div><div class=\"muted\">JSON: <a href=\"/api/state.json\">/api/state.json</a>; control with <code>stado optimize</code> and <code>stado cost</code>.</div></div>");
     out.push_str("\n<h2>queue</h2><div class=\"big\">queued <strong>");
     out.push_str(&e_get(counts, "queue", "0"));
     out.push_str("</strong> &nbsp; running <strong>");

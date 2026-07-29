@@ -449,7 +449,13 @@ fn resolve_long(name: &str) -> Option<&'static str> {
 /// argparse's error strings; exit behavior is described by
 /// [`ParseOutcome`].
 pub fn parse_args(_prog: &str, args: &[String]) -> Result<ParsedArgs, ParseOutcome> {
-    let default_bucket = std::env::var("WC_BUCKET").unwrap_or_else(|_| DEFAULT_BUCKET.to_string());
+    let bucket_env = crate::capabilities::config_env(
+        crate::capabilities::RuntimeFacet::Storage,
+        crate::capabilities::StorageAdapter::Gcs.id(),
+        "bucket",
+    )
+    .expect("GCS bucket binding is missing from the capability catalog");
+    let default_bucket = std::env::var(bucket_env).unwrap_or_else(|_| DEFAULT_BUCKET.to_string());
     let mut parsed = ParsedArgs {
         bucket: default_bucket,
         interval_s: DEFAULT_INTERVAL_S,

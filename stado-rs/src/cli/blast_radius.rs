@@ -17,9 +17,10 @@ use crate::config;
 use chrono::{DateTime, SecondsFormat, Utc};
 use clap::Args;
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::providers::gcp::inventory::{
-    self as gcp_inventory, GcpInventoryReport, GcsObjectAsset, InventoryOptions,
+    self as gcp_inventory, GcpInventoryReport, InventoryOptions,
 };
 use crate::queue::copy::{Endpoint, CANONICAL_PREFIXES};
 use crate::queue::BlobBackend;
@@ -161,13 +162,18 @@ const PAYLOADS: &[&str] = &["runs/", "scripts/", "artifacts/"];
 const REGISTRY: &[&str] = &["registry.json"];
 
 pub async fn run(args: &BlastRadiusArgs) -> Result<(), CmdError> {
-    validate_dependency(&args.dependency)?;
+    let dependency = validate_dependency(&args.dependency)?;
 
     let primary_endpoint = Endpoint::configured_primary();
     let backup_endpoint = Endpoint::configured_backup();
     let inventory_options = gcp_inventory_options(&primary_endpoint, backup_endpoint.as_ref());
     let inventory_probe = async {
-        if args.dependency == "gcp" {
+        if matches!(
+            dependency.adapter,
+            crate::capabilities::RuntimeAdapter::Dependency(
+                crate::capabilities::DependencyAdapter::Gcp
+            )
+        ) {
             Some(gcp_inventory::inspect(inventory_options).await)
         } else {
             None
@@ -189,14 +195,13 @@ pub async fn run(args: &BlastRadiusArgs) -> Result<(), CmdError> {
         backup_matches_primary,
     );
     let domains = data_domains(&primary);
-    let downstream = downstream_impacts(&args.dependency, &primary.report, &backup.report);
+    let downstream = downstream_impacts(dependency, &primary.report, &backup.report);
     let affected_components = downstream
         .iter()
         .filter(|impact| impact.state != "unaffected")
         .count();
     let primary_unavailable = primary.report.state != "reachable";
-    let dependency_owns_primary =
-        dependency_owns_backend(&args.dependency, config::wc_storage_backend());
+    let dependency_owns_primary = dependency_owns_backend(dependency, config::wc_storage_backend());
     let infrastructure_critical = infrastructure
         .as_ref()
         .is_some_and(|report| report.summary.critical_failures != usize::default());
@@ -245,7 +250,7 @@ pub async fn run(args: &BlastRadiusArgs) -> Result<(), CmdError> {
     let credential_store_state = credential_store.state.clone();
 
     let report = BlastRadiusReport {
-        dependency: args.dependency.clone(),
+        dependency: dependency.id.to_string(),
         configured_storage_backend: config::wc_storage_backend().to_string(),
         configured_compute_providers: config::wc_providers().to_vec(),
         summary: Summary {
@@ -373,29 +378,11 @@ pub(crate) fn gcp_inventory_options(
 ) -> InventoryOptions {
     let mut buckets = BTreeSet::new();
     for endpoint in [Some(primary), backup].into_iter().flatten() {
-        if endpoint.kind == "gcs" && !endpoint.bucket.is_empty() {
+        if endpoint.adapter() == Some(crate::capabilities::StorageAdapter::Gcs)
+            && !endpoint.bucket.is_empty()
+        {
             buckets.insert(endpoint.bucket.clone());
         }
-    }
-
-    let mut objects = Vec::new();
-    if let Some((bucket, object)) = parse_gs_locator(&crate::targets::registry_location()) {
-        buckets.insert(bucket.clone());
-        objects.push(GcsObjectAsset {
-            name: "registry_object".to_string(),
-            bucket,
-            object,
-            severity: "critical".to_string(),
-        });
-    }
-    if let Some((bucket, object)) = release_pointer(config::release_base_url()) {
-        buckets.insert(bucket.clone());
-        objects.push(GcsObjectAsset {
-            name: "release_channel_pointer".to_string(),
-            bucket,
-            object,
-            severity: "high".to_string(),
-        });
     }
 
     InventoryOptions {
@@ -403,44 +390,29 @@ pub(crate) fn gcp_inventory_options(
         region: config::region().to_string(),
         regions: config::regions().to_vec(),
         buckets: buckets.into_iter().collect(),
-        objects,
+        objects: Vec::new(),
         alerts_topic: config::alerts_topic().to_string(),
         billing_dataset: config::billing_dataset().to_string(),
         billing_table: config::billing_table().to_string(),
     }
 }
 
-fn parse_gs_locator(locator: &str) -> Option<(String, String)> {
-    let path = locator.strip_prefix("gs://")?;
-    let (bucket, object) = path.split_once('/')?;
-    Some((bucket.to_string(), object.to_string()))
-}
-
-fn release_pointer(base: &str) -> Option<(String, String)> {
-    let parsed = url::Url::parse(base).ok()?;
-    let host = parsed.host_str()?;
-    let path = parsed.path().trim_matches('/');
-    if host == "storage.googleapis.com" {
-        let (bucket, prefix) = path.split_once('/')?;
-        return Some((
-            bucket.to_string(),
-            format!("{}/latest.json", prefix.trim_end_matches('/')),
-        ));
+fn validate_dependency(
+    dependency: &str,
+) -> Result<&'static crate::capabilities::CapabilityVariant, CmdError> {
+    if let Some(variant) = crate::capabilities::configurable_variant(
+        crate::capabilities::RuntimeFacet::Dependency,
+        dependency,
+    ) {
+        return Ok(variant);
     }
-    let bucket = host.strip_suffix(".storage.googleapis.com")?;
-    Some((
-        bucket.to_string(),
-        format!("{}/latest.json", path.trim_end_matches('/')),
-    ))
-}
-
-fn validate_dependency(dependency: &str) -> Result<(), CmdError> {
-    match dependency {
-        "gcp" | "azure" | "aws" | "local" => Ok(()),
-        other => Err(CmdError::click(format!(
-            "unknown dependency {other:?}; use gcp, azure, aws or local"
-        ))),
-    }
+    let choices =
+        crate::capabilities::configurable_ids(crate::capabilities::RuntimeFacet::Dependency)
+            .collect::<Vec<_>>()
+            .join(", ");
+    Err(CmdError::click(format!(
+        "unknown dependency {dependency:?}; use one of: {choices}"
+    )))
 }
 
 async fn inspect_storage_bounded(role: &str, endpoint: Option<&Endpoint>) -> StorageInspection {
@@ -735,7 +707,7 @@ fn domain(
 }
 
 fn downstream_impacts(
-    dependency: &str,
+    dependency: &crate::capabilities::CapabilityVariant,
     primary: &StorageReport,
     backup: &StorageReport,
 ) -> Vec<DownstreamImpact> {
@@ -779,9 +751,11 @@ fn downstream_impacts(
         ),
     ];
 
-    let provider_enabled = config::wc_providers()
-        .iter()
-        .any(|provider| provider == dependency);
+    let provider_enabled = dependency.provider.is_some_and(|owner| {
+        config::wc_providers()
+            .iter()
+            .any(|provider| owner.matches(provider))
+    });
     impacts.push(impact(
         "compute_provider",
         "critical",
@@ -799,7 +773,7 @@ fn downstream_impacts(
         "configured compute providers are the scheduler's VM creation and lifecycle surface",
     ));
 
-    let release_hit = dependency_owns_release(dependency, config::release_base_url());
+    let release_hit = dependency_owns_release(dependency, &config::stado_release_api_url());
     impacts.push(impact(
         "release_channel",
         "high",
@@ -814,7 +788,8 @@ fn downstream_impacts(
         "new processes need the binary and checksum channel even when existing processes still run",
     ));
 
-    let pubsub_hit = dependency == "gcp" && !config::alerts_topic().is_empty();
+    let pubsub_hit = dependency.provider == Some(crate::capabilities::ProviderId::Gcp)
+        && !config::alerts_topic().is_empty();
     impacts.push(impact(
         "pubsub_alert_sink",
         "medium",
@@ -827,7 +802,7 @@ fn downstream_impacts(
     impacts.push(impact(
         "provider_billing_visibility",
         "high",
-        if dependency == "local" {
+        if dependency.provider == Some(crate::capabilities::ProviderId::Local) {
             "unaffected"
         } else {
             "degraded"
@@ -871,21 +846,20 @@ fn impact(
     }
 }
 
-fn dependency_owns_backend(dependency: &str, backend: &str) -> bool {
-    matches!(
-        (dependency, backend),
-        ("gcp", "gcs") | ("azure", "azure") | ("aws", "s3") | ("local", "local")
-    )
+fn dependency_owns_backend(
+    dependency: &crate::capabilities::CapabilityVariant,
+    backend: &str,
+) -> bool {
+    let backend_owner =
+        crate::capabilities::variant(crate::capabilities::RuntimeFacet::Storage, backend)
+            .and_then(|variant| variant.provider);
+    dependency.provider.is_some() && dependency.provider == backend_owner
 }
 
-fn dependency_owns_release(dependency: &str, url: &str) -> bool {
-    match dependency {
-        "gcp" => url.contains("googleapis.com") || url.contains("storage.cloud.google.com"),
-        "azure" => url.contains("blob.core.windows.net"),
-        "aws" => url.contains("amazonaws.com"),
-        "local" => url.starts_with("file:"),
-        _ => false,
-    }
+fn dependency_owns_release(dependency: &crate::capabilities::CapabilityVariant, url: &str) -> bool {
+    dependency
+        .provider
+        .is_some_and(|provider| provider.owns_release_url(url))
 }
 
 fn print_human(report: &BlastRadiusReport) {

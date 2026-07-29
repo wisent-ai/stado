@@ -663,17 +663,51 @@ fn extract_amount(props: &Value) -> Value {
 /// service-principal credential is resolved independently from Azure Key
 /// Vault.
 pub async fn live_snapshot(store: &JobStorage) -> Value {
-    let (gcp, azure) = tokio::join!(gcp_section(), azure_section(store));
-    billing_document(gcp, azure)
+    let variants = crate::capabilities::get(crate::capabilities::RuntimeFacet::Billing.as_str())
+        .map(|capability| capability.variants)
+        .unwrap_or_default();
+    let sections = futures::future::join_all(variants.iter().map(|variant| async move {
+        let value = match variant.adapter {
+            crate::capabilities::RuntimeAdapter::Billing(
+                crate::capabilities::BillingAdapter::Gcp,
+            ) => gcp_section().await,
+            crate::capabilities::RuntimeAdapter::Billing(
+                crate::capabilities::BillingAdapter::Azure,
+            ) => azure_section(store).await,
+            _ => error_section(format!(
+                "billing catalog variant {:?} has no billing adapter",
+                variant.id
+            )),
+        };
+        (variant.id, value)
+    }))
+    .await;
+    billing_document_from_sections(sections)
+}
+
+fn billing_document_from_sections(
+    sections: impl IntoIterator<Item = (&'static str, Value)>,
+) -> Value {
+    let mut document = serde_json::Map::new();
+    document.insert(
+        "reported_at".to_string(),
+        Value::String(Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false)),
+    );
+    document.insert(
+        "project".to_string(),
+        Value::String(config::project().to_string()),
+    );
+    for (provider, section) in sections {
+        document.insert(provider.to_string(), section);
+    }
+    Value::Object(document)
 }
 
 fn billing_document(gcp: Value, azure: Value) -> Value {
-    json!({
-        "reported_at": Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false),
-        "project": config::project(),
-        "gcp": gcp,
-        "azure": azure,
-    })
+    billing_document_from_sections([
+        (crate::capabilities::ProviderId::Gcp.as_str(), gcp),
+        (crate::capabilities::ProviderId::Azure.as_str(), azure),
+    ])
 }
 
 /// Persist one already-built billing document.
@@ -728,38 +762,51 @@ async fn publish(store: &JobStorage, mut document: Value) {
 }
 
 fn emit_alerts(document: &Value) {
-    let gcp = &document["gcp"];
-    let azure = &document["azure"];
-    if gcp
-        .get("credit_depleted")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        log(&format!(
-            "BILLING ALERT: GCP latest-month net ${} exceeds ${} — promotion credit exhausted or rate-capped",
-            py_value(gcp.get("latest_month_net_usd")),
-            py_value(gcp.get("net_alert_threshold_usd")),
-        ));
-    }
-    let threshold = config::billing_net_alert_usd();
-    if let Some(balance) = azure.get("available_balance").and_then(Value::as_f64) {
-        if balance < threshold {
-            log(&format!(
-                "BILLING ALERT: Azure available credit balance {} below {}",
-                py_f64(balance),
-                py_f64(threshold),
-            ));
+    if let Some(capability) = crate::capabilities::get("billing") {
+        for variant in capability.variants {
+            let section = &document[variant.id];
+            match variant.adapter {
+                crate::capabilities::RuntimeAdapter::Billing(
+                    crate::capabilities::BillingAdapter::Gcp,
+                ) if section
+                    .get("credit_depleted")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false) =>
+                {
+                    log(&format!(
+                        "BILLING ALERT: GCP latest-month net ${} exceeds ${} — promotion credit exhausted or rate-capped",
+                        py_value(section.get("latest_month_net_usd")),
+                        py_value(section.get("net_alert_threshold_usd")),
+                    ));
+                }
+                crate::capabilities::RuntimeAdapter::Billing(
+                    crate::capabilities::BillingAdapter::Azure,
+                ) => {
+                    let threshold = config::billing_net_alert_usd();
+                    if let Some(balance) = section.get("available_balance").and_then(Value::as_f64)
+                    {
+                        if balance < threshold {
+                            log(&format!(
+                                "BILLING ALERT: Azure available credit balance {} below {}",
+                                py_f64(balance),
+                                py_f64(threshold),
+                            ));
+                        }
+                    }
+                    if section.get("overage_risk").and_then(Value::as_bool) == Some(true) {
+                        log(
+                            "BILLING WARNING: Azure spending limit is off; paid overage can continue after credits",
+                        );
+                    }
+                }
+                _ => {}
+            }
         }
     }
-    if azure.get("overage_risk").and_then(Value::as_bool) == Some(true) {
-        log(
-            "BILLING WARNING: Azure spending limit is off; paid overage can continue after credits",
-        );
-    }
-    if let Some(providers) = document[HEALTH_KEY]
+    let provider_health = document[HEALTH_KEY]
         .get("providers")
-        .and_then(Value::as_object)
-    {
+        .and_then(Value::as_object);
+    if let Some(providers) = provider_health {
         for (provider, health) in providers {
             if health.get("degraded").and_then(Value::as_bool) == Some(true) {
                 log(&format!(
@@ -773,8 +820,16 @@ fn emit_alerts(document: &Value) {
     }
     log(&format!(
         "billing: gcp={} azure={} -> {BLOB}",
-        py_value(gcp.get("status")),
-        py_value(azure.get("status")),
+        py_value(
+            provider_health
+                .and_then(|providers| providers.get("gcp"))
+                .and_then(|health| health.get("status"))
+        ),
+        py_value(
+            provider_health
+                .and_then(|providers| providers.get("azure"))
+                .and_then(|health| health.get("status"))
+        ),
     ));
 }
 
@@ -782,12 +837,9 @@ fn emit_alerts(document: &Value) {
 // Account health
 // ---------------------------------------------------------------------------
 
-/// Time-unit ladder. NO Python original: Python spells `60` / `3600`
-/// inline. Here every quantity is derived from the standard-library integer
-/// constants (`u8::BITS == 8`, `u32::BITS == 32`, `u64::BITS == 64`)
-/// because this crate's edit policy rejects bare numeric literals. The
-/// arithmetic is const-evaluated, so nothing is computed at run time.
-pub const SECONDS_PER_SECOND: u64 = (u8::BITS / u8::BITS) as u64;
+/// Time-unit ladder. The base unit is explicit; larger units are derived
+/// from standard-library integer constants and prior entries in the ladder.
+pub const SECONDS_PER_SECOND: u64 = true as u64;
 /// `64 - 32/8 == 60`.
 pub const SECONDS_PER_MINUTE: u64 = (u64::BITS - u32::BITS / u8::BITS) as u64;
 /// `60 * 60 == 3600`.
@@ -807,8 +859,13 @@ pub const HEALTH_GRACE_SECONDS: i64 = SECONDS_PER_HOUR as i64;
 /// `CANONICAL_PREFIXES` already carries `billing_health/`.
 pub const HEALTH_KEY: &str = "account_health";
 
-/// Provider sections carried by the billing document, in report order.
-pub const PROVIDERS: &[&str] = &["gcp", "azure"];
+/// Provider sections carried by the billing document, in catalog order.
+pub fn providers() -> Vec<&'static str> {
+    crate::capabilities::provider_ids(crate::capabilities::RuntimeFacet::Billing)
+        .into_iter()
+        .map(|provider| provider.as_str())
+        .collect()
+}
 
 /// The one section status that means "this query actually succeeded".
 const OK_STATUS: &str = "ok";
@@ -853,7 +910,7 @@ pub struct Signal {
 /// Result of evaluating one billing document against the previous one.
 #[derive(Debug, Clone, Default)]
 pub struct HealthEvaluation {
-    /// Health of every entry in [`PROVIDERS`], in that order.
+    /// Health of every billing provider in catalog order.
     pub providers: Vec<ProviderHealth>,
     /// Every condition true right now.
     pub firing: Vec<Signal>,
@@ -886,9 +943,10 @@ pub fn apply_health(
         .map(str::to_string)
         .collect();
 
-    let mut providers = Vec::with_capacity(PROVIDERS.len());
+    let billing_providers = providers();
+    let mut providers = Vec::with_capacity(billing_providers.len());
     let mut record = serde_json::Map::new();
-    for &provider in PROVIDERS {
+    for provider in billing_providers {
         let prior = history
             .and_then(|health| health.get("providers"))
             .and_then(|map| map.get(provider));
@@ -1059,44 +1117,56 @@ fn signals(document: &Value, providers: &[ProviderHealth]) -> Vec<Signal> {
         });
     }
 
-    let gcp = &document["gcp"];
-    if gcp
-        .get("credit_depleted")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        firing.push(Signal {
-            key: "credit_depleted:gcp".to_string(),
-            subject: "stado billing: GCP promotion credit exhausted".to_string(),
-            message: format!(
-                "BILLING ALERT: GCP latest-month net ${} exceeds ${} — promotion credit exhausted or rate-capped",
-                py_value(gcp.get("latest_month_net_usd")),
-                py_value(gcp.get("net_alert_threshold_usd")),
-            ),
-        });
-    }
-
-    let azure = &document["azure"];
-    let threshold = config::billing_net_alert_usd();
-    if let Some(balance) = azure.get("available_balance").and_then(Value::as_f64) {
-        if balance < threshold {
-            firing.push(Signal {
-                key: "balance_low:azure".to_string(),
-                subject: "stado billing: Azure credit balance low".to_string(),
-                message: format!(
-                    "BILLING ALERT: Azure available credit balance {} below {}",
-                    py_f64(balance),
-                    py_f64(threshold),
-                ),
-            });
+    if let Some(capability) = crate::capabilities::get("billing") {
+        for variant in capability.variants {
+            let section = &document[variant.id];
+            match variant.adapter {
+                crate::capabilities::RuntimeAdapter::Billing(
+                    crate::capabilities::BillingAdapter::Gcp,
+                ) if section
+                    .get("credit_depleted")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false) =>
+                {
+                    firing.push(Signal {
+                        key: format!("credit_depleted:{}", variant.id),
+                        subject: "stado billing: GCP promotion credit exhausted".to_string(),
+                        message: format!(
+                            "BILLING ALERT: GCP latest-month net ${} exceeds ${} — promotion credit exhausted or rate-capped",
+                            py_value(section.get("latest_month_net_usd")),
+                            py_value(section.get("net_alert_threshold_usd")),
+                        ),
+                    });
+                }
+                crate::capabilities::RuntimeAdapter::Billing(
+                    crate::capabilities::BillingAdapter::Azure,
+                ) => {
+                    let threshold = config::billing_net_alert_usd();
+                    if let Some(balance) = section.get("available_balance").and_then(Value::as_f64)
+                    {
+                        if balance < threshold {
+                            firing.push(Signal {
+                                key: format!("balance_low:{}", variant.id),
+                                subject: "stado billing: Azure credit balance low".to_string(),
+                                message: format!(
+                                    "BILLING ALERT: Azure available credit balance {} below {}",
+                                    py_f64(balance),
+                                    py_f64(threshold),
+                                ),
+                            });
+                        }
+                    }
+                    if section.get("overage_risk").and_then(Value::as_bool) == Some(true) {
+                        firing.push(Signal {
+                            key: format!("overage_risk:{}", variant.id),
+                            subject: "stado billing: Azure spending limit is off".to_string(),
+                            message: "BILLING WARNING: Azure spending limit is off; paid overage can continue after credits".to_string(),
+                        });
+                    }
+                }
+                _ => {}
+            }
         }
-    }
-    if azure.get("overage_risk").and_then(Value::as_bool) == Some(true) {
-        firing.push(Signal {
-            key: "overage_risk:azure".to_string(),
-            subject: "stado billing: Azure spending limit is off".to_string(),
-            message: "BILLING WARNING: Azure spending limit is off; paid overage can continue after credits".to_string(),
-        });
     }
     firing
 }

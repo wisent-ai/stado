@@ -1,30 +1,41 @@
 # Operations
 
+## Host health publication
+
+Linux and macOS writers collect local disk and service state, then call
+`stado host publish-beacon FILE`. The command requires
+`STADO_HOST_HEALTH_API_URL` plus the dedicated
+`stado-host-health-beacon` Skarbiec URL/consumer/grant metadata. It resolves
+only `stado-host-health-api/token` and sends the document to authenticated
+`PUT /api/host-health`. The control plane stores `host_health/<host>.json`
+through its configured Stado backend, so Azure and local outage profiles write
+to Azure Blob and local storage respectively.
+
+Missing routing, an unreadable or over-broad grant, an insecure non-loopback
+HTTP URL, failed authorization, and backend errors all leave the prior beacon
+untouched and return failure. There is no cloud CLI, provider SDK, direct
+bucket URL, ambient credential, or cross-backend fallback in the writer.
+
+The systemd unit reads non-secret API/Skarbiec origins from
+`/etc/stado/host-health.env`; the launchd template carries the same non-secret
+routing metadata. Both keep the opaque Skarbiec grant owner-only at
+`~/.stado/host-health-beacon-skarbiec-token`.
+
+Every command below enters through Stado. Provider diagnostics belong inside
+the corresponding adapter and are unavailable unless that provider is
+explicitly enabled in the selected profile.
+
 ## Common queries
 
-### Hour-bucketed completion + failure histograms
+### Fleet, queue, quota, and billing
 
 ```bash
-gsutil ls -l gs://$WC_BUCKET/completed/ | grep -oE '202[0-9]-[0-9-]+T[0-9]+' \
-  | sort | uniq -c
-gsutil ls -l gs://$WC_BUCKET/failed/    | grep -oE '202[0-9]-[0-9-]+T[0-9]+' \
-  | sort | uniq -c
+stado overview
+stado overview --json
 ```
 
-### Latest scheduler decisions
-
-```bash
-gcloud functions logs read wisent-compute-tick --gen2 --region=$GCP_REGION \
-  --project=$GCP_PROJECT 2>&1 \
-  | grep -E "Available slots|Dispatched agent|Skip bucket|Yielding|Cost-optimal"
-```
-
-### Live quota usage
-
-```bash
-gcloud compute regions describe $GCP_REGION --project=$GCP_PROJECT \
-  --format=json | grep -A1 PREEMPTIBLE_NVIDIA
-```
+`overview` resolves the configured Stado backend and enabled adapters. It does
+not fall back to a provider CLI, ADC, or a different storage backend.
 
 ### Local agent state
 
@@ -40,9 +51,9 @@ ssh root@<host> '
 ### Inspect one job end-to-end
 
 ```bash
-JID=00255b9b
-gsutil cat gs://$WC_BUCKET/{queue,running,completed,failed}/${JID}.json 2>/dev/null
-gsutil cat gs://$WC_BUCKET/status/${JID}/output/command_output.log
+scripts/watch_job.sh <job_id>
+stado machine status <job_id>
+stado machine logs <job_id> --cursor 0 --limit 1048576
 ```
 
 ## Failure mode quick-grep
@@ -63,71 +74,42 @@ these substrings to classify failures fast:
 | `gated repo` / `401 Client Error` | The scoped workload credential cannot read the requested repository. Rotate `stado-huggingface/token` through the stdin-only Skarbiec service path; never place the token in VM metadata or logs. |
 | `Quota 'PREEMPTIBLE_NVIDIA_*_GPUS' exceeded` | Hit the regional preemptible quota. Either raise via GCP console or add zones to `MACHINE_TYPE_ZONES`. |
 
-## Velocity / load script
-
-A handy one-shot reporter (run from anywhere with ADC):
-
-```python
-# /tmp/wisent_velocity.py — see the README's Operations section
-# Computes: completions per 5-min bucket, failures per 5-min bucket,
-# concurrent in-flight count per bucket, average + peak load, per-model
-# pass-rate, plus an ASCII bar chart for the last 24 buckets.
-```
-
-`pass-rate (last 60m)` and `pass-rate (last 15m)` are the two numbers
-operators watch. Below ~30% sustained signals a regression — pull
-`gsutil ls -l gs://$WC_BUCKET/failed/ | sort -k 2 -r | head` and grep
-the first few jobs' stdouts to find the new failure class.
-
 ## Release / publishing
 
-`wisent-compute` is published manually (no CI publish step yet):
+`.github/workflows/deploy.yml` builds the Rust binaries and publishes every
+`stado://releases/stado/<version>/<platform>/<file>` through the authenticated
+Stado release API. The workflow expands only
+`stado-release-publisher/token` through its dedicated, sole-item Skarbiec
+grant and always requests create-if-absent.
+
+A retry reads back an existing object and accepts it only when the bytes are
+identical. Different bytes at the same version/platform URI are a hard
+collision; they are never overwritten. There is no PyPI workflow, provider
+CLI upload, ADC path, mutable image tag, or `latest` release pointer.
+
+Install a release by pinning its exact version, platform, and Stado control
+origin:
 
 ```bash
-# 1. bump version
-sed -i '' 's/version = "X.Y.Z"/version = "X.Y.Z+1"/' pyproject.toml
-
-# 2. commit + push  (CI redeploys the Cloud Function on push to main)
-git add pyproject.toml
-git commit -m "release: X.Y.Z+1"
-git push origin main
-
-# 3. build + upload the wheel
-rm -rf build/ dist/ stado.egg-info/
-python -m build
-twine upload dist/stado-*
-
-# 4. (optional) verify
-curl -s https://pypi.org/pypi/wisent-compute/json | grep -oE '"version":"[^"]+"' | head -1
+STADO_RELEASE_API_URL=https://stado.wisent.com \
+STADO_RELEASE_VERSION=<exact-immutable-version> \
+STADO_RELEASE_PLATFORM=<exact-release-platform> \
+./deploy/stado-up.sh <target>
 ```
-
-The GitHub Action `.github/workflows/deploy.yml` redeploys the Cloud
-Function via `deploy/redeploy_function.sh` on every push to `main`.
-The cloud agents pull `wisent-compute` and `wisent` via `pip install
---upgrade` in their startup script, so they pick up the new version
-on next spawn — no per-VM upgrade needed.
-
-To force the running fleet onto a new release immediately, delete the
-running agent VMs (`gcloud compute instances delete ...` — the scheduler
-respawns within one tick).
 
 ## Bringing up a new local box
 
 ```bash
-# On the box (or via wc bootstrap from your laptop, see CLI reference):
+# Install a verified Rust release and resolved profile first.
+export STADO_CONFIG="$HOME/.stado/config.json"
+export STADO_TARGET="<registry-target>"
 
-#  Install package + ADC
-pip install --user wisent-compute
-gcloud auth application-default login
+# The provider-neutral installer validates config and preflight, then delegates
+# persistent launchd/systemd ownership to Rust bootstrap.
+./install.sh
 
-# Configure registry entry (also pushed to gs:// for cluster-wide visibility)
-cat >> stado/targets/registry.json <<EOF
-{"name": "$(hostname)", "kind": "local", "ssh": "user@$(hostname)",
- "gpu_type": "auto", "slots": 0, "vram_gb": 96}
-EOF
-wc registry push
-
-# Install + enable as systemd
-wc bootstrap --local
-systemctl --user status wisent-agent.service
+# Health publication additionally requires the dedicated
+# stado-host-health-beacon Skarbiec grant and non-secret Stado/Skarbiec origins
+# described above. It never requires a cloud login.
+stado host health "$STADO_TARGET"
 ```

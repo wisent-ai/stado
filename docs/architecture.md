@@ -2,41 +2,32 @@
 
 ## Data flow
 
-```
-        submit (CLI / API)
-              │
-              ▼
-   gs://$WC_BUCKET/queue/<id>.json     ← the job ledger
-              │
-        ┌─────┴───────────────────────────────────┐
-        ▼                                         ▼
-  Cloud Function tick                     Local agent (long-lived)
-  (every 3 min via Cloud Scheduler)       (workstation, 1 box per registry)
-        │                                         │
-        ▼                                         ▼
-  schedule_queued_jobs                       _job_eligible + claim
-        │                                         │
-        ▼                                         ▼
-  dispatch_agent_vms                       move_job(queue → running)
-   (one VM per (accel,                     run subprocess
-   machine_type) bucket,                          │
-   sized to largest queued                         ▼
-   job in the bucket,                       gs://$WC_BUCKET/
-   uses startup_gpu_agent.sh                  status/<id>/output/
-   which boots `wc agent                            │
-   --idle-shutdown`)                                ▼
-        │                                    move_job(running → completed)
-        ▼
-  GCE VM boots, pip-installs
-  wisent + wisent-compute, runs
-  `wc agent --idle-shutdown`,
-  claims jobs by VRAM, self-
-  deletes when queue exhausted.
+```text
+submitter
+    |
+    v
+authenticated Stado machine / object boundary
+    |
+    v
+configured canonical queue backend
+    |
+    +----> Rust coordinator ----> enabled provider adapter ----> Rust agent
+    |                                                        |
+    +--------------------------------------------------------+
+                                                             |
+                                                             v
+                                      canonical status and output objects
 ```
 
-## GCS layout
+The selected `STADO_CONFIG` owns provider order, explicit fencing, primary
+storage, replication, release origin, and credential-verifier boundaries.
+Coordinator and agents use the same canonical object prefixes regardless of
+backend. There is no Cloud Function scheduler, provider-derived storage
+fallback, or direct client bucket path.
 
-Job state lives under `gs://$WC_BUCKET/`:
+## Canonical object layout
+
+Job state lives in the backend selected by `STADO_CONFIG`:
 
 | Prefix | Contents |
 |---|---|
@@ -46,7 +37,7 @@ Job state lives under `gs://$WC_BUCKET/`:
 | `failed/<id>.json` | Finished with rc != 0. `failed_at`, `error` set. |
 | `status/<id>/status` | `RUNNING <ts>` / `COMPLETED` / `FAILED exit=N`. |
 | `status/<id>/heartbeat` | `RUNNING <ts>` refreshed by the running job. |
-| `status/<id>/output/...` | stdout, profile PNGs, anything `gsutil cp -r`'d at job end. |
+| `status/<id>/output/...` | Canonical stdout, profiles, and job artifacts published by the trusted agent. |
 | `capacity/<consumer-id>.json` | Per-consumer broadcast: `free_vram_gb`, `total_vram_gb`, `free_slots`. |
 | `scripts/<id>.sh` | Per-job rendered startup script (legacy 1-VM-per-job path). |
 | `config/quotas.json` | Reservation overlay (subtracts from live API limits). |
@@ -87,24 +78,16 @@ passes `_job_eligible` (gpu_type-compat or pinned-local). No slot count
 
 ## Cloud-agent VM lifecycle
 
-- **Spawn** — scheduler tick calls `provider.create_instance(...)` with
-  `stado/templates/startup_gpu_agent.sh` rendered into VM startup metadata
-  without Hugging Face or other workload credentials.
-- **Boot** — VM runs `apt-get install python3-venv`, creates a venv,
-  `pip install wisent wisent-compute wisent-extractors wisent-evaluators
-  wisent-tools lm-eval` plus pinned `transformers<5.0`, `tokenizers`,
-  `datasets<4.0`, `huggingface-hub<1.0`, `numpy<2.3`. Sets
-  `NUMBA_NUM_THREADS=1` and `HF_HUB_DOWNLOAD_TIMEOUT=120` in env so the
-  pinned versions and rate-limit-tolerant fetches are loaded before
-  Python imports.
-- **Run** — `wc agent --gpu-type "${ACCEL_TYPE}" --idle-shutdown` polls
-  the queue, claims jobs, spawns subprocesses.
-- **Self-shutdown** — when `len(slots) == 0 AND no_eligible_in_queue`,
-  the agent exits cleanly. On GCE,
-  `stado/providers/local/gcp_self.py` calls `gcloud compute
-  instances delete --quiet` against the VM's own metadata-derived
-  `(name, zone)` to release the Spot reservation back to the pool.
-  No-op outside GCE.
+- **Spawn** — the Rust scheduler calls only an explicitly enabled provider
+  adapter after identity, quota, network, release, and credential preflight.
+- **Boot** — the adapter supplies a checksum-pinned Rust release and no
+  application bearer or ambient cloud credential to the workload.
+- **Run** — the Rust agent stages declared `stado://` inputs, resolves only
+  allowlisted Skarbiec item/field references, claims eligible work, and writes
+  canonical output.
+- **Release** — the owning adapter releases its resource. Provider-specific
+  metadata and cloud APIs remain encapsulated inside that adapter; local and
+  consumer operator paths never invoke a provider CLI.
 
 ## Box sandbox lifecycle
 

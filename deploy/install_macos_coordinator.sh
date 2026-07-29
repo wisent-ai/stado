@@ -39,6 +39,6 @@ if ! "$STADO_BIN" doctor --fix-hints; then
     echo "FATAL: Stado preflight failed; resolve the active profile findings above."
     false
 fi
-COORD_TARGET="${COORD_TARGET:-azure-control-plane}"
+COORD_TARGET="${COORD_TARGET:-local-control-plane}"
 
 exec "$STADO_BIN" bootstrap --local --target "$COORD_TARGET"

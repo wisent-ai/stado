@@ -395,9 +395,10 @@ pub async fn check_running_jobs(
                     live_consumers_cache = Some(read_consumer_capacity(store).await?);
                 }
                 let live = live_consumers_cache.as_ref().expect("just built");
-                let agent_live = ["local", "gcp", "azure", "aws"]
-                    .iter()
-                    .any(|p| live.contains_key(&format!("{p}-{hostname}")));
+                let agent_live = crate::capabilities::get("execution")
+                    .into_iter()
+                    .flat_map(|capability| capability.variants)
+                    .any(|variant| live.contains_key(&format!("{}-{hostname}", variant.id)));
                 if agent_live {
                     // Agent up != this old job progresses (restarts
                     // orphan it). Heartbeat is proof; self-terminating

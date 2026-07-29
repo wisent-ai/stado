@@ -63,11 +63,6 @@ const LEASE_PREFIX: &str = "provider-leases/";
 /// Suffix of a lease blob name (`provider-leases/{job_id}.json`).
 const LEASE_SUFFIX: &str = ".json";
 
-/// `WC_PROVIDERS` entry for device-local agents. Skipped exactly as
-/// `coordinator.rs::resolve_providers` skips it: a physical lab box has no
-/// VM lifecycle to list or reap.
-const LOCAL_PROVIDER: &str = "local";
-
 /// Printed where a value could not be resolved from any source.
 const UNKNOWN: &str = "-";
 
@@ -94,22 +89,32 @@ pub async fn dispatch(cmd: InstancesCommands) -> Result<(), CmdError> {
     }
 }
 
-/// Providers that own an agent-VM fleet: the single `--provider` name, or
-/// every `WC_PROVIDERS` entry, minus [`LOCAL_PROVIDER`].
+/// Providers that expose an inventory adapter: the selected provider or every
+/// configured provider, in catalog order.
 fn fleet_providers(selected: Option<&str>) -> Result<Vec<String>, CmdError> {
-    let configured: Vec<String> = match selected {
+    let configured = match selected {
         Some(name) => vec![name.trim().to_string()],
         None => config::wc_providers().to_vec(),
     };
-    let fleet: Vec<String> = configured
+    let enumerable =
+        crate::capabilities::provider_ids(crate::capabilities::RuntimeFacet::Inventory);
+    let fleet = configured
         .into_iter()
-        .filter(|name| name.as_str() != LOCAL_PROVIDER)
-        .collect();
+        .filter_map(|name| {
+            crate::capabilities::provider(&name)
+                .filter(|provider| enumerable.contains(provider))
+                .map(|provider| provider.as_str().to_string())
+        })
+        .collect::<Vec<_>>();
     if fleet.is_empty() {
-        return Err(CmdError::click(
-            "no provider with an agent-VM fleet selected (\"local\" agents run on physical \
-             hosts and have no VM lifecycle)",
-        ));
+        let choices = enumerable
+            .into_iter()
+            .map(|provider| provider.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(CmdError::click(format!(
+            "no provider with an agent-VM inventory selected; available inventory providers: {choices}"
+        )));
     }
     Ok(fleet)
 }

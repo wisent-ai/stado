@@ -2,25 +2,24 @@
 
 Job queue and compute management for Wisent GPU workloads.
 
-`wisent-compute` runs a fleet of GPU workers — long-lived local agents plus
-auto-scaling cloud agents — against a single GCS-backed job queue. The Rust
-Cloud Run control plane schedules work continuously; Rust agents claim jobs
-that fit their available VRAM. The system includes priority queues,
-per-accelerator zone rotation, pair-text caching, cost-aware dispatch, and
-condition-driven idle shutdown for cloud VMs.
+`wisent-compute` runs long-lived local agents and autoscaling cloud agents
+against the queue and object backend selected by `STADO_CONFIG`. The Rust
+control plane schedules work continuously and Rust agents claim jobs that fit
+their available VRAM. Azure is the active production backend; the local
+profile provides authenticated outage operation. Cloud-provider adapters are
+explicit opt-ins rather than bootstrap defaults.
 
 ## Install
 
-Released Rust binaries are published to
-`gs://wisent-compute/releases/stado/`. Install or refresh a registered host
-with:
+Released Rust binaries come from the configured immutable Stado release
+channel. Install or refresh a registered host with:
 
 ```bash
 ./deploy/stado-up.sh <target>
 ```
 
 The primary binaries are `stado` and its compatible `wc` entry point. The
-coordinator runs as the authenticated `stado-coordinator` Cloud Run service.
+coordinator runs through the configured authenticated Stado control boundary.
 
 ## Quick start
 
@@ -36,7 +35,7 @@ wc submit --batch jobs.txt --spot --max-cost-per-hour 4.00 ''
 # 3. Watch progress
 wc status
 
-# 4. Pull results from GCS once a job completes
+# 4. Pull canonical results through Stado once a job completes
 wc results <job_id> ./out/
 
 # 5. Run the local agent on a workstation (polls queue, claims jobs that
@@ -52,7 +51,7 @@ stado overview
 
 ## Registry-controlled disk cleanup
 
-Local targets can opt into bounded cleanup through their canonical GCS registry entry. Cleanup fails closed when the registry is unavailable, invalid, stale, or does not uniquely match the local hostname. Start every rollout in `report` mode; switch to `enforce` only after inspecting the host report.
+Local targets can opt into bounded cleanup through their canonical Stado registry entry. Cleanup fails closed when the configured backend is unavailable, invalid, stale, or does not uniquely match the local hostname. Start every rollout in `report` mode; switch to `enforce` only after inspecting the host report.
 
 ```json
 "disk_cleanup": {
@@ -74,9 +73,9 @@ Local targets can opt into bounded cleanup through their canonical GCS registry 
 ## Documentation
 
 - [`docs/cli.md`](docs/cli.md) — full CLI reference (`wc submit`, `wc agent`, `wc coordinator`, `wc registry`, `wc cost`, `wc bootstrap`).
-- [`docs/architecture.md`](docs/architecture.md) — data flow, scheduling rules, cloud-agent VM lifecycle, the GCS layout (`queue/`, `running/`, `completed/`, `failed/`, `capacity/`).
-- [`docs/configuration.md`](docs/configuration.md) — every `WC_*` / `GCP_*` env var, the registry schema, the live-quota + reservation overlay, GCP one-time setup.
-- [`docs/operations.md`](docs/operations.md) — common operator queries (failure breakdowns, fleet inspection, log paths) and release/publishing flow.
+- [`docs/architecture.md`](docs/architecture.md) — provider-neutral data flow, scheduling rules, agent lifecycle, and canonical object prefixes.
+- [`docs/configuration.md`](docs/configuration.md) — deployment profiles, authenticated boundaries, provider fencing, registry schema, and quota overlay.
+- [`docs/operations.md`](docs/operations.md) — Stado operator queries and immutable release publication.
 
 ## Project layout
 
@@ -84,22 +83,20 @@ Local targets can opt into bounded cleanup through their canonical GCS registry 
 stado-rs/
   src/                                # Rust CLI, queue, scheduler, agents, providers
   data/                               # registry, profiles, startup templates
-  cloudbuild.yaml                     # release binaries and coordinator image
 deploy/
-  deploy_stado_rust.sh                # Cloud Run production deployment
-  stado-up.sh                         # binary installer for registered hosts
-  gcp_setup.sh                        # one-time GCP bootstrap
+  deploy_stado_rust.sh                # native coordinator bootstrap
+  stado-up.sh                         # pinned immutable binary installer
 .github/workflows/
   deploy.yml                          # push-to-main Rust release and deployment
-  registry-bootstrap.yml              # registry changes install Rust agents
 ```
 
 ## Contributing
 
-Build and release from `stado-rs/`. The Cloud Build pipeline publishes the
-Linux binaries, checksum manifest, stable release pointer, and coordinator
-container image. Production deployment is handled by
-`deploy/deploy_stado_rust.sh`.
+Build from `stado-rs/`. The deploy workflow publishes each version/platform
+object through the exact `stado-release-publisher` Stado boundary with
+create-if-absent semantics. A retry accepts only byte-identical objects; a
+different payload at an existing URI is a release collision. Installers require
+an explicit version and never resolve a mutable `latest` image or pointer.
 
 ## License
 
