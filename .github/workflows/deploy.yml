@@ -27,6 +27,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Make tags and history visible to the version check
+        # actions/checkout fetches one commit and no tags, so `git tag --list` is
+        # empty on a runner however many tags the remote holds. The version check
+        # asks whether a better baseline than the committed one has become reachable,
+        # and a tag it cannot see is a tag it cannot notice: the check would pass
+        # while asleep, which is worse than not having it. Unshallowing matters
+        # separately, because recovering a tag's surface needs that tag's tree; the
+        # fallback is there because --unshallow refuses on a complete repository.
+        run: git fetch --force --tags --unshallow || git fetch --force --tags
+
       - name: Build provider-neutral Rust release
         run: |
           docker build --tag stado-rust-release stado-rs
