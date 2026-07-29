@@ -73,12 +73,21 @@ pub struct NextArgs {
     /// The version currently published, as a major.minor.patch triple.
     #[arg(long)]
     current: String,
-    /// Executable already published at --current.
+    /// Executable already published at --current, interrogated for its surface.
+    #[arg(long, conflicts_with = "published_surface")]
+    published: Option<String>,
+    /// Surface of the published side, read from a file instead of an executable.
+    /// Accepts what `release surface --json` prints, so a product that is not a
+    /// command-line tool can describe itself however it likes — routes, exported
+    /// symbols, event names — and still be classified by the same rule.
     #[arg(long)]
-    published: String,
+    published_surface: Option<PathBuf>,
     /// Executable being considered for release.
+    #[arg(long, conflicts_with = "candidate_surface")]
+    candidate: Option<String>,
+    /// Surface of the candidate side, read from a file.
     #[arg(long)]
-    candidate: String,
+    candidate_surface: Option<PathBuf>,
     /// Declare breakage the command list cannot show: a field dropped from a
     /// payload, a stored format changed, an exit code repurposed. This can only
     /// escalate the classification, never lower it.
@@ -502,10 +511,47 @@ fn read_surface(binary: &str, surface_command: &str) -> Result<Surface, CmdError
         .map_err(|err| CmdError::click(format!("{binary} {surface_command}: {err}")))
 }
 
+/// Resolve one side of the comparison from whichever source the caller named.
+///
+/// Requiring an executable would have limited the rule to command-line tools. A
+/// service, a library or an app has a surface too — routes, exported symbols,
+/// event names — and can describe it in a file. The classification does not care
+/// where the names came from, only that both sides were described the same way.
+fn resolve_side(
+    binary: Option<&String>,
+    file: Option<&PathBuf>,
+    surface_command: &str,
+    side: &str,
+) -> Result<Surface, CmdError> {
+    match (binary, file) {
+        (Some(binary), None) => read_surface(binary, surface_command),
+        (None, Some(path)) => {
+            let body = std::fs::read_to_string(path)
+                .map_err(|err| CmdError::click(format!("{}: {err}", path.display())))?;
+            Surface::from_help(&body)
+                .map_err(|err| CmdError::click(format!("{}: {err}", path.display())))
+        }
+        _ => Err(CmdError::click(format!(
+            "name exactly one {side} source: --{side} <executable> or \
+             --{side}-surface <file>"
+        ))),
+    }
+}
+
 fn next(args: &NextArgs) -> Result<(), CmdError> {
     let current = Version::parse(&args.current).map_err(|err| CmdError::click(err.to_string()))?;
-    let published = read_surface(&args.published, &args.surface_command)?;
-    let candidate = read_surface(&args.candidate, &args.surface_command)?;
+    let published = resolve_side(
+        args.published.as_ref(),
+        args.published_surface.as_ref(),
+        &args.surface_command,
+        "published",
+    )?;
+    let candidate = resolve_side(
+        args.candidate.as_ref(),
+        args.candidate_surface.as_ref(),
+        &args.surface_command,
+        "candidate",
+    )?;
     let decision = decide(current, &published, &candidate, args.breaking);
 
     if args.json {
