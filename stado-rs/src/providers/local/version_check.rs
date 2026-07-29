@@ -36,51 +36,11 @@ const IMPORT_BAD_TTL: Duration = Duration::from_secs(30);
 #[cfg(test)]
 const CACHE_TTL: Duration = IMPORT_BAD_TTL;
 
-/// One token of Python `_version_tuple`: (0, int) for numeric tokens,
-/// (1, str) otherwise — numeric tokens always sort before string tokens.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum VersionToken {
-    Num(i64),
-    Str(String),
-}
-
-impl Ord for VersionToken {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        use std::cmp::Ordering;
-        match (self, other) {
-            (VersionToken::Num(a), VersionToken::Num(b)) => a.cmp(b),
-            (VersionToken::Str(a), VersionToken::Str(b)) => a.cmp(b),
-            // Python (0, int) < (1, str).
-            (VersionToken::Num(_), VersionToken::Str(_)) => Ordering::Less,
-            (VersionToken::Str(_), VersionToken::Num(_)) => Ordering::Greater,
-        }
-    }
-}
-
-impl PartialOrd for VersionToken {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-/// Python `_version_tuple`: split on "." and "-", numeric tokens as ints.
-/// Slice comparison matches Python tuple semantics (a proper prefix sorts
-/// before its extension: 1.0 < 1.0.1).
-pub fn version_tuple(v: &str) -> Vec<VersionToken> {
-    v.replace('-', ".")
-        .split('.')
-        .map(|token| match token.parse::<i64>() {
-            Ok(n) => VersionToken::Num(n),
-            // i64 overflow lands here too; real release versions never do.
-            Err(_) => VersionToken::Str(token.to_string()),
-        })
-        .collect()
-}
-
-/// True when `latest` is strictly newer than `installed`.
-pub fn version_newer(installed: &str, latest: &str) -> bool {
-    version_tuple(installed) < version_tuple(latest)
-}
+/// Version ordering lives in [`crate::release`], which owns every rule about
+/// release versions. Re-exported here because this module's PyPI checks and the
+/// callers that grew up around them compare versions too, and two
+/// implementations of "which of these is newer" is exactly one too many.
+pub use crate::release::{version_newer, version_tuple, VersionToken};
 
 /// Pure: newest release key of a PyPI /pypi/<pkg>/json payload.
 /// None when there are no releases (Python `if not releases: return None`).
