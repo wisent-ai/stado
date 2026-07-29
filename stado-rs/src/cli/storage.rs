@@ -1391,50 +1391,62 @@ fn read_object_source(source: &str) -> Result<Vec<u8>, CmdError> {
     }
 }
 
-async fn put(args: &StoragePutArgs) -> Result<(), CmdError> {
-    let object = crate::object_store::ObjectRef::parse(&args.uri)?;
+/// Store one object through whichever route its namespace requires, create-only
+/// for `releases` whether or not the caller asks.
+///
+/// Shared with `stado release publish` so the publisher cannot drift from what
+/// `storage put` does: one implementation of "how an object reaches the channel".
+pub(crate) async fn store_object(
+    uri: &str,
+    source: &str,
+    content_type: &str,
+    if_absent: bool,
+) -> Result<String, CmdError> {
+    let object = crate::object_store::ObjectRef::parse(uri)?;
     let uri = object.to_string();
-    let create_only = args.if_absent || object.namespace() == "releases";
+    let create_only = if_absent || object.namespace() == "releases";
     if let Some(remote) = RemoteObjectApi::configured()? {
-        let bytes = read_object_source(&args.source)?;
-        remote
-            .put(&uri, &args.content_type, create_only, bytes)
-            .await?;
-    } else {
-        let path = object.storage_path();
-        let store = JobStorage::new().await?;
-        let uploaded = if create_only {
-            if args.source == "-" {
-                let bytes = read_object_source(&args.source)?;
-                let mut source = tempfile::NamedTempFile::new()?;
-                source.write_all(&bytes)?;
-                store.upload_file_if_absent(&path, source.path()).await?
-            } else {
-                store
-                    .upload_file_if_absent(&path, std::path::Path::new(&args.source))
-                    .await?
-            }
+        let bytes = read_object_source(source)?;
+        remote.put(&uri, content_type, create_only, bytes).await?;
+        return Ok(uri);
+    }
+    let path = object.storage_path();
+    let store = JobStorage::new().await?;
+    let uploaded = if create_only {
+        if source == "-" {
+            let bytes = read_object_source(source)?;
+            let mut staged = tempfile::NamedTempFile::new()?;
+            staged.write_all(&bytes)?;
+            store.upload_file_if_absent(&path, staged.path()).await?
         } else {
-            let bytes = read_object_source(&args.source)?;
-            store.upload_bytes(&path, &bytes).await?;
-            true
-        };
-
-        if !uploaded {
-            let policy = if object.namespace() == "releases" {
-                "release objects are immutable"
-            } else {
-                "--if-absent refused to replace it"
-            };
-            return Err(CmdError::click(format!(
-                "{object} already exists; {policy}"
-            )));
+            store
+                .upload_file_if_absent(&path, std::path::Path::new(source))
+                .await?
         }
+    } else {
+        let bytes = read_object_source(source)?;
+        store.upload_bytes(&path, &bytes).await?;
+        true
+    };
 
-        let metadata = crate::object_store::metadata(&object, &args.content_type);
-        store.backend().set_metadata(&path, &metadata).await?;
+    if !uploaded {
+        let policy = if object.namespace() == "releases" {
+            "release objects are immutable"
+        } else {
+            "--if-absent refused to replace it"
+        };
+        return Err(CmdError::click(format!(
+            "{object} already exists; {policy}"
+        )));
     }
 
+    let metadata = crate::object_store::metadata(&object, content_type);
+    store.backend().set_metadata(&path, &metadata).await?;
+    Ok(uri)
+}
+
+async fn put(args: &StoragePutArgs) -> Result<(), CmdError> {
+    let uri = store_object(&args.uri, &args.source, &args.content_type, args.if_absent).await?;
     if args.json {
         echo_json(&json!({
             "state": "stored",
@@ -1447,28 +1459,27 @@ async fn put(args: &StoragePutArgs) -> Result<(), CmdError> {
     Ok(())
 }
 
-async fn get(args: &StorageGetArgs) -> Result<(), CmdError> {
-    let object = crate::object_store::ObjectRef::parse(&args.uri)?;
+/// Fetch one object's bytes through whichever route its namespace requires.
+/// Shared with `stado release publish` for the same reason as [`store_object`].
+pub(crate) async fn fetch_object(uri: &str) -> Result<Vec<u8>, CmdError> {
+    let object = crate::object_store::ObjectRef::parse(uri)?;
     let uri = object.to_string();
-    let bytes = if object.namespace() == "releases" {
+    if object.namespace() == "releases" {
         if let Some(remote) = RemoteObjectApi::configured_release_reader()? {
-            remote.get_release(&uri).await?
-        } else {
-            let store = JobStorage::new().await?;
-            let Some(bytes) = store.read_bytes(&object.storage_path()).await? else {
-                return Err(CmdError::click(format!("{object}: absent")));
-            };
-            bytes
+            return remote.get_release(&uri).await;
         }
     } else if let Some(remote) = RemoteObjectApi::configured()? {
-        remote.get(&uri).await?
-    } else {
-        let store = JobStorage::new().await?;
-        let Some(bytes) = store.read_bytes(&object.storage_path()).await? else {
-            return Err(CmdError::click(format!("{object}: absent")));
-        };
-        bytes
+        return remote.get(&uri).await;
+    }
+    let store = JobStorage::new().await?;
+    let Some(bytes) = store.read_bytes(&object.storage_path()).await? else {
+        return Err(CmdError::click(format!("{object}: absent")));
     };
+    Ok(bytes)
+}
+
+async fn get(args: &StorageGetArgs) -> Result<(), CmdError> {
+    let bytes = fetch_object(&args.uri).await?;
     if args.destination == "-" {
         let mut out = std::io::stdout().lock();
         out.write_all(&bytes)?;
