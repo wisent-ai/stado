@@ -4,41 +4,43 @@
 set -eu
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
-TARGET="${1:?"usage: stado-up <target-name>"}"
+TARGET="${1:-local-control-plane}"
 
 BIN_DIR="${HOME}/.stado/bin"
 mkdir -p "$BIN_DIR"
 STADO_BIN="${STADO_BIN:-$BIN_DIR/stado}"
-# Initial release channel. There is deliberately no GCS fallback. Operator
-# laptops have no managed identity for private Azure Blob reads, so provide a
-# public channel or append a container SAS to WC_RELEASE_BASE_URL. Once Rust
-# Stado is installed, its own fetcher uses the configured Azure identity.
-if [ -n "${WC_RELEASE_BASE_URL:-}" ]; then
-    RELEASE_BASE="$WC_RELEASE_BASE_URL"
-elif [ -n "${WC_AZURE_STORAGE_ACCOUNT:-}" ]; then
-    RELEASE_BASE="https://${WC_AZURE_STORAGE_ACCOUNT}.blob.core.windows.net/${WC_AZURE_CONTAINER:-stado}/releases/stado"
-else
-    echo "FATAL: release channel unresolved; set WC_RELEASE_BASE_URL (Azure Blob URL plus SAS when private)"
-    false
-fi
-RELEASE_QS=""
-case "$RELEASE_BASE" in
-    *\?*)
-        RELEASE_QS="?${RELEASE_BASE#*\?}"
-        RELEASE_BASE="${RELEASE_BASE%%\?*}"
-        ;;
+# Bootstrap reads a caller-pinned immutable version through Stado's public,
+# release-only GET route. Direct provider URLs and mutable latest pointers are
+# intentionally unsupported.
+RELEASE_API="${STADO_RELEASE_API_URL:?set the HTTPS Stado control origin}"
+VERSION="${STADO_RELEASE_VERSION:?pin the exact immutable Stado version}"
+PLATFORM="${STADO_RELEASE_PLATFORM:?pin the exact Stado release platform}"
+case "$RELEASE_API" in
+    https://*) ;;
+    *) echo "FATAL: STADO_RELEASE_API_URL must use HTTPS"; false ;;
 esac
-RELEASE_BASE="${RELEASE_BASE%/}"
+case "$VERSION" in
+    *[![:alnum:]._-]*|"") echo "FATAL: invalid STADO_RELEASE_VERSION"; false ;;
+esac
+case "$PLATFORM" in
+    *[![:alnum:]._-]*|"") echo "FATAL: invalid STADO_RELEASE_PLATFORM"; false ;;
+esac
+RELEASE_API="${RELEASE_API%/}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-curl -fsSL "${RELEASE_BASE}/latest.json${RELEASE_QS}" -o "${TMP}/latest.json"
-VERSION="$(/usr/bin/plutil -extract version raw -o - "${TMP}/latest.json")"
-BASE="${RELEASE_BASE}/${VERSION}/darwin-arm64"
-RELEASE_BINARIES="stado wc stado-coverage stado-fix stado-watchdog stado-mcp"
+download_release() {
+    object="$1"
+    destination="$2"
+    curl -fsSL --get \
+        --data-urlencode "uri=stado://releases/stado/${VERSION}/${PLATFORM}/${object}" \
+        "${RELEASE_API}/api/release/object" \
+        -o "$destination"
+}
+RELEASE_BINARIES="stado stado-coverage stado-fix stado-watchdog stado-mcp"
 for name in $RELEASE_BINARIES; do
-    curl -fsSL "${BASE}/${name}${RELEASE_QS}" -o "${TMP}/${name}"
+    download_release "$name" "${TMP}/${name}"
 done
-curl -fsSL "${BASE}/SHA256SUMS${RELEASE_QS}" -o "${TMP}/SHA256SUMS"
+download_release SHA256SUMS "${TMP}/SHA256SUMS"
 for name in $RELEASE_BINARIES; do
     EXPECTED="$(grep -E "[ *]${name}$" "${TMP}/SHA256SUMS")"
     EXPECTED="${EXPECTED%% *}"
@@ -56,18 +58,14 @@ for name in $RELEASE_BINARIES; do
     mv "${target}.new" "$target"
 done
 
-# The bootstrap-only SAS is never persisted, but all binaries needed by Rust
-# bootstrap are installed before it is removed from the channel URL.
-export WC_RELEASE_BASE_URL="$RELEASE_BASE"
-if [ -z "${STADO_CONFIG:-}" ]; then
-    STADO_CONFIG="$HOME/.config/stado/config.json"
-    mkdir -p "${STADO_CONFIG%/*}"
-    cp "$SCRIPT_DIR/local/stado.config.json" "$STADO_CONFIG"
-    chmod u=rw,go= "$STADO_CONFIG"
+# Persistent profile ownership stays with SecretStateRepair. This installer
+# only installs the scoped release on the current host.
+if [ -z "${STADO_CONFIG:-}" ] || [ ! -r "$STADO_CONFIG" ]; then
+    echo "FATAL: STADO_CONFIG must name the readable profile installed by SecretStateRepair"
+    false
 fi
-if [ ! -r "$STADO_CONFIG" ]; then
-    echo "FATAL: missing Stado config at $STADO_CONFIG"
-    echo "Use deploy/local/stado.config.json for outage mode, or explicitly set STADO_CONFIG."
+if [ "$TARGET" != "local-control-plane" ]; then
+    echo "FATAL: stado-up installs only the local-control-plane owner; remote agents use stado bootstrap without --local"
     false
 fi
 export STADO_CONFIG

@@ -143,8 +143,9 @@ fn fleet_snapshot(
         .targets
         .iter()
         .map(|target| {
-            let active_worker =
-                (target.kind == "local").then(|| active_targets.contains(&target.name));
+            let active_worker = target
+                .is_provider(crate::capabilities::ProviderId::Local)
+                .then(|| active_targets.contains(&target.name));
             json!({
                 "name": target.name,
                 "kind": target.kind,
@@ -171,7 +172,7 @@ fn fleet_snapshot(
     let local_registered = registry
         .targets
         .iter()
-        .filter(|target| target.kind == "local")
+        .filter(|target| target.is_provider(crate::capabilities::ProviderId::Local))
         .count();
 
     json!({
@@ -346,7 +347,7 @@ fn print_human(document: &Value) {
             .and_then(Value::as_str)
             .unwrap_or("unavailable")
     );
-    let gcp = &billing["gcp"];
+    let gcp = &billing[crate::capabilities::ProviderId::Gcp.as_str()];
     if gcp.get("status").and_then(Value::as_str) == Some("ok") {
         if let Some(month) = gcp
             .get("monthly")
@@ -386,7 +387,7 @@ fn print_human(document: &Value) {
                 .unwrap_or("unavailable")
         );
     }
-    let azure = &billing["azure"];
+    let azure = &billing[crate::capabilities::ProviderId::Azure.as_str()];
     if azure.get("status").and_then(Value::as_str) == Some("ok") {
         println!(
             "  Azure credits: current={} estimated={} {}",

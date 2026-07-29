@@ -56,7 +56,7 @@ impl Context {
             ActionKind::ReleaseReservation => self.gcp()?.inspect_reservation(action).await,
             ActionKind::DisableStorageBackup => inspect_backup_config(),
             ActionKind::PauseScheduler => self.gcp()?.inspect_scheduler(action).await,
-            ActionKind::StopInstance => self.gcp()?.inspect_instance(action).await,
+            ActionKind::StopInstance | ActionKind::StartInstance => self.inspect_vm(action).await,
             ActionKind::SuspendCloudSql => self.gcp()?.inspect_sql(action).await,
             rollback => Err(CmdError::click(format!(
                 "rollback-only action {rollback:?} cannot be inspected as a plan action"
@@ -75,7 +75,8 @@ impl Context {
             ActionKind::DisableStorageBackup => disable_backup_config(action),
             ActionKind::PauseScheduler => self.gcp()?.pause_scheduler(action).await,
             ActionKind::ResizeManagedInstanceGroup => self.gcp()?.resize_mig(action).await,
-            ActionKind::StopInstance => self.gcp()?.stop_instance(action).await,
+            ActionKind::StopInstance => self.stop_vm(action).await,
+            ActionKind::StartInstance => self.start_vm(action).await,
             ActionKind::SuspendCloudSql => self.gcp()?.suspend_sql(action).await,
             rollback => Err(CmdError::click(format!(
                 "rollback-only action {rollback:?} cannot be applied directly"
@@ -99,7 +100,8 @@ impl Context {
                     .resize_mig_with(action, &rollback.parameters)
                     .await
             }
-            ActionKind::StartInstance => self.gcp()?.start_instance(action).await,
+            ActionKind::StartInstance => self.start_vm(action).await,
+            ActionKind::StopInstance => self.stop_vm(action).await,
             ActionKind::RestoreCloudSql => self.gcp()?.restore_sql(action, rollback).await,
             kind => Err(CmdError::click(format!(
                 "action {} has unsupported rollback kind {kind:?}",
@@ -149,24 +151,94 @@ impl Context {
             .iter()
             .find(|row| row.reference == action.resource.reference)
         {
+            let inventory_context = self.inventory_context(action).await?;
+            let inventory_orphan = inventory_context.map(|(orphan, _)| orphan).unwrap_or(true);
+            let age_seconds = inventory_context
+                .map(|(_, age_seconds)| age_seconds as f64)
+                .unwrap_or(row.age_seconds);
             return Ok(json!({
                 "exists": true,
-                "orphan": row.held_by.is_empty(),
-                "age_seconds": row.age_seconds,
+                "running": true,
+                "stopped": false,
+                "lifecycle_state": "running",
+                "orphan": row.held_by.is_empty() && inventory_orphan,
+                "age_seconds": age_seconds,
                 "held_by": row.held_by,
             }));
         }
         let client = get_provider(provider)?;
+        let lifecycle = client
+            .instance_lifecycle_state(&action.resource.reference)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
         let exists = client
             .instance_exists(&action.resource.reference)
             .await
             .map_err(|error| CmdError::click(error.to_string()))?;
+        let normalized = lifecycle
+            .as_deref()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let stopped = matches!(
+            normalized.as_str(),
+            "stopped" | "stopping" | "deallocated" | "deallocating"
+        ) || (provider == "gcp" && normalized == "terminated");
+        let present = exists || stopped;
+        let inventory_context = self.inventory_context(action).await?;
+        let inventory_orphan = inventory_context.map(|(orphan, _)| orphan).unwrap_or(false);
+        let age_seconds = inventory_context
+            .map(|(_, age_seconds)| age_seconds)
+            .unwrap_or_default();
         Ok(json!({
-            "exists": exists,
-            "orphan": false,
-            "age_seconds": f64::default(),
+            "exists": present,
+            "running": exists && !stopped,
+            "stopped": stopped,
+            "lifecycle_state": lifecycle,
+            "orphan": inventory_orphan,
+            "age_seconds": age_seconds,
             "held_by": [],
         }))
+    }
+
+    async fn inventory_context(&self, action: &Action) -> Result<Option<(bool, u64)>, CmdError> {
+        let Some(resource_id) = action.parameters.get("resource_id").and_then(Value::as_str) else {
+            return Ok(None);
+        };
+        let Some(snapshot) = crate::autonomy::storage::read_json::<
+            crate::autonomy::model::InventorySnapshot,
+        >(&self.store, "autonomy/inventory/latest.json")
+        .await?
+        else {
+            return Ok(Some((false, u64::default())));
+        };
+        let Some(resource) = snapshot
+            .resources
+            .iter()
+            .find(|resource| resource.resource_id == resource_id)
+        else {
+            return Ok(Some((false, u64::default())));
+        };
+        let revision_matches = action
+            .parameters
+            .get("resource_revision")
+            .and_then(Value::as_str)
+            .is_some_and(|expected| resource.source_revision.as_deref() == Some(expected));
+        let age_seconds = resource
+            .created_at
+            .as_deref()
+            .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw).ok())
+            .map(|created| {
+                chrono::Utc::now()
+                    .signed_duration_since(created.with_timezone(&chrono::Utc))
+                    .num_seconds()
+                    .max(i64::default())
+            })
+            .and_then(|seconds| u64::try_from(seconds).ok())
+            .unwrap_or_default();
+        Ok(Some((
+            resource.ownership.is_mutable() && resource.workload.is_none() && revision_matches,
+            age_seconds,
+        )))
     }
 
     async fn delete_vm(&self, action: &Action) -> Result<Value, CmdError> {
@@ -186,6 +258,24 @@ impl Context {
             .await
             .map_err(|error| CmdError::click(error.to_string()))?;
         Ok(json!({"deleted": true, "provider": provider}))
+    }
+
+    async fn stop_vm(&self, action: &Action) -> Result<Value, CmdError> {
+        let provider = provider_name(action.resource.provider)?;
+        get_provider(provider)?
+            .stop_instance(&action.resource.reference)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        Ok(json!({"stopped": true, "provider": provider}))
+    }
+
+    async fn start_vm(&self, action: &Action) -> Result<Value, CmdError> {
+        let provider = provider_name(action.resource.provider)?;
+        get_provider(provider)?
+            .start_instance(&action.resource.reference)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        Ok(json!({"started": true, "provider": provider}))
     }
 
     fn gcp(&self) -> Result<&GcpRest, CmdError> {
@@ -240,15 +330,12 @@ fn field<'a>(value: &'a Value, dotted: &str) -> Option<&'a Value> {
 }
 
 fn provider_name(provider: ProviderKind) -> Result<&'static str, CmdError> {
-    match provider {
-        ProviderKind::Gcp => Ok("gcp"),
-        ProviderKind::Azure => Ok("azure"),
-        ProviderKind::Aws => Ok("aws"),
-        ProviderKind::Box => Ok("box"),
-        other => Err(CmdError::click(format!(
-            "provider {other:?} has no VM deletion executor"
-        ))),
-    }
+    crate::capabilities::constructible_variant(
+        crate::capabilities::RuntimeFacet::Compute,
+        provider.as_str(),
+    )
+    .map(|variant| variant.id)
+    .ok_or_else(|| CmdError::click(format!("provider {provider:?} has no VM deletion executor")))
 }
 
 #[derive(Clone)]
@@ -420,27 +507,6 @@ impl GcpRest {
         })
     }
 
-    async fn inspect_instance(&self, action: &Action) -> Result<Value, CmdError> {
-        let url = self.compute_url(&format!(
-            "/projects/{}/zones/{}/instances/{}",
-            self.project,
-            location(action)?,
-            action.resource.name
-        ));
-        let value = self.get_allow_404(&url, "inspect GCE instance").await?;
-        Ok(match value {
-            None => json!({"exists": false, "status": Value::Null, "has_local_ssd": false}),
-            Some(value) => json!({
-                "exists": true,
-                "status": value.get("status"),
-                "has_local_ssd": has_local_ssd(&value),
-                "resource_id": value.get("id"),
-                "creation_timestamp": value.get("creationTimestamp"),
-                "metadata_fingerprint": value.pointer("/metadata/fingerprint"),
-            }),
-        })
-    }
-
     async fn inspect_sql(&self, action: &Action) -> Result<Value, CmdError> {
         let url = format!(
             "https://sqladmin.googleapis.com/sql/v1beta4/projects/{}/instances/{}",
@@ -567,34 +633,6 @@ impl GcpRest {
             .await?;
         self.wait_operation(&operation).await?;
         Ok(json!({"target_size": target}))
-    }
-
-    async fn stop_instance(&self, action: &Action) -> Result<Value, CmdError> {
-        let url = self.compute_url(&format!(
-            "/projects/{}/zones/{}/instances/{}/stop?discardLocalSsd=false",
-            self.project,
-            location(action)?,
-            action.resource.name
-        ));
-        let operation = self
-            .request_json(Method::POST, &url, Some(&json!({})), "stop instance")
-            .await?;
-        self.wait_operation(&operation).await?;
-        Ok(json!({"stopped": true}))
-    }
-
-    async fn start_instance(&self, action: &Action) -> Result<Value, CmdError> {
-        let url = self.compute_url(&format!(
-            "/projects/{}/zones/{}/instances/{}/start",
-            self.project,
-            location(action)?,
-            action.resource.name
-        ));
-        let operation = self
-            .request_json(Method::POST, &url, Some(&json!({})), "start instance")
-            .await?;
-        self.wait_operation(&operation).await?;
-        Ok(json!({"started": true}))
     }
 
     async fn suspend_sql(&self, action: &Action) -> Result<Value, CmdError> {
@@ -915,15 +953,6 @@ fn json_u64(value: &Value) -> Option<u64> {
         .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
 }
 
-fn has_local_ssd(instance: &Value) -> bool {
-    instance
-        .get("disks")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .any(|disk| disk.get("type").and_then(Value::as_str) == Some("SCRATCH"))
-}
-
 fn inspect_backup_config() -> Result<Value, CmdError> {
     if backup_env_override() {
         return Ok(json!({
@@ -1012,16 +1041,13 @@ fn enable_backup_config(action: &Action, receipt: Option<&Value>) -> Result<Valu
 }
 
 fn backup_env_override() -> bool {
-    [
-        "WC_BACKUP_STORAGE_BACKEND",
-        "WC_BACKUP_BUCKET",
-        "WC_BACKUP_AZURE_STORAGE_ACCOUNT",
-        "WC_BACKUP_AZURE_CONTAINER",
-        "WC_BACKUP_S3_REGION",
-        "WC_BACKUP_LOCAL_STORAGE_PATH",
-    ]
-    .into_iter()
-    .any(|name| std::env::var(name).is_ok_and(|value| !value.trim().is_empty()))
+    crate::capabilities::STORAGE_BACKEND_CONFIG
+        .backup_env
+        .into_iter()
+        .chain(crate::capabilities::backup_config_envs(
+            crate::capabilities::RuntimeFacet::Storage,
+        ))
+        .any(|name| std::env::var(name).is_ok_and(|value| !value.trim().is_empty()))
 }
 
 fn atomic_json(path: &Path, value: &Value) -> Result<(), CmdError> {

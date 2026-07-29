@@ -1,9 +1,9 @@
 {
-  "_comment": "Azure-primary Stado deployment. Install at ~/.stado/config.json (or point $STADO_CONFIG at it). Replace every <placeholder> before use. Provider preference, explicit fences and both storage locators live only in this file.",
+  "_comment": "Fenced Azure-primary deployment template. Replace every <placeholder>, provision dedicated runtime identities, then remove Azure from providers_disabled and add it to providers while AWS and GCP remain fenced. The active authoritative profile is deploy/local/stado.config.json.",
 
-  "providers": ["azure", "aws", "gcp"],
-  "providers_disabled": ["aws", "gcp"],
-  "_providers_comment": "GCP is fenced while billing is disabled. AWS is fenced until its network and AMI settings are provisioned; remove a provider from providers_disabled only when doctor can authenticate and schedule it.",
+  "providers": [],
+  "providers_disabled": ["azure", "aws", "gcp"],
+  "_providers_comment": "The enabled-provider set is intentionally empty. Only after Azure identity, networking, quota, object routes, and the scoped agent grant are provisioned, remove Azure from providers_disabled and add it to providers; AWS and GCP remain fenced.",
 
   "storage": {
     "backend": "azure",
@@ -44,44 +44,282 @@
     "bind": "localhost"
   },
 
+  "backend": {
+    "messaging": {
+      "skarbiec": {
+        "url": "https://<control-plane-skarbiec-host>",
+        "consumer": "wisent-backend-business-messaging",
+        "token_file": "~/.stado/wisent-backend-business-messaging-skarbiec-token",
+        "items": [
+          "wisent-backend-apns",
+          "wisent-backend-fcm",
+          "stado-supabase"
+        ]
+      }
+    },
+    "push_skarbiec": {
+      "consumer": "stado-backend-push-api-verifier",
+      "token_file": "~/.stado/stado-backend-push-api-verifier-skarbiec-token"
+    },
+    "push_clients": {
+      "wisent-app": {
+        "item": "wisent-app-push-router",
+        "actions": ["register", "send", "status", "unregister"],
+        "paths": ["/api/backend/push/inactivity", "/api/backend/push/reachability", "/api/backend/push/register", "/api/backend/push/unregister"]
+      },
+      "wisent-backend": {
+        "item": "wisent-backend-push-router",
+        "actions": ["send"],
+        "paths": ["/api/backend/push/inactivity"]
+      }
+    }
+  },
+  "rate_limit": {
+    "skarbiec": {
+      "consumer": "stado-rate-limit-api-verifier",
+      "token_file": "~/.stado/stado-rate-limit-api-verifier-skarbiec-token"
+    },
+    "clients": {
+      "trading-autonomy": {
+        "consumer": "trading-autonomy-rate-limit-client",
+        "item": "trading-autonomy-rate-limit-api",
+        "namespaces": ["trading-autonomy"],
+        "actions": ["consume"]
+      }
+    }
+  },
+
+
+  "services": {
+    "brama": {
+      "allowed_models": [
+        "wisent-backend/chat/primary",
+        "wisent-backend/chat/fallback",
+        "wisent-backend/evaluation",
+        "wisent-backend/embeddings",
+        "wisent-backend/moderation",
+        "weles/agent/primary"
+      ],
+      "model_aliases": {
+        "wisent-backend/chat/primary": "qwen/default",
+        "wisent-backend/chat/fallback": "qwen/default",
+        "wisent-backend/evaluation": "openai/default",
+        "wisent-backend/embeddings": "openai/embeddings",
+        "wisent-backend/moderation": "openai/moderation",
+        "weles/agent/primary": "qwen/default"
+      },
+      "required_provider_capabilities": ["openai", "qwen"]
+    }
+  },
+
   "secrets": {
-    "_comment": "Coordinator/dashboard read-only grant for central service items. Object routes read only stado-object-api/token, machine submit/status/cancel reads only stado-machine-api/token, and managed-service status/restart reads only stado-service-api/token. Every path fails closed; no application token belongs in env or this file.",
+    "_comment": "Coordinator read-only grant for route-only machine and host-health verification items. Managed-service, product, and release publisher tokens use their dedicated verifiers. Provider credentials stay exclusively in adapter managed identities. Host writers use a distinct stado-host-health-beacon grant. Every path fails closed; no application token belongs in env or this file.",
     "skarbiec": {
       "url": "https://<control-plane-skarbiec-host>",
       "consumer": "stado-control-plane",
       "token_file": "~/.stado/control-plane-skarbiec-token"
     }
   },
+  "integration": {
+    "_comment": "Dedicated exact client-token verifier. The finite people client/actions are registered, but the people provider domain remains omitted and fails closed until real provider items and its exact grant exist.",
+    "skarbiec": {
+      "url": "https://<control-plane-skarbiec-host>",
+      "consumer": "stado-integration-api-verifier",
+      "token_file": "~/.stado/stado-integration-api-verifier-skarbiec-token"
+    },
+    "clients": {
+      "content-platform-production": {"item": "content-platform-production-integration-api", "allowed_actions": ["content/umami.accounts", "content/umami.report", "content/umami.website.ensure", "content/resend.email.send", "content/resend.receiving.list", "content/resend.receiving.get", "content/resend.verification.code", "content/resend.deliverability.canary", "content/juicysms.number.order", "content/juicysms.order.status", "content/juicysms.order.cancel", "content/juicysms.balance", "content/stripe.account", "content/stripe.revenue.report", "content/stripe.transfer.create", "content/stripe.webhook.verify", "content/google.analytics.properties", "content/google.analytics.report", "content/google.firebase.apps", "content/media.external.import", "content/apify.tiktok.trends", "content/apify.instagram.search", "content/apify.twitter.search", "content/apify.youtube.search", "content/apify.pinterest.search", "content/apify.video.download", "content/apify.tiktok.metrics", "content/apify.tiktok.hashtag", "content/github.research.tex", "content/github.research.index", "content/reddit.top.images", "content/pinterest.search", "content/tokchart.sounds", "content/tokchart.hashtags", "content/gofile.resolve", "content/mega.resolve"]},
+      "echo-production": {"item": "echo-production-integration-api", "allowed_actions": ["content/google.analytics.properties", "content/google.analytics.report", "content/google.firebase.apps", "content/resend.email.send", "content/resend.receiving.list", "content/resend.receiving.get", "content/resend.verification.code", "content/resend.deliverability.canary", "content/juicysms.number.order", "content/juicysms.order.status", "content/juicysms.order.cancel", "content/juicysms.balance", "content/apify.tiktok.trends", "content/apify.instagram.search", "content/apify.twitter.search", "content/apify.youtube.search", "content/apify.pinterest.search", "content/apify.video.download", "content/apify.tiktok.metrics", "content/apify.tiktok.hashtag", "content/serper.search", "content/github.research.tex", "content/github.research.index", "content/reddit.top.images", "content/pinterest.search", "content/tokchart.sounds", "content/tokchart.hashtags", "content/gofile.resolve", "content/mega.resolve", "echo-paid-ads/accounts.list", "echo-paid-ads/accounts.connect", "echo-paid-ads/campaigns.list", "echo-paid-ads/campaigns.get", "echo-paid-ads/campaigns.create", "echo-paid-ads/campaigns.mutate", "echo-paid-ads/entities.list", "echo-paid-ads/entities.create", "echo-paid-ads/entities.mutate", "echo-paid-ads/metrics.report", "echo-paid-ads/conversions.upload", "echo-paid-ads/webhook.verify", "echo-paid-ads/attribution.resolve"]},
+      "entitlements-rotator": {"item": "entitlements-rotator-integration-api", "allowed_actions": ["deployment/echo.env.upsert", "deployment/echo.production.redeploy"]},
+      "wisent-backend-admin": {"item": "wisent-backend-admin-integration-api", "allowed_actions": ["backend/admin-jwt.verify"]},
+      "wisent-backend": {"item": "wisent-backend-integration-api", "allowed_actions": ["backend/email.send", "backend/twilio.sms-send", "backend/twilio.sms-status", "backend/twilio.whatsapp-send", "backend/twilio.whatsapp-template", "backend/twilio.webhook-verify", "backend/content.pose-recipes", "backend/content.visual-profiles"]},
+      "trading-tools": {"item": "trading-tools-integration-api", "allowed_actions": ["trading/send-whatsapp", "trading/verify-whatsapp-webhook"]},
+      "most-service": {"item": "most-service-integration-api", "allowed_actions": ["most/send-sms"]},
+      "oko": {"item": "oko-integration-api", "allowed_actions": ["oko/analytics.mobile.collect", "oko/experiments.assign"]},
+      "wisent-enterprise": {"item": "wisent-enterprise-integration-api", "allowed_actions": ["enterprise/jobs.snapshot", "enterprise/jobs.timeseries", "enterprise/fleet.host-health", "enterprise/fleet.registry"]},
+      "people-rotator": {"item": "people-rotator-integration-api", "allowed_actions": ["people/prerequisites", "people/github.org.invite_member", "people/github.team.add_member", "people/github.repo.remove_collaborator", "people/github.org.remove_member", "people/github.membership.check", "people/github.org.revoke_fine_grained_pat_grants", "people/github.repo.transfer", "people/slack.user.invite", "people/slack.user.deactivate", "people/supabase.auth.invite_user", "people/supabase.auth.ban_user", "people/supabase.credentials.rotate", "people/weles.queue.enqueue"]},
+      "singularity": {"item": "singularity-integration-api", "allowed_actions": ["singularity/resend_send_email", "singularity/sendgrid_send_email", "singularity/stripe_create_payment_link", "singularity/stripe_get_balance", "singularity/stripe_list_payments", "singularity/stripe_create_product", "singularity/stripe_refund_payment", "singularity/github_create_repo", "singularity/github_create_issue", "singularity/github_search_repos", "singularity/github_search_issues", "singularity/github_fork_repo", "singularity/github_star_repo", "singularity/github_get_user", "singularity/github_create_gist", "singularity/vercel_list_projects", "singularity/vercel_get_project", "singularity/vercel_create_project", "singularity/vercel_deploy", "singularity/vercel_list_deployments", "singularity/vercel_get_deployment", "singularity/vercel_list_domains", "singularity/vercel_add_domain", "singularity/vercel_remove_domain", "singularity/vercel_delete_project", "singularity/vercel_get_user", "singularity/twitter_post_tweet", "singularity/twitter_search_tweets", "singularity/twitter_get_mentions", "singularity/twitter_follow_user", "singularity/twitter_send_dm", "singularity/twitter_get_user_info", "singularity/twitter_like_tweet", "singularity/twitter_retweet", "singularity/namecheap_check_domain", "singularity/namecheap_register_domain", "singularity/namecheap_list_domains", "singularity/namecheap_get_dns", "singularity/namecheap_set_dns", "singularity/captcha_solve_recaptcha_v2", "singularity/captcha_solve_recaptcha_v3", "singularity/captcha_solve_hcaptcha", "singularity/captcha_solve_turnstile", "singularity/captcha_solve_image", "singularity/captcha_solve_funcaptcha", "singularity/huggingface_publish_dataset"]}
+    }
+  },
+  "object_api": {
+    "_comment": "Dedicated product-token verifier. Its Skarbiec grant must list exactly these mapped items and no others. Namespace and key-prefix policy is resolved before the matching token is read. The public GET-only releases route is separate and tokenless.",
+    "skarbiec": {
+      "url": "https://<control-plane-skarbiec-host>",
+      "consumer": "stado-object-api-verifier",
+      "token_file": "~/.stado/stado-object-api-verifier-skarbiec-token"
+    },
+    "namespaces": {
+      "entitlements-rotator": {"item": "entitlements-rotator-object-api", "prefixes": ["skarbiec.vault.json"], "actions": ["get", "put"]},
+      "echo": {
+        "item": "echo-object-api",
+        "prefix_policies": [
+          {"prefix": "aesthetics/", "actions": ["get", "stat"]},
+          {"prefix": "audio/", "actions": ["get", "put"]},
+          {"prefix": "batch-heroes/", "actions": ["get", "put"]},
+          {"prefix": "batch-videos/", "actions": ["delete", "get", "list", "put", "stat"]},
+          {"prefix": "body-horror-requests/", "actions": ["get", "list", "stat"]},
+          {"prefix": "captions/", "actions": ["get", "put"]},
+          {"prefix": "civitai-references/", "actions": ["delete", "get", "list", "put", "stat"]},
+          {"prefix": "daily-fill/", "actions": ["get", "list", "stat"]},
+          {"prefix": "eval-rejections/", "actions": ["get", "put"]},
+          {"prefix": "explainer/", "actions": ["get", "put"]},
+          {"prefix": "external-assets/", "actions": ["get", "put"]},
+          {"prefix": "gateway-output/", "actions": ["get", "list", "stat"]},
+          {"prefix": "lifestyle/", "actions": ["get", "put", "stat"]},
+          {"prefix": "lipsync/", "actions": ["get", "put", "stat"]},
+          {"prefix": "lora-compare/", "actions": ["get", "put", "stat"]},
+          {"prefix": "lora-training/", "actions": ["delete", "get", "list", "put", "stat"]},
+          {"prefix": "loras/", "actions": ["get", "list", "put", "stat"]},
+          {"prefix": "needher/", "actions": ["get", "list", "put", "stat"]},
+          {"prefix": "needher-captions/", "actions": ["get", "put", "stat"]},
+          {"prefix": "needher-lifestyle/", "actions": ["get", "put", "stat"]},
+          {"prefix": "needher-watermarked/", "actions": ["get", "list", "put", "stat"]},
+          {"prefix": "passion-poses/", "actions": ["get", "put", "stat"]},
+          {"prefix": "pose-videos/", "actions": ["delete", "get", "list", "put", "stat"]},
+          {"prefix": "scail/", "actions": ["delete", "get", "list", "put", "stat"]},
+          {"prefix": "scene-videos/", "actions": ["get", "put", "stat"]},
+          {"prefix": "smoothmix/", "actions": ["delete", "get", "list", "put", "stat"]},
+          {"prefix": "training-images/", "actions": ["get", "list", "put", "stat"]},
+          {"prefix": "uploads/", "actions": ["get", "put"]}
+        ]
+      },
+      "content-platform": {"item": "content-platform-object-api", "prefixes": ["ad-pipeline/", "aesthetics/", "batch-videos/", "caption-series/", "checkpoints/", "civitai-references/", "daily-fill/", "generated-days/", "generated-images/", "generated-videos/", "lifestyle/", "locations/", "lora-compare/", "passion/", "passion-poses/", "pipeline/", "pose-recipes/", "pose-videos/", "probierz/", "test/", "training/", "training-images/", "ugc/"], "actions": ["delete", "get", "list", "put", "stat"]},
+      "growth-tactics": {"item": "growth-tactics-object-api", "prefixes": ["jobs/"], "actions": ["get", "list", "put"]},
+      "needher": {"item": "needher-object-api", "prefixes": ["avatars/", "covers/", "daily-fill/", "daily-fill-alt-flash/", "daily-fill-noir-bw/", "feed-snapshot.json", "needher-captions/", "needher-lifestyle/", "needher-watermarked/", "pose-previews/", "pose-videos/"], "actions": ["get", "put", "stat"]},
+      "oko": {"item": "oko-object-api", "prefixes": ["transcripts/"], "actions": ["get", "list", "put", "stat"]},
+      "openenv": {"item": "openenv-object-api", "prefixes": ["datasets/", "models/", "pipeline/", "training/"], "actions": ["get", "put"]},
+      "probierz": {"item": "probierz-object-api", "prefixes": ["capacity/", "inputs/", "results/"], "actions": ["get", "list", "put"]},
+      "trading-autonomy": {"item": "trading-autonomy-object-api", "prefixes": ["agents/", "billing/", "media/"], "actions": ["delete", "get", "put"]},
+      "trading-tools": {"item": "trading-tools-object-api", "prefixes": ["stock-context/"], "actions": ["delete", "get", "list", "put", "stat"]},
+      "weles": {"item": "weles-object-api", "prefixes": ["recordings/"], "actions": ["delete", "get", "list", "put", "stat"]},
+      "wisent-app": {"item": "wisent-app-object-api", "prefixes": ["character-previews/", "character-videos/", "characters/", "classifiers/", "dual-video/", "generation-inputs/", "generation-jobs/", "lora_tests/", "loras/", "manual-jobs/", "media/", "processing/", "rooms/", "training-inputs/", "verification/"], "actions": ["delete", "get", "list", "put"]},
+      "wisent-backend": {"item": "wisent-backend-object-client", "prefixes": ["__healthcheck__", "activations/", "benchmarks/", "characters/", "contrastive_pairs/", "control_vectors/", "datasets/", "evaluation_results/", "images/", "optimization/", "personas/", "profiles/", "representations/", "state/", "traits/", "unique_personas/", "vector_stores/"], "actions": ["delete", "get", "list", "put", "stat"]},
+      "wisent-images": {"item": "wisent-images-object-api", "prefixes": ["images/generated/", "models/base/sha256/", "models/loras/sha256/"], "actions": ["get", "put", "stat"]},
+      "wisent-tools": {"item": "wisent-tools-object-api", "prefixes": ["activation-pairs/", "activations/", "datasets/", "evaluations/", "jobs/", "models/", "sweeps/"], "actions": ["delete", "get", "list", "put"]},
+      "wisent-enterprise": {"item": "wisent-enterprise-object-api", "prefix_policies": [{"prefix": "inputs/", "actions": ["put"]}, {"prefix": "models/sha256/", "actions": ["get", "stat"]}, {"prefix": "outputs/", "actions": ["get", "stat"]}]},
+      "wisent-trade": {"item": "wisent-trade-object-api", "prefixes": ["agents/"], "actions": ["delete", "get", "list", "put", "stat"]}
+    }
+  },
+  "machine_api": {
+    "_comment": "Dedicated verifier for exact machine clients. Every client bearer is bound to finite actions and scheduler targets; no global machine bearer exists.",
+    "skarbiec": {
+      "url": "https://<control-plane-skarbiec-host>",
+      "consumer": "stado-machine-api-verifier",
+      "token_file": "~/.stado/stado-machine-api-verifier-skarbiec-token"
+    },
+    "clients": {
+      "echo": {
+        "item": "echo-machine-api",
+        "actions": ["cancel", "status", "submit"],
+        "targets": ["local"]
+      },
+      "wisent-enterprise": {
+        "item": "wisent-enterprise-machine-api",
+        "actions": ["cancel", "status", "submit"],
+        "targets": ["local"]
+      }
+    }
+  },
+  "release_api": {
+    "_comment": "Dedicated verifier for authenticated immutable release creation. Its grant exposes exactly the mapped release publisher items. PUT requires if_absent, delete/overwrite fail, and authenticated reads/lists remain inside the product prefix. Public release downloads remain tokenless GET.",
+    "skarbiec": {
+      "url": "https://<control-plane-skarbiec-host>",
+      "consumer": "stado-release-api-verifier",
+      "token_file": "~/.stado/stado-release-api-verifier-skarbiec-token"
+    },
+    "publishers": {
+      "brama": {"item": "brama-release-publisher", "prefix": "brama/"},
+      "compute-marketplace": {"item": "compute-marketplace-release-publisher", "prefix": "compute-marketplace/"},
+      "image-video-router": {"item": "image-video-router-release-publisher", "prefix": "image-video-router/"},
+      "jeden": {"item": "jeden-release-publisher", "prefix": "jeden/"},
+      "oko": {"item": "oko-release-publisher", "prefix": "oko/"},
+      "skarbiec": {"item": "skarbiec-release-publisher", "prefix": "skarbiec/"},
+      "stado": {"item": "stado-release-publisher", "prefix": "stado/"},
+      "trading-autonomy": {"item": "trading-autonomy-release-publisher", "prefix": "trading-autonomy/"},
+      "wisent-backend": {"item": "wisent-backend-release-publisher", "prefix": "wisent-backend/"},
+      "wisent-images": {"item": "wisent-images-release-publisher", "prefix": "wisent-images/"}
+    }
+  },
+
+  "service_api": {
+    "_comment": "Dedicated managed-service verifier. A request resolves its exact service and action before reading only the mapped deployer token; there is no global service bearer or publisher fallback.",
+    "skarbiec": {
+      "url": "https://<control-plane-skarbiec-host>",
+      "consumer": "stado-service-api-verifier",
+      "token_file": "~/.stado/stado-service-api-verifier-skarbiec-token"
+    },
+    "deployers": {
+      "weles": {
+        "consumer": "weles-service-deployer",
+        "item": "weles-service-deployer",
+        "services": ["com.wisent.weles-api"],
+        "actions": ["status", "restart"]
+      },
+      "compute-marketplace": {
+        "consumer": "compute-marketplace-service-deployer",
+        "item": "compute-marketplace-service-deployer",
+        "services": ["compute-marketplace-backend", "compute-marketplace-frontend"],
+        "actions": ["status", "restart"]
+      },
+      "wisent-backend": {
+        "consumer": "wisent-backend-release-deployer",
+        "item": "wisent-backend-release-deployer",
+        "services": ["wisent-backend"],
+        "actions": ["status", "restart"]
+      }
+    }
+  },
 
   "agent": {
-    "_comment": "Dedicated Azure VM grant. Its visible items must equal this allowlist exactly. The grant is handed to the VM only through encrypted Azure protectedSettings, never customData. Jobs may resolve only the exact item#field entries below; stado-aws remains trusted-agent infrastructure and is deliberately absent from secret_fields.",
+    "_comment": "Dedicated provider-neutral Azure workload grant. Its newly scoped consumer excludes every cloud-provider credential item; provider identities stay inside their adapters. Jobs can project only the exact item#field allowlist.",
     "skarbiec": {
       "url": "https://<agent-reachable-skarbiec-host>",
-      "consumer": "stado-azure-agent",
-      "token_file": "~/.stado/azure-agent-skarbiec-token",
+      "consumer": "stado-azure-workload-agent",
+      "token_file": "~/.stado/azure-workload-agent-skarbiec-token",
       "items": [
-        "stado-aws",
+        "compute-marketplace-agent",
         "trading-autonomy-agent-auth",
         "trading-autonomy-media-router",
         "trading-autonomy-model-router",
-        "wisent-trade-agent-anthropic",
+        "wisent-backend-alert-router",
+        "wisent-backend-data-router",
+        "wisent-backend-inactivity-webhook",
+        "wisent-backend-media-router",
+        "wisent-backend-model-router",
+        "wisent-backend-object-client",
+        "wisent-backend-object-signing",
+        "wisent-backend-release-runner",
+        "wisent-backend-scheduler",
         "wisent-trade-agent-email",
-        "wisent-trade-agent-openai"
+        "wisent-trade-agent-model-router"
       ],
       "secret_fields": [
+        "compute-marketplace-agent#token",
         "trading-autonomy-agent-auth#agent_auth_secret",
         "trading-autonomy-media-router#token",
         "trading-autonomy-model-router#token",
-        "wisent-trade-agent-anthropic#api-key",
+        "wisent-backend-alert-router#token",
+        "wisent-backend-data-router#token",
+        "wisent-backend-inactivity-webhook#secret",
+        "wisent-backend-media-router#token",
+        "wisent-backend-model-router#token",
+        "wisent-backend-object-client#token",
+        "wisent-backend-object-signing#key",
+        "wisent-backend-release-runner#token",
+        "wisent-backend-scheduler#token",
         "wisent-trade-agent-email#api-key",
-        "wisent-trade-agent-openai#api-key"
+        "wisent-trade-agent-model-router#token",
+        "wisent-trade-agent-model-router#url"
       ]
     }
   },
 
+
   "release": {
-    "_comment": "Required binary channel for Rust self-update and Azure VM bootstrap. Publish the release layout into this private Azure container; Stado authenticates with the coordinator or VM managed identity. There is no built-in cloud release origin.",
-    "base_url": "https://<storage-account>.blob.core.windows.net/stado/releases/stado"
+    "_comment": "Required immutable Stado runtime release. Agents fetch only canonical stado:// release objects through the public Stado endpoint; no provider storage locator or mutable channel pointer is accepted.",
+    "api_url": "https://stado.wisent.com",
+    "version": "<exact-immutable-version>",
+    "platform": "<exact-release-platform>"
   },
 
   "alerts": {

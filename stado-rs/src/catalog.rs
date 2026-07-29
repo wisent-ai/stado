@@ -18,7 +18,7 @@ pub static GPU_SIZING: LazyLock<HashMap<&'static str, BTreeMap<i64, MachineSpec>
     LazyLock::new(|| {
         HashMap::from([
             (
-                "gcp",
+                crate::capabilities::ProviderId::Gcp.as_str(),
                 BTreeMap::from([
                     (12, ("n1-standard-4", "nvidia-tesla-k80")),
                     (16, ("n1-standard-4", "nvidia-tesla-t4")),
@@ -33,7 +33,7 @@ pub static GPU_SIZING: LazyLock<HashMap<&'static str, BTreeMap<i64, MachineSpec>
                 ]),
             ),
             (
-                "azure",
+                crate::capabilities::ProviderId::Azure.as_str(),
                 BTreeMap::from([
                     (12, ("Standard_NC6", "nvidia-tesla-k80")),
                     (16, ("Standard_NC6s_v3", "nvidia-tesla-v100")),
@@ -48,7 +48,7 @@ pub static GPU_SIZING: LazyLock<HashMap<&'static str, BTreeMap<i64, MachineSpec>
                 ]),
             ),
             (
-                "aws",
+                crate::capabilities::ProviderId::Aws.as_str(),
                 BTreeMap::from([
                     (16, ("g4dn.xlarge", "nvidia-tesla-t4")),
                     (24, ("g5.xlarge", "nvidia-a10")),
@@ -113,76 +113,194 @@ pub static AZURE_VM_TO_ACCEL: LazyLock<HashMap<&'static str, (&'static str, i64)
         ])
     });
 
-/// AWS instance type -> accel_type (aws.py `AWS_INSTANCE_TO_ACCEL`).
+/// AWS instance type -> accel_type, projected from the canonical AWS sizing
+/// ladder so a new instance cannot be schedulable but invisible to the AWS
+/// provider adapter.
 pub static AWS_INSTANCE_TO_ACCEL: LazyLock<HashMap<&'static str, &'static str>> =
     LazyLock::new(|| {
-        HashMap::from([
-            ("g4dn.xlarge", "nvidia-tesla-t4"),
-            ("g5.xlarge", "nvidia-a10"),
-            ("g6e.xlarge", "nvidia-l40s"),
-            ("p4de.24xlarge", "nvidia-a100-80gb"),
-            ("p5.4xlarge", "nvidia-h100-80gb"),
-        ])
+        GPU_SIZING
+            .get(crate::capabilities::ProviderId::Aws.as_str())
+            .into_iter()
+            .flat_map(|tiers| tiers.values())
+            .map(|(machine, accel)| (*machine, *accel))
+            .collect()
     });
 
-/// Azure quota family name -> accel_type. Key strings are byte-identical to
-/// the Azure API's family names, including their inconsistent casing/spacing.
+/// One Azure quota-family record. API spelling, accelerator semantics, and
+/// the scheduler-compatible representative VM live together so the quota
+/// reader and request writer cannot drift into separate family catalogs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AzureQuotaFamily {
+    pub name: &'static str,
+    pub accel: &'static str,
+    pub machine_type: Option<&'static str>,
+}
+
+pub const AZURE_QUOTA_FAMILIES: &[AzureQuotaFamily] = &[
+    AzureQuotaFamily {
+        name: "standardNCFamily",
+        accel: "nvidia-tesla-k80",
+        machine_type: Some("Standard_NC6"),
+    },
+    AzureQuotaFamily {
+        name: "standardNCSv2Family",
+        accel: "nvidia-tesla-p100",
+        machine_type: None,
+    },
+    AzureQuotaFamily {
+        name: "standardNCSv3Family",
+        accel: "nvidia-tesla-v100",
+        machine_type: Some("Standard_NC6s_v3"),
+    },
+    AzureQuotaFamily {
+        name: "standardNCPromoFamily",
+        accel: "nvidia-tesla-k80",
+        machine_type: None,
+    },
+    AzureQuotaFamily {
+        name: "Standard NCASv3_T4 Family",
+        accel: "nvidia-tesla-t4",
+        machine_type: Some("Standard_NC4as_T4_v3"),
+    },
+    AzureQuotaFamily {
+        name: "standardNCASv3Family",
+        accel: "nvidia-tesla-t4",
+        machine_type: Some("Standard_NC4as_T4_v3"),
+    },
+    AzureQuotaFamily {
+        name: "standardNCASv4Family",
+        accel: "nvidia-tesla-t4",
+        machine_type: None,
+    },
+    AzureQuotaFamily {
+        name: "StandardNCADSA10v4Family",
+        accel: "nvidia-a10",
+        machine_type: Some("Standard_NC8ads_A10_v4"),
+    },
+    AzureQuotaFamily {
+        name: "StandardNCADSA100v4Family",
+        accel: "nvidia-a100-80gb",
+        machine_type: Some("Standard_NC24ads_A100_v4"),
+    },
+    AzureQuotaFamily {
+        name: "StandardNCadsH100v5Family",
+        accel: "nvidia-h100-94gb",
+        machine_type: Some("Standard_NC40ads_H100_v5"),
+    },
+    AzureQuotaFamily {
+        name: "StandardNCCads2023Family",
+        accel: "nvidia-h100-94gb",
+        machine_type: None,
+    },
+    AzureQuotaFamily {
+        name: "standardNDSFamily",
+        accel: "nvidia-tesla-p40",
+        machine_type: None,
+    },
+    AzureQuotaFamily {
+        name: "standardNDSv2Family",
+        accel: "nvidia-tesla-v100-32gb",
+        machine_type: None,
+    },
+    AzureQuotaFamily {
+        name: "standardNDSv3Family",
+        accel: "nvidia-tesla-v100",
+        machine_type: None,
+    },
+    AzureQuotaFamily {
+        name: "standard NDAMSv4_A100Family",
+        accel: "nvidia-a100-80gb",
+        machine_type: None,
+    },
+    AzureQuotaFamily {
+        name: "Standard NDASv4_A100 Family",
+        accel: "nvidia-tesla-a100",
+        machine_type: None,
+    },
+    AzureQuotaFamily {
+        name: "standardNDSH100v5Family",
+        accel: "nvidia-h100-80gb",
+        machine_type: None,
+    },
+    AzureQuotaFamily {
+        name: "standardNDISRH200V5Family",
+        accel: "nvidia-h200-141gb",
+        machine_type: Some("Standard_ND96isr_H200_v5"),
+    },
+    AzureQuotaFamily {
+        name: "standardNDISRGB200V6NDRFamily",
+        accel: "nvidia-b200-180gb",
+        machine_type: Some("Standard_ND96isr_B200_v6"),
+    },
+    AzureQuotaFamily {
+        name: "standardNDISRGB300V6Family",
+        accel: "nvidia-gb200-192gb",
+        machine_type: None,
+    },
+    AzureQuotaFamily {
+        name: "standardNDISRGB300G5V6Family",
+        accel: "nvidia-gb200-192gb",
+        machine_type: None,
+    },
+    AzureQuotaFamily {
+        name: "standardNDISv5MI300XFamily",
+        accel: "amd-mi300x-192gb",
+        machine_type: Some("Standard_ND96isr_MI300X_v5"),
+    },
+    AzureQuotaFamily {
+        name: "standardNVFamily",
+        accel: "nvidia-tesla-m60",
+        machine_type: None,
+    },
+    AzureQuotaFamily {
+        name: "standardNVSv2Family",
+        accel: "nvidia-tesla-m60",
+        machine_type: None,
+    },
+    AzureQuotaFamily {
+        name: "standardNVSv3Family",
+        accel: "nvidia-tesla-m60",
+        machine_type: None,
+    },
+    AzureQuotaFamily {
+        name: "standardNVSv4Family",
+        accel: "amd-radeonpro-v520",
+        machine_type: None,
+    },
+    AzureQuotaFamily {
+        name: "standardNVPromoFamily",
+        accel: "nvidia-tesla-m60",
+        machine_type: None,
+    },
+    AzureQuotaFamily {
+        name: "StandardNVADSA10v5Family",
+        accel: "nvidia-a10",
+        machine_type: None,
+    },
+    AzureQuotaFamily {
+        name: "StandardNVadsV710v5Family",
+        accel: "amd-radeonpro-v710",
+        machine_type: None,
+    },
+];
+
+/// Azure quota family name -> accel_type. Derived from
+/// [`AZURE_QUOTA_FAMILIES`].
 pub static AZURE_QUOTA_FAMILY_TO_ACCEL: LazyLock<HashMap<&'static str, &'static str>> =
     LazyLock::new(|| {
-        HashMap::from([
-            ("standardNCFamily", "nvidia-tesla-k80"),
-            ("standardNCSv2Family", "nvidia-tesla-p100"),
-            ("standardNCSv3Family", "nvidia-tesla-v100"),
-            ("standardNCPromoFamily", "nvidia-tesla-k80"),
-            ("Standard NCASv3_T4 Family", "nvidia-tesla-t4"),
-            ("standardNCASv3Family", "nvidia-tesla-t4"),
-            ("standardNCASv4Family", "nvidia-tesla-t4"),
-            ("StandardNCADSA10v4Family", "nvidia-a10"),
-            ("StandardNCADSA100v4Family", "nvidia-a100-80gb"),
-            ("StandardNCadsH100v5Family", "nvidia-h100-94gb"),
-            ("StandardNCCads2023Family", "nvidia-h100-94gb"),
-            ("standardNDSFamily", "nvidia-tesla-p40"),
-            ("standardNDSv2Family", "nvidia-tesla-v100-32gb"),
-            ("standardNDSv3Family", "nvidia-tesla-v100"),
-            ("standard NDAMSv4_A100Family", "nvidia-a100-80gb"),
-            ("Standard NDASv4_A100 Family", "nvidia-tesla-a100"),
-            ("standardNDSH100v5Family", "nvidia-h100-80gb"),
-            ("standardNDISRH200V5Family", "nvidia-h200-141gb"),
-            ("standardNDISRGB200V6NDRFamily", "nvidia-b200-180gb"),
-            ("standardNDISRGB300V6Family", "nvidia-gb200-192gb"),
-            ("standardNDISRGB300G5V6Family", "nvidia-gb200-192gb"),
-            ("standardNDISv5MI300XFamily", "amd-mi300x-192gb"),
-            ("standardNVFamily", "nvidia-tesla-m60"),
-            ("standardNVSv2Family", "nvidia-tesla-m60"),
-            ("standardNVSv3Family", "nvidia-tesla-m60"),
-            ("standardNVSv4Family", "amd-radeonpro-v520"),
-            ("standardNVPromoFamily", "nvidia-tesla-m60"),
-            ("StandardNVADSA10v5Family", "nvidia-a10"),
-            ("StandardNVadsV710v5Family", "amd-radeonpro-v710"),
-        ])
+        AZURE_QUOTA_FAMILIES
+            .iter()
+            .map(|family| (family.name, family.accel))
+            .collect()
     });
 
-/// Azure quota family -> representative VM size used by the scheduler.
-///
-/// Azure vCPU quotas are isolated by VM family: quota from an ND family
-/// cannot launch the scheduler's NC-family default for the same accelerator.
-/// Therefore the live quota reader admits only families whose representative
-/// size is one of the scheduler-supported defaults, and derives vCPU/GPU from
-/// [`AZURE_VM_TO_ACCEL`] instead of pooling unrelated family limits.
+/// Azure quota family -> scheduler-compatible representative VM size.
 pub static AZURE_QUOTA_FAMILY_TO_MACHINE_TYPE: LazyLock<HashMap<&'static str, &'static str>> =
     LazyLock::new(|| {
-        HashMap::from([
-            ("standardNCFamily", "Standard_NC6"),
-            ("standardNCSv3Family", "Standard_NC6s_v3"),
-            ("Standard NCASv3_T4 Family", "Standard_NC4as_T4_v3"),
-            ("standardNCASv3Family", "Standard_NC4as_T4_v3"),
-            ("StandardNCADSA10v4Family", "Standard_NC8ads_A10_v4"),
-            ("StandardNCADSA100v4Family", "Standard_NC24ads_A100_v4"),
-            ("StandardNCadsH100v5Family", "Standard_NC40ads_H100_v5"),
-            ("standardNDISRH200V5Family", "Standard_ND96isr_H200_v5"),
-            ("standardNDISRGB200V6NDRFamily", "Standard_ND96isr_B200_v6"),
-            ("standardNDISv5MI300XFamily", "Standard_ND96isr_MI300X_v5"),
-        ])
+        AZURE_QUOTA_FAMILIES
+            .iter()
+            .filter_map(|family| family.machine_type.map(|machine| (family.name, machine)))
+            .collect()
     });
 
 /// On-demand hourly rate per GPU, USD.
@@ -276,27 +394,25 @@ pub static VM_BUNDLE_HOURLY_RATE_USD: LazyLock<HashMap<&'static str, (f64, f64)>
         ])
     });
 
-/// GCE accel_type -> default machine_type carrying that GPU.
+/// GCE accel_type -> default machine_type carrying that GPU. Scheduler tier
+/// defaults are projected from [`GPU_SIZING`]; only accelerator families not
+/// present in that ladder are declared as supplemental defaults here.
 pub static GPU_TYPE_TO_MACHINE_TYPE: LazyLock<HashMap<&'static str, &'static str>> =
     LazyLock::new(|| {
-        HashMap::from([
-            ("nvidia-tesla-k80", "n1-standard-4"),
+        let mut defaults = GPU_SIZING
+            .get(crate::capabilities::ProviderId::Gcp.as_str())
+            .into_iter()
+            .flat_map(|tiers| tiers.values())
+            .map(|(machine, accel)| (*accel, *machine))
+            .collect::<HashMap<_, _>>();
+        defaults.extend([
             ("nvidia-tesla-p100", "n1-standard-8"),
             ("nvidia-tesla-p40", "n1-standard-8"),
-            ("nvidia-tesla-v100", "n1-standard-8"),
             ("nvidia-tesla-v100-32gb", "n1-standard-8"),
-            ("nvidia-tesla-t4", "n1-standard-4"),
-            ("nvidia-l4", "g2-standard-4"),
-            ("nvidia-tesla-a100", "a2-highgpu-1g"),
-            ("nvidia-a100-80gb", "a2-ultragpu-1g"),
             ("nvidia-a10", "n1-standard-8"),
-            ("nvidia-h100-80gb", "a3-highgpu-8g"),
-            ("nvidia-h100-94gb", "a3-highgpu-1g"),
-            ("nvidia-h200-141gb", "a3-ultragpu-8g"),
-            ("nvidia-b200-180gb", "a4-highgpu-8g"),
-            ("nvidia-gb200-192gb", "a4x-highgpu-4g"),
             ("amd-mi300x-192gb", "a4-highgpu-8g"),
-        ])
+        ]);
+        defaults
     });
 
 /// Azure VM size -> (on_demand, spot) USD/hour bundle rates.
@@ -402,8 +518,11 @@ mod tests {
         assert_eq!(SPOT_DISCOUNT["nvidia-rtx-pro-6000"], 1.0);
         assert_eq!(VM_BUNDLE_HOURLY_RATE_USD.len(), 21);
         assert_eq!(VM_BUNDLE_HOURLY_RATE_USD["a3-highgpu-8g"], (8.00, 3.20));
-        assert_eq!(GPU_TYPE_TO_MACHINE_TYPE.len(), 16);
         assert_eq!(GPU_TYPE_TO_MACHINE_TYPE["nvidia-l4"], "g2-standard-4");
+        for &(machine, accel) in GPU_SIZING[crate::capabilities::ProviderId::Gcp.as_str()].values()
+        {
+            assert_eq!(GPU_TYPE_TO_MACHINE_TYPE[accel], machine);
+        }
         assert_eq!(AZURE_VM_HOURLY_RATE_USD.len(), 34);
         assert_eq!(
             AZURE_VM_HOURLY_RATE_USD["Standard_ND96isr_GB200_v6"],

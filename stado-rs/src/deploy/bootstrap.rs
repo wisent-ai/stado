@@ -2,9 +2,9 @@
 //!
 //! Port of `stado/deploy/bootstrap.py`, cut over to the Rust release
 //! binaries. For each kind=local registry entry with an ssh field,
-//! downloads the platform-appropriate release binaries (stado + wc +
-//! stado-fix + stado-watchdog) from the release channel
-//! ([`crate::config::release_base_url`]) into
+//! downloads the platform-appropriate release binaries (stado +
+//! stado-fix + stado-watchdog) from the public Stado release endpoint
+//! ([`crate::config::stado_release_api_url`]) into
 //! `~/.stado/bin/` on the remote host (platform picked by remote uname:
 //! Linux x86_64 -> linux-amd64, Darwin arm64 -> darwin-arm64), writes a
 //! systemd unit that runs `stado agent` with the configured WC_LOCAL_SLOTS
@@ -28,14 +28,12 @@ use crate::targets::{ComputeTarget, Registry};
 /// Remote install script BODY (fed as the remote command argument, not
 /// stdin). Downloads release artifacts over HTTPS, checksum-verifies them,
 /// then prints the platform, the job-runtime Python path and the installed
-/// Stado path as the final three stdout lines. Plain HTTPS keeps bootstrap
-/// independent of gcloud AND of any one object store.
+/// Stado path as the final three stdout lines. Public HTTPS keeps bootstrap
+/// independent of any cloud CLI or object-store locator.
 ///
-/// `release_base` is bound by [`remote_install_script`]. The remote host
-/// has no Azure identity to mint a bearer token with, so an Azure blob
-/// channel must be public-read or carry a container SAS; that query string
-/// is split off the base and re-appended after each object path, which is
-/// also where the existing cache-bust parameter lives.
+/// [`remote_install_script`] binds the exact version and public Stado API
+/// origin. The remote consumes only canonical `stado://releases/...` objects
+/// through `/api/release/object`; it never discovers a channel pointer.
 pub const REMOTE_INSTALL_SCRIPT: &str = r#"set -euo pipefail
 BIN_DIR="$HOME/.stado/bin"
 mkdir -p "$BIN_DIR"
@@ -44,29 +42,30 @@ case "$(uname -s)-$(uname -m)" in
   Darwin-arm64) platform=darwin-arm64 ;;
   *) echo "unsupported platform: $(uname -s) $(uname -m)" >&2; exit 1 ;;
 esac
-release_qs=""
-case "$release_base" in
-  *\?*)
-    release_qs="${release_base#*\?}"
-    release_base="${release_base%%\?*}"
-    ;;
+case "$release_api" in
+  https://*) ;;
+  *) echo "STADO_RELEASE_API_URL must use HTTPS"; false ;;
 esac
-release_base="${release_base%/}"
-latest="$(curl -fsSL "$release_base/latest.json${release_qs:+?$release_qs}")"
-version="${latest#*\"version\": \"}"
-version="${version%%\"*}"
-prefix="$release_base/$version/$platform"
+case "$release_version" in
+  *[![:alnum:]._-]*|"") echo "invalid STADO_RELEASE_VERSION"; false ;;
+esac
+release_api="${release_api%/}"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-cache_bust="$(date +%s)"
-for name in stado wc stado-fix stado-watchdog SHA256SUMS; do
-  curl -fsSL "$prefix/$name?cache_bust=$cache_bust${release_qs:+&$release_qs}" -o "$tmp/$name"
+release_get() {
+  curl -fsSL --get \
+    --data-urlencode "uri=stado://releases/stado/$release_version/$platform/$name" \
+    "$release_api/api/release/object" \
+    -o "$tmp/$name"
+}
+for name in stado stado-fix stado-watchdog SHA256SUMS; do
+  release_get
 done
 verify() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum -c -; else shasum -a 256 -c -; fi
 }
-(cd "$tmp" && for name in stado wc stado-fix stado-watchdog; do grep -E "[ *]$name\$" SHA256SUMS | verify; done)
-for name in stado wc stado-fix stado-watchdog; do
+(cd "$tmp" && for name in stado stado-fix stado-watchdog; do grep -E "[ *]$name\$" SHA256SUMS | verify; done)
+for name in stado stado-fix stado-watchdog; do
   chmod 755 "$tmp/$name"
   mv "$tmp/$name" "$BIN_DIR/$name"
 done
@@ -75,12 +74,13 @@ python3 -c 'import sys; sys.stdout.write(sys.executable + "\n")'
 echo "$BIN_DIR/stado"
 "#;
 
-/// [`REMOTE_INSTALL_SCRIPT`] with the release channel bound in. The base
-/// URL is shell-quoted, so a SAS query string survives intact.
-pub fn remote_install_script(base_url: &str) -> String {
+/// [`REMOTE_INSTALL_SCRIPT`] with the immutable release coordinates bound in.
+/// Both values are shell-quoted and validated again by the remote script.
+pub fn remote_install_script(api_url: &str, version: &str) -> String {
     format!(
-        "release_base={}\n{REMOTE_INSTALL_SCRIPT}",
-        shlex_quote(base_url)
+        "release_api={}\nrelease_version={}\n{REMOTE_INSTALL_SCRIPT}",
+        shlex_quote(api_url),
+        shlex_quote(version)
     )
 }
 
@@ -133,9 +133,6 @@ pub fn watchdog_unit_text(name: &str, watchdog_bin: &str, user: &str) -> String 
          [Service]\n\
          Type=simple\n\
          Environment=PYTHONUNBUFFERED=1\n\
-         Environment=GOOGLE_CLOUD_PROJECT=wisent-480400\n\
-         Environment=GCP_PROJECT=wisent-480400\n\
-         Environment=WC_BUCKET=wisent-compute\n\
          ExecStart={watchdog_bin}\n\
          Restart=on-failure\n\
          RestartSec=30\n\
@@ -161,7 +158,10 @@ pub fn ssh_argv(ssh_target: &str, command: &str) -> Vec<String> {
 pub fn install_spec(ssh_target: &str) -> CommandSpec {
     CommandSpec::new(ssh_argv(
         ssh_target,
-        &remote_install_script(crate::config::release_base_url()),
+        &remote_install_script(
+            &crate::config::stado_release_api_url(),
+            &crate::config::stado_release_version(),
+        ),
     ))
 }
 
@@ -310,9 +310,11 @@ pub async fn provision_target(
                     .to_string(),
             ));
         }
-        let agent_vault =
-            crate::skarbiec::Client::new(agent_url, agent_consumer, grant_path).map_err(|error| {
-                DeployError(format!("cannot configure dedicated remote agent grant: {error}"))
+        let agent_vault = crate::skarbiec::Client::new(agent_url, agent_consumer, grant_path)
+            .map_err(|error| {
+                DeployError(format!(
+                    "cannot configure dedicated remote agent grant: {error}"
+                ))
             })?;
         let mut visible = agent_vault
             .list_items()
@@ -369,15 +371,6 @@ pub async fn provision_target(
                 secure.detail()
             )));
         }
-        let channel_prefix =
-            if crate::config::release_base_url() == crate::config::DEFAULT_RELEASE_BASE_URL {
-                String::new()
-            } else {
-                format!(
-                    "WC_RELEASE_BASE_URL={} ",
-                    shlex_quote(crate::config::release_base_url())
-                )
-            };
         let items = crate::config::agent_skarbiec_items().join(",");
         let secret_fields = crate::config::agent_skarbiec_secret_fields().join(",");
         let skarbiec_prefix = format!(
@@ -394,7 +387,7 @@ pub async fn provision_target(
             shlex_quote(agent_consumer),
         );
         let command = format!(
-            "{channel_prefix}{skarbiec_prefix}{} bootstrap --local --target {}",
+            "{skarbiec_prefix}{} bootstrap --local --target {}",
             shlex_quote(&stado_bin),
             shlex_quote(&target.name)
         );
@@ -521,7 +514,7 @@ pub async fn run_bootstrap(
             .await;
         }
         if let Some(t) = registry.lookup(target) {
-            if t.kind == "local" {
+            if t.is_provider(crate::capabilities::ProviderId::Local) {
                 return local_install::install_local(
                     &t.name, "agent", dry_run, runner, hf_fetch, echo,
                 )

@@ -36,9 +36,37 @@ use crate::targets::{ComputeTarget, Registry};
 /// side did not exit clean. The success value is command-specific.
 pub const FAILED_STATUS: &str = "failed";
 
-/// Registry-authorized host resolution, with the three refusals
+/// True when the registry entry names THIS machine, matched the way the
+/// registry matches identities elsewhere: case-insensitively, on the short
+/// name as well as the fully qualified one.
+///
+/// Lifted out of [`crate::deploy::host_build_caches`], which had the only
+/// copy, so the read-only host channel and the cache pass cannot disagree
+/// about which box they are standing on.
+pub fn target_is_this_host(target: &ComputeTarget) -> bool {
+    let hostname = crate::providers::vast::system_hostname().to_lowercase();
+    if hostname.is_empty() {
+        return false;
+    }
+    let short = hostname.split('.').next().unwrap_or_default().to_string();
+    target.hostnames.iter().any(|candidate| {
+        let candidate = candidate.to_lowercase();
+        candidate == hostname
+            || candidate == short
+            || candidate.split('.').next().unwrap_or_default() == short
+    })
+}
+
+/// Registry-authorized host resolution, with the refusals
 /// [`crate::deploy::host_reboot`] makes, word for word: not in the
 /// registry, not a local host, no registry-managed ssh destination.
+///
+/// One deliberate exception to the last refusal: a target that IS this
+/// machine needs no ssh destination, because reaching it does not involve
+/// the network. A local pool host with slots and no `ssh` field is a normal
+/// registry entry, not a broken one — refusing it made every read-only
+/// `stado host ...` command unusable on the box running the command, which
+/// is the box an operator most often asks about.
 pub fn resolve_target<'a>(
     registry: &'a Registry,
     target_name: &str,
@@ -49,15 +77,15 @@ pub fn resolve_target<'a>(
             py_str_repr(target_name)
         )));
     };
-    if target.kind != "local" {
+    if !target.is_provider(crate::capabilities::ProviderId::Local) {
         return Err(DeployError(format!(
             "target {} is not a local host",
             py_str_repr(target_name)
         )));
     }
-    if target.ssh.as_deref().unwrap_or("").is_empty() {
+    if target.ssh.as_deref().unwrap_or("").is_empty() && !target_is_this_host(target) {
         return Err(DeployError(format!(
-            "target {} has no registry-managed ssh destination",
+            "target {} has no registry-managed ssh destination and is not this host",
             py_str_repr(target_name)
         )));
     }
@@ -69,7 +97,7 @@ pub async fn canonical_target(target_name: &str) -> Result<ComputeTarget, Deploy
     let registry = crate::targets::fetch_registry_remote()
         .await
         .map_err(|exc| DeployError(exc.to_string()))?;
-    resolve_target(&registry, target_name).map(Clone::clone)
+    resolve_target(&registry, target_name).cloned()
 }
 
 /// The ssh invocation up to and including the destination, taken from
@@ -121,14 +149,23 @@ pub fn remote_timeout() -> Duration {
     Duration::from_secs(host_recovery::TIMEOUT_SECONDS)
 }
 
-/// Run one fixed remote program on a resolved target.
+/// Run one fixed program on a resolved target.
+///
+/// A target that IS this machine runs the program directly. The words are
+/// the same compile-time constants the ssh path sends, so the two transports
+/// cannot answer different questions; only the hop disappears.
 pub async fn run_program(
     target: &ComputeTarget,
     program: &[&str],
     runner: &Runner,
 ) -> Result<CommandOutput, DeployError> {
+    let argv = if target_is_this_host(target) {
+        program.iter().map(|word| word.to_string()).collect()
+    } else {
+        ssh_program_argv(target.ssh.as_deref().unwrap_or(""), program)
+    };
     runner(CommandSpec {
-        argv: ssh_program_argv(target.ssh.as_deref().unwrap_or(""), program),
+        argv,
         stdin: None,
         timeout: Some(remote_timeout()),
     })
@@ -136,14 +173,23 @@ pub async fn run_program(
     .map_err(DeployError)
 }
 
-/// Run one fixed remote script (fed on stdin) on a resolved target.
+/// Run one fixed script (fed on stdin) on a resolved target.
+///
+/// The local branch runs the same `/bin/bash -s` the ssh branch asks the
+/// login shell for, so the marker protocol on the far side is byte-identical
+/// whichever transport carried it.
 pub async fn run_script(
     target: &ComputeTarget,
     script: &str,
     runner: &Runner,
 ) -> Result<CommandOutput, DeployError> {
+    let argv = if target_is_this_host(target) {
+        vec!["/bin/bash".to_string(), "-s".to_string()]
+    } else {
+        ssh_script_argv(target.ssh.as_deref().unwrap_or(""))
+    };
     runner(CommandSpec {
-        argv: ssh_script_argv(target.ssh.as_deref().unwrap_or("")),
+        argv,
         stdin: Some(script.to_string()),
         timeout: Some(remote_timeout()),
     })

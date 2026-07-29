@@ -6,16 +6,165 @@
 //! (resolved once, on first use). Plain compile-time constants keep their
 //! Python names as `pub const`. Env var names are byte-identical to Python.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{LazyLock, RwLock};
 use std::time::Instant;
 
 use crate::catalog::GPU_SIZING;
 use crate::config_file::{expand_tilde, resolve as cfg, resolve_list as cfg_list};
 
-static PROJECT: LazyLock<String> = LazyLock::new(|| cfg("GCP_PROJECT", "project", ""));
-static BUCKET: LazyLock<String> = LazyLock::new(|| cfg("WC_BUCKET", "storage.gcs.bucket", ""));
-static REGION: LazyLock<String> = LazyLock::new(|| cfg("GCP_REGION", "region", "us-central1"));
+use serde_json::Value;
+
+fn resolve_binding(
+    field: &crate::capabilities::ConfigField,
+    backup: bool,
+    default: &str,
+) -> String {
+    let (env, path, fallback) = if backup {
+        (
+            field
+                .backup_env
+                .expect("catalog field has no backup environment binding"),
+            field
+                .backup_path
+                .expect("catalog field has no backup configuration path"),
+            default.to_string(),
+        )
+    } else {
+        let fallback = if field.fallback_env.is_some() || field.fallback_path.is_some() {
+            cfg(
+                field.fallback_env.unwrap_or(""),
+                field.fallback_path.unwrap_or(""),
+                default,
+            )
+        } else {
+            default.to_string()
+        };
+        (field.env, field.path, fallback)
+    };
+    cfg(env, path, &fallback)
+}
+
+fn resolve_capability_binding(
+    kind: crate::capabilities::RuntimeFacet,
+    variant: &str,
+    key: &str,
+    backup: bool,
+    default: &str,
+) -> String {
+    let field = crate::capabilities::config_field(kind, variant, key)
+        .expect("runtime configuration binding is missing from the capability catalog");
+    debug_assert_eq!(
+        field.value_kind,
+        crate::capabilities::ConfigValueKind::Scalar
+    );
+    resolve_binding(field, backup, default)
+}
+
+fn resolve_capability_list_binding(
+    kind: crate::capabilities::RuntimeFacet,
+    variant: &str,
+    key: &str,
+    default: &[&str],
+) -> Vec<String> {
+    let field = crate::capabilities::config_field(kind, variant, key)
+        .expect("runtime list binding is missing from the capability catalog");
+    debug_assert_eq!(field.value_kind, crate::capabilities::ConfigValueKind::List);
+    cfg_list(field.env, field.path, default)
+}
+
+fn resolve_compute_binding(
+    provider: crate::capabilities::ProviderId,
+    key: &str,
+    default: &str,
+) -> String {
+    resolve_capability_binding(
+        crate::capabilities::RuntimeFacet::Compute,
+        provider.as_str(),
+        key,
+        false,
+        default,
+    )
+}
+
+fn resolve_compute_list_binding(
+    provider: crate::capabilities::ProviderId,
+    key: &str,
+    default: &[&str],
+) -> Vec<String> {
+    resolve_capability_list_binding(
+        crate::capabilities::RuntimeFacet::Compute,
+        provider.as_str(),
+        key,
+        default,
+    )
+}
+
+fn resolve_storage_binding(
+    adapter: crate::capabilities::StorageAdapter,
+    key: &str,
+    backup: bool,
+    default: &str,
+) -> String {
+    resolve_capability_binding(
+        crate::capabilities::RuntimeFacet::Storage,
+        adapter.id(),
+        key,
+        backup,
+        default,
+    )
+}
+
+const DEFAULT_GCP_PROJECT: &str = "";
+const DEFAULT_GCS_BUCKET: &str = "";
+const DEFAULT_GCP_REGION: &str = "us-central1";
+const DEFAULT_GCP_REGIONS: &[&str] = &[
+    "us-central1",
+    "europe-west4",
+    "us-east1",
+    "us-east4",
+    "us-east5",
+];
+const DEFAULT_PROVIDERS: &[&str] = &[];
+const DEFAULT_STORAGE_BACKEND: &str = "";
+
+fn resolve_storage_backend(backup: bool) -> String {
+    let name = resolve_binding(
+        &crate::capabilities::STORAGE_BACKEND_CONFIG,
+        backup,
+        DEFAULT_STORAGE_BACKEND,
+    );
+    crate::capabilities::canonical_id(crate::capabilities::RuntimeFacet::Storage, &name)
+        .unwrap_or(&name)
+        .to_string()
+}
+
+static PROJECT: LazyLock<String> = LazyLock::new(|| {
+    resolve_capability_binding(
+        crate::capabilities::RuntimeFacet::Compute,
+        crate::capabilities::ProviderId::Gcp.as_str(),
+        "project",
+        false,
+        DEFAULT_GCP_PROJECT,
+    )
+});
+static BUCKET: LazyLock<String> = LazyLock::new(|| {
+    resolve_storage_binding(
+        crate::capabilities::StorageAdapter::Gcs,
+        "bucket",
+        false,
+        DEFAULT_GCS_BUCKET,
+    )
+});
+static REGION: LazyLock<String> = LazyLock::new(|| {
+    resolve_capability_binding(
+        crate::capabilities::RuntimeFacet::Compute,
+        crate::capabilities::ProviderId::Gcp.as_str(),
+        "region",
+        false,
+        DEFAULT_GCP_REGION,
+    )
+});
 static ALERTS_TOPIC: LazyLock<String> = LazyLock::new(|| {
     std::env::var("WC_ALERTS_TOPIC")
         .ok()
@@ -51,16 +200,11 @@ pub fn alerts_topic() -> &'static str {
 }
 
 static REGIONS: LazyLock<Vec<String>> = LazyLock::new(|| {
-    cfg_list(
-        "GCP_REGIONS",
+    resolve_capability_list_binding(
+        crate::capabilities::RuntimeFacet::Compute,
+        crate::capabilities::ProviderId::Gcp.as_str(),
         "regions",
-        &[
-            "us-central1",
-            "europe-west4",
-            "us-east1",
-            "us-east4",
-            "us-east5",
-        ],
+        DEFAULT_GCP_REGIONS,
     )
 });
 
@@ -299,41 +443,68 @@ pub const DEFAULT_BOOT_DISK_GB: i64 = 200;
 // wisent-compute install can target multiple subscriptions/resource groups
 // without code changes. The provider does NOT create the vnet/subnet/NSG —
 // it expects pre-provisioned infra named below.
-static AZURE_SUBSCRIPTION_ID: LazyLock<String> =
-    LazyLock::new(|| cfg("AZURE_SUBSCRIPTION_ID", "azure.subscription_id", ""));
+static AZURE_SUBSCRIPTION_ID: LazyLock<String> = LazyLock::new(|| {
+    resolve_compute_binding(
+        crate::capabilities::ProviderId::Azure,
+        "subscription-id",
+        "",
+    )
+});
 static AZURE_RESOURCE_GROUP: LazyLock<String> = LazyLock::new(|| {
-    cfg(
-        "AZURE_RESOURCE_GROUP",
-        "azure.resource_group",
+    resolve_compute_binding(
+        crate::capabilities::ProviderId::Azure,
+        "resource-group",
         "wisent-compute",
     )
 });
 static AZURE_LOCATIONS: LazyLock<Vec<String>> = LazyLock::new(|| {
-    cfg_list(
-        "AZURE_LOCATIONS",
-        "azure.locations",
+    resolve_compute_list_binding(
+        crate::capabilities::ProviderId::Azure,
+        "locations",
         &["eastus", "westus3", "westus2", "northeurope"],
     )
 });
-static AZURE_VNET: LazyLock<String> =
-    LazyLock::new(|| cfg("AZURE_VNET", "azure.vnet", "wisent-compute-vnet"));
-static AZURE_SUBNET: LazyLock<String> =
-    LazyLock::new(|| cfg("AZURE_SUBNET", "azure.subnet", "wisent-compute-subnet"));
-static AZURE_NSG: LazyLock<String> =
-    LazyLock::new(|| cfg("AZURE_NSG", "azure.nsg", "wisent-compute-nsg"));
+static AZURE_VNET: LazyLock<String> = LazyLock::new(|| {
+    resolve_compute_binding(
+        crate::capabilities::ProviderId::Azure,
+        "vnet",
+        "wisent-compute-vnet",
+    )
+});
+static AZURE_SUBNET: LazyLock<String> = LazyLock::new(|| {
+    resolve_compute_binding(
+        crate::capabilities::ProviderId::Azure,
+        "subnet",
+        "wisent-compute-subnet",
+    )
+});
+static AZURE_NSG: LazyLock<String> = LazyLock::new(|| {
+    resolve_compute_binding(
+        crate::capabilities::ProviderId::Azure,
+        "nsg",
+        "wisent-compute-nsg",
+    )
+});
 static AZURE_IMAGE_URN: LazyLock<String> = LazyLock::new(|| {
-    cfg(
-        "AZURE_IMAGE_URN",
-        "azure.image_urn",
+    resolve_compute_binding(
+        crate::capabilities::ProviderId::Azure,
+        "image-urn",
         "microsoft-dsvm:ubuntu-hpc:2204:latest",
     )
 });
-static AZURE_VM_USERNAME: LazyLock<String> =
-    LazyLock::new(|| cfg("AZURE_VM_USERNAME", "azure.vm_username", "wisent"));
-static AZURE_SSH_PUBLIC_KEY: LazyLock<String> =
-    LazyLock::new(|| cfg("AZURE_SSH_PUBLIC_KEY", "azure.ssh_public_key", ""));
-static AZURE_VM_IDENTITY_ID: LazyLock<String> =
-    LazyLock::new(|| cfg("AZURE_VM_IDENTITY_ID", "azure.vm_identity_id", ""));
+static AZURE_VM_USERNAME: LazyLock<String> = LazyLock::new(|| {
+    resolve_compute_binding(
+        crate::capabilities::ProviderId::Azure,
+        "vm-username",
+        "wisent",
+    )
+});
+static AZURE_SSH_PUBLIC_KEY: LazyLock<String> = LazyLock::new(|| {
+    resolve_compute_binding(crate::capabilities::ProviderId::Azure, "ssh-public-key", "")
+});
+static AZURE_VM_IDENTITY_ID: LazyLock<String> = LazyLock::new(|| {
+    resolve_compute_binding(crate::capabilities::ProviderId::Azure, "vm-identity-id", "")
+});
 
 /// Azure subscription id (env `AZURE_SUBSCRIPTION_ID`).
 pub fn azure_subscription_id() -> &'static str {
@@ -400,21 +571,24 @@ pub fn azure_vm_identity_id() -> &'static str {
     AZURE_VM_IDENTITY_ID.as_str()
 }
 
-// AWS (parallel to GCP). Python aws.py reads these straight from
-// os.environ (no config-file keys), so these accessors do the same — no
-// `cfg(...)` fallback. Python resolves them per create_instance call;
-// here LazyLock freezes them on first use, which is equivalent in
-// practice (env does not change mid-process).
-static AWS_REGION: LazyLock<String> =
-    LazyLock::new(|| std::env::var("AWS_REGION").unwrap_or_else(|_| "us-east-1".to_string()));
-static AWS_SECURITY_GROUP: LazyLock<String> =
-    LazyLock::new(|| std::env::var("AWS_SECURITY_GROUP").unwrap_or_default());
+// AWS uses the same catalog-driven env/config/default precedence as the other
+// compute providers. The accessors remain LazyLock-backed because runtime
+// configuration is immutable for the process lifetime.
+static AWS_REGION: LazyLock<String> = LazyLock::new(|| {
+    resolve_compute_binding(crate::capabilities::ProviderId::Aws, "region", "us-east-1")
+});
+static AWS_SECURITY_GROUP: LazyLock<String> = LazyLock::new(|| {
+    resolve_compute_binding(crate::capabilities::ProviderId::Aws, "security-group", "")
+});
 static AWS_IAM_PROFILE: LazyLock<String> = LazyLock::new(|| {
-    std::env::var("AWS_IAM_PROFILE").unwrap_or_else(|_| "stado-agent".to_string())
+    resolve_compute_binding(
+        crate::capabilities::ProviderId::Aws,
+        "iam-profile",
+        "stado-agent",
+    )
 });
 static AWS_AMI_ID: LazyLock<String> = LazyLock::new(|| {
-    std::env::var("AWS_AMI_ID")
-        .unwrap_or_default()
+    resolve_compute_binding(crate::capabilities::ProviderId::Aws, "ami-id", "")
         .trim()
         .to_string()
 });
@@ -443,10 +617,39 @@ pub fn aws_ami_id() -> &'static str {
     AWS_AMI_ID.as_str()
 }
 
-static WC_DISABLED_PROVIDERS: LazyLock<Vec<String>> =
-    LazyLock::new(|| cfg_list("WC_DISABLED_PROVIDERS", "providers_disabled", &[]));
+fn canonicalize_capability_names(
+    kind: crate::capabilities::RuntimeFacet,
+    values: Vec<String>,
+) -> Vec<String> {
+    values
+        .into_iter()
+        .map(|name| {
+            crate::capabilities::canonical_id(kind, &name)
+                .unwrap_or(&name)
+                .to_string()
+        })
+        .collect()
+}
+
+static WC_DISABLED_PROVIDERS: LazyLock<Vec<String>> = LazyLock::new(|| {
+    canonicalize_capability_names(
+        crate::capabilities::RuntimeFacet::Compute,
+        cfg_list(
+            crate::capabilities::DISABLED_PROVIDERS_CONFIG.env,
+            crate::capabilities::DISABLED_PROVIDERS_CONFIG.path,
+            &[],
+        ),
+    )
+});
 static WC_PROVIDERS: LazyLock<Vec<String>> = LazyLock::new(|| {
-    let mut providers = cfg_list("WC_PROVIDERS", "providers", &[]);
+    let mut providers = canonicalize_capability_names(
+        crate::capabilities::RuntimeFacet::Compute,
+        cfg_list(
+            crate::capabilities::PROVIDERS_CONFIG.env,
+            crate::capabilities::PROVIDERS_CONFIG.path,
+            DEFAULT_PROVIDERS,
+        ),
+    );
     providers.retain(|provider| !WC_DISABLED_PROVIDERS.contains(provider));
     providers
 });
@@ -468,61 +671,73 @@ pub fn wc_disabled_providers() -> &'static [String] {
     &WC_DISABLED_PROVIDERS
 }
 
-static WC_STORAGE_BACKEND: LazyLock<String> =
-    LazyLock::new(|| cfg("WC_STORAGE_BACKEND", "storage.backend", ""));
-static WC_AZURE_STORAGE_ACCOUNT: LazyLock<String> =
-    LazyLock::new(|| cfg("WC_AZURE_STORAGE_ACCOUNT", "storage.azure.account", ""));
+static WC_STORAGE_BACKEND: LazyLock<String> = LazyLock::new(|| resolve_storage_backend(false));
+static WC_AZURE_STORAGE_ACCOUNT: LazyLock<String> = LazyLock::new(|| {
+    resolve_storage_binding(
+        crate::capabilities::StorageAdapter::AzureBlob,
+        "account",
+        false,
+        "",
+    )
+});
 /// An Azure deployment must name its container explicitly. Exported so
 /// doctor/deploy preflight can distinguish configured state from the
 /// provider-neutral empty default.
 pub const DEFAULT_AZURE_CONTAINER: &str = "";
 static WC_AZURE_CONTAINER: LazyLock<String> = LazyLock::new(|| {
-    cfg(
-        "WC_AZURE_CONTAINER",
-        "storage.azure.container",
+    resolve_storage_binding(
+        crate::capabilities::StorageAdapter::AzureBlob,
+        "container",
+        false,
         DEFAULT_AZURE_CONTAINER,
     )
 });
-static WC_S3_BUCKET: LazyLock<String> =
-    LazyLock::new(|| cfg("WC_S3_BUCKET", "storage.s3.bucket", ""));
+static WC_S3_BUCKET: LazyLock<String> = LazyLock::new(|| {
+    resolve_storage_binding(crate::capabilities::StorageAdapter::S3, "bucket", false, "")
+});
 static WC_S3_REGION: LazyLock<String> = LazyLock::new(|| {
-    let aws_region = std::env::var("AWS_REGION").unwrap_or_else(|_| "us-east-1".to_string());
-    cfg("WC_S3_REGION", "storage.s3.region", &aws_region)
+    resolve_storage_binding(
+        crate::capabilities::StorageAdapter::S3,
+        "region",
+        false,
+        "us-east-1",
+    )
 });
 static WC_LOCAL_STORAGE_PATH: LazyLock<String> = LazyLock::new(|| {
     let default = expand_tilde("~/.stado/local-storage");
-    cfg(
-        "WC_LOCAL_STORAGE_PATH",
-        "storage.local.path",
+    resolve_storage_binding(
+        crate::capabilities::StorageAdapter::Local,
+        "path",
+        false,
         &default.to_string_lossy(),
     )
 });
 static WC_BACKUP_STORAGE_BACKEND: LazyLock<String> =
-    LazyLock::new(|| cfg("WC_BACKUP_STORAGE_BACKEND", "storage.backup.backend", ""));
-static WC_BACKUP_BUCKET: LazyLock<String> =
-    LazyLock::new(|| cfg("WC_BACKUP_BUCKET", "storage.backup.bucket", ""));
+    LazyLock::new(|| resolve_storage_backend(true));
+static WC_BACKUP_BUCKET: LazyLock<String> = LazyLock::new(|| {
+    resolve_storage_binding(crate::capabilities::StorageAdapter::S3, "bucket", true, "")
+});
 static WC_BACKUP_AZURE_STORAGE_ACCOUNT: LazyLock<String> = LazyLock::new(|| {
-    cfg(
-        "WC_BACKUP_AZURE_STORAGE_ACCOUNT",
-        "storage.backup.azure.account",
+    resolve_storage_binding(
+        crate::capabilities::StorageAdapter::AzureBlob,
+        "account",
+        true,
         "",
     )
 });
 static WC_BACKUP_AZURE_CONTAINER: LazyLock<String> = LazyLock::new(|| {
-    cfg(
-        "WC_BACKUP_AZURE_CONTAINER",
-        "storage.backup.azure.container",
+    resolve_storage_binding(
+        crate::capabilities::StorageAdapter::AzureBlob,
+        "container",
+        true,
         "",
     )
 });
-static WC_BACKUP_S3_REGION: LazyLock<String> =
-    LazyLock::new(|| cfg("WC_BACKUP_S3_REGION", "storage.backup.s3.region", ""));
+static WC_BACKUP_S3_REGION: LazyLock<String> = LazyLock::new(|| {
+    resolve_storage_binding(crate::capabilities::StorageAdapter::S3, "region", true, "")
+});
 static WC_BACKUP_LOCAL_STORAGE_PATH: LazyLock<String> = LazyLock::new(|| {
-    cfg(
-        "WC_BACKUP_LOCAL_STORAGE_PATH",
-        "storage.backup.local.path",
-        "",
-    )
+    resolve_storage_binding(crate::capabilities::StorageAdapter::Local, "path", true, "")
 });
 
 /// Queue storage backend (env `WC_STORAGE_BACKEND`). "gcs", "azure", and
@@ -595,34 +810,55 @@ pub fn wc_backup_local_storage_path() -> &'static str {
     WC_BACKUP_LOCAL_STORAGE_PATH.as_str()
 }
 
-/// No compiled or provider-derived release origin. An active deployment must
-/// configure one explicitly so a typo in its storage locator cannot silently
-/// install from a different container or cloud.
-pub const DEFAULT_RELEASE_BASE_URL: &str = "";
+/// Public Stado control origin serving immutable software releases (env
+/// `STADO_RELEASE_API_URL`, config key `release.api_url`, trailing slash
+/// stripped). There is deliberately no storage-provider or public-host
+/// fallback: dispatch and bootstrap fail closed when it is absent.
+pub fn stado_release_api_url() -> String {
+    cfg("STADO_RELEASE_API_URL", "release.api_url", "")
+        .trim_end_matches('/')
+        .to_string()
+}
 
-static RELEASE_BASE_URL: LazyLock<String> = LazyLock::new(|| {
+/// Exact immutable Stado version consumed by bootstrap and cloud agents (env
+/// `STADO_RELEASE_VERSION`, config key `release.version`).
+pub fn stado_release_version() -> String {
+    cfg("STADO_RELEASE_VERSION", "release.version", "")
+        .trim()
+        .to_string()
+}
+
+/// Exact release platform shipped to cloud-agent templates (env
+/// `STADO_RELEASE_PLATFORM`, config key `release.platform`). Remote bootstrap
+/// derives its exact platform from the remote kernel and architecture.
+pub fn stado_release_platform() -> String {
+    cfg("STADO_RELEASE_PLATFORM", "release.platform", "")
+        .trim()
+        .to_string()
+}
+
+/// Exact immutable release object containing the cloud-agent Python
+/// environment and model cache. There is deliberately no default: dispatch
+/// refuses to create a machine until the operator publishes and selects one.
+pub fn stado_agent_runtime_bundle_uri() -> String {
     cfg(
-        "WC_RELEASE_BASE_URL",
-        "release.base_url",
-        DEFAULT_RELEASE_BASE_URL,
+        "STADO_AGENT_RUNTIME_BUNDLE_URI",
+        "release.agent_runtime_bundle_uri",
+        "",
     )
-    .trim_end_matches('/')
+    .trim()
     .to_string()
-});
+}
 
-/// Base URL of the binary release channel (env `WC_RELEASE_BASE_URL`,
-/// config key `release.base_url`, trailing slash stripped).
-///
-/// The release tree is independent of the queue layout: any HTTPS origin
-/// serving `latest.json` and `<version>/<platform>/` is valid. Azure cutover
-/// config points explicitly at its release container; [`crate::self_update`]
-/// authenticates Azure Blob with the shared token chain and dispatched VMs
-/// use their managed identity.
-///
-/// An empty result is intentionally invalid and is reported by doctor/deploy
-/// preflight rather than silently selecting a cloud provider.
-pub fn release_base_url() -> &'static str {
-    RELEASE_BASE_URL.as_str()
+/// SHA-256 of [`stado_agent_runtime_bundle_uri`], checked before extraction.
+pub fn stado_agent_runtime_bundle_sha256() -> String {
+    cfg(
+        "STADO_AGENT_RUNTIME_BUNDLE_SHA256",
+        "release.agent_runtime_bundle_sha256",
+        "",
+    )
+    .trim()
+    .to_string()
 }
 
 static BILLING_DATASET: LazyLock<String> = LazyLock::new(|| {
@@ -676,19 +912,14 @@ static SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
 });
 static AGENT_SKARBIEC_URL: LazyLock<String> =
     LazyLock::new(|| cfg("WC_AGENT_SKARBIEC_URL", "agent.skarbiec.url", ""));
-static AGENT_SKARBIEC_CONSUMER: LazyLock<String> = LazyLock::new(|| {
-    cfg(
-        "WC_AGENT_SKARBIEC_CONSUMER",
-        "agent.skarbiec.consumer",
-        "stado-azure-agent",
-    )
-});
+static AGENT_SKARBIEC_CONSUMER: LazyLock<String> =
+    LazyLock::new(|| cfg("WC_AGENT_SKARBIEC_CONSUMER", "agent.skarbiec.consumer", ""));
 static AGENT_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
     let default = std::env::var("HOME")
         .map(|home| {
             std::path::Path::new(&home)
                 .join(".stado")
-                .join("azure-agent-skarbiec-token")
+                .join("workload-agent-skarbiec-token")
                 .to_string_lossy()
                 .into_owned()
         })
@@ -701,18 +932,1721 @@ static AGENT_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
     .to_string_lossy()
     .into_owned()
 });
-static AGENT_SKARBIEC_ITEMS: LazyLock<Vec<String>> = LazyLock::new(|| {
-    cfg_list(
-        "WC_AGENT_SKARBIEC_ITEMS",
-        "agent.skarbiec.items",
-        &["stado-aws"],
-    )
-});
+static AGENT_SKARBIEC_ITEMS: LazyLock<Vec<String>> =
+    LazyLock::new(|| cfg_list("WC_AGENT_SKARBIEC_ITEMS", "agent.skarbiec.items", &[]));
 static AGENT_SKARBIEC_SECRET_FIELDS: LazyLock<Vec<String>> = LazyLock::new(|| {
     cfg_list(
         "WC_AGENT_SKARBIEC_SECRET_FIELDS",
         "agent.skarbiec.secret_fields",
         &[],
+    )
+});
+static BACKEND_MESSAGING_SKARBIEC_URL: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "WC_BACKEND_MESSAGING_SKARBIEC_URL",
+        "backend.messaging.skarbiec.url",
+        skarbiec_url(),
+    )
+});
+static BACKEND_MESSAGING_SKARBIEC_CONSUMER: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "WC_BACKEND_MESSAGING_SKARBIEC_CONSUMER",
+        "backend.messaging.skarbiec.consumer",
+        "",
+    )
+});
+static BACKEND_MESSAGING_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
+    expand_tilde(&cfg(
+        "WC_BACKEND_MESSAGING_SKARBIEC_TOKEN_FILE",
+        "backend.messaging.skarbiec.token_file",
+        "",
+    ))
+    .to_string_lossy()
+    .into_owned()
+});
+static BACKEND_MESSAGING_SKARBIEC_ITEMS: LazyLock<Vec<String>> = LazyLock::new(|| {
+    cfg_list(
+        "WC_BACKEND_MESSAGING_SKARBIEC_ITEMS",
+        "backend.messaging.skarbiec.items",
+        &[],
+    )
+});
+
+/// Product namespaces that must have explicit object-gateway credentials.
+/// `releases` is intentionally absent: it remains on the dedicated public
+/// GET-only release route.
+pub const ACTIVE_OBJECT_NAMESPACES: &[&str] = &[
+    "entitlements-rotator",
+    "echo",
+    "content-platform",
+    "growth-tactics",
+    "needher",
+    "oko",
+    "openenv",
+    "probierz",
+    "trading-autonomy",
+    "trading-tools",
+    "weles",
+    "wisent-app",
+    "wisent-backend",
+    "wisent-images",
+    "wisent-tools",
+    "wisent-trade",
+];
+
+pub const OBJECT_API_VERIFIER_CONSUMER: &str = "stado-object-api-verifier";
+
+pub const OBJECT_API_ACTIONS: &[&str] = &["delete", "get", "list", "put", "stat"];
+
+/// One exact object-key boundary and the actions granted inside it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ObjectPrefixPolicy {
+    prefix: String,
+    actions: Vec<String>,
+}
+
+impl ObjectPrefixPolicy {
+    pub fn prefix(&self) -> &str {
+        &self.prefix
+    }
+
+    pub fn actions(&self) -> &[String] {
+        &self.actions
+    }
+
+    fn allows_action(&self, action: &str) -> bool {
+        self.actions.iter().any(|allowed| allowed == action)
+    }
+
+    fn contains_key(&self, key: &str) -> bool {
+        if self.prefix.is_empty() {
+            true
+        } else if self.prefix.ends_with('/') {
+            key.starts_with(&self.prefix)
+        } else {
+            key == self.prefix
+        }
+    }
+}
+
+/// One product credential and its least-privilege key/action boundaries.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ObjectApiNamespace {
+    item: String,
+    prefix_policies: Vec<ObjectPrefixPolicy>,
+}
+
+impl ObjectApiNamespace {
+    pub fn item(&self) -> &str {
+        &self.item
+    }
+
+    pub fn prefix_policies(&self) -> &[ObjectPrefixPolicy] {
+        &self.prefix_policies
+    }
+
+    /// Whether one canonical object key and action are granted together.
+    pub fn allows_object_action(&self, key: &str, action: &str) -> bool {
+        self.prefix_policies
+            .iter()
+            .any(|policy| policy.allows_action(action) && policy.contains_key(key))
+    }
+
+    /// Authorize and canonicalize a list prefix under one policy that grants
+    /// list. Exact-key policies can never authorize a prefix scan.
+    pub fn authorized_list_prefix(&self, requested: &str, action: &str) -> Option<String> {
+        let requested = requested.trim_matches('/');
+        self.prefix_policies.iter().find_map(|policy| {
+            if !policy.allows_action(action) {
+                return None;
+            }
+            let allowed = policy.prefix();
+            if allowed.is_empty() {
+                return Some(requested.to_string());
+            }
+            if !allowed.ends_with('/') {
+                return None;
+            }
+            let root = allowed.strip_suffix('/').unwrap_or(allowed);
+            if requested == root {
+                Some(allowed.to_string())
+            } else if requested.starts_with(allowed) {
+                Some(requested.to_string())
+            } else {
+                None
+            }
+        })
+    }
+}
+
+fn valid_object_prefix(prefix: &str) -> bool {
+    if prefix.is_empty() {
+        return true;
+    }
+    if prefix.trim() != prefix || prefix.starts_with('/') {
+        return false;
+    }
+    let is_subtree = prefix.ends_with('/');
+    let path = prefix.trim_end_matches('/');
+    !path.is_empty()
+        && (is_subtree || !path.contains('/'))
+        && !path
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+        && !path.contains('\0')
+        && !path.contains('\\')
+}
+
+fn object_prefixes_overlap(left: &str, right: &str) -> bool {
+    left == right
+        || left.is_empty()
+        || right.is_empty()
+        || (left.ends_with('/') && right.starts_with(left))
+        || (right.ends_with('/') && left.starts_with(right))
+}
+
+fn parse_object_actions(
+    value: Option<&Value>,
+    location: &str,
+    use_default: bool,
+    problems: &mut Vec<String>,
+) -> Vec<String> {
+    let Some(value) = value else {
+        if use_default {
+            return OBJECT_API_ACTIONS
+                .iter()
+                .map(|action| (*action).to_string())
+                .collect();
+        }
+        problems.push(format!("{location} is required"));
+        return Vec::new();
+    };
+    let Value::Array(values) = value else {
+        problems.push(format!("{location} must be an array of actions"));
+        return Vec::new();
+    };
+    if values.is_empty() {
+        problems.push(format!("{location} must not be empty"));
+        return Vec::new();
+    }
+    let mut parsed = Vec::with_capacity(values.len());
+    let mut seen = BTreeSet::new();
+    for value in values {
+        let Some(action) = value.as_str() else {
+            problems.push(format!("{location} entries must be strings"));
+            continue;
+        };
+        if !OBJECT_API_ACTIONS.contains(&action) {
+            problems.push(format!("{location} contains unsupported action {action:?}"));
+            continue;
+        }
+        if !seen.insert(action) {
+            problems.push(format!("{location} contains duplicate action {action:?}"));
+            continue;
+        }
+        parsed.push(action.to_string());
+    }
+    parsed
+}
+
+fn parse_legacy_object_prefixes(
+    value: Option<&Value>,
+    location: &str,
+    problems: &mut Vec<String>,
+) -> Vec<String> {
+    let Some(value) = value else {
+        return vec![String::new()];
+    };
+    let Value::Array(values) = value else {
+        problems.push(format!("{location} must be an array of strings"));
+        return Vec::new();
+    };
+    if values.is_empty() {
+        problems.push(format!("{location} must not be empty"));
+        return Vec::new();
+    }
+    let mut parsed: Vec<String> = Vec::with_capacity(values.len());
+    for value in values {
+        let Some(prefix) = value.as_str() else {
+            problems.push(format!("{location} entries must be strings"));
+            continue;
+        };
+        if !valid_object_prefix(prefix) {
+            problems.push(format!(
+                "{location} entry {prefix:?} must be empty for namespace root, a canonical top-level object key, or a canonical path ending in '/'"
+            ));
+            continue;
+        }
+        if let Some(earlier) = parsed
+            .iter()
+            .find(|earlier| object_prefixes_overlap(earlier, prefix))
+        {
+            problems.push(format!(
+                "{location} contains ambiguous overlapping prefixes {earlier:?} and {prefix:?}"
+            ));
+            continue;
+        }
+        parsed.push(prefix.to_string());
+    }
+    parsed
+}
+
+/// Parse the security-sensitive namespace map without applying defaults.
+/// Each item name is bound to its namespace by construction, preventing a
+/// typo from granting product A the bearer belonging to product B.
+pub(crate) fn parse_object_api_namespaces(
+    value: Option<&Value>,
+) -> Result<BTreeMap<String, ObjectApiNamespace>, Vec<String>> {
+    let Some(Value::Object(entries)) = value else {
+        return Err(vec![
+            "object_api.namespaces must be a non-empty object mapping namespaces to Skarbiec items"
+                .to_string(),
+        ]);
+    };
+    if entries.is_empty() {
+        return Err(vec![
+            "object_api.namespaces must not be empty; product object routes fail closed without an explicit mapping"
+                .to_string(),
+        ]);
+    }
+
+    let mut problems = Vec::new();
+    let mut namespaces = BTreeMap::new();
+    let mut items = BTreeSet::new();
+    for (namespace, raw_entry) in entries {
+        let problem_count = problems.len();
+        if namespace.trim() != namespace
+            || namespace == "releases"
+            || crate::object_store::ObjectRef::new(namespace, "sentinel").is_err()
+        {
+            problems.push(format!(
+                "object_api.namespaces key {namespace:?} is not a canonical private product namespace"
+            ));
+        }
+        let Some(entry) = raw_entry.as_object() else {
+            problems.push(format!(
+                "object_api.namespaces.{namespace} must be an object with item and either prefix_policies or legacy prefixes/actions"
+            ));
+            continue;
+        };
+        for key in entry.keys() {
+            if !matches!(
+                key.as_str(),
+                "item" | "prefixes" | "actions" | "prefix_policies"
+            ) {
+                problems.push(format!(
+                    "object_api.namespaces.{namespace} contains unsupported key {key:?}"
+                ));
+            }
+        }
+        let item = entry
+            .get("item")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let expected_item = if namespace == "wisent-backend" {
+            "wisent-backend-object-client".to_string()
+        } else {
+            format!("{namespace}-object-api")
+        };
+        if item != expected_item {
+            problems.push(format!(
+                "object_api.namespaces.{namespace}.item must be {expected_item:?}, got {item:?}"
+            ));
+        }
+
+        let mut prefix_policies = Vec::new();
+        if let Some(explicit) = entry.get("prefix_policies") {
+            if entry.contains_key("prefixes") || entry.contains_key("actions") {
+                problems.push(format!(
+                    "object_api.namespaces.{namespace} cannot combine prefix_policies with legacy prefixes/actions"
+                ));
+            }
+            match explicit {
+                Value::Array(values) if !values.is_empty() => {
+                    for (index, raw_policy) in values.iter().enumerate() {
+                        let location =
+                            format!("object_api.namespaces.{namespace}.prefix_policies[{index}]");
+                        let Some(policy) = raw_policy.as_object() else {
+                            problems.push(format!(
+                                "{location} must be an object with exact prefix and actions"
+                            ));
+                            continue;
+                        };
+                        for key in policy.keys() {
+                            if !matches!(key.as_str(), "prefix" | "actions") {
+                                problems
+                                    .push(format!("{location} contains unsupported key {key:?}"));
+                            }
+                        }
+                        let prefix = policy
+                            .get("prefix")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        if prefix.is_empty() || !valid_object_prefix(prefix) {
+                            problems.push(format!(
+                                "{location}.prefix must be a non-empty canonical top-level object key or path ending in '/'"
+                            ));
+                        }
+                        let actions = parse_object_actions(
+                            policy.get("actions"),
+                            &format!("{location}.actions"),
+                            false,
+                            &mut problems,
+                        );
+                        if let Some(earlier) =
+                            prefix_policies
+                                .iter()
+                                .find(|earlier: &&ObjectPrefixPolicy| {
+                                    object_prefixes_overlap(earlier.prefix(), prefix)
+                                })
+                        {
+                            problems.push(format!(
+                                "{location}.prefix {prefix:?} ambiguously overlaps earlier prefix {:?}",
+                                earlier.prefix()
+                            ));
+                        }
+                        prefix_policies.push(ObjectPrefixPolicy {
+                            prefix: prefix.to_string(),
+                            actions,
+                        });
+                    }
+                }
+                Value::Array(_) => problems.push(format!(
+                    "object_api.namespaces.{namespace}.prefix_policies must not be empty"
+                )),
+                _ => problems.push(format!(
+                    "object_api.namespaces.{namespace}.prefix_policies must be an array"
+                )),
+            }
+        } else {
+            let prefixes = parse_legacy_object_prefixes(
+                entry.get("prefixes"),
+                &format!("object_api.namespaces.{namespace}.prefixes"),
+                &mut problems,
+            );
+            let actions = parse_object_actions(
+                entry.get("actions"),
+                &format!("object_api.namespaces.{namespace}.actions"),
+                true,
+                &mut problems,
+            );
+            prefix_policies.extend(prefixes.into_iter().map(|prefix| ObjectPrefixPolicy {
+                prefix,
+                actions: actions.clone(),
+            }));
+        }
+        if !items.insert(item.to_string()) {
+            problems.push(format!(
+                "object_api.namespaces maps more than one namespace to item {item:?}"
+            ));
+        }
+        if problems.len() == problem_count {
+            namespaces.insert(
+                namespace.to_string(),
+                ObjectApiNamespace {
+                    item: item.to_string(),
+                    prefix_policies,
+                },
+            );
+        }
+    }
+    for &required in ACTIVE_OBJECT_NAMESPACES {
+        if !namespaces.contains_key(required) {
+            problems.push(format!(
+                "object_api.namespaces is missing active namespace {required:?}"
+            ));
+        }
+    }
+    if problems.is_empty() {
+        Ok(namespaces)
+    } else {
+        Err(problems)
+    }
+}
+
+static OBJECT_API_NAMESPACES: LazyLock<Result<BTreeMap<String, ObjectApiNamespace>, Vec<String>>> =
+    LazyLock::new(|| {
+        let configured = match std::env::var("WC_OBJECT_API_NAMESPACES")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+        {
+            Some(encoded) => match serde_json::from_str::<Value>(&encoded) {
+                Ok(value) => Some(value),
+                Err(error) => {
+                    return Err(vec![format!(
+                        "WC_OBJECT_API_NAMESPACES must be a JSON object: {error}"
+                    )])
+                }
+            },
+            None => crate::config_file::get("object_api.namespaces"),
+        };
+        parse_object_api_namespaces(configured.as_ref())
+    });
+static OBJECT_SKARBIEC_URL: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "WC_OBJECT_SKARBIEC_URL",
+        "object_api.skarbiec.url",
+        skarbiec_url(),
+    )
+});
+static OBJECT_SKARBIEC_CONSUMER: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "WC_OBJECT_SKARBIEC_CONSUMER",
+        "object_api.skarbiec.consumer",
+        OBJECT_API_VERIFIER_CONSUMER,
+    )
+});
+static OBJECT_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
+    let default = std::env::var("HOME")
+        .map(|home| {
+            std::path::Path::new(&home)
+                .join(".stado")
+                .join("stado-object-api-verifier-skarbiec-token")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .unwrap_or_default();
+    expand_tilde(&cfg(
+        "WC_OBJECT_SKARBIEC_TOKEN_FILE",
+        "object_api.skarbiec.token_file",
+        &default,
+    ))
+    .to_string_lossy()
+    .into_owned()
+});
+
+/// Active authenticated software publishers. Public readers use the separate
+/// tokenless release GET route.
+pub const ACTIVE_RELEASE_PUBLISHERS: &[&str] = &[
+    "brama",
+    "compute-marketplace",
+    "image-video-router",
+    "oko",
+    "skarbiec",
+    "stado",
+    "trading-autonomy",
+    "wisent-backend",
+    "wisent-images",
+];
+
+pub const RELEASE_API_VERIFIER_CONSUMER: &str = "stado-release-api-verifier";
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReleasePublisher {
+    item: String,
+    prefix: String,
+}
+
+impl ReleasePublisher {
+    pub fn item(&self) -> &str {
+        &self.item
+    }
+
+    pub fn prefix(&self) -> &str {
+        &self.prefix
+    }
+
+    pub fn allows_key(&self, key: &str) -> bool {
+        key.starts_with(&self.prefix)
+    }
+
+    pub fn authorized_list_prefix(&self, requested: &str) -> Option<String> {
+        let requested = requested.trim_matches('/');
+        let root = self.prefix.strip_suffix('/').unwrap_or(&self.prefix);
+        if requested == root {
+            Some(self.prefix.clone())
+        } else if requested.starts_with(&self.prefix) {
+            Some(requested.to_string())
+        } else {
+            None
+        }
+    }
+}
+
+pub(crate) fn parse_release_publishers(
+    value: Option<&Value>,
+) -> Result<BTreeMap<String, ReleasePublisher>, Vec<String>> {
+    let Some(Value::Object(entries)) = value else {
+        return Err(vec![
+            "release_api.publishers must be a non-empty product-to-item mapping".to_string(),
+        ]);
+    };
+    if entries.is_empty() {
+        return Err(vec![
+            "release_api.publishers must not be empty; authenticated release writes fail closed"
+                .to_string(),
+        ]);
+    }
+
+    let mut problems = Vec::new();
+    let mut publishers = BTreeMap::new();
+    let mut items = BTreeSet::new();
+    let mut prefixes = BTreeSet::new();
+    for (product, raw_entry) in entries {
+        let mut entry_valid = true;
+        if product.trim() != product
+            || crate::object_store::ObjectRef::new(product, "sentinel").is_err()
+        {
+            problems.push(format!(
+                "release_api.publishers key {product:?} is not a canonical product name"
+            ));
+            entry_valid = false;
+        }
+        let Some(entry) = raw_entry.as_object() else {
+            problems.push(format!(
+                "release_api.publishers.{product} must be an object with item and prefix"
+            ));
+            continue;
+        };
+        for key in entry.keys() {
+            if key != "item" && key != "prefix" {
+                problems.push(format!(
+                    "release_api.publishers.{product} contains unsupported key {key:?}"
+                ));
+                entry_valid = false;
+            }
+        }
+        let item = entry
+            .get("item")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let expected_item = format!("{product}-release-publisher");
+        if item != expected_item {
+            problems.push(format!(
+                "release_api.publishers.{product}.item must be {expected_item:?}, got {item:?}"
+            ));
+            entry_valid = false;
+        }
+        let prefix = entry
+            .get("prefix")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let expected_prefix = format!("{product}/");
+        if prefix != expected_prefix {
+            problems.push(format!(
+                "release_api.publishers.{product}.prefix must be {expected_prefix:?}, got {prefix:?}"
+            ));
+            entry_valid = false;
+        }
+        if !items.insert(item.to_string()) {
+            problems.push(format!(
+                "release_api.publishers maps more than one product to item {item:?}"
+            ));
+            entry_valid = false;
+        }
+        if !prefixes.insert(prefix.to_string()) {
+            problems.push(format!(
+                "release_api.publishers maps more than one product to prefix {prefix:?}"
+            ));
+            entry_valid = false;
+        }
+        if entry_valid {
+            publishers.insert(
+                product.to_string(),
+                ReleasePublisher {
+                    item: item.to_string(),
+                    prefix: prefix.to_string(),
+                },
+            );
+        }
+    }
+    for &required in ACTIVE_RELEASE_PUBLISHERS {
+        if !publishers.contains_key(required) {
+            problems.push(format!(
+                "release_api.publishers is missing active publisher {required:?}"
+            ));
+        }
+    }
+    if problems.is_empty() {
+        Ok(publishers)
+    } else {
+        Err(problems)
+    }
+}
+
+static RELEASE_API_PUBLISHERS: LazyLock<Result<BTreeMap<String, ReleasePublisher>, Vec<String>>> =
+    LazyLock::new(|| {
+        let configured = match std::env::var("WC_RELEASE_API_PUBLISHERS")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+        {
+            Some(encoded) => match serde_json::from_str::<Value>(&encoded) {
+                Ok(value) => Some(value),
+                Err(error) => {
+                    return Err(vec![format!(
+                        "WC_RELEASE_API_PUBLISHERS must be a JSON object: {error}"
+                    )])
+                }
+            },
+            None => crate::config_file::get("release_api.publishers"),
+        };
+        parse_release_publishers(configured.as_ref())
+    });
+static RELEASE_SKARBIEC_URL: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "WC_RELEASE_SKARBIEC_URL",
+        "release_api.skarbiec.url",
+        skarbiec_url(),
+    )
+});
+static RELEASE_SKARBIEC_CONSUMER: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "WC_RELEASE_SKARBIEC_CONSUMER",
+        "release_api.skarbiec.consumer",
+        RELEASE_API_VERIFIER_CONSUMER,
+    )
+});
+static RELEASE_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
+    let default = std::env::var("HOME")
+        .map(|home| {
+            std::path::Path::new(&home)
+                .join(".stado")
+                .join("stado-release-api-verifier-skarbiec-token")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .unwrap_or_default();
+    expand_tilde(&cfg(
+        "WC_RELEASE_SKARBIEC_TOKEN_FILE",
+        "release_api.skarbiec.token_file",
+        &default,
+    ))
+    .to_string_lossy()
+    .into_owned()
+});
+
+pub const MACHINE_API_VERIFIER_CONSUMER: &str = "stado-machine-api-verifier";
+pub const MACHINE_API_ACTIONS: &[&str] = &["cancel", "status", "submit"];
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MachineApiClient {
+    item: String,
+    actions: Vec<String>,
+    targets: Vec<String>,
+}
+
+impl MachineApiClient {
+    pub fn item(&self) -> &str {
+        &self.item
+    }
+
+    pub fn allows_action(&self, action: &str) -> bool {
+        self.actions.iter().any(|allowed| allowed == action)
+    }
+
+    pub fn allows_target(&self, target: &str) -> bool {
+        self.targets.iter().any(|allowed| allowed == target)
+    }
+
+    pub fn targets(&self) -> &[String] {
+        &self.targets
+    }
+}
+
+fn canonical_machine_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.trim() == value
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+pub(crate) fn parse_machine_api_clients(
+    value: Option<&Value>,
+) -> Result<BTreeMap<String, MachineApiClient>, Vec<String>> {
+    let Some(Value::Object(entries)) = value else {
+        return Err(vec![
+            "machine_api.clients must be a non-empty exact client mapping".to_string(),
+        ]);
+    };
+    if entries.is_empty() {
+        return Err(vec!["machine_api.clients must not be empty".to_string()]);
+    }
+    let mut problems = Vec::new();
+    let mut clients = BTreeMap::new();
+    let mut items = BTreeSet::new();
+    for (name, raw) in entries {
+        let start = problems.len();
+        if !canonical_machine_name(name) {
+            problems.push(format!("machine_api.clients key {name:?} is not canonical"));
+        }
+        let Some(entry) = raw.as_object() else {
+            problems.push(format!("machine_api.clients.{name} must be an object"));
+            continue;
+        };
+        for key in entry.keys() {
+            if !matches!(key.as_str(), "item" | "actions" | "targets") {
+                problems.push(format!(
+                    "machine_api.clients.{name} contains unsupported key {key:?}"
+                ));
+            }
+        }
+        let item = entry
+            .get("item")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let expected_item = format!("{name}-machine-api");
+        if item != expected_item {
+            problems.push(format!(
+                "machine_api.clients.{name}.item must be {expected_item:?}"
+            ));
+        }
+        if !items.insert(item.to_string()) {
+            problems.push(format!(
+                "machine_api.clients maps more than one client to item {item:?}"
+            ));
+        }
+        let mut actions = Vec::new();
+        match entry.get("actions") {
+            Some(Value::Array(values)) if !values.is_empty() => {
+                let mut seen = BTreeSet::new();
+                for value in values {
+                    let Some(action) = value.as_str() else {
+                        problems.push(format!(
+                            "machine_api.clients.{name}.actions entries must be strings"
+                        ));
+                        continue;
+                    };
+                    if !MACHINE_API_ACTIONS.contains(&action) || !seen.insert(action) {
+                        problems.push(format!(
+                            "machine_api.clients.{name}.actions contains unsupported or duplicate {action:?}"
+                        ));
+                        continue;
+                    }
+                    actions.push(action.to_string());
+                }
+            }
+            _ => problems.push(format!(
+                "machine_api.clients.{name}.actions must be a non-empty array"
+            )),
+        }
+        let mut targets = Vec::new();
+        match entry.get("targets") {
+            Some(Value::Array(values)) if !values.is_empty() => {
+                let mut seen = BTreeSet::new();
+                for value in values {
+                    let Some(target) = value.as_str() else {
+                        problems.push(format!(
+                            "machine_api.clients.{name}.targets entries must be strings"
+                        ));
+                        continue;
+                    };
+                    let known = crate::capabilities::configurable_variant(
+                        crate::capabilities::RuntimeFacet::Compute,
+                        target,
+                    )
+                    .is_some();
+                    if !known || !seen.insert(target) {
+                        problems.push(format!(
+                            "machine_api.clients.{name}.targets contains unknown or duplicate {target:?}"
+                        ));
+                        continue;
+                    }
+                    targets.push(target.to_string());
+                }
+            }
+            _ => problems.push(format!(
+                "machine_api.clients.{name}.targets must be a non-empty array"
+            )),
+        }
+        if problems.len() == start {
+            clients.insert(
+                name.to_string(),
+                MachineApiClient {
+                    item: item.to_string(),
+                    actions,
+                    targets,
+                },
+            );
+        }
+    }
+    if problems.is_empty() {
+        Ok(clients)
+    } else {
+        Err(problems)
+    }
+}
+
+static MACHINE_API_CLIENTS: LazyLock<Result<BTreeMap<String, MachineApiClient>, Vec<String>>> =
+    LazyLock::new(|| {
+        let configured = match std::env::var("WC_MACHINE_API_CLIENTS")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+        {
+            Some(encoded) => match serde_json::from_str::<Value>(&encoded) {
+                Ok(value) => Some(value),
+                Err(error) => {
+                    return Err(vec![format!(
+                        "WC_MACHINE_API_CLIENTS must be a JSON object: {error}"
+                    )])
+                }
+            },
+            None => crate::config_file::get("machine_api.clients"),
+        };
+        parse_machine_api_clients(configured.as_ref())
+    });
+static MACHINE_SKARBIEC_URL: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "WC_MACHINE_SKARBIEC_URL",
+        "machine_api.skarbiec.url",
+        skarbiec_url(),
+    )
+});
+static MACHINE_SKARBIEC_CONSUMER: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "WC_MACHINE_SKARBIEC_CONSUMER",
+        "machine_api.skarbiec.consumer",
+        MACHINE_API_VERIFIER_CONSUMER,
+    )
+});
+static MACHINE_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
+    let default = std::env::var("HOME")
+        .map(|home| {
+            std::path::Path::new(&home)
+                .join(".stado")
+                .join("stado-machine-api-verifier-skarbiec-token")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .unwrap_or_default();
+    expand_tilde(&cfg(
+        "WC_MACHINE_SKARBIEC_TOKEN_FILE",
+        "machine_api.skarbiec.token_file",
+        &default,
+    ))
+    .to_string_lossy()
+    .into_owned()
+});
+
+pub const BACKEND_PUSH_API_VERIFIER_CONSUMER: &str = "stado-backend-push-api-verifier";
+pub const BACKEND_PUSH_ACTIONS: &[&str] = &["register", "send", "status", "unregister"];
+pub const BACKEND_PUSH_PATHS: &[&str] = &[
+    "/api/backend/push/inactivity",
+    "/api/backend/push/reachability",
+    "/api/backend/push/register",
+    "/api/backend/push/unregister",
+];
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BackendPushClient {
+    item: String,
+    actions: Vec<String>,
+    paths: Vec<String>,
+}
+
+impl BackendPushClient {
+    pub fn item(&self) -> &str {
+        &self.item
+    }
+
+    pub fn allows(&self, path: &str, action: &str) -> bool {
+        self.paths.iter().any(|allowed| allowed == path)
+            && self.actions.iter().any(|allowed| allowed == action)
+    }
+}
+
+pub(crate) fn parse_backend_push_clients(
+    value: Option<&Value>,
+) -> Result<BTreeMap<String, BackendPushClient>, Vec<String>> {
+    let Some(Value::Object(entries)) = value else {
+        return Err(vec![
+            "backend.push_clients must be a non-empty exact client mapping".to_string(),
+        ]);
+    };
+    if entries.is_empty() {
+        return Err(vec!["backend.push_clients must not be empty".to_string()]);
+    }
+    let mut problems = Vec::new();
+    let mut clients = BTreeMap::new();
+    let mut items = BTreeSet::new();
+    for (name, raw) in entries {
+        let start = problems.len();
+        if !canonical_machine_name(name) {
+            problems.push(format!(
+                "backend.push_clients key {name:?} is not canonical"
+            ));
+        }
+        let Some(entry) = raw.as_object() else {
+            problems.push(format!("backend.push_clients.{name} must be an object"));
+            continue;
+        };
+        for key in entry.keys() {
+            if !matches!(key.as_str(), "item" | "actions" | "paths") {
+                problems.push(format!(
+                    "backend.push_clients.{name} contains unsupported key {key:?}"
+                ));
+            }
+        }
+        let item = entry
+            .get("item")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let expected_item = format!("{name}-push-router");
+        if item != expected_item {
+            problems.push(format!(
+                "backend.push_clients.{name}.item must be {expected_item:?}"
+            ));
+        }
+        if !items.insert(item.to_string()) {
+            problems.push(format!(
+                "backend.push_clients maps more than one client to item {item:?}"
+            ));
+        }
+        let mut actions = Vec::new();
+        match entry.get("actions") {
+            Some(Value::Array(values)) if !values.is_empty() => {
+                let mut seen = BTreeSet::new();
+                for value in values {
+                    let Some(action) = value.as_str() else {
+                        problems.push(format!(
+                            "backend.push_clients.{name}.actions entries must be strings"
+                        ));
+                        continue;
+                    };
+                    if !BACKEND_PUSH_ACTIONS.contains(&action) || !seen.insert(action) {
+                        problems.push(format!(
+                            "backend.push_clients.{name}.actions contains unsupported or duplicate {action:?}"
+                        ));
+                        continue;
+                    }
+                    actions.push(action.to_string());
+                }
+            }
+            _ => problems.push(format!(
+                "backend.push_clients.{name}.actions must be a non-empty array"
+            )),
+        }
+        let mut paths = Vec::new();
+        match entry.get("paths") {
+            Some(Value::Array(values)) if !values.is_empty() => {
+                let mut seen = BTreeSet::new();
+                for value in values {
+                    let Some(path) = value.as_str() else {
+                        problems.push(format!(
+                            "backend.push_clients.{name}.paths entries must be strings"
+                        ));
+                        continue;
+                    };
+                    if !BACKEND_PUSH_PATHS.contains(&path) || !seen.insert(path) {
+                        problems.push(format!(
+                            "backend.push_clients.{name}.paths contains unsupported or duplicate {path:?}"
+                        ));
+                        continue;
+                    }
+                    paths.push(path.to_string());
+                }
+            }
+            _ => problems.push(format!(
+                "backend.push_clients.{name}.paths must be a non-empty array"
+            )),
+        }
+        if problems.len() == start {
+            clients.insert(
+                name.to_string(),
+                BackendPushClient {
+                    item: item.to_string(),
+                    actions,
+                    paths,
+                },
+            );
+        }
+    }
+    if problems.is_empty() {
+        Ok(clients)
+    } else {
+        Err(problems)
+    }
+}
+
+static BACKEND_PUSH_CLIENTS: LazyLock<Result<BTreeMap<String, BackendPushClient>, Vec<String>>> =
+    LazyLock::new(|| {
+        let configured = match std::env::var("WC_BACKEND_PUSH_CLIENTS")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+        {
+            Some(encoded) => match serde_json::from_str::<Value>(&encoded) {
+                Ok(value) => Some(value),
+                Err(error) => {
+                    return Err(vec![format!(
+                        "WC_BACKEND_PUSH_CLIENTS must be a JSON object: {error}"
+                    )])
+                }
+            },
+            None => crate::config_file::get("backend.push_clients"),
+        };
+        parse_backend_push_clients(configured.as_ref())
+    });
+static BACKEND_PUSH_SKARBIEC_URL: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "WC_BACKEND_PUSH_SKARBIEC_URL",
+        "backend.push_skarbiec.url",
+        skarbiec_url(),
+    )
+});
+static BACKEND_PUSH_SKARBIEC_CONSUMER: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "WC_BACKEND_PUSH_SKARBIEC_CONSUMER",
+        "backend.push_skarbiec.consumer",
+        BACKEND_PUSH_API_VERIFIER_CONSUMER,
+    )
+});
+static BACKEND_PUSH_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
+    let default = std::env::var("HOME")
+        .map(|home| {
+            std::path::Path::new(&home)
+                .join(".stado")
+                .join("stado-backend-push-api-verifier-skarbiec-token")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .unwrap_or_default();
+    expand_tilde(&cfg(
+        "WC_BACKEND_PUSH_SKARBIEC_TOKEN_FILE",
+        "backend.push_skarbiec.token_file",
+        &default,
+    ))
+    .to_string_lossy()
+    .into_owned()
+});
+
+pub const SERVICE_API_VERIFIER_CONSUMER: &str = "stado-service-api-verifier";
+pub const SERVICE_API_ACTIONS: &[&str] = &["status", "restart"];
+pub const ACTIVE_DEPLOYED_SERVICES: &[&str] = &["com.wisent.weles-api"];
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ServiceDeployer {
+    item: String,
+    consumer: String,
+    services: Vec<String>,
+    actions: Vec<String>,
+}
+
+impl ServiceDeployer {
+    pub fn item(&self) -> &str {
+        &self.item
+    }
+
+    pub fn consumer(&self) -> &str {
+        &self.consumer
+    }
+
+    pub fn services(&self) -> &[String] {
+        &self.services
+    }
+
+    pub fn actions(&self) -> &[String] {
+        &self.actions
+    }
+
+    pub fn allows(&self, service: &str, action: &str) -> bool {
+        self.services.iter().any(|configured| configured == service)
+            && self.actions.iter().any(|configured| configured == action)
+    }
+}
+
+pub(crate) fn parse_service_deployers(
+    value: Option<&Value>,
+) -> Result<BTreeMap<String, ServiceDeployer>, Vec<String>> {
+    let Some(Value::Object(entries)) = value else {
+        return Err(vec![
+            "service_api.deployers must be a non-empty product-to-deployer mapping".to_string(),
+        ]);
+    };
+    if entries.is_empty() {
+        return Err(vec![
+            "service_api.deployers must not be empty; managed-service routes fail closed"
+                .to_string(),
+        ]);
+    }
+
+    let canonical = |value: &str| {
+        !value.is_empty()
+            && value.trim() == value
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    };
+    let mut problems = Vec::new();
+    let mut deployers = BTreeMap::new();
+    let mut items = BTreeSet::new();
+    let mut services_seen = BTreeSet::new();
+    for (product, raw_entry) in entries {
+        let mut entry_valid = true;
+        if !canonical(product) {
+            problems.push(format!(
+                "service_api.deployers key {product:?} is not a canonical product name"
+            ));
+            entry_valid = false;
+        }
+        let Some(entry) = raw_entry.as_object() else {
+            problems.push(format!(
+                "service_api.deployers.{product} must contain consumer, item, services, and actions"
+            ));
+            continue;
+        };
+        for key in entry.keys() {
+            if !matches!(key.as_str(), "consumer" | "item" | "services" | "actions") {
+                problems.push(format!(
+                    "service_api.deployers.{product} contains unsupported key {key:?}"
+                ));
+                entry_valid = false;
+            }
+        }
+        let item = entry
+            .get("item")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let consumer = entry
+            .get("consumer")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !canonical(item) || !item.ends_with("-deployer") {
+            problems.push(format!(
+                "service_api.deployers.{product}.item must name one canonical *-deployer item"
+            ));
+            entry_valid = false;
+        }
+        if consumer != item {
+            problems.push(format!(
+                "service_api.deployers.{product}.consumer must equal its exact item {item:?}"
+            ));
+            entry_valid = false;
+        }
+        if !items.insert(item.to_string()) {
+            problems.push(format!(
+                "service_api.deployers maps more than one product to item {item:?}"
+            ));
+            entry_valid = false;
+        }
+        let services = match entry.get("services") {
+            Some(Value::Array(values)) if !values.is_empty() => {
+                let mut parsed = Vec::with_capacity(values.len());
+                for value in values {
+                    let Some(service) = value.as_str() else {
+                        problems.push(format!(
+                            "service_api.deployers.{product}.services entries must be strings"
+                        ));
+                        entry_valid = false;
+                        continue;
+                    };
+                    if !canonical(service) && service != "com.wisent.weles-api" {
+                        problems.push(format!(
+                            "service_api.deployers.{product}.services contains non-canonical {service:?}"
+                        ));
+                        entry_valid = false;
+                    }
+                    if !services_seen.insert(service.to_string()) {
+                        problems.push(format!(
+                            "service {service:?} is mapped to more than one deployer"
+                        ));
+                        entry_valid = false;
+                    }
+                    parsed.push(service.to_string());
+                }
+                parsed
+            }
+            _ => {
+                problems.push(format!(
+                    "service_api.deployers.{product}.services must be a non-empty string array"
+                ));
+                entry_valid = false;
+                Vec::new()
+            }
+        };
+        let actions = match entry.get("actions") {
+            Some(Value::Array(values)) if !values.is_empty() => {
+                let mut parsed = Vec::with_capacity(values.len());
+                let mut seen = BTreeSet::new();
+                for value in values {
+                    let Some(action) = value.as_str() else {
+                        problems.push(format!(
+                            "service_api.deployers.{product}.actions entries must be strings"
+                        ));
+                        entry_valid = false;
+                        continue;
+                    };
+                    if !SERVICE_API_ACTIONS.contains(&action) || !seen.insert(action.to_string()) {
+                        problems.push(format!(
+                            "service_api.deployers.{product}.actions contains unsupported or duplicate {action:?}"
+                        ));
+                        entry_valid = false;
+                    }
+                    parsed.push(action.to_string());
+                }
+                parsed
+            }
+            _ => {
+                problems.push(format!(
+                    "service_api.deployers.{product}.actions must be a non-empty string array"
+                ));
+                entry_valid = false;
+                Vec::new()
+            }
+        };
+        if entry_valid {
+            deployers.insert(
+                product.to_string(),
+                ServiceDeployer {
+                    item: item.to_string(),
+                    consumer: consumer.to_string(),
+                    services,
+                    actions,
+                },
+            );
+        }
+    }
+    for &required in ACTIVE_DEPLOYED_SERVICES {
+        if !services_seen.contains(required) {
+            problems.push(format!(
+                "service_api.deployers is missing active service {required:?}"
+            ));
+        }
+    }
+    if problems.is_empty() {
+        Ok(deployers)
+    } else {
+        Err(problems)
+    }
+}
+
+static SERVICE_API_DEPLOYERS: LazyLock<Result<BTreeMap<String, ServiceDeployer>, Vec<String>>> =
+    LazyLock::new(|| {
+        let configured = match std::env::var("WC_SERVICE_API_DEPLOYERS")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+        {
+            Some(encoded) => match serde_json::from_str::<Value>(&encoded) {
+                Ok(value) => Some(value),
+                Err(error) => {
+                    return Err(vec![format!(
+                        "WC_SERVICE_API_DEPLOYERS must be a JSON object: {error}"
+                    )])
+                }
+            },
+            None => crate::config_file::get("service_api.deployers"),
+        };
+        parse_service_deployers(configured.as_ref())
+    });
+static SERVICE_SKARBIEC_URL: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "WC_SERVICE_SKARBIEC_URL",
+        "service_api.skarbiec.url",
+        skarbiec_url(),
+    )
+});
+static SERVICE_SKARBIEC_CONSUMER: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "WC_SERVICE_SKARBIEC_CONSUMER",
+        "service_api.skarbiec.consumer",
+        SERVICE_API_VERIFIER_CONSUMER,
+    )
+});
+static SERVICE_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
+    let default = std::env::var("HOME")
+        .map(|home| {
+            std::path::Path::new(&home)
+                .join(".stado")
+                .join("stado-service-api-verifier-skarbiec-token")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .unwrap_or_default();
+    expand_tilde(&cfg(
+        "WC_SERVICE_SKARBIEC_TOKEN_FILE",
+        "service_api.skarbiec.token_file",
+        &default,
+    ))
+    .to_string_lossy()
+    .into_owned()
+});
+
+pub const RATE_LIMIT_API_VERIFIER_CONSUMER: &str = "stado-rate-limit-api-verifier";
+
+static RATE_LIMIT_SKARBIEC_URL: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "WC_RATE_LIMIT_SKARBIEC_URL",
+        "rate_limit.skarbiec.url",
+        skarbiec_url(),
+    )
+});
+static RATE_LIMIT_SKARBIEC_CONSUMER: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "WC_RATE_LIMIT_SKARBIEC_CONSUMER",
+        "rate_limit.skarbiec.consumer",
+        RATE_LIMIT_API_VERIFIER_CONSUMER,
+    )
+});
+static RATE_LIMIT_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
+    let default = std::env::var("HOME")
+        .map(|home| {
+            std::path::Path::new(&home)
+                .join(".stado")
+                .join("stado-rate-limit-api-verifier-skarbiec-token")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .unwrap_or_default();
+    expand_tilde(&cfg(
+        "WC_RATE_LIMIT_SKARBIEC_TOKEN_FILE",
+        "rate_limit.skarbiec.token_file",
+        &default,
+    ))
+    .to_string_lossy()
+    .into_owned()
+});
+
+pub const INTEGRATION_API_VERIFIER_CONSUMER: &str = "stado-integration-api-verifier";
+pub const INTEGRATION_DOMAINS: &[&str] = &[
+    "backend",
+    "content",
+    "deployment",
+    "enterprise",
+    "people",
+    "singularity",
+    "oko",
+    "trading",
+    "most",
+    "echo-paid-ads",
+];
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IntegrationClient {
+    item: String,
+    allowed_actions: Vec<String>,
+}
+
+impl IntegrationClient {
+    pub fn item(&self) -> &str {
+        &self.item
+    }
+
+    pub fn allows(&self, domain: &str, action: &str) -> bool {
+        self.allowed_actions.iter().any(|allowed| {
+            allowed
+                .split_once('/')
+                .is_some_and(|(allowed_domain, allowed_action)| {
+                    allowed_domain == domain && allowed_action == action
+                })
+        })
+    }
+
+    pub fn allowed_actions(&self) -> &[String] {
+        &self.allowed_actions
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IntegrationProvider {
+    consumer: String,
+    token_file: String,
+    items: Vec<String>,
+}
+
+impl IntegrationProvider {
+    pub fn consumer(&self) -> &str {
+        &self.consumer
+    }
+
+    pub fn token_file(&self) -> &str {
+        &self.token_file
+    }
+
+    pub fn items(&self) -> &[String] {
+        &self.items
+    }
+}
+
+fn canonical_integration_component(value: &str) -> bool {
+    !value.is_empty()
+        && value.trim() == value
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'.' | b'_')
+        })
+}
+
+pub(crate) fn parse_integration_clients(
+    value: Option<&Value>,
+) -> Result<BTreeMap<String, IntegrationClient>, Vec<String>> {
+    let Some(Value::Object(entries)) = value else {
+        return Err(vec![
+            "integration.clients must be a non-empty exact client mapping".to_string(),
+        ]);
+    };
+    if entries.is_empty() {
+        return Err(vec!["integration.clients must not be empty".to_string()]);
+    }
+    let mut problems = Vec::new();
+    let mut clients = BTreeMap::new();
+    let mut items = BTreeSet::new();
+    for (name, raw) in entries {
+        let start = problems.len();
+        if !canonical_integration_component(name) || name.contains('.') {
+            problems.push(format!("integration.clients key {name:?} is not canonical"));
+        }
+        let Some(entry) = raw.as_object() else {
+            problems.push(format!("integration.clients.{name} must be an object"));
+            continue;
+        };
+        for key in entry.keys() {
+            if !matches!(key.as_str(), "item" | "allowed_actions") {
+                problems.push(format!(
+                    "integration.clients.{name} contains unsupported key {key:?}"
+                ));
+            }
+        }
+        let item = entry
+            .get("item")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !canonical_integration_component(item) || !item.ends_with("-integration-api") {
+            problems.push(format!(
+                "integration.clients.{name}.item must be a canonical product-specific *-integration-api item"
+            ));
+        }
+        if !items.insert(item.to_string()) {
+            problems.push(format!(
+                "integration.clients maps more than one client to item {item:?}"
+            ));
+        }
+        let mut allowed_actions = Vec::new();
+        match entry.get("allowed_actions") {
+            Some(Value::Array(values)) if !values.is_empty() => {
+                let mut seen = BTreeSet::new();
+                for value in values {
+                    let Some(value) = value.as_str() else {
+                        problems.push(format!(
+                            "integration.clients.{name}.allowed_actions entries must be strings"
+                        ));
+                        continue;
+                    };
+                    let canonical = value.split_once('/').is_some_and(|(domain, action)| {
+                        !domain.contains('.')
+                            && canonical_integration_component(domain)
+                            && INTEGRATION_DOMAINS.contains(&domain)
+                            && canonical_integration_component(action)
+                    });
+                    if !canonical || !seen.insert(value) {
+                        problems.push(format!(
+                            "integration.clients.{name}.allowed_actions contains invalid or duplicate {value:?}"
+                        ));
+                        continue;
+                    }
+                    allowed_actions.push(value.to_string());
+                }
+            }
+            _ => problems.push(format!(
+                "integration.clients.{name}.allowed_actions must be a non-empty array"
+            )),
+        }
+        if problems.len() == start {
+            clients.insert(
+                name.to_string(),
+                IntegrationClient {
+                    item: item.to_string(),
+                    allowed_actions,
+                },
+            );
+        }
+    }
+    if problems.is_empty() {
+        Ok(clients)
+    } else {
+        Err(problems)
+    }
+}
+
+pub(crate) fn parse_integration_providers(
+    value: Option<&Value>,
+) -> Result<BTreeMap<String, IntegrationProvider>, Vec<String>> {
+    let entries = match value {
+        None => return Ok(BTreeMap::new()),
+        Some(Value::Object(entries)) => entries,
+        Some(_) => {
+            return Err(vec![
+                "integration.providers must be an exact domain mapping".to_string(),
+            ])
+        }
+    };
+    if entries.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let mut problems = Vec::new();
+    let mut providers = BTreeMap::new();
+    let mut consumers = BTreeSet::new();
+    let mut token_files = BTreeSet::new();
+    let mut all_items = BTreeSet::new();
+    for (domain, raw) in entries {
+        let start = problems.len();
+        if !canonical_integration_component(domain) || domain.contains('.') {
+            problems.push(format!(
+                "integration.providers key {domain:?} is not canonical"
+            ));
+        }
+        if !INTEGRATION_DOMAINS.contains(&domain.as_str()) {
+            problems.push(format!(
+                "integration.providers contains unsupported domain {domain:?}"
+            ));
+        }
+        let Some(entry) = raw.as_object() else {
+            problems.push(format!("integration.providers.{domain} must be an object"));
+            continue;
+        };
+        for key in entry.keys() {
+            if !matches!(key.as_str(), "consumer" | "token_file" | "items") {
+                problems.push(format!(
+                    "integration.providers.{domain} contains unsupported key {key:?}"
+                ));
+            }
+        }
+        let consumer = entry
+            .get("consumer")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let expected_consumer = format!("stado-{domain}-integration-provider");
+        if consumer != expected_consumer {
+            problems.push(format!(
+                "integration.providers.{domain}.consumer must be {expected_consumer:?}"
+            ));
+        }
+        if !consumers.insert(consumer.to_string()) {
+            problems.push(format!(
+                "integration.providers reuses consumer {consumer:?}"
+            ));
+        }
+        let token_file = entry
+            .get("token_file")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if token_file.trim().is_empty() {
+            problems.push(format!(
+                "integration.providers.{domain}.token_file is required"
+            ));
+        }
+        let token_file = expand_tilde(token_file).to_string_lossy().into_owned();
+        if !token_files.insert(token_file.clone()) {
+            problems.push(format!(
+                "integration.providers reuses token_file for domain {domain:?}"
+            ));
+        }
+        let mut items = Vec::new();
+        match entry.get("items") {
+            Some(Value::Array(values)) if !values.is_empty() => {
+                let mut seen = BTreeSet::new();
+                for value in values {
+                    let Some(item) = value.as_str() else {
+                        problems.push(format!(
+                            "integration.providers.{domain}.items entries must be strings"
+                        ));
+                        continue;
+                    };
+                    if !canonical_integration_component(item)
+                        || item.ends_with("-integration-api")
+                        || !seen.insert(item)
+                        || !all_items.insert(item)
+                    {
+                        problems.push(format!(
+                            "integration.providers.{domain}.items contains invalid, duplicate, or cross-domain item {item:?}"
+                        ));
+                        continue;
+                    }
+                    items.push(item.to_string());
+                }
+            }
+            _ => problems.push(format!(
+                "integration.providers.{domain}.items must be a non-empty array"
+            )),
+        }
+        if problems.len() == start {
+            providers.insert(
+                domain.to_string(),
+                IntegrationProvider {
+                    consumer: consumer.to_string(),
+                    token_file,
+                    items,
+                },
+            );
+        }
+    }
+    if problems.is_empty() {
+        Ok(providers)
+    } else {
+        Err(problems)
+    }
+}
+
+static INTEGRATION_CLIENTS: LazyLock<Result<BTreeMap<String, IntegrationClient>, Vec<String>>> =
+    LazyLock::new(|| {
+        let configured = match std::env::var("WC_INTEGRATION_CLIENTS")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+        {
+            Some(encoded) => match serde_json::from_str::<Value>(&encoded) {
+                Ok(value) => Some(value),
+                Err(error) => {
+                    return Err(vec![format!(
+                        "WC_INTEGRATION_CLIENTS must be a JSON object: {error}"
+                    )])
+                }
+            },
+            None => crate::config_file::get("integration.clients"),
+        };
+        parse_integration_clients(configured.as_ref())
+    });
+static INTEGRATION_PROVIDERS: LazyLock<Result<BTreeMap<String, IntegrationProvider>, Vec<String>>> =
+    LazyLock::new(|| {
+        let configured = match std::env::var("WC_INTEGRATION_PROVIDERS")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+        {
+            Some(encoded) => match serde_json::from_str::<Value>(&encoded) {
+                Ok(value) => Some(value),
+                Err(error) => {
+                    return Err(vec![format!(
+                        "WC_INTEGRATION_PROVIDERS must be a JSON object: {error}"
+                    )])
+                }
+            },
+            None => crate::config_file::get("integration.providers"),
+        };
+        parse_integration_providers(configured.as_ref())
+    });
+static INTEGRATION_SKARBIEC_URL: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "WC_INTEGRATION_SKARBIEC_URL",
+        "integration.skarbiec.url",
+        skarbiec_url(),
+    )
+});
+static INTEGRATION_SKARBIEC_CONSUMER: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "WC_INTEGRATION_SKARBIEC_CONSUMER",
+        "integration.skarbiec.consumer",
+        INTEGRATION_API_VERIFIER_CONSUMER,
+    )
+});
+static INTEGRATION_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
+    let default = std::env::var("HOME")
+        .map(|home| {
+            std::path::Path::new(&home)
+                .join(".stado")
+                .join("stado-integration-api-verifier-skarbiec-token")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .unwrap_or_default();
+    expand_tilde(&cfg(
+        "WC_INTEGRATION_SKARBIEC_TOKEN_FILE",
+        "integration.skarbiec.token_file",
+        &default,
+    ))
+    .to_string_lossy()
+    .into_owned()
+});
+static INTEGRATION_PROVIDER_SKARBIEC_URL: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "WC_INTEGRATION_PROVIDER_SKARBIEC_URL",
+        "integration.provider_skarbiec.url",
+        skarbiec_url(),
     )
 });
 
@@ -766,6 +2700,189 @@ pub fn skarbiec_token_file() -> &'static str {
     SKARBIEC_TOKEN_FILE.as_str()
 }
 
+/// Exact private product namespace policies accepted by the object gateway.
+pub fn object_api_namespaces(
+) -> Result<&'static BTreeMap<String, ObjectApiNamespace>, &'static [String]> {
+    match &*OBJECT_API_NAMESPACES {
+        Ok(namespaces) => Ok(namespaces),
+        Err(problems) => Err(problems.as_slice()),
+    }
+}
+
+/// Policy for one canonical namespace. Invalid aggregate configuration fails
+/// closed for every namespace rather than partially enabling the valid rows.
+pub fn object_api_namespace(namespace: &str) -> Option<&'static ObjectApiNamespace> {
+    object_api_namespaces().ok()?.get(namespace)
+}
+
+/// Skarbiec endpoint used only by the product-token verifier grant.
+pub fn object_skarbiec_url() -> &'static str {
+    OBJECT_SKARBIEC_URL.as_str()
+}
+
+/// Dedicated least-privilege consumer that can read exactly the mapped items.
+pub fn object_skarbiec_consumer() -> &'static str {
+    OBJECT_SKARBIEC_CONSUMER.as_str()
+}
+
+/// Owner-only grant file for the dedicated object-token verifier.
+pub fn object_skarbiec_token_file() -> &'static str {
+    OBJECT_SKARBIEC_TOKEN_FILE.as_str()
+}
+
+pub fn release_api_publishers(
+) -> Result<&'static BTreeMap<String, ReleasePublisher>, &'static [String]> {
+    match &*RELEASE_API_PUBLISHERS {
+        Ok(publishers) => Ok(publishers),
+        Err(problems) => Err(problems.as_slice()),
+    }
+}
+
+pub fn release_publisher_for_key(key: &str) -> Option<&'static ReleasePublisher> {
+    release_api_publishers()
+        .ok()?
+        .values()
+        .find(|publisher| publisher.allows_key(key))
+}
+
+pub fn release_publisher_for_list(prefix: &str) -> Option<(&'static ReleasePublisher, String)> {
+    release_api_publishers()
+        .ok()?
+        .values()
+        .find_map(|publisher| {
+            publisher
+                .authorized_list_prefix(prefix)
+                .map(|authorized| (publisher, authorized))
+        })
+}
+
+pub fn release_skarbiec_url() -> &'static str {
+    RELEASE_SKARBIEC_URL.as_str()
+}
+
+pub fn release_skarbiec_consumer() -> &'static str {
+    RELEASE_SKARBIEC_CONSUMER.as_str()
+}
+
+pub fn release_skarbiec_token_file() -> &'static str {
+    RELEASE_SKARBIEC_TOKEN_FILE.as_str()
+}
+
+pub fn backend_push_clients(
+) -> Result<&'static BTreeMap<String, BackendPushClient>, &'static [String]> {
+    match &*BACKEND_PUSH_CLIENTS {
+        Ok(clients) => Ok(clients),
+        Err(problems) => Err(problems.as_slice()),
+    }
+}
+
+pub fn backend_push_skarbiec_url() -> &'static str {
+    BACKEND_PUSH_SKARBIEC_URL.as_str()
+}
+
+pub fn backend_push_skarbiec_consumer() -> &'static str {
+    BACKEND_PUSH_SKARBIEC_CONSUMER.as_str()
+}
+
+pub fn backend_push_skarbiec_token_file() -> &'static str {
+    BACKEND_PUSH_SKARBIEC_TOKEN_FILE.as_str()
+}
+
+pub fn machine_api_clients(
+) -> Result<&'static BTreeMap<String, MachineApiClient>, &'static [String]> {
+    match &*MACHINE_API_CLIENTS {
+        Ok(clients) => Ok(clients),
+        Err(problems) => Err(problems.as_slice()),
+    }
+}
+
+pub fn machine_skarbiec_url() -> &'static str {
+    MACHINE_SKARBIEC_URL.as_str()
+}
+
+pub fn machine_skarbiec_consumer() -> &'static str {
+    MACHINE_SKARBIEC_CONSUMER.as_str()
+}
+
+pub fn machine_skarbiec_token_file() -> &'static str {
+    MACHINE_SKARBIEC_TOKEN_FILE.as_str()
+}
+
+pub fn service_api_deployers(
+) -> Result<&'static BTreeMap<String, ServiceDeployer>, &'static [String]> {
+    match &*SERVICE_API_DEPLOYERS {
+        Ok(deployers) => Ok(deployers),
+        Err(problems) => Err(problems.as_slice()),
+    }
+}
+
+pub fn service_deployer_for(service: &str, action: &str) -> Option<&'static ServiceDeployer> {
+    service_api_deployers()
+        .ok()?
+        .values()
+        .find(|deployer| deployer.allows(service, action))
+}
+
+pub fn service_skarbiec_url() -> &'static str {
+    SERVICE_SKARBIEC_URL.as_str()
+}
+
+pub fn service_skarbiec_consumer() -> &'static str {
+    SERVICE_SKARBIEC_CONSUMER.as_str()
+}
+
+pub fn service_skarbiec_token_file() -> &'static str {
+    SERVICE_SKARBIEC_TOKEN_FILE.as_str()
+}
+
+pub fn rate_limit_skarbiec_url() -> &'static str {
+    RATE_LIMIT_SKARBIEC_URL.as_str()
+}
+
+pub fn rate_limit_skarbiec_consumer() -> &'static str {
+    RATE_LIMIT_SKARBIEC_CONSUMER.as_str()
+}
+
+pub fn rate_limit_skarbiec_token_file() -> &'static str {
+    RATE_LIMIT_SKARBIEC_TOKEN_FILE.as_str()
+}
+
+pub fn integration_clients(
+) -> Result<&'static BTreeMap<String, IntegrationClient>, &'static [String]> {
+    match &*INTEGRATION_CLIENTS {
+        Ok(clients) => Ok(clients),
+        Err(problems) => Err(problems.as_slice()),
+    }
+}
+
+pub fn integration_providers(
+) -> Result<&'static BTreeMap<String, IntegrationProvider>, &'static [String]> {
+    match &*INTEGRATION_PROVIDERS {
+        Ok(providers) => Ok(providers),
+        Err(problems) => Err(problems.as_slice()),
+    }
+}
+
+pub fn integration_provider(domain: &str) -> Option<&'static IntegrationProvider> {
+    integration_providers().ok()?.get(domain)
+}
+
+pub fn integration_skarbiec_url() -> &'static str {
+    INTEGRATION_SKARBIEC_URL.as_str()
+}
+
+pub fn integration_skarbiec_consumer() -> &'static str {
+    INTEGRATION_SKARBIEC_CONSUMER.as_str()
+}
+
+pub fn integration_skarbiec_token_file() -> &'static str {
+    INTEGRATION_SKARBIEC_TOKEN_FILE.as_str()
+}
+
+pub fn integration_provider_skarbiec_url() -> &'static str {
+    INTEGRATION_PROVIDER_SKARBIEC_URL.as_str()
+}
+
 /// Skarbiec endpoint reachable by workload agents. Cloud agents require HTTPS;
 /// a device-local agent may leave this empty and use [`skarbiec_url`].
 pub fn agent_skarbiec_url() -> &'static str {
@@ -797,6 +2914,26 @@ pub fn agent_skarbiec_secret_fields() -> &'static [String] {
     &AGENT_SKARBIEC_SECRET_FIELDS
 }
 
+/// HTTPS Skarbiec endpoint used by the backend outbound-messaging adapter.
+pub fn backend_messaging_skarbiec_url() -> &'static str {
+    BACKEND_MESSAGING_SKARBIEC_URL.as_str()
+}
+
+/// Dedicated consumer whose grant contains only backend messaging providers.
+pub fn backend_messaging_skarbiec_consumer() -> &'static str {
+    BACKEND_MESSAGING_SKARBIEC_CONSUMER.as_str()
+}
+
+/// Owner-only grant file for the backend outbound-messaging adapter.
+pub fn backend_messaging_skarbiec_token_file() -> &'static str {
+    BACKEND_MESSAGING_SKARBIEC_TOKEN_FILE.as_str()
+}
+
+/// Exact provider and device-registry items visible to the messaging grant.
+pub fn backend_messaging_skarbiec_items() -> &'static [String] {
+    &BACKEND_MESSAGING_SKARBIEC_ITEMS
+}
+
 /// Whether a job may project one exact Skarbiec field into its environment.
 /// Matching without allocating keeps this check cheap on every admission path.
 pub fn agent_secret_reference_allowed(item: &str, field: &str) -> bool {
@@ -809,12 +2946,12 @@ pub fn agent_secret_reference_allowed(item: &str, field: &str) -> bool {
     })
 }
 
-/// In-process cache TTL for the GCS-fetched model policy (Python
-/// `_MODEL_POLICY_TTL_S`).
+/// In-process cache TTL for the model policy loaded through the configured
+/// [`crate::queue::JobStorage`] adapter.
 pub const MODEL_POLICY_TTL_S: u64 = 300;
 
-/// Co-schedule and cost-policy flags loaded from
-/// `config/model_overrides.json` in the configured queue bucket.
+/// Co-schedule and cost-policy flags loaded from the provider-neutral
+/// `config/model_overrides.json` object in the configured queue store.
 #[derive(Debug, Default, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(default)]
 pub struct ModelPolicy {
@@ -965,12 +3102,14 @@ mod tests {
 
     #[test]
     fn defaults_match_python() {
-        assert_eq!(project(), "wisent-480400");
-        assert_eq!(bucket(), "stado");
-        assert_eq!(region(), "us-central1");
-        assert_eq!(alerts_topic(), "projects/wisent-480400/topics/stado-alerts");
+        // Accessors resolve deployment overrides once through LazyLock. Test the
+        // production fallback inputs directly so ambient env/config cannot turn
+        // this contract test into a deployment-specific assertion.
+        assert_eq!(DEFAULT_GCP_PROJECT, "");
+        assert_eq!(DEFAULT_GCS_BUCKET, "");
+        assert_eq!(DEFAULT_GCP_REGION, "us-central1");
         assert_eq!(
-            regions(),
+            DEFAULT_GCP_REGIONS,
             [
                 "us-central1",
                 "europe-west4",
@@ -979,28 +3118,9 @@ mod tests {
                 "us-east5"
             ]
         );
-        assert_eq!(wc_providers(), ["gcp"]);
-        assert_eq!(wc_storage_backend(), "gcs");
-        assert_eq!(wc_azure_container(), "wisent-compute");
-        assert_eq!(dashboard_bind(), "127.0.0.1");
-        assert_eq!(dashboard_port(), 8765);
-        assert_eq!(dashboard_refresh_seconds(), 10);
-        assert_eq!(dashboard_agent_fresh_seconds(), 180);
-        assert_eq!(azure_resource_group(), "wisent-compute");
-        assert_eq!(
-            azure_locations(),
-            ["eastus", "westus3", "westus2", "northeurope"]
-        );
-        assert_eq!(azure_image_urn(), "microsoft-dsvm:ubuntu-hpc:2204:latest");
-        assert_eq!(azure_vm_username(), "wisent");
-        assert_eq!(billing_dataset(), "billing_export");
-        assert_eq!(
-            billing_table(),
-            "gcp_billing_export_v1_017364_D3B657_F207B5"
-        );
-        assert_eq!(billing_net_alert_usd(), 100.0);
-        assert_eq!(azure_billing_secret(), "wisent-azure-billing-sp");
-        assert!(wc_local_storage_path().ends_with(".stado/local-storage"));
+        assert!(DEFAULT_PROVIDERS.is_empty());
+        assert_eq!(DEFAULT_STORAGE_BACKEND, "");
+        assert_eq!(DEFAULT_AZURE_CONTAINER, "");
     }
 
     #[test]

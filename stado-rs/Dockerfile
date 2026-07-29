@@ -1,5 +1,5 @@
 # Builds the stado Rust binaries for linux/amd64 (fleet rollout).
-# Used by the provider-neutral Azure release workflow; binaries land in /out.
+# Used by the provider-neutral Stado release publisher; binaries land in /out.
 FROM rust:slim-bookworm AS build
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends pkg-config \

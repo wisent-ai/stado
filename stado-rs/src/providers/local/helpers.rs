@@ -154,7 +154,7 @@ async fn smi_query_mib(field: &str) -> Option<i64> {
 /// Python `_compat_accel_types`.
 pub fn compat_accel_types(local_vram_gb: i64) -> Vec<String> {
     let mut accels: Vec<String> = Vec::new();
-    if let Some(sizing) = GPU_SIZING.get("gcp") {
+    if let Some(sizing) = GPU_SIZING.get(crate::capabilities::ProviderId::Gcp.as_str()) {
         // BTreeMap iterates tiers ascending, matching Python's sorted(...).
         for (tier, (_, accel)) in sizing {
             if local_vram_gb >= *tier && !accel.is_empty() && !accels.iter().any(|a| a == accel) {
@@ -209,18 +209,26 @@ pub fn job_eligible(
     if job.exclusive && active_slot_count > 0 {
         return false;
     }
-    if kind != "local" {
+    if crate::capabilities::execution_adapter(kind)
+        != Some(crate::capabilities::ExecutionAdapter::Local)
+    {
         if let Some(caps) = MODEL_RE.captures(&job.command) {
             if config::is_local_only_model(caps[1].trim_matches(['\'', '"'])) {
                 return false;
             }
         }
     }
-    if job.pin_to_provider && job.provider != kind {
+    if job.pin_to_provider
+        && !crate::capabilities::same_variant(
+            crate::capabilities::RuntimeFacet::Execution,
+            &job.provider,
+            kind,
+        )
+    {
         return false;
     }
     let job_accel = job.gpu_type.as_str();
-    let matches = job.provider == "local"
+    let matches = crate::capabilities::ProviderId::Local.matches(&job.provider)
         || job_accel.is_empty()
         || job_accel == gpu_type
         || (vram_gb > 0 && compat_accel_types(vram_gb).iter().any(|a| a == job_accel));
@@ -248,7 +256,7 @@ pub fn build_capacity_dict(
     if gpu_type.is_empty() || gpu_type == "cpu" || free_vram_gb <= 0 {
         return out;
     }
-    if let Some(sizing) = GPU_SIZING.get("gcp") {
+    if let Some(sizing) = GPU_SIZING.get(crate::capabilities::ProviderId::Gcp.as_str()) {
         for (tier, (_, accel)) in sizing {
             if total_vram_gb >= *tier && !accel.is_empty() {
                 let n = (free_vram_gb / (*tier).max(1)).max(0);

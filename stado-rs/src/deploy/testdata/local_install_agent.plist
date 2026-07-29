@@ -16,19 +16,23 @@
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>/tmp/com.wisent.compute.agent.mini-one.log</string>
+    <string>/Users/u/.stado/logs/com.wisent.compute.agent.mini-one.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/com.wisent.compute.agent.mini-one.log</string>
+    <string>/Users/u/.stado/logs/com.wisent.compute.agent.mini-one.log</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PYTHONUNBUFFERED</key>
         <string>1</string>
+        <key>WC_SKARBIEC_URL</key>
+        <string>https://skarbiec.invalid</string>
+        <key>WC_SKARBIEC_CONSUMER</key>
+        <string>stado-local-agent</string>
+        <key>WC_SKARBIEC_TOKEN_FILE</key>
+        <string>/Users/u/.stado/local-agent-skarbiec-token</string>
         <key>WC_PYTHON</key>
-        <string>/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12</string>
-        <key>HF_TOKEN</key>
-        <string>hf_secret</string>
-        <key>HUGGING_FACE_HUB_TOKEN</key>
-        <string>hf_secret</string>
+        <string>/usr/bin/python</string>
+        <key>PATH</key>
+        <string>/usr/bin:/bin</string>
     </dict>
 </dict>
 </plist>

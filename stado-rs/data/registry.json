@@ -4,17 +4,10 @@
       "active": true,
       "host": "https://stado.wisent.com",
       "interval_seconds": 180,
-      "name": "azure-control-plane",
-      "notes": "Sole Rust Stado control plane. Runs as a long-lived daemon with Azure primary storage and S3 read fallback.",
+      "name": "local-control-plane",
+      "notes": "Sole Rust Stado control plane. Runs on the registered local Mac target with cloud providers fenced and provider-neutral Stado API routes.",
       "runtime": "daemon",
       "state_uri": "stado://system/registry"
-    },
-    {
-      "active": true,
-      "name": "mac-outage-control-plane",
-      "runtime": "daemon",
-      "state_uri": "stado://system/registry",
-      "notes": "Outage-safe local Rust control plane while external cloud accounts are fenced."
     }
   ],
   "schema_version": 2,
@@ -46,11 +39,19 @@
       "notes": "Primary Weles browser worker; placement is controlled by this policy.",
       "ssh": "charles@100.120.25.24",
       "weles": {
-        "actions": [
-          "*"
-        ],
-        "enabled": true
+        "actions": [],
+        "enabled": false
       },
+      "services": [
+        {
+          "name": "com.wisent.weles-api",
+          "unit": "",
+          "label": "com.wisent.weles-api",
+          "path": "$HOME/Library/LaunchAgents/com.wisent.weles-api.plist",
+          "kind": "launchd",
+          "managed_since": ""
+        }
+      ],
       "pinned_only": true
     },
     {
@@ -77,15 +78,6 @@
       "notes": "Operator RTX PRO 6000 workstation. External workloads, including ComfyUI, remain protected by default; local jobs use admission v2 accounting.",
       "slots": 2,
       "vram_gb": 95
-    },
-    {
-      "gpu_type": "nvidia-tesla-t4",
-      "kind": "gcp",
-      "max_concurrent": 20,
-      "name": "gcp-spot-t4",
-      "notes": "GCP T4 Spot dispatcher. Drives instance creation via wisent-compute cloud function.",
-      "region": "us-central1",
-      "spot": true
     },
     {
       "name": "lukasz-macbook",

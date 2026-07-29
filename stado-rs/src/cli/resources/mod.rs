@@ -19,6 +19,8 @@ pub mod shutdown;
 pub enum ResourcesCommands {
     /// Show one read-only inventory across configured providers and storage.
     Show(ShowArgs),
+    /// Explicitly adopt one observed resource into Stado ownership.
+    Adopt(AdoptArgs),
     /// Produce an immutable resource rationalization plan; never mutates.
     Rationalize(RationalizeArgs),
     /// Execute the exact rationalization plan supplied by the operator.
@@ -45,6 +47,21 @@ pub struct ShowArgs {
     /// Emit the versioned machine-readable inventory.
     #[arg(long)]
     pub json: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct AdoptArgs {
+    /// Canonical `stado://` resource id from `resources show`.
+    pub resource_id: String,
+    /// Accountable owner recorded on every autonomous action.
+    #[arg(long)]
+    pub owner: String,
+    /// Versioned autonomy policy governing the adopted resource.
+    #[arg(long)]
+    pub policy_ref: String,
+    /// Exact provider revision observed during review.
+    #[arg(long)]
+    pub expect_revision: String,
 }
 
 #[derive(Args, Debug)]
@@ -154,6 +171,7 @@ pub enum OperationsCommands {
 pub async fn dispatch(command: ResourcesCommands) -> Result<(), CmdError> {
     match command {
         ResourcesCommands::Show(args) => inventory::run(&args).await,
+        ResourcesCommands::Adopt(args) => adopt(&args).await,
         ResourcesCommands::Rationalize(args) => rationalize::run(&args).await,
         ResourcesCommands::KillIrrational(args) => engine::kill_irrational(&args).await,
         ResourcesCommands::Shutdown(args) => shutdown::run(&args).await,
@@ -162,4 +180,43 @@ pub async fn dispatch(command: ResourcesCommands) -> Result<(), CmdError> {
         ResourcesCommands::Restore(args) => engine::restore(&args).await,
         ResourcesCommands::Operations(command) => journal::dispatch(command).await,
     }
+}
+async fn adopt(args: &AdoptArgs) -> Result<(), CmdError> {
+    let store = crate::queue::JobStorage::new().await?;
+    let inventory = crate::autonomy::storage::load_latest_inventory(&store)
+        .await?
+        .ok_or_else(|| {
+            CmdError::click("no autonomy inventory snapshot; run `stado optimize run`")
+        })?;
+    let resource = inventory
+        .resources
+        .iter()
+        .find(|resource| resource.resource_id == args.resource_id)
+        .ok_or_else(|| CmdError::click(format!("resource not found: {}", args.resource_id)))?;
+    if resource.source_revision.as_deref() != Some(args.expect_revision.as_str()) {
+        return Err(CmdError::click(
+            "resource revision changed or is unavailable; refresh inventory and review again",
+        ));
+    }
+    if matches!(
+        resource.ownership,
+        crate::autonomy::model::Ownership::Owned | crate::autonomy::model::Ownership::Adopted
+    ) {
+        return Err(CmdError::click("resource is already owned or adopted"));
+    }
+    let adoption = crate::autonomy::model::AdoptionRecord {
+        schema_version: crate::autonomy::model::SCHEMA_VERSION,
+        resource_id: resource.resource_id.clone(),
+        adopted_at: chrono::Utc::now().to_rfc3339(),
+        adopted_by: std::env::var("USER").unwrap_or_else(|_| "operator".to_string()),
+        owner: args.owner.clone(),
+        policy_ref: args.policy_ref.clone(),
+        source_revision: resource.source_revision.clone(),
+    };
+    crate::autonomy::storage::write_adoption(&store, &adoption).await?;
+    println!(
+        "Adopted {} at revision {}",
+        adoption.resource_id, args.expect_revision
+    );
+    Ok(())
 }

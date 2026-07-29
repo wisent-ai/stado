@@ -249,7 +249,7 @@ fn earliest_start(slots: &[(f64, i64)], new_vram: i64, total_vram: i64) -> f64 {
 /// eligibility without pulling in the local-provider module.
 fn compat_accel_types(local_vram_gb: i64) -> Vec<&'static str> {
     let mut accels: Vec<&'static str> = Vec::new();
-    let Some(sizing) = GPU_SIZING.get("gcp") else {
+    let Some(sizing) = GPU_SIZING.get(crate::capabilities::ProviderId::Gcp.as_str()) else {
         return accels;
     };
     for (tier, (_, accel)) in sizing {

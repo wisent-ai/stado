@@ -7,6 +7,7 @@
 
 pub mod artifacts;
 pub mod artifacts_models;
+pub mod autonomy;
 pub mod capabilities;
 pub mod catalog;
 pub mod cli;

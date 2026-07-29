@@ -78,6 +78,32 @@ pub enum SchedulerError {
         /// Placeholder name only, never its value — secrets stay unlogged.
         key: String,
     },
+    /// A template omitted an export owned by the dispatcher. Checking the
+    /// source contract before substitution prevents an apparently successful
+    /// render from silently dropping deployment state.
+    #[error("agent startup template for {provider} omits required ${{{key}}} export")]
+    MissingStartupExport { provider: String, key: String },
+    /// A required immutable boot coordinate is absent. This must fail before
+    /// the provider API is called, not after a billable machine starts.
+    #[error(
+        "agent startup setting {key} is empty; configure {env} (config key {config_key}) \
+         with the immutable runtime artifact before dispatch"
+    )]
+    MissingStartupSetting {
+        key: String,
+        env: &'static str,
+        config_key: &'static str,
+    },
+    #[error(
+        "agent startup setting {key} is invalid: {reason}; fix {env} \
+         (config key {config_key}) before dispatch"
+    )]
+    InvalidStartupSetting {
+        key: String,
+        env: &'static str,
+        config_key: &'static str,
+        reason: &'static str,
+    },
 }
 
 /// Python `_log`.
@@ -168,35 +194,49 @@ pub fn dynamic_per_tick_cap(queue_depth: i64) -> i64 {
 /// priority into blob metadata, so this filters + orders the whole queue
 /// cheaply and we read only the surviving window's bodies.
 /// The stuck backlog stays queued and untouched — it just stops blocking.
+#[cfg(test)]
 pub(crate) fn prefilter_candidates(
     blobs: &[crate::queue::BlobInfo],
     available: &BTreeMap<String, i64>,
     provider_name: &str,
     window_budget: usize,
 ) -> (Vec<String>, usize) {
+    prefilter_candidates_with_routing(blobs, available, provider_name, window_budget, false)
+}
+
+fn prefilter_candidates_with_routing(
+    blobs: &[crate::queue::BlobInfo],
+    available: &BTreeMap<String, i64>,
+    provider_name: &str,
+    window_budget: usize,
+    require_provider_pin: bool,
+) -> (Vec<String>, usize) {
     let in_quota: BTreeSet<&str> = available
         .iter()
-        .filter(|(_, v)| **v > 0)
-        .map(|(a, _)| a.as_str())
+        .filter(|(_, available)| **available > i64::default())
+        .map(|(accelerator, _)| accelerator.as_str())
         .collect();
-    let mut cand: Vec<(i64, i64, String)> = Vec::new(); // (-priority, updated_ts, job_id)
-    let mut skipped_no_quota = 0usize;
+    let mut cand: Vec<(i64, i64, String)> = Vec::new();
+    let mut skipped_no_quota = usize::default();
     for info in blobs {
         if !info.name.ends_with(".json") {
             continue;
         }
         let meta = &info.metadata;
+        if require_provider_pin
+            && (meta.get("pin_to_provider").map(String::as_str) != Some("true")
+                || meta.get("provider").map(String::as_str) != Some(provider_name))
+        {
+            continue;
+        }
         let gm: i64 = meta
             .get("gpu_mem_gb")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
-        let explicit_accel = meta.get("gpu_type").map(|s| s.trim()).unwrap_or("");
-        // gm<=0 jobs are kept: dispatch_agent_vms re-sizes them via its own
-        // observed/smallest_live_vram recovery. Only skip jobs with a
-        // concrete size that maps to an accelerator with zero available
-        // quota.
-        let derived = if gm > 0 {
-            config::lookup_instance_type(provider_name, gm).1
+            .and_then(|value| value.parse().ok())
+            .unwrap_or_default();
+        let explicit_accel = meta.get("gpu_type").map(|value| value.trim()).unwrap_or("");
+        let derived = if gm > i64::default() {
+            let (_, accelerator) = config::lookup_instance_type(provider_name, gm);
+            accelerator
         } else {
             ""
         };
@@ -206,14 +246,17 @@ pub(crate) fn prefilter_candidates(
             explicit_accel
         };
         if !accel_for_filter.is_empty() && !in_quota.contains(accel_for_filter) {
-            skipped_no_quota += 1;
+            skipped_no_quota += true as usize;
             continue;
         }
         let prio: i64 = meta
             .get("priority")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
-        let ts = info.updated.map(|u| u.timestamp()).unwrap_or(0);
+            .and_then(|value| value.parse().ok())
+            .unwrap_or_default();
+        let ts = info
+            .updated
+            .map(|updated| updated.timestamp())
+            .unwrap_or_default();
         let jid = info
             .name
             .rsplit('/')
@@ -223,11 +266,10 @@ pub(crate) fn prefilter_candidates(
             .to_string();
         cand.push((-prio, ts, jid));
     }
-    // priority desc, then oldest-first (FIFO)
-    cand.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+    cand.sort_by(|left, right| (left.0, left.1).cmp(&(right.0, right.1)));
     cand.truncate(window_budget);
     (
-        cand.into_iter().map(|(_, _, jid)| jid).collect(),
+        cand.into_iter().map(|(_, _, job_id)| job_id).collect(),
         skipped_no_quota,
     )
 }
@@ -307,6 +349,25 @@ pub async fn schedule_queued_jobs(
     provider_name: &str,
     secrets: &BTreeMap<String, String>,
 ) -> Result<i64, SchedulerError> {
+    schedule_queued_jobs_inner(store, provider, provider_name, secrets, false).await
+}
+
+pub async fn schedule_queued_jobs_routed(
+    store: &JobStorage,
+    provider: &dyn Provider,
+    provider_name: &str,
+    secrets: &BTreeMap<String, String>,
+) -> Result<i64, SchedulerError> {
+    schedule_queued_jobs_inner(store, provider, provider_name, secrets, true).await
+}
+
+async fn schedule_queued_jobs_inner(
+    store: &JobStorage,
+    provider: &dyn Provider,
+    provider_name: &str,
+    secrets: &BTreeMap<String, String>,
+    require_provider_pin: bool,
+) -> Result<i64, SchedulerError> {
     // Maintenance-mode gate (queue::control — read that module for the
     // full semantics). A paused queue dispatches NOTHING: no quota read,
     // no instance created, no new cloud spend. The backlog is left exactly
@@ -340,8 +401,13 @@ pub async fn schedule_queued_jobs(
     let window_budget = dynamic_per_tick_cap(1_000_000_000) as usize * 8;
 
     let blobs = store.list_blobs_with_meta("queue/").await?;
-    let (candidates, skipped_no_quota) =
-        prefilter_candidates(&blobs, &available, provider_name, window_budget);
+    let (candidates, skipped_no_quota) = prefilter_candidates_with_routing(
+        &blobs,
+        &available,
+        provider_name,
+        window_budget,
+        require_provider_pin,
+    );
     if skipped_no_quota > 0 {
         log(&format!(
             "window: skipped {skipped_no_quota} undispatchable (0-quota-accel) queued jobs"
@@ -395,8 +461,10 @@ pub async fn schedule_queued_jobs(
     // yielded in this tick doesn't burn the local agent's capacity in our
     // internal book before it actually claims.
     let consumer_caps = capacity::read_consumer_capacity(store).await?;
-    let local_free = capacity::total_free_by_accel(&consumer_caps, Some(&["local"]));
-    let local_vram_pool = capacity::consumers_by_free_vram(&consumer_caps, Some(&["local"]));
+    let local_provider = [crate::capabilities::ProviderId::Local.as_str()];
+    let local_free = capacity::total_free_by_accel(&consumer_caps, Some(local_provider.as_slice()));
+    let local_vram_pool =
+        capacity::consumers_by_free_vram(&consumer_caps, Some(local_provider.as_slice()));
     if !local_free.is_empty() {
         log(&format!(
             "Live local-agent slots: {}",
