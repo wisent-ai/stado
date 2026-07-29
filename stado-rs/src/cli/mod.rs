@@ -38,6 +38,7 @@ pub mod queue;
 pub mod quota;
 pub mod recovery;
 pub mod registry;
+pub mod release;
 pub mod resources;
 pub mod results;
 pub mod schedule;
@@ -434,6 +435,10 @@ enum Commands {
     /// adopt, retire, deploy, logs, env.
     #[command(subcommand)]
     Service(service::ServiceCommands),
+    /// Decide the next release version from what a build's command surface gained
+    /// or lost, rather than from whoever is publishing remembering the rule.
+    #[command(subcommand)]
+    Release(release::ReleaseCommands),
     /// Ordered deployment preflight: config, storage, provider auth, quota,
     /// release channel, agent template, VM identity, registry, queue pause
     /// state and alert channels. Exits non-zero if any check FAILs.
@@ -1513,6 +1518,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Secrets(sub) => secrets::dispatch(sub).await,
         Commands::Queue(sub) => queue::dispatch(sub).await,
         Commands::Service(sub) => service::dispatch(sub).await,
+        Commands::Release(sub) => release::dispatch(sub).await,
         Commands::Doctor(args) => doctor::dispatch(args).await,
     }
 }

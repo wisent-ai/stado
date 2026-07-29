@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 
-use crate::providers::local::version_check::version_newer;
+use crate::release::{canonical_coordinate, version_newer};
 
 /// Legacy pointer name retained only by offline compatibility tests. Runtime
 /// release resolution never fetches it.
@@ -139,14 +139,6 @@ pub fn platform_triple_short() -> Result<&'static str, SelfUpdateError> {
 pub trait ReleaseFetcher: Send + Sync {
     /// Object bytes, or `None` when the object does not exist.
     async fn fetch(&self, object_path: &str) -> Result<Option<Vec<u8>>, SelfUpdateError>;
-}
-
-fn canonical_coordinate(value: &str) -> bool {
-    !value.is_empty()
-        && value.trim() == value
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
 fn release_coordinates_error(api_url: &str, version: &str, platform: &str) -> Option<String> {
