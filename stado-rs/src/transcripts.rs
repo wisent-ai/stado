@@ -496,6 +496,13 @@ pub fn value_for(name: &str) -> Option<String> {
     None
 }
 
+/// Longest string still plausible as a passphrase. Beyond this a token is a
+/// hash, a bearer, or base64 payload, not something a person or a generator
+/// produced as an unlock phrase.
+fn max_phrase_len() -> usize {
+    "128".parse().unwrap_or_default()
+}
+
 /// Candidate unlock phrases for a passphrase-protected key, newest first.
 ///
 /// A protected key is useless without its phrase, and the phrase is the one
@@ -511,22 +518,59 @@ pub fn unlock_candidates() -> Vec<(String, String)> {
         let upper = name.to_ascii_uppercase();
         upper.contains("UNLOCK") || upper.contains("PASSPHRASE")
     };
+    // A phrase also reaches a transcript with no name attached — the output of
+    // reading the unlock file is just the phrase on a line by itself. Those
+    // payloads are recognised by naming the file, which keeps this narrow: bare
+    // tokens are harvested only from output that was demonstrably about the
+    // unlock material, never from arbitrary text.
+    let about_unlock_file = |payload: &str| {
+        payload.contains(".skarbiec-unlock")
+            || payload.contains("SKARBIEC_UNLOCK_FILE")
+            || payload.contains("skarbiec-unlock")
+    };
+    let plausible_phrase = |token: &str| {
+        let bounds = token.len() >= min_secret_len() && token.len() <= max_phrase_len();
+        bounds
+            && token.chars().all(|c| {
+                c.is_ascii_alphanumeric()
+                    || c == '+'
+                    || c == '/'
+                    || c == '='
+                    || c == '_'
+                    || c == '-'
+            })
+    };
     let mut candidates: Vec<(String, String)> = Vec::new();
+    let push = |name: &str, value: &str, into: &mut Vec<(String, String)>| {
+        let known = into
+            .iter()
+            .any(|(_, seen): &(String, String)| seen == value);
+        if !known {
+            into.push((name.to_string(), value.to_string()));
+        }
+    };
     for path in transcript_files() {
         for (payload, origin) in payloads(&path) {
             if origin != Origin::Runtime {
                 continue;
             }
+            let bare_ok = about_unlock_file(&payload);
             for line in payload.lines() {
                 for (name, value) in pairs_in_line(line) {
-                    if !interesting(&name) || value.len() < min_secret_len() {
-                        continue;
+                    if interesting(&name) && value.len() >= min_secret_len() {
+                        push(&name, &value, &mut candidates);
                     }
-                    let already = candidates
-                        .iter()
-                        .any(|(_, known): &(String, String)| known == &value);
-                    if !already {
-                        candidates.push((name, value));
+                }
+                if !bare_ok {
+                    continue;
+                }
+                for token in line.split(|c: char| !c.is_ascii_graphic()) {
+                    if plausible_phrase(token) {
+                        push(
+                            "bare token beside an unlock-file mention",
+                            token,
+                            &mut candidates,
+                        );
                     }
                 }
             }
