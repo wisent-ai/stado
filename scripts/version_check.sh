@@ -100,13 +100,27 @@ if [ "$claims_channel" = yes ]; then
   fi
   echo "The channel serves $key, as the baseline claims."
 else
+  # An empty listing and an unreachable store are the same silence, and here the wrong
+  # answer is the passing one: the assertion would conclude "nothing is published"
+  # precisely when it learned nothing. So absence is only read after a request that
+  # demonstrably succeeded. `stat` is the control because it distinguishes absent from
+  # unreachable, and the probe object need not exist. The forward branch above needs no
+  # such control: it requires a positive answer, so silence there already refuses.
+  probe="stado://releases/stado/$released/linux-amd64/stado"
+  probe_state="$("$stado_bin" storage stat "$probe" --json | jq -r .state)"
+  if [ "$probe_state" = unreachable ]; then
+    echo "::error::the release channel is unreachable ($probe), so the absence of a" \
+      "published stado release is unproven. Refusing rather than assuming that" \
+      "$marker is honest."
+    false
+  fi
   if printf '%s' "$listing" | jq -e '.objects | any(has("key"))' >/dev/null; then
     echo "::error::$baseline claims nothing is published ($marker), but the release" \
       "channel already serves stado releases, so every comparison is measured" \
       "against the wrong artifact. Regenerate it: python3 scripts/baseline.py"
     false
   fi
-  echo "The channel serves no stado release, as the baseline claims."
+  echo "The channel is readable and serves no stado release, as the baseline claims."
 fi
 
 # Being honest about the marker is not the same as sitting on the best artifact. A
