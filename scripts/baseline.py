@@ -143,23 +143,32 @@ def as_triple(version: str) -> tuple:
     return tuple(int(part) for part in parts)
 
 
+STATED = ("present", "absent")
+
+
 def assert_channel_readable(stado: str) -> None:
     """Refuse to read silence as absence.
 
     An empty listing and an unreachable store are the same silence, and the wrong
-    answer is the one that passes: a baseline would claim nothing is published because
-    it failed to ask. `stat` is the positive control, because it distinguishes absent
-    from unreachable; the probe object does not need to exist.
+    answer is the one that passes: the baseline would claim nothing is published
+    because it failed to ask. `stat` on a full stado:// URI is the control, because it
+    names one of three states for one object where the listing offers only silence. The
+    probe object need not exist; a bare path would answer about the queue store instead
+    and report absence forever.
+
+    Only a stated present or absent counts. Unreachable, a missing field, or a state
+    this script does not know is an answer nobody gave.
     """
     probe = (
         f"stado://{NAMESPACE}/{PRODUCT}/{declared_version(REPOSITORY)}"
         f"/{PROBE_PLATFORM}/{BINARY}"
     )
-    state = json.loads(run([stado, "storage", "stat", probe, "--json"]))["state"]
-    if state == "unreachable":
+    state = json.loads(run([stado, "storage", "stat", probe, "--json"])).get("state")
+    if state not in STATED:
         raise Unreachable(
-            f"the release channel is unreachable ({probe}), so the absence of a "
-            "published release cannot be established; refusing to assume one way"
+            f"the release channel did not testify about {probe} (state {state!r}), so "
+            "the absence of a published release cannot be established; refusing rather "
+            "than assuming it either way"
         )
 
 
