@@ -69,6 +69,10 @@ enum Commands {
         /// self-install path (ssh=null, bootstrap runs on the machine).
         #[arg(long)]
         ssh: Option<String>,
+        /// Real DNS hostname of the machine, so the agent can resolve
+        /// itself in the registry (self-install path).
+        #[arg(long)]
+        hostname: Option<String>,
         /// Target kind.
         #[arg(long, default_value = "local")]
         kind: String,
@@ -93,10 +97,21 @@ async fn main() -> ExitCode {
         Commands::Enroll {
             name,
             ssh,
+            hostname,
             kind,
             fleet,
             bootstrap,
-        } => ops::enroll(&name, ssh.as_deref(), &kind, fleet.as_deref(), bootstrap).await,
+        } => {
+            ops::enroll(
+                &name,
+                ssh.as_deref(),
+                &kind,
+                fleet.as_deref(),
+                bootstrap,
+                hostname.as_deref(),
+            )
+            .await
+        }
     };
     match result {
         Ok(clean) => {
