@@ -60,11 +60,12 @@ fn checked_url(base_url: &str) -> Result<String, SkarbiecError> {
     let base_url = base_url.trim().trim_end_matches('/');
     let parsed =
         url::Url::parse(base_url).map_err(|_| SkarbiecError::InvalidUrl(base_url.to_string()))?;
-    let loopback = parsed
-        .host_str()
-        .and_then(|host| host.parse::<std::net::IpAddr>().ok())
-        .is_some_and(|host| host.is_loopback())
-        || parsed.host_str() == Some("localhost");
+    let loopback = match parsed.host() {
+        Some(url::Host::Ipv4(host)) => host.is_loopback(),
+        Some(url::Host::Ipv6(host)) => host.is_loopback(),
+        Some(url::Host::Domain(host)) => host == "localhost",
+        None => false,
+    };
     let transport_allowed = parsed.scheme() == "https" || (parsed.scheme() == "http" && loopback);
     if !transport_allowed
         || !parsed.username().is_empty()

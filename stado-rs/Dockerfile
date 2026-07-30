@@ -7,7 +7,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends pkg-config \
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY data ./data
-RUN cargo build --release --locked \
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/app/target \
+    CARGO_BUILD_JOBS="$(printf x | wc -c)" cargo build --release --locked \
     && mkdir -p /out \
     && cp target/release/stado \
           target/release/stado-coverage \
