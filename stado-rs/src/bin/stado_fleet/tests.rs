@@ -69,3 +69,87 @@ fn field_may_contain_further_hashes() {
         Some(("item", "field#extra"))
     );
 }
+
+mod fleets {
+    use serde_json::json;
+
+    use crate::fleet::{find_fleet, parse_fleets};
+
+    #[test]
+    fn document_without_section_has_no_fleets() {
+        let doc = json!({ "targets": [] });
+        assert!(parse_fleets(&doc).expect("parse").is_empty());
+    }
+
+    #[test]
+    fn membership_resolves_from_target_field() {
+        let doc = json!({
+            "fleets": [
+                { "name": "core", "notes": "always on" },
+                { "name": "burst" }
+            ],
+            "targets": [
+                { "name": "mini", "fleet": "core" },
+                { "name": "gpu-box", "fleet": "burst" },
+                { "name": "laptop" }
+            ]
+        });
+        let fleets = parse_fleets(&doc).expect("parse");
+        let core = find_fleet(&fleets, "core").expect("core fleet");
+        assert_eq!(core.members, vec!["mini".to_string()]);
+        assert_eq!(core.notes, "always on");
+        let burst = find_fleet(&fleets, "burst").expect("burst fleet");
+        assert_eq!(burst.members, vec!["gpu-box".to_string()]);
+        assert!(burst.notes.is_empty());
+    }
+
+    #[test]
+    fn duplicate_fleet_names_are_refused() {
+        let doc = json!({
+            "fleets": [{ "name": "core" }, { "name": "core" }],
+            "targets": []
+        });
+        let err = parse_fleets(&doc).unwrap_err();
+        assert!(err.contains("duplicate fleet"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn dangling_fleet_reference_is_refused() {
+        let doc = json!({
+            "fleets": [{ "name": "core" }],
+            "targets": [{ "name": "mini", "fleet": "ghost" }]
+        });
+        let err = parse_fleets(&doc).unwrap_err();
+        assert!(err.contains("undeclared fleet"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn non_string_fleet_field_is_refused() {
+        let doc = json!({
+            "fleets": [{ "name": "core" }],
+            "targets": [{ "name": "mini", "fleet": true }]
+        });
+        let err = parse_fleets(&doc).unwrap_err();
+        assert!(err.contains("must be a string"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn malformed_fleet_name_is_refused() {
+        let doc = json!({
+            "fleets": [{ "name": "Core Team" }],
+            "targets": []
+        });
+        let err = parse_fleets(&doc).unwrap_err();
+        assert!(
+            err.contains("lowercase fleet identifier"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn non_array_section_is_refused() {
+        let doc = json!({ "fleets": { "name": "core" }, "targets": [] });
+        let err = parse_fleets(&doc).unwrap_err();
+        assert!(err.contains("must be an array"), "unexpected error: {err}");
+    }
+}
