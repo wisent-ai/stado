@@ -1,10 +1,8 @@
-//! Configuration and constants.
+//! Versioned configuration accessors and operational constants.
 //!
-//! Port of `stado/config.py`. Python resolves these at import time; Rust has
-//! no import-time hooks, so every value that goes through env/config-file
-//! resolution is exposed as an accessor function backed by `LazyLock`
-//! (resolved once, on first use). Plain compile-time constants keep their
-//! Python names as `pub const`. Env var names are byte-identical to Python.
+//! Environment variables are limited to documented route-local overrides.
+//! Deployment-wide provider, storage, identity, and policy state resolves from
+//! the selected schema-versioned configuration file.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{LazyLock, RwLock};
@@ -179,6 +177,9 @@ static ALERTS_TOPIC: LazyLock<String> = LazyLock::new(|| {
         })
 });
 
+static ALERT_CHANNELS: LazyLock<Vec<String>> =
+    LazyLock::new(|| cfg_list("STADO_ALERT_CHANNELS", "alerts.channels", &[]));
+
 /// GCP project id (env `GCP_PROJECT`).
 pub fn project() -> &'static str {
     PROJECT.as_str()
@@ -197,6 +198,11 @@ pub fn region() -> &'static str {
 /// Pub/Sub alerts topic (env `WC_ALERTS_TOPIC`).
 pub fn alerts_topic() -> &'static str {
     ALERTS_TOPIC.as_str()
+}
+
+/// Explicitly enabled optional alert adapters.
+pub fn alert_channels() -> &'static [String] {
+    ALERT_CHANNELS.as_slice()
 }
 
 static REGIONS: LazyLock<Vec<String>> = LazyLock::new(|| {

@@ -1,23 +1,10 @@
-//! GCS backend: Google Cloud Storage JSON API v1 via reqwest + gcp_auth.
+//! Google Cloud Storage backend using the JSON API and scoped token provider.
 //!
-//! Port of the SDK path of the inline backend in `stado/queue/storage.py`.
-//! **The gsutil subprocess fallback is deliberately DROPPED**: when neither a
-//! GCP workload identity nor the `stado-gcp` Skarbiec item is available,
-//! [`GcsBackend::new`] fails clearly instead of shelling out.
-//!
-//! Auth note: the task brief mentions `gcp_auth::AuthenticationManager`,
-//! Authentication accepts only a GCP managed identity or the `stado-gcp`
-//! service-account item in Skarbiec; ADC files, environment credentials and
-//! gcloud sessions are not credential sources.
-//!
-//! Conditional writes use GCS generations: `ifGenerationMatch=0` for
-//! atomic create, `ifGenerationMatch=<generation>` for CAS. HTTP 412 maps
-//! to [`StorageError::StorageConflict`], 404 to `None`/`false`.
-//!
-//! Fan-out: the Python code mounts a 64-connection urllib3 pool so
-//! parallel scans proceed concurrently; here reqwest already multiplexes
-//! and the fan-out will be `futures::stream::buffer_unordered` at the call
-//! sites, so the backend is just cheap to clone (one `Arc` inside).
+//! Authentication accepts a GCP managed identity or the `stado-gcp` Skarbiec
+//! service-account item; cloud CLI sessions and subprocess fallbacks are not
+//! credential sources. GCS generations provide create-if-absent and
+//! compare-and-swap semantics. Authorization, transport, and non-precondition
+//! provider failures remain observable to callers.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -29,9 +16,8 @@ use reqwest::{Method, StatusCode};
 
 use super::{BlobBackend, BlobInfo, StorageError, VersionedText};
 
-/// OAuth scope matching the Python google-cloud-storage client.
+/// Read/write storage OAuth scope and JSON API base.
 const STORAGE_SCOPE: &str = "https://www.googleapis.com/auth/devstorage.read_write";
-/// GCS JSON API v1 base.
 const API_BASE: &str = "https://storage.googleapis.com";
 
 struct Inner {
@@ -47,14 +33,11 @@ pub struct GcsBackend {
 }
 
 impl GcsBackend {
-    /// Build a backend for `bucket`, resolving GCP credentials. No gsutil
-    /// fallback: an auth failure is a hard error.
+    /// Build a backend for `bucket`; authentication failure is terminal.
     pub async fn new(bucket: &str) -> Result<Self, StorageError> {
         let auth = crate::skarbiec::gcp_provider().await.map_err(|err| {
             StorageError::Auth(format!(
-                "no GCP credentials found for the GCS backend \
-                 (the gsutil subprocess fallback of the Python implementation \
-                 is not ported): {err}"
+                "no scoped GCP credentials found for the GCS backend: {err}"
             ))
         })?;
         Ok(Self {
