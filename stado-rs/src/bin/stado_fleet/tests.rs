@@ -153,3 +153,76 @@ mod fleets {
         assert!(err.contains("must be an array"), "unexpected error: {err}");
     }
 }
+
+mod ops {
+    use serde_json::json;
+
+    use crate::fleet::{find_fleet, parse_fleets};
+    use crate::ops::{assign_target, create_fleet};
+
+    fn base() -> serde_json::Value {
+        json!({
+            "fleets": [{ "name": "core", "notes": "always on" }],
+            "targets": [{ "name": "mini", "fleet": "core" }, { "name": "laptop" }]
+        })
+    }
+
+    #[test]
+    fn create_appends_entry_and_preserves_existing() {
+        let next = create_fleet(&base(), "lab", "experiments").expect("create");
+        let fleets = parse_fleets(&next).expect("parse");
+        let lab = find_fleet(&fleets, "lab").expect("lab fleet");
+        assert_eq!(lab.notes, "experiments");
+        assert!(lab.members.is_empty());
+        assert!(find_fleet(&fleets, "core").is_some());
+    }
+
+    #[test]
+    fn create_refuses_duplicate() {
+        let err = create_fleet(&base(), "core", "again").unwrap_err();
+        assert!(err.contains("already exists"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn create_refuses_malformed_name() {
+        let err = create_fleet(&base(), "Not A Fleet", "").unwrap_err();
+        assert!(
+            err.contains("lowercase fleet identifier"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn assign_sets_membership_on_existing_target() {
+        let next = assign_target(&base(), "laptop", "core").expect("assign");
+        let fleets = parse_fleets(&next).expect("parse");
+        let core = find_fleet(&fleets, "core").expect("core fleet");
+        assert_eq!(
+            core.members,
+            vec!["mini".to_string(), "laptop".to_string()]
+        );
+    }
+
+    #[test]
+    fn assign_refuses_undeclared_fleet() {
+        let err = assign_target(&base(), "laptop", "ghost").unwrap_err();
+        assert!(err.contains("not declared"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn assign_refuses_unknown_target() {
+        let err = assign_target(&base(), "ghost", "core").unwrap_err();
+        assert!(err.contains("not found"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn reassign_moves_target_between_fleets() {
+        let with_lab = create_fleet(&base(), "lab", "experiments").expect("create");
+        let moved = assign_target(&with_lab, "mini", "lab").expect("reassign");
+        let fleets = parse_fleets(&moved).expect("parse");
+        let core = find_fleet(&fleets, "core").expect("core fleet");
+        assert!(core.members.is_empty());
+        let lab = find_fleet(&fleets, "lab").expect("lab fleet");
+        assert_eq!(lab.members, vec!["mini".to_string()]);
+    }
+}
