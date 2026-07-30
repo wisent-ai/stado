@@ -78,20 +78,23 @@ fn submit_status_cancel_flow() {
     assert!(out.status.success());
     assert!(stdout(&out).contains("1 queued"), "{}", stdout(&out));
 
-    // Cancel removes the queued job (cli.py semantics: queued jobs are
-    // deleted from queue/, not moved to a cancelled prefix).
+    // Cancellation is a durable terminal transition, not deletion.
     let out = stado(storage, &["cancel", &job_id]);
     assert!(out.status.success(), "cancel failed: {}", stderr(&out));
-    assert_eq!(stdout(&out).trim(), format!("Removed {job_id} from queue"));
+    assert_eq!(stdout(&out).trim(), format!("Cancelled {job_id}"));
+    assert!(storage
+        .join(format!("cancellations/{job_id}.json"))
+        .exists());
+    assert!(storage.join(format!("cancelled/{job_id}.json")).exists());
+    assert!(!storage.join(format!("queue/{job_id}.json")).exists());
 
-    // Status no longer finds it.
+    // Both exact and aggregate status expose the terminal cancellation.
     let out = stado(storage, &["status", &job_id]);
     assert!(out.status.success());
-    assert!(
-        stdout(&out).contains(&format!("(no job with id {job_id})")),
-        "{}",
-        stdout(&out)
-    );
+    assert!(stdout(&out).contains("cancelled"), "{}", stdout(&out));
+    let out = stado(storage, &["status"]);
+    assert!(out.status.success());
+    assert!(stdout(&out).contains("1 cancelled"), "{}", stdout(&out));
 }
 
 #[test]
@@ -239,7 +242,7 @@ fn config_validate_passes_on_temp_config() {
     let out = stado(storage.as_path(), &["config", "bogus"]);
     assert_eq!(out.status.code(), Some(1));
     assert!(
-        stderr(&out).contains("unknown config subcommand: bogus (show|validate|init)"),
+        stderr(&out).contains("unknown config subcommand: bogus (show|validate|init|migrate)"),
         "{}",
         stderr(&out)
     );

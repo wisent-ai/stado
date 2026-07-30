@@ -65,7 +65,7 @@ use crate::artifacts::registry::{ArtifactRegistry, RegistryError as ArtifactRegi
 use crate::artifacts_models::ArtifactRef;
 use crate::config;
 use crate::deploy::{host_channel, production_runner, service};
-use crate::machine::{MachineError, MachineFacade};
+use crate::machine::{MachineError, MachineFacade, SCHEMA_VERSION as MACHINE_SCHEMA_VERSION};
 use crate::models::isoformat_utc;
 use crate::providers::local::disk_cleanup::{
     read_cleanup_state, run_cleanup_once, sanitize_cleanup_report,
@@ -395,6 +395,15 @@ impl Dashboard {
             tokio::time::timeout(startup_timeout, self.rate_limiter.restore()),
             tokio::time::timeout(startup_timeout, integration::validate_startup()),
         );
+        match &object {
+            Ok(Err(error)) => {
+                eprintln!("[dashboard] object authorization boundary error: {error}")
+            }
+            Err(error) => {
+                eprintln!("[dashboard] object authorization boundary timed out: {error}")
+            }
+            Ok(Ok(_)) => {}
+        }
         let boundaries = BoundaryAvailability {
             object: matches!(object, Ok(Ok(_))),
             release: matches!(release, Ok(Ok(_))),
@@ -618,6 +627,9 @@ impl Dashboard {
         let control_route =
             path_no_query == "/api/machine/status" || path_no_query == "/api/service/status";
         if !self.trusted_request_host(request.header("host"), request.header("x-forwarded-proto")) {
+            if path_no_query == "/api/machine/status" {
+                return machine_result_response(Err(MachineError::new("FORBIDDEN", "forbidden")));
+            }
             return if control_route {
                 send_json(http_status("403"), &json!({"error": "forbidden"}))
             } else {
@@ -716,10 +728,10 @@ impl Dashboard {
                 );
             }
             if path_no_query == "/api/machine/status" && !boundaries.machine {
-                return send_json(
-                    http_status("503"),
-                    &json!({"error": "machine authorization unavailable"}),
-                );
+                return machine_result_response(Err(MachineError::retryable(
+                    "AUTH_UNAVAILABLE",
+                    "machine authorization unavailable",
+                )));
             }
             if path_no_query == "/api/service/status" {
                 let query = request
@@ -996,12 +1008,17 @@ impl Dashboard {
         }
         let client = match authenticate_machine_client(request, "status").await {
             Ok(Some(client)) => client,
-            Ok(None) => return send_json(http_status("401"), &json!({"error": "unauthorized"})),
+            Ok(None) => {
+                return machine_result_response(Err(MachineError::new(
+                    "UNAUTHORIZED",
+                    "unauthorized",
+                )))
+            }
             Err(()) => {
-                return send_json(
-                    http_status("503"),
-                    &json!({"error": "machine authorization unavailable"}),
-                )
+                return machine_result_response(Err(MachineError::retryable(
+                    "AUTH_UNAVAILABLE",
+                    "machine authorization unavailable",
+                )))
             }
         };
         let job_id = match machine_job_id(query) {
@@ -1015,7 +1032,7 @@ impl Dashboard {
             .and_then(machine_result_target)
             .is_some_and(|target| client.allows_target(target));
         if !target_allowed {
-            return send_json(http_status("401"), &json!({"error": "unauthorized"}));
+            return machine_result_response(Err(MachineError::new("UNAUTHORIZED", "unauthorized")));
         }
         machine_result_response(result)
     }
@@ -1048,12 +1065,17 @@ impl Dashboard {
         }
         let client = match authenticate_machine_client(request, "submit").await {
             Ok(Some(client)) => client,
-            Ok(None) => return send_json(http_status("401"), &json!({"error": "unauthorized"})),
+            Ok(None) => {
+                return machine_result_response(Err(MachineError::new(
+                    "UNAUTHORIZED",
+                    "unauthorized",
+                )))
+            }
             Err(()) => {
-                return send_json(
-                    http_status("503"),
-                    &json!({"error": "machine authorization unavailable"}),
-                )
+                return machine_result_response(Err(MachineError::retryable(
+                    "AUTH_UNAVAILABLE",
+                    "machine authorization unavailable",
+                )))
             }
         };
         let requested = payload
@@ -1062,13 +1084,16 @@ impl Dashboard {
             .unwrap_or_default();
         let target = if requested.is_empty() {
             let [target] = client.targets() else {
-                return send_json(http_status("401"), &json!({"error": "unauthorized"}));
+                return machine_result_response(Err(MachineError::new(
+                    "UNAUTHORIZED",
+                    "unauthorized",
+                )));
             };
             target.clone()
         } else if client.allows_target(requested) {
             requested.to_string()
         } else {
-            return send_json(http_status("401"), &json!({"error": "unauthorized"}));
+            return machine_result_response(Err(MachineError::new("UNAUTHORIZED", "unauthorized")));
         };
         let Some(object) = payload.as_object_mut() else {
             return invalid_machine_request("machine request must be an object");
@@ -1087,12 +1112,17 @@ impl Dashboard {
         }
         let client = match authenticate_machine_client(request, "cancel").await {
             Ok(Some(client)) => client,
-            Ok(None) => return send_json(http_status("401"), &json!({"error": "unauthorized"})),
+            Ok(None) => {
+                return machine_result_response(Err(MachineError::new(
+                    "UNAUTHORIZED",
+                    "unauthorized",
+                )))
+            }
             Err(()) => {
-                return send_json(
-                    http_status("503"),
-                    &json!({"error": "machine authorization unavailable"}),
-                )
+                return machine_result_response(Err(MachineError::retryable(
+                    "AUTH_UNAVAILABLE",
+                    "machine authorization unavailable",
+                )))
             }
         };
         let job_id = match machine_job_id(query) {
@@ -1106,7 +1136,7 @@ impl Dashboard {
             .and_then(machine_result_target)
             .is_some_and(|target| client.allows_target(target));
         if !target_allowed {
-            return send_json(http_status("401"), &json!({"error": "unauthorized"}));
+            return machine_result_response(Err(MachineError::new("UNAUTHORIZED", "unauthorized")));
         }
         machine_result_response(self.machine_facade().cancel_job(job_id).await)
     }
@@ -1330,6 +1360,9 @@ impl Dashboard {
             || path == "/api/service/restart"
             || path == "/api/rate-limit/consume";
         if !self.trusted_request_host(request.header("host"), request.header("x-forwarded-proto")) {
+            if matches!(path, "/api/machine/submit" | "/api/machine/cancel") {
+                return machine_result_response(Err(MachineError::new("FORBIDDEN", "forbidden")));
+            }
             return if control_route {
                 send_json(http_status("403"), &json!({"error": "forbidden"}))
             } else {
@@ -1346,6 +1379,12 @@ impl Dashboard {
                 && !boundaries.machine)
             || (path == "/api/service/restart" && !boundaries.service);
         if unavailable {
+            if matches!(path, "/api/machine/submit" | "/api/machine/cancel") {
+                return machine_result_response(Err(MachineError::retryable(
+                    "AUTH_UNAVAILABLE",
+                    "machine authorization unavailable",
+                )));
+            }
             return send_json(
                 http_status("503"),
                 &json!({"error": "authorization boundary unavailable"}),
@@ -1675,7 +1714,9 @@ impl Dashboard {
         }
         let deployment_id = self.deployment_id();
         if deployment_id.is_empty() {
-            return false;
+            // Local onboarding has no Supabase dependency. The outer host
+            // boundary has already restricted this mode to loopback.
+            return true;
         }
         let (supabase_url, anon_key) = match self.operator_auth_metadata().await {
             Ok(metadata) => metadata,
@@ -2005,18 +2046,24 @@ fn send_json(status: u16, payload: &Value) -> Response {
 
 fn machine_result_response(result: Result<Value, MachineError>) -> Response {
     match result {
-        Ok(result) => send_json(http_status("200"), &json!({"ok": true, "result": result})),
+        Ok(result) => send_json(
+            http_status("200"),
+            &json!({"schema_version": MACHINE_SCHEMA_VERSION, "ok": true, "result": result}),
+        ),
         Err(error) => {
             let status = match error.code.as_str() {
                 "INVALID_REQUEST" | "INVALID_SOURCE_ARCHIVE" => http_status("400"),
                 "NOT_FOUND" => http_status("404"),
                 "IDEMPOTENCY_CONFLICT" => http_status("409"),
+                "UNAUTHORIZED" => http_status("401"),
+                "FORBIDDEN" => http_status("403"),
                 _ if error.retryable => http_status("503"),
                 _ => http_status("500"),
             };
             send_json(
                 status,
                 &json!({
+                    "schema_version": MACHINE_SCHEMA_VERSION,
                     "ok": false,
                     "error": {
                         "code": error.code,
