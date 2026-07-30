@@ -25,10 +25,11 @@ channel). The preflight runs before any write: an already-registered name
 or an undeclared fleet is refused with nothing changed.
 
 No ssh access from the control plane? Skip `--ssh` — the machine
-registers with `ssh: null` and installs itself:
+registers with `ssh: null` and installs itself. Pass the machine's real
+DNS name so the agent can resolve itself in the registry:
 
 ```sh
-stado_fleet enroll render-node-c --fleet render-burst
+stado_fleet enroll render-node-c --hostname render-node-c.local --fleet render-burst
 # then, on render-node-c itself:
 stado bootstrap --local --target render-node-c
 ```
