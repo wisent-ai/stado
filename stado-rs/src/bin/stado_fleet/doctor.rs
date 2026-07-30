@@ -146,8 +146,22 @@ async fn agent_grant_checks() -> Vec<Check> {
 /// Per-target beacon presence plus live capacity vs the registered local
 /// targets. A registered target with no live capacity broadcast is a worker
 /// that is down, whatever the reason — that is what the fleet manager must
-/// say out loud.
-async fn fleet_checks(store: &JobStorage) -> Result<Vec<Check>, String> {
+/// say out loud. With `scoped`, only members of that named fleet are
+/// checked; an undeclared fleet name is an error, not an empty pass.
+async fn fleet_checks(store: &JobStorage, scoped: Option<&str>) -> Result<Vec<Check>, String> {
+    let document = stado::cli::registry::fetch_document()
+        .await
+        .map_err(|exc| exc.to_string())?;
+    let fleets = crate::fleet::parse_fleets(&document)?;
+    let wanted: Option<Vec<String>> = match scoped {
+        Some(name) => Some(
+            crate::fleet::find_fleet(&fleets, name)
+                .ok_or_else(|| format!("fleet '{name}' is not declared in the registry"))?
+                .members
+                .clone(),
+        ),
+        None => None,
+    };
     let registry = targets::load_registry_auto()
         .await
         .map_err(|exc| exc.to_string())?;
@@ -157,6 +171,11 @@ async fn fleet_checks(store: &JobStorage) -> Result<Vec<Check>, String> {
     let broadcasting: Vec<String> = consumers.keys().cloned().collect();
     let mut checks = Vec::new();
     for target in registry.local_targets() {
+        if let Some(members) = &wanted {
+            if !members.iter().any(|member| member == &target.name) {
+                continue;
+            }
+        }
         match host_health::load_host_health(store, &target.name).await {
             Ok(report) => {
                 let reported_at = report
@@ -191,11 +210,12 @@ async fn fleet_checks(store: &JobStorage) -> Result<Vec<Check>, String> {
 
 /// Run every section, print the report, and return whether the fleet is
 /// clean. Read-only: nothing here mutates the store, the registry, or any
-/// credential.
-pub async fn run(as_json: bool) -> Result<bool, String> {
+/// credential. `scoped` limits the beacon section to one named fleet; the
+/// agent-grant section always covers this machine's own worker grant.
+pub async fn run(as_json: bool, scoped: Option<&str>) -> Result<bool, String> {
     let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
     let mut checks = agent_grant_checks().await;
-    checks.extend(fleet_checks(&store).await?);
+    checks.extend(fleet_checks(&store, scoped).await?);
     let clean = checks.iter().all(|check| check.ok);
     if as_json {
         let document: Value = serde_json::json!({

@@ -7,6 +7,7 @@
 //! per-target beacon and capacity presence, all through Stado's own reads.
 
 mod doctor;
+mod fleet;
 #[cfg(test)]
 mod tests;
 
@@ -28,6 +29,20 @@ enum Commands {
         /// Emit the machine-readable report instead of the table.
         #[arg(long)]
         json: bool,
+        /// Scope the fleet section to one named fleet.
+        #[arg(long)]
+        fleet: Option<String>,
+    },
+    /// List the fleets declared in the registry with their members.
+    List {
+        /// Emit the machine-readable document instead of the table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show live state for the members of one named fleet.
+    Status {
+        /// Fleet name as declared in the registry `fleets` section.
+        name: String,
     },
 }
 
@@ -35,7 +50,9 @@ enum Commands {
 async fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
-        Commands::Doctor { json } => doctor::run(json).await,
+        Commands::Doctor { json, fleet } => doctor::run(json, fleet.as_deref()).await,
+        Commands::List { json } => fleet::list(json).await,
+        Commands::Status { name } => fleet::status(&name).await,
     };
     match result {
         Ok(clean) => {
