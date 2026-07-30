@@ -141,6 +141,47 @@ async fn file_backend_refuses_group_readable_file() {
     }
 }
 
+#[tokio::test]
+async fn skarbiec_helpers_honor_file_backend() {
+    let _guard = env_lock();
+    let (_dir, path) = write_store(
+        r#"{"stado-vast": {"api_key": "vast-key"}, "stado-box": {"api_key": "box-key", "note": "n"}}"#,
+        "600",
+    );
+    let _env = StoreEnv::set(&format!("file://{}", path.display()));
+    // The production call paths — crate::skarbiec::read_string and
+    // Client::configured_item — resolve from the file backend without any
+    // call-site change.
+    assert_eq!(
+        crate::skarbiec::read_string("stado-vast", "api_key")
+            .await
+            .expect("read"),
+        Some("vast-key".to_string())
+    );
+    let item = crate::skarbiec::Client::configured_item("stado-box")
+        .await
+        .expect("item");
+    assert_eq!(item.get("note").and_then(Value::as_str), Some("n"));
+    match crate::skarbiec::Client::configured_item("stado-missing").await {
+        Err(SkarbiecError::MissingValue(id)) => assert_eq!(id, "stado-missing"),
+        other => panic!("missing item must be MissingValue, got {other:?}"),
+    }
+    // The operator's scratch store (created for the STADO_CREDENTIAL_STORE
+    // manual verification) must serve the same helpers when present.
+    let scratch = Path::new(
+        "/Users/lukaszbartoszcze/.stado/tmp-recovery/cred-store/creds.json",
+    );
+    if scratch.exists() {
+        std::env::set_var(ENV_STORE, format!("file://{}", scratch.display()));
+        assert_eq!(
+            crate::skarbiec::read_string("stado-vast", "api_key")
+                .await
+                .expect("read"),
+            Some("demo-vast-key-not-real".to_string())
+        );
+    }
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn file_backend_refuses_symlink() {
