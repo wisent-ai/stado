@@ -464,7 +464,31 @@ impl Client {
             .json(&json!({"id": id}))
             .send()
             .await?;
-        let body = Self::response_json(response).await?;
+        // A refusal here is almost always a grant-scope decision, not a broken token, and the
+        // bare upstream body says neither which consumer asked nor what it asked for. That cost
+        // real time: `billing watch` reads provider credentials through the coordinator grant,
+        // which is documented as entitled only to route-local machine and host-health items, and
+        // the resulting "consumer not authorized to read item" was repeatedly read as a
+        // credential fault. Name both, so the reader sees a missing entitlement instead of
+        // hunting a token.
+        let body = Self::response_json(response)
+            .await
+            .map_err(|err| match err {
+                SkarbiecError::Response { status, detail }
+                    if status == reqwest::StatusCode::FORBIDDEN.as_u16() =>
+                {
+                    SkarbiecError::Response {
+                        status,
+                        detail: format!(
+                            "{detail} (consumer {:?} asked for item {id:?}; if that consumer is \
+                             not entitled to this item, the grant is the thing to change, not the \
+                             token)",
+                            self.consumer
+                        ),
+                    }
+                }
+                other => other,
+            })?;
         body.get("value")
             .cloned()
             .ok_or_else(|| SkarbiecError::MissingValue(id.to_string()))
