@@ -18,6 +18,22 @@ pub use object::validate_object_verifier;
 pub use release::validate_release_verifier;
 pub use service::{validate_backend_push_verifier, validate_service_verifier};
 
+/// Read one `token` field per item through one shared verifier client,
+/// concurrently. The Skarbiec listener is thread-per-connection, so sweeping
+/// N items serially would multiply the vault's gpg latency by N for no
+/// benefit. Results come back in the same order as `items`.
+pub(crate) async fn read_token_fields(
+    client: &Client,
+    items: Vec<&str>,
+) -> Result<Vec<Option<String>>, SkarbiecError> {
+    futures::future::try_join_all(
+        items
+            .into_iter()
+            .map(|item| client.read_string(item, "token")),
+    )
+    .await
+}
+
 /// Validate the auth verifier independently from all provider domains.
 pub async fn validate_integration_verifier() -> Result<usize, SkarbiecError> {
     let clients = crate::config::integration_clients().map_err(|problems| {

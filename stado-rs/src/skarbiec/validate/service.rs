@@ -108,8 +108,13 @@ pub async fn validate_service_verifier() -> Result<usize, SkarbiecError> {
             problems.join("; ")
         ))
     })?;
-    for (namespace, policy) in namespaces {
-        if let Some(token) = object_client.read_string(policy.item(), "token").await? {
+    let object_tokens = super::read_token_fields(
+        &object_client,
+        namespaces.values().map(|policy| policy.item()).collect(),
+    )
+    .await?;
+    for ((namespace, _), token) in namespaces.iter().zip(object_tokens) {
+        if let Some(token) = token {
             token_owners.insert(
                 Sha256::digest(token.as_bytes()).to_vec(),
                 format!("object namespace {namespace}"),
@@ -123,18 +128,26 @@ pub async fn validate_service_verifier() -> Result<usize, SkarbiecError> {
             problems.join("; ")
         ))
     })?;
-    for (product, policy) in publishers {
-        if let Some(token) = release_client.read_string(policy.item(), "token").await? {
+    let release_tokens = super::read_token_fields(
+        &release_client,
+        publishers.values().map(|policy| policy.item()).collect(),
+    )
+    .await?;
+    for ((product, _), token) in publishers.iter().zip(release_tokens) {
+        if let Some(token) = token {
             token_owners.insert(
                 Sha256::digest(token.as_bytes()).to_vec(),
                 format!("release publisher {product}"),
             );
         }
     }
-    for (product, policy) in deployers {
-        let token = client
-            .read_string(policy.item(), "token")
-            .await?
+    let deployer_tokens = super::read_token_fields(
+        &client,
+        deployers.values().map(|policy| policy.item()).collect(),
+    )
+    .await?;
+    for ((product, policy), token) in deployers.iter().zip(deployer_tokens) {
+        let token = token
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| {
                 SkarbiecError::Deployment(format!(
