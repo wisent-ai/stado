@@ -2,13 +2,19 @@ name: deploy
 
 on:
   push:
-    branches: [main]
-    paths:
-      - "stado-rs/**"
-      - "deploy/**"
-      - "config/**"
-      - ".github/workflows/deploy.yml"
+    tags:
+      - "stado-v*"
   workflow_dispatch:
+    inputs:
+      channel:
+        description: "Immutable release channel"
+        required: true
+        type: choice
+        options:
+          - nightly
+          - candidate
+          - stable
+        default: nightly
 
 concurrency:
   group: wisent-compute-deploy
@@ -16,6 +22,9 @@ concurrency:
 
 jobs:
   release:
+    outputs:
+      channel: ${{ steps.release_identity.outputs.channel }}
+      version: ${{ steps.release_identity.outputs.version }}
     runs-on: [self-hosted, stado-control-plane]
     permissions:
       contents: read
@@ -26,6 +35,37 @@ jobs:
       WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-skarbiec-token
     steps:
       - uses: actions/checkout@v4
+      - name: Resolve exact release identity
+        id: release_identity
+        env:
+          REQUESTED_CHANNEL: ${{ inputs.channel }}
+        run: |
+          die() {
+            printf 'FATAL: %s\n' "$*" > /dev/stderr
+            false
+          }
+          version_line="$(sed -n '/^version = /p' stado-rs/Cargo.toml)"
+          version="${version_line#*\"}"
+          version="${version%%\"*}"
+          test -n "$version" || die "Cargo release version is unresolved"
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            test "$GITHUB_REF_NAME" = "stado-v$version" ||
+              die "tag $GITHUB_REF_NAME must equal stado-v$version"
+            case "$version" in
+              *-*) channel=candidate ;;
+              *) channel=stable ;;
+            esac
+          else
+            channel="$REQUESTED_CHANNEL"
+          fi
+          case "$channel" in
+            nightly|candidate|stable) ;;
+            *) die "unsupported release channel: $channel" ;;
+          esac
+          echo "STADO_VERSION=$version" >> "$GITHUB_ENV"
+          echo "STADO_RELEASE_CHANNEL=$channel" >> "$GITHUB_ENV"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
 
       - name: Make tags and history visible to the version check
         # actions/checkout fetches one commit and no tags, so `git tag --list` is
@@ -44,14 +84,41 @@ jobs:
           mkdir -p "$RUNNER_TEMP/stado-release"
           docker cp "$container:/out/." "$RUNNER_TEMP/stado-release/"
           docker rm "$container" >/dev/null
-          version_line="$(sed -n '/^version = /p' stado-rs/Cargo.toml)"
-          version="${version_line#*\"}"
-          version="${version%%\"*}"
-          if [ -z "$version" ]; then
-            echo "::error::Cargo release version is unresolved."
-            false
-          fi
-          echo "STADO_VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Create Linux release manifest
+        run: |
+          machine_schema="$(
+            sed -n '/pub const SCHEMA_VERSION:/{s/.*= //;s/;//;p;q;}' \
+              stado-rs/src/machine.rs
+          )"
+          schema_unit="$(printf x | wc -c | tr -d '[:space:]')"
+          config_schema="$(
+            sed -n '/pub const SCHEMA_VERSION:/{s/.*= //;s/;//;p;q;}' \
+              stado-rs/src/config_file.rs
+          )"
+          storage_schema="$(
+            sed -n '/pub const STORAGE_LAYOUT_VERSION:/{s/.*= //;s/;//;p;q;}' \
+              stado-rs/src/queue/mod.rs
+          )"
+          test "$config_schema" != "true as u16" || config_schema="$schema_unit"
+          test "$storage_schema" != "true as u16" || storage_schema="$schema_unit"
+          test -n "$config_schema"
+          test -n "$storage_schema"
+          test -n "$machine_schema"
+          STADO_RELEASE_DIR="$RUNNER_TEMP/stado-release" \
+          STADO_RELEASE_VERSION="$STADO_VERSION" \
+          STADO_RELEASE_CHANNEL="$STADO_RELEASE_CHANNEL" \
+          STADO_RELEASE_PLATFORM="linux-amd64" \
+          STADO_RELEASE_SOURCE_COMMIT="$GITHUB_SHA" \
+          STADO_RELEASE_SOURCE_REPOSITORY="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+          STADO_RELEASE_BUILT_AT="$(git show -s --format=%cI "$GITHUB_SHA")" \
+          STADO_MACHINE_SCHEMA_VERSION="$machine_schema" \
+          STADO_CONFIG_SCHEMA_VERSION="$config_schema" \
+          STADO_STORAGE_SCHEMA_VERSION="$storage_schema" \
+          STADO_LICENSE_FILE="$GITHUB_WORKSPACE/LICENSE" \
+          STADO_RELEASE_STABLE_INTEGRATIONS="local-compute,local-filesystem-storage,skarbiec" \
+          STADO_RELEASE_PREVIEW_INTEGRATIONS="gcs-storage,s3-storage,azure-blob-storage,gcp-compute,aws-ec2,azure-vm,box,vast" \
+            scripts/release_manifest.sh
 
       - name: Refuse a release whose version disagrees with its contract
         # The public contract of this product is the command list `stado help`
@@ -111,6 +178,7 @@ jobs:
 
   deploy-control-plane:
     needs: release
+    if: needs.release.outputs.channel == 'stable'
     runs-on: [self-hosted, stado-control-plane]
     permissions:
       contents: read
@@ -164,9 +232,10 @@ jobs:
           for name in stado stado-coverage stado-fix stado-watchdog stado-mcp; do
             cp "$STADO_SOURCE_DIR/stado-rs/target/release/$name" "$release_dir/$name"
           done
+          cp "$release_dir/stado" "$release_dir/wc"
           (
             cd "$release_dir"
-            for name in stado stado-coverage stado-fix stado-watchdog stado-mcp; do
+            for name in stado wc stado-coverage stado-fix stado-watchdog stado-mcp; do
               digest="$(openssl dgst -sha256 "$name")"
               printf '%s  %s\n' "${digest##* }" "$name"
             done > SHA256SUMS
@@ -175,6 +244,38 @@ jobs:
           version="${version_line#*\"}"
           version="${version%%\"*}"
           platform="${STADO_CONTROL_PLATFORM:?set the native release platform}"
+          machine_schema="$(
+            sed -n '/pub const SCHEMA_VERSION:/{s/.*= //;s/;//;p;q;}' \
+              "$STADO_SOURCE_DIR/stado-rs/src/machine.rs"
+          )"
+          schema_unit="$(printf x | wc -c | tr -d '[:space:]')"
+          config_schema="$(
+            sed -n '/pub const SCHEMA_VERSION:/{s/.*= //;s/;//;p;q;}' \
+              "$STADO_SOURCE_DIR/stado-rs/src/config_file.rs"
+          )"
+          storage_schema="$(
+            sed -n '/pub const STORAGE_LAYOUT_VERSION:/{s/.*= //;s/;//;p;q;}' \
+              "$STADO_SOURCE_DIR/stado-rs/src/queue/mod.rs"
+          )"
+          test "$config_schema" != "true as u16" || config_schema="$schema_unit"
+          test "$storage_schema" != "true as u16" || storage_schema="$schema_unit"
+          test -n "$machine_schema"
+          test -n "$config_schema"
+          test -n "$storage_schema"
+          STADO_RELEASE_DIR="$release_dir" \
+          STADO_RELEASE_VERSION="$version" \
+          STADO_RELEASE_CHANNEL="${{ needs.release.outputs.channel }}" \
+          STADO_RELEASE_PLATFORM="$platform" \
+          STADO_RELEASE_SOURCE_COMMIT="$GITHUB_SHA" \
+          STADO_RELEASE_SOURCE_REPOSITORY="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+          STADO_RELEASE_BUILT_AT="$(git -C "$STADO_SOURCE_DIR" show -s --format=%cI "$GITHUB_SHA")" \
+          STADO_MACHINE_SCHEMA_VERSION="$machine_schema" \
+          STADO_CONFIG_SCHEMA_VERSION="$config_schema" \
+          STADO_STORAGE_SCHEMA_VERSION="$storage_schema" \
+          STADO_LICENSE_FILE="$STADO_SOURCE_DIR/LICENSE" \
+          STADO_RELEASE_STABLE_INTEGRATIONS="local-compute,local-filesystem-storage,skarbiec" \
+          STADO_RELEASE_PREVIEW_INTEGRATIONS="gcs-storage,s3-storage,azure-blob-storage,gcp-compute,aws-ec2,azure-vm,box,vast" \
+            "$STADO_SOURCE_DIR/scripts/release_manifest.sh"
           stado_bin="$HOME/.stado/bin/stado"
           STADO_API_TOKEN="$("$stado_bin" secrets get stado-release-publisher --field token)"
           export STADO_API_TOKEN
