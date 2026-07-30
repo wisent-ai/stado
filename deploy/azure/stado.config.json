@@ -323,7 +323,8 @@
   },
 
   "alerts": {
-    "_comment": "Empty disables the isolated optional GCP Pub/Sub channel. Configure a provider-neutral alert sink separately.",
+    "_comment": "No optional alert adapter is enabled. Add an explicit channel and its route-specific configuration before credentials are resolved.",
+    "channels": [],
     "topic": ""
   }
 }

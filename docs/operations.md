@@ -76,31 +76,42 @@ these substrings to classify failures fast:
 
 ## Release / publishing
 
-`.github/workflows/deploy.yml` builds the Rust binaries and publishes every
-`stado://releases/stado/<version>/<platform>/<file>` through the authenticated
-Stado release API. The workflow expands only
+`.github/workflows/deploy.yml` publishes only an explicit `stado-v*` tag or a
+manual immutable-channel request. Candidate tags publish artifacts without
+deploying the production control plane. A final stable tag may pass the
+separate production deployment job.
+
+Every `stado://releases/stado/<version>/<platform>/<file>` write goes through
+the authenticated Stado release API. The workflow expands only
 `stado-release-publisher/token` through its dedicated, sole-item Skarbiec
 grant and always requests create-if-absent.
 
 A retry reads back an existing object and accepts it only when the bytes are
 identical. Different bytes at the same version/platform URI are a hard
 collision; they are never overwritten. There is no PyPI workflow, provider
-CLI upload, ADC path, mutable image tag, or `latest` release pointer.
+CLI upload, ADC path, mutable image tag, or `latest` release pointer. See
+[`release.md`](release.md) for channels, manifests, compatibility, promotion,
+upgrade, and rollback.
 
-Install a release by pinning its exact version, platform, and Stado control
-origin:
+Install an exact release before service bootstrap:
 
 ```bash
-STADO_RELEASE_API_URL=https://stado.wisent.com \
-STADO_RELEASE_VERSION=<exact-immutable-version> \
-STADO_RELEASE_PLATFORM=<exact-release-platform> \
-./deploy/stado-up.sh <target>
+export STADO_RELEASE_API_URL=https://stado.wisent.com
+export STADO_RELEASE_VERSION=<exact-immutable-version>
+export STADO_RELEASE_PLATFORM=<exact-release-platform>
+./install-stado.sh
 ```
+
+The installer downloads `release-manifest.json`, verifies product, version,
+platform, every artifact SHA-256, and `SHA256SUMS`, preserves prior binaries,
+then replaces the selected release atomically. Service deployment remains a
+separate explicit step.
 
 ## Bringing up a new local box
 
 ```bash
 # Install a verified Rust release and resolved profile first.
+./install-stado.sh
 export STADO_CONFIG="$HOME/.stado/config.json"
 export STADO_TARGET="<registry-target>"
 
