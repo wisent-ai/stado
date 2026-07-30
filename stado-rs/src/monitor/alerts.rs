@@ -1,12 +1,15 @@
-//! Optional Slack, Telegram, SendGrid, and GCP Pub/Sub alert delivery.
-//!
-//! `alerts.channels` is the explicit enablement fence. With no enabled
-//! channels, alert dispatch performs no credential or network lookup. Enabled
-//! channels resolve only their scoped credentials. Each delivery is
-//! fault-isolated and emits a bounded structured failure without blocking the
-//! monitor, coordinator, or another channel.
+//! Optional Slack, Telegram, SendGrid, most (SMS), and GCP Pub/Sub alert
+//! delivery. `alerts.channels` is the explicit enablement fence: with no
+//! enabled channels, dispatch performs no credential or network lookup, and
+//! each delivery is fault-isolated with a bounded structured failure line.
 
-use serde_json::{json, Value};
+use serde_json::Value;
+
+mod send;
+#[cfg(test)]
+mod tests;
+
+use send::{email_subject, send_email, send_most, send_pubsub, send_slack, send_telegram};
 
 /// GCP OAuth scope for the Pub/Sub publish call.
 const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
@@ -16,6 +19,8 @@ const TELEGRAM_API_BASE: &str = "https://api.telegram.org";
 const SENDGRID_URL: &str = "https://api.sendgrid.com/v3/mail/send";
 /// Pub/Sub REST base.
 const PUBSUB_BASE: &str = "https://pubsub.googleapis.com";
+/// Twilio REST base for the most (SMS) channel.
+const TWILIO_API_BASE: &str = "https://api.twilio.com";
 /// Python `WC_EMAIL_FROM` default.
 const DEFAULT_EMAIL_FROM: &str = "compute@example.com";
 
@@ -69,10 +74,23 @@ pub struct PubSubChannel {
     pub token: String,
 }
 
-/// Resolved alert-channel configuration. Channels with no config are `None`
-/// and are skipped. Construct via [`AlertChannels::from_env`] in production;
-/// tests build literals pointing at the loopback mock (never env vars —
-/// parallel tests would race on process env).
+/// most (SMS) channel: destination from `stado-alerts/most_phone`, Twilio
+/// credentials resolved from `most-twilio` through the `most` integration
+/// provider grant, delivered in-process so the alert path never depends on
+/// the dashboard it may be alerting about.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MostChannel {
+    pub phone: String,
+    pub account_sid: String,
+    pub auth_token: String,
+    pub api_version: String,
+    pub messaging_service_sid: Option<String>,
+    pub from_number: Option<String>,
+    /// Twilio REST base; tests point it at the loopback mock.
+    pub api_base: String,
+}
+
+/// Resolved alert-channel configuration; channels with no config are skipped.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AlertChannels {
     /// Slack webhook URL from `stado-alerts/slack_webhook` in Skarbiec.
@@ -80,6 +98,7 @@ pub struct AlertChannels {
     pub telegram: Option<TelegramChannel>,
     pub sendgrid: Option<SendgridChannel>,
     pub pubsub: Option<PubSubChannel>,
+    pub most: Option<MostChannel>,
 }
 
 impl AlertChannels {
@@ -91,7 +110,10 @@ impl AlertChannels {
             return Self::default();
         }
 
-        let needs_stored = is_enabled("slack") || is_enabled("telegram") || is_enabled("sendgrid");
+        let needs_stored = is_enabled("slack")
+            || is_enabled("telegram")
+            || is_enabled("sendgrid")
+            || is_enabled("most");
         let stored = if needs_stored {
             match crate::skarbiec::Client::configured() {
                 Ok(vault) => match vault.read_item("stado-alerts").await {
@@ -117,9 +139,7 @@ impl AlertChannels {
                 .map(str::to_string)
         };
 
-        let slack_webhook = is_enabled("slack")
-            .then(|| secret("slack_webhook"))
-            .flatten();
+        let slack_webhook = is_enabled("slack").then(|| secret("slack_webhook")).flatten();
         let telegram = if is_enabled("telegram") {
             match (secret("telegram_bot_token"), secret("telegram_chat_id")) {
                 (Some(token), Some(chat_id)) => Some(TelegramChannel {
@@ -151,6 +171,11 @@ impl AlertChannels {
         } else {
             None
         };
+        let most = if is_enabled("most") {
+            resolve_most(secret("most_phone")).await
+        } else {
+            None
+        };
         let pubsub = if is_enabled("gcp-pubsub") && !topic.is_empty() {
             match gcp_token().await {
                 Ok(token) => Some(PubSubChannel {
@@ -172,6 +197,46 @@ impl AlertChannels {
             telegram,
             sendgrid,
             pubsub,
+            most,
+        }
+    }
+}
+
+/// Resolve the most (SMS) channel: destination from the alerts item, Twilio
+/// material through the `most` integration provider grant. Any gap degrades
+/// to no channel with a structured failure line, never a panic.
+async fn resolve_most(phone: Option<String>) -> Option<MostChannel> {
+    let phone = phone.filter(|value| !value.is_empty())?;
+    let provider = crate::skarbiec::Client::integration_provider("most")
+        .map_err(|err| channel_failed("most-configuration", &err.to_string()))
+        .ok()?;
+    let item = provider
+        .read_item("most-twilio")
+        .await
+        .map_err(|err| channel_failed("most-configuration", &err.to_string()))
+        .ok()?;
+    let field = |name: &str| {
+        item.get(name)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    match (field("account_sid"), field("auth_token"), field("api_version")) {
+        (Some(account_sid), Some(auth_token), Some(api_version)) => Some(MostChannel {
+            phone,
+            account_sid,
+            auth_token,
+            api_version,
+            messaging_service_sid: field("messaging_service_sid"),
+            from_number: field("from_number"),
+            api_base: TWILIO_API_BASE.to_string(),
+        }),
+        _ => {
+            channel_failed(
+                "most-configuration",
+                "most-twilio needs account_sid, auth_token, and api_version",
+            );
+            None
         }
     }
 }
@@ -187,93 +252,9 @@ async fn gcp_token() -> Result<String, String> {
     Ok(token.as_str().to_string())
 }
 
-/// Error on a non-2xx response, including the upstream body.
-async fn ensure_success(response: reqwest::Response) -> Result<(), String> {
-    let status = response.status();
-    if status.is_success() {
-        return Ok(());
-    }
-    let body = response.text().await.unwrap_or_default();
-    Err(format!("HTTP {status}: {body}"))
-}
-
-async fn send_slack(client: &reqwest::Client, url: &str, message: &str) -> Result<(), String> {
-    let response = client
-        .post(url)
-        .json(&json!({"text": message}))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    ensure_success(response).await
-}
-
-async fn send_telegram(
-    client: &reqwest::Client,
-    channel: &TelegramChannel,
-    message: &str,
-) -> Result<(), String> {
-    let url = format!("{}/bot{}/sendMessage", channel.api_base, channel.token);
-    let response = client
-        .post(url)
-        .json(&json!({"chat_id": channel.chat_id, "text": message, "parse_mode": "Markdown"}))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    ensure_success(response).await
-}
-
-async fn send_email(
-    client: &reqwest::Client,
-    channel: &SendgridChannel,
-    subject: &str,
-    body: &str,
-) -> Result<(), String> {
-    let response = client
-        .post(&channel.url)
-        .bearer_auth(&channel.api_key)
-        .json(&json!({
-            "personalizations": [{"to": [{"email": channel.to}]}],
-            "from": {"email": channel.from},
-            "subject": subject,
-            "content": [{"type": "text/plain", "value": body}],
-        }))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    ensure_success(response).await
-}
-
-async fn send_pubsub(
-    client: &reqwest::Client,
-    channel: &PubSubChannel,
-    message: &str,
-) -> Result<(), String> {
-    use base64::Engine;
-    let data = base64::engine::general_purpose::STANDARD.encode(message);
-    let url = format!("{}/v1/{}:publish", channel.base_url, channel.topic);
-    let response = client
-        .post(url)
-        .bearer_auth(&channel.token)
-        .json(&json!({"messages": [{"data": data}]}))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    ensure_success(response).await
-}
-
-/// Python `subject or message[:80]`, char-boundary safe.
-fn email_subject<'a>(subject: &'a str, message: &'a str) -> String {
-    if subject.is_empty() {
-        message.chars().take(80).collect()
-    } else {
-        subject.to_string()
-    }
-}
-
 /// Send an alert to every configured channel. Each channel is fault-isolated
-/// (see module docs): a failure goes through [`channel_failed`] — the
-/// `[alert] <channel> failed: {err}` line plus one structured, classified
-/// failure row — and the remaining channels still fire.
+/// (see module docs): a failure goes through [`channel_failed`] and the
+/// remaining channels still fire.
 pub async fn send_alert_with(channels: &AlertChannels, message: &str, subject: &str) {
     log(message);
     let client = reqwest::Client::new();
@@ -297,6 +278,12 @@ pub async fn send_alert_with(channels: &AlertChannels, message: &str, subject: &
             Err(err) => channel_failed("email", &err),
         }
     }
+    if let Some(most) = &channels.most {
+        match send_most(&client, most, message).await {
+            Ok(()) => log("SMS sent"),
+            Err(err) => channel_failed("most", &err),
+        }
+    }
     if let Some(pubsub) = &channels.pubsub {
         match send_pubsub(&client, pubsub, message).await {
             Ok(()) => log("Pub/Sub sent"),
@@ -309,183 +296,4 @@ pub async fn send_alert_with(channels: &AlertChannels, message: &str, subject: &
 pub async fn send_alert(topic: &str, message: &str, subject: &str) {
     let channels = AlertChannels::from_env(topic).await;
     send_alert_with(&channels, message, subject).await;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::testutil::{http_response, mock_http};
-
-    fn ok() -> String {
-        http_response(200, "OK", "{}")
-    }
-
-    #[tokio::test]
-    async fn slack_posts_text_payload() {
-        let mock = mock_http(vec![ok()]).await;
-        let channels = AlertChannels {
-            slack_webhook: Some(mock.base_url.clone()),
-            ..Default::default()
-        };
-        send_alert_with(&channels, "disk full", "").await;
-        let requests = mock.requests.lock().expect("requests lock");
-        assert_eq!(requests.len(), 1);
-        assert!(requests[0].starts_with("POST / "), "{}", requests[0]);
-        assert!(
-            requests[0].contains(r#"{"text":"disk full"}"#),
-            "{}",
-            requests[0]
-        );
-    }
-
-    #[tokio::test]
-    async fn telegram_posts_markdown_message() {
-        let mock = mock_http(vec![ok()]).await;
-        let channels = AlertChannels {
-            telegram: Some(TelegramChannel {
-                token: "tok123".into(),
-                chat_id: "chat42".into(),
-                api_base: mock.base_url.clone(),
-            }),
-            ..Default::default()
-        };
-        send_alert_with(&channels, "hello *fleet*", "").await;
-        let requests = mock.requests.lock().expect("requests lock");
-        assert_eq!(requests.len(), 1);
-        assert!(
-            requests[0].starts_with("POST /bottok123/sendMessage "),
-            "{}",
-            requests[0]
-        );
-        assert!(
-            requests[0]
-                .contains(r#"{"chat_id":"chat42","text":"hello *fleet*","parse_mode":"Markdown"}"#),
-            "{}",
-            requests[0]
-        );
-    }
-
-    #[tokio::test]
-    async fn email_falls_back_to_message_prefix_subject() {
-        let mock = mock_http(vec![ok()]).await;
-        let long_message = "x".repeat(200);
-        let channels = AlertChannels {
-            sendgrid: Some(SendgridChannel {
-                api_key: "SG.key".into(),
-                to: "ops@example.com".into(),
-                from: "compute@example.com".into(),
-                url: format!("{}/v3/mail/send", mock.base_url),
-            }),
-            ..Default::default()
-        };
-        send_alert_with(&channels, &long_message, "").await;
-        let requests = mock.requests.lock().expect("requests lock");
-        assert_eq!(requests.len(), 1);
-        assert!(
-            requests[0].contains("authorization: Bearer SG.key"),
-            "{}",
-            requests[0]
-        );
-        // Empty subject -> first 80 chars of the message.
-        let expected_subject = "x".repeat(80);
-        assert!(
-            requests[0].contains(&format!(r#""subject":"{expected_subject}""#)),
-            "{}",
-            requests[0]
-        );
-        assert!(requests[0].contains(r#""from":{"email":"compute@example.com"}"#));
-    }
-
-    #[tokio::test]
-    async fn email_uses_explicit_subject_when_given() {
-        let mock = mock_http(vec![ok()]).await;
-        let channels = AlertChannels {
-            sendgrid: Some(SendgridChannel {
-                api_key: "k".into(),
-                to: "ops@example.com".into(),
-                from: "compute@example.com".into(),
-                url: mock.base_url.clone(),
-            }),
-            ..Default::default()
-        };
-        send_alert_with(&channels, "body text", "explicit subject").await;
-        let requests = mock.requests.lock().expect("requests lock");
-        assert!(
-            requests[0].contains(r#""subject":"explicit subject""#),
-            "{}",
-            requests[0]
-        );
-    }
-
-    #[tokio::test]
-    async fn pubsub_publishes_base64_message() {
-        let mock = mock_http(vec![ok()]).await;
-        let channels = AlertChannels {
-            pubsub: Some(PubSubChannel {
-                topic: "projects/p/topics/t".into(),
-                base_url: mock.base_url.clone(),
-                token: "ya29.tok".into(),
-            }),
-            ..Default::default()
-        };
-        send_alert_with(&channels, "hello", "").await;
-        let requests = mock.requests.lock().expect("requests lock");
-        assert_eq!(requests.len(), 1);
-        assert!(
-            requests[0].starts_with("POST /v1/projects/p/topics/t:publish "),
-            "{}",
-            requests[0]
-        );
-        assert!(
-            requests[0].contains("authorization: Bearer ya29.tok"),
-            "{}",
-            requests[0]
-        );
-        // base64("hello") == "aGVsbG8="
-        assert!(
-            requests[0].contains(r#"{"messages":[{"data":"aGVsbG8="}]}"#),
-            "{}",
-            requests[0]
-        );
-    }
-
-    #[tokio::test]
-    async fn broken_channel_does_not_suppress_the_others() {
-        let mock = mock_http(vec![ok()]).await;
-        let channels = AlertChannels {
-            // Port 1 refuses connections -> slack fails.
-            slack_webhook: Some("http://127.0.0.1:1/webhook".into()),
-            telegram: Some(TelegramChannel {
-                token: "tok".into(),
-                chat_id: "c".into(),
-                api_base: mock.base_url.clone(),
-            }),
-            ..Default::default()
-        };
-        send_alert_with(&channels, "m", "").await;
-        let requests = mock.requests.lock().expect("requests lock");
-        assert_eq!(
-            requests.len(),
-            1,
-            "telegram must still fire after slack failed"
-        );
-    }
-
-    #[tokio::test]
-    async fn non_2xx_is_a_channel_error_not_a_success() {
-        let mock = mock_http(vec![http_response(500, "Internal Server Error", "boom")]).await;
-        let channels = AlertChannels {
-            slack_webhook: Some(mock.base_url.clone()),
-            ..Default::default()
-        };
-        // Must not panic; the failure is logged and swallowed.
-        send_alert_with(&channels, "m", "").await;
-        let requests = mock.requests.lock().expect("requests lock");
-        assert_eq!(requests.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn no_channels_configured_is_a_noop() {
-        send_alert_with(&AlertChannels::default(), "quiet", "").await;
-    }
 }
