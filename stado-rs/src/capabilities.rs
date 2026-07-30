@@ -273,9 +273,9 @@ define_capabilities! {
         id: "compute",
         summary: "Provision or attach CPU and accelerator-backed machines.",
         providers: [
-            ProviderId::Gcp => (Implemented, "providers::gcp::GcpProvider", "Google Compute Engine VM lifecycle"),
-            ProviderId::Azure => (Implemented, "providers::azure::AzureProvider", "Azure Virtual Machines lifecycle"),
-            ProviderId::Aws => (Implemented, "providers::aws::AwsProvider", "Amazon EC2 lifecycle"),
+            ProviderId::Gcp => (Partial, "providers::gcp::GcpProvider", "Preview Google Compute Engine VM lifecycle; not stable without release-scoped live acceptance"),
+            ProviderId::Azure => (Implemented, "providers::azure::AzureProvider", "Preview Azure Virtual Machines lifecycle; not stable without release-scoped live acceptance"),
+            ProviderId::Aws => (Implemented, "providers::aws::AwsProvider", "Preview Amazon EC2 lifecycle; not stable without release-scoped live acceptance"),
             ProviderId::Box => (Implemented, "providers::box::BoxProvider", "Externally managed fixed-shape boxes"),
             ProviderId::Local => (Partial, "providers::local", "Attach existing hosts; no machine provisioning"),
             ProviderId::Vast => (Partial, "providers::vast", "Publish a host; renter provisioning is not implemented"),
@@ -296,21 +296,21 @@ define_capabilities! {
         summary: "Run a queued workload in a managed agent environment.",
         providers: [
             ProviderId::Stado => (Implemented, "scheduler + agent", "Provider-neutral queue, leases, dispatch, and execution contract"),
-            ProviderId::Gcp => (Implemented, "providers::local::agent + providers::gcp", "Ephemeral agent on a GCE VM"),
-            ProviderId::Azure => (Implemented, "providers::local::agent + providers::azure", "Ephemeral agent on an Azure VM"),
-            ProviderId::Aws => (Implemented, "providers::local::agent + providers::aws", "Ephemeral agent on an EC2 VM"),
+            ProviderId::Gcp => (Partial, "providers::local::agent + providers::gcp", "Preview ephemeral agent lifecycle on an owned GCE VM"),
+            ProviderId::Azure => (Implemented, "providers::local::agent + providers::azure", "Preview ephemeral agent lifecycle on an Azure VM"),
+            ProviderId::Aws => (Implemented, "providers::local::agent + providers::aws", "Preview ephemeral agent lifecycle on an EC2 VM"),
             ProviderId::Box => (Implemented, "providers::local::agent + providers::box", "Agent bootstrapped on a leased box"),
             ProviderId::Local => (Implemented, "providers::local::agent", "Long-lived workstation or server agent"),
-            ProviderId::Vast => (Implemented, "providers::local::agent + providers::vast", "Agent on a Vast.ai-listed host"),
+            ProviderId::Vast => (Partial, "providers::local::agent + providers::vast", "Agent execution on an operator-published Vast host; renter provisioning is unavailable"),
         ]
     },
     ObjectStorage => {
         id: "object-storage",
         summary: "Persist queue state, results, artifacts, and control objects.",
         providers: [
-            ProviderId::Gcp => (Implemented, "queue::gcs::GcsBackend", "Google Cloud Storage"),
-            ProviderId::Azure => (Implemented, "queue::azure_blob::AzureBlobBackend", "Azure Blob Storage"),
-            ProviderId::Aws => (Implemented, "queue::s3::S3Backend", "Amazon S3"),
+            ProviderId::Gcp => (Implemented, "queue::gcs::GcsBackend", "Preview Google Cloud Storage; not stable without release-scoped live acceptance"),
+            ProviderId::Azure => (Implemented, "queue::azure_blob::AzureBlobBackend", "Preview Azure Blob Storage; not stable without release-scoped live acceptance"),
+            ProviderId::Aws => (Implemented, "queue::s3::S3Backend", "Preview Amazon S3; not stable without release-scoped live acceptance"),
             ProviderId::Local => (Implemented, "queue::local_file::LocalBackend", "Device-local filesystem"),
         ]
     },
@@ -423,7 +423,7 @@ define_capabilities! {
             ProviderId::Azure => (Implemented, "azure_token", "Managed identity and operator token chain"),
             ProviderId::Aws => (Implemented, "providers::aws::sdk_config", "AWS credential chain, IMDS, and scoped fallback"),
             ProviderId::Local => (Partial, "deploy::host_channel", "Local account and SSH identity"),
-            ProviderId::Supabase => (Implemented, "dashboard::authorized", "User JWT authorization through RLS"),
+            ProviderId::Supabase => (Implemented, "dashboard::authorized", "Optional dashboard user JWT authorization through RLS; not required by the core control plane"),
         ]
     },
     Secrets => {
@@ -475,7 +475,7 @@ define_capabilities! {
         summary: "Report allocatable capacity, quotas, and reservations.",
         providers: [
             ProviderId::Stado => (Implemented, "config/quotas.json + queue::capacity", "Provider-neutral reservations and published capacity"),
-            ProviderId::Gcp => (Implemented, "scheduler::quota", "Live accelerator quota and configured reservations"),
+            ProviderId::Gcp => (Partial, "scheduler::quota", "Preview live accelerator quota reads plus configured reservations"),
             ProviderId::Azure => (Partial, "scheduler::quota", "Configured reservations; live VM-family coverage is incomplete"),
             ProviderId::Aws => (Planned, "", "No live AWS quota adapter"),
             ProviderId::Local => (Implemented, "queue::capacity + providers::local", "GPU probe, free VRAM, and agent slots"),
