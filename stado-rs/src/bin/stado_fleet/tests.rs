@@ -250,7 +250,8 @@ mod ops {
 
     #[test]
     fn register_target_adds_ssh_null_entry() {
-        let next = register_target(&base(), "new-box", "local").expect("register");
+        let hostnames = vec!["new-box.local".to_string()];
+        let next = register_target(&base(), "new-box", "local", &hostnames).expect("register");
         let targets = next
             .get("targets")
             .and_then(serde_json::Value::as_array)
@@ -264,11 +265,15 @@ mod ops {
             added.get("kind").and_then(serde_json::Value::as_str),
             Some("local")
         );
+        assert_eq!(
+            added.get("hostnames").and_then(serde_json::Value::as_array),
+            Some(&vec![serde_json::Value::String("new-box.local".to_string())])
+        );
     }
 
     #[test]
     fn register_target_refuses_duplicate() {
-        let err = register_target(&base(), "mini", "local").unwrap_err();
+        let err = register_target(&base(), "mini", "local", &[]).unwrap_err();
         assert!(err.contains("already registered"), "unexpected error: {err}");
     }
 }
