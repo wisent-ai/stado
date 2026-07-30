@@ -7,6 +7,7 @@
 //! per-target beacon and capacity presence, all through Stado's own reads.
 
 mod doctor;
+mod enroll;
 mod fleet;
 mod ops;
 #[cfg(test)]
@@ -83,6 +84,23 @@ enum Commands {
         #[arg(long)]
         bootstrap: bool,
     },
+    /// Announce this machine to the fleet (run on the machine being added).
+    Join,
+    /// List unanswered join requests.
+    Pending,
+    /// Turn a pending join request into a registered target.
+    Approve {
+        /// Hostname from the join request.
+        hostname: String,
+        /// Fleet to place the machine in right away.
+        #[arg(long)]
+        fleet: Option<String>,
+    },
+    /// Drop a pending join request.
+    Reject {
+        /// Hostname from the join request.
+        hostname: String,
+    },
 }
 
 #[tokio::main]
@@ -112,6 +130,10 @@ async fn main() -> ExitCode {
             )
             .await
         }
+        Commands::Join => enroll::join().await,
+        Commands::Pending => enroll::pending().await,
+        Commands::Approve { hostname, fleet } => enroll::approve(&hostname, fleet.as_deref()).await,
+        Commands::Reject { hostname } => enroll::reject(&hostname).await,
     };
     match result {
         Ok(clean) => {
