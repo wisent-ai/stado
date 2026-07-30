@@ -1,12 +1,20 @@
 # Configuration
 
-## Deployment profile and bounded overrides
+## First-run config and deployment profiles
 
-`STADO_CONFIG` selects the authoritative JSON profile. The shipped
-`deploy/local/stado.config.json` is the active outage profile;
-`deploy/azure/stado.config.json` is a fenced production template. Provider
-order, explicit provider fences, storage, object/release/service verifiers, and
-the workload-agent allowlist live in that profile rather than in cloud CLI state.
+`stado config init` creates only a schema-versioned local queue profile:
+local compute, local primary and backup stores, one deployment identity, and a
+loopback dashboard. It contains no Wisent service routes, production clients,
+cloud locators, or credentials. Existing legacy files migrate explicitly with
+`stado config migrate`; the exact prior file is preserved beside the migrated
+document.
+
+`STADO_CONFIG` selects an authoritative deployment profile. The shipped
+`deploy/local/stado.config.json` is an explicit Wisent outage profile, not a
+first-run template; `deploy/azure/stado.config.json` is a fenced production
+template. Provider order, explicit provider fences, storage,
+object/release/service verifiers, and the workload-agent allowlist live in
+deployment profiles rather than in cloud CLI state.
 
 Only route-local or process-local values should be overridden:
 
@@ -20,6 +28,7 @@ Only route-local or process-local values should be overridden:
 | `STADO_RELEASE_API_URL` | Public HTTPS Stado origin serving `/api/release/object`. |
 | `STADO_RELEASE_VERSION` | Required exact immutable Stado runtime version. |
 | `STADO_RELEASE_PLATFORM` | Required exact Stado runtime platform for dispatched agents. |
+| `STADO_ALERT_CHANNELS` | Explicit comma-separated optional adapters: `slack`, `telegram`, `sendgrid`, `gcp-pubsub`. |
 | `WC_LOCAL_SLOTS` | Optional local-agent concurrency cap; `0` is uncapped. |
 | `STADO_HOST_HEALTH_API_URL` | Authenticated Stado host-health origin. |
 | `STADO_HOST_HEALTH_SKARBIEC_URL` | Skarbiec origin for the route-only host-health publisher. |
@@ -38,6 +47,12 @@ Stado object boundary. Immutable artifact manifests may additionally reference
 provider-native `az://`, `gs://`, and `s3://` locations, plus `hf://` and
 HTTPS; access still resolves through authenticated provider adapters, and
 embedded credentials or sensitive query parameters are rejected.
+
+Optional alerts are disabled when `alerts.channels` is absent or empty. Enabling
+a channel authorizes only its own credential lookup and network route. The
+Pub/Sub topic and SendGrid recipient are inert unless their adapters are also
+enabled. An alert failure is isolated from scheduling, execution, health, and
+the other channels.
 
 ## Registry
 
@@ -79,82 +94,41 @@ A coordinator entry pins the scheduling-tick driver:
 
 ## Quotas
 
-Live limits come from the GCP regions API
-(`compute_v1.RegionsClient().get(project, region)`).
-The provider-neutral `config/quotas.json` object in the configured Stado store
-contains *reservations only*:
-```json
-{
-  "gcp": {
-    "nvidia-tesla-a100": {"reserved": 4}
-  }
-}
-```
+The provider-neutral `config/quotas.json` object contains reservation overlays,
+not invented capacity. A reservation subtracts operator-owned capacity from a
+live provider limit before dispatch. Missing or unreachable live quota data is
+reported as unavailable; Stado does not reinterpret it as zero usage or
+unlimited capacity.
 
-means "subtract 4 A100s from the live limit before dispatching" —
-useful when you want to reserve capacity for non-wisent workloads.
-The `total` field is ignored; setting it has no effect.
-
-The metric-name → internal accel mapping
-(`stado/scheduler/quota.py:_GCP_METRIC_TO_ACCEL`):
-
-```python
-_GCP_METRIC_TO_ACCEL = {
-    "PREEMPTIBLE_NVIDIA_T4_GPUS":      "nvidia-tesla-t4",
-    "PREEMPTIBLE_NVIDIA_L4_GPUS":      "nvidia-l4",
-    "PREEMPTIBLE_NVIDIA_A100_GPUS":    "nvidia-tesla-a100",
-    "PREEMPTIBLE_NVIDIA_A100_80GB_GPUS": "nvidia-a100-80gb",
-}
-```
+GCP quota reads are part of the preview compute adapter and use the Rust
+provider boundary. Azure supports configured reservations with incomplete live
+VM-family coverage. Live AWS quota management is planned and unavailable.
 
 ## Optional GCP adapter prerequisites
 
-Stado does not ship an infrastructure-provisioning shell path. An operator who
-explicitly enables the GCP provider adapter must supply an already provisioned
-project, shared store, identity, quota overlay, networking, and alert sink in
-the deployment profile. Runtime compute and storage operations then remain
-inside the Rust provider adapter; install, bootstrap, release, health, and
-recovery paths never invoke a cloud CLI or consume ambient ADC.
+The GCP compute adapter is preview. An operator must explicitly enable it and
+supply an already provisioned project, canonical store, scoped managed identity
+or Skarbiec service account, quota overlay, network, image, ownership labels,
+cost policy, and immutable Stado release. Runtime compute and storage operations
+stay inside the Rust provider adapters; install, bootstrap, release, health,
+and recovery paths do not invoke a cloud CLI.
 
-The active deploy workflow publishes through Stado and installs the native
-coordinator. It has no Cloud Function redeploy, provider CLI authentication,
-workload-identity publisher, or ambient ADC path.
+Zone candidates and machine compatibility belong to the selected deployment
+profile. Resource exhaustion may advance to the next allowed candidate; an
+authorization, ownership, invalid configuration, or ambiguous provider error
+must not. GCP is not stable until a release-scoped live test creates an owned
+VM, boots the pinned agent, runs and collects a workload, exercises
+cancellation and recovery, and reaps all paid resources.
 
-## Per-machine-type zone rotation
+The active deployment workflow publishes immutable native releases and
+installs the Rust coordinator. It has no Cloud Function scheduler, mutable
+package upgrade, provider CLI authentication, or ambient credential fallback.
 
-`MACHINE_TYPE_ZONES` in `stado/config.py` is consulted by
-`providers/gcp.py:create_instance` before the default
-`ZONE_ROTATION`. It exists because some accelerator-optimized SKUs
-(`a2-ultragpu-1g`, the A100-80GB single-GPU machine) only exist in a
-subset of zones, and Spot capacity in `us-central1-a` is regularly
-exhausted:
+## Workload runtime ownership
 
-```python
-MACHINE_TYPE_ZONES = {
-    "a2-ultragpu-1g": [
-        f"{REGION}-c", f"{REGION}-a",
-        "us-east5-a", "us-east5-b", "us-east4-c",
-        "europe-west4-a",
-    ],
-}
-```
-
-The provider iterates these in order and creates the instance in the
-first zone that returns a non-`None` ref. 503 ZONE_RESOURCE_POOL_EXHAUSTED
-or 400 "machine type does not exist" cause it to walk to the next zone.
-
-## Pinned cloud-agent dependencies
-
-`stado/templates/startup_gpu_agent.sh` pins the following
-deps. Each pin has a known reason — don't relax them without reading
-the comments in the template:
-
-| Pin | Reason |
-|---|---|
-| `transformers>=4.55,<5.0` | transformers 5.x has a 0-indexed shard-name miscompute that fails on Llama-2-7b/Qwen3-8B/gpt-oss-20b. |
-| `tokenizers>=0.20,<0.22` | matches `transformers<5.0`. |
-| `datasets>=3.0,<4.0` | datasets 4.0 dropped support for dataset loading scripts (`flores.py` etc. raise `RuntimeError: Dataset scripts are no longer supported`). |
-| `huggingface-hub>=0.34.0,<1.0` | hub 1.x violates `transformers<5.0`'s `huggingface-hub<1.0` constraint and the agent crashes at import time. |
-| `numpy>=1.24,<2.3` | numba 0.61.x requires numpy < 2.3. |
-| `NUMBA_NUM_THREADS=1` (env var) | wisent sets this in 8 modules but the import-order race lets numba init at the system cpu_count first; setting it in the agent's own env avoids `RuntimeError: Cannot set NUMBA_NUM_THREADS once threads have been launched`. |
-| `HF_HUB_DOWNLOAD_TIMEOUT=120` (env var) | wisent fleet hits HF's 1000-req/5-min free-tier ceiling regularly; longer timeouts let the SDK back off and retry rather than fail the whole job. |
+Stado does not pin Python, CUDA framework, Hugging Face, NumPy, or application
+package versions as part of the control-plane contract. A workload declares and
+owns its runtime, image, command, source revision, artifacts, and verification
+hook. Provider bootstrap templates may install prerequisites required by a
+specific workload profile, but those pins are deployment data and do not become
+dependencies of the Rust agent or local onboarding path.
