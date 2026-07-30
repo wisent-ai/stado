@@ -158,7 +158,7 @@ mod ops {
     use serde_json::json;
 
     use crate::fleet::{find_fleet, parse_fleets};
-    use crate::ops::{assign_target, create_fleet};
+    use crate::ops::{assign_target, create_fleet, preflight_enroll};
 
     fn base() -> serde_json::Value {
         json!({
@@ -224,5 +224,27 @@ mod ops {
         assert!(core.members.is_empty());
         let lab = find_fleet(&fleets, "lab").expect("lab fleet");
         assert_eq!(lab.members, vec!["mini".to_string()]);
+    }
+
+    #[test]
+    fn enroll_preflight_refuses_registered_target() {
+        let err = preflight_enroll(&base(), "mini", None).unwrap_err();
+        assert!(err.contains("already registered"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn enroll_preflight_refuses_undeclared_fleet() {
+        let err = preflight_enroll(&base(), "new-box", Some("ghost")).unwrap_err();
+        assert!(err.contains("not declared"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn enroll_preflight_accepts_new_machine_with_fleet() {
+        preflight_enroll(&base(), "new-box", Some("core")).expect("preflight");
+    }
+
+    #[test]
+    fn enroll_preflight_accepts_new_machine_without_fleet() {
+        preflight_enroll(&base(), "new-box", None).expect("preflight");
     }
 }
