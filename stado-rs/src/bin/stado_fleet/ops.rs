@@ -80,3 +80,60 @@ pub async fn assign(target: &str, fleet_name: &str) -> Result<bool, String> {
     println!("target '{target}' assigned to fleet '{fleet_name}' (generation {generation})");
     Ok(true)
 }
+
+/// Enroll preflight, run BEFORE any write: the machine must not already be
+/// registered, and the requested fleet must be declared — otherwise the
+/// command would register a target and only then fail the fleet step.
+/// Pure.
+pub fn preflight_enroll(
+    document: &Value,
+    name: &str,
+    fleet_name: Option<&str>,
+) -> Result<(), String> {
+    let targets = document
+        .get("targets")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "registry.targets: must be an array".to_string())?;
+    if targets
+        .iter()
+        .any(|target| target.get("name").and_then(Value::as_str) == Some(name))
+    {
+        return Err(format!("target '{name}' is already registered"));
+    }
+    if let Some(fleet) = fleet_name {
+        let fleets = parse_fleets(document)?;
+        find_fleet(&fleets, fleet)
+            .ok_or_else(|| format!("fleet '{fleet}' is not declared; create it first"))?;
+    }
+    Ok(())
+}
+
+/// `stado_fleet enroll NAME --ssh DEST [--kind local] [--fleet FLEET]
+/// [--bootstrap]` — one-command onboarding: register the machine in the
+/// canonical registry, optionally place it in a fleet, optionally install
+/// the agent through `stado bootstrap`. Registration itself goes through
+/// `stado registry host add`, so the registry-v2 contract validation runs
+/// before anything is written.
+pub async fn enroll(
+    name: &str,
+    ssh: &str,
+    kind: &str,
+    fleet_name: Option<&str>,
+    bootstrap: bool,
+) -> Result<bool, String> {
+    let document = fetch_document().await.map_err(|exc| exc.to_string())?;
+    preflight_enroll(&document, name, fleet_name)?;
+    stado::cli::registry::host_add(name, ssh, kind)
+        .await
+        .map_err(|exc| exc.to_string())?;
+    if let Some(fleet) = fleet_name {
+        assign(name, fleet).await?;
+    }
+    if bootstrap {
+        stado::cli::bootstrap::run(Some(name.to_string()), false, false)
+            .await
+            .map_err(|exc| exc.to_string())?;
+    }
+    println!("enrolled '{name}' (kind={kind}, ssh={ssh})");
+    Ok(true)
+}
