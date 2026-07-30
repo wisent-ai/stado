@@ -24,6 +24,15 @@ registering it (goes through `stado bootstrap`, Stado's own remote
 channel). The preflight runs before any write: an already-registered name
 or an undeclared fleet is refused with nothing changed.
 
+No ssh access from the control plane? Skip `--ssh` — the machine
+registers with `ssh: null` and installs itself:
+
+```sh
+stado_fleet enroll render-node-c --fleet render-burst
+# then, on render-node-c itself:
+stado bootstrap --local --target render-node-c
+```
+
 ## Declare a fleet
 
 ```sh
