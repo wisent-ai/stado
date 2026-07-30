@@ -196,7 +196,7 @@ The worker host must already have the shell, runtime, and GPU driver required by
 Open http://127.0.0.1:8765
 
 Submit your first job:
-   stado submit \"python -c 'print(\\\"hello from Stado\\\")'\"
+   stado submit \"printf 'hello from Stado\\n'\"
 
 Already configured? Run:
    stado overview
@@ -210,7 +210,10 @@ fn print_onboarding() {
 }
 
 #[derive(Parser)]
-#[command(about = "Wisent Compute — GPU job queue management.")]
+#[command(
+    version,
+    about = "Stado — policy-controlled queue and compute control plane."
+)]
 pub struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,

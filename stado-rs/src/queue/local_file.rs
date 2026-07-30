@@ -1,15 +1,12 @@
 //! Filesystem-backed job storage for a device-local Stado deployment.
 //!
-//! Port of `stado/queue/local_file.py` (`LocalFileBackend`). Implements the
-//! blob backend contract using atomic local files: blobs are plain files at
-//! `{root}/{path}`, metadata sidecars live under `.metadata/`, advisory
-//! locks under `.locks/` (flock via fs2), writes go through a tempfile +
-//! fsync + rename, if-absent creation uses `O_CREAT|O_EXCL`, and the CAS
-//! version token is the SHA-256 hex of the content.
+//! Implements the shared blob contract with atomic local files. Blobs are
+//! plain files under the deployment root, metadata and advisory locks use
+//! private side directories, writes use tempfile/fsync/rename, conditional
+//! creation uses exclusive create, and the CAS token is a content SHA-256.
 //!
 //! This backend intentionally serves one device. Remote workers require a
-//! cloud-backed deployment instead of exposing this directory over the
-//! network.
+//! cloud backend rather than network exposure of this directory.
 
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
@@ -33,8 +30,7 @@ pub struct LocalBackend {
 }
 
 impl LocalBackend {
-    /// Root the backend at `root` (created when missing, `~` expanded).
-    /// Python raises `RuntimeError` for an empty `WC_LOCAL_STORAGE_PATH`.
+    /// Root the backend at `root`, creating it when missing.
     pub fn new(root: &str) -> Result<Self, StorageError> {
         if root.is_empty() {
             return Err(StorageError::Other(

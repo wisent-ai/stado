@@ -2,8 +2,8 @@
 name = "stado"
 version = "0.4.392"
 edition = "2021"
-description = "Job queue and compute management for Wisent GPU workloads"
-license = "MIT"
+description = "Policy-controlled queue and compute control plane for AI workloads"
+license-file = "../LICENSE"
 
 [dependencies]
 anyhow = "1"
