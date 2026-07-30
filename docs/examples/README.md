@@ -24,6 +24,10 @@ examples requirement). Each script runs end-to-end locally.
    beacon age, host ping, service list — fleet truth without ssh.
 4. [`queue-maintenance.sh`](queue-maintenance.sh) —
    pause, drain, resume — maintenance without cancelling work.
+5. [`fleet/add-remove-host.sh`](fleet/add-remove-host.sh) —
+   onboard a device with `registry host add`, remove it via
+   pull → edit → validate → push. Ends net-zero; verified on the real
+   registry.
 
 ## Template for a new example
 
