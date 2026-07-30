@@ -1,45 +1,29 @@
 //! Version-drift check used by the agent main loop to self-recycle
 //! when a newer stado release ships.
 //!
-//! Port of `stado/providers/local/version_check.py`, with the phase-4
-//! DEVIATION below.
+//! A running agent compares its compiled version only with the
+//! operator-pinned [`crate::config::stado_release_version`]. No mutable
+//! channel pointer, package index, or public "latest" resolver is compiled
+//! into production builds.
 //!
-//! A running agent compares its compiled version only with the operator-pinned
-//! [`crate::config::stado_release_version`]. No channel pointer, package index,
-//! or public "latest" resolver is compiled into production builds.
-//!
-//! DEVIATION (intended): the Rust binary is an immutable Stado artifact:
-//!   * drift detection compares `CARGO_PKG_VERSION` with the operator-pinned
-//!     release coordinate;
-//!   * remediation on a local-kind agent downloads the exact configured
-//!     version and platform through the public Stado release object route,
-//!     verifies every binary against SHA256SUMS, atomically replaces the
-//!     running binary and installed siblings, then re-execs. Any failure is
-//!     logged and the old binary continues running;
-//!   * cloud agents exit after recording a provider-neutral termination
-//!     intent, and the coordinator reaps and replaces them through the owning
-//!     provider adapter.
-//!   * `WC_SKIP_VERSION_CHECK=1` still short-circuits the whole check —
-//!     detection AND remediation;
-//!   * the cloud-agent terminate-on-drift path exits after recording a
-//!     provider-neutral intent through [`super::self_terminate`]; the
-//!     coordinator reaps the machine through its owning provider adapter and
-//!     dispatches a replacement with the configured exact release.
+//! Local remediation downloads the exact configured version and platform,
+//! verifies the immutable manifest and checksums, atomically replaces the
+//! installed binaries, and re-execs. Failure leaves the current binary
+//! running. Cloud machines record a provider-neutral termination intent and
+//! are replaced through their owning adapter. `WC_SKIP_VERSION_CHECK` remains
+//! the explicit operator escape hatch for detection and remediation.
 
 #[cfg(test)]
 use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
-use std::time::{Duration, Instant};
-
-const IMPORT_OK_TTL: Duration = Duration::from_secs(300);
-const IMPORT_BAD_TTL: Duration = Duration::from_secs(30);
 #[cfg(test)]
-const CACHE_TTL: Duration = IMPORT_BAD_TTL;
+use std::sync::{LazyLock, Mutex};
+#[cfg(test)]
+use std::time::{Duration, Instant};
+#[cfg(test)]
+const CACHE_TTL: Duration = Duration::from_secs(b'\x1e' as u64);
 
 /// Version ordering lives in [`crate::release`], which owns every rule about
-/// release versions. Re-exported here because this module's PyPI checks and the
-/// callers that grew up around them compare versions too, and two
-/// implementations of "which of these is newer" is exactly one too many.
+/// release versions. Re-exported here for compatibility tests.
 pub use crate::release::{version_newer, version_tuple, VersionToken};
 
 /// Pure: newest release key of a PyPI /pypi/<pkg>/json payload.
@@ -124,96 +108,27 @@ pub async fn detect_drift() -> Option<(String, String)> {
     (canonical && version_newer(&installed, &desired)).then_some((installed, desired))
 }
 
-static IMPORT_CACHE: LazyLock<Mutex<Option<(Instant, bool, String)>>> =
-    LazyLock::new(|| Mutex::new(None));
-
-/// Smoke-test `import wisent` in a subprocess of the agent's job-runtime
-/// Python. Returns (ok, error_message). Python `wisent_import_ok`.
-///
-/// Run before claiming a job so a corrupt or incompatible immutable runtime
-/// bundle triggers remediation rather than claiming jobs that will fail their
-/// first `python -m wisent...` line.
-///
-/// Deviation: Python uses `sys.executable`; the Rust binary is not a
-/// Python interpreter, so it invokes `python3` from the agent's PATH (the
-/// agent runs inside its venv, whose bin/ is first on PATH).
-pub async fn wisent_import_ok() -> (bool, String) {
-    {
-        let cache = IMPORT_CACHE.lock().expect("import cache lock");
-        if let Some((ts, ok, err)) = &*cache {
-            let ttl = if *ok { IMPORT_OK_TTL } else { IMPORT_BAD_TTL };
-            if ts.elapsed() < ttl {
-                return (*ok, err.clone());
-            }
-        }
-    }
-    let result = tokio::time::timeout(
-        Duration::from_secs(20),
-        tokio::process::Command::new(super::python_bin())
-            .args(["-c", "import wisent"])
-            .output(),
-    )
-    .await;
-    let (ok, err) = match result {
-        Err(_) => (false, "import smoke test timed out".to_string()),
-        Ok(Err(err)) => (false, format!("import smoke test failed to spawn: {err}")),
-        Ok(Ok(out)) if out.status.success() => (true, String::new()),
-        Ok(Ok(out)) => {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            // Python: (res.stderr or res.stdout or "(no output)").strip()[:400]
-            let raw = if !stderr.is_empty() {
-                stderr.into_owned()
-            } else if !stdout.is_empty() {
-                stdout.into_owned()
-            } else {
-                "(no output)".to_string()
-            };
-            (false, raw.trim().chars().take(400).collect())
-        }
-    };
-    *IMPORT_CACHE.lock().expect("import cache lock") = Some((Instant::now(), ok, err.clone()));
-    (ok, err)
-}
-
 /// What the agent loop should do after [`maybe_drain_or_upgrade`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DriftOutcome {
-    /// No remediation needed (Python returns False).
+    /// No remediation needed.
     Clean,
-    /// Skip the claim path this tick (Python returns True -> `continue`).
-    SkipClaim,
-    /// Drift remediation on a local-kind agent FAILED (self-update error
-    /// or re-exec failure) or the venv is broken: the error was logged and
-    /// the agent keeps running the current binary. A successful
-    /// self-update never produces this outcome — the process re-execs
-    /// instead ([`crate::self_update::reexec`]).
+    /// Drift remediation on a local-kind agent failed. The error was logged
+    /// and the agent keeps running the current binary. A successful update
+    /// re-execs instead ([`crate::self_update::reexec`]).
     DriftDetected,
-    /// Cloud agent: self-terminate was invoked (Python raises
-    /// SystemExit(0) right after); the caller should exit(0).
+    /// Cloud replacement was requested; the caller should exit.
     SelfTerminated,
 }
 
-/// Combined drift + venv-integrity handling for the agent main loop.
-/// Python `maybe_drain_or_upgrade(slots, log_fn, kind)` — `slots_active`
-/// stands in for the drained-slots check (`if slots:` / `if not slots:`).
+/// Handle immutable-binary release drift for the agent main loop.
 ///
-///   1. the exact configured release version is strictly newer than the
-///      installed version ([`detect_drift`]).
-///   2. `import wisent` raises in the selected immutable runtime bundle.
+/// Workload runtime checks belong to the submitted job and its declared
+/// requirements. The Stado agent itself does not import Python packages before
+/// claiming unrelated shell, native, or container workloads.
 ///
-/// Cloud agents (kind != "local") DO NOT upgrade in place on drift; they
-/// self-terminate so the dispatcher creates a fresh VM with the new
-/// version baked in — no in-process file race possible (that race
-/// produced the zombie 1778695548-{2,3,5} VMs on 2026-05-13).
-///
-/// Local agents remediate binary drift with [`crate::self_update`]: download,
-/// verify, atomically replace, then re-exec. A broken Python runtime requires
-/// selecting a replacement bundle, so that path keeps the log-and-report
-/// behavior.
-///
-/// Caller MUST advance slots BEFORE calling this so a drained slots list
-/// triggers the remediation path.
+/// Cloud agents do not upgrade in place; they self-terminate so the dispatcher
+/// creates a fresh machine with the configured immutable release.
 pub async fn maybe_drain_or_upgrade(
     slots_active: bool,
     log_fn: &mut dyn FnMut(&str),
@@ -225,41 +140,23 @@ pub async fn maybe_drain_or_upgrade(
     {
         return DriftOutcome::Clean;
     }
-    // Active work defers drift handling. Exact configuration resolution is
-    // local and does not create a network liveness dependency.
+    // Active work defers release replacement. Runtime checks are job-scoped
+    // and therefore do not block the global claim loop.
     if slots_active {
-        let (ok, err) = wisent_import_ok().await;
-        if ok {
-            return DriftOutcome::Clean;
-        }
-        log_fn(&format!("venv broken while slots active: {err}"));
-        return DriftOutcome::SkipClaim;
-    }
-    let drift = detect_drift().await;
-    let (ok, err) = wisent_import_ok().await;
-    if drift.is_none() && ok {
         return DriftOutcome::Clean;
     }
-    // Slots are drained past this point (Python `if not slots:`).
+    let Some(drift) = detect_drift().await else {
+        return DriftOutcome::Clean;
+    };
     if crate::capabilities::execution_adapter(kind)
         != Some(crate::capabilities::ExecutionAdapter::Local)
     {
         log_fn(&format!(
-            "cloud agent {kind} drift={drift:?} ok={ok}; self-terminate \
-             so dispatcher creates a fresh VM with new version baked in"
+            "cloud agent {kind} release drift={drift:?}; self-terminate \
+             so dispatcher creates a fresh machine with the configured release"
         ));
         super::self_terminate(kind, log_fn).await;
         return DriftOutcome::SelfTerminated;
-    }
-    if !ok {
-        // A broken venv is a Python-environment problem; replacing the
-        // Rust binary cannot fix it, so keep the log-and-report stance.
-        log_fn(&format!("venv broken: {err}"));
-        log_fn(
-            "venv remediation requires publishing and selecting a replacement immutable \
-             runtime bundle; restart the agent after updating that exact coordinate",
-        );
-        return DriftOutcome::DriftDetected;
     }
     // Binary self-update downloads the exact configured release, verifies it,
     // atomically replaces the executable, then re-execs.
@@ -279,8 +176,7 @@ pub async fn maybe_drain_or_upgrade(
         }
         Err(update_err) => {
             log_fn(&format!(
-                "self-update failed (drift {drift:?}): {update_err}; \
-                 keeping the current binary running"
+                "self-update failed (drift {drift:?}): {update_err}; keeping the current binary running"
             ));
         }
     }

@@ -1,28 +1,11 @@
-//! Per-slot lifecycle for the local GPU agent: start, heartbeat, Vast
-//! pause/resume, completion, cooperative yield, status/output upload.
+//! Fenced local slot lifecycle: atomic claim handoff, process-group execution,
+//! heartbeat, Vast pause/resume, cooperative yield, cancellation, redacted
+//! output persistence, and durable terminal transition.
 //!
-//! Port of `stado/providers/local/slots.py`.
-//!
-//! Splits the single-job lifecycle out of the agent main loop so the agent
-//! can manage N concurrent slots without ballooning the loop. A running
-//! slot is an [`ActiveSlot`] (Python's slot dict): the live child process,
-//! the [`super::Slot`] the helpers read (`job`, `pid`, `peak_vram_gb`), the
-//! log-file handle, and bookkeeping timestamps.
-//!
-//! DEVIATIONS from the Python source (all intended):
-//!   * `_write_status` / `_write_heartbeat` / `_upload_output` raise
-//!     `RuntimeError` in Python when `store._sdk_bucket is None`; every Rust
-//!     [`JobStorage`] has a blob backend that can write text, so no such
-//!     gate exists (writes go through the backend, SDK or local file).
-//!   * The job subprocess runs under `/bin/sh -c` (Python `shell=True`,
-//!     which is `/bin/sh` on POSIX) with `process_group(0)` — the exact
-//!     semantic of Python's `start_new_session=True` (setsid; the child
-//!     becomes a process-group leader so `killpg` can reap the whole tree).
-//!   * The optional output mirror accepts only `stado://` object prefixes
-//!     and writes through [`JobStorage`]. Mirror failure is logged because
-//!     canonical `status/<id>/output/` data is already durable.
-//!   * `WISENT_RAW_*` env floats that fail to parse panic (Python's
-//!     `float()` raises `ValueError`, crashing the agent visibly).
+//! A running slot owns its workload process group, log handle, monotonic
+//! timestamps, capacity accounting, and shared cleanup lock. Canonical output
+//! is written through `JobStorage`; optional mirrors accept only `stado://`
+//! destinations after the canonical write succeeds.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -32,6 +15,7 @@ use chrono::Utc;
 use nix::sys::signal::Signal;
 use nix::unistd::Pid;
 use serde_json::Value;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 use crate::constants;
 use crate::models::{
@@ -214,41 +198,81 @@ fn walk_files(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// Upload every regular file under output_dir to `status/<job_id>/output/`.
-/// Python `_upload_output`.
-///
-/// Earlier this used `subprocess.run([gsutil, -m, cp, -r, ..., capture_output=True])`
-/// which silently swallowed failures (same fire-and-forget gsutil pattern as
-/// the heartbeat bug). On the workstation, this resulted in 7/7 sampled
-/// `local@ubuntu-server` completions on 2026-05-07 having NO log file at all
-/// in GCS (`gsutil cat` returned `CommandException: No URLs matched`).
-/// Backend-based upload raises on failure; the caller decides whether that
-/// is fatal (advance_slot: yes; request_yield: logged, non-fatal).
+async fn output_redactions(job: &Job) -> Result<Vec<Vec<u8>>, StorageError> {
+    Ok(resolve_job_secret_environment(job)
+        .await?
+        .into_values()
+        .filter(|value| !value.is_empty())
+        .map(String::into_bytes)
+        .collect())
+}
+
+fn redact_secret_bytes(bytes: &mut [u8], secrets: &[Vec<u8>]) {
+    for secret in secrets.iter().filter(|secret| !secret.is_empty()) {
+        let mut offset = usize::default();
+        while offset <= bytes.len().saturating_sub(secret.len()) {
+            let Some(relative) = bytes[offset..]
+                .windows(secret.len())
+                .position(|window| window == secret.as_slice())
+            else {
+                break;
+            };
+            let start = offset + relative;
+            let end = start + secret.len();
+            bytes[start..end].fill(b'*');
+            offset = end;
+        }
+    }
+}
+
+async fn redacted_tail(job: &Job, path: &Path, max_bytes: u64) -> Result<String, StorageError> {
+    let mut file = match tokio::fs::File::open(path).await {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
+        Err(error) => return Err(error.into()),
+    };
+    let length = file.metadata().await?.len();
+    file.seek(std::io::SeekFrom::Start(length.saturating_sub(max_bytes)))
+        .await?;
+    let mut bytes = Vec::with_capacity(length.min(max_bytes) as usize);
+    file.read_to_end(&mut bytes).await?;
+    let secrets = output_redactions(job).await?;
+    redact_secret_bytes(&mut bytes, &secrets);
+    Ok(String::from_utf8_lossy(&bytes).trim().to_string())
+}
+
+/// Upload every regular file under `output_dir` to
+/// `status/<job_id>/output/`. Secret values are replaced in memory before
+/// bytes cross the durable storage boundary. Backend failures propagate; the
+/// lifecycle caller decides whether to retry finalization or continue.
 pub async fn upload_output(
     store: &JobStorage,
-    job_id: &str,
+    job: &Job,
     output_dir: &Path,
 ) -> Result<(), StorageError> {
     if !output_dir.exists() {
         return Ok(());
     }
+    let secrets = output_redactions(job).await?;
     for path in walk_files(output_dir) {
         let rel = path
             .strip_prefix(output_dir)
             .unwrap_or(&path)
             .components()
-            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .map(|component| component.as_os_str().to_string_lossy().into_owned())
             .collect::<Vec<_>>()
             .join("/");
-        let bytes = tokio::fs::read(&path).await?;
+        let mut bytes = tokio::fs::read(&path).await?;
+        redact_secret_bytes(&mut bytes, &secrets);
         store
-            .upload_bytes(&format!("status/{job_id}/output/{rel}"), &bytes)
+            .upload_bytes(&format!("status/{}/output/{rel}", job.job_id), &bytes)
             .await?;
     }
     Ok(())
 }
 
-/// Last max_bytes of the per-job log; "" if missing. Python `_tail_log`.
+/// Test-only byte-tail helper.
+#[cfg(test)]
 pub fn tail_log(path: &Path, max_bytes: u64) -> String {
     let Ok(data) = std::fs::read(path) else {
         return String::new();
@@ -791,47 +815,39 @@ pub async fn start_slot(
             return Ok(None);
         }
     };
+    let log_file = std::fs::File::create(format!("{work_dir}/output/command_output.log"))?;
+    let stdout_file = log_file.try_clone()?;
+    let stderr_file = log_file.try_clone()?;
+    job.state = job_state::RUNNING.to_string();
+    job.started_at = Some(isoformat_utc(Utc::now()));
+    job.instance_ref = Some(format!("local@{hostname}"));
+    if !store.claim_queued_job(&job).await? {
+        log_fn(&format!(
+            "claim lost for {}: another worker or cancellation won",
+            job.job_id
+        ));
+        return Ok(None);
+    }
     write_status(
         store,
         &job.job_id,
         &format!("RUNNING {}", isoformat_utc(Utc::now())),
     )
     .await?;
-    job.state = job_state::RUNNING.to_string();
-    job.started_at = Some(isoformat_utc(Utc::now()));
-    job.instance_ref = Some(format!("local@{hostname}"));
-    store.move_job(&job, "queue", "running").await?;
-    let log_file = std::fs::File::create(format!("{work_dir}/output/command_output.log"))?;
     let full_command = build_job_command(&job);
-    // WISENT_FLEET_STAGING_DIR points at a persistent agent-owned staging
-    // dir. wisent's upload_extracted_activations writes shards there and
-    // SKIPS the per-job flush. The agent flushes the whole dir periodically
-    // across ALL jobs as one HF commit — reduces 429 risk drastically.
-    let fleet_staging = std::env::var("WISENT_FLEET_STAGING_DIR").unwrap_or_else(|_| {
-        let tmpdir = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
-        Path::new(&tmpdir)
-            .join("wisent_fleet_staging")
-            .to_string_lossy()
-            .into_owned()
-    });
-    std::fs::create_dir_all(&fleet_staging)?;
     let mut command = tokio::process::Command::new("/bin/sh");
     inherit_safe_agent_environment(&mut command);
     command
         .arg("-c")
         .arg(&full_command)
         .current_dir(&work_dir)
-        .env("WISENT_DTYPE", "auto")
-        .env("PYTHONUNBUFFERED", "1")
-        .env("HF_HUB_DISABLE_XET", "1")
-        .env("WISENT_FLEET_STAGING_DIR", &fleet_staging)
         .env("WC_JOB_ID", &job.job_id)
         .env("WC_ARTIFACT_INPUTS_JSON", &artifact_inputs_json)
         .env("WC_ARTIFACT_INPUTS_FILE", &artifact_inputs_file)
         .envs(secret_environment)
-        .stdout(std::process::Stdio::from(log_file.try_clone()?))
+        .stdout(std::process::Stdio::from(stdout_file))
         // subprocess.STDOUT parity: stderr lands in the same log file.
-        .stderr(std::process::Stdio::from(log_file.try_clone()?))
+        .stderr(std::process::Stdio::from(stderr_file))
         // Own session/process group so a cooperative yield (request_yield)
         // can signal the WHOLE job tree via the group, and SIGKILL it
         // cleanly if the grace is blown — without that, killing only the
@@ -839,7 +855,17 @@ pub async fn start_slot(
         // The existing Vast SIGSTOP/SIGCONT still target the root pid
         // directly, so their behavior is unchanged.
         .process_group(0);
-    let child = command.spawn()?;
+    let child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            job.state = job_state::FAILED.to_string();
+            job.failed_at = Some(isoformat_utc(Utc::now()));
+            job.error = Some(format!("workload process failed to spawn: {error}"));
+            store.move_job(&job, "running", "failed").await?;
+            log_fn(&format!("refuse {}: {error}", job.job_id));
+            return Err(error.into());
+        }
+    };
     let pid = child.id().expect("freshly spawned child has a pid") as i32;
     log_fn(&format!(
         "Started job {}: {}",
@@ -915,9 +941,9 @@ pub async fn request_yield(
             .max(1);
         let secret_environment = match resolve_job_secret_environment(&job).await {
             Ok(environment) => environment,
-            Err(error) => {
+            Err(_) => {
                 log_fn(&format!(
-                    "yield: workload secret resolution failed for {}: {error}",
+                    "yield: workload secret resolution failed for {}",
                     job.job_id
                 ));
                 BTreeMap::new()
@@ -941,9 +967,8 @@ pub async fn request_yield(
                 let rc = python_returncode(out.status);
                 if rc != 0 {
                     log_fn(&format!(
-                        "yield: on-yield hook {} rc={rc}: {}",
-                        job.job_id,
-                        captured_head(&out.stderr, &out.stdout, 200)
+                        "yield: on-yield hook {} failed with rc={rc}",
+                        job.job_id
                     ));
                 }
             }
@@ -992,7 +1017,7 @@ pub async fn request_yield(
     .await?;
     let output_dir = format!("/tmp/wc-{}/output", job.job_id);
     if Path::new(&output_dir).exists() {
-        if let Err(exc) = upload_output(store, &job.job_id, Path::new(&output_dir)).await {
+        if let Err(exc) = upload_output(store, &job, Path::new(&output_dir)).await {
             log_fn(&format!(
                 "yield: output upload {} failed (non-fatal): {exc}",
                 job.job_id
@@ -1007,6 +1032,32 @@ pub async fn request_yield(
         job.job_id, job.yield_count
     ));
     Ok(true)
+}
+
+async fn terminate_cancelled_slot(
+    slot: &mut ActiveSlot,
+    log_fn: &mut dyn FnMut(&str),
+) -> std::io::Result<()> {
+    let pgid = slot.pid();
+    let _ = nix::sys::signal::killpg(Pid::from_raw(pgid), Signal::SIGTERM);
+    match tokio::time::timeout(
+        Duration::from_secs(crate::constants::POLL_INTERVAL_S),
+        slot.child.wait(),
+    )
+    .await
+    {
+        Ok(result) => {
+            result?;
+        }
+        Err(_) => {
+            log_fn(&format!(
+                "cancelled job process group {pgid} ignored SIGTERM; sending SIGKILL"
+            ));
+            let _ = nix::sys::signal::killpg(Pid::from_raw(pgid), Signal::SIGKILL);
+            slot.child.wait().await?;
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1026,10 +1077,18 @@ pub async fn advance_slot(
     let job_id = slot.slot.job.job_id.clone();
     for terminal_prefix in ["uploaded", "completed", "cancelled"] {
         if store.read_job(terminal_prefix, &job_id).await?.is_some() {
-            // proc.terminate(): SIGTERM to the root shell pid only (NOT the
-            // process group — matches Python exactly).
-            let _ = nix::sys::signal::kill(Pid::from_raw(pid), Signal::SIGTERM);
+            terminate_cancelled_slot(&mut slot, log_fn).await?;
             slot.close_log();
+            let output_dir = format!("/tmp/wc-{job_id}/output");
+            if Path::new(&output_dir).exists() {
+                if let Err(error) =
+                    upload_output(store, &slot.slot.job, Path::new(&output_dir)).await
+                {
+                    log_fn(&format!(
+                        "cancelled job artifact upload failed for {job_id}: {error}"
+                    ));
+                }
+            }
             let _ = store.delete_job("running", &job_id).await;
             log_fn(&format!(
                 "drop duplicate running {job_id}: already in {terminal_prefix}/"
@@ -1064,7 +1123,9 @@ pub async fn advance_slot(
             let log_path = format!("/tmp/wc-{job_id}/output/command_output.log");
             if Path::new(&log_path).exists() {
                 let upload = async {
-                    let bytes = tokio::fs::read(&log_path).await?;
+                    let mut bytes = tokio::fs::read(&log_path).await?;
+                    let secrets = output_redactions(&slot.slot.job).await?;
+                    redact_secret_bytes(&mut bytes, &secrets);
                     store
                         .upload_bytes(
                             &format!("status/{job_id}/output/command_output.log"),
@@ -1093,7 +1154,7 @@ pub async fn advance_slot(
     };
 
     let mut ret = python_returncode(exit_status);
-    let mut verify_err = String::new();
+    let mut verification_failed = false;
     let verify_cmd = verify_command(&slot.slot.job);
     if ret == 0 && !verify_cmd.is_empty() {
         // Verification hook — see Job.verify_command docstring. Runs in
@@ -1103,11 +1164,11 @@ pub async fn advance_slot(
         // a wall-clock cap.
         let secret_environment = match resolve_job_secret_environment(&slot.slot.job).await {
             Ok(environment) => environment,
-            Err(error) => {
+            Err(_) => {
                 ret = i32::MAX;
-                verify_err = format!("verify_command secret resolution failed: {error}");
+                verification_failed = true;
                 log_fn(&format!(
-                    "verify_command secret resolution failed for {job_id}: {error}"
+                    "verify_command secret resolution failed for {job_id}"
                 ));
                 BTreeMap::new()
             }
@@ -1126,17 +1187,14 @@ pub async fn advance_slot(
                 let vrc = python_returncode(out.status);
                 if vrc != 0 {
                     ret = 1000 + vrc;
-                    verify_err = captured_head(&out.stderr, &out.stdout, 500);
-                    log_fn(&format!(
-                        "verify_command failed for {job_id}: rc={vrc} err={}",
-                        head_chars(&verify_err, 120)
-                    ));
+                    verification_failed = true;
+                    log_fn(&format!("verify_command failed for {job_id}: rc={vrc}"));
                 }
             }
-            Err(exc) => {
+            Err(_) => {
                 ret = 1999;
-                verify_err = format!("verify_command raised: {exc}");
-                log_fn(&format!("verify_command exception for {job_id}: {exc}"));
+                verification_failed = true;
+                log_fn(&format!("verify_command failed to start for {job_id}"));
             }
         }
     }
@@ -1153,7 +1211,6 @@ pub async fn advance_slot(
     } else {
         format!("FAILED exit={ret}")
     };
-    write_status(store, &job_id, &status).await?;
     let mut job = slot.slot.job.clone();
     job.state = if ret == 0 {
         job_state::COMPLETED.to_string()
@@ -1161,25 +1218,20 @@ pub async fn advance_slot(
         job_state::FAILED.to_string()
     };
     let output_dir = format!("/tmp/wc-{job_id}/output");
-    let log_path = format!("{output_dir}/command_output.log");
     let ts = isoformat_utc(Utc::now());
     if ret == 0 {
         job.completed_at = Some(ts);
     } else {
         job.failed_at = Some(ts);
-        let tail = tail_log(Path::new(&log_path), 4096);
-        job.error = Some(if !verify_err.is_empty() {
-            verify_err
-        } else if !tail.is_empty() {
-            tail
+        job.error = Some(if !verification_failed {
+            "workload exited unsuccessfully; inspect the redacted command output".to_string()
         } else {
-            format!("exit={ret} (no stdout/stderr captured)")
+            "verification command failed; inspect the redacted command output".to_string()
         });
     }
-    // Durable state transition FIRST so a subsequent upload failure
-    // doesn't leave the slot orphaned in running/. upload_output
-    // raises on real backend errors; a missing output_dir is a normal
-    // happy-path case (job wrote nothing).
+    // Artifacts become durable before the terminal transition. A storage
+    // failure retains the running record so finalization can be retried;
+    // success and failure therefore expose the same result contract.
     job.peak_vram_gb = job.peak_vram_gb.max(slot.slot.peak_vram_gb);
     // Stamp the per-GPU-probe marker: this agent is 0.4.241+,
     // so smi_job_used_gb measured the MAX single-GPU footprint
@@ -1187,21 +1239,38 @@ pub async fn advance_slot(
     // trusts only flagged peaks, so legacy summed records can no
     // longer poison the model max().
     job.peak_vram_per_gpu = true;
-    if job.state == job_state::FAILED {
-        let error_text = job.error.clone().unwrap_or_default();
-        if sizing.escalate_on_oom(store, &mut job, &error_text).await? {
+    let classification_error = if job.state == job_state::FAILED {
+        redacted_tail(
+            &job,
+            &Path::new(&output_dir).join("command_output.log"),
+            "4096".parse().expect("static error-tail size"),
+        )
+        .await?
+    } else {
+        String::new()
+    };
+    if job.state == job_state::FAILED
+        && sizing
+            .escalate_on_oom(store, &mut job, &classification_error)
+            .await?
+    {
+        log_fn(&format!(
+            "Job {job_id} OOM-escalated to gpu_mem_gb={}; requeued",
+            job.gpu_mem_gb
+        ));
+        return Ok(SlotOutcome::Done);
+    }
+    if Path::new(&output_dir).exists() {
+        if let Err(error) = upload_output(store, &job, Path::new(&output_dir)).await {
             log_fn(&format!(
-                "Job {job_id} OOM-escalated to gpu_mem_gb={}; requeued",
-                job.gpu_mem_gb
+                "terminal artifact upload failed for {job_id}; retaining running state for retry: {error}"
             ));
-            return Ok(SlotOutcome::Done);
+            return Ok(SlotOutcome::Running(slot));
         }
     }
+    write_status(store, &job_id, &status).await?;
     let to_prefix = job.state.clone();
     store.move_job(&job, "running", &to_prefix).await?;
-    if Path::new(&output_dir).exists() {
-        upload_output(store, &job_id, Path::new(&output_dir)).await?;
-    }
     // Mirror to job.output_uri if set. Runs for both COMPLETED and
     // FAILED so debugging logs and partial artifacts also land at
     // the caller's project URI. Failure here is logged, not raised
@@ -1476,10 +1545,9 @@ mod tests {
         let failed = store.read_job("failed", &id).await.unwrap().unwrap();
         assert_eq!(failed.state, "failed");
         assert!(failed.failed_at.is_some());
-        // No stdout/stderr captured -> the exit-code fallback error text.
         assert_eq!(
             failed.error.as_deref(),
-            Some("exit=3 (no stdout/stderr captured)")
+            Some("workload exited unsuccessfully; inspect the redacted command output")
         );
         let status = store
             .download_text(&format!("status/{id}/status"))
@@ -1519,7 +1587,7 @@ mod tests {
         assert_eq!(failed.state, "failed");
         assert_eq!(
             failed.error.as_deref(),
-            Some("exit=1007 (no stdout/stderr captured)")
+            Some("verification command failed; inspect the redacted command output")
         );
         let status = store
             .download_text(&format!("status/{id}/status"))
