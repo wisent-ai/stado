@@ -65,9 +65,10 @@ enum Commands {
     Enroll {
         /// Machine name (a lowercase target identifier).
         name: String,
-        /// SSH destination of the machine (user@host).
+        /// SSH destination of the machine (user@host). Omit for the
+        /// self-install path (ssh=null, bootstrap runs on the machine).
         #[arg(long)]
-        ssh: String,
+        ssh: Option<String>,
         /// Target kind.
         #[arg(long, default_value = "local")]
         kind: String,
@@ -95,7 +96,7 @@ async fn main() -> ExitCode {
             kind,
             fleet,
             bootstrap,
-        } => ops::enroll(&name, &ssh, &kind, fleet.as_deref(), bootstrap).await,
+        } => ops::enroll(&name, ssh.as_deref(), &kind, fleet.as_deref(), bootstrap).await,
     };
     match result {
         Ok(clean) => {
