@@ -8,6 +8,7 @@
 
 mod doctor;
 mod fleet;
+mod ops;
 #[cfg(test)]
 mod tests;
 
@@ -44,6 +45,21 @@ enum Commands {
         /// Fleet name as declared in the registry `fleets` section.
         name: String,
     },
+    /// Declare a new fleet in the canonical registry.
+    Create {
+        /// Fleet name: a lowercase identifier.
+        name: String,
+        /// Free-form description of what this fleet is for.
+        #[arg(long, default_value = "")]
+        notes: String,
+    },
+    /// Add a registered machine to a declared fleet.
+    Assign {
+        /// Registry target name (the machine).
+        target: String,
+        /// Declared fleet name.
+        fleet: String,
+    },
 }
 
 #[tokio::main]
@@ -53,6 +69,8 @@ async fn main() -> ExitCode {
         Commands::Doctor { json, fleet } => doctor::run(json, fleet.as_deref()).await,
         Commands::List { json } => fleet::list(json).await,
         Commands::Status { name } => fleet::status(&name).await,
+        Commands::Create { name, notes } => ops::create(&name, &notes).await,
+        Commands::Assign { target, fleet } => ops::assign(&target, &fleet).await,
     };
     match result {
         Ok(clean) => {
