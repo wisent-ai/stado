@@ -24,6 +24,8 @@ use super::{
     VersionedText,
 };
 
+const LAYOUT_PATH: &str = "system/storage-layout.json";
+
 /// Job-level storage facade over a [`BlobBackend`]. Cheap to clone.
 #[derive(Clone)]
 pub struct JobStorage {
@@ -32,6 +34,28 @@ pub struct JobStorage {
     bucket_name: String,
 }
 
+fn validate_layout_document(raw: &str) -> Result<(), StorageError> {
+    let document: serde_json::Value = serde_json::from_str(raw)?;
+    let product = document.get("product").and_then(serde_json::Value::as_str);
+    let version = document
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64);
+    if product != Some("stado") {
+        return Err(StorageError::Other(
+            "storage layout marker belongs to another product".to_string(),
+        ));
+    }
+    if version != Some(u64::from(super::STORAGE_LAYOUT_VERSION)) {
+        return Err(StorageError::Other(format!(
+            "unsupported storage layout schema_version {}; expected {}",
+            version
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "missing".to_string()),
+            super::STORAGE_LAYOUT_VERSION
+        )));
+    }
+    Ok(())
+}
 impl JobStorage {
     /// Select the backend from `config::wc_storage_backend()`: "local" roots
     /// a [`LocalBackend`] at `config::wc_local_storage_path()`, "gcs"
@@ -88,9 +112,10 @@ impl JobStorage {
             },
         )
         .await?;
-        Self::with_backend_and_bucket(backend, variant.id, bucket)
-            .with_configured_read_failover()
-            .await
+
+        let storage = Self::with_backend_and_bucket(backend, variant.id, bucket);
+        storage.ensure_layout().await?;
+        storage.with_configured_read_failover().await
     }
 
     async fn with_configured_read_failover(mut self) -> Result<Self, StorageError> {
@@ -110,6 +135,33 @@ impl JobStorage {
             backup,
         ));
         Ok(self)
+    }
+
+    async fn ensure_layout(&self) -> Result<(), StorageError> {
+        if let Some(raw) = self.backend.download_text(LAYOUT_PATH).await? {
+            return validate_layout_document(&raw);
+        }
+        let body = serde_json::to_string(&serde_json::json!({
+            "product": "stado",
+            "schema_version": super::STORAGE_LAYOUT_VERSION,
+        }))?;
+        if self
+            .backend
+            .upload_text_if_absent(LAYOUT_PATH, &body)
+            .await?
+        {
+            return Ok(());
+        }
+        let raw = self
+            .backend
+            .download_text(LAYOUT_PATH)
+            .await?
+            .ok_or_else(|| {
+                StorageError::Other(
+                    "storage layout marker disappeared after concurrent creation".to_string(),
+                )
+            })?;
+        validate_layout_document(&raw)
     }
 
     /// Bind the facade to an explicit backend (tests, custom deployments).
@@ -266,6 +318,38 @@ impl JobStorage {
         }
         Ok(())
     }
+
+    /// Atomically claim a queued job by creating its `running/` record.
+    /// Exactly one agent can win the create-if-absent race. A concurrent
+    /// cancellation marker fences the winner before workload execution.
+    pub async fn claim_queued_job(&self, job: &Job) -> Result<bool, StorageError> {
+        let running_path = format!("running/{}.json", job.job_id);
+        if !self
+            .backend
+            .upload_text_if_absent(&running_path, &job.to_json())
+            .await?
+        {
+            return Ok(false);
+        }
+        self.backend
+            .set_metadata(&running_path, &Self::job_metadata(job))
+            .await?;
+
+        let cancellation = format!("cancellations/{}.json", job.job_id);
+        let cancelled = format!("cancelled/{}.json", job.job_id);
+        if self.backend.download_text(&cancellation).await?.is_some()
+            || self.backend.download_text(&cancelled).await?.is_some()
+        {
+            self.backend.delete(&running_path).await?;
+            return Ok(false);
+        }
+
+        self.backend
+            .delete(&format!("queue/{}.json", job.job_id))
+            .await?;
+        self.delete_priority_marker(&job.job_id).await?;
+        Ok(true)
+    }
     pub async fn refresh_job_metadata(&self, prefix: &str, job: &Job) -> Result<(), StorageError> {
         let blob_path = format!("{}/{}.json", prefix, job.job_id);
         self.backend
@@ -403,7 +487,14 @@ impl JobStorage {
     /// All jobs grouped by prefix. Python `JobStorage.list_all_jobs`.
     pub async fn list_all_jobs(&self) -> Result<BTreeMap<String, Vec<Job>>, StorageError> {
         let mut result = BTreeMap::new();
-        for prefix in ["queue", "running", "completed", "uploaded", "failed"] {
+        for prefix in [
+            "queue",
+            "running",
+            "completed",
+            "uploaded",
+            "failed",
+            "cancelled",
+        ] {
             result.insert(prefix.to_string(), self.list_jobs(prefix, 0).await?);
         }
         Ok(result)
