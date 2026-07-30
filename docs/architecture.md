@@ -31,50 +31,40 @@ Job state lives in the backend selected by `STADO_CONFIG`:
 
 | Prefix | Contents |
 |---|---|
-| `queue/<id>.json` | Pending jobs. The ledger. |
-| `running/<id>.json` | In-flight jobs with `instance_ref`, `started_at` set. |
-| `completed/<id>.json` | Finished successfully. `completed_at` set. |
-| `failed/<id>.json` | Finished with rc != 0. `failed_at`, `error` set. |
-| `status/<id>/status` | `RUNNING <ts>` / `COMPLETED` / `FAILED exit=N`. |
-| `status/<id>/heartbeat` | `RUNNING <ts>` refreshed by the running job. |
-| `status/<id>/output/...` | Canonical stdout, profiles, and job artifacts published by the trusted agent. |
-| `capacity/<consumer-id>.json` | Per-consumer broadcast: `free_vram_gb`, `total_vram_gb`, `free_slots`. |
-| `scripts/<id>.sh` | Per-job rendered startup script (legacy 1-VM-per-job path). |
-| `config/quotas.json` | Reservation overlay (subtracts from live API limits). |
-| `registry.json` | Live compute-target registry; agents re-fetch every poll. |
+| `queue/<id>.json` | Pending jobs and submission ledger. |
+| `running/<id>.json` | In-flight jobs with owner, instance reference, and start time. |
+| `completed/<id>.json` | Successful terminal jobs. |
+| `failed/<id>.json` | Unsuccessful terminal jobs with bounded error classification. |
+| `cancelled/<id>.json` | Durable operator cancellation record. |
+| `status/<id>/...` | Heartbeats, redacted output, result manifest, and artifact evidence. |
+| `leases/...` and `locks/...` | Conditional ownership, expiry, generation, and fencing state. |
+| `capacity/<consumer-id>.json` | Per-consumer resource broadcast. |
+| `control/...` | Pause, drain, migration, and coordinator control state. |
+| `config/quotas.json` | Provider-neutral reservation overlay. |
+| `registry.json` | Versioned compute-target and coordinator registry. |
+| `system/storage-layout.json` | Versioned storage-layout marker. |
 
-State transitions are atomic from the caller's POV:
-`write_job(new_prefix)` then `delete_blob(old_prefix)`.
+The queued-to-running claim is create-if-absent and therefore has one winner.
+Other prefix transitions write the new record before deleting the old one.
+Readers tolerate the resulting retry window and resolve terminal state first;
+writers are idempotent and fenced by the expected generation.
 
 ## Scheduling rules
 
-The scheduler (`stado/scheduler/scheduler.py`) sorts queued jobs
-by `(-priority, created_at)` and applies, in order:
+The Rust scheduler reads a bounded provider-neutral queue window, orders work by
+priority and creation time, and admits only targets whose declared
+capabilities, policy, deadline, resource envelope, and provider fence match.
+Capacity broadcasts prevent dispatch when an existing eligible consumer can
+accept the work. Cloud placement applies configured quota reservations, cost
+policy, zone candidates, spot/on-demand policy, and retry backoff before an
+owned provider mutation.
 
-1. **Per-tick listing cap** — `_dynamic_per_tick_cap(queue_depth) * 8`
-   blobs are pulled from GCS oldest-first. Beyond that wouldn't dispatch
-   anyway, and pulling a 28k+ queue every tick blew the function timeout.
-2. **Per-accelerator fairness** — `per_accel_share = ceil(per_tick_cap /
-   distinct_accels)` so a heterogeneous queue (T4 + A100-40 + A100-80)
-   makes concurrent progress instead of one accel hogging every tick.
-3. **Cost-optimal local pack** — a `(wall_seconds/3600) * $/hr / vram`
-   knapsack picks queued jobs to *yield* to a free local consumer
-   instead of paying for a fresh VM.
-4. **Spot with on-demand escape** — after `max_preempts_before_ondemand`
-   preemptions (default 3), the next attempt for that job dispatches
-   on-demand instead of Spot.
-5. **Per-machine-type zone rotation** — `MACHINE_TYPE_ZONES` in
-   `config.py` lets a SKU walk to alternate regions when its primary
-   zones are exhausted (e.g. `a2-ultragpu-1g` → us-east5, europe-west4
-   when us-central1 spot is dry).
-6. **Dispatch backoff** — failed `create_instance` calls escalate via
-   `DISPATCH_BACKOFF_MINUTES = [0, 1, 5, 15, 30, 60, 120, 240]`
-   minutes per attempt count.
-
-The local agent (`stado/providers/local_agent.py`) walks the
-queue FIFO and claims any job whose `gpu_mem_gb <= free_vram_gb` AND
-passes `_job_eligible` (gpu_type-compat or pinned-local). No slot count
-— pure VRAM admission.
+The local Rust agent publishes native capacity and scans for an eligible job.
+It claims through the atomic storage primitive before writing runtime state or
+starting a process. GPU admission uses free per-device VRAM plus any explicit
+slot cap; CPU-only work uses the declared RAM, disk, deadline, and exclusivity
+constraints. A paused queue prevents new claims while active slots continue to
+heartbeat, yield, complete, fail, or cancel.
 
 ## Cloud-agent VM lifecycle
 
@@ -112,8 +102,9 @@ a coordinator crash cannot silently duplicate a launch or strand collection.
 
 ## Consumer capacity broadcasts
 
-Every consumer (local agent + each cloud agent) writes
-`gs://$WC_BUCKET/capacity/<consumer-id>.json` every poll cycle:
+Every local or cloud agent writes
+`stado://capacity/<consumer-id>` through the configured canonical backend on
+each poll cycle:
 
 ```json
 {
