@@ -28,6 +28,10 @@ examples requirement). Each script runs end-to-end locally.
    onboard a device with `registry host add`, remove it via
    pull → edit → validate → push. Ends net-zero; verified on the real
    registry.
+6. [`fleet/onboard-host.sh`](fleet/onboard-host.sh) —
+   bring a device to reporting life: registry add, bootstrap, skarbiec
+   grants (`stado-local-agent`, `stado-host-health-beacon`), host recover,
+   beacon-age as proof.
 
 ## Template for a new example
 
