@@ -10,6 +10,20 @@ All writes go through the validated compare-and-swap registry path, the
 same one `stado registry push` uses, so a malformed change is refused
 before it lands.
 
+## Onboard a new machine
+
+One command takes a machine from "unknown to Stado" to registered, with
+the fleet assignment in the same step:
+
+```sh
+stado_fleet enroll render-node-a --ssh operator@render-node-a.local --fleet render-burst
+```
+
+Add `--bootstrap` to install the agent on the machine right after
+registering it (goes through `stado bootstrap`, Stado's own remote
+channel). The preflight runs before any write: an already-registered name
+or an undeclared fleet is refused with nothing changed.
+
 ## Declare a fleet
 
 ```sh
