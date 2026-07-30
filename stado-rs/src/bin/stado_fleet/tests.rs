@@ -158,7 +158,7 @@ mod ops {
     use serde_json::json;
 
     use crate::fleet::{find_fleet, parse_fleets};
-    use crate::ops::{assign_target, create_fleet, preflight_enroll};
+    use crate::ops::{assign_target, create_fleet, preflight_enroll, register_target};
 
     fn base() -> serde_json::Value {
         json!({
@@ -246,5 +246,29 @@ mod ops {
     #[test]
     fn enroll_preflight_accepts_new_machine_without_fleet() {
         preflight_enroll(&base(), "new-box", None).expect("preflight");
+    }
+
+    #[test]
+    fn register_target_adds_ssh_null_entry() {
+        let next = register_target(&base(), "new-box", "local").expect("register");
+        let targets = next
+            .get("targets")
+            .and_then(serde_json::Value::as_array)
+            .expect("targets");
+        let added = targets
+            .iter()
+            .find(|target| target.get("name").and_then(serde_json::Value::as_str) == Some("new-box"))
+            .expect("added target");
+        assert!(added.get("ssh").expect("ssh key").is_null());
+        assert_eq!(
+            added.get("kind").and_then(serde_json::Value::as_str),
+            Some("local")
+        );
+    }
+
+    #[test]
+    fn register_target_refuses_duplicate() {
+        let err = register_target(&base(), "mini", "local").unwrap_err();
+        assert!(err.contains("already registered"), "unexpected error: {err}");
     }
 }
