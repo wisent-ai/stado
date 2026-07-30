@@ -60,6 +60,24 @@ enum Commands {
         /// Declared fleet name.
         fleet: String,
     },
+    /// One-command onboarding: register a machine, optionally fleet it,
+    /// optionally install the agent.
+    Enroll {
+        /// Machine name (a lowercase target identifier).
+        name: String,
+        /// SSH destination of the machine (user@host).
+        #[arg(long)]
+        ssh: String,
+        /// Target kind.
+        #[arg(long, default_value = "local")]
+        kind: String,
+        /// Fleet to place the machine in right away.
+        #[arg(long)]
+        fleet: Option<String>,
+        /// Install the agent on the machine after registering it.
+        #[arg(long)]
+        bootstrap: bool,
+    },
 }
 
 #[tokio::main]
@@ -71,6 +89,13 @@ async fn main() -> ExitCode {
         Commands::Status { name } => fleet::status(&name).await,
         Commands::Create { name, notes } => ops::create(&name, &notes).await,
         Commands::Assign { target, fleet } => ops::assign(&target, &fleet).await,
+        Commands::Enroll {
+            name,
+            ssh,
+            kind,
+            fleet,
+            bootstrap,
+        } => ops::enroll(&name, &ssh, &kind, fleet.as_deref(), bootstrap).await,
     };
     match result {
         Ok(clean) => {
