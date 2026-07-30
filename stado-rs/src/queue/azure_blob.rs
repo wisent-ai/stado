@@ -1,39 +1,14 @@
-//! Azure Blob backend: hand-rolled Blob Storage REST (no Azure SDK crate).
+//! Azure Blob Storage backend using the provider REST API.
 //!
-//! Port of `stado/queue/azure_blob.py` (`AzureBlobBackend`). The Python code
-//! uses azure-storage-blob with DefaultAzureCredential; here every call is a
-//! direct REST request against `https://{account}.blob.core.windows.net`
-//! with a Bearer token from [`crate::azure_token`]: managed identity first,
-//! then the `stado-azure` service-principal item in Skarbiec.
+//! Authentication uses managed identity first and then the scoped
+//! `stado-azure` service-principal item in Skarbiec. Conditional creates and
+//! writes use `If-None-Match` and `If-Match`; lost races surface as
+//! [`StorageError::StorageConflict`]. Reads pin the observed ETag and retry a
+//! bounded concurrent-write race. Listing preserves opaque continuation
+//! markers and blob metadata.
 //!
-//! REST API version: `x-ms-version: 2023-11-03` (recent stable; the Python
-//! SDK negotiates its own version, so this pins an equivalent feature set —
-//! conditional headers, metadata include, marker pagination).
-//!
-//! Mapping notes:
-//! - if-absent = Put Blob with `If-None-Match: *`; HTTP 409 is the Python
-//!   `ResourceExistsError` -> `false`.
-//! - CAS = Put Blob with `If-Match: {etag}`; HTTP 412 is the Python
-//!   `ResourceModifiedError` -> [`StorageError::StorageConflict`]. The new
-//!   version is the response `ETag` header; Python raises RuntimeError when
-//!   it is absent.
-//! - Versioned read = HEAD (Get Blob Properties) then GET pinned with
-//!   `If-Match: {etag}` (Python `MatchConditions.IfNotModified`), 3
-//!   attempts. A 412 retries; on the final attempt Python re-raises
-//!   `ResourceModifiedError` — here that surfaces as a plain
-//!   [`StorageError::Other`] (NOT StorageConflict: a read race, not a lost
-//!   write), matching the Python exception NOT being a StorageConflict.
-//! - Version token: the blob ETag verbatim as Azure returns it in headers
-//!   (quoted, e.g. `"0x8DC..."` — Python `str(props.etag)` keeps the
-//!   quotes). Tokens are only ever compared against tokens from the same
-//!   backend, and CAS sends them back unmodified.
-//! - `exists` / `updated_at` swallow ALL errors like Python's bare
-//!   `except Exception` (exists -> false, updated_at -> None);
-//!   `set_metadata` logs and swallows like Python's `_log(...)` path.
-//!
-//! Deviation: the list-blobs XML (`EnumerationResults`) is parsed with a
-//! small hand-rolled extractor (no XML crate in the dependency set); it
-//! understands the fixed tag set of the List Blobs response.
+//! The REST API version is pinned so conditional headers, metadata, and
+//! pagination remain a release-visible contract.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -53,11 +28,6 @@ pub(crate) const X_MS_VERSION: &str = "2023-11-03";
 pub(crate) const STORAGE_SCOPE: &str = "https://storage.azure.com/.default";
 /// Resource for IMDS / az-CLI token requests (same audience).
 pub(crate) const STORAGE_RESOURCE: &str = "https://storage.azure.com";
-
-/// Python `_log`.
-fn log(msg: &str) {
-    eprintln!("[azure-blob] {msg}");
-}
 
 struct Inner {
     http: reqwest::Client,
@@ -582,14 +552,14 @@ impl BlobBackend for AzureBlobBackend {
     }
 
     async fn exists(&self, path: &str) -> Result<bool, StorageError> {
-        // Python `except Exception: return False` — ANY failure is "absent".
-        match self
+        let response = self
             .send(Method::HEAD, &self.blob_url(path), &[], None)
-            .await
-        {
-            Ok(response) => Ok(response.status().is_success()),
-            Err(_) => Ok(false),
+            .await?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(false);
         }
+        Self::ensure_success(response, &format!("HEAD {path}")).await?;
+        Ok(true)
     }
 
     async fn list_paths(
@@ -608,11 +578,7 @@ impl BlobBackend for AzureBlobBackend {
     }
 
     async fn updated_at(&self, path: &str) -> Result<Option<DateTime<Utc>>, StorageError> {
-        // Python `except Exception: return None` — ANY failure is None.
-        match self.head(path).await {
-            Ok(props) => Ok(props.and_then(|p| p.last_modified)),
-            Err(_) => Ok(None),
-        }
+        Ok(self.head(path).await?.and_then(|props| props.last_modified))
     }
 
     async fn set_metadata(
@@ -620,13 +586,10 @@ impl BlobBackend for AzureBlobBackend {
         path: &str,
         kv: &BTreeMap<String, String>,
     ) -> Result<(), StorageError> {
-        // Python: read current metadata (any failure -> start from empty),
-        // merge skipping empty values, PUT comp=metadata; any write failure
-        // is logged and SWALLOWED.
-        let mut merged: BTreeMap<String, String> = match self.head(path).await {
-            Ok(Some(props)) => props.metadata,
-            Ok(None) | Err(_) => BTreeMap::new(),
+        let Some(props) = self.head(path).await? else {
+            return Err(StorageError::NotFound(path.to_string()));
         };
+        let mut merged: BTreeMap<String, String> = props.metadata;
         merged.extend(
             kv.iter()
                 .filter(|(_, v)| !v.is_empty())
@@ -641,19 +604,9 @@ impl BlobBackend for AzureBlobBackend {
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
         let url = format!("{}?comp=metadata", self.blob_url(path));
-        let result = self.send(Method::PUT, &url, &header_refs, None).await;
-        match result {
-            Ok(response) if response.status().is_success() => Ok(()),
-            Ok(response) => {
-                let err = Self::api_error(response, &format!("set_metadata {path}")).await;
-                log(&format!("set_metadata({path}) failed: {err}"));
-                Ok(())
-            }
-            Err(err) => {
-                log(&format!("set_metadata({path}) failed: {err}"));
-                Ok(())
-            }
-        }
+        let response = self.send(Method::PUT, &url, &header_refs, None).await?;
+        Self::ensure_success(response, &format!("set_metadata {path}")).await?;
+        Ok(())
     }
 
     async fn list_blobs_with_meta(&self, prefix: &str) -> Result<Vec<BlobInfo>, StorageError> {
@@ -900,7 +853,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_is_idempotent_and_exists_swallows_failures() {
+    async fn delete_is_idempotent_and_exists_propagates_provider_failures() {
         let server = mock_http(vec![
             response_with(202, "Accepted", &[], ""),
             response_with(404, "Not Found", &[], ""),
@@ -915,7 +868,14 @@ mod tests {
         b.delete("gone").await.unwrap(); // 404 tolerated
         assert!(b.exists("present").await.unwrap());
         assert!(!b.exists("missing").await.unwrap());
-        assert!(!b.exists("server-on-fire").await.unwrap());
+        let error = b.exists("server-on-fire").await.unwrap_err();
+        assert!(
+            error.to_string().contains(&format!(
+                "HTTP {}",
+                StatusCode::INTERNAL_SERVER_ERROR.as_u16()
+            )),
+            "{error}"
+        );
         let reqs = requests(&server);
         assert!(reqs[0].starts_with("DELETE /cont/blob"), "{}", reqs[0]);
         assert!(reqs[2].starts_with("HEAD /cont/present"), "{}", reqs[2]);
@@ -923,7 +883,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn updated_at_parses_last_modified_and_swallows_errors() {
+    async fn updated_at_parses_last_modified_and_propagates_errors() {
         let server = mock_http(vec![
             response_with(
                 200,
@@ -944,8 +904,14 @@ mod tests {
             "2026-01-02T03:04:05+00:00"
         );
         assert_eq!(b.updated_at("gone").await.unwrap(), None);
-        // Python `except Exception: return None` covers non-404 failures too.
-        assert_eq!(b.updated_at("server-on-fire").await.unwrap(), None);
+        let error = b.updated_at("server-on-fire").await.unwrap_err();
+        assert!(
+            error.to_string().contains(&format!(
+                "HTTP {}",
+                StatusCode::INTERNAL_SERVER_ERROR.as_u16()
+            )),
+            "{error}"
+        );
         server.stop();
     }
 
@@ -1030,19 +996,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn set_metadata_failures_are_logged_and_swallowed() {
-        // HEAD fails (current metadata treated as empty), PUT fails — the
-        // Python path only logs, never raises.
-        let server = mock_http(vec![
-            response_with(404, "Not Found", &[], ""),
-            response_with(500, "Server Error", &[], "boom"),
+    async fn set_metadata_failures_propagate() {
+        let missing = mock_http(vec![response_with(
+            StatusCode::NOT_FOUND.as_u16(),
+            "Not Found",
+            &[],
+            "",
+        )])
+        .await;
+        let missing_backend = backend(&missing);
+        let error = missing_backend
+            .set_metadata("gone", &BTreeMap::from([("k".into(), "v".into())]))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, StorageError::NotFound(_)), "{error:?}");
+        missing.stop();
+
+        let provider_failure = mock_http(vec![
+            response_with(StatusCode::OK.as_u16(), "OK", &[("ETag", "\"0x8D1\"")], ""),
+            response_with(
+                StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+                "Server Error",
+                &[],
+                "boom",
+            ),
         ])
         .await;
-        let b = backend(&server);
-        b.set_metadata("gone", &BTreeMap::from([("k".into(), "v".into())]))
+        let provider_backend = backend(&provider_failure);
+        let error = provider_backend
+            .set_metadata("present", &BTreeMap::from([("k".into(), "v".into())]))
             .await
-            .unwrap();
-        server.stop();
+            .unwrap_err();
+        assert!(
+            error.to_string().contains(&format!(
+                "HTTP {}",
+                StatusCode::INTERNAL_SERVER_ERROR.as_u16()
+            )),
+            "{error}"
+        );
+        provider_failure.stop();
     }
 
     #[tokio::test]

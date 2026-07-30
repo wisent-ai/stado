@@ -51,6 +51,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
+/// Canonical queue/storage layout contract recorded in release manifests.
+pub const STORAGE_LAYOUT_VERSION: u16 = true as u16;
 pub use azure_blob::AzureBlobBackend;
 pub use gcs::GcsBackend;
 pub use local_file::LocalBackend;
@@ -89,9 +91,8 @@ pub(crate) async fn construct_backend(
     }
 }
 
-/// Text blob content together with the opaque backend version token used
-/// for compare-and-swap: the GCS generation, or the local SHA-256 hex of
-/// the content. Python `queue/storage.py::VersionedText`.
+/// Text blob content with its opaque backend version token for
+/// compare-and-swap.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VersionedText {
     pub content: String,
@@ -99,11 +100,7 @@ pub struct VersionedText {
 }
 
 /// Backend-agnostic blob descriptor used to filter on metadata before
-/// downloading the full body. Python `queue/azure_blob.py::BlobInfo`.
-///
-/// Unlike the Python dataclass this carries NO bound `download_text` /
-/// `delete` closures — Rust consumers hold the `Arc<dyn BlobBackend>`
-/// alongside the descriptor and call the backend directly.
+/// downloading a body. Callers retain the backend separately.
 #[derive(Debug, Clone)]
 pub struct BlobInfo {
     pub name: String,
@@ -112,21 +109,18 @@ pub struct BlobInfo {
     pub metadata: BTreeMap<String, String>,
 }
 
-/// Storage-layer error. Python raises `StorageConflict` (a `RuntimeError`
-/// subclass) for lost conditional-write races, `FileNotFoundError` for a
-/// CAS against a missing local blob, `ValueError` for a local path escape,
-/// and lets SDK/IO exceptions propagate otherwise.
+/// Storage-layer failures distinguish lost conditional-write races, missing
+/// objects, invalid local paths, authentication, provider API, transport, and
+/// serialization failures.
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
-    /// A conditional write lost a race with another writer (GCS HTTP 412,
-    /// or a local SHA-256 version mismatch). Python `StorageConflict`.
+    /// A conditional write lost a race with another writer.
     #[error("{0}")]
     StorageConflict(String),
-    /// A conditional operation required a blob that does not exist
-    /// (Python `FileNotFoundError` from the local CAS path).
+    /// A conditional operation required a blob that does not exist.
     #[error("blob not found: {0}")]
     NotFound(String),
-    /// Local backend path escapes the deployment root (Python `ValueError`).
+    /// A local backend path escaped the deployment root.
     #[error("storage path escapes deployment root: {0}")]
     PathEscape(String),
     /// GCS JSON API returned a non-success status other than 404/412.
@@ -145,12 +139,9 @@ pub enum StorageError {
     Other(String),
 }
 
-/// The 14-method blob backend contract shared by the local and GCS
-/// backends (Python: the implicit protocol between `AzureBlobBackend`,
-/// `LocalFileBackend` and the inline GCS path in `storage.py`).
-///
-/// `path` is always a bucket-relative blob name using `/` separators
-/// (e.g. `queue/<job_id>.json`).
+/// Backend-neutral blob contract shared by local filesystem, GCS, S3, and
+/// Azure Blob Storage. `path` is always a backend-root-relative name using
+/// `/` separators.
 #[async_trait]
 pub trait BlobBackend: Send + Sync {
     /// Unconditional overwrite of a text blob.

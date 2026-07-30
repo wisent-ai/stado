@@ -157,7 +157,18 @@ pub async fn run(
         });
         println!("[vast] auto-list thread started (price-gpu=${vast_price_gpu}/h)");
     }
-    local_agent::run_agent(&gpu_type, idle_shutdown, &kind)
-        .await
-        .map_err(|e| CmdError::click(e.to_string()))
+    loop {
+        match local_agent::run_agent(&gpu_type, idle_shutdown, &kind).await {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                local_agent::agent_log(&format!(
+                    "agent loop failed: {error}; restarting after bounded delay"
+                ));
+                tokio::time::sleep(std::time::Duration::from_secs(
+                    crate::constants::POLL_INTERVAL_S,
+                ))
+                .await;
+            }
+        }
+    }
 }
