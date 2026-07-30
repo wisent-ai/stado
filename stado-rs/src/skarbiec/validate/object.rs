@@ -45,19 +45,31 @@ pub async fn validate_object_verifier() -> Result<usize, SkarbiecError> {
     }
 
     let mut token_owners = HashMap::<Vec<u8>, &str>::new();
-    for (namespace, policy) in namespaces {
-        let token = client
-            .read_string(policy.item(), "token")
-            .await?
+    // Reads share one client concurrently: the Skarbiec listener is
+    // thread-per-connection, so serial per-item reads would multiply the
+    // vault's gpg latency by the namespace count for no benefit.
+    let reads: Vec<(&str, Result<Option<String>, SkarbiecError>)> =
+        futures::future::join_all(namespaces.iter().map(|(namespace, policy)| {
+            let client = &client;
+            async move {
+                (
+                    namespace.as_str(),
+                    client.read_string(policy.item(), "token").await,
+                )
+            }
+        }))
+        .await;
+    for (namespace, result) in reads {
+        let token = result?
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| {
                 SkarbiecError::Deployment(format!(
                     "Skarbiec item {}/token is missing or empty for namespace {namespace}",
-                    policy.item()
+                    namespaces[namespace].item()
                 ))
             })?;
         let digest = Sha256::digest(token.as_bytes()).to_vec();
-        if let Some(other) = token_owners.insert(digest, namespace.as_str()) {
+        if let Some(other) = token_owners.insert(digest, namespace) {
             return Err(SkarbiecError::Deployment(format!(
                 "object bearer values for namespaces {other} and {namespace} must be distinct"
             )));
