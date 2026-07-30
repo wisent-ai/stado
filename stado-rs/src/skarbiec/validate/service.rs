@@ -1,0 +1,153 @@
+//! Validate exact push-client visibility and reject any reused client bearer,
+//! and validate the complete managed-service authorization boundary: the
+//! verifier sees exactly the mapped deployer items, each token is non-empty,
+//! and no service bearer collides with another service, object, or release
+//! bearer.
+
+use std::collections::{BTreeSet, HashMap};
+
+use sha2::{Digest, Sha256};
+
+use super::super::{Client, SkarbiecError};
+
+pub async fn validate_backend_push_verifier() -> Result<usize, SkarbiecError> {
+    let clients = crate::config::backend_push_clients().map_err(|problems| {
+        SkarbiecError::Deployment(format!(
+            "invalid backend.push_clients: {}",
+            problems.join("; ")
+        ))
+    })?;
+    let client = Client::backend_push_verifier()?;
+    let expected = clients
+        .values()
+        .map(|policy| policy.item().to_string())
+        .collect::<BTreeSet<_>>();
+    let visible = client
+        .list_items()
+        .await?
+        .into_iter()
+        .filter(|item| item.deleted != Some(true))
+        .map(|item| item.id)
+        .collect::<BTreeSet<_>>();
+    if visible != expected {
+        let missing = expected
+            .difference(&visible)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(",");
+        let unexpected = visible
+            .difference(&expected)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(",");
+        return Err(SkarbiecError::Deployment(format!(
+            "backend push verifier grant item set mismatch (missing=[{missing}], unexpected=[{unexpected}])"
+        )));
+    }
+    let mut token_owners = HashMap::<Vec<u8>, String>::new();
+    for (name, policy) in clients {
+        let token = client
+            .read_string(policy.item(), "token")
+            .await?
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                SkarbiecError::Deployment(format!(
+                    "Skarbiec item {}/token is missing or empty for backend push client {name}",
+                    policy.item()
+                ))
+            })?;
+        let digest = Sha256::digest(token.as_bytes()).to_vec();
+        if let Some(other) = token_owners.insert(digest, format!("backend push client {name}")) {
+            return Err(SkarbiecError::Deployment(format!(
+                "bearer values for {other} and backend push client {name} must be distinct"
+            )));
+        }
+    }
+    Ok(clients.len())
+}
+
+pub async fn validate_service_verifier() -> Result<usize, SkarbiecError> {
+    let deployers = crate::config::service_api_deployers().map_err(|problems| {
+        SkarbiecError::Deployment(format!(
+            "invalid service_api.deployers: {}",
+            problems.join("; ")
+        ))
+    })?;
+    let client = Client::service_verifier()?;
+    let expected = deployers
+        .values()
+        .map(|policy| policy.item().to_string())
+        .collect::<BTreeSet<_>>();
+    let visible = client
+        .list_items()
+        .await?
+        .into_iter()
+        .filter(|item| item.deleted != Some(true))
+        .map(|item| item.id)
+        .collect::<BTreeSet<_>>();
+    if visible != expected {
+        let missing = expected
+            .difference(&visible)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(",");
+        let unexpected = visible
+            .difference(&expected)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(",");
+        return Err(SkarbiecError::Deployment(format!(
+            "service verifier grant item set mismatch (missing=[{missing}], unexpected=[{unexpected}])"
+        )));
+    }
+    let mut token_owners = HashMap::<Vec<u8>, String>::new();
+    let object_client = Client::object_verifier()?;
+    let namespaces = crate::config::object_api_namespaces().map_err(|problems| {
+        SkarbiecError::Deployment(format!(
+            "invalid object_api.namespaces while validating service bearers: {}",
+            problems.join("; ")
+        ))
+    })?;
+    for (namespace, policy) in namespaces {
+        if let Some(token) = object_client.read_string(policy.item(), "token").await? {
+            token_owners.insert(
+                Sha256::digest(token.as_bytes()).to_vec(),
+                format!("object namespace {namespace}"),
+            );
+        }
+    }
+    let release_client = Client::release_verifier()?;
+    let publishers = crate::config::release_api_publishers().map_err(|problems| {
+        SkarbiecError::Deployment(format!(
+            "invalid release_api.publishers while validating service bearers: {}",
+            problems.join("; ")
+        ))
+    })?;
+    for (product, policy) in publishers {
+        if let Some(token) = release_client.read_string(policy.item(), "token").await? {
+            token_owners.insert(
+                Sha256::digest(token.as_bytes()).to_vec(),
+                format!("release publisher {product}"),
+            );
+        }
+    }
+    for (product, policy) in deployers {
+        let token = client
+            .read_string(policy.item(), "token")
+            .await?
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                SkarbiecError::Deployment(format!(
+                    "Skarbiec item {}/token is missing or empty for service deployer {product}",
+                    policy.item()
+                ))
+            })?;
+        let digest = Sha256::digest(token.as_bytes()).to_vec();
+        if let Some(other) = token_owners.insert(digest, format!("service deployer {product}")) {
+            return Err(SkarbiecError::Deployment(format!(
+                "bearer values for {other} and service deployer {product} must be distinct"
+            )));
+        }
+    }
+    Ok(deployers.len())
+}
