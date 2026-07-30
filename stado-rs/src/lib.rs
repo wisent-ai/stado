@@ -17,6 +17,7 @@ pub mod constants;
 pub mod control_plane;
 pub mod coordinator;
 pub mod coverage;
+pub mod credential_store;
 pub mod dashboard;
 pub mod deploy;
 pub mod doctor;

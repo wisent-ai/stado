@@ -1,29 +1,13 @@
-//! Local-agent infrastructure: GPU/VRAM detection and per-slot measurement,
-//! job eligibility, disk admission gates, staging redirection, GCE/Azure
-//! self-awareness, PyPI version-drift detection, HF rate-limit token buckets,
-//! the asynchronous fleet-staging flush, the per-slot lifecycle, and the
-//! agent main loop.
+//! Local compute runtime: native GPU/VRAM detection, per-process measurement,
+//! atomic queue claims, fenced slot lifecycle, disk admission and cleanup,
+//! provider-owned machine termination, immutable release replacement, and the
+//! resilient agent loop.
 //!
-//! Port of `stado/providers/local/` + `stado/providers/local_agent.py`:
-//!   helpers/__init__.py  -> [`helpers`]   (detection, eligibility, RAM gates)
-//!   helpers/gpu_probe.py -> [`gpu_probe`] (per-job GPU-memory attribution)
-//!   disk/gate.py         -> [`disk_gate`] (admission-only disk diagnostics)
-//!   disk/cleanup.py      -> [`disk_cleanup`] (registry-authorized janitor)
-//!   disk/staging.py      -> [`disk_staging`] (tmpfs /tmp TMPDIR redirect)
-//!   gcp_self.py          -> [`gcp_self`]  (retired guest-side GCE adapter)
-//!   (no Python source)   -> [`azure_self`] (retired guest-side Azure adapter)
-//!   version_check.py     -> [`version_check`] (PyPI drift; see deviations)
-//!   hf_rate.py           -> [`hf_rate`]   (GCS-backed HF token buckets)
-//!   fleet_flush.py       -> [`fleet_flush`] (rotation + detached flush spawn)
-//!   local/slots.py       -> [`slots`]     (per-slot lifecycle)
-//!   local_agent.py       -> [`agent`]     (run_agent main loop; see its
-//!                           module docs for the deviations)
-//!
-//! `build_job_command` / `verify_command` / `repo_prelude` from
-//! `providers/local/helpers/execution.py` were already ported alongside the
-//! box dispatch runtime in `scheduler::dispatch::box::output` (see its module
-//! docs); they are re-exported here so local-agent consumers have a single
-//! import site without moving the code the box runtime depends on.
+//! The base runtime is framework-neutral. Optional Hugging Face rate limiting
+//! and staging flush live in separate modules and activate only through their
+//! explicit configuration. Shared command construction remains in
+//! `scheduler::dispatch::box::output` and is re-exported here for the local
+//! executor.
 
 pub mod agent;
 pub mod azure_self;
@@ -41,18 +25,6 @@ pub mod version_check;
 pub use crate::scheduler::dispatch::r#box::output::{build_job_command, verify_command};
 
 use crate::models::Job;
-
-/// Python interpreter for subprocess probes/flushes (`import wisent` smoke
-/// test, CUDA probe, fleet flush). Python's agent used `sys.executable` (the
-/// venv interpreter); the Rust binary reads `$WC_PYTHON` first so launchd /
-/// systemd units can point at the job environment's interpreter, and falls
-/// back to `python3` on PATH.
-pub fn python_bin() -> String {
-    std::env::var("WC_PYTHON")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| "python3".to_string())
-}
 
 /// A running local-agent slot — the keys of Python local_agent's slot dict
 /// that the helpers read (`job`, `proc.pid`, `peak_vram_gb`). The full
