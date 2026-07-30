@@ -25,6 +25,31 @@ use serde_json::Value;
 use crate::skarbiec::{Client, SkarbiecError};
 
 const ENV_STORE: &str = "STADO_CREDENTIAL_STORE";
+const CONFIG_KEY: &str = "credential_store";
+
+/// The store is declared in the stado config file (`credential_store` key);
+/// `STADO_CREDENTIAL_STORE` exists only as an explicit per-process override.
+/// Nothing about a backend may live solely in the environment.
+fn declared() -> String {
+    if let Ok(raw) = std::env::var(ENV_STORE) {
+        let raw = raw.trim();
+        if !raw.is_empty() {
+            return raw.to_string();
+        }
+    }
+    let config_path = std::env::var("STADO_CONFIG")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            std::env::var("HOME")
+                .map(|home| PathBuf::from(home).join(".config/stado/config.json"))
+                .unwrap_or_default()
+        });
+    std::fs::read_to_string(config_path)
+        .ok()
+        .and_then(|body| serde_json::from_str::<Value>(&body).ok())
+        .and_then(|doc| doc.get(CONFIG_KEY).and_then(Value::as_str).map(str::to_string))
+        .unwrap_or_default()
+}
 
 #[cfg(test)]
 mod tests;
@@ -49,7 +74,7 @@ fn unsupported(scheme: &str) -> SkarbiecError {
 }
 
 fn selected() -> Result<Backend, SkarbiecError> {
-    let raw = std::env::var(ENV_STORE).unwrap_or_default();
+    let raw = declared();
     let raw = raw.trim();
     if raw.is_empty() || raw == "skarbiec" {
         return Ok(Backend::Skarbiec { url: None });
