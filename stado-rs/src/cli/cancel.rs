@@ -1,25 +1,15 @@
-//! `stado cancel JOB_ID [--terminate]` — port of the `cancel` command in
-//! `stado/cli.py`, plus the flag that closes the billing gap.
+//! `stado cancel JOB_ID [--terminate]` performs one durable, idempotent
+//! cancellation transition. Every accepted cancellation writes the marker
+//! consumed by agents/coordinators and moves the job to `cancelled/`; a
+//! cancelled job is never deleted or mislabeled as failed.
 //!
-//! Queue-path semantics are exactly cli.py's: a queued job is DELETED from
-//! `queue/`; a running job with an instance_ref is moved `running/` ->
-//! `failed/` with state=failed, error="cancelled" after the provider
-//! terminates its instance. There is no `cancelled/`-prefix transition in
-//! cli.py (v0.4.391) — the cancelled state exists in the model and in
-//! runs' TERMINAL_PREFIXES but nothing in the cancel command writes it.
-//!
-//! `--terminate` has NO Python original. cli.py only ever reads the job
-//! document's `instance_ref`, so the two cases where a VM exists but the
-//! document does not name it — a dispatch that created the instance and
-//! died before stamping the job, and a job already rewritten by a partial
-//! cancel — leave a machine running that nothing reclaims. The flag
-//! resolves the reference through [`recorded_instance`], which also reads
-//! `provider-leases/<job_id>.json`, deletes the instance through
-//! [`crate::providers::get_provider`], and refuses to exit zero when it
-//! could not find anything to delete for a job that is supposed to have
-//! one. Without the flag every call is byte-for-byte what it was.
+//! A recorded cloud instance is deleted before the state transition on every
+//! path so cancellation cannot knowingly leave paid capacity behind.
+//! `--terminate` additionally reports the instance lookup and fails loudly
+//! when a running job has no recoverable instance record.
 
-use crate::machine::{recorded_instance, LOCAL_INSTANCE_PREFIX};
+use crate::machine::{canonical_json, recorded_instance, utcnow};
+use crate::models::job_state;
 use crate::queue::submit::default_store;
 use crate::queue::JobStorage;
 
@@ -45,28 +35,22 @@ enum Termination {
 pub async fn run(job_id: &str, terminate: bool) -> Result<(), CmdError> {
     let store = default_store(crate::config::bucket()).await?;
 
-    // Terminate BEFORE the state transition. The transition rewrites the
-    // blobs the reference lives in, and stopping the meter is the half that
-    // must survive a crash in the middle.
-    let terminated = if terminate {
-        let outcome = terminate_instance(&store, job_id).await?;
-        report(&outcome, job_id);
-        Some(outcome)
-    } else {
-        None
-    };
-
-    cancel_in_store(&store, job_id, terminated.as_ref()).await?;
-
-    match terminated {
-        Some(Termination::NoRecord { expected: false }) => Err(CmdError::click(format!(
-            "--terminate found nothing to delete for {job_id}: it is in running/ but neither \
-             the job document nor provider-leases/{job_id}.json records an instance \
-             reference. The job was cancelled; if a VM is still up, no queue state points \
-             at it and it will keep billing — check the provider console."
-        ))),
-        _ => Ok(()),
+    // Stop any recorded paid capacity before publishing the terminal state.
+    // The provider deletion contract is idempotent.
+    let terminated = terminate_instance(&store, job_id).await?;
+    if terminate {
+        report(&terminated, job_id);
     }
+    cancel_in_store(&store, job_id).await?;
+
+    if terminate && matches!(terminated, Termination::NoRecord { expected: false }) {
+        return Err(CmdError::click(format!(
+            "--terminate found nothing to delete for {job_id}: it was running but neither \
+             the job document nor provider lease records an instance. The durable cancellation \
+             remains visible; inspect the provider inventory for orphaned capacity."
+        )));
+    }
+    Ok(())
 }
 
 /// Resolve the job's provider instance and delete it.
@@ -127,51 +111,47 @@ fn report(outcome: &Termination, job_id: &str) {
     }
 }
 
-/// The cli.py cancel path. With `terminated` as `None` — every call without
-/// `--terminate` — this is byte-for-byte the command as it shipped.
-async fn cancel_in_store(
-    store: &JobStorage,
-    job_id: &str,
-    terminated: Option<&Termination>,
-) -> Result<(), CmdError> {
-    if store.read_job("queue", job_id).await?.is_some() {
-        store.delete_job("queue", job_id).await?;
-        println!("Removed {job_id} from queue");
-        return Ok(());
-    }
-    let job = store.read_job("running", job_id).await?;
-    if let Some(mut job) = job {
-        // cli.py performs the transition only inside `if instance_ref`, so
-        // a running job whose reference only ever reached the provider
-        // lease falls through to "not found" and stays in running/ for
-        // good. Under --terminate the reference has already been resolved
-        // and the instance dealt with, so the move no longer hangs off the
-        // document field — and the command stops reporting "not found" for
-        // a job it just terminated.
-        if job.instance_ref.is_some() || terminated.is_some() {
-            if let Some(instance_ref) = job.instance_ref.as_deref() {
-                // --terminate already deleted it; the provider contract
-                // makes a second delete a no-op, but re-issuing it risks
-                // failing the cancel on a transient error after the VM is
-                // already gone.
-                let already_gone = matches!(terminated, Some(Termination::Deleted { .. }));
-                if !already_gone && !instance_ref.starts_with(LOCAL_INSTANCE_PREFIX) {
-                    let provider = crate::providers::get_provider(&job.provider)
-                        .map_err(|exc| CmdError::click(exc.to_string()))?;
-                    provider
-                        .delete_instance(instance_ref)
-                        .await
-                        .map_err(|exc| CmdError::click(format!("cancel failed: {exc}")))?;
-                }
-            }
-            job.state = "failed".into();
-            job.error = Some("cancelled".into());
-            job.instance_ref = None;
-            store.move_job(&job, "running", "failed").await?;
-            println!("Cancelled {job_id} (marked failed)");
+/// Publish one durable terminal transition. The marker is create-if-absent,
+/// and terminal jobs make retries idempotent.
+async fn cancel_in_store(store: &JobStorage, job_id: &str) -> Result<(), CmdError> {
+    for prefix in ["cancelled", "completed", "uploaded", "failed"] {
+        if let Some(job) = store.read_job(prefix, job_id).await? {
+            println!("Job {job_id} is already terminal ({})", job.state);
             return Ok(());
         }
     }
-    println!("Job {job_id} not found");
-    Ok(())
+
+    let marker = canonical_json(&serde_json::json!({
+        "job_id": job_id,
+        "requested_at": utcnow(),
+    }));
+    store
+        .create_text_if_absent(&format!("cancellations/{job_id}.json"), &marker)
+        .await?;
+
+    if let Some(mut job) = store.read_job("queue", job_id).await? {
+        job.state = job_state::CANCELLED.into();
+        job.completed_at = Some(utcnow());
+        job.error = Some("cancelled".into());
+        store.write_job("cancelled", &job).await?;
+        store.delete_job("queue", job_id).await?;
+        if store.read_job("running", job_id).await?.is_none() {
+            println!("Cancelled {job_id}");
+            return Ok(());
+        }
+    }
+
+    if let Some(mut job) = store.read_job("running", job_id).await? {
+        job.state = job_state::CANCELLED.into();
+        job.completed_at = Some(utcnow());
+        job.error = Some("cancelled".into());
+        job.instance_ref = None;
+        store.write_job("cancelled", &job).await?;
+        store.delete_job("running", job_id).await?;
+        store.delete_job("failed", job_id).await?;
+        println!("Cancelled {job_id}");
+        return Ok(());
+    }
+
+    Err(CmdError::click(format!("Job {job_id} not found")))
 }

@@ -1,6 +1,5 @@
-//! `stado config SUB` — port of the `config` command in `stado/cli.py`:
-//! positional string dispatch (NOT real subcommands) over
-//! show | validate | init.
+//! `stado config SUB` — configuration lifecycle commands:
+//! show | validate | init | migrate.
 
 use serde_json::{Map, Value};
 
@@ -12,12 +11,73 @@ use super::CmdError;
 pub fn run(sub: &str) -> Result<(), CmdError> {
     match sub {
         "init" => init(),
+        "migrate" => migrate(),
         "validate" => validate(),
         "show" => show(),
         other => Err(CmdError::click(format!(
-            "unknown config subcommand: {other} (show|validate|init)"
+            "unknown config subcommand: {other} (show|validate|init|migrate)"
         ))),
     }
+}
+
+fn initialize_local_registry(home: &std::path::Path) -> Result<(), CmdError> {
+    let storage_root = home.join(".stado").join("local-storage");
+    std::fs::create_dir_all(&storage_root)?;
+    let registry_path = storage_root.join(crate::targets::REGISTRY_BLOB);
+    if registry_path.exists() {
+        return Ok(());
+    }
+
+    let hostname = crate::providers::vast::system_hostname();
+    let identity = crate::targets::normalize_hostname(&hostname);
+    let target_name = identity
+        .split('.')
+        .next()
+        .unwrap_or(identity.as_str())
+        .to_string();
+    let hostnames = if target_name == identity {
+        Vec::new()
+    } else {
+        vec![identity]
+    };
+    let policy_unit = crate::providers::local::disk_cleanup::STATE_VERSION;
+    let registry = serde_json::json!({
+        "schema_version": crate::targets::REGISTRY_SCHEMA_VERSION,
+        "coordinators": [],
+        "targets": [{
+            "name": target_name,
+            "kind": "local",
+            "hostnames": hostnames,
+            "slots": policy_unit,
+            "disk_cleanup": {
+                "mode": "off",
+                "check_interval_seconds": i64::try_from(
+                    crate::constants::MIN_RUNTIME_BEFORE_YIELD_S
+                ).expect("cleanup interval fits i64"),
+                "low_free_gb": policy_unit,
+                "target_free_gb": policy_unit.saturating_add(policy_unit),
+                "max_bytes_per_pass": crate::providers::local::disk_cleanup::GIB,
+                "max_items_per_pass": policy_unit,
+                "max_scan_items": policy_unit,
+                "cleaners": {}
+            }
+        }]
+    });
+    crate::targets::validate_registry(&registry)
+        .map_err(|error| CmdError::click(format!("generated local registry is invalid: {error}")))?;
+    let body = format!("{}\n", serde_json::to_string_pretty(&registry)?);
+    let mut file = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&registry_path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    std::io::Write::write_all(&mut file, body.as_bytes())?;
+    file.sync_all()?;
+    Ok(())
 }
 
 /// `config init`: write the commented template to ~/.stado/config.json.
@@ -36,8 +96,70 @@ fn init() -> Result<(), CmdError> {
         std::fs::create_dir_all(parent)?;
     }
     let body = serde_json::to_string_pretty(&config_file::template())?;
+    initialize_local_registry(std::path::Path::new(&home))?;
     std::fs::write(&path, format!("{body}\n"))?;
     println!("{}", path.display());
+    Ok(())
+}
+
+/// Add the current root schema to a legacy config while preserving the exact
+/// prior document beside it. Future schemas are never rewritten or downgraded.
+fn migrate() -> Result<(), CmdError> {
+    let path = config_file::config_path()
+        .map_err(|exc| CmdError::click(exc.to_string()))?
+        .ok_or_else(|| CmdError::click("no config file exists to migrate"))?;
+    let raw = std::fs::read_to_string(&path)?;
+    let mut document: Value = serde_json::from_str(&raw)?;
+    let root = document
+        .as_object_mut()
+        .ok_or_else(|| CmdError::click("config file must contain a JSON object"))?;
+    match root.get("schema_version").and_then(Value::as_u64) {
+        Some(version) if version == u64::from(config_file::SCHEMA_VERSION) => {
+            println!(
+                "config already uses schema_version {} ({})",
+                config_file::SCHEMA_VERSION,
+                path.display()
+            );
+            return Ok(());
+        }
+        Some(version) => {
+            return Err(CmdError::click(format!(
+                "cannot migrate config schema_version {version}; this binary supports {}",
+                config_file::SCHEMA_VERSION
+            )));
+        }
+        None => {}
+    }
+
+    root.insert(
+        "schema_version".to_string(),
+        Value::from(config_file::SCHEMA_VERSION),
+    );
+    let migrated = format!("{}\n", serde_json::to_string_pretty(&document)?);
+    let backup = std::path::PathBuf::from(format!("{}.before-schema-migration", path.display()));
+    let mut backup_file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&backup)
+        .map_err(|error| {
+            CmdError::click(format!(
+                "cannot preserve config at {}: {error}",
+                backup.display()
+            ))
+        })?;
+    std::io::Write::write_all(&mut backup_file, raw.as_bytes())?;
+
+    let temporary = std::path::PathBuf::from(format!("{}.migrating", path.display()));
+    std::fs::write(&temporary, migrated)?;
+    if let Ok(metadata) = std::fs::metadata(&path) {
+        std::fs::set_permissions(&temporary, metadata.permissions())?;
+    }
+    std::fs::rename(&temporary, &path)?;
+    println!(
+        "migrated config to schema_version {}; previous file: {}",
+        config_file::SCHEMA_VERSION,
+        backup.display()
+    );
     Ok(())
 }
 
