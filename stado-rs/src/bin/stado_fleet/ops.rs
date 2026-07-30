@@ -74,9 +74,17 @@ pub async fn create(name: &str, notes: &str) -> Result<bool, String> {
 
 /// Register a target without an ssh destination (`ssh: null`) — the
 /// self-install path: the machine later runs `stado bootstrap --local
-/// --target NAME` on itself. Duplicate names are refused; the result is
-/// validated by the registry-v2 contract inside `push_document`. Pure.
-pub fn register_target(document: &Value, name: &str, kind: &str) -> Result<Value, String> {
+/// --target NAME` on itself. `hostnames` carries the machine's real DNS
+/// names: the agent resolves itself by hostname (`lookup_self`), so an
+/// entry without them only ever matches a machine whose hostname equals
+/// the target name. Duplicate names are refused; the result is validated
+/// by the registry-v2 contract inside `push_document`. Pure.
+pub fn register_target(
+    document: &Value,
+    name: &str,
+    kind: &str,
+    hostnames: &[String],
+) -> Result<Value, String> {
     let mut next = document.clone();
     let targets = next
         .get_mut("targets")
@@ -92,6 +100,7 @@ pub fn register_target(document: &Value, name: &str, kind: &str) -> Result<Value
         "name": name,
         "kind": kind,
         "ssh": Value::Null,
+        "hostnames": hostnames,
         "notes": "enrolled by `stado_fleet enroll` (self-install path)",
     }));
     Ok(next)
@@ -145,6 +154,7 @@ pub async fn enroll(
     kind: &str,
     fleet_name: Option<&str>,
     bootstrap: bool,
+    hostname: Option<&str>,
 ) -> Result<bool, String> {
     let document = fetch_document().await.map_err(|exc| exc.to_string())?;
     preflight_enroll(&document, name, fleet_name)?;
@@ -161,7 +171,15 @@ pub async fn enroll(
                 .map_err(|exc| exc.to_string())?;
         }
         None => {
-            let next = register_target(&document, name, kind)?;
+            let hostnames: Vec<String> = hostname
+                .map(|value| vec![value.to_string()])
+                .unwrap_or_default();
+            if hostnames.is_empty() {
+                println!(
+                    "note: no --hostname given; the agent will find this entry only if the machine's hostname is '{name}'"
+                );
+            }
+            let next = register_target(&document, name, kind, &hostnames)?;
             let generation = push_document(&next)
                 .await
                 .map_err(|exc| exc.to_string())?;
