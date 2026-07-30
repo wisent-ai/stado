@@ -72,6 +72,31 @@ pub async fn create(name: &str, notes: &str) -> Result<bool, String> {
     Ok(true)
 }
 
+/// Register a target without an ssh destination (`ssh: null`) — the
+/// self-install path: the machine later runs `stado bootstrap --local
+/// --target NAME` on itself. Duplicate names are refused; the result is
+/// validated by the registry-v2 contract inside `push_document`. Pure.
+pub fn register_target(document: &Value, name: &str, kind: &str) -> Result<Value, String> {
+    let mut next = document.clone();
+    let targets = next
+        .get_mut("targets")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| "registry.targets: must be an array".to_string())?;
+    if targets
+        .iter()
+        .any(|target| target.get("name").and_then(Value::as_str) == Some(name))
+    {
+        return Err(format!("target '{name}' is already registered"));
+    }
+    targets.push(json!({
+        "name": name,
+        "kind": kind,
+        "ssh": Value::Null,
+        "notes": "enrolled by `stado_fleet enroll` (self-install path)",
+    }));
+    Ok(next)
+}
+
 /// `stado_fleet assign TARGET FLEET` — add a registered machine to a fleet.
 pub async fn assign(target: &str, fleet_name: &str) -> Result<bool, String> {
     let document = fetch_document().await.map_err(|exc| exc.to_string())?;
@@ -108,24 +133,42 @@ pub fn preflight_enroll(
     Ok(())
 }
 
-/// `stado_fleet enroll NAME --ssh DEST [--kind local] [--fleet FLEET]
-/// [--bootstrap]` — one-command onboarding: register the machine in the
-/// canonical registry, optionally place it in a fleet, optionally install
-/// the agent through `stado bootstrap`. Registration itself goes through
-/// `stado registry host add`, so the registry-v2 contract validation runs
-/// before anything is written.
+/// `stado_fleet enroll NAME [--ssh DEST] [--kind local] [--fleet FLEET]
+/// [--bootstrap]` — one-command onboarding. With `--ssh`, the agent is
+/// installable from here through `stado bootstrap`. Without it, the target
+/// registers with `ssh: null` on the self-install path: run
+/// `stado bootstrap --local --target NAME` on the machine itself.
+/// Registration goes through the same validated CAS write either way.
 pub async fn enroll(
     name: &str,
-    ssh: &str,
+    ssh: Option<&str>,
     kind: &str,
     fleet_name: Option<&str>,
     bootstrap: bool,
 ) -> Result<bool, String> {
     let document = fetch_document().await.map_err(|exc| exc.to_string())?;
     preflight_enroll(&document, name, fleet_name)?;
-    stado::cli::registry::host_add(name, ssh, kind)
-        .await
-        .map_err(|exc| exc.to_string())?;
+    if bootstrap && ssh.is_none() {
+        return Err(
+            "--bootstrap needs --ssh; on an ssh-less target run stado bootstrap --local on the machine"
+                .to_string(),
+        );
+    }
+    match ssh {
+        Some(destination) => {
+            stado::cli::registry::host_add(name, destination, kind)
+                .await
+                .map_err(|exc| exc.to_string())?;
+        }
+        None => {
+            let next = register_target(&document, name, kind)?;
+            let generation = push_document(&next)
+                .await
+                .map_err(|exc| exc.to_string())?;
+            println!("registered '{name}' (kind={kind}, ssh=null) generation={generation}");
+            println!("self-install on the machine: stado bootstrap --local --target '{name}'");
+        }
+    }
     if let Some(fleet) = fleet_name {
         assign(name, fleet).await?;
     }
@@ -134,6 +177,6 @@ pub async fn enroll(
             .await
             .map_err(|exc| exc.to_string())?;
     }
-    println!("enrolled '{name}' (kind={kind}, ssh={ssh})");
+    println!("enrolled '{name}' (kind={kind})");
     Ok(true)
 }
