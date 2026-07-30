@@ -1,0 +1,82 @@
+//! Fleet write operations: `create` and `assign`.
+//!
+//! Every write is a pure document-to-document transform followed by the
+//! validated compare-and-swap `push_document` — the exact write path of
+//! `stado registry push` — so a malformed fleet change is refused before
+//! anything reaches the canonical registry.
+
+use serde_json::{json, Value};
+use stado::cli::registry::{fetch_document, push_document};
+
+use crate::fleet::{find_fleet, parse_fleets};
+
+/// Append a fleet entry to the document. Duplicate names are refused up
+/// front; the result is re-parsed through the same [`parse_fleets`] the
+/// readers use, so an invalid name fails here, not in production. Pure.
+pub fn create_fleet(document: &Value, name: &str, notes: &str) -> Result<Value, String> {
+    let fleets = parse_fleets(document)?;
+    if find_fleet(&fleets, name).is_some() {
+        return Err(format!("fleet '{name}' already exists"));
+    }
+    let mut next = document.clone();
+    let root = next
+        .as_object_mut()
+        .ok_or_else(|| "registry must be an object".to_string())?;
+    let section = root
+        .entry("fleets".to_string())
+        .or_insert_with(|| json!([]));
+    let entries = section
+        .as_array_mut()
+        .ok_or_else(|| "registry.fleets: must be an array".to_string())?;
+    entries.push(json!({ "name": name, "notes": notes }));
+    parse_fleets(&next)?;
+    Ok(next)
+}
+
+/// Point one target's `fleet` field at a declared fleet. Moving a target
+/// between fleets is just another assignment; pointing at an undeclared
+/// fleet or an unknown target is refused. Pure.
+pub fn assign_target(
+    document: &Value,
+    target_name: &str,
+    fleet_name: &str,
+) -> Result<Value, String> {
+    let fleets = parse_fleets(document)?;
+    find_fleet(&fleets, fleet_name)
+        .ok_or_else(|| format!("fleet '{fleet_name}' is not declared; create it first"))?;
+    let mut next = document.clone();
+    let targets = next
+        .get_mut("targets")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| "registry.targets: must be an array".to_string())?;
+    let mut found = false;
+    for target in targets.iter_mut() {
+        if target.get("name").and_then(Value::as_str) == Some(target_name) {
+            target["fleet"] = Value::String(fleet_name.to_string());
+            found = true;
+        }
+    }
+    if !found {
+        return Err(format!("target '{target_name}' not found in registry"));
+    }
+    parse_fleets(&next)?;
+    Ok(next)
+}
+
+/// `stado_fleet create NAME` — declare a fleet in the canonical registry.
+pub async fn create(name: &str, notes: &str) -> Result<bool, String> {
+    let document = fetch_document().await.map_err(|exc| exc.to_string())?;
+    let next = create_fleet(&document, name, notes)?;
+    let generation = push_document(&next).await.map_err(|exc| exc.to_string())?;
+    println!("fleet '{name}' created (generation {generation})");
+    Ok(true)
+}
+
+/// `stado_fleet assign TARGET FLEET` — add a registered machine to a fleet.
+pub async fn assign(target: &str, fleet_name: &str) -> Result<bool, String> {
+    let document = fetch_document().await.map_err(|exc| exc.to_string())?;
+    let next = assign_target(&document, target, fleet_name)?;
+    let generation = push_document(&next).await.map_err(|exc| exc.to_string())?;
+    println!("target '{target}' assigned to fleet '{fleet_name}' (generation {generation})");
+    Ok(true)
+}
