@@ -1,26 +1,10 @@
-//! S3 backend: aws-sdk-s3 against the configured bucket.
+//! Amazon S3 backend using the AWS SDK.
 //!
-//! Port of `stado/queue/s3.py` (`S3Backend`). PutObject / GetObject /
-//! HeadObject / DeleteObject / paginated ListObjectsV2, metadata stamping via
-//! CopyObject with `MetadataDirective::Replace`.
-//!
-//! Deviation from the Python source (intentional, SDK caught up): Python's
-//! `compare_and_swap_text` hand-builds and SigV4-signs a raw PUT because
-//! botocore's PutObject model did not expose S3's `If-Match` header.
-//! aws-sdk-s3 (>= 1.74) exposes `if_match` / `if_none_match` natively on
-//! PutObject, so CAS and atomic-create go through the SDK like every other
-//! call. The wire semantics are identical: 412 PreconditionFailed maps to
-//! [`StorageError::StorageConflict`] / `false`.
-//!
-//! Version token parity: the token is the object ETag WITHOUT the
-//! surrounding quotes (Python `response["ETag"].strip('"')`); CAS re-adds
-//! the quotes for the `If-Match` header, exactly like the Python code.
-//!
-//! Error classification is raw-status based: S3 returns 404 for both
-//! HeadObject-on-missing and GetObject NoSuchKey, and 412 for both
-//! If-None-Match and If-Match precondition failures — the exact situations
-//! Python detects via the `NoSuchKey` / `404` / `PreconditionFailed` /
-//! `412` error codes.
+//! Conditional creates and compare-and-swap writes use native `If-None-Match`
+//! and `If-Match` support. ETags are opaque backend version tokens. Missing
+//! objects and precondition failures are classified from service status;
+//! transport and authorization failures remain observable. Listing follows
+//! every provider continuation token and retains metadata required by recovery.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -37,8 +21,6 @@ use super::{gcs::percent_encode, BlobBackend, BlobInfo, StorageError, VersionedT
 struct Inner {
     client: aws_sdk_s3::Client,
     bucket: String,
-    #[allow(dead_code)] // kept for diagnostics parity with Python `self.region`
-    region: String,
 }
 
 /// S3 implementation of [`BlobBackend`]. Cheap to clone.
@@ -61,15 +43,7 @@ impl S3Backend {
         let shared = crate::providers::aws::sdk_config(region)
             .await
             .map_err(|err| StorageError::Other(err.to_string()))?;
-        let resolved = shared
-            .region()
-            .map(|r| r.as_ref().to_string())
-            .unwrap_or_else(|| "us-east-1".to_string());
-        Ok(Self::assemble(
-            aws_sdk_s3::Client::new(&shared),
-            bucket,
-            &resolved,
-        ))
+        Ok(Self::assemble(aws_sdk_s3::Client::new(&shared), bucket))
     }
 
     /// Assemble from an explicit client (tests bind a loopback endpoint).
@@ -77,17 +51,16 @@ impl S3Backend {
     pub(crate) fn assemble_for_test(
         client: aws_sdk_s3::Client,
         bucket: &str,
-        region: &str,
+        _region: &str,
     ) -> Self {
-        Self::assemble(client, bucket, region)
+        Self::assemble(client, bucket)
     }
 
-    fn assemble(client: aws_sdk_s3::Client, bucket: &str, region: &str) -> Self {
+    fn assemble(client: aws_sdk_s3::Client, bucket: &str) -> Self {
         Self {
             inner: Arc::new(Inner {
                 client,
                 bucket: bucket.to_string(),
-                region: region.to_string(),
             }),
         }
     }

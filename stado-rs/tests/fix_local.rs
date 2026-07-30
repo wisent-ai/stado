@@ -255,8 +255,8 @@ fn execute_dispatches_via_local_claude_cli() {
         .env("WC_SKARBIEC_TOKEN_FILE", &grant_file)
         .output()
         .expect("stado-fix binary runs");
-    skarbiec.join().unwrap();
     assert!(out.status.success(), "{}", stderr(&out));
+    skarbiec.join().unwrap();
     let result: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
     assert_eq!(result["status"], "dispatched");
     assert_eq!(result["attempts"], 1);

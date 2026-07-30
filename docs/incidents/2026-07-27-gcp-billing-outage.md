@@ -4,7 +4,7 @@ Date: 2026-07-27 UTC (2026-07-26 PDT)
 
 Project: `wisent-480400`
 
-Status: active incident; current GCP inventory is incomplete because the project billing account is disabled.
+Status: contained on a local-only Stado profile; GCP recovery is not verified because cloud access remains fenced and no post-restoration inventory is available.
 
 ## Scope and evidence quality
 
@@ -16,6 +16,11 @@ This report separates three evidence levels. They must not be merged into one ap
 
 Current live enumeration of GCS, Compute Engine, IAM, Secret Manager, Cloud Run revisions, Artifact Registry, Pub/Sub, BigQuery, and Cloud Build is unavailable. Therefore there is no defensible single number for all current GCP assets.
 
+Incident-time and containment evidence are intentionally separated below. The
+outage conclusions describe the configuration and behavior observed at failure
+onset. A later local-only profile contains new work but does not prove recovery
+of the inaccessible GCS state.
+
 ## Incident conclusion
 
 A current `stado overview --json` request fails with:
@@ -26,7 +31,7 @@ The billing account for the owning project is disabled in state absent
 reason: accountDisabled
 ```
 
-The active Stado configuration has no config-file override. Compiled defaults and the LaunchAgent resolve to:
+At incident onset, Stado had no config-file override. Compiled defaults and the LaunchAgent resolved to:
 
 - project: `wisent-480400`;
 - primary storage: GCS;
@@ -35,7 +40,7 @@ The active Stado configuration has no config-file override. Compiled defaults an
 - backup storage backend: empty;
 - automatic failover: disabled.
 
-The local `operator-host` agent currently starts, initializes `JobStorage`, receives the same GCS 403 before queue processing, exits, and is restarted by launchd roughly every 11–13 seconds.
+At incident onset, the local `operator-host` agent started, initialized `JobStorage`, received the same GCS 403 before queue processing, exited, and was restarted by launchd roughly every 11–13 seconds.
 
 Consequences:
 
@@ -48,7 +53,7 @@ Consequences:
 
 ## Quantitative summary
 
-### Current facts
+### Incident-onset facts
 
 | Measurement | Value | Evidence |
 |---|---:|---|
@@ -57,6 +62,26 @@ Consequences:
 | Directly observed agents in crash-loop | 1 | local MacBook agent log |
 | Exact current jobs | unknown | GCS listing blocked |
 | Exact current VM, disk, bucket, or object count | unknown | provider APIs and GCS blocked |
+
+
+### Current local containment snapshot
+
+The current configuration explicitly enables only the `local` provider, fences
+`gcp`, `azure`, and `aws`, stores state under `~/.stado/local-storage`, and uses
+`~/.stado/local-backup` as a same-disk mirror. It explicitly warns that this is
+not cross-provider disaster recovery.
+
+The declared local control-plane surface contains 17 object namespaces with 123
+allowed prefixes, 11 integration clients, 2 machine clients, 10 release
+publishers, 3 managed-service deployers, and 15 agent secret items. These counts
+measure the routed application surface, not recovered GCS objects.
+
+Filesystem inspection found 179 payload files totaling 2,951,765,553 bytes in
+the local primary and 200 payload files totaling 2,951,766,620 bytes in the
+same-disk mirror. Most current payload is under `ecosystem/`; the primary has
+only one `queue/` object and two `runs/` objects. This is post-incident local
+state and is not evidence that the historical GCS queue, media, models, or
+artifacts were recovered.
 
 ### Last observed Compute Engine snapshot
 

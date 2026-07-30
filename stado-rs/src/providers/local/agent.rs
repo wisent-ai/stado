@@ -2,39 +2,19 @@
 //! slots, respects Vast.ai renters, broadcasts capacity, and cooperatively
 //! yields lower-priority slots for higher-priority queued work.
 //!
-//! Port of `stado/providers/local_agent.py` (`run_agent` +
-//! `_maybe_yield_for_priority` + the CUDA child probe + the registry
-//! self-lookup). Usage: `stado agent --gpu-type nvidia-rtx-4090`.
+//! The runtime contract is framework-neutral:
+//!   * no Python package is imported before claim;
+//!   * NVIDIA admission uses the native `nvidia-smi` driver interface;
+//!   * optional Hugging Face staging runs only when both
+//!     `STADO_HF_FLUSH_STAGING_DIR` and `STADO_HF_FLUSH_PYTHON` are set;
+//!   * job-specific runtimes, libraries, and GPU framework checks belong to
+//!     the submitted workload.
 //!
-//! DEVIATIONS from the Python source (all intended):
-//!   * The per-tick `wisent...upload_worker.sweep()` call is NOT ported
-//!     (it lives in the Python `wisent` package; the fleet-flush
-//!     subprocess path in [`super::fleet_flush`] covers the same pool).
-//!   * The registry self-lookup fetches `registry.json` from whichever
-//!     store `WC_STORAGE_BACKEND` selects, via
-//!     [`targets::fetch_registry_remote`] (on "gcs", the GCS JSON-API
-//!     backend) with the same 30s TTL and the same fall-back-to-bundled-file
-//!     semantics (Python uses the GCS SDK directly, `source="auto"`).
-//!   * A registry `gpu_type` change logs the Python
-//!     "pip_upgrade_and_exec for restart" line but does NOT re-exec — the
-//!     binary self-update in [`crate::self_update`] fires on version drift
-//!     only; a gpu_type change remains an operator-restart action.
-//!   * Version drift on a local-kind agent triggers exact-coordinate binary
-//!     self-update and re-exec. Detection reads the configured immutable Stado
-//!     release version, never a mutable channel or PyPI. On failure the agent
-//!     logs the error and keeps claiming on the old binary; wedging it into
-//!     skip-claim forever would be a fleet outage.
-//!   * Python `local_agent.py:647` references a bare
-//!     `VRAM_SAFETY_BUFFER_GB` that does not exist in that module (latent
-//!     NameError on the raw multi-claim path). Ported as the computed
-//!     dynamic buffer `vram_buffer_gb`, which is the obviously intended
-//!     value.
-//!   * `_ensure_hf_token_from_cache` is defined but never called in
-//!     Python's local_agent (only fleet_flush's own copy runs, inside the
-//!     Python flush child) — not ported.
-//!   * The CUDA child probe invokes `python3` from PATH instead of
-//!     `sys.executable` (the Rust binary is not a Python interpreter; the
-//!     agent runs inside its venv, whose bin/ is first on PATH).
+//! Registry self-lookup uses the configured Stado storage backend with the
+//! bundled registry only as the documented fallback. Local release drift
+//! triggers exact-coordinate binary self-update and re-exec; cloud machines
+//! self-terminate for provider-owned replacement. A registry GPU-type change
+//! remains an explicit operator restart.
 //!
 //! The janitor-owned disk-cleanup engine IS ported ([`super::disk_cleanup`]):
 //! this loop runs `run_cleanup_once` every tick, holds a shared workload
@@ -77,12 +57,8 @@ pub const POLL_INTERVAL_S: u64 = constants::POLL_INTERVAL_S;
 /// done before it can be bumped again. Pairs with Job.max_yields_before_protected.
 pub const MIN_RUNTIME_BEFORE_YIELD_S: u64 = constants::MIN_RUNTIME_BEFORE_YIELD_S;
 
-/// Cache TTL for the CUDA child-probe.
+/// Cache TTL for the native NVIDIA driver-health probe.
 pub const CUDA_PROBE_CACHE_S: u64 = constants::CUDA_PROBE_CACHE_S;
-
-/// The torch probe executed in a child Python (Python `_cuda_child_available`'s
-/// `code`).
-const CUDA_PROBE_CODE: &str = "import torch, sys; ok=torch.cuda.is_available(); print(f'cuda_available={ok}', flush=True); sys.exit(0 if ok else 66)";
 
 /// Python `_log`: `[HH:MM:SS] [agent] msg` on stderr (local time).
 pub fn agent_log(msg: &str) {
@@ -182,13 +158,11 @@ struct CudaProbe {
 
 static CUDA_PROBE: LazyLock<Mutex<Option<CudaProbe>>> = LazyLock::new(|| Mutex::new(None));
 
-/// True only if a child Python in the agent's launch environment can
-/// initialize CUDA. nvidia-smi being healthy is not enough: the live failure
-/// mode was nvidia-smi reporting an RTX PRO 6000 while every claimed job's
-/// first Python process printed `CUDA available: False` and exited 66. Gate
-/// claims on the exact child-process condition that jobs require.
-/// Python `_cuda_child_available`.
-pub async fn cuda_child_available() -> (bool, String) {
+/// Check that the host's native NVIDIA management interface can enumerate a
+/// GPU. Workload-specific CUDA frameworks are validated by the workload
+/// itself; the global agent must not import Python or `wisent` before claiming
+/// an unrelated shell, native, or container job.
+pub async fn gpu_driver_available() -> (bool, String) {
     if let Some(probe) = &*CUDA_PROBE.lock().expect("cuda probe cache lock") {
         if probe.checked_at.elapsed() < Duration::from_secs(CUDA_PROBE_CACHE_S) {
             return (probe.ok, probe.detail.clone());
@@ -206,9 +180,8 @@ pub async fn cuda_child_available() -> (bool, String) {
 async fn run_cuda_probe() -> (bool, String) {
     let res = tokio::time::timeout(
         Duration::from_secs(30),
-        tokio::process::Command::new(super::python_bin())
-            .args(["-c", CUDA_PROBE_CODE])
-            .env("PYTHONUNBUFFERED", "1")
+        tokio::process::Command::new("nvidia-smi")
+            .args(["--query-gpu=uuid", "--format=csv,noheader,nounits"])
             .output(),
     )
     .await;
@@ -223,9 +196,8 @@ async fn run_cuda_probe() -> (bool, String) {
     }
 }
 
-/// Pure: (ok, detail) from one probe run.
-/// Python `detail = (res.stdout or res.stderr or f"rc={rc}").strip()`,
-/// stored truncated to the last 300 chars.
+/// Pure: `(ok, detail)` from one native driver probe. Detail is truncated to
+/// a bounded suffix for capacity diagnostics.
 pub fn cuda_probe_result(rc: i32, stdout: &str, stderr: &str) -> (bool, String) {
     let raw = if !stdout.is_empty() {
         stdout.to_string()
@@ -486,8 +458,9 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
     let consumer_id = format!("{kind}-{hostname}");
     let mut slots: Vec<ActiveSlot> = Vec::new();
     let mut agent_diag: Map<String, Value> = Map::new();
-    let fleet_staging = std::env::var("WISENT_FLEET_STAGING_DIR")
-        .unwrap_or_else(|_| "/tmp/wisent_fleet_staging".to_string());
+    let fleet_staging = std::env::var("STADO_HF_FLUSH_STAGING_DIR")
+        .ok()
+        .filter(|path| !path.trim().is_empty());
     let mut last_fleet_flush = Instant::now();
 
     let mut last_cap: Option<LastCap> = None;
@@ -510,7 +483,17 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         // DEVIATION: the wisent upload_worker sweep is not ported (the
         // wisent Python package owns it); the fleet-flush subprocess path
         // below covers the same pending pool.
-        let vast_active = helpers::vast_has_renter().await?;
+        let vast_active = if crate::config::wc_providers()
+            .iter()
+            .any(|provider| provider == crate::capabilities::ProviderId::Vast.as_str())
+            && !crate::config::wc_disabled_providers()
+                .iter()
+                .any(|provider| provider == crate::capabilities::ProviderId::Vast.as_str())
+        {
+            helpers::vast_has_renter().await?
+        } else {
+            false
+        };
         let mut survivors: Vec<ActiveSlot> = Vec::with_capacity(slots.len());
         for slot in slots.drain(..) {
             match advance_slot(slot, &store, &sizing, vast_active, log_fn).await? {
@@ -581,8 +564,10 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         if last_fleet_flush.elapsed() > Duration::from_secs(constants::FLEET_FLUSH_INTERVAL_S)
             && slots.is_empty()
         {
-            if spawn_fleet_flush(Path::new(&fleet_staging), log_fn).await? {
-                log_fn("fleet staging flush running asynchronously");
+            if let Some(fleet_staging) = fleet_staging.as_deref() {
+                if spawn_fleet_flush(Path::new(fleet_staging), log_fn).await? {
+                    log_fn("optional Hugging Face staging flush running asynchronously");
+                }
             }
             last_fleet_flush = Instant::now();
         }
@@ -616,24 +601,17 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                 }
             }
         }
-        // Cleanup already ran before upgrade checks (as in Python). This
-        // gate is strictly admission/diagnostics-only and has no
-        // destructive side effects; the pre-drain refusal value is
-        // intentionally unused, like Python's `_pre_refuse`.
+        // Cleanup already ran before the immutable release check. This gate is
+        // admission/diagnostics-only and has no destructive side effects.
         let (_pre_refuse, pre_diag) = disk_gate::gate_and_maybe_evict(log_fn);
         agent_diag.extend(diag_map(&pre_diag));
-        log_fn("loop: pre-drain (detect_drift + import-smoketest subprocess)");
+        log_fn("loop: pre-drain release drift check");
         match version_check::maybe_drain_or_upgrade(!slots.is_empty(), log_fn, kind).await {
-            // DriftDetected: a self-update / re-exec failure (or a broken
-            // venv) was logged; keep claiming on the old binary — a wedged
-            // agent is worse than a stale one. A successful self-update
+            // An update/re-exec failure was logged; keep claiming on the old
+            // binary rather than wedging the fleet. A successful update
             // re-execs and never reaches this arm.
             DriftOutcome::Clean | DriftOutcome::DriftDetected => {}
-            DriftOutcome::SkipClaim => {
-                tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
-                continue;
-            }
-            // Python raises SystemExit(0) right after self_terminate.
+            // Cloud replacement was requested through the provider adapter.
             DriftOutcome::SelfTerminated => return Ok(()),
         }
         if vast_active {
@@ -733,16 +711,16 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             // (the cuda-fail continue stamps its own) — dead in both.
         }
         if free_vram_gb > 0 && slots.is_empty() && gpu_type.starts_with("nvidia") {
-            let (cuda_ok, cuda_detail) = cuda_child_available().await;
-            agent_diag.insert("cuda_child_ok".into(), Value::from(cuda_ok));
-            agent_diag.insert("cuda_child_detail".into(), Value::from(cuda_detail.clone()));
+            let (cuda_ok, cuda_detail) = gpu_driver_available().await;
+            agent_diag.insert("gpu_driver_ok".into(), Value::from(cuda_ok));
+            agent_diag.insert("gpu_driver_detail".into(), Value::from(cuda_detail.clone()));
             agent_diag.insert(
-                "cuda_child_checked_at".into(),
+                "gpu_driver_checked_at".into(),
                 Value::from(isoformat_utc(Utc::now())),
             );
             if !cuda_ok {
                 log_fn(&format!(
-                    "CUDA child probe failed; publishing zero capacity: {}",
+                    "NVIDIA driver probe failed; publishing zero capacity: {}",
                     cuda_detail.chars().take(160).collect::<String>()
                 ));
                 publish_capacity(

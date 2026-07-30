@@ -85,8 +85,9 @@ pub(crate) fn pick_or_rotate(
     Ok(Some(flush_dir))
 }
 
-/// Rotate a staging dir and flush it in a background process. The upload
-/// credential is resolved from Skarbiec and passed only to the child.
+/// Rotate a staging dir and flush it through an explicitly configured
+/// external adapter. Both the Python interpreter and staging directory are
+/// opt-in; the base Stado agent has no Python or Hugging Face dependency.
 pub async fn spawn_fleet_flush(
     fleet_staging: &Path,
     log_fn: &mut dyn FnMut(&str),
@@ -98,7 +99,12 @@ pub async fn spawn_fleet_flush(
         .ok_or_else(|| {
             std::io::Error::other("Skarbiec item stado-huggingface field write_token is required")
         })?;
-    spawn_fleet_flush_with_token(&super::python_bin(), fleet_staging, log_fn, &token)
+    let python = std::env::var("STADO_HF_FLUSH_PYTHON").map_err(|_| {
+        std::io::Error::other(
+            "STADO_HF_FLUSH_PYTHON is required when Hugging Face flush is enabled",
+        )
+    })?;
+    spawn_fleet_flush_with_token(&python, fleet_staging, log_fn, &token)
 }
 
 /// Explicit-interpreter seam retained for deterministic callers.

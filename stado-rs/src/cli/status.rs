@@ -5,8 +5,15 @@ use crate::queue::submit::default_store;
 
 use super::CmdError;
 
-/// Python `_STATES` — display + scan order.
-const STATES: [&str; 5] = ["running", "queue", "completed", "uploaded", "failed"];
+/// Canonical lifecycle states in display and direct-lookup order.
+const STATES: &[&str] = &[
+    "running",
+    "queue",
+    "completed",
+    "uploaded",
+    "failed",
+    "cancelled",
+];
 
 pub async fn run(filter_id: Option<&str>) -> Result<(), CmdError> {
     status_queue(filter_id).await
@@ -47,10 +54,10 @@ async fn status_queue(filter_id: Option<&str>) -> Result<(), CmdError> {
     );
     println!("{}", "-".repeat(110));
 
-    // Fast path: filter looks like a job_id — 5 parallel direct reads, no listing.
+    // Fast path: direct parallel reads across every canonical lifecycle state.
     let job_id_re = regex::Regex::new(r"^[0-9a-f]{8}$").expect("static regex compiles");
     if let Some(filter) = filter_id.filter(|f| job_id_re.is_match(f)) {
-        let reads = STATES.map(|state| {
+        let reads = STATES.iter().copied().map(|state| {
             let store = store.clone();
             async move { (state, store.read_job(state, filter).await) }
         });
@@ -70,7 +77,7 @@ async fn status_queue(filter_id: Option<&str>) -> Result<(), CmdError> {
 
     // Slow path: no filter, or filter is a batch_id — must scan all blobs.
     let all_jobs = store.list_all_jobs().await?;
-    for state in STATES {
+    for state in STATES.iter().copied() {
         for job in &all_jobs[state] {
             if let Some(filter) = filter_id {
                 if !job.job_id.contains(filter) && !job.batch_id.contains(filter) {
@@ -81,12 +88,13 @@ async fn status_queue(filter_id: Option<&str>) -> Result<(), CmdError> {
         }
     }
     println!(
-        "\n{} running, {} queued, {} extracted (awaiting upload), {} uploaded, {} failed",
+        "\n{} running, {} queued, {} extracted (awaiting upload), {} uploaded, {} failed, {} cancelled",
         all_jobs["running"].len(),
         all_jobs["queue"].len(),
         all_jobs["completed"].len(),
         all_jobs["uploaded"].len(),
         all_jobs["failed"].len(),
+        all_jobs["cancelled"].len(),
     );
     Ok(())
 }

@@ -1,21 +1,10 @@
-//! Alert delivery: Slack webhook, Telegram Bot API, SendGrid mail, and GCP
-//! Pub/Sub. Non-GCP channel credentials are resolved from the `stado-alerts`
-//! Skarbiec item. Pub/Sub uses workload identity through `gcp_auth`.
+//! Optional Slack, Telegram, SendGrid, and GCP Pub/Sub alert delivery.
 //!
-//! DEVIATION from Python (deliberate): Python lets a channel exception
-//! propagate out of `send_alert`, suppressing every later channel. Here each
-//! channel is fault-isolated — on error it logs `[alert] <channel> failed:
-//! {err}` and the remaining channels still fire. Missing Skarbiec items or
-//! non-secret routing config disable only their channel. A gcp_auth failure for
-//! Pub/Sub likewise logs and skips.
-//!
-//! That swallowing is correct — an alert must never be the thing that kills
-//! the process it is reporting on — but it used to leave nothing queryable
-//! behind, so "the alerts have been silently failing for a week" was only
-//! ever discovered by noticing the silence. Every channel failure now also
-//! emits the fleet's structured failure line ([`crate::failure`]) with the
-//! same classification the CLI uses, so a dead alert path is a row an
-//! operator can find rather than an absence they have to infer.
+//! `alerts.channels` is the explicit enablement fence. With no enabled
+//! channels, alert dispatch performs no credential or network lookup. Enabled
+//! channels resolve only their scoped credentials. Each delivery is
+//! fault-isolated and emits a bounded structured failure without blocking the
+//! monitor, coordinator, or another channel.
 
 use serde_json::{json, Value};
 
@@ -94,22 +83,31 @@ pub struct AlertChannels {
 }
 
 impl AlertChannels {
-    /// Resolve secret-bearing channel configuration from the `stado-alerts`
-    /// Skarbiec item. Non-secret routing fields remain ordinary configuration.
-    /// Pub/Sub uses workload identity through `gcp_auth`.
+    /// Resolve only explicitly enabled alert channels.
     pub async fn from_env(topic: &str) -> Self {
-        let stored = match crate::skarbiec::Client::configured() {
-            Ok(vault) => match vault.read_item("stado-alerts").await {
-                Ok(value) => value,
+        let enabled = crate::config::alert_channels();
+        let is_enabled = |channel: &str| enabled.iter().any(|value| value == channel);
+        if enabled.is_empty() {
+            return Self::default();
+        }
+
+        let needs_stored = is_enabled("slack") || is_enabled("telegram") || is_enabled("sendgrid");
+        let stored = if needs_stored {
+            match crate::skarbiec::Client::configured() {
+                Ok(vault) => match vault.read_item("stado-alerts").await {
+                    Ok(value) => value,
+                    Err(err) => {
+                        channel_failed("configuration", &err.to_string());
+                        Value::Null
+                    }
+                },
                 Err(err) => {
-                    log(&format!("Skarbiec alert credentials unavailable: {err}"));
+                    channel_failed("configuration", &err.to_string());
                     Value::Null
                 }
-            },
-            Err(err) => {
-                log(&format!("Skarbiec alert credentials unavailable: {err}"));
-                Value::Null
             }
+        } else {
+            Value::Null
         };
         let secret = |field: &str| {
             stored
@@ -118,36 +116,42 @@ impl AlertChannels {
                 .filter(|value| !value.is_empty())
                 .map(str::to_string)
         };
-        let slack_webhook = secret("slack_webhook");
 
-        let telegram = match (secret("telegram_bot_token"), secret("telegram_chat_id")) {
-            (Some(token), Some(chat_id)) if !chat_id.is_empty() => Some(TelegramChannel {
-                token,
-                chat_id,
-                api_base: TELEGRAM_API_BASE.to_string(),
-            }),
-            _ => None,
-        };
-
-        let sendgrid = match (
-            secret("sendgrid_api_key"),
-            std::env::var("WC_EMAIL_TO").ok(),
-        ) {
-            (Some(api_key), Some(to)) if !to.is_empty() => Some(SendgridChannel {
-                api_key,
-                to,
-                from: std::env::var("WC_EMAIL_FROM")
-                    .ok()
-                    .filter(|value| !value.is_empty())
-                    .unwrap_or_else(|| DEFAULT_EMAIL_FROM.to_string()),
-                url: SENDGRID_URL.to_string(),
-            }),
-            _ => None,
-        };
-
-        let pubsub = if topic.is_empty() {
-            None
+        let slack_webhook = is_enabled("slack")
+            .then(|| secret("slack_webhook"))
+            .flatten();
+        let telegram = if is_enabled("telegram") {
+            match (secret("telegram_bot_token"), secret("telegram_chat_id")) {
+                (Some(token), Some(chat_id)) => Some(TelegramChannel {
+                    token,
+                    chat_id,
+                    api_base: TELEGRAM_API_BASE.to_string(),
+                }),
+                _ => None,
+            }
         } else {
+            None
+        };
+        let sendgrid = if is_enabled("sendgrid") {
+            match (
+                secret("sendgrid_api_key"),
+                std::env::var("WC_EMAIL_TO").ok(),
+            ) {
+                (Some(api_key), Some(to)) if !to.is_empty() => Some(SendgridChannel {
+                    api_key,
+                    to,
+                    from: std::env::var("WC_EMAIL_FROM")
+                        .ok()
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or_else(|| DEFAULT_EMAIL_FROM.to_string()),
+                    url: SENDGRID_URL.to_string(),
+                }),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let pubsub = if is_enabled("gcp-pubsub") && !topic.is_empty() {
             match gcp_token().await {
                 Ok(token) => Some(PubSubChannel {
                     topic: topic.to_string(),
@@ -155,10 +159,12 @@ impl AlertChannels {
                     token,
                 }),
                 Err(err) => {
-                    log(&format!("pubsub auth failed: {err}"));
+                    channel_failed("pubsub-auth", &err);
                     None
                 }
             }
+        } else {
+            None
         };
 
         Self {
@@ -299,7 +305,7 @@ pub async fn send_alert_with(channels: &AlertChannels, message: &str, subject: &
     }
 }
 
-/// Send an alert to all configured channels (Python `send_alert`).
+/// Send an alert to all explicitly enabled channels.
 pub async fn send_alert(topic: &str, message: &str, subject: &str) {
     let channels = AlertChannels::from_env(topic).await;
     send_alert_with(&channels, message, subject).await;
