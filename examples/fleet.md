@@ -12,8 +12,24 @@ before it lands.
 
 ## Onboard a new machine
 
-One command takes a machine from "unknown to Stado" to registered, with
-the fleet assignment in the same step:
+The product flow needs no insider knowledge — the machine announces
+itself, the operator only approves:
+
+```sh
+# on the new machine (no arguments, no hostname needed):
+stado_fleet join
+# on the control plane:
+stado_fleet pending
+stado_fleet approve <hostname-from-the-request> --fleet render-burst
+```
+
+`join` records the machine's real hostname, OS and architecture in the
+store and prints the request (for setups where the store is not shared,
+the printed JSON travels by any channel). `approve` turns it into a
+registered target through the validated registry write — a host identity
+already declared is refused, never duplicated. `reject` drops a request.
+
+One command from the control plane also works, when the address is known:
 
 ```sh
 stado_fleet enroll render-node-a --ssh operator@render-node-a.local --fleet render-burst
