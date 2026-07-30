@@ -33,6 +33,23 @@ examples requirement). Each script runs end-to-end locally.
    grants (`stado-local-agent`, `stado-host-health-beacon`), host recover,
    beacon-age as proof.
 
+## Providers (opt-in backends, per user)
+
+Each provider lights up the same way: credentials into YOUR skarbiec,
+provider flipped on in YOUR config, one verify command. Credentials come
+from your env, never inline.
+
+7. [`providers/enable-azure.sh`](providers/enable-azure.sh) —
+   `wisent-azure-billing-sp` (tenant_id, client_id, client_secret), then
+   `stado azure`.
+8. [`providers/enable-gcp.sh`](providers/enable-gcp.sh) —
+   `stado-gcp` (service_account_json), then `stado doctor`.
+9. [`providers/enable-aws.sh`](providers/enable-aws.sh) —
+   `stado-aws` (access_key_id, secret_access_key), then
+   `config validate`. Verified end-to-end on a scratch config.
+10. [`providers/enable-vast.sh`](providers/enable-vast.sh) —
+    `stado-vast` (api_key), then `stado vast list`.
+
 ## Template for a new example
 
 Per skarbiec's `PRODUCT.md`: the example IS the commands a user would
