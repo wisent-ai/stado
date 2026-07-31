@@ -44,15 +44,10 @@ before any write; a failed bootstrap rolls the entry back. The channel
 is anything the destination resolves over — LAN, mDNS, or an overlay
 address such as a tailnet IP; Stado does not care which.
 
-No ssh access from the control plane? Skip `--ssh` — the machine
-registers with `ssh: null` and installs itself. Pass the machine's real
-DNS name so the agent can resolve itself in the registry:
-
-```sh
-stado_fleet enroll render-node-c --hostname render-node-c.local --fleet render-burst
-# then, on render-node-c itself:
-stado bootstrap --local --target render-node-c
-```
+Without a control-plane SSH channel, use the machine-initiated `join` /
+`pending` / `approve` path above. There is no declaration-only enrollment:
+every registered target is backed by either a verified remote probe or a
+machine-authored join request.
 
 ## Declare a fleet
 
