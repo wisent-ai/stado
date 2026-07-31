@@ -91,7 +91,7 @@ jobs:
             sed -n '/pub const SCHEMA_VERSION:/{s/.*= //;s/;//;p;q;}' \
               stado-rs/src/machine.rs
           )"
-          schema_unit="$(printf x | wc -c | tr -d '[:space:]')"
+          schema_unit="$(printf x | /usr/bin/wc -c | tr -d '[:space:]')"
           config_schema="$(
             sed -n '/pub const SCHEMA_VERSION:/{s/.*= //;s/;//;p;q;}' \
               stado-rs/src/config_file.rs
@@ -296,7 +296,7 @@ jobs:
             sed -n '/pub const SCHEMA_VERSION:/{s/.*= //;s/;//;p;q;}' \
               "$STADO_SOURCE_DIR/stado-rs/src/machine.rs"
           )"
-          schema_unit="$(printf x | wc -c | tr -d '[:space:]')"
+          schema_unit="$(printf x | /usr/bin/wc -c | tr -d '[:space:]')"
           config_schema="$(
             sed -n '/pub const SCHEMA_VERSION:/{s/.*= //;s/;//;p;q;}' \
               "$STADO_SOURCE_DIR/stado-rs/src/config_file.rs"
