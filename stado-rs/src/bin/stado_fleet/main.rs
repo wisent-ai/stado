@@ -97,6 +97,12 @@ enum Commands {
         /// Hostname from the join request.
         hostname: String,
     },
+    /// Print the central enrollment and communication catalog.
+    Catalog {
+        /// Emit the machine-readable document instead of the table.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[tokio::main]
@@ -119,6 +125,7 @@ async fn main() -> ExitCode {
         Commands::Pending => enroll::pending().await,
         Commands::Approve { hostname, fleet } => enroll::approve(&hostname, fleet.as_deref()).await,
         Commands::Reject { hostname } => enroll::reject(&hostname).await,
+        Commands::Catalog { json } => enroll::catalog::catalog(json).await,
     };
     match result {
         Ok(clean) => {
