@@ -4,29 +4,45 @@
 //! literal appears in source.
 
 use super::*;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::MutexGuard;
 
 fn env_lock() -> MutexGuard<'static, ()> {
-    static LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-    LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    test_env_lock()
 }
 
-struct StoreEnv;
+struct StoreEnv {
+    _config: tempfile::TempDir,
+}
 
 impl StoreEnv {
     fn set(value: &str) -> Self {
+        let config = tempfile::tempdir().expect("config tempdir");
+        let path = config.path().join("config.json");
+        let document = serde_json::json!({"credentials": {"store": value}});
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&document).expect("serialize config"),
+        )
+        .expect("write config");
+        std::env::set_var("STADO_CONFIG", path);
         std::env::set_var(ENV_STORE, value);
-        Self
+        Self { _config: config }
     }
+
     fn unset() -> Self {
+        let config = tempfile::tempdir().expect("config tempdir");
+        let path = config.path().join("config.json");
+        std::fs::write(&path, b"{}").expect("write config");
+        std::env::set_var("STADO_CONFIG", path);
         std::env::remove_var(ENV_STORE);
-        Self
+        Self { _config: config }
     }
 }
 
 impl Drop for StoreEnv {
     fn drop(&mut self) {
         std::env::remove_var(ENV_STORE);
+        std::env::remove_var("STADO_CONFIG");
     }
 }
 
@@ -47,14 +63,20 @@ fn write_store(contents: &str, mode: &str) -> (tempfile::TempDir, PathBuf) {
 fn unset_selects_skarbiec() {
     let _guard = env_lock();
     let _env = StoreEnv::unset();
-    assert_eq!(selected().expect("selected"), Backend::Skarbiec { url: None });
+    assert_eq!(
+        selected().expect("selected"),
+        Backend::Skarbiec { url: None }
+    );
 }
 
 #[test]
 fn bare_skarbiec_selects_skarbiec() {
     let _guard = env_lock();
     let _env = StoreEnv::set("skarbiec");
-    assert_eq!(selected().expect("selected"), Backend::Skarbiec { url: None });
+    assert_eq!(
+        selected().expect("selected"),
+        Backend::Skarbiec { url: None }
+    );
 }
 
 #[test]
@@ -165,20 +187,6 @@ async fn skarbiec_helpers_honor_file_backend() {
     match crate::skarbiec::Client::configured_item("stado-missing").await {
         Err(SkarbiecError::MissingValue(id)) => assert_eq!(id, "stado-missing"),
         other => panic!("missing item must be MissingValue, got {other:?}"),
-    }
-    // The operator's scratch store (created for the STADO_CREDENTIAL_STORE
-    // manual verification) must serve the same helpers when present.
-    let scratch = Path::new(
-        "/Users/lukaszbartoszcze/.stado/tmp-recovery/cred-store/creds.json",
-    );
-    if scratch.exists() {
-        std::env::set_var(ENV_STORE, format!("file://{}", scratch.display()));
-        assert_eq!(
-            crate::skarbiec::read_string("stado-vast", "api_key")
-                .await
-                .expect("read"),
-            Some("demo-vast-key-not-real".to_string())
-        );
     }
 }
 

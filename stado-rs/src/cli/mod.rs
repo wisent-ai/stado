@@ -28,6 +28,7 @@ pub mod dashboard;
 pub mod disk_cleanup;
 pub mod doctor;
 pub mod host;
+pub mod inference;
 pub mod instances;
 pub mod job;
 pub mod machine;
@@ -469,8 +470,8 @@ enum Commands {
     /// Move queue state between storage backends (billing-outage migration).
     #[command(subcommand)]
     Storage(storage::StorageCommands),
-    /// Read and manage application credentials in Skarbiec.
-    #[command(subcommand)]
+    /// Read, migrate, and manage application credentials in the selected store.
+    #[command(name = "credentials", visible_alias = "secrets", subcommand)]
     Secrets(secrets::SecretsCommands),
     /// Maintenance mode: pause/resume dispatching, and drain the fleet.
     #[command(subcommand)]
@@ -479,6 +480,9 @@ enum Commands {
     /// adopt, retire, deploy, logs, env.
     #[command(subcommand)]
     Service(service::ServiceCommands),
+    /// Plan, deploy, route and operate local OpenAI-compatible inference.
+    #[command(subcommand)]
+    Inference(inference::InferenceCommands),
     /// Ordered deployment preflight: config, storage, provider auth, quota,
     /// release channel, agent template, VM identity, registry, queue pause
     /// state and alert channels. Exits non-zero if any check FAILs.
@@ -1326,7 +1330,7 @@ fn failure_service(matches: &clap::ArgMatches) -> &'static str {
         | "doctor"
         | "disk-cleanup"
         | "install-disk-cleanup" => "fleet",
-        "secrets" => "skarbiec",
+        "secrets" => "credentials",
         "billing" | "cost" | "quota" => "billing",
         "mail" => "mail",
         "azure" | "vast" | "blast-radius" => "provider",
@@ -1562,6 +1566,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Secrets(sub) => secrets::dispatch(sub).await,
         Commands::Queue(sub) => queue::dispatch(sub).await,
         Commands::Service(sub) => service::dispatch(sub).await,
+        Commands::Inference(sub) => inference::dispatch(sub).await,
         Commands::Doctor(args) => doctor::dispatch(args).await,
     }
 }

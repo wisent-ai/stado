@@ -105,16 +105,14 @@ fn config_init_seeds_a_safe_local_registry_for_the_first_worker() {
         usize::try_from(stado::providers::local::disk_cleanup::STATE_VERSION)
             .expect("state version fits usize")
     );
-    let hostname =
-        stado::targets::normalize_hostname(&stado::providers::vast::system_hostname());
+    let hostname = stado::targets::normalize_hostname(&stado::providers::vast::system_hostname());
     let target = &targets[usize::default()];
     let name_matches = target["name"].as_str() == Some(hostname.as_str());
-    let hostname_matches = target["hostnames"]
-        .as_array()
-        .is_some_and(|values| values.iter().any(|value| value.as_str() == Some(hostname.as_str())));
+    let hostname_matches = target["hostnames"].as_array().is_some_and(|values| {
+        values
+            .iter()
+            .any(|value| value.as_str() == Some(hostname.as_str()))
+    });
     assert!(name_matches || hostname_matches);
-    assert_eq!(
-        targets[usize::default()]["disk_cleanup"]["mode"],
-        "off"
-    );
+    assert_eq!(targets[usize::default()]["disk_cleanup"]["mode"], "off");
 }
