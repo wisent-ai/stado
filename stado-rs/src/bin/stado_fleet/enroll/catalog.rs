@@ -17,7 +17,12 @@ pub struct EnrollmentCatalog {
     pub allow_join: bool,
     pub allow_enroll: bool,
     pub require_verified_hostname: bool,
+    pub key_custody: String,
 }
+
+/// Key custody values the fleet supports.
+const CUSTODY_SKARBIEC: &str = "skarbiec";
+const CUSTODY_OPENSSH: &str = "openssh";
 
 /// The parsed `channels` section: declared channel names plus free-form
 /// notes, preserving the operator's wording.
@@ -47,6 +52,7 @@ pub fn parse_enrollment(document: &Value) -> Result<EnrollmentCatalog, String> {
             allow_join: true,
             allow_enroll: true,
             require_verified_hostname: false,
+            key_custody: CUSTODY_SKARBIEC.to_string(),
         });
     };
     if !section.is_object() {
@@ -61,11 +67,26 @@ pub fn parse_enrollment(document: &Value) -> Result<EnrollmentCatalog, String> {
         None => true,
         Some(_) => bool_field(section, "allow_enroll", location)?,
     };
+    let key_custody = match section.get("key_custody") {
+        None => CUSTODY_SKARBIEC.to_string(),
+        Some(value) => {
+            let custody = value
+                .as_str()
+                .ok_or_else(|| format!("{location}.key_custody: must be a string"))?;
+            if custody != CUSTODY_SKARBIEC && custody != CUSTODY_OPENSSH {
+                return Err(format!(
+                    "{location}.key_custody: must be '{CUSTODY_SKARBIEC}' or '{CUSTODY_OPENSSH}'"
+                ));
+            }
+            custody.to_string()
+        }
+    };
     Ok(EnrollmentCatalog {
         declared: true,
         allow_join,
         allow_enroll,
         require_verified_hostname: bool_field(section, "require_verified_hostname", location)?,
+        key_custody,
     })
 }
 
@@ -143,6 +164,7 @@ pub async fn catalog(as_json: bool) -> Result<bool, String> {
                 "allow_join": enrollment.allow_join,
                 "allow_enroll": enrollment.allow_enroll,
                 "require_verified_hostname": enrollment.require_verified_hostname,
+                "key_custody": enrollment.key_custody,
             },
             "channels": {
                 "declared": channels.declared,
@@ -162,8 +184,11 @@ pub async fn catalog(as_json: bool) -> Result<bool, String> {
     }
     println!("enrollment:");
     println!(
-        "  allow_join={} allow_enroll={} require_verified_hostname={}",
-        enrollment.allow_join, enrollment.allow_enroll, enrollment.require_verified_hostname
+        "  allow_join={} allow_enroll={} require_verified_hostname={} key_custody={}",
+        enrollment.allow_join,
+        enrollment.allow_enroll,
+        enrollment.require_verified_hostname,
+        enrollment.key_custody
     );
     if channels.declared {
         println!("channels:");
@@ -205,6 +230,26 @@ mod tests {
         let err = require_join_allowed(&doc).unwrap_err();
         assert!(err.contains("allow_join"), "unexpected error: {err}");
         require_enroll_allowed(&doc).expect("enroll still allowed");
+    }
+
+    #[test]
+    fn custody_defaults_to_the_vault() {
+        let catalog = parse_enrollment(&json!({})).expect("parse");
+        assert_eq!(catalog.key_custody, "skarbiec");
+    }
+
+    #[test]
+    fn custody_accepts_openssh_alternative() {
+        let doc = json!({ "enrollment": { "key_custody": "openssh" } });
+        let catalog = parse_enrollment(&doc).expect("parse");
+        assert_eq!(catalog.key_custody, "openssh");
+    }
+
+    #[test]
+    fn unknown_custody_is_refused() {
+        let doc = json!({ "enrollment": { "key_custody": "dropbox" } });
+        let err = parse_enrollment(&doc).unwrap_err();
+        assert!(err.contains("key_custody"), "unexpected error: {err}");
     }
 
     #[test]
