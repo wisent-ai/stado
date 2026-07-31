@@ -241,8 +241,6 @@ jobs:
       STADO_CONTROL_PLATFORM: ${{ vars.STADO_CONTROL_PLATFORM }}
       STADO_API_HOST: stado.wisent.com
       STADO_DASHBOARD_UPSTREAM: ${{ vars.STADO_DASHBOARD_UPSTREAM }}
-      BRAMA_API_HOST: ${{ vars.BRAMA_API_HOST }}
-      BRAMA_PORT: ${{ vars.BRAMA_PORT }}
     steps:
       - name: Check out exact source revision
         env:
@@ -345,6 +343,7 @@ jobs:
           STADO_RELEASE_DIR="$release_dir" bash "$STADO_SOURCE_DIR/deploy/deploy_stado_rust.sh"
 
       - name: Reload TLS reverse proxy
+        if: ${{ vars.STADO_ENABLE_AZURE_DEPLOY == 'true' }}
         run: |
           if [ -z "$STADO_DASHBOARD_UPSTREAM" ]; then
             STADO_DASHBOARD_UPSTREAM="$(
@@ -353,28 +352,6 @@ jobs:
             )"
             export STADO_DASHBOARD_UPSTREAM
           fi
-          : "${BRAMA_PORT:?configure BRAMA_PORT}"
-          registry="$RUNNER_TEMP/stado-registry.json"
-          "$HOME/.stado/bin/stado" registry pull > "$registry"
-          gateway="$(jq -r '.inference.gateway_target // empty' "$registry")"
-          if [ -z "$gateway" ]; then
-            echo "::notice::Inference gateway is not registered; preserving the current proxy configuration."
-            exit
-          fi
-          destination="$(
-            jq -er --arg gateway "$gateway" \
-              '.targets[] | select(.name == $gateway) | .ssh | select(type == "string" and . != "")' \
-              "$registry"
-          )"
-          address="${destination##*@}"
-          case "$address" in
-            ''|*[![:alnum:]._-]*)
-              echo "::error::Inference gateway '$gateway' has no safe registered Brama address."
-              false
-              ;;
-          esac
-          BRAMA_UPSTREAM="${address}:${BRAMA_PORT}"
-          export BRAMA_UPSTREAM
           if ! command -v caddy >/dev/null; then
             echo "::error::Caddy is not installed on the control-plane runner."
             false
