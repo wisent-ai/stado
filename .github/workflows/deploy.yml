@@ -32,7 +32,7 @@ jobs:
       STADO_API_URL: https://stado.wisent.com
       WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
       WC_SKARBIEC_CONSUMER: stado-release-publisher
-      WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-skarbiec-token
+      WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
     steps:
       - uses: actions/checkout@v4
       - name: Resolve exact release identity
@@ -237,7 +237,7 @@ jobs:
       STADO_API_URL: https://stado.wisent.com
       WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
       WC_SKARBIEC_CONSUMER: stado-release-publisher
-      WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-skarbiec-token
+      WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
       STADO_CONTROL_PLATFORM: ${{ vars.STADO_CONTROL_PLATFORM }}
       STADO_API_HOST: stado.wisent.com
       STADO_DASHBOARD_UPSTREAM: ${{ vars.STADO_DASHBOARD_UPSTREAM }}
