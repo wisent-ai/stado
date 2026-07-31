@@ -23,6 +23,7 @@ pub mod deploy;
 pub mod doctor;
 pub mod failure;
 pub mod failure_fixer;
+pub mod inference;
 pub mod machine;
 pub mod mail;
 pub mod mcp;

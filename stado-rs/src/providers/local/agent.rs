@@ -614,6 +614,28 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             // Cloud replacement was requested through the provider adapter.
             DriftOutcome::SelfTerminated => return Ok(()),
         }
+        if let Some(reservation) = crate::inference::reservation::active() {
+            agent_diag.insert(
+                "inference_reservation".into(),
+                Value::from(reservation.deployment.clone()),
+            );
+            publish_capacity(
+                &store,
+                &consumer_id,
+                kind,
+                &BTreeMap::new(),
+                Some(i64::default()),
+                Some(total_vram_gb),
+                Some(agent_diag.clone()),
+            )
+            .await?;
+            log_fn(&format!(
+                "exclusive inference reservation '{}': publishing zero compute capacity",
+                reservation.deployment
+            ));
+            tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
+            continue;
+        }
         if vast_active {
             publish_capacity(
                 &store,
