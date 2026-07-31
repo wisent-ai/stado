@@ -87,7 +87,7 @@ async fn restore_after_failed_apply(
     let Some(previous) = attempted.previous.as_deref() else {
         return Ok(());
     };
-    let bearer = super::super::service::service_secret(&previous.credential_item, "token").await?;
+    let bearer = super::credential::read().await?;
     let previous_target = host_channel::canonical_target(&previous.target)
         .await
         .map_err(click)?;
@@ -102,8 +102,7 @@ async fn activate(
     deployment: &schema::Deployment,
     runner: &crate::deploy::Runner,
 ) -> Result<(), CmdError> {
-    let bearer =
-        super::super::service::service_secret(&deployment.credential_item, "token").await?;
+    let bearer = super::credential::read().await?;
     let target = host_channel::canonical_target(&deployment.target)
         .await
         .map_err(click)?;
@@ -215,8 +214,7 @@ pub async fn apply(plan_id: &str, json_output: bool) -> Result<(), CmdError> {
             "registry changed after inference plan creation; create a new plan",
         ));
     }
-    let bearer =
-        super::super::service::service_secret(&plan.deployment.credential_item, "token").await?;
+    let bearer = super::credential::read().await?;
     let target = host_channel::canonical_target(&plan.deployment.target)
         .await
         .map_err(click)?;
