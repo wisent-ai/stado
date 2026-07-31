@@ -2,11 +2,10 @@
 //!
 //! `azure login` uses authorization-code + PKCE against the target tenant.
 //! `domain_hint=live.com` preserves the Microsoft-account federation used by
-//! Azure guest users. Only the refresh token is encrypted in an owner-only
-//! Skarbiec item; authorization codes and access tokens remain process-local.
+//! Azure refresh credential is written to the globally selected credential
+//! store; authorization codes and access tokens remain process-local.
 
 use std::path::PathBuf;
-use std::process::Stdio;
 use std::time::Duration;
 
 use base64::Engine;
@@ -15,7 +14,6 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tokio::process::Command;
 use url::Url;
 use uuid::Uuid;
 
@@ -342,31 +340,22 @@ fn home_path(relative: &str) -> PathBuf {
         .join(relative)
 }
 
-fn skarbiec_binary() -> PathBuf {
-    if let Some(path) = std::env::var_os("SKARBIEC_BIN") {
-        return PathBuf::from(path);
-    }
-    let installed = home_path(".stado/bin/skarbiec");
-    if installed.is_file() {
-        installed
-    } else {
-        PathBuf::from("skarbiec")
-    }
+fn credential_client() -> Result<crate::skarbiec::Client, CmdError> {
+    let credentials = crate::credential_store::admin_credentials()
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    crate::skarbiec::Client::new(
+        &credentials.url,
+        &credentials.consumer,
+        &credentials.token_file,
+    )
+    .map_err(|error| CmdError::click(error.to_string()))
 }
 
-async fn skarbiec_item(id: &str) -> Result<Value, CmdError> {
-    let output = Command::new(skarbiec_binary())
-        .args(["get", id])
-        .output()
+async fn credential_item(id: &str) -> Result<Value, CmdError> {
+    credential_client()?
+        .read_item(id)
         .await
-        .map_err(|err| CmdError::click(format!("cannot run Skarbiec: {err}")))?;
-    if !output.status.success() {
-        return Err(CmdError::click(format!(
-            "cannot read Skarbiec item {id}: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-    serde_json::from_slice(&output.stdout).map_err(CmdError::from)
+        .map_err(|error| CmdError::click(format!("cannot read credential item {id}: {error}")))
 }
 
 async fn store_operator_item(
@@ -376,9 +365,7 @@ async fn store_operator_item(
     refresh_token: &str,
     token_body: &Value,
 ) -> Result<(), CmdError> {
-    let row = json!([{
-        "id": id,
-        "type": "oauth",
+    let value = json!({
         "display_name": "Stado Azure operator session",
         "login_email": account,
         "tenant_id": tenant,
@@ -388,28 +375,13 @@ async fn store_operator_item(
         "client_info": token_body.get("client_info").and_then(Value::as_str).unwrap_or(""),
         "credential_status": "ready",
         "tags": ["wisent", "azure", "operator", "oauth-refresh"]
-    }]);
-    let mut child = Command::new(skarbiec_binary())
-        .args(["import", "/dev/stdin"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|err| CmdError::click(format!("cannot run Skarbiec: {err}")))?;
-    child
-        .stdin
-        .take()
-        .ok_or_else(|| CmdError::click("cannot open Skarbiec import stdin"))?
-        .write_all(serde_json::to_string(&row)?.as_bytes())
-        .await?;
-    let output = child.wait_with_output().await?;
-    if !output.status.success() {
-        return Err(CmdError::click(format!(
-            "cannot store Azure operator credential: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-    Ok(())
+    });
+    credential_client()?
+        .write_item(id, "oauth", &value)
+        .await
+        .map_err(|error| {
+            CmdError::click(format!("cannot store Azure operator credential: {error}"))
+        })
 }
 
 async fn login(args: LoginArgs) -> Result<(), CmdError> {
@@ -482,7 +454,7 @@ struct OperatorToken {
 }
 
 async fn refresh_operator_token(item_id: &str) -> Result<OperatorToken, CmdError> {
-    let item = skarbiec_item(item_id).await?;
+    let item = credential_item(item_id).await?;
     let required = |name: &str| {
         item.get(name)
             .and_then(Value::as_str)

@@ -47,6 +47,8 @@ use futures::future::BoxFuture;
 pub mod bootstrap;
 pub mod host_build_caches;
 pub mod host_channel;
+pub mod inference;
+pub mod inference_routes;
 pub mod host_cleanup;
 pub mod host_disk;
 pub mod host_exec;

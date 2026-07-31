@@ -118,11 +118,19 @@ pub async fn run(
     let explicit_off = matches!(auto_list_env.as_str(), "0" | "false" | "no" | "off");
     let explicit_on = matches!(auto_list_env.as_str(), "1" | "true" | "yes" | "on");
     let env_has_api_key = vast::vast_api_key_available().await;
-    let effective_vast = vast_auto_list
-        || explicit_on
-        || (crate::capabilities::ProviderId::Local.matches(&kind)
-            && env_has_api_key
-            && !explicit_off);
+    let inference_reservation = crate::inference::reservation::active();
+    let effective_vast = inference_reservation.is_none()
+        && (vast_auto_list
+            || explicit_on
+            || (crate::capabilities::ProviderId::Local.matches(&kind)
+                && env_has_api_key
+                && !explicit_off));
+    if let Some(reservation) = &inference_reservation {
+        println!(
+            "agent: Vast disabled by exclusive inference reservation '{}'",
+            reservation.deployment
+        );
+    }
     if effective_vast {
         // Spawn the Vast.ai auto-listing daemon as a background task so
         // one `stado agent --vast-auto-list` invocation gives the operator both

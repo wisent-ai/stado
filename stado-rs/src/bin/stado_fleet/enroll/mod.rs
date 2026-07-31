@@ -15,6 +15,7 @@
 //! is refused.
 
 pub mod catalog;
+pub mod legacy;
 
 use serde_json::{json, Value};
 use stado::cli::registry::{fetch_document, push_document};
