@@ -1,12 +1,11 @@
 //! Client for the separate Skarbiec credential service.
 //!
-//! Skarbiec is reached over its loopback HTTP API or a TLS-protected remote
-//! endpoint. Application credentials are decrypted by Skarbiec, authorized by
-//! an action-scoped consumer grant, and held only in the requesting Stado
-//! process. Skarbiec is the default credential store; `STADO_CREDENTIAL_STORE`
-//! (see `crate::credential_store`) may select the guarded JSON file backend
-//! for the two plain read helpers (`read_string`, `Client::configured_item`),
-//! while every verifier grant below always talks to Skarbiec.
+//! Skarbiec is reached over loopback HTTP or a TLS-protected remote endpoint
+//! and enforces scoped consumer grants. It is the default backend; every
+//! application-credential CRUD call routes through `crate::credential_store`,
+//! selected by `STADO_CREDENTIALS_STORE`. Backend bootstrap grants remain
+//! direct because a manager cannot store the credential required to unlock
+//! itself.
 //!
 //! This module is a directory split of the former single `skarbiec.rs`: the
 //! public API surface is re-exported unchanged so every `crate::skarbiec::…`
@@ -155,12 +154,9 @@ pub(crate) fn erase_transient_agent_grant(path: &str, byte_count: usize) {
     let _ = std::fs::remove_file(path);
 }
 
-/// Resolve one optional string field from a Skarbiec item. A missing item is
-/// `None`; authentication, transport, schema, and authorization failures remain
-/// explicit errors and never trigger an alternate credential source. The read
-/// flows through the credential store selector, so a file backend selected via
-/// `STADO_CREDENTIAL_STORE` answers it and the default skarbiec backend is
-/// byte-identical to the direct client call.
+/// Resolve one optional string field from the selected credential store. A
+/// missing item is `None`; authentication, transport, schema, and authorization
+/// failures remain explicit and never trigger an alternate source.
 pub async fn read_string(id: &str, field: &str) -> Result<Option<String>, SkarbiecError> {
     crate::credential_store::read_string(id, field).await
 }
