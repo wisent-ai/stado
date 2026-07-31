@@ -239,11 +239,6 @@ recorded prior deployment; `retire` refuses while any primary or fallback route
 still selects the deployment and retains model cache unless `--purge-cache` is
 explicit.
 
-The stable Stado GitHub deployment also owns the public Brama ingress.
-`BRAMA_PORT` must match the Brama listener; `BRAMA_API_HOST` is optional and
-defaults to `brama.bobloo.com`. The workflow resolves the upstream from
-`inference.gateway_target` and that target's verified `ssh` channel, then
-reloads Caddy. No machine address is duplicated in workflow or proxy config.
 
 ## Quotas
 

@@ -3,8 +3,6 @@
 # Environment:
 #   STADO_API_HOST           optional; defaults to stado.wisent.com
 #   STADO_DASHBOARD_UPSTREAM dashboard listener, including host and port
-#   BRAMA_API_HOST           optional; defaults to brama.bobloo.com
-#   BRAMA_UPSTREAM           Brama listener resolved from the registry gateway
 #
 # Rust permits bearer-free GET only on /api/release/object and only for the
 # stado://releases software namespace. Product object, machine, service,
@@ -13,10 +11,4 @@
 {$STADO_API_HOST:stado.wisent.com} {
     # Caddy supplies X-Forwarded-Proto for the Rust trusted-proxy check.
     reverse_proxy {$STADO_DASHBOARD_UPSTREAM}
-}
-
-{$BRAMA_API_HOST:brama.bobloo.com} {
-    # The upstream is the registered gateway's Tailscale/DNS address; callers
-    # continue using HTTPS and never connect to the model host directly.
-    reverse_proxy {$BRAMA_UPSTREAM}
 }
