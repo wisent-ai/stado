@@ -158,7 +158,9 @@ mod ops {
     use serde_json::json;
 
     use crate::fleet::{find_fleet, parse_fleets};
-    use crate::ops::{assign_target, create_fleet, preflight_enroll, register_target, remove_target};
+    use crate::ops::{
+        assign_target, create_fleet, preflight_enroll, register_target, remove_target,
+    };
 
     fn base() -> serde_json::Value {
         json!({
@@ -197,10 +199,7 @@ mod ops {
         let next = assign_target(&base(), "laptop", "core").expect("assign");
         let fleets = parse_fleets(&next).expect("parse");
         let core = find_fleet(&fleets, "core").expect("core fleet");
-        assert_eq!(
-            core.members,
-            vec!["mini".to_string(), "laptop".to_string()]
-        );
+        assert_eq!(core.members, vec!["mini".to_string(), "laptop".to_string()]);
     }
 
     #[test]
@@ -229,7 +228,10 @@ mod ops {
     #[test]
     fn enroll_preflight_refuses_registered_target() {
         let err = preflight_enroll(&base(), "mini", None).unwrap_err();
-        assert!(err.contains("already registered"), "unexpected error: {err}");
+        assert!(
+            err.contains("already registered"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -258,7 +260,9 @@ mod ops {
             .expect("targets");
         let added = targets
             .iter()
-            .find(|target| target.get("name").and_then(serde_json::Value::as_str) == Some("new-box"))
+            .find(|target| {
+                target.get("name").and_then(serde_json::Value::as_str) == Some("new-box")
+            })
             .expect("added target");
         assert!(added.get("ssh").expect("ssh key").is_null());
         assert_eq!(
@@ -267,14 +271,19 @@ mod ops {
         );
         assert_eq!(
             added.get("hostnames").and_then(serde_json::Value::as_array),
-            Some(&vec![serde_json::Value::String("new-box.local".to_string())])
+            Some(&vec![serde_json::Value::String(
+                "new-box.local".to_string()
+            )])
         );
     }
 
     #[test]
     fn register_target_refuses_duplicate() {
         let err = register_target(&base(), "mini", "local", &[]).unwrap_err();
-        assert!(err.contains("already registered"), "unexpected error: {err}");
+        assert!(
+            err.contains("already registered"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -289,7 +298,9 @@ mod ops {
             .all(|target| target.get("name").and_then(serde_json::Value::as_str) != Some("mini")));
         assert!(targets
             .iter()
-            .any(|target| target.get("name").and_then(serde_json::Value::as_str) == Some("laptop")));
+            .any(
+                |target| target.get("name").and_then(serde_json::Value::as_str) == Some("laptop")
+            ));
     }
 
     #[test]

@@ -203,10 +203,7 @@ mod tests {
             request.get("status").and_then(Value::as_str),
             Some(STATUS_PENDING)
         );
-        assert_eq!(
-            request.get("arch").and_then(Value::as_str),
-            Some("aarch64")
-        );
+        assert_eq!(request.get("arch").and_then(Value::as_str), Some("aarch64"));
     }
 
     #[test]

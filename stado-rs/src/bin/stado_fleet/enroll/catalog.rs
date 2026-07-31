@@ -184,9 +184,7 @@ pub async fn catalog(as_json: bool) -> Result<bool, String> {
     println!("enrollment:");
     println!(
         "  allow_join={} allow_enroll={} require_verified_hostname={}",
-        enrollment.allow_join,
-        enrollment.allow_enroll,
-        enrollment.require_verified_hostname
+        enrollment.allow_join, enrollment.allow_enroll, enrollment.require_verified_hostname
     );
     if channels.declared {
         println!("channels:");

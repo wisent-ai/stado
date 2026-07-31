@@ -29,11 +29,9 @@ fn current_uid() -> Result<u32, SkarbiecError> {
             .parse()
             .map_err(|error| format!("cannot parse id -u output: {error}"))
     });
-    UID.as_ref()
-        .copied()
-        .map_err(|detail| {
-            SkarbiecError::Deployment(format!("cannot determine current uid: {detail}"))
-        })
+    UID.as_ref().copied().map_err(|detail| {
+        SkarbiecError::Deployment(format!("cannot determine current uid: {detail}"))
+    })
 }
 
 /// The store file must be a regular, non-symlink file owned by the current
@@ -56,16 +54,16 @@ pub(super) fn checked_owner_file(path: &Path) -> Result<(), SkarbiecError> {
         ))
     })?;
     if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-        return Err(insecure("must be a regular file, not a symlink or special file"));
+        return Err(insecure(
+            "must be a regular file, not a symlink or special file",
+        ));
     }
     if metadata.uid() != current_uid()? {
         return Err(insecure("must be owned by the current user"));
     }
     let non_owner_mask = u32::from(u8::MAX >> (u16::BITS / u8::BITS));
     if metadata.permissions().mode() & non_owner_mask != u32::MIN {
-        return Err(insecure(
-            "must not be accessible by group or other users",
-        ));
+        return Err(insecure("must not be accessible by group or other users"));
     }
     Ok(())
 }
@@ -107,7 +105,11 @@ pub(super) fn file_read_item(path: &Path, id: &str) -> Result<Value, SkarbiecErr
         .ok_or_else(|| SkarbiecError::MissingValue(id.to_string()))
 }
 
-pub(super) fn file_read_string(path: &Path, id: &str, field: &str) -> Result<Option<String>, SkarbiecError> {
+pub(super) fn file_read_string(
+    path: &Path,
+    id: &str,
+    field: &str,
+) -> Result<Option<String>, SkarbiecError> {
     Ok(read_store_file(path)?
         .get(id)
         .and_then(|item| item.get(field))
@@ -176,7 +178,9 @@ pub(super) fn file_store(path: &Path, doc: &Value) -> Result<(), SkarbiecError> 
     let temporary = parent.join(format!(
         ".stado-credentials-{}-{}.tmp",
         std::process::id(),
-        path.file_name().and_then(|name| name.to_str()).unwrap_or("store")
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("store")
     ));
     let owner_mode = u32::from_str_radix("600", u32::from(u8::BITS))
         .map_err(|source| SkarbiecError::Deployment(source.to_string()))?;
