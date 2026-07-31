@@ -9,6 +9,7 @@
 mod doctor;
 mod enroll;
 mod fleet;
+mod key;
 mod ops;
 #[cfg(test)]
 mod tests;
@@ -103,6 +104,38 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Host keys in the Skarbiec vault.
+    #[command(subcommand)]
+    Key(KeyCommands),
+}
+
+#[derive(Subcommand)]
+enum KeyCommands {
+    /// Import an existing private key into the vault (never printed).
+    Add {
+        /// Registry target the key belongs to.
+        target: String,
+        /// Path of the private key file to import.
+        #[arg(long)]
+        from: String,
+    },
+    /// List vault host keys (metadata only).
+    Ls,
+    /// Remove a target's vault host key.
+    Rm {
+        /// Registry target.
+        target: String,
+    },
+    /// Install the vault public key into the target's authorized_keys.
+    Install {
+        /// Registry target.
+        target: String,
+    },
+    /// Verify the vault key opens the channel to the target.
+    Check {
+        /// Registry target.
+        target: String,
+    },
 }
 
 #[tokio::main]
@@ -126,6 +159,16 @@ async fn main() -> ExitCode {
         Commands::Approve { hostname, fleet } => enroll::approve(&hostname, fleet.as_deref()).await,
         Commands::Reject { hostname } => enroll::reject(&hostname).await,
         Commands::Catalog { json } => enroll::catalog::catalog(json).await,
+        Commands::Key(sub) => {
+            let runner = stado::deploy::production_runner();
+            match sub {
+                KeyCommands::Add { target, from } => key::add(&runner, &target, &from).await,
+                KeyCommands::Ls => key::ls().await,
+                KeyCommands::Rm { target } => key::rm(&target).await,
+                KeyCommands::Install { target } => key::install(&runner, &target).await,
+                KeyCommands::Check { target } => key::check(&runner, &target).await,
+            }
+        }
     };
     match result {
         Ok(clean) => {
