@@ -96,6 +96,24 @@ always covers the machine the command runs on.
 - `burst` — heavy GPU capacity for burst work
 - `interactive` — operator workstations that may sleep
 
+## Host keys in the vault
+
+Host keys live in Skarbiec, not in home directories. The vault is the
+source of truth; using a key means materializing it for one remote call
+and removing it right after, and private material is never printed.
+
+```sh
+stado_fleet key add render-node-a --from ~/.ssh/id_ed25519   # import into the vault
+stado_fleet key ls                                            # metadata only: id, type, fingerprint
+stado_fleet key install render-node-a                         # public key -> authorized_keys on the host
+stado_fleet key check render-node-a                           # verify the vault key opens the channel
+stado_fleet key rm render-node-a                              # remove from the vault
+```
+
+Targets with a vault key open their channel with it (`-i` from the
+materialized file); targets without one keep the OpenSSH default
+resolution (agent, config, default key files).
+
 ## The central catalog
 
 Which registration paths the fleet allows, and how machines reach the
