@@ -2,14 +2,14 @@
 //! `STADO_CREDENTIALS_STORE` (or an explicit CLI destination) is the target.
 //! Normal credential access refuses a selector mismatch, so no process can
 //! silently start against an empty store after an environment change.
-#[cfg(unix)]
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use serde::Serialize;
-use serde_json::{Map, Value};
 use super::write::{delete_item_at, list_items_at, read_item_at, write_item_at};
 use super::{configured_selector, parse_selector, requested_selector, Backend, ENV_STORE};
 use crate::skarbiec::SkarbiecError;
+use serde::Serialize;
+use serde_json::{Map, Value};
+#[cfg(unix)]
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Serialize)]
 pub struct MigrationReport {
@@ -79,7 +79,10 @@ fn write_config(path: &Path, body: &[u8]) -> Result<(), SkarbiecError> {
         .map_err(|source| deployment(format!("cannot write config: {source}")))?;
     std::fs::rename(&temporary, path).map_err(|source| {
         let _ = std::fs::remove_file(&temporary);
-        deployment(format!("cannot replace config {}: {source}", path.display()))
+        deployment(format!(
+            "cannot replace config {}: {source}",
+            path.display()
+        ))
     })
 }
 
@@ -96,10 +99,15 @@ fn write_config(path: &Path, body: &[u8]) -> Result<(), SkarbiecError> {
 fn persist_selector(locator: &str) -> Result<(), SkarbiecError> {
     let path = config_path_for_write()?;
     let mut document = if path.exists() {
-        let body = std::fs::read_to_string(&path)
-            .map_err(|source| deployment(format!("cannot read config {}: {source}", path.display())))?;
-        serde_json::from_str::<Value>(&body)
-            .map_err(|source| deployment(format!("config {} is invalid JSON: {source}", path.display())))?
+        let body = std::fs::read_to_string(&path).map_err(|source| {
+            deployment(format!("cannot read config {}: {source}", path.display()))
+        })?;
+        serde_json::from_str::<Value>(&body).map_err(|source| {
+            deployment(format!(
+                "config {} is invalid JSON: {source}",
+                path.display()
+            ))
+        })?
     } else {
         Value::Object(Map::new())
     };
@@ -131,8 +139,7 @@ fn persist_selector(locator: &str) -> Result<(), SkarbiecError> {
     }
     let body = format!(
         "{}\n",
-        serde_json::to_string_pretty(&document)
-            .map_err(|source| deployment(source.to_string()))?
+        serde_json::to_string_pretty(&document).map_err(|source| deployment(source.to_string()))?
     );
     write_config(&path, body.as_bytes())
 }
@@ -168,9 +175,7 @@ async fn clear_items(
 ) -> Result<(), SkarbiecError> {
     let mut first_error = None;
     for item in items.iter().rev() {
-        if let Err(error) =
-            delete_item_at(backend, url, consumer, token_file, &item.id).await
-        {
+        if let Err(error) = delete_item_at(backend, url, consumer, token_file, &item.id).await {
             if first_error.is_none() {
                 first_error = Some(error);
             }
@@ -223,7 +228,9 @@ pub async fn migrate(
     }
     if let Ok(environment) = std::env::var(ENV_STORE) {
         let environment = environment.trim();
-        if !environment.is_empty() && explicit_destination.is_some_and(|value| value.trim() != environment) {
+        if !environment.is_empty()
+            && explicit_destination.is_some_and(|value| value.trim() != environment)
+        {
             return Err(deployment(format!(
                 "--to {destination_raw:?} conflicts with {ENV_STORE}={environment:?}"
             )));
@@ -243,7 +250,10 @@ pub async fn migrate(
 
     let items = snapshot(&source, url, consumer, token_file).await?;
     let destination_items = list_items_at(&destination, url, consumer, token_file).await?;
-    if destination_items.iter().any(|item| item.deleted != Some(true)) {
+    if destination_items
+        .iter()
+        .any(|item| item.deleted != Some(true))
+    {
         return Err(deployment(format!(
             "destination {} is not empty; refusing to overwrite credentials",
             destination.locator()
@@ -263,13 +273,13 @@ pub async fn migrate(
     };
     let verified = copied.len() == items.len()
         && copied.iter().zip(&items).all(|(left, right)| {
-            left.id == right.id
-                && left.item_type == right.item_type
-                && left.value == right.value
+            left.id == right.id && left.item_type == right.item_type && left.value == right.value
         });
     if !verified {
         let _ = clear_items(&destination, &items, url, consumer, token_file).await;
-        return Err(deployment("destination verification differs from the source snapshot"));
+        return Err(deployment(
+            "destination verification differs from the source snapshot",
+        ));
     }
     if let Err(config_error) = persist_selector(&destination.locator()) {
         let _ = clear_items(&destination, &items, url, consumer, token_file).await;
@@ -279,7 +289,8 @@ pub async fn migrate(
     if let Err(delete_error) = clear_items(&source, &items, url, consumer, token_file).await {
         let source_restore = restore_items(&source, &items, url, consumer, token_file).await;
         let selector_restore = persist_selector(&source.locator());
-        let destination_cleanup = clear_items(&destination, &items, url, consumer, token_file).await;
+        let destination_cleanup =
+            clear_items(&destination, &items, url, consumer, token_file).await;
         if source_restore.is_err() || selector_restore.is_err() || destination_cleanup.is_err() {
             return Err(deployment(format!(
                 "source cleanup failed ({delete_error}); rollback was incomplete and requires operator recovery"

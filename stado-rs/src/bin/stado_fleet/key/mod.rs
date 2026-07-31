@@ -44,8 +44,8 @@ pub(crate) async fn run_checked(
 /// Key management is an operator action routed through the globally selected
 /// credential store; Skarbiec uses the external admin bootstrap grant.
 pub(crate) fn configured_client() -> Result<Client, String> {
-    let credentials = stado::credential_store::admin_credentials()
-        .map_err(|exc| exc.to_string())?;
+    let credentials =
+        stado::credential_store::admin_credentials().map_err(|exc| exc.to_string())?;
     Client::new(
         &credentials.url,
         &credentials.consumer,
@@ -53,7 +53,6 @@ pub(crate) fn configured_client() -> Result<Client, String> {
     )
     .map_err(|exc| exc.to_string())
 }
-
 
 /// `key add TARGET --from PATH` — move an existing private key into the
 /// selected store. The source file is removed only after a read-back verifies
@@ -150,7 +149,10 @@ pub async fn ls() -> Result<bool, String> {
         if !item.id.starts_with(ITEM_PREFIX) {
             continue;
         }
-        let document = client.read_item(&item.id).await.map_err(|exc| exc.to_string())?;
+        let document = client
+            .read_item(&item.id)
+            .await
+            .map_err(|exc| exc.to_string())?;
         let fingerprint = document
             .get("fingerprint")
             .and_then(Value::as_str)
@@ -193,7 +195,12 @@ pub async fn install(runner: &Runner, target: &str) -> Result<bool, String> {
     let public_key = document
         .get("public_key")
         .and_then(Value::as_str)
-        .ok_or_else(|| format!("credential item {} has no public_key field", item_id(target)))?;
+        .ok_or_else(|| {
+            format!(
+                "credential item {} has no public_key field",
+                item_id(target)
+            )
+        })?;
     let registry = stado::targets::load_registry_auto()
         .await
         .map_err(|exc| exc.to_string())?;
@@ -227,8 +234,7 @@ pub async fn check(runner: &Runner, target: &str) -> Result<bool, String> {
         .as_deref()
         .ok_or_else(|| format!("target '{target}' has no remote channel (ssh=null)"))?;
     let (argv, _key) = channel_argv(target, destination, "hostname").await?;
-    let answered =
-        run_checked(runner, CommandSpec::new(argv), "hostname over the channel").await?;
+    let answered = run_checked(runner, CommandSpec::new(argv), "hostname over the channel").await?;
     println!(
         "credential-store key verified: {destination} answered as {}",
         answered.trim()

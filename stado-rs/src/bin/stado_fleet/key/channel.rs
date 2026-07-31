@@ -50,12 +50,9 @@ fn write_key(private_key: &str) -> Result<KeyFile, String> {
         .duration_since(UNIX_EPOCH)
         .map_err(|error| error.to_string())?
         .as_nanos();
-    let path = std::env::temp_dir().join(format!(
-        "stado-fleet-key-{}-{nonce}",
-        std::process::id()
-    ));
-    let owner_mode = u32::from_str_radix("600", u32::from(u8::BITS))
-        .map_err(|error| error.to_string())?;
+    let path = std::env::temp_dir().join(format!("stado-fleet-key-{}-{nonce}", std::process::id()));
+    let owner_mode =
+        u32::from_str_radix("600", u32::from(u8::BITS)).map_err(|error| error.to_string())?;
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -78,10 +75,7 @@ fn write_key(private_key: &str) -> Result<KeyFile, String> {
         .duration_since(UNIX_EPOCH)
         .map_err(|error| error.to_string())?
         .as_nanos();
-    let path = std::env::temp_dir().join(format!(
-        "stado-fleet-key-{}-{nonce}",
-        std::process::id()
-    ));
+    let path = std::env::temp_dir().join(format!("stado-fleet-key-{}-{nonce}", std::process::id()));
     std::fs::write(&path, format!("{private_key}\n")).map_err(|error| error.to_string())?;
     Ok(KeyFile(path))
 }

@@ -4,30 +4,45 @@
 //! literal appears in source.
 
 use super::*;
-use std::sync::{LazyLock, Mutex, MutexGuard};
+use std::sync::MutexGuard;
 
 fn env_lock() -> MutexGuard<'static, ()> {
-    static LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-    LOCK.lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    test_env_lock()
 }
 
-struct StoreEnv;
+struct StoreEnv {
+    _config: tempfile::TempDir,
+}
 
 impl StoreEnv {
     fn set(value: &str) -> Self {
+        let config = tempfile::tempdir().expect("config tempdir");
+        let path = config.path().join("config.json");
+        let document = serde_json::json!({"credentials": {"store": value}});
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&document).expect("serialize config"),
+        )
+        .expect("write config");
+        std::env::set_var("STADO_CONFIG", path);
         std::env::set_var(ENV_STORE, value);
-        Self
+        Self { _config: config }
     }
+
     fn unset() -> Self {
+        let config = tempfile::tempdir().expect("config tempdir");
+        let path = config.path().join("config.json");
+        std::fs::write(&path, b"{}").expect("write config");
+        std::env::set_var("STADO_CONFIG", path);
         std::env::remove_var(ENV_STORE);
-        Self
+        Self { _config: config }
     }
 }
 
 impl Drop for StoreEnv {
     fn drop(&mut self) {
         std::env::remove_var(ENV_STORE);
+        std::env::remove_var("STADO_CONFIG");
     }
 }
 
