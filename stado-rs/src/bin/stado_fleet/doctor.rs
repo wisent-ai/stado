@@ -143,6 +143,13 @@ async fn agent_grant_checks() -> Vec<Check> {
     checks
 }
 
+/// A registration with no channel and no proof of contact is an error
+/// state, not a worker: nothing can verify the machine exists. Extracted
+/// pure so the rule is unit-tested.
+pub fn unverifiable_registration(has_channel: bool, has_beacon: bool) -> bool {
+    !has_channel && !has_beacon
+}
+
 /// Per-target beacon presence plus live capacity vs the registered local
 /// targets. A registered target with no live capacity broadcast is a worker
 /// that is down, whatever the reason — that is what the fleet manager must
@@ -188,10 +195,22 @@ async fn fleet_checks(store: &JobStorage, scoped: Option<&str>) -> Result<Vec<Ch
                     format!("{}: last beacon at {reported_at}", target.name),
                 ));
             }
-            Err(exc) => checks.push(fail(
-                "beacon",
-                format!("{}: no readable health beacon ({exc})", target.name),
-            )),
+            Err(exc) => {
+                if unverifiable_registration(target.ssh.is_some(), false) {
+                    checks.push(fail(
+                        "registration",
+                        format!(
+                            "{}: unverifiable registration — no communication channel and no proof of contact; enroll --ssh or join/approve is required ({exc})",
+                            target.name
+                        ),
+                    ));
+                } else {
+                    checks.push(fail(
+                        "beacon",
+                        format!("{}: no readable health beacon ({exc})", target.name),
+                    ));
+                }
+            }
         }
     }
     if broadcasting.is_empty() {
@@ -206,6 +225,31 @@ async fn fleet_checks(store: &JobStorage, scoped: Option<&str>) -> Result<Vec<Ch
         ));
     }
     Ok(checks)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unverifiable_registration;
+
+    #[test]
+    fn channelless_and_contactless_is_unverifiable() {
+        assert!(unverifiable_registration(false, false));
+    }
+
+    #[test]
+    fn channel_makes_it_verifiable() {
+        assert!(!unverifiable_registration(true, false));
+    }
+
+    #[test]
+    fn beacon_makes_it_verifiable() {
+        assert!(!unverifiable_registration(false, true));
+    }
+
+    #[test]
+    fn channel_and_beacon_is_verifiable() {
+        assert!(!unverifiable_registration(true, true));
+    }
 }
 
 /// Run every section, print the report, and return whether the fleet is
