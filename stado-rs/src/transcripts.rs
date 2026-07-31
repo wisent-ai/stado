@@ -17,8 +17,8 @@
 //! value: the whole defect being measured is values reaching places that only
 //! needed names, and a tool that printed them to a terminal, a log or an agent
 //! transcript would be one more of those places. Values move only through
-//! [`value_for`], which the caller must ask for by exact name and which streams
-//! into the vault without passing a shell.
+//! [`value_for`], which the caller must ask for by exact name and which writes
+//! into the selected credential store without passing a shell.
 //!
 //! # Reading the stores, not scanning them
 //!

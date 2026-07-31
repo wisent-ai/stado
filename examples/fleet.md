@@ -96,32 +96,38 @@ always covers the machine the command runs on.
 - `burst` — heavy GPU capacity for burst work
 - `interactive` — operator workstations that may sleep
 
-## Host keys in the vault
+## SSH host keys in the credential store
 
-Host keys live in Skarbiec, not in home directories. The vault is the
-source of truth; using a key means materializing it for one remote call
-and removing it right after, and private material is never printed.
+Host keys use the same global backend as every other Stado credential.
+`STADO_CREDENTIALS_STORE` requests the backend; `credentials.store` in the
+config records the committed backend. There is no separate registry
+`key_custody` switch and no fallback to `~/.ssh`.
 
 ```sh
-stado_fleet key add render-node-a --from ~/.ssh/id_ed25519   # import into the vault
-stado_fleet key generate render-node-b                        # fresh ed25519 pair into the vault
+stado_fleet key add render-node-a --from ~/.ssh/id_ed25519   # move; source removed after read-back
+stado_fleet key generate render-node-b                        # generate into the selected store
 stado_fleet key rotate render-node-a                          # safe end-to-end rotation
-stado_fleet key ls                                            # metadata only: id, type, fingerprint
-stado_fleet key install render-node-a                         # public key -> authorized_keys on the host
-stado_fleet key check render-node-a                           # verify the vault key opens the channel
-stado_fleet key rm render-node-a                              # remove from the vault
+stado_fleet key ls                                            # metadata only
+stado_fleet key install render-node-a                         # public key -> authorized_keys
+stado_fleet key check render-node-a                           # verify the stored key
+stado_fleet key rm render-node-a                              # delete from the selected store
 ```
 
-Rotation is transactional: the new public key goes onto the host through
-the still-valid old key, the vault item is overwritten, the channel is
-verified with the NEW key, and only then the old public key is removed.
-A failed verification restores the old vault item, so a host never gets
-stranded on a key nobody holds.
+Private material is never printed. One remote call materializes it into an
+owner-only temporary file for `ssh -i` and removes that file immediately.
+Rotation installs the new public key through the old stored key, replaces the
+credential item, verifies the new key, then removes the old public key. Failed
+verification restores the old item.
 
-Where keys live is a fleet decision in the central catalog:
-`registry.enrollment.key_custody` is `skarbiec` (the vault, default) or
-`openssh` (agent, config, default key files). `stado_fleet catalog`
-shows the active custody, and every channel honors it.
+Changing backends moves SSH keys together with every other credential:
+
+```sh
+export STADO_CREDENTIALS_STORE=file:///secure/stado-credentials.json
+stado secrets migrate
+```
+
+Until migration verifies and commits the new backend, every credential access
+fails closed instead of falling through to a second location.
 
 ## The central catalog
 

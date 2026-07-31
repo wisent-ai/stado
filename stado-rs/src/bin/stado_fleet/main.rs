@@ -104,39 +104,39 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Host keys in the Skarbiec vault.
+    /// SSH host keys in the globally selected credential store.
     #[command(subcommand)]
     Key(KeyCommands),
 }
 
 #[derive(Subcommand)]
 enum KeyCommands {
-    /// Import an existing private key into the vault (never printed).
+    /// Move an existing private key into the credential store (never printed).
     Add {
         /// Registry target the key belongs to.
         target: String,
-        /// Path of the private key file to import.
+        /// Private key file removed after verified storage.
         #[arg(long)]
         from: String,
     },
-    /// List vault host keys (metadata only).
+    /// List stored SSH host keys (metadata only).
     Ls,
-    /// Remove a target's vault host key.
+    /// Remove a target's SSH key from the credential store.
     Rm {
         /// Registry target.
         target: String,
     },
-    /// Install the vault public key into the target's authorized_keys.
+    /// Install the stored public key into the target's authorized_keys.
     Install {
         /// Registry target.
         target: String,
     },
-    /// Verify the vault key opens the channel to the target.
+    /// Verify the stored key opens the channel to the target.
     Check {
         /// Registry target.
         target: String,
     },
-    /// Generate a fresh ed25519 pair for the target into the vault.
+    /// Generate a fresh ed25519 pair for the target into the credential store.
     Generate {
         /// Registry target.
         target: String,
