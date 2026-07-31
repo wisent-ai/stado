@@ -484,6 +484,7 @@ pub fn validate_registry(data: &Value) -> Result<(), RegistryValidationError> {
             identities.insert(identity, identity_location);
         }
     }
+    crate::inference::schema::validate(data).map_err(RegistryValidationError)?;
     Ok(())
 }
 

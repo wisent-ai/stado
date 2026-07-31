@@ -24,6 +24,7 @@ pub mod doctor;
 pub mod failure;
 pub mod failure_fixer;
 pub mod machine;
+pub mod inference;
 pub mod mail;
 pub mod mcp;
 pub mod models;

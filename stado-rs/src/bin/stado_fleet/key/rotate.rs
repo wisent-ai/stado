@@ -1,15 +1,14 @@
-//! Key generation and rotation for vault host keys.
+//! Key generation and rotation in the selected credential store.
 //!
-//! `generate` creates a fresh ed25519 pair for a target and stores it in
-//! the vault; the public key is printed for installation. `rotate` is the
-//! safe version of the same act on a live host: install the new public
-//! key through the still-valid old key, overwrite the vault item, verify
-//! the channel with the NEW key, and only then remove the old public key.
-//! A failed verification restores the old vault item, so a rotation never
-//! strands the host on a key nobody holds.
+//! `generate` creates a fresh ed25519 pair for a target. `rotate` installs the
+//! new public key through the still-valid old key, overwrites the store item,
+//! verifies the channel with the new key, and only then removes the old public
+//! key. Failed verification restores the old item.
 
 use serde_json::{json, Value};
 use stado::deploy::{CommandSpec, Runner};
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{authorized_keys_line, channel_argv, configured_client, item_id, run_checked, ITEM_TYPE};
 
@@ -18,11 +17,28 @@ struct KeyPair {
     public_key: String,
     fingerprint: String,
 }
+struct GeneratedFiles {
+    private: PathBuf,
+    public: PathBuf,
+}
 
-/// Generate an ed25519 pair in the transient directory; both files are
-/// removed by the caller after the material is read.
+impl Drop for GeneratedFiles {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.private);
+        let _ = std::fs::remove_file(&self.public);
+    }
+}
+
+/// Generate an ed25519 pair in a unique transient path guarded by Drop.
 async fn generate_pair(runner: &Runner, comment: &str) -> Result<KeyPair, String> {
-    let path = std::env::temp_dir().join(format!("stado-fleet-keygen-{}", std::process::id()));
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "stado-fleet-keygen-{}-{nonce}",
+        std::process::id()
+    ));
     let path_str = path.to_string_lossy().to_string();
     run_checked(
         runner,
@@ -40,21 +56,24 @@ async fn generate_pair(runner: &Runner, comment: &str) -> Result<KeyPair, String
         "ssh-keygen ed25519",
     )
     .await?;
-    let private_key = std::fs::read_to_string(&path).map_err(|exc| exc.to_string())?;
+    let files = GeneratedFiles {
+        private: path,
+        public: PathBuf::from(format!("{path_str}.pub")),
+    };
+    let private_key =
+        std::fs::read_to_string(&files.private).map_err(|exc| exc.to_string())?;
     let public_key =
-        std::fs::read_to_string(format!("{path_str}.pub")).map_err(|exc| exc.to_string())?;
+        std::fs::read_to_string(&files.public).map_err(|exc| exc.to_string())?;
     let fingerprint_line = run_checked(
         runner,
         CommandSpec::new(vec![
             "ssh-keygen".to_string(),
             "-lf".to_string(),
-            path_str.clone(),
+            path_str,
         ]),
         "ssh-keygen -lf",
     )
     .await?;
-    let _ = std::fs::remove_file(&path);
-    let _ = std::fs::remove_file(format!("{path_str}.pub"));
     let fingerprint = fingerprint_line
         .split_whitespace()
         .find(|part| part.starts_with("SHA256:"))
@@ -84,21 +103,20 @@ async fn store_pair(client: &stado::skarbiec::Client, target: &str, pair: &KeyPa
         .map_err(|exc| exc.to_string())
 }
 
-/// `key generate TARGET` — fresh pair into the vault; the public key is
-/// printed so it can be installed wherever the host accepts keys.
+/// `key generate TARGET` — store a fresh pair and print only the public key.
 pub async fn generate(runner: &Runner, target: &str) -> Result<bool, String> {
     let pair = generate_pair(runner, &item_id(target)).await?;
-    let client = configured_client().await?;
+    let client = configured_client()?;
     store_pair(&client, target, &pair).await?;
-    println!("stored vault item {} ({})", item_id(target), pair.fingerprint);
+    println!("stored credential item {} ({})", item_id(target), pair.fingerprint);
     println!("public key: {}", pair.public_key);
     Ok(true)
 }
 
-/// `key rotate TARGET` — replace the target's key end to end, rolling
-/// back the vault item when the new key cannot open the channel.
+/// `key rotate TARGET` — replace the target key end to end, restoring the old
+/// credential-store item if the new key cannot open the channel.
 pub async fn rotate(runner: &Runner, target: &str) -> Result<bool, String> {
-    let client = configured_client().await?;
+    let client = configured_client()?;
     let old_item = client
         .read_item(&item_id(target))
         .await
@@ -114,8 +132,8 @@ pub async fn rotate(runner: &Runner, target: &str) -> Result<bool, String> {
         .unwrap_or_default()
         .to_string();
     let pair = generate_pair(runner, &item_id(target)).await?;
-    // The channel still resolves the OLD vault key at this point: install
-    // the new public key through it.
+    // The channel still resolves the old stored key while installing the new
+    // public key.
     install_public_key(runner, target, &pair.public_key).await?;
     store_pair(&client, target, &pair).await?;
     match verify_new_key(runner, target).await {
@@ -146,12 +164,10 @@ async fn install_public_key(runner: &Runner, target: &str, public_key: &str) -> 
     let command = format!(
         "mkdir -p \"$HOME/.ssh\" && touch \"$HOME/.ssh/authorized_keys\" && grep -qF '{line}' \"$HOME/.ssh/authorized_keys\" || echo '{line}' >> \"$HOME/.ssh/authorized_keys\""
     );
-    let (argv, materialized) = channel_argv(runner, target, &destination, &command).await?;
-    let result = run_checked(runner, CommandSpec::new(argv), "authorized_keys install").await;
-    if let Some(path) = materialized {
-        let _ = std::fs::remove_file(path);
-    }
-    result.map(|_| ())
+    let (argv, _key) = channel_argv(target, &destination, &command).await?;
+    run_checked(runner, CommandSpec::new(argv), "authorized_keys install")
+        .await
+        .map(|_| ())
 }
 
 async fn remove_public_key(runner: &Runner, target: &str, public_key: &str) -> Result<(), String> {
@@ -162,22 +178,19 @@ async fn remove_public_key(runner: &Runner, target: &str, public_key: &str) -> R
     let command = format!(
         "grep -vF '{public_key}' \"$HOME/.ssh/authorized_keys\" > \"$HOME/.ssh/authorized_keys.tmp\" && mv \"$HOME/.ssh/authorized_keys.tmp\" \"$HOME/.ssh/authorized_keys\""
     );
-    let (argv, materialized) = channel_argv(runner, target, &destination, &command).await?;
-    let result = run_checked(runner, CommandSpec::new(argv), "authorized_keys cleanup").await;
-    if let Some(path) = materialized {
-        let _ = std::fs::remove_file(path);
-    }
-    result.map(|_| ())
+    let (argv, _key) = channel_argv(target, &destination, &command).await?;
+    run_checked(runner, CommandSpec::new(argv), "authorized_keys cleanup")
+        .await
+        .map(|_| ())
 }
 
 async fn verify_new_key(runner: &Runner, target: &str) -> Result<String, String> {
     let destination = destination_of(target).await?;
-    let (argv, materialized) = channel_argv(runner, target, &destination, "hostname").await?;
-    let result = run_checked(runner, CommandSpec::new(argv), "hostname with the new key").await;
-    if let Some(path) = materialized {
-        let _ = std::fs::remove_file(path);
-    }
-    Ok(result?.trim().to_string())
+    let (argv, _key) = channel_argv(target, &destination, "hostname").await?;
+    Ok(run_checked(runner, CommandSpec::new(argv), "hostname with the new key")
+        .await?
+        .trim()
+        .to_string())
 }
 
 async fn destination_of(target: &str) -> Result<String, String> {
