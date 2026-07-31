@@ -10,6 +10,10 @@
       "state_uri": "stado://system/registry"
     }
   ],
+  "inference": {
+    "deployments": [],
+    "routes": {}
+  },
   "schema_version": 2,
   "targets": [
     {

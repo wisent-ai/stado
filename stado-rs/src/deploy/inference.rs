@@ -1,0 +1,288 @@
+//! Narrow remote lifecycle for one digest-pinned vLLM container.
+
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+use serde_json::{json, Value};
+
+use super::{host_channel, shlex_quote, DeployError, Runner};
+use crate::inference::{reservation::Reservation, schema::Deployment};
+use crate::targets::ComputeTarget;
+
+fn report(target: &ComputeTarget, output: &super::CommandOutput, ok: &str) -> Value {
+    let mut body = host_channel::base_report(target);
+    host_channel::finish_report(&mut body, output, ok, "inference operation failed");
+    body.insert("stdout".to_string(), Value::String(output.stdout.clone()));
+    Value::Object(body)
+}
+
+fn unit_name(name: &str) -> String {
+    format!("stado-inference-{name}.service")
+}
+
+fn safe_runtime(deployment: &Deployment) -> Result<(), DeployError> {
+    crate::inference::schema::validate(&json!({
+        "schema_version": crate::targets::REGISTRY_SCHEMA_VERSION,
+        "targets": [{
+            "name": deployment.target,
+            "kind": "local",
+            "gpu_type": "declared",
+            "vram_gb": u8::MAX,
+        }],
+        "inference": {"deployments": [deployment], "routes": {}}
+    }))
+    .map_err(DeployError)
+}
+
+pub async fn inventory(target: &ComputeTarget, runner: &Runner) -> Result<Value, DeployError> {
+    let script = r#"set -euo pipefail
+printf 'HOST\t'; hostname
+printf 'KERNEL\t'; uname -sr
+if ! command -v nvidia-smi >/dev/null; then printf 'ERROR\tnvidia-smi missing\n'; exit 1; fi
+printf 'GPU\t'; nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
+printf 'CUDA_CAPABILITY\t'; nvidia-smi --query-gpu=compute_cap --format=csv,noheader
+printf 'RAM\t'; free -b | grep '^Mem:'
+if ! command -v tailscale >/dev/null; then printf 'ERROR\ntailscale missing\n'; false; fi
+printf 'TAILSCALE\t'
+tailscale ip | while IFS= read -r address; do case "$address" in *:*) ;; *) printf '%s\n' "$address"; break ;; esac; done
+printf 'PROCESSES\t'; nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader || true
+if ! command -v docker >/dev/null; then printf 'ERROR\tdocker missing\n'; exit 1; fi
+printf 'DOCKER\t'; docker version --format '{{.Server.Version}}'
+runtimes=$(docker info --format '{{json .Runtimes}}')
+printf 'DOCKER_RUNTIMES\t%s\n' "$runtimes"
+case "$runtimes" in *nvidia*) ;; *) printf 'ERROR\tDocker NVIDIA runtime missing\n'; false ;; esac
+printf 'DISK\t'; df -Pk "$HOME" | tail -n 1
+"#;
+    let output = host_channel::run_script(target, script, runner).await?;
+    Ok(report(target, &output, "inventoried"))
+}
+
+/// Large immutable image pulls and first model loads need a wider bound than
+/// ordinary host operations; connection establishment keeps its short SSH cap.
+pub fn startup_timeout() -> std::time::Duration {
+    host_channel::remote_timeout().saturating_mul(u8::BITS.saturating_mul(u8::BITS))
+}
+
+pub async fn install(
+    target: &ComputeTarget,
+    deployment: &Deployment,
+    api_key: &str,
+    runner: &Runner,
+) -> Result<Value, DeployError> {
+    safe_runtime(deployment)?;
+    if api_key.is_empty() || api_key.chars().any(char::is_control) {
+        return Err(DeployError(
+            "inference bearer must be non-empty and single-line".to_string(),
+        ));
+    }
+    let name = shlex_quote(&deployment.name);
+    let image = shlex_quote(&deployment.engine.image);
+    let endpoint_host = shlex_quote(&deployment.endpoint.host);
+    let port = deployment.endpoint.port;
+    let max_model_len = deployment.resources.max_model_len;
+    let secret = shlex_quote(&STANDARD.encode(api_key));
+    let unit = shlex_quote(&unit_name(&deployment.name));
+    let reservation = Reservation {
+        deployment: deployment.name.clone(),
+        target: deployment.target.clone(),
+        gpu_mode: deployment.resources.gpu_mode.clone(),
+        engine: deployment.engine.name.clone(),
+        model: deployment.model.repository.clone(),
+        revision: deployment.model.revision.clone(),
+        endpoint_host: deployment.endpoint.host.clone(),
+        port: deployment.endpoint.port,
+    };
+    let reservation =
+        shlex_quote(&STANDARD.encode(
+            serde_json::to_vec(&reservation).map_err(|error| DeployError(error.to_string()))?,
+        ));
+    let script = format!(
+        r#"set -euo pipefail
+name={name}
+endpoint_host={endpoint_host}
+unit={unit}
+root="$HOME/.stado/inference/$name"
+reservation="$HOME/.stado/inference/reservation.json"
+mkdir -p "$root/cache" "$HOME/.config/systemd/user"
+chmod 700 "$HOME/.stado/inference" "$root" "$root/cache"
+if [ -f "$reservation" ] && ! grep -F '"deployment":"'"$name"'"' "$reservation" >/dev/null; then
+  printf 'ERROR\tanother inference reservation exists\n'; exit 1
+fi
+if nvidia-smi --query-compute-apps=pid --format=csv,noheader,nounits | grep -E '[0-9]' >/dev/null; then
+  if ! docker ps --filter "name=^stado-inference-$name$" --format '{{{{.Names}}}}' | grep -Fx "stado-inference-$name" >/dev/null; then
+    printf 'ERROR\tGPU has an unmanaged active compute process\n'; exit 1
+  fi
+fi
+if ss -ltn | grep -F "$endpoint_host:{port} " >/dev/null; then
+  if ! docker ps --filter "name=^stado-inference-$name$" --format '{{{{.Names}}}}' | grep -Fx "stado-inference-$name" >/dev/null; then
+    printf 'ERROR\tinference endpoint {port} is already in use\n'; false
+  fi
+fi
+printf '%s' {secret} | base64 --decode > "$root/api-key"
+printf '\n' >> "$root/api-key"
+chmod 600 "$root/api-key"
+printf 'VLLM_API_KEY=' > "$root/runtime.env"
+cat "$root/api-key" >> "$root/runtime.env"
+printf 'HF_HOME=/data/huggingface\n' >> "$root/runtime.env"
+chmod 600 "$root/runtime.env"
+printf '%s' {reservation} | base64 --decode > "$reservation"
+chmod 600 "$reservation"
+docker pull {image}
+cat > "$HOME/.config/systemd/user/$unit" <<'STADO_INFERENCE_UNIT'
+[Unit]
+Description=Stado managed inference
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Restart=on-failure
+RestartSec=5
+ExecStart=/usr/bin/docker run --rm --name stado-inference-{raw_name} --gpus all --network host --ipc host --env-file %h/.stado/inference/{raw_name}/runtime.env -v %h/.stado/inference/{raw_name}/cache:/data/huggingface {raw_image} --model {raw_repository} --revision {raw_revision} --served-model-name {raw_name} --host {raw_endpoint_host} --port {port} --max-model-len {max_model_len} --enable-auto-tool-choice --tool-call-parser hermes
+ExecStop=/usr/bin/docker stop stado-inference-{raw_name}
+
+[Install]
+WantedBy=default.target
+STADO_INFERENCE_UNIT
+systemctl --user daemon-reload
+systemctl --user enable "$unit"
+systemctl --user restart "$unit"
+printf 'UNIT\t%s\n' "$unit"
+printf 'STATUS\tstarted\n'
+"#,
+        raw_name = deployment.name,
+        raw_image = deployment.engine.image,
+        raw_repository = deployment.model.repository,
+        raw_revision = deployment.model.revision,
+        raw_endpoint_host = deployment.endpoint.host,
+    );
+    let output =
+        host_channel::run_script_with_timeout(target, &script, startup_timeout(), runner).await?;
+    Ok(report(target, &output, "started"))
+}
+
+pub async fn status(
+    target: &ComputeTarget,
+    deployment: &Deployment,
+    runner: &Runner,
+) -> Result<Value, DeployError> {
+    safe_runtime(deployment)?;
+    let unit = shlex_quote(&unit_name(&deployment.name));
+    let name = shlex_quote(&deployment.name);
+    let script = format!(
+        r#"set -u
+unit={unit}
+name={name}
+printf 'UNIT\t'; systemctl --user is-active "$unit" || true
+printf 'CONTAINER\t'; docker inspect --format '{{{{.State.Status}}}}' "stado-inference-$name" 2>/dev/null || printf 'missing\n'
+printf 'GPU\t'; nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader || true
+"#
+    );
+    let output = host_channel::run_script(target, &script, runner).await?;
+    Ok(report(target, &output, "reported"))
+}
+
+pub async fn probe(
+    target: &ComputeTarget,
+    deployment: &Deployment,
+    api_key: &str,
+    runner: &Runner,
+) -> Result<Value, DeployError> {
+    safe_runtime(deployment)?;
+    let secret = shlex_quote(&STANDARD.encode(api_key));
+    let unit = shlex_quote(&unit_name(&deployment.name));
+    let port = deployment.endpoint.port;
+    let endpoint_host = shlex_quote(&deployment.endpoint.host);
+    let script = format!(
+        r#"set -euo pipefail
+token=$(printf '%s' {secret} | base64 --decode)
+unit={unit}
+if systemctl --user is-failed --quiet "$unit"; then
+  printf 'ERROR\tinference unit failed\n'; false
+fi
+endpoint_host={endpoint_host}
+curl --fail --silent --show-error --max-time $(printf '%s' '15') -H "Authorization: Bearer $token" "http://$endpoint_host:{port}/v1/models" >/dev/null
+printf 'READY\tauthenticated\n'
+"#
+    );
+    let output = host_channel::run_script(target, &script, runner).await?;
+    Ok(report(target, &output, "ready"))
+}
+
+pub async fn verify_completion(
+    target: &ComputeTarget,
+    deployment: &Deployment,
+    api_key: &str,
+    runner: &Runner,
+) -> Result<Value, DeployError> {
+    safe_runtime(deployment)?;
+    let secret = shlex_quote(&STANDARD.encode(api_key));
+    let payload = shlex_quote(
+        &json!({
+            "model": deployment.name,
+            "messages": [{"role": "user", "content": "Reply with the single word ready."}],
+            "max_tokens": u8::BITS,
+        })
+        .to_string(),
+    );
+    let port = deployment.endpoint.port;
+    let endpoint_host = shlex_quote(&deployment.endpoint.host);
+    let script = format!(
+        r#"set -euo pipefail
+token=$(printf '%s' {secret} | base64 --decode)
+endpoint_host={endpoint_host}
+curl --fail --silent --show-error --max-time $(printf '%s' '120') -H "Authorization: Bearer $token" -H 'Content-Type: application/json' --data {payload} "http://$endpoint_host:{port}/v1/chat/completions"
+printf '\n'
+"#
+    );
+    let output = host_channel::run_script(target, &script, runner).await?;
+    Ok(report(target, &output, "verified"))
+}
+
+pub async fn logs(
+    target: &ComputeTarget,
+    deployment: &Deployment,
+    lines: usize,
+    runner: &Runner,
+) -> Result<Value, DeployError> {
+    safe_runtime(deployment)?;
+    let unit = shlex_quote(&unit_name(&deployment.name));
+    let script = format!(
+        "set -euo pipefail\nsystemctl --user status {unit} >/dev/null\njournalctl --user -u {unit} -n {lines} --no-pager\n"
+    );
+    let output = host_channel::run_script(target, &script, runner).await?;
+    Ok(report(target, &output, "read"))
+}
+
+pub async fn retire(
+    target: &ComputeTarget,
+    deployment: &Deployment,
+    purge_cache: bool,
+    runner: &Runner,
+) -> Result<Value, DeployError> {
+    safe_runtime(deployment)?;
+    let unit = shlex_quote(&unit_name(&deployment.name));
+    let name = shlex_quote(&deployment.name);
+    let purge = if purge_cache {
+        "rm -rf \"$root/cache\""
+    } else {
+        ":"
+    };
+    let script = format!(
+        r#"set -euo pipefail
+unit={unit}
+name={name}
+root="$HOME/.stado/inference/$name"
+systemctl --user disable --now "$unit" || true
+docker rm -f "stado-inference-$name" >/dev/null 2>&1 || true
+rm -f "$HOME/.config/systemd/user/$unit"
+if [ -f "$HOME/.stado/inference/reservation.json" ] && grep -F '"deployment":"'"$name"'"' "$HOME/.stado/inference/reservation.json" >/dev/null; then
+  rm -f "$HOME/.stado/inference/reservation.json"
+fi
+rm -f "$root/api-key" "$root/runtime.env"
+{purge}
+systemctl --user daemon-reload
+printf 'STATUS\tretired\n'
+"#
+    );
+    let output = host_channel::run_script(target, &script, runner).await?;
+    Ok(report(target, &output, "retired"))
+}
