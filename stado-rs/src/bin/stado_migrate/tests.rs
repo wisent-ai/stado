@@ -58,7 +58,11 @@ fn explicit_from_is_honoured() {
 
 #[test]
 fn unknown_from_is_refused() {
-    let doc = registry(json!([daemon("new-plane", false, Some("operator@example-host"))]));
+    let doc = registry(json!([daemon(
+        "new-plane",
+        false,
+        Some("operator@example-host")
+    )]));
     let err = build(&doc, Some("ghost"), "new-plane", SHARED, false).unwrap_err();
     assert!(err.contains("not found"), "unexpected error: {err}");
 }
@@ -70,7 +74,10 @@ fn missing_active_entry_is_refused_without_from() {
         daemon("new-plane", false, Some("operator@example-host"))
     ]));
     let err = build(&doc, None, "new-plane", SHARED, false).unwrap_err();
-    assert!(err.contains("no active coordinator"), "unexpected error: {err}");
+    assert!(
+        err.contains("no active coordinator"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]
@@ -81,14 +88,20 @@ fn duplicated_active_entries_are_refused() {
         daemon("new-plane", false, Some("operator@example-host"))
     ]));
     let err = build(&doc, None, "new-plane", SHARED, false).unwrap_err();
-    assert!(err.contains("multiple active coordinators"), "unexpected error: {err}");
+    assert!(
+        err.contains("multiple active coordinators"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]
 fn migrating_to_self_is_refused() {
     let doc = registry(json!([daemon("only", true, Some("operator@example-host"))]));
     let err = build(&doc, None, "only", SHARED, false).unwrap_err();
-    assert!(err.contains("nothing to migrate"), "unexpected error: {err}");
+    assert!(
+        err.contains("nothing to migrate"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]
@@ -98,7 +111,10 @@ fn already_active_target_is_refused() {
         daemon("busy", true, Some("operator@example-host"))
     ]));
     let err = build(&doc, Some("old-plane"), "busy", SHARED, false).unwrap_err();
-    assert!(err.contains("already the active entry"), "unexpected error: {err}");
+    assert!(
+        err.contains("already the active entry"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]
@@ -145,5 +161,8 @@ fn device_local_backend_requires_the_move_flag() {
 #[test]
 fn document_without_coordinators_is_refused() {
     let err = build(&json!({}), None, "new-plane", SHARED, false).unwrap_err();
-    assert!(err.contains("no coordinators array"), "unexpected error: {err}");
+    assert!(
+        err.contains("no coordinators array"),
+        "unexpected error: {err}"
+    );
 }
