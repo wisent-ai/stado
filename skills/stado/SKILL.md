@@ -1,11 +1,11 @@
 ---
 name: stado
-description: Use the stado GPU job-queue (wisent-compute) through its Python CLI or its read-only MCP server. Use when a task needs to inspect queue/job status, per-target cost reports, GPU quota (totals, catalog, in-flight requests), submit profiles, cron schedules, the compute-target registry, or Vast.ai machine status. Job submission and quota-increase requests SPEND REAL MONEY and are CLI-only — they are intentionally never exposed over MCP.
+description: Use the Stado GPU job queue through its Python CLI or its read-only MCP server. Use when a task needs to inspect queue/job status, per-target cost reports, GPU quota (totals, catalog, in-flight requests), submit profiles, cron schedules, the compute-target registry, or Vast.ai machine status. Job submission and quota-increase requests SPEND REAL MONEY and are CLI-only — they are intentionally never exposed over MCP.
 ---
 
 # Stado
 
-Stado is the GPU job-queue package in this repo (`wisent-compute`): a GCS-backed queue that dispatches shell-command jobs onto cloud or local GPUs, with cost tracking, quota management, cron schedules, a compute-target registry, and Vast.ai host-listing. The canonical engine is the Python package `stado`; do not reimplement its queue logic.
+Stado is the GPU job-queue package in this repository: a multi-backend queue that dispatches shell-command jobs onto cloud or local GPUs, with cost tracking, quota management, cron schedules, a compute-target registry, and Vast.ai host-listing. The canonical engine is the Python package `stado`; do not reimplement its queue logic.
 
 ## Canonical engine
 
