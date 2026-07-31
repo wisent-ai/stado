@@ -25,6 +25,14 @@ use crate::skarbiec::{Client, SkarbiecError};
 pub const ENV_STORE: &str = "STADO_CREDENTIALS_STORE";
 const DEFAULT_STORE: &str = "skarbiec";
 
+#[cfg(test)]
+pub(crate) fn test_env_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =
+        std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
+    LOCK.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 mod file;
 pub mod migrate;
 #[cfg(test)]
@@ -206,7 +214,9 @@ pub async fn read_item(id: &str) -> Result<Value, SkarbiecError> {
 pub async fn read_string(id: &str, field: &str) -> Result<Option<String>, SkarbiecError> {
     match selected()? {
         Backend::Skarbiec { url } => {
-            configured_client(url.as_deref())?.read_string(id, field).await
+            configured_client(url.as_deref())?
+                .read_string(id, field)
+                .await
         }
         Backend::File { path } => file::file_read_string(&path, id, field),
     }
@@ -223,13 +233,11 @@ pub async fn read_item_with(
     id: &str,
 ) -> Result<Value, SkarbiecError> {
     match selected()? {
-        Backend::Skarbiec { url: store_url } => Client::direct(
-            store_url.as_deref().unwrap_or(url),
-            consumer,
-            token_file,
-        )?
-        .read_item(id)
-        .await,
+        Backend::Skarbiec { url: store_url } => {
+            Client::direct(store_url.as_deref().unwrap_or(url), consumer, token_file)?
+                .read_item(id)
+                .await
+        }
         Backend::File { path } => file::file_read_item(&path, id),
     }
 }

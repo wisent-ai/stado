@@ -134,10 +134,7 @@ async fn probe_hostname(
     let (argv, _key) = crate::key::channel_argv(target, destination, "hostname").await?;
     let output = runner(stado::deploy::CommandSpec::new(argv)).await?;
     if !output.ok() {
-        return Err(format!(
-            "cannot verify {destination}: {}",
-            output.detail()
-        ));
+        return Err(format!("cannot verify {destination}: {}", output.detail()));
     }
     let hostname = stado::targets::normalize_hostname(output.stdout.trim());
     if hostname.is_empty() {
@@ -234,12 +231,8 @@ pub async fn enroll(
     if bootstrap {
         if let Err(exc) = stado::cli::bootstrap::run(Some(name.to_string()), false, false).await {
             let current = fetch_document().await.map_err(|err| err.to_string())?;
-            let rolled_back = crate::enroll::legacy::rollback_registration(
-                &current,
-                &document,
-                name,
-                takeover,
-            )?;
+            let rolled_back =
+                crate::enroll::legacy::rollback_registration(&current, &document, name, takeover)?;
             push_document(&rolled_back)
                 .await
                 .map_err(|err| err.to_string())?;

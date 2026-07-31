@@ -89,7 +89,9 @@ pub fn build(
     let from_entry = resolve_from(entries, from)?;
     let from_name = entry_name(from_entry).unwrap_or_default().to_string();
     if from_name == to {
-        return Err(format!("source and target are both '{to}'; nothing to migrate"));
+        return Err(format!(
+            "source and target are both '{to}'; nothing to migrate"
+        ));
     }
     let to_entry = find_named(entries, to)?;
     if is_active(to_entry) {
@@ -105,7 +107,9 @@ pub fn build(
         ));
     }
     let to_host = host_of(to_entry).ok_or_else(|| {
-        format!("coordinator '{to}' has no host; a migration target needs an operator-reachable host")
+        format!(
+            "coordinator '{to}' has no host; a migration target needs an operator-reachable host"
+        )
     })?;
     if storage_backend == LOCAL_BACKEND && !move_local_storage {
         return Err(

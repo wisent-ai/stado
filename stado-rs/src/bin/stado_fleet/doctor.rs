@@ -132,7 +132,10 @@ async fn agent_grant_checks() -> Vec<Check> {
     if unreadable.is_empty() {
         checks.push(pass(
             "agent-secret-probes",
-            format!("every declared secret field reads back: {}", probed.join(", ")),
+            format!(
+                "every declared secret field reads back: {}",
+                probed.join(", ")
+            ),
         ));
     } else {
         checks.push(fail(

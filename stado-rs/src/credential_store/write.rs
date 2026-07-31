@@ -13,7 +13,11 @@ fn type_map(document: &Value) -> Option<&Map<String, Value>> {
 }
 
 fn set_type(document: &mut Value, id: &str, item_type: &str) {
-    if document.get(TYPE_METADATA).and_then(Value::as_object).is_none() {
+    if document
+        .get(TYPE_METADATA)
+        .and_then(Value::as_object)
+        .is_none()
+    {
         document[TYPE_METADATA] = Value::Object(Map::new());
     }
     document[TYPE_METADATA][id] = Value::String(item_type.to_string());
@@ -30,11 +34,7 @@ fn direct_client(
             "internal error: direct Skarbiec client requested for file backend".to_string(),
         ));
     };
-    Client::direct(
-        store_url.as_deref().unwrap_or(url),
-        consumer,
-        token_file,
-    )
+    Client::direct(store_url.as_deref().unwrap_or(url), consumer, token_file)
 }
 
 pub(crate) async fn read_item_at(
@@ -45,9 +45,11 @@ pub(crate) async fn read_item_at(
     id: &str,
 ) -> Result<Value, SkarbiecError> {
     match backend {
-        Backend::Skarbiec { .. } => direct_client(backend, url, consumer, token_file)?
-            .read_item(id)
-            .await,
+        Backend::Skarbiec { .. } => {
+            direct_client(backend, url, consumer, token_file)?
+                .read_item(id)
+                .await
+        }
         Backend::File { path } => super::file::file_read_item(path, id),
     }
 }
@@ -62,9 +64,11 @@ pub(crate) async fn write_item_at(
     value: &Value,
 ) -> Result<(), SkarbiecError> {
     match backend {
-        Backend::Skarbiec { .. } => direct_client(backend, url, consumer, token_file)?
-            .write_item(id, item_type, value)
-            .await,
+        Backend::Skarbiec { .. } => {
+            direct_client(backend, url, consumer, token_file)?
+                .write_item(id, item_type, value)
+                .await
+        }
         Backend::File { path } => {
             if id == TYPE_METADATA {
                 return Err(SkarbiecError::Deployment(format!(
@@ -87,9 +91,11 @@ pub(crate) async fn delete_item_at(
     id: &str,
 ) -> Result<(), SkarbiecError> {
     match backend {
-        Backend::Skarbiec { .. } => direct_client(backend, url, consumer, token_file)?
-            .delete_item(id)
-            .await,
+        Backend::Skarbiec { .. } => {
+            direct_client(backend, url, consumer, token_file)?
+                .delete_item(id)
+                .await
+        }
         Backend::File { path } => {
             let mut document = super::file::file_load(path)?;
             if let Some(items) = document.as_object_mut() {
@@ -113,9 +119,11 @@ pub(crate) async fn list_items_at(
     token_file: &str,
 ) -> Result<Vec<ItemInfo>, SkarbiecError> {
     match backend {
-        Backend::Skarbiec { .. } => direct_client(backend, url, consumer, token_file)?
-            .list_items()
-            .await,
+        Backend::Skarbiec { .. } => {
+            direct_client(backend, url, consumer, token_file)?
+                .list_items()
+                .await
+        }
         Backend::File { path } => {
             let document = super::file::file_load(path)?;
             let types = type_map(&document);
@@ -194,25 +202,49 @@ pub async fn list_ids_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::credential_store::ENV_STORE;
 
     #[tokio::test]
 
     async fn file_backend_roundtrip() {
-        let dir = std::env::temp_dir().join(format!("stado-cred-store-test-{}", std::process::id()));
+        let _guard = super::super::test_env_lock();
+        let dir =
+            std::env::temp_dir().join(format!("stado-cred-store-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let path = dir.join("store.json");
-        std::env::set_var("STADO_CREDENTIAL_STORE", format!("file://{}", path.display()));
-        write_item_with("unused", "unused", "unused", "alpha", "token", &serde_json::json!({"token": "v"}))
+        let selector = format!("file://{}", path.display());
+        let config = dir.join("config.json");
+        let document = serde_json::json!({"credentials": {"store": &selector}});
+        std::fs::write(
+            &config,
+            serde_json::to_vec(&document).expect("serialize config"),
+        )
+        .expect("write config");
+        std::env::set_var("STADO_CONFIG", config);
+        std::env::set_var(ENV_STORE, selector);
+        write_item_with(
+            "unused",
+            "unused",
+            "unused",
+            "alpha",
+            "token",
+            &serde_json::json!({"token": "v"}),
+        )
+        .await
+        .expect("write");
+        let ids = list_ids_with("unused", "unused", "unused")
             .await
-            .expect("write");
-        let ids = list_ids_with("unused", "unused", "unused").await.expect("list");
+            .expect("list");
         assert_eq!(ids, vec!["alpha".to_string()]);
         delete_item_with("unused", "unused", "unused", "alpha")
             .await
             .expect("delete");
-        let ids = list_ids_with("unused", "unused", "unused").await.expect("list");
+        let ids = list_ids_with("unused", "unused", "unused")
+            .await
+            .expect("list");
         assert!(ids.is_empty());
-        std::env::remove_var("STADO_CREDENTIAL_STORE");
+        std::env::remove_var(ENV_STORE);
+        std::env::remove_var("STADO_CONFIG");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
