@@ -183,6 +183,17 @@ pub async fn run_script(
     script: &str,
     runner: &Runner,
 ) -> Result<CommandOutput, DeployError> {
+    run_script_with_timeout(target, script, remote_timeout(), runner).await
+}
+
+/// Run a fixed remote script with an operation-specific wall-clock bound.
+/// Connection setup remains bounded by the shared SSH options.
+pub async fn run_script_with_timeout(
+    target: &ComputeTarget,
+    script: &str,
+    timeout: Duration,
+    runner: &Runner,
+) -> Result<CommandOutput, DeployError> {
     let argv = if target_is_this_host(target) {
         vec!["/bin/bash".to_string(), "-s".to_string()]
     } else {
@@ -191,7 +202,7 @@ pub async fn run_script(
     runner(CommandSpec {
         argv,
         stdin: Some(script.to_string()),
-        timeout: Some(remote_timeout()),
+        timeout: Some(timeout),
     })
     .await
     .map_err(DeployError)

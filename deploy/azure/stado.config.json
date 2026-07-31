@@ -108,7 +108,7 @@
         "wisent-backend/moderation": "openai/moderation",
         "weles/agent/primary": "qwen/default"
       },
-      "required_provider_capabilities": ["openai", "qwen"]
+      "required_provider_capabilities": ["local-openai", "openai", "qwen"]
     }
   },
 

@@ -33,7 +33,11 @@ async fn slack_posts_text_payload() {
     send_alert_with(&channels, "disk full", "").await;
     let requests = mock.requests.lock().expect("requests lock");
     assert_eq!(requests.len(), one());
-    assert!(first(&requests).starts_with("POST / "), "{}", first(&requests));
+    assert!(
+        first(&requests).starts_with("POST / "),
+        "{}",
+        first(&requests)
+    );
     assert!(
         first(&requests).contains(r#"{"text":"disk full"}"#),
         "{}",
@@ -211,7 +215,12 @@ async fn broken_channel_does_not_suppress_the_others() {
 
 #[tokio::test]
 async fn non_2xx_is_a_channel_error_not_a_success() {
-    let mock = mock_http(vec![http_response(status_server_error(), "Internal Server Error", "boom")]).await;
+    let mock = mock_http(vec![http_response(
+        status_server_error(),
+        "Internal Server Error",
+        "boom",
+    )])
+    .await;
     let channels = AlertChannels {
         slack_webhook: Some(mock.base_url.clone()),
         ..Default::default()
