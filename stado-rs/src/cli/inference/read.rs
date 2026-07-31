@@ -99,8 +99,7 @@ pub async fn logs(name: &str, lines: usize, json_output: bool) -> Result<(), Cmd
 
 pub async fn doctor(name: &str, json_output: bool) -> Result<(), CmdError> {
     let (_, deployment) = document_and_deployment(name).await?;
-    let bearer =
-        super::super::service::service_secret(&deployment.credential_item, "token").await?;
+    let bearer = super::credential::read().await?;
     let target = host_channel::canonical_target(&deployment.target)
         .await
         .map_err(click)?;
@@ -129,8 +128,7 @@ pub async fn doctor(name: &str, json_output: bool) -> Result<(), CmdError> {
 
 pub async fn verify(name: &str, json_output: bool) -> Result<(), CmdError> {
     let (_, deployment) = document_and_deployment(name).await?;
-    let bearer =
-        super::super::service::service_secret(&deployment.credential_item, "token").await?;
+    let bearer = super::credential::read().await?;
     let target = host_channel::canonical_target(&deployment.target)
         .await
         .map_err(click)?;
