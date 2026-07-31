@@ -136,6 +136,16 @@ enum KeyCommands {
         /// Registry target.
         target: String,
     },
+    /// Generate a fresh ed25519 pair for the target into the vault.
+    Generate {
+        /// Registry target.
+        target: String,
+    },
+    /// Rotate the target's key end to end, with rollback on failure.
+    Rotate {
+        /// Registry target.
+        target: String,
+    },
 }
 
 #[tokio::main]
@@ -167,6 +177,8 @@ async fn main() -> ExitCode {
                 KeyCommands::Rm { target } => key::rm(&target).await,
                 KeyCommands::Install { target } => key::install(&runner, &target).await,
                 KeyCommands::Check { target } => key::check(&runner, &target).await,
+                KeyCommands::Generate { target } => key::rotate::generate(&runner, &target).await,
+                KeyCommands::Rotate { target } => key::rotate::rotate(&runner, &target).await,
             }
         }
     };

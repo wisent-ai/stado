@@ -1,11 +1,15 @@
-//! Host-key custody in Skarbiec: `key add|ls|rm|install|check`.
+//! Host-key custody in Skarbiec: `key add|ls|rm|install|check`, with
+//! generation and rotation in [`rotate`].
 //!
 //! Private host keys live as Skarbiec items — never on disk under the
 //! user's home, never printed. Listing shows metadata only. Using a key
 //! means materializing it into a transient owner-only file for the single
-//! remote call and removing it right after; fleet commands open their
-//! channel with that key, and hosts without a vault key keep the OpenSSH
-//! default resolution (agent, config, default key files).
+//! remote call and removing it right after. Where keys live is a fleet
+//! decision: `registry.enrollment.key_custody` is `skarbiec` (vault
+//! first) or `openssh` (agent, config, default key files), read from the
+//! central catalog on every channel.
+
+pub mod rotate;
 
 use serde_json::{json, Value};
 use stado::deploy::bootstrap::ssh_argv;
@@ -14,7 +18,6 @@ use stado::skarbiec::Client;
 
 /// Vault item id prefix for host keys; the target name follows it.
 const ITEM_PREFIX: &str = "stado-ssh-";
-/// Skarbiec item type for host keys.
 const ITEM_TYPE: &str = "ssh-key";
 
 /// Vault item id for one target's host key. Pure.
@@ -22,12 +25,11 @@ pub fn item_id(target: &str) -> String {
     format!("{ITEM_PREFIX}{target}")
 }
 
-/// One authorized_keys line. Pure.
 pub fn authorized_keys_line(public_key: &str, comment: &str) -> String {
     format!("{public_key} {comment}")
 }
 
-async fn run_checked(
+pub(crate) async fn run_checked(
     runner: &Runner,
     spec: CommandSpec,
     what: &str,
@@ -42,7 +44,7 @@ async fn run_checked(
 
 /// Key management is an operator action: it uses the operator consumer
 /// (write access to vault items), not the scoped runtime consumers.
-async fn configured_client() -> Result<Client, String> {
+pub(crate) async fn configured_client() -> Result<Client, String> {
     let home = std::env::var_os("HOME")
         .ok_or_else(|| "HOME is not set; cannot locate the operator grant".to_string())?;
     let token_file = format!(
@@ -53,8 +55,7 @@ async fn configured_client() -> Result<Client, String> {
         .map_err(|exc| exc.to_string())
 }
 
-/// Write the private key to a transient owner-only file and return its
-/// path; the caller removes it after the remote call.
+/// Write the private key to a transient owner-only file; the caller removes it.
 async fn materialize(
     runner: &Runner,
     client: &Client,
@@ -83,16 +84,25 @@ async fn materialize(
     Ok(Some(path))
 }
 
-/// Build the channel argv for a remote command: vault key with `-i` when
-/// the target has one, the OpenSSH default resolution otherwise.
+/// Build the channel argv honoring the fleet's custody declaration:
+/// `skarbiec` uses the target's vault key with `-i` when stored,
+/// `openssh` always uses the OpenSSH default resolution.
 pub async fn channel_argv(
     runner: &Runner,
     target: &str,
     destination: &str,
     command: &str,
 ) -> Result<(Vec<String>, Option<std::path::PathBuf>), String> {
-    let client = configured_client().await?;
-    let materialized = materialize(runner, &client, target).await?;
+    let document = stado::cli::registry::fetch_document()
+        .await
+        .map_err(|exc| exc.to_string())?;
+    let custody = crate::enroll::catalog::parse_enrollment(&document)?.key_custody;
+    let materialized = if custody == "openssh" {
+        None
+    } else {
+        let client = configured_client().await?;
+        materialize(runner, &client, target).await?
+    };
     let argv = match &materialized {
         Some(path) => vec![
             "ssh".to_string(),
