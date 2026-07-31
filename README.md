@@ -371,9 +371,9 @@ Compatibility before 1.0:
 Support:
 
 - operational and product defects:
-  [GitHub Issues](https://github.com/wisent-ai/wisent-compute/issues);
+  [GitHub Issues](https://github.com/wisent-ai/stado/issues);
 - security vulnerabilities: use a private
-  [GitHub Security Advisory](https://github.com/wisent-ai/wisent-compute/security/advisories/new)
+  [GitHub Security Advisory](https://github.com/wisent-ai/stado/security/advisories/new)
   and do not open a public issue;
 - release, compatibility, and rollback policy:
   [docs/release.md](docs/release.md).
