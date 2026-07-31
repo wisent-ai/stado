@@ -26,8 +26,7 @@ async fn require_ready(registry: &schema::Registry, destination: &str) -> Result
         }
         return Ok(());
     };
-    let bearer =
-        super::super::service::service_secret(&deployment.credential_item, "token").await?;
+    let bearer = super::credential::read().await?;
     let target = host_channel::canonical_target(&deployment.target)
         .await
         .map_err(click)?;
