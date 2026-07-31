@@ -104,15 +104,24 @@ and removing it right after, and private material is never printed.
 
 ```sh
 stado_fleet key add render-node-a --from ~/.ssh/id_ed25519   # import into the vault
+stado_fleet key generate render-node-b                        # fresh ed25519 pair into the vault
+stado_fleet key rotate render-node-a                          # safe end-to-end rotation
 stado_fleet key ls                                            # metadata only: id, type, fingerprint
 stado_fleet key install render-node-a                         # public key -> authorized_keys on the host
 stado_fleet key check render-node-a                           # verify the vault key opens the channel
 stado_fleet key rm render-node-a                              # remove from the vault
 ```
 
-Targets with a vault key open their channel with it (`-i` from the
-materialized file); targets without one keep the OpenSSH default
-resolution (agent, config, default key files).
+Rotation is transactional: the new public key goes onto the host through
+the still-valid old key, the vault item is overwritten, the channel is
+verified with the NEW key, and only then the old public key is removed.
+A failed verification restores the old vault item, so a host never gets
+stranded on a key nobody holds.
+
+Where keys live is a fleet decision in the central catalog:
+`registry.enrollment.key_custody` is `skarbiec` (the vault, default) or
+`openssh` (agent, config, default key files). `stado_fleet catalog`
+shows the active custody, and every channel honors it.
 
 ## The central catalog
 
