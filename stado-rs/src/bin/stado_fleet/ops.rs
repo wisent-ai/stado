@@ -122,17 +122,22 @@ pub fn remove_target(document: &Value, name: &str) -> Result<Value, String> {
     Ok(next)
 }
 
-/// Probe the machine's real hostname through Stado's own deploy channel.
-/// Verification BEFORE any registry write: a machine that cannot be
-/// reached, or answers with no usable hostname, is never registered.
+/// Probe the machine's real hostname through Stado's own deploy channel —
+/// with the target's vault key when one is stored, the OpenSSH default
+/// resolution otherwise. Verification BEFORE any registry write: a machine
+/// that cannot be reached, or answers with no usable hostname, is never
+/// registered.
 async fn probe_hostname(
     runner: &stado::deploy::Runner,
+    target: &str,
     destination: &str,
 ) -> Result<String, String> {
-    let output = runner(stado::deploy::CommandSpec::new(
-        stado::deploy::bootstrap::ssh_argv(destination, "hostname"),
-    ))
-    .await?;
+    let (argv, materialized) =
+        crate::key::channel_argv(runner, target, destination, "hostname").await?;
+    let output = runner(stado::deploy::CommandSpec::new(argv)).await?;
+    if let Some(path) = materialized {
+        let _ = std::fs::remove_file(path);
+    }
     if !output.ok() {
         return Err(format!(
             "cannot verify {destination}: {}",
@@ -208,7 +213,7 @@ pub async fn enroll(
     crate::enroll::catalog::require_enroll_allowed(&document)?;
     preflight_enroll(&document, name, fleet_name)?;
     let runner = stado::deploy::production_runner();
-    let hostname = probe_hostname(&runner, destination).await?;
+    let hostname = probe_hostname(&runner, name, destination).await?;
     let next = register_target(&document, name, kind, std::slice::from_ref(&hostname))?;
     let generation = push_document(&next).await.map_err(|exc| exc.to_string())?;
     println!("registered '{name}', verified as '{hostname}' (generation {generation})");
