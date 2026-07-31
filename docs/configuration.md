@@ -34,6 +34,9 @@ Only route-local or process-local values should be overridden:
 | `STADO_HOST_HEALTH_SKARBIEC_URL` | Skarbiec origin for the route-only host-health publisher. |
 | `STADO_HOST_HEALTH_SKARBIEC_CONSUMER` | Exactly `stado-host-health-beacon`. |
 | `STADO_HOST_HEALTH_SKARBIEC_TOKEN_FILE` | Owner-only grant scoped only to `stado-host-health-api`. |
+| `STADO_CREDENTIALS_STORE` | Requested credential backend (`skarbiec`, `skarbiec://<https-origin>`, or `file://<absolute-path>`). A value different from `credentials.store` is a pending migration. |
+| `STADO_CREDENTIALS_ADMIN_CONSUMER` | Skarbiec bootstrap consumer used only for store administration and migration. |
+| `STADO_CREDENTIALS_ADMIN_TOKEN_FILE` | Owner-only bootstrap grant for the credential-store administrator. |
 
 Cloud-provider locators and credentials are not caller overrides. An enabled
 provider adapter receives its exact profile and provider-plugin identity; a
@@ -53,6 +56,53 @@ a channel authorizes only its own credential lookup and network route. The
 Pub/Sub topic and SendGrid recipient are inert unless their adapters are also
 enabled. An alert failure is isolated from scheduling, execution, health, and
 the other channels.
+
+## Credential store
+
+One selector owns every application credential, including cloud/provider
+credentials, service tokens, and SSH host keys:
+
+```json
+{
+  "credentials": {
+    "store": "skarbiec",
+    "admin": {
+      "consumer": "local-operator",
+      "token_file": "~/.stado/local-operator-skarbiec-token"
+    }
+  }
+}
+```
+
+`credentials.store` is the committed source of truth.
+`STADO_CREDENTIALS_STORE` is its process-level override. Supported locators are
+`skarbiec`, `skarbiec://<https-origin>`, and `file://<absolute-path>`. The file
+backend is an owner-only local/offline manager; Skarbiec adds encryption,
+scoped grants, audit, recovery recipients, and remote HTTPS access.
+
+Changing the environment selector does not make Stado read an empty backend.
+It creates a fail-closed pending migration:
+
+```sh
+export STADO_CREDENTIALS_STORE=file:///secure/stado-credentials.json
+stado secrets migrate
+```
+
+Without an environment override, `stado secrets migrate --to <locator>` performs
+the same change. Migration snapshots every active item and its type, requires an
+empty destination, copies and reads every value back, commits
+`credentials.store`, and only then removes the source items. A failed copy,
+verification, config write, or source cleanup rolls back to the previous store.
+Normal reads and writes remain blocked while the environment and committed
+selectors differ.
+
+All `stado secrets` CRUD, provider reads, scoped verifier reads, and
+`stado_fleet key` operations use this selector. There is no OpenSSH-file
+fallback for host channels. Only a backend's own bootstrap credential remains
+outside the selected store: putting the grant needed to unlock a manager inside
+that same manager would be circular. For Skarbiec, this is the owner-only admin
+token file named above.
+
 
 ## Registry
 
@@ -91,6 +141,104 @@ A coordinator entry pins the scheduling-tick driver:
   "active": true
 }
 ```
+
+A registry document may also carry the fleet's central enrollment and
+communication catalog. `enrollment` declares which registration paths are
+allowed — `allow_join` for machine-initiated `stado_fleet join`/`approve`,
+`allow_enroll` for control-plane `stado_fleet enroll`, and
+`require_verified_hostname` for the verified-identity contract.
+`channels` declares how machines reach the control plane. Both sections
+are additive: a document without them is unrestricted, which
+`stado_fleet catalog` reports explicitly. The `stado_fleet` commands
+enforce the catalog in their preflights, before any write.
+
+```jsonc
+{
+  "enrollment": {
+    "allow_join": true,
+    "allow_enroll": true,
+    "require_verified_hostname": true
+  },
+  "channels": {
+    "control_plane": ["loopback"],
+    "notes": "any address that resolves: LAN, mDNS, tailnet"
+  }
+}
+```
+
+## Local inference
+
+The optional top-level `inference` section is the single desired-state and
+routing catalog for Stado-managed vLLM. `gateway_target` is the registered host
+running Brama; deployments run on registered local GPU targets and expose their
+OpenAI-compatible endpoint only on a Tailscale IPv4 address.
+
+```jsonc
+{
+  "inference": {
+    "gateway_target": "my-brama-host",
+    "deployments": [],
+    "routes": {}
+  }
+}
+```
+
+The lifecycle is deliberately two-step and generation-fenced:
+
+Create the shared bearer without exposing it in argv, output, or a file:
+
+```sh
+stado inference init-credential
+```
+
+Bootstrap the gateway snapshot before Brama's first managed start:
+
+```sh
+stado inference route set wisent-backend/chat/primary \
+  --to qwen/default --expected absent --gateway ubuntu-server-rtx-pro-6000
+```
+
+```sh
+stado inference plan chat-primary \
+  --host ubuntu-server-rtx-pro-6000 \
+  --image 'vllm/vllm-openai@sha256:770fe65b2c73ee74a5c42165cf3433de4048cc2cd9c57a937ca4e35aba5aa87b' \
+  --model 'Qwen/Qwen2.5-72B-Instruct-AWQ' \
+  --revision '698703eae6604af048a3d2f509995dc302088217'
+stado inference apply <plan-id>
+stado inference doctor chat-primary
+stado inference verify chat-primary
+stado inference route set wisent-backend/chat/primary \
+  --to chat-primary --fallback qwen/default \
+  --expected qwen/default --gateway ubuntu-server-rtx-pro-6000
+```
+The pinned AWQ model is the quality-first single-GPU profile for the registered
+RTX Pro 6000 Blackwell with 96 GB VRAM. The immutable Hugging Face revision and
+amd64 vLLM image digest above prevent silent model or runtime replacement.
+
+
+`plan` inventories the host, requires Docker, NVIDIA tooling, and a live
+Tailscale address, then saves an immutable plan bound to the current registry
+digest. `apply` rechecks that precondition, installs the digest-pinned vLLM
+container as a user systemd unit, waits for an authenticated readiness probe,
+and only then commits the deployment. A failed runtime, readiness check, or
+registry compare-and-swap restores the prior runtime.
+
+The deployment and Brama use one centrally stored credential item:
+`provider:local-openai`, containing a non-empty `token` field.
+`stado inference init-credential` generates and stores it without printing the
+token, and refuses to overwrite an existing item. Deliberate rotation can use
+`stado credentials put provider:local-openai` with JSON on standard input, but
+must be coordinated with runtime replacement; never place the token in argv or
+registry data. Route changes require `--expected`, probe the destination first,
+stage an owner-only route snapshot on the gateway, compare-and-swap the
+registry, and then atomically commit the snapshot. Brama reloads that file per
+request, so cutover needs no backend restart. Ordered `--fallback` destinations
+are attempted when the primary provider fails; `qwen/default` therefore
+preserves service while local vLLM is unavailable. `rollback` reinstalls the
+recorded prior deployment; `retire` refuses while any primary or fallback route
+still selects the deployment and retains model cache unless `--purge-cache` is
+explicit.
+
 
 ## Quotas
 
