@@ -158,7 +158,7 @@ mod ops {
     use serde_json::json;
 
     use crate::fleet::{find_fleet, parse_fleets};
-    use crate::ops::{assign_target, create_fleet, preflight_enroll, register_target};
+    use crate::ops::{assign_target, create_fleet, preflight_enroll, register_target, remove_target};
 
     fn base() -> serde_json::Value {
         json!({
@@ -275,5 +275,26 @@ mod ops {
     fn register_target_refuses_duplicate() {
         let err = register_target(&base(), "mini", "local", &[]).unwrap_err();
         assert!(err.contains("already registered"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn remove_target_drops_the_entry() {
+        let next = remove_target(&base(), "mini").expect("remove");
+        let targets = next
+            .get("targets")
+            .and_then(serde_json::Value::as_array)
+            .expect("targets");
+        assert!(targets
+            .iter()
+            .all(|target| target.get("name").and_then(serde_json::Value::as_str) != Some("mini")));
+        assert!(targets
+            .iter()
+            .any(|target| target.get("name").and_then(serde_json::Value::as_str) == Some("laptop")));
+    }
+
+    #[test]
+    fn remove_target_refuses_unknown_name() {
+        let err = remove_target(&base(), "ghost").unwrap_err();
+        assert!(err.contains("not found"), "unexpected error: {err}");
     }
 }

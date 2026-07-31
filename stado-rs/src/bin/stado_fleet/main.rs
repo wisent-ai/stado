@@ -66,14 +66,10 @@ enum Commands {
     Enroll {
         /// Machine name (a lowercase target identifier).
         name: String,
-        /// SSH destination of the machine (user@host). Omit for the
-        /// self-install path (ssh=null, bootstrap runs on the machine).
+        /// SSH destination of the machine (user@host) — the verification
+        /// channel; the machine is probed before anything is written.
         #[arg(long)]
-        ssh: Option<String>,
-        /// Real DNS hostname of the machine, so the agent can resolve
-        /// itself in the registry (self-install path).
-        #[arg(long)]
-        hostname: Option<String>,
+        ssh: String,
         /// Target kind.
         #[arg(long, default_value = "local")]
         kind: String,
@@ -115,21 +111,10 @@ async fn main() -> ExitCode {
         Commands::Enroll {
             name,
             ssh,
-            hostname,
             kind,
             fleet,
             bootstrap,
-        } => {
-            ops::enroll(
-                &name,
-                ssh.as_deref(),
-                &kind,
-                fleet.as_deref(),
-                bootstrap,
-                hostname.as_deref(),
-            )
-            .await
-        }
+        } => ops::enroll(&name, Some(&ssh), &kind, fleet.as_deref(), bootstrap).await,
         Commands::Join => enroll::join().await,
         Commands::Pending => enroll::pending().await,
         Commands::Approve { hostname, fleet } => enroll::approve(&hostname, fleet.as_deref()).await,
