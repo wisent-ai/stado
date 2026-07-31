@@ -106,6 +106,46 @@ pub fn register_target(
     Ok(next)
 }
 
+/// Remove a target from the document — the rollback half of a verified
+/// enroll whose bootstrap failed. Pure.
+pub fn remove_target(document: &Value, name: &str) -> Result<Value, String> {
+    let mut next = document.clone();
+    let targets = next
+        .get_mut("targets")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| "registry.targets: must be an array".to_string())?;
+    let before = targets.len();
+    targets.retain(|target| target.get("name").and_then(Value::as_str) != Some(name));
+    if targets.len() == before {
+        return Err(format!("target '{name}' not found in registry"));
+    }
+    Ok(next)
+}
+
+/// Probe the machine's real hostname through Stado's own deploy channel.
+/// Verification BEFORE any registry write: a machine that cannot be
+/// reached, or answers with no usable hostname, is never registered.
+async fn probe_hostname(
+    runner: &stado::deploy::Runner,
+    destination: &str,
+) -> Result<String, String> {
+    let output = runner(stado::deploy::CommandSpec::new(
+        stado::deploy::bootstrap::ssh_argv(destination, "hostname"),
+    ))
+    .await?;
+    if !output.ok() {
+        return Err(format!(
+            "cannot verify {destination}: {}",
+            output.detail()
+        ));
+    }
+    let hostname = stado::targets::normalize_hostname(output.stdout.trim());
+    if hostname.is_empty() {
+        return Err(format!("{destination} returned an empty hostname"));
+    }
+    Ok(hostname)
+}
+
 /// `stado_fleet assign TARGET FLEET` — add a registered machine to a fleet.
 pub async fn assign(target: &str, fleet_name: &str) -> Result<bool, String> {
     let document = fetch_document().await.map_err(|exc| exc.to_string())?;
@@ -142,58 +182,49 @@ pub fn preflight_enroll(
     Ok(())
 }
 
-/// `stado_fleet enroll NAME [--ssh DEST] [--kind local] [--fleet FLEET]
-/// [--bootstrap]` — one-command onboarding. With `--ssh`, the agent is
-/// installable from here through `stado bootstrap`. Without it, the target
-/// registers with `ssh: null` on the self-install path: run
-/// `stado bootstrap --local --target NAME` on the machine itself.
-/// Registration goes through the same validated CAS write either way.
+/// `stado_fleet enroll NAME --ssh DEST [--kind local] [--fleet FLEET]
+/// [--bootstrap]` — verified onboarding as one transaction. The machine is
+/// probed through Stado's deploy channel BEFORE anything is written: its
+/// real hostname lands in the entry, so the registration is a verified
+/// fact, not a declaration. A failed bootstrap rolls the entry back — an
+/// unverifiable or uninstallable machine never stays in the registry.
+/// Without `--ssh` there is no channel to verify against; the
+/// machine-initiated path (`stado_fleet join` there, `approve` here) is
+/// the answer for that setup.
 pub async fn enroll(
     name: &str,
     ssh: Option<&str>,
     kind: &str,
     fleet_name: Option<&str>,
     bootstrap: bool,
-    hostname: Option<&str>,
 ) -> Result<bool, String> {
-    let document = fetch_document().await.map_err(|exc| exc.to_string())?;
-    preflight_enroll(&document, name, fleet_name)?;
-    if bootstrap && ssh.is_none() {
+    let Some(destination) = ssh else {
         return Err(
-            "--bootstrap needs --ssh; on an ssh-less target run stado bootstrap --local on the machine"
+            "enroll needs --ssh for a verified registration; without a reachable channel use machine-initiated enrollment: stado_fleet join on the machine, then stado_fleet approve here"
                 .to_string(),
         );
-    }
-    match ssh {
-        Some(destination) => {
-            stado::cli::registry::host_add(name, destination, kind)
-                .await
-                .map_err(|exc| exc.to_string())?;
-        }
-        None => {
-            let hostnames: Vec<String> = hostname
-                .map(|value| vec![value.to_string()])
-                .unwrap_or_default();
-            if hostnames.is_empty() {
-                println!(
-                    "note: no --hostname given; the agent will find this entry only if the machine's hostname is '{name}'"
-                );
-            }
-            let next = register_target(&document, name, kind, &hostnames)?;
-            let generation = push_document(&next)
-                .await
-                .map_err(|exc| exc.to_string())?;
-            println!("registered '{name}' (kind={kind}, ssh=null) generation={generation}");
-            println!("self-install on the machine: stado bootstrap --local --target '{name}'");
-        }
-    }
+    };
+    let document = fetch_document().await.map_err(|exc| exc.to_string())?;
+    preflight_enroll(&document, name, fleet_name)?;
+    let runner = stado::deploy::production_runner();
+    let hostname = probe_hostname(&runner, destination).await?;
+    let next = register_target(&document, name, kind, std::slice::from_ref(&hostname))?;
+    let generation = push_document(&next).await.map_err(|exc| exc.to_string())?;
+    println!("registered '{name}', verified as '{hostname}' (generation {generation})");
     if let Some(fleet) = fleet_name {
         assign(name, fleet).await?;
     }
     if bootstrap {
-        stado::cli::bootstrap::run(Some(name.to_string()), false, false)
-            .await
-            .map_err(|exc| exc.to_string())?;
+        if let Err(exc) = stado::cli::bootstrap::run(Some(name.to_string()), false, false).await {
+            let current = fetch_document().await.map_err(|err| err.to_string())?;
+            let rolled_back = remove_target(&current, name)?;
+            push_document(&rolled_back)
+                .await
+                .map_err(|err| err.to_string())?;
+            return Err(format!(
+                "bootstrap failed ({exc}); the registration of '{name}' was rolled back"
+            ));
+        }
     }
     println!("enrolled '{name}' (kind={kind})");
     Ok(true)
