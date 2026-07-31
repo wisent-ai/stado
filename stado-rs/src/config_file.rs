@@ -6,8 +6,8 @@
 //! in order: $STADO_CONFIG, ./stado.config.json, ~/.config/stado/config.json,
 //! ~/.stado/config.json.
 //!
-//! Structured sections (storage/providers/azure/dashboard/alerts/billing)
-//! are flattened onto the flat constant names config.rs already consumes, so
+//! Structured sections (storage/providers/azure/dashboard/alerts/billing/
+//! credentials) are flattened onto the constant names config.rs consumes, so
 //! no consumer changes are required to adopt a file-driven deployment.
 //!
 //! The file is loaded once and cached process-wide (Python `_CACHE`), via
@@ -313,6 +313,28 @@ pub fn validate(data: &Value) -> Vec<String> {
         )),
     }
     unresolved_placeholders(data, "", &mut problems);
+    if let Some(store) = get_in(root, "credentials.store") {
+        match store.as_str().filter(|value| !value.trim().is_empty()) {
+            Some(store) => {
+                if let Err(error) = crate::credential_store::parse_selector(store) {
+                    problems.push(error.to_string());
+                }
+            }
+            None => problems.push("credentials.store must be a non-empty string".to_string()),
+        }
+    }
+    for field in [
+        "credentials.admin.consumer",
+        "credentials.admin.token_file",
+    ] {
+        if get_in(root, field).is_some_and(|value| {
+            !value
+                .as_str()
+                .is_some_and(|entry| !entry.trim().is_empty())
+        }) {
+            problems.push(format!("{field} must be a non-empty string"));
+        }
+    }
     if let Some(channels) = get_in(root, "alerts.channels") {
         match channels {
             Value::Array(values) => {
@@ -1240,6 +1262,13 @@ pub fn template() -> Value {
         "schema_version": SCHEMA_VERSION,
         "providers": [local],
         "providers_disabled": disabled,
+        "credentials": {
+            "store": "skarbiec",
+            "admin": {
+                "consumer": "local-operator",
+                "token_file": "~/.stado/local-operator-skarbiec-token"
+            }
+        },
         "storage": {
             "backend": "local",
             "local": {"path": "~/.stado/local-storage"},
