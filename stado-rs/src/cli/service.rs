@@ -460,7 +460,7 @@ async fn restart(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdEr
     fail_if_any(&failures, "restart")
 }
 
-async fn service_secret(item: &str, field: &str) -> Result<String, CmdError> {
+pub(crate) async fn service_secret(item: &str, field: &str) -> Result<String, CmdError> {
     let vault = crate::skarbiec::Client::service_verifier()
         .map_err(|err| CmdError::click(err.to_string()))?;
     let stored = vault

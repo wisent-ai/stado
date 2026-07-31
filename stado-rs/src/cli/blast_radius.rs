@@ -304,9 +304,31 @@ pub async fn run(args: &BlastRadiusArgs) -> Result<(), CmdError> {
 
 async fn inspect_credential_store() -> CredentialStoreReport {
     const REQUIRED_ITEMS: &[&str] = &["stado-huggingface"];
-    let locator = config::skarbiec_url().to_string();
-    let consumer = config::skarbiec_consumer().to_string();
-    let client = match crate::skarbiec::Client::configured() {
+    let locator = crate::credential_store::requested_selector()
+        .unwrap_or_else(|error| format!("invalid selector: {error}"));
+    let credentials = match crate::credential_store::admin_credentials() {
+        Ok(credentials) => credentials,
+        Err(error) => {
+            return CredentialStoreReport {
+                state: "unreachable".to_string(),
+                locator,
+                consumer: String::new(),
+                item_count: None,
+                items: Vec::new(),
+                missing_required: REQUIRED_ITEMS
+                    .iter()
+                    .map(|item| (*item).to_string())
+                    .collect(),
+                error: Some(error.to_string()),
+            }
+        }
+    };
+    let consumer = credentials.consumer.clone();
+    let client = match crate::skarbiec::Client::new(
+        &credentials.url,
+        &credentials.consumer,
+        &credentials.token_file,
+    ) {
         Ok(client) => client,
         Err(error) => {
             return CredentialStoreReport {
@@ -747,7 +769,7 @@ fn downstream_impacts(
             storage_state,
             REGISTRY,
             &["coordinators", "host management"],
-            "registry.json lives in the configured primary store; credentials live in Skarbiec",
+            "registry.json lives in the configured primary store; credentials live in the globally selected credential store",
         ),
     ];
 
