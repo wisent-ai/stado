@@ -12,8 +12,10 @@ before it lands.
 
 ## Onboard a new machine
 
-The product flow needs no insider knowledge — the machine announces
-itself, the operator only approves:
+Enrollment is verified: a machine lands in the registry only after Stado
+proves it exists. Two channels, both verified:
+
+**Machine-initiated (no address needed):**
 
 ```sh
 # on the new machine (no arguments, no hostname needed):
@@ -29,16 +31,18 @@ the printed JSON travels by any channel). `approve` turns it into a
 registered target through the validated registry write — a host identity
 already declared is refused, never duplicated. `reject` drops a request.
 
-One command from the control plane also works, when the address is known:
+**Control-plane-initiated (verified over the remote channel):**
 
 ```sh
-stado_fleet enroll render-node-a --ssh operator@render-node-a.local --fleet render-burst
+stado_fleet enroll render-node-a --ssh operator@render-node-a.local --fleet render-burst --bootstrap
 ```
 
-Add `--bootstrap` to install the agent on the machine right after
-registering it (goes through `stado bootstrap`, Stado's own remote
-channel). The preflight runs before any write: an already-registered name
-or an undeclared fleet is refused with nothing changed.
+`enroll` first probes the machine through Stado's own remote channel and
+puts the machine's REAL hostname into the entry — the registration is a
+verified fact, not a declaration. An unreachable machine is refused
+before any write; a failed bootstrap rolls the entry back. The channel
+is anything the destination resolves over — LAN, mDNS, or an overlay
+address such as a tailnet IP; Stado does not care which.
 
 No ssh access from the control plane? Skip `--ssh` — the machine
 registers with `ssh: null` and installs itself. Pass the machine's real
