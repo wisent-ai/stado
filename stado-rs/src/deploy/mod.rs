@@ -61,6 +61,7 @@ pub mod inference;
 pub mod inference_routes;
 pub mod local_install;
 pub mod service;
+pub mod ssh_key;
 
 /// Deploy-layer failure carrying the exact Python exception message
 /// (RuntimeError / ValueError / LookupError text). The CLI maps it to a
