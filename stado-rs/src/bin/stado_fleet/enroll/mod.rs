@@ -9,6 +9,12 @@
 //! `approve` — the same validated compare-and-swap registry write as every
 //! other fleet command, so a colliding host identity is refused by the
 //! registry-v2 contract, never papered over.
+//!
+//! Both `join` and `approve` honor the fleet's central enrollment catalog
+//! (`registry.enrollment`, see [`catalog`]): a path the catalog disables
+//! is refused.
+
+pub mod catalog;
 
 use serde_json::{json, Value};
 use stado::cli::registry::{fetch_document, push_document};
@@ -68,6 +74,12 @@ pub fn pending_request(document: &Value) -> Result<&str, String> {
 /// in the store and prints the request for carry-over setups.
 pub async fn join() -> Result<bool, String> {
     let hostname = normalize_hostname(&stado::providers::vast::system_hostname());
+    // The catalog gates join wherever the registry is readable from here;
+    // on carry-over setups the control plane gates at approve instead.
+    match fetch_document().await {
+        Ok(document) => catalog::require_join_allowed(&document)?,
+        Err(_) => println!("note: registry not readable here; the catalog gates at approve"),
+    }
     let request = build_request(&hostname, std::env::consts::OS, std::env::consts::ARCH);
     let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
     let created = store
@@ -144,6 +156,7 @@ pub async fn approve(hostname: &str, fleet_name: Option<&str>) -> Result<bool, S
         .unwrap_or("local")
         .to_string();
     let document = fetch_document().await.map_err(|exc| exc.to_string())?;
+    catalog::require_join_allowed(&document)?;
     let next = register_target(&document, &name, &kind, &[request_hostname.clone()])?;
     let generation = push_document(&next).await.map_err(|exc| exc.to_string())?;
     println!("approved '{request_hostname}' as target '{name}' (generation {generation})");

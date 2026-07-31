@@ -92,6 +92,30 @@ A coordinator entry pins the scheduling-tick driver:
 }
 ```
 
+A registry document may also carry the fleet's central enrollment and
+communication catalog. `enrollment` declares which registration paths are
+allowed — `allow_join` for machine-initiated `stado_fleet join`/`approve`,
+`allow_enroll` for control-plane `stado_fleet enroll`, and
+`require_verified_hostname` for the verified-identity contract.
+`channels` declares how machines reach the control plane. Both sections
+are additive: a document without them is unrestricted, which
+`stado_fleet catalog` reports explicitly. The `stado_fleet` commands
+enforce the catalog in their preflights, before any write.
+
+```jsonc
+{
+  "enrollment": {
+    "allow_join": true,
+    "allow_enroll": true,
+    "require_verified_hostname": true
+  },
+  "channels": {
+    "control_plane": ["loopback"],
+    "notes": "any address that resolves: LAN, mDNS, tailnet"
+  }
+}
+```
+
 ## Quotas
 
 The provider-neutral `config/quotas.json` object contains reservation overlays,
