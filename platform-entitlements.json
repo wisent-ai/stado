@@ -1,0 +1,12 @@
+{
+  "schema": "wisent.product-entitlements.current",
+  "product": "stado",
+  "organization_id": "deployment home organization",
+  "principal_id": "authenticated operator identity",
+  "community": ["stado.self-hosted"],
+  "managed": ["stado.managed-workers", "stado.dedicated-control-plane"],
+  "managed_failure": "managed scheduling and fleet mutation fail closed",
+  "community_failure": "self-hosted queue and authorized local workers remain available",
+  "billing_unit": "active managed worker",
+  "cloud_costs": "separately attributed pass-through"
+}
