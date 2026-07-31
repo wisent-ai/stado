@@ -9,7 +9,7 @@ COPY src ./src
 COPY data ./data
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
-    CARGO_BUILD_JOBS="$(printf x | wc -c)" cargo build --release --locked \
+    CARGO_BUILD_JOBS="$(printf x | /usr/bin/wc -c)" cargo build --release --locked \
     && mkdir -p /out \
     && cp target/release/stado \
           target/release/stado-coverage \
