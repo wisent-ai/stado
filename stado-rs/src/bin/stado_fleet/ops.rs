@@ -205,6 +205,7 @@ pub async fn enroll(
         );
     };
     let document = fetch_document().await.map_err(|exc| exc.to_string())?;
+    crate::enroll::catalog::require_enroll_allowed(&document)?;
     preflight_enroll(&document, name, fleet_name)?;
     let runner = stado::deploy::production_runner();
     let hostname = probe_hostname(&runner, destination).await?;
