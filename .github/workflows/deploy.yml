@@ -85,6 +85,9 @@ jobs:
           docker cp "$container:/out/." "$RUNNER_TEMP/stado-release/"
           docker rm "$container" >/dev/null
 
+      - name: Build native release publisher CLI
+        run: cargo build --manifest-path stado-rs/Cargo.toml --locked --bin stado
+
       - name: Create Linux release manifest
         run: |
           machine_schema="$(
@@ -196,7 +199,7 @@ jobs:
           python3 scripts/surface.py --help-text "$RUNNER_TEMP/stado-help.txt" \
             > "$RUNNER_TEMP/candidate-surface.json"
 
-          stado_bin="$HOME/.stado/bin/stado"
+          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/debug/stado"
           STADO_API_TOKEN="$("$stado_bin" secrets get stado-release-publisher --field token)"
           export STADO_API_TOKEN
           AUTOVERSION="$RUNNER_TEMP/autoversion/bin/autoversion" \
@@ -205,7 +208,7 @@ jobs:
 
       - name: Create immutable Linux release through Stado
         run: |
-          stado_bin="$HOME/.stado/bin/stado"
+          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/debug/stado"
           test -x "$stado_bin"
           test -n "$WC_SKARBIEC_URL"
           STADO_API_TOKEN="$("$stado_bin" secrets get stado-release-publisher --field token)"
