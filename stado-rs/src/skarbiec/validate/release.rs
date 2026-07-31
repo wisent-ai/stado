@@ -50,15 +50,27 @@ pub async fn validate_release_verifier() -> Result<usize, SkarbiecError> {
     })?;
     let object_client = Client::object_verifier()?;
     let mut token_owners = HashMap::<Vec<u8>, String>::new();
-    for (namespace, policy) in object_namespaces {
-        let token = object_client
-            .read_string(policy.item(), "token")
-            .await?
+    // Both sweeps share their verifier client concurrently: the Skarbiec
+    // listener is thread-per-connection, so serial reads would multiply the
+    // vault's gpg latency by the item count for no benefit.
+    let object_reads: Vec<(&str, Result<Option<String>, SkarbiecError>)> =
+        futures::future::join_all(object_namespaces.iter().map(|(namespace, policy)| {
+            let object_client = &object_client;
+            async move {
+                (
+                    namespace.as_str(),
+                    object_client.read_string(policy.item(), "token").await,
+                )
+            }
+        }))
+        .await;
+    for (namespace, result) in object_reads {
+        let token = result?
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| {
                 SkarbiecError::Deployment(format!(
                     "Skarbiec item {}/token is missing or empty for namespace {namespace}",
-                    policy.item()
+                    object_namespaces[namespace].item()
                 ))
             })?;
         token_owners.insert(
@@ -66,15 +78,24 @@ pub async fn validate_release_verifier() -> Result<usize, SkarbiecError> {
             format!("object namespace {namespace}"),
         );
     }
-    for (product, policy) in publishers {
-        let token = client
-            .read_string(policy.item(), "token")
-            .await?
+    let publisher_reads: Vec<(&str, Result<Option<String>, SkarbiecError>)> =
+        futures::future::join_all(publishers.iter().map(|(product, policy)| {
+            let client = &client;
+            async move {
+                (
+                    product.as_str(),
+                    client.read_string(policy.item(), "token").await,
+                )
+            }
+        }))
+        .await;
+    for (product, result) in publisher_reads {
+        let token = result?
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| {
                 SkarbiecError::Deployment(format!(
                     "Skarbiec item {}/token is missing or empty for release publisher {product}",
-                    policy.item()
+                    publishers[product].item()
                 ))
             })?;
         let digest = Sha256::digest(token.as_bytes()).to_vec();

@@ -235,7 +235,10 @@ async fn verify(runner: &Runner, plan: &MigrationPlan) -> Result<(), String> {
     let check = format!("launchctl print gui/$(id -u)/{}", label(&plan.to_name));
     let out = runner(CommandSpec::new(ssh_argv(&plan.to_host, &check))).await?;
     if out.ok() {
-        println!("[verify] {} reports the coordinator service loaded", plan.to_host);
+        println!(
+            "[verify] {} reports the coordinator service loaded",
+            plan.to_host
+        );
     } else {
         println!(
             "[verify] warning: service not visible on {} yet: {}",
@@ -273,7 +276,12 @@ pub async fn migrate_coordinator(
         return Ok(());
     }
     let runner = production_runner();
-    run_checked(&runner, install_spec(&plan.to_host), "release binary install").await?;
+    run_checked(
+        &runner,
+        install_spec(&plan.to_host),
+        "release binary install",
+    )
+    .await?;
     println!("[preflight] release binaries present on {}", plan.to_host);
     stop_source(&runner, &plan).await?;
     if plan.move_local_storage {

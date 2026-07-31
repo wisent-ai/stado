@@ -24,4 +24,4 @@ else
   BODY=$(printf '%s\n```\n%s\n```\n' "Process exited without writing DONE marker." "$(tail -50 "$LOG")")
 fi
 
-gh issue create -R wisent-ai/wisent-compute --title "$TITLE" --body "$BODY"
+gh issue create -R wisent-ai/stado --title "$TITLE" --body "$BODY"

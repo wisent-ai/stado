@@ -58,9 +58,7 @@ pub fn parse_fleets(document: &Value) -> Result<Vec<Fleet>, String> {
                 .get("name")
                 .and_then(Value::as_str)
                 .filter(|name| is_fleet_name(name))
-                .ok_or_else(|| {
-                    format!("{location}.name: must be a lowercase fleet identifier")
-                })?;
+                .ok_or_else(|| format!("{location}.name: must be a lowercase fleet identifier"))?;
             if fleets.iter().any(|fleet| fleet.name == name) {
                 return Err(format!("{location}.name: duplicate fleet '{name}'"));
             }

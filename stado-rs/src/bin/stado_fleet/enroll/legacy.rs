@@ -23,14 +23,20 @@ pub async fn allow_takeover(document: &Value, name: &str) -> Result<bool, String
     };
     let target = &document["targets"][index];
     if target.get("ssh").is_some_and(|value| !value.is_null()) {
-        return Err(format!("target '{name}' is already registered with a communication channel"));
+        return Err(format!(
+            "target '{name}' is already registered with a communication channel"
+        ));
     }
 
     let store = JobStorage::new().await.map_err(|error| error.to_string())?;
     match stado::monitor::host_health::load_host_health(&store, name).await {
         Err(HostHealthError::NoBeacon { .. }) => Ok(true),
-        Ok(_) => Err(format!("target '{name}' already has a health beacon and cannot be replaced")),
-        Err(error) => Err(format!("cannot prove target '{name}' has no beacon: {error}")),
+        Ok(_) => Err(format!(
+            "target '{name}' already has a health beacon and cannot be replaced"
+        )),
+        Err(error) => Err(format!(
+            "cannot prove target '{name}' has no beacon: {error}"
+        )),
     }
 }
 

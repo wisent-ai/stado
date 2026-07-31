@@ -323,15 +323,10 @@ pub fn validate(data: &Value) -> Vec<String> {
             None => problems.push("credentials.store must be a non-empty string".to_string()),
         }
     }
-    for field in [
-        "credentials.admin.consumer",
-        "credentials.admin.token_file",
-    ] {
-        if get_in(root, field).is_some_and(|value| {
-            !value
-                .as_str()
-                .is_some_and(|entry| !entry.trim().is_empty())
-        }) {
+    for field in ["credentials.admin.consumer", "credentials.admin.token_file"] {
+        if get_in(root, field)
+            .is_some_and(|value| !value.as_str().is_some_and(|entry| !entry.trim().is_empty()))
+        {
             problems.push(format!("{field} must be a non-empty string"));
         }
     }

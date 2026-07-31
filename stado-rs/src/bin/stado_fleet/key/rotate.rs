@@ -10,7 +10,9 @@ use stado::deploy::{CommandSpec, Runner};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::{authorized_keys_line, channel_argv, configured_client, item_id, run_checked, ITEM_TYPE};
+use super::{
+    authorized_keys_line, channel_argv, configured_client, item_id, run_checked, ITEM_TYPE,
+};
 
 struct KeyPair {
     private_key: String,
@@ -35,10 +37,8 @@ async fn generate_pair(runner: &Runner, comment: &str) -> Result<KeyPair, String
         .duration_since(UNIX_EPOCH)
         .map_err(|error| error.to_string())?
         .as_nanos();
-    let path = std::env::temp_dir().join(format!(
-        "stado-fleet-keygen-{}-{nonce}",
-        std::process::id()
-    ));
+    let path =
+        std::env::temp_dir().join(format!("stado-fleet-keygen-{}-{nonce}", std::process::id()));
     let path_str = path.to_string_lossy().to_string();
     run_checked(
         runner,
@@ -60,17 +60,11 @@ async fn generate_pair(runner: &Runner, comment: &str) -> Result<KeyPair, String
         private: path,
         public: PathBuf::from(format!("{path_str}.pub")),
     };
-    let private_key =
-        std::fs::read_to_string(&files.private).map_err(|exc| exc.to_string())?;
-    let public_key =
-        std::fs::read_to_string(&files.public).map_err(|exc| exc.to_string())?;
+    let private_key = std::fs::read_to_string(&files.private).map_err(|exc| exc.to_string())?;
+    let public_key = std::fs::read_to_string(&files.public).map_err(|exc| exc.to_string())?;
     let fingerprint_line = run_checked(
         runner,
-        CommandSpec::new(vec![
-            "ssh-keygen".to_string(),
-            "-lf".to_string(),
-            path_str,
-        ]),
+        CommandSpec::new(vec!["ssh-keygen".to_string(), "-lf".to_string(), path_str]),
         "ssh-keygen -lf",
     )
     .await?;
@@ -86,7 +80,11 @@ async fn generate_pair(runner: &Runner, comment: &str) -> Result<KeyPair, String
     })
 }
 
-async fn store_pair(client: &stado::skarbiec::Client, target: &str, pair: &KeyPair) -> Result<(), String> {
+async fn store_pair(
+    client: &stado::skarbiec::Client,
+    target: &str,
+    pair: &KeyPair,
+) -> Result<(), String> {
     client
         .write_item(
             &item_id(target),
@@ -108,7 +106,11 @@ pub async fn generate(runner: &Runner, target: &str) -> Result<bool, String> {
     let pair = generate_pair(runner, &item_id(target)).await?;
     let client = configured_client()?;
     store_pair(&client, target, &pair).await?;
-    println!("stored credential item {} ({})", item_id(target), pair.fingerprint);
+    println!(
+        "stored credential item {} ({})",
+        item_id(target),
+        pair.fingerprint
+    );
     println!("public key: {}", pair.public_key);
     Ok(true)
 }
@@ -187,10 +189,12 @@ async fn remove_public_key(runner: &Runner, target: &str, public_key: &str) -> R
 async fn verify_new_key(runner: &Runner, target: &str) -> Result<String, String> {
     let destination = destination_of(target).await?;
     let (argv, _key) = channel_argv(target, &destination, "hostname").await?;
-    Ok(run_checked(runner, CommandSpec::new(argv), "hostname with the new key")
-        .await?
-        .trim()
-        .to_string())
+    Ok(
+        run_checked(runner, CommandSpec::new(argv), "hostname with the new key")
+            .await?
+            .trim()
+            .to_string(),
+    )
 }
 
 async fn destination_of(target: &str) -> Result<String, String> {
