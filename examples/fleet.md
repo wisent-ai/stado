@@ -96,6 +96,32 @@ always covers the machine the command runs on.
 - `burst` — heavy GPU capacity for burst work
 - `interactive` — operator workstations that may sleep
 
+## The central catalog
+
+Which registration paths the fleet allows, and how machines reach the
+control plane, is declared once — in the canonical registry, readable by
+every machine:
+
+```json
+{
+  "enrollment": {
+    "allow_join": true,
+    "allow_enroll": true,
+    "require_verified_hostname": true
+  },
+  "channels": {
+    "control_plane": ["loopback"],
+    "notes": "anything the address resolves over: LAN, mDNS, tailnet"
+  }
+}
+```
+
+`stado_fleet catalog` prints it. `join`, `approve` and `enroll` consult
+`enrollment` in their preflights: a path the catalog disables is refused
+with the policy's own message, before anything is written. A document
+without the sections is unrestricted — and `catalog` says so out loud,
+so an absent policy is never mistaken for a declared one.
+
 ## Schema reference
 
 What the commands above produce inside `registry.json`:
