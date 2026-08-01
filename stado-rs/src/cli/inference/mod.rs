@@ -5,6 +5,7 @@ use super::CmdError;
 mod beacon;
 mod credential;
 mod lifecycle;
+mod process;
 mod read;
 mod routes;
 
@@ -93,6 +94,25 @@ pub enum InferenceCommands {
         #[arg(long)]
         json: bool,
     },
+    /// List GPU compute processes with PID-reuse-safe identities.
+    Blockers {
+        #[arg(long)]
+        host: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Gracefully stop one exact GPU process; optionally escalate to KILL.
+    Release {
+        #[arg(long)]
+        host: String,
+        /// Exact PID:START_TICKS value printed by `blockers`.
+        #[arg(long)]
+        identity: String,
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// Stop and forget a deployment; model cache is retained by default.
     Retire {
         name: String,
@@ -172,6 +192,13 @@ pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
                     json,
                 },
         } => routes::set(&alias, &to, &expected, gateway.as_deref(), &fallback, json).await,
+        InferenceCommands::Blockers { host, json } => process::blockers(&host, json).await,
+        InferenceCommands::Release {
+            host,
+            identity,
+            force,
+            json,
+        } => process::release(&host, &identity, force, json).await,
         InferenceCommands::Rollback { name, json } => lifecycle::rollback(&name, json).await,
         InferenceCommands::Retire {
             name,

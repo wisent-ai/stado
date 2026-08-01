@@ -215,6 +215,20 @@ The pinned AWQ model is the quality-first single-GPU profile for the registered
 RTX Pro 6000 Blackwell with 96 GB VRAM. The immutable Hugging Face revision and
 amd64 vLLM image digest above prevent silent model or runtime replacement.
 
+If `plan` or `apply` reports an unmanaged GPU workload, inspect it through the
+same target-scoped host channel instead of opening an ad hoc SSH session:
+
+```sh
+stado inference blockers --host ubuntu-server-rtx-pro-6000
+stado inference release --host ubuntu-server-rtx-pro-6000 \
+  --identity <PID:START_TICKS>
+```
+
+`blockers` reports the executable, owner, VRAM use, cgroup, and an identity made
+from both PID and `/proc` start ticks. `release` refuses a stale identity, sends
+`TERM`, and waits for exit. Add `--force` only to escalate that same verified
+process to `KILL`; it never accepts a bare PID.
+
 
 `plan` inventories the host, requires Docker, NVIDIA tooling, and a live
 Tailscale address, then saves an immutable plan bound to the current registry
