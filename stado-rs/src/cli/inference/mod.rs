@@ -43,6 +43,9 @@ pub enum InferenceCommands {
         port: u16,
         #[arg(long, default_value_t = default_context())]
         max_model_len: u64,
+        /// Persistent host directory for the Hugging Face model cache.
+        #[arg(long)]
+        cache_dir: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -113,6 +116,14 @@ pub enum InferenceCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Stop runtime left by an uncommitted plan and optionally remove its cache.
+    Abort {
+        plan_id: String,
+        #[arg(long)]
+        purge_cache: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// Stop and forget a deployment; model cache is retained by default.
     Retire {
         name: String,
@@ -161,6 +172,7 @@ pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
             revision,
             port,
             max_model_len,
+            cache_dir,
             json,
         } => {
             lifecycle::plan(lifecycle::PlanOptions {
@@ -171,6 +183,7 @@ pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
                 revision,
                 port,
                 max_model_len,
+                cache_dir,
                 json,
             })
             .await
@@ -199,6 +212,11 @@ pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
             force,
             json,
         } => process::release(&host, &identity, force, json).await,
+        InferenceCommands::Abort {
+            plan_id,
+            purge_cache,
+            json,
+        } => lifecycle::abort(&plan_id, purge_cache, json).await,
         InferenceCommands::Rollback { name, json } => lifecycle::rollback(&name, json).await,
         InferenceCommands::Retire {
             name,
