@@ -1,0 +1,51 @@
+set -euo pipefail
+pid=__PID__
+expected_start=__START_TICKS__
+force=__FORCE__
+read_start() {
+  [ -r "/proc/$pid/stat" ] || return 1
+  stat_tail=$(sed 's/^.*) //' "/proc/$pid/stat") || return 1
+  set -- $stat_tail
+  printf '%s\n' "${20:-}"
+}
+send_signal() {
+  signal="$1"
+  if kill "-$signal" "$pid" 2>/dev/null; then return; fi
+  sudo -n kill "-$signal" "$pid"
+}
+actual_start=$(read_start || true)
+if [ -z "$actual_start" ]; then
+  printf 'ERROR\tprocess no longer exists\n'
+  exit 1
+fi
+if [ "$actual_start" != "$expected_start" ]; then
+  printf 'ERROR\tprocess identity changed: expected %s:%s, found %s:%s\n' \
+    "$pid" "$expected_start" "$pid" "$actual_start"
+  exit 1
+fi
+command=$(tr '\000\t\r\n' '    ' < "/proc/$pid/cmdline" 2>/dev/null || true)
+printf 'RELEASING\t%s:%s\t%s\n' "$pid" "$expected_start" "$command"
+send_signal TERM
+for ignored in $(seq 1 15); do
+  actual_start=$(read_start || true)
+  if [ -z "$actual_start" ] || [ "$actual_start" != "$expected_start" ]; then
+    printf 'RELEASED\t%s:%s\tTERM\n' "$pid" "$expected_start"
+    exit 0
+  fi
+  sleep 1
+done
+if [ "$force" != true ]; then
+  printf 'ERROR\tprocess still running after TERM; retry the same identity with --force\n'
+  exit 1
+fi
+send_signal KILL
+for ignored in $(seq 1 5); do
+  actual_start=$(read_start || true)
+  if [ -z "$actual_start" ] || [ "$actual_start" != "$expected_start" ]; then
+    printf 'RELEASED\t%s:%s\tKILL\n' "$pid" "$expected_start"
+    exit 0
+  fi
+  sleep 1
+done
+printf 'ERROR\tprocess still exists after KILL\n'
+exit 1
