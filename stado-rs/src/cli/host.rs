@@ -1330,16 +1330,7 @@ pub async fn install_release(
     release_component("family", family)?;
     release_component("version", version)?;
     release_component("platform", platform)?;
-    let asset = match family {
-        "weles-worker" => "weles-worker.tar.gz",
-        "weles-chromium" => "weles-chromium.tar.gz",
-        "weles-firefox" => "weles-firefox.tar.gz",
-        _ => {
-            return Err(CmdError::usage(
-                "release family must be weles-worker, weles-chromium, or weles-firefox",
-            ))
-        }
-    };
+    let asset = format!("{family}.tar.gz");
     let source_path = std::path::Path::new(source);
     if !source_path.is_file() || source_path.is_symlink() {
         return Err(CmdError::click(format!(
@@ -1388,8 +1379,15 @@ pub async fn install_release(
             .ssh
             .as_deref()
             .ok_or_else(|| CmdError::click("registry target has no SSH destination"))?;
+        let key = crate::deploy::ssh_key::materialize(&resolved.name)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
         let destination = format!("{ssh}:{remote_temporary}");
         let transferred = tokio::process::Command::new("scp")
+            .arg("-i")
+            .arg(key.path())
+            .arg("-o")
+            .arg("IdentitiesOnly=yes")
             .arg("-q")
             .arg("-o")
             .arg("BatchMode=yes")
