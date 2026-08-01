@@ -97,6 +97,25 @@ pub async fn logs(name: &str, lines: usize, json_output: bool) -> Result<(), Cmd
     Ok(())
 }
 
+pub async fn plan_logs(plan_id: &str, lines: usize, json_output: bool) -> Result<(), CmdError> {
+    let plan = crate::inference::plan::load(plan_id).map_err(click)?;
+    let target = host_channel::canonical_target(&plan.deployment.target)
+        .await
+        .map_err(click)?;
+    let result = inference::logs(&target, &plan.deployment, lines, &production_runner())
+        .await
+        .map_err(click)?;
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else if let Some(stdout) = result.get("stdout").and_then(Value::as_str) {
+        print!("{stdout}");
+    }
+    if result.get("status").and_then(Value::as_str) != Some("read") {
+        return Err(CmdError::click("inference plan log read failed"));
+    }
+    Ok(())
+}
+
 pub async fn doctor(name: &str, json_output: bool) -> Result<(), CmdError> {
     let (_, deployment) = document_and_deployment(name).await?;
     let bearer = super::credential::read().await?;
