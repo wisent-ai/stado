@@ -202,6 +202,7 @@ stado inference route set wisent-backend/chat/primary \
 stado inference plan chat-primary \
   --host ubuntu-server-rtx-pro-6000 \
   --image 'vllm/vllm-openai@sha256:770fe65b2c73ee74a5c42165cf3433de4048cc2cd9c57a937ca4e35aba5aa87b' \
+  --cache-dir /mnt/wd16tb/stado/inference/chat-primary \
   --model 'Qwen/Qwen2.5-72B-Instruct-AWQ' \
   --revision '698703eae6604af048a3d2f509995dc302088217'
 stado inference apply <plan-id>
@@ -228,6 +229,19 @@ stado inference release --host ubuntu-server-rtx-pro-6000 \
 from both PID and `/proc` start ticks. `release` refuses a stale identity, sends
 `TERM`, and waits for exit. Add `--force` only to escalate that same verified
 process to `KILL`; it never accepts a bare PID.
+
+A cancelled or failed pre-commit plan can leave a runtime or root-owned model
+cache without a registry deployment. Clean that exact saved plan through the
+managed channel:
+
+```sh
+stado inference abort <plan-id> --purge-cache
+```
+
+`abort` never changes the registry. It stops only the runtime described by the
+immutable local plan, removes its cache through the pinned container runtime,
+and consumes the plan after successful cleanup. Set `--cache-dir` during
+`plan` when the target's home filesystem is not the intended model volume.
 
 
 `plan` inventories the host, requires Docker, NVIDIA tooling, and a live
