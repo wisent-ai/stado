@@ -60,10 +60,13 @@ async fn wait_ready(
         if report
             .get("stdout")
             .and_then(Value::as_str)
-            .is_some_and(|stdout| stdout.contains("inference unit failed"))
+            .is_some_and(|stdout| {
+                stdout.contains("inference container is")
+                    || stdout.contains("inference container missing")
+            })
         {
             return Err(CmdError::click(format!(
-                "inference '{}' unit failed during startup",
+                "inference '{}' container failed during startup",
                 deployment.name
             )));
         }
