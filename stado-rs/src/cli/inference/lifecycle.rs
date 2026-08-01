@@ -12,6 +12,7 @@ pub struct PlanOptions {
     pub revision: String,
     pub port: u16,
     pub max_model_len: u64,
+    pub cache_dir: Option<String>,
     pub json: bool,
 }
 
@@ -171,6 +172,7 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
             gpu_mode: schema::GPU_EXCLUSIVE.to_string(),
             gpus: u16::from(true),
             max_model_len: options.max_model_len,
+            cache_dir: options.cache_dir,
         },
         endpoint: schema::Endpoint {
             host: endpoint_host,
@@ -393,6 +395,31 @@ pub async fn retire(name: &str, purge_cache: bool, json_output: bool) -> Result<
         );
     } else {
         println!("retired '{name}' generation={generation}");
+    }
+    Ok(())
+}
+
+pub async fn abort(plan_id: &str, purge_cache: bool, json_output: bool) -> Result<(), CmdError> {
+    let plan = saved_plan::load(plan_id).map_err(click)?;
+    let target = host_channel::canonical_target(&plan.deployment.target)
+        .await
+        .map_err(click)?;
+    let runtime = inference::retire(&target, &plan.deployment, purge_cache, &production_runner())
+        .await
+        .map_err(click)?;
+    if !succeeded(&runtime, "retired") {
+        return Err(CmdError::click(format!(
+            "inference plan abort failed: {runtime}"
+        )));
+    }
+    saved_plan::consume(plan_id).map_err(click)?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({"plan_id": plan_id, "runtime": runtime}))?
+        );
+    } else {
+        println!("aborted inference plan {plan_id}");
     }
     Ok(())
 }
