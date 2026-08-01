@@ -235,8 +235,12 @@ cache without a registry deployment. Clean that exact saved plan through the
 managed channel:
 
 ```sh
+stado inference plan-logs <plan-id>
 stado inference abort <plan-id> --purge-cache
 ```
+
+`plan-logs` reads the not-yet-committed runtime's systemd journal through the
+same managed host channel.
 
 `abort` never changes the registry. It stops only the runtime described by the
 immutable local plan, removes its cache through the pinned container runtime,

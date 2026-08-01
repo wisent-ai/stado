@@ -74,6 +74,14 @@ pub enum InferenceCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Read systemd logs for a runtime that has not committed its plan.
+    PlanLogs {
+        plan_id: String,
+        #[arg(long, default_value_t = default_log_lines())]
+        lines: usize,
+        #[arg(long)]
+        json: bool,
+    },
     /// Inspect runtime, GPU, endpoint and authentication.
     Doctor {
         name: String,
@@ -194,6 +202,11 @@ pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
         InferenceCommands::Logs { name, lines, json } => read::logs(&name, lines, json).await,
         InferenceCommands::Doctor { name, json } => read::doctor(&name, json).await,
         InferenceCommands::Verify { name, json } => read::verify(&name, json).await,
+        InferenceCommands::PlanLogs {
+            plan_id,
+            lines,
+            json,
+        } => read::plan_logs(&plan_id, lines, json).await,
         InferenceCommands::Route {
             command:
                 RouteCommands::Set {
