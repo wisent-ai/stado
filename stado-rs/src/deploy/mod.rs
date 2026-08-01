@@ -58,6 +58,7 @@ pub mod host_uptime;
 pub mod host_user_delete;
 pub mod host_users;
 pub mod inference;
+pub mod inference_process;
 pub mod inference_routes;
 pub mod local_install;
 pub mod service;
