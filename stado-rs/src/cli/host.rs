@@ -1135,25 +1135,15 @@ fi
 exec "$helper"
 "#
     );
-    let argv = if crate::deploy::host_channel::target_is_this_host(&resolved) {
-        vec!["/bin/bash".to_string(), "-s".to_string()]
-    } else {
-        let ssh = resolved
-            .ssh
-            .as_deref()
-            .ok_or_else(|| CmdError::click("registry target has no SSH destination"))?;
-        crate::deploy::host_channel::ssh_script_argv(ssh)
-    };
     let runner = crate::deploy::production_runner();
-    let output = runner(crate::deploy::CommandSpec {
-        argv,
-        stdin: Some(script),
-        timeout: Some(std::time::Duration::from_secs(
-            crate::monitor::billing::SECONDS_PER_HOUR,
-        )),
-    })
+    let output = crate::deploy::host_channel::run_script_with_timeout(
+        &resolved,
+        &script,
+        std::time::Duration::from_secs(crate::monitor::billing::SECONDS_PER_HOUR),
+        &runner,
+    )
     .await
-    .map_err(CmdError::click)?;
+    .map_err(|error| CmdError::click(error.to_string()))?;
     if json {
         println!(
             "{}",
