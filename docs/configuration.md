@@ -239,8 +239,8 @@ stado inference plan-logs <plan-id>
 stado inference abort <plan-id> --purge-cache
 ```
 
-`plan-logs` reads the not-yet-committed runtime's systemd journal through the
-same managed host channel.
+`plan-logs` reads the not-yet-committed container logs through the same managed
+host channel.
 
 `abort` never changes the registry. It stops only the runtime described by the
 immutable local plan, removes its cache through the pinned container runtime,
@@ -251,9 +251,9 @@ and consumes the plan after successful cleanup. Set `--cache-dir` during
 `plan` inventories the host, requires Docker, NVIDIA tooling, and a live
 Tailscale address, then saves an immutable plan bound to the current registry
 digest. `apply` rechecks that precondition, installs the digest-pinned vLLM
-container as a user systemd unit, waits for an authenticated readiness probe,
-and only then commits the deployment. A failed runtime, readiness check, or
-registry compare-and-swap restores the prior runtime.
+container under Docker's `unless-stopped` supervisor, waits for an authenticated
+readiness probe, and only then commits the deployment. A failed runtime,
+readiness check, or registry compare-and-swap restores the prior runtime.
 
 The deployment and Brama use one centrally stored credential item:
 `provider:local-openai`, containing a non-empty `token` field.
