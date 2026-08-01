@@ -1064,13 +1064,13 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Transfer one immutable Weles release archive through the registry SSH channel.
+    /// Transfer one immutable product release archive through the registry SSH channel.
     #[command(name = "install-release")]
     InstallRelease {
         target: String,
         /// Local .tar.gz release archive.
         source: String,
-        /// Release family: weles-worker, weles-chromium, or weles-firefox.
+        /// Path-safe release family; the remote asset is FAMILY.tar.gz.
         family: String,
         /// Immutable release version.
         version: String,
