@@ -1,5 +1,14 @@
 # Stado
 
+<!-- wisent-readme-signals:start -->
+[![CI](https://github.com/wisent-ai/stado/actions/workflows/deploy.yml/badge.svg?branch=main)](https://github.com/wisent-ai/stado/actions/workflows/deploy.yml)
+[![Release](https://img.shields.io/github/v/release/wisent-ai/stado?display_name=tag&sort=semver)](https://github.com/wisent-ai/stado/releases)
+[![Downloads](https://img.shields.io/github/downloads/wisent-ai/stado/total)](https://github.com/wisent-ai/stado/releases)
+[![License](https://img.shields.io/github/license/wisent-ai/stado)](https://github.com/wisent-ai/stado)
+[![Discord](https://img.shields.io/badge/Discord-Join%20Wisent-5865F2?logo=discord&logoColor=white)](https://discord.gg/qRjpkthq54)
+<!-- wisent-readme-signals:end -->
+
+
 **Stado runs policy-controlled AI workloads across machines you own or explicitly authorize, using one durable queue, one result contract, and bounded cost and safety rules.**
 
 Stado is a self-hosted Rust control plane. An operator submits the result a
