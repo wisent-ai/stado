@@ -1,7 +1,6 @@
 # Stado
 
 <!-- wisent-readme-signals:start -->
-[![deploy](https://github.com/wisent-ai/stado/actions/workflows/deploy.yml/badge.svg?branch=main)](https://github.com/wisent-ai/stado/actions/workflows/deploy.yml)
 [![Release](https://img.shields.io/github/v/release/wisent-ai/stado?display_name=tag&sort=semver)](https://github.com/wisent-ai/stado/releases)
 [![Downloads](https://img.shields.io/github/downloads/wisent-ai/stado/total)](https://github.com/wisent-ai/stado/releases)
 [![License](https://img.shields.io/github/license/wisent-ai/stado)](https://github.com/wisent-ai/stado)
