@@ -16,6 +16,8 @@ umask u=rwx,g=,o=
 : "${STADO_RELEASE_PLATFORM:?STADO_RELEASE_PLATFORM is required}"
 : "${STADO_RUNTIME_MATERIALIZER:?STADO_RUNTIME_MATERIALIZER is required}"
 : "${STADO_HOST_HEALTH_GRANT_FILE:?STADO_HOST_HEALTH_GRANT_FILE is required}"
+: "${STADO_AGENT_REGISTRY_DOCUMENT:?STADO_AGENT_REGISTRY_DOCUMENT is required}"
+: "${STADO_AGENT_REGISTRY_MATERIALIZER:?STADO_AGENT_REGISTRY_MATERIALIZER is required}"
 retire_managed() {
     for service do
         unit="$($STADO_BIN service status "$service" --json \
@@ -52,6 +54,20 @@ $STADO_BIN host install-helper \
 $STADO_BIN host run-helper \
     "$STADO_RELEASE_HOST" \
     materialize-stado-agent-runtime \
+    --json
+$STADO_BIN host install-secret \
+    "$STADO_RELEASE_HOST" \
+    "$STADO_AGENT_REGISTRY_DOCUMENT" \
+    stado-agent-registry.json \
+    --json
+$STADO_BIN host install-helper \
+    "$STADO_RELEASE_HOST" \
+    "$STADO_AGENT_REGISTRY_MATERIALIZER" \
+    materialize-stado-agent-registry \
+    --json
+$STADO_BIN host run-helper \
+    "$STADO_RELEASE_HOST" \
+    materialize-stado-agent-registry \
     --json
 env_file="$(mktemp)"
 trap 'rm -f "$env_file" "$version_file"' EXIT HUP INT TERM
