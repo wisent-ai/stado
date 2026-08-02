@@ -11,6 +11,18 @@ umask u=rwx,g=,o=
 : "${STADO_RELEASE_LAUNCHER:?STADO_RELEASE_LAUNCHER is required}"
 : "${STADO_STORE_MATERIALIZER:?STADO_STORE_MATERIALIZER is required}"
 : "${STADO_RUNTIME_MATERIALIZER:?STADO_RUNTIME_MATERIALIZER is required}"
+retire_managed() {
+    for service do
+        unit="$($STADO_BIN service status "$service" --json \
+            | jq -r --arg host "$STADO_RELEASE_HOST" '.[] | select(.host == $host) | (.unit_id // .unit)' \
+            || true)"
+        if [ -n "$unit" ] && [ "$unit" != null ]; then
+            $STADO_BIN service retire "$unit" \
+                --host "$STADO_RELEASE_HOST" \
+                --json
+        fi
+    done
+}
 
 store_result="$($STADO_BIN host install-release \
     "$STADO_RELEASE_HOST" \
@@ -81,6 +93,7 @@ if [ -z "$launcher_path" ] || [ "$launcher_path" = null ]; then
     echo "Stado did not return the installed release API launcher path"
     false
 fi
+retire_managed stado-release-api
 $STADO_BIN service deploy stado-release-api \
     --host "$STADO_RELEASE_HOST" \
     --from "$launcher_path" \
