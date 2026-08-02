@@ -27,7 +27,7 @@ module.exports = function releaseObject(request, response) {
   const uri = typeof request.query.uri === "string" ? request.query.uri : "";
   const match = RELEASE_URI.exec(uri);
   const [, version, platform, name] = match || [];
-  if (!match || MUTABLE_COORDINATES.has(version) || !RELEASE_OBJECTS.has(name)) {
+  if (!match || !RELEASE_COORDINATES.has(version) || MUTABLE_COORDINATES.has(version) || !RELEASE_OBJECTS.has(name)) {
     response.status(statusNamed("Not Found")).json({ error: "release object not found" });
     return;
   }
