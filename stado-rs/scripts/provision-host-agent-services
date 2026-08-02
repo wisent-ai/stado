@@ -1,0 +1,93 @@
+#!/bin/sh
+set -eu
+umask u=rwx,g=,o=
+: "${STADO_BIN:?STADO_BIN is required}"
+: "${STADO_RELEASE_HOST:?STADO_RELEASE_HOST is required}"
+: "${STADO_RELEASE_REMOTE_HOME:?STADO_RELEASE_REMOTE_HOME is required}"
+: "${STADO_TARGET:?STADO_TARGET is required}"
+: "${WC_LOCAL_SLOTS:?WC_LOCAL_SLOTS is required}"
+: "${STADO_AGENT_LAUNCHER:?STADO_AGENT_LAUNCHER is required}"
+: "${WC_HEALTH_INTERVAL_SECONDS:?WC_HEALTH_INTERVAL_SECONDS is required}"
+: "${STADO_WATCHDOG_LAUNCHER:?STADO_WATCHDOG_LAUNCHER is required}"
+: "${STADO_HOST_HEALTH_API_URL:?STADO_HOST_HEALTH_API_URL is required}"
+: "${STADO_HOST_HEALTH_SKARBIEC_URL:?STADO_HOST_HEALTH_SKARBIEC_URL is required}"
+: "${STADO_RUNTIME_ARCHIVE:?STADO_RUNTIME_ARCHIVE is required}"
+: "${STADO_RELEASE_VERSION:?STADO_RELEASE_VERSION is required}"
+: "${STADO_RELEASE_PLATFORM:?STADO_RELEASE_PLATFORM is required}"
+: "${STADO_RUNTIME_MATERIALIZER:?STADO_RUNTIME_MATERIALIZER is required}"
+: "${STADO_HOST_HEALTH_GRANT_FILE:?STADO_HOST_HEALTH_GRANT_FILE is required}"
+
+$STADO_BIN host install-release \
+    "$STADO_RELEASE_HOST" \
+    "$STADO_RUNTIME_ARCHIVE" \
+    stado-runtime-amd64 \
+    "$STADO_RELEASE_VERSION" \
+    --platform "$STADO_RELEASE_PLATFORM" \
+    --json
+version_file="$(mktemp)"
+trap 'rm -f "$version_file"' EXIT HUP INT TERM
+printf '%s\n' "$STADO_RELEASE_VERSION" > "$version_file"
+$STADO_BIN host install-secret \
+    "$STADO_RELEASE_HOST" \
+    "$version_file" \
+    stado-release-version \
+    --json
+$STADO_BIN host install-helper \
+    "$STADO_RELEASE_HOST" \
+    "$STADO_RUNTIME_MATERIALIZER" \
+    materialize-stado-agent-runtime \
+    --json
+$STADO_BIN host run-helper \
+    "$STADO_RELEASE_HOST" \
+    materialize-stado-agent-runtime \
+    --json
+env_file="$(mktemp)"
+trap 'rm -f "$env_file" "$version_file"' EXIT HUP INT TERM
+printf 'STADO_TARGET=%s\nWC_LOCAL_SLOTS=%s\nWC_HEALTH_INTERVAL_SECONDS=%s\nWC_STORAGE_BACKEND=local\nWC_LOCAL_STORAGE_PATH=%s/.stado/local-storage\nSTADO_HOST_HEALTH_API_URL=%s\nSTADO_HOST_HEALTH_SKARBIEC_URL=%s\nSTADO_HOST_HEALTH_SKARBIEC_CONSUMER=stado-host-health-beacon\nSTADO_HOST_HEALTH_SKARBIEC_TOKEN_FILE=%s/.stado/host-health-beacon-skarbiec-token\n' \
+    "$STADO_TARGET" "$WC_LOCAL_SLOTS" "$WC_HEALTH_INTERVAL_SECONDS" \
+    "$STADO_RELEASE_REMOTE_HOME" "$STADO_HOST_HEALTH_API_URL" \
+    "$STADO_HOST_HEALTH_SKARBIEC_URL" "$STADO_RELEASE_REMOTE_HOME" > "$env_file"
+$STADO_BIN host install-secret \
+    "$STADO_RELEASE_HOST" \
+    "$env_file" \
+    stado-agent.env \
+    --json
+$STADO_BIN host install-secret \
+    "$STADO_RELEASE_HOST" \
+    "$STADO_HOST_HEALTH_GRANT_FILE" \
+    host-health-beacon-skarbiec-token \
+    --json
+launcher_result="$($STADO_BIN host install-helper \
+    "$STADO_RELEASE_HOST" \
+    "$STADO_AGENT_LAUNCHER" \
+    stado-agent-service \
+    --json)"
+launcher_path="$(printf '%s' "$launcher_result" | jq -r '.path // (map(.path) | first)')"
+case "$launcher_path" in
+    '$HOME/'*) launcher_path="$STADO_RELEASE_REMOTE_HOME/${launcher_path#\$HOME/}" ;;
+esac
+if [ -z "$launcher_path" ] || [ "$launcher_path" = null ]; then
+    echo "Stado did not return the installed agent launcher path"
+    false
+fi
+watchdog_result="$($STADO_BIN host install-helper \
+    "$STADO_RELEASE_HOST" \
+    "$STADO_WATCHDOG_LAUNCHER" \
+    stado-watchdog-service \
+    --json)"
+watchdog_path="$(printf '%s' "$watchdog_result" | jq -r '.path // (map(.path) | first)')"
+case "$watchdog_path" in
+    '$HOME/'*) watchdog_path="$STADO_RELEASE_REMOTE_HOME/${watchdog_path#\$HOME/}" ;;
+esac
+if [ -z "$watchdog_path" ] || [ "$watchdog_path" = null ]; then
+    echo "Stado did not return the installed watchdog launcher path"
+    false
+fi
+$STADO_BIN service deploy stado-agent \
+    --host "$STADO_RELEASE_HOST" \
+    --from "$launcher_path" \
+    --json
+$STADO_BIN service deploy stado-watchdog \
+    --host "$STADO_RELEASE_HOST" \
+    --from "$watchdog_path" \
+    --json

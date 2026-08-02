@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+umask u=rwx,g=,o=
+service_env="${STADO_RELEASE_SERVICE_ENV:-$HOME/.stado/stado-release-api.env}"
+if [ ! -f "$service_env" ]; then
+    echo "The owner-controlled Stado release API environment is required"
+    false
+fi
+. "$service_env"
+: "${STADO_RELEASE_ROOT:?STADO_RELEASE_ROOT is required}"
+: "${STADO_RUNTIME_BIN:?STADO_RUNTIME_BIN is required}"
+if [ ! -x "$STADO_RUNTIME_BIN" ]; then
+    echo "The immutable Stado runtime is not executable"
+    false
+fi
+if [ ! -d "$STADO_RELEASE_ROOT/ecosystem/releases" ]; then
+    echo "The immutable Stado release object store is missing"
+    false
+fi
+export WC_STORAGE_BACKEND=local
+export WC_LOCAL_STORAGE_PATH="$STADO_RELEASE_ROOT"
+exec "$STADO_RUNTIME_BIN" dashboard
