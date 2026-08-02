@@ -10,6 +10,7 @@ const RELEASE_OBJECTS = new Set([
   "stado-fix",
   "stado-mcp",
   "stado-watchdog",
+  "wc",
 ]);
 const MUTABLE_COORDINATES = new Set(["latest", "main", "master", "stable"]);
 
