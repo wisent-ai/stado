@@ -314,7 +314,7 @@ async fn beacon_store() -> Result<JobStorage, CmdError> {
 /// The write-side commands need the declaration — its unit id and its
 /// unit-file path — not its state, so they must not pay for a beacon read
 /// per host to get it.
-async fn declared_matching(
+pub(crate) async fn declared_matching(
     name: &str,
     host: Option<&str>,
 ) -> Result<Vec<ManagedService>, CmdError> {
