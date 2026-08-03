@@ -115,7 +115,7 @@ jobs:
           STADO_STORAGE_SCHEMA_VERSION="$storage_schema" \
           STADO_LICENSE_FILE="$GITHUB_WORKSPACE/LICENSE" \
           STADO_RELEASE_STABLE_INTEGRATIONS="local-compute,local-filesystem-storage,skarbiec" \
-          STADO_RELEASE_PREVIEW_INTEGRATIONS="gcs-storage,s3-storage,azure-blob-storage,gcp-compute,aws-ec2,azure-vm,box,vast" \
+          STADO_RELEASE_PREVIEW_INTEGRATIONS="gcs-storage,s3-storage,azure-blob-storage,gcp-compute,aws-ec2,azure-vm,cloudflare,box,vast" \
             scripts/release_manifest.sh
 
       - name: Refuse a release whose version disagrees with its contract
