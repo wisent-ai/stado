@@ -45,12 +45,19 @@ if [ -z "$store_root" ] || [ "$store_root" = null ] || [ -z "$runtime_archive" ]
     false
 fi
 version_file="$(mktemp)"
-trap 'rm -f "$version_file"' EXIT HUP INT TERM
+home_file="$(mktemp)"
+trap 'rm -f "$home_file" "$version_file"' EXIT HUP INT TERM
 printf '%s\n' "$STADO_RELEASE_VERSION" > "$version_file"
+printf '%s\n' "$STADO_RELEASE_REMOTE_HOME" > "$home_file"
 $STADO_BIN host install-secret \
     "$STADO_RELEASE_HOST" \
     "$version_file" \
     stado-release-version \
+    --json
+$STADO_BIN host install-secret \
+    "$STADO_RELEASE_HOST" \
+    "$home_file" \
+    stado-release-home \
     --json
 $STADO_BIN host install-helper \
     "$STADO_RELEASE_HOST" \
@@ -72,7 +79,7 @@ $STADO_BIN host run-helper \
     --json
 
 env_file="$(mktemp)"
-trap 'rm -f "$env_file" "$version_file"' EXIT HUP INT TERM
+trap 'rm -f "$env_file" "$home_file" "$version_file"' EXIT HUP INT TERM
 printf 'STADO_RELEASE_ROOT=%s/.stado/local-storage\nSTADO_RUNTIME_BIN=%s/.stado/bin/stado-linux\n' \
     "$STADO_RELEASE_REMOTE_HOME" "$STADO_RELEASE_REMOTE_HOME" > "$env_file"
 $STADO_BIN host install-secret \
