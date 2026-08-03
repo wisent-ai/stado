@@ -767,6 +767,30 @@ if [ \"$os\" = \"Darwin\" ]; then
 elif [ \"$os\" = \"Linux\" ]; then
   if [ -n \"$linux_unit\" ]; then unit=\"$linux_unit\"; fi
   if [ -z \"$unit_path\" ]; then unit_path=\"$HOME/.config/systemd/user/$unit\"; fi
+  case \"$unit_path\" in
+    */.config/systemd/user/*) owner_path=\"${unit_path%%/.config/systemd/user/*}\" ;;
+    *) owner_path=\"$unit_path\" ;;
+  esac
+  while [ ! -e \"$owner_path\" ] && [ \"$owner_path\" != \"/\" ]; do
+    owner_path=$(/usr/bin/dirname \"$owner_path\")
+  done
+  service_user=$(/usr/bin/stat -c %U \"$owner_path\")
+  service_uid=$(/usr/bin/id -u \"$service_user\")
+  systemctl_user() {
+    runtime=\"/run/user/$service_uid\"
+    if [ \"$service_uid\" = \"$uid\" ]; then
+      /usr/bin/env \
+        XDG_RUNTIME_DIR=\"$runtime\" \
+        DBUS_SESSION_BUS_ADDRESS=\"unix:path=$runtime/bus\" \
+        /usr/bin/systemctl --user \"$@\"
+      return
+    fi
+    if [ -x /usr/bin/sudo ]; then sudo_bin=/usr/bin/sudo; else sudo_bin=/bin/sudo; fi
+    \"$sudo_bin\" -u \"$service_user\" /usr/bin/env \
+      XDG_RUNTIME_DIR=\"$runtime\" \
+      DBUS_SESSION_BUS_ADDRESS=\"unix:path=$runtime/bus\" \
+      /usr/bin/systemctl --user \"$@\"
+  }
 else
   say 'unsupported_os' \"$os\"
   exit 65
@@ -821,8 +845,8 @@ const RESTART_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   rc=$?
   if [ \"$rc\" -eq 0 ]; then say 'restarted' \"$domain\"; else say 'restart_failed' \"$rc $detail\"; fi
 else
-  /usr/bin/systemctl --user daemon-reload >/dev/null 2>&1 || true
-  detail=$(/usr/bin/systemctl --user restart \"$unit\" 2>&1)
+  systemctl_user daemon-reload >/dev/null 2>&1 || true
+  detail=$(systemctl_user restart \"$unit\" 2>&1)
   rc=$?
   if [ \"$rc\" -eq 0 ]; then say 'restarted' 'systemd --user'; else say 'restart_failed' \"$rc $detail\"; fi
 fi
@@ -837,7 +861,7 @@ const STOP_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   /bin/launchctl bootout \"$gui/$recovery_unit\" >/dev/null 2>&1 || true
   /bin/launchctl bootout \"$user_domain/$recovery_unit\" >/dev/null 2>&1 || true
 else
-  /usr/bin/systemctl --user stop \"$unit\" >/dev/null 2>&1 || true
+  systemctl_user stop \"$unit\" >/dev/null 2>&1 || true
 fi
 say 'stopped' \"$unit_path\"
 ";
@@ -852,7 +876,7 @@ unit_state='unloaded'
 if [ \"$os\" = \"Darwin\" ]; then
   if /bin/launchctl print \"$domain/$unit\" >/dev/null 2>&1; then unit_state='loaded'; fi
 else
-  if /usr/bin/systemctl --user cat \"$unit\" >/dev/null 2>&1; then unit_state='loaded'; fi
+  if systemctl_user cat \"$unit\" >/dev/null 2>&1; then unit_state='loaded'; fi
 fi
 printf 'STADO_ADOPT\\t%s\\t%s\\n' \"$file_state\" \"$unit_state\"
 say 'probed' \"$unit_path\"
@@ -874,7 +898,7 @@ const RETIRE_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   /bin/launchctl disable \"$gui/$recovery_unit\" >/dev/null 2>&1 || true
   /bin/launchctl disable \"$user_domain/$recovery_unit\" >/dev/null 2>&1 || true
 else
-  /usr/bin/systemctl --user disable --now \"$unit\" >/dev/null 2>&1 || true
+  systemctl_user disable --now \"$unit\" >/dev/null 2>&1 || true
 fi
 say 'retired' \"$unit_path\"
 ";
@@ -948,8 +972,8 @@ else
   /bin/cat > \"$unit_path\" <<'@HEREDOC@'
 @LINUX_UNIT@
 @HEREDOC@
-  /usr/bin/systemctl --user daemon-reload >/dev/null 2>&1 || true
-  detail=$(/usr/bin/systemctl --user enable --now \"$unit\" 2>&1)
+  systemctl_user daemon-reload >/dev/null 2>&1 || true
+  detail=$(systemctl_user enable --now \"$unit\" 2>&1)
   rc=$?
   if [ \"$rc\" -eq 0 ]; then say 'deployed' \"$unit_path\"; else say 'enable_failed' \"$rc $detail\"; fi
 fi
