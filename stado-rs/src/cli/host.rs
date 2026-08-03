@@ -1032,7 +1032,6 @@ pub async fn install_secret(
     name: &str,
     json: bool,
 ) -> Result<(), CmdError> {
-    release_component("secret file name", name)?;
     let metadata = std::fs::symlink_metadata(source)?;
     let unsafe_bits = u32::from_str_radix("077", u8::BITS).unwrap_or_default();
     if !metadata.is_file()
@@ -1044,32 +1043,144 @@ pub async fn install_secret(
         ));
     }
     let bytes = std::fs::read(source)?;
+    let (path, byte_count) = transfer_secret(target, name, &bytes, None).await?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": target,
+                "source": source,
+                "path": path,
+                "bytes": byte_count,
+                "integrity": "sha256",
+                "status": "installed",
+            }))?
+        );
+    } else {
+        println!("{target}: installed owner-only {path} ({byte_count} bytes)");
+    }
+    Ok(())
+}
+
+/// Resolve one exact credential field through Stado's selected store and
+/// transfer it directly to a host. The value never reaches argv, stdout, a
+/// local temporary file, or the JSON report.
+pub async fn install_credential(
+    target: &str,
+    item: &str,
+    field: &str,
+    name: &str,
+    home: Option<&str>,
+    json: bool,
+) -> Result<(), CmdError> {
+    let value = crate::credential_store::read_string(item, field)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "credential item {item:?} has no string field {field:?}"
+            ))
+        })?;
+    let (path, byte_count) = transfer_secret(target, name, value.as_bytes(), home).await?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": target,
+                "credential": item,
+                "field": field,
+                "path": path,
+                "bytes": byte_count,
+                "integrity": "sha256",
+                "status": "installed",
+            }))?
+        );
+    } else {
+        println!("{target}: installed {item}.{field} as owner-only {path} ({byte_count} bytes)");
+    }
+    Ok(())
+}
+
+pub(crate) async fn install_secret_value_at_home(
+    target: &str,
+    name: &str,
+    value: &str,
+    home: &str,
+) -> Result<(String, usize), CmdError> {
+    transfer_secret(target, name, value.as_bytes(), Some(home)).await
+}
+
+async fn transfer_secret(
+    target: &str,
+    name: &str,
+    bytes: &[u8],
+    home: Option<&str>,
+) -> Result<(String, usize), CmdError> {
+    release_component("secret file name", name)?;
     if bytes.is_empty() || bytes.len() > usize::from(u16::MAX) {
         return Err(CmdError::click(
             "host secret must contain between one and 65535 bytes",
         ));
     }
     let mut digest = Sha256::new();
-    digest.update(&bytes);
+    digest.update(bytes);
     let expected_sha256 = hex::encode(digest.finalize());
-    let payload = STANDARD.encode(&bytes);
+    let payload = STANDARD.encode(bytes);
     let remote_name = crate::deploy::shlex_quote(name);
     let remote_expected = crate::deploy::shlex_quote(&expected_sha256);
+    let remote_home = match home {
+        Some(home) => {
+            let valid = home.starts_with('/')
+                && !home.chars().any(char::is_control)
+                && !home
+                    .split('/')
+                    .any(|component| matches!(component, "." | ".."));
+            if !valid {
+                return Err(CmdError::usage(
+                    "target home must be an absolute path without '.' or '..' components",
+                ));
+            }
+            crate::deploy::shlex_quote(home)
+        }
+        None => "\"$HOME\"".to_string(),
+    };
     let script = format!(
         r#"set -euo pipefail
 name={remote_name}
 expected={remote_expected}
+home={remote_home}
 case "$name" in
   ""|*[!A-Za-z0-9._-]*) printf '%s\n' 'invalid secret file name' >&2; exit 1 ;;
 esac
-dir="$HOME/.stado"
+if [ ! -d "$home" ]; then
+  printf '%s\n' 'target home directory does not exist' >&2
+  false
+fi
+os=$(/usr/bin/uname -s)
+if [ "$os" = "Darwin" ]; then
+  decode=-D
+  owner=$(/usr/bin/stat -f %Su "$home")
+  group=$(/usr/bin/stat -f %Sg "$home")
+else
+  decode=--decode
+  owner=$(/usr/bin/stat -c %U "$home")
+  group=$(/usr/bin/stat -c %G "$home")
+fi
+if [ -x /usr/bin/chown ]; then chown_bin=/usr/bin/chown; else chown_bin=/usr/sbin/chown; fi
+current=$(/usr/bin/id -un)
+if [ "$owner" != "$current" ] && [ "$(/usr/bin/id -u)" -ne 0 ]; then
+  printf '%s\n' 'SSH account cannot write the selected target home' >&2
+  false
+fi
+dir="$home/.stado"
 tmp="$dir/.${{name}}.stado-secret.$$"
 trap 'rm -f "$tmp"' EXIT
 /bin/mkdir -p "$dir"
 /bin/chmod 700 "$dir"
-if [ "$(/usr/bin/uname -s)" = "Darwin" ]; then decode=-D; else decode=--decode; fi
+if [ "$owner" != "$current" ]; then "$chown_bin" "$owner:$group" "$dir"; fi
 printf '%s' '{payload}' | /usr/bin/base64 "$decode" > "$tmp"
 /bin/chmod 600 "$tmp"
+if [ "$owner" != "$current" ]; then "$chown_bin" "$owner:$group" "$tmp"; fi
 /bin/mv "$tmp" "$dir/$name"
 line=$(/usr/bin/openssl dgst -sha256 -r "$dir/$name")
 actual="${{line%% *}}"
@@ -1094,26 +1205,10 @@ printf '%s\n' "$dir/$name"
             crate::deploy::host_channel::last_error_line(&output, "remote secret write failed")
         )));
     }
-    let path = format!("$HOME/.stado/{name}");
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": target,
-                "source": source,
-                "path": path,
-                "bytes": bytes.len(),
-                "integrity": "sha256",
-                "status": "installed",
-            }))?
-        );
-    } else {
-        println!(
-            "{target}: installed owner-only {path} ({} bytes)",
-            bytes.len()
-        );
-    }
-    Ok(())
+    Ok((
+        format!("{}/.stado/{name}", home.unwrap_or("$HOME")),
+        bytes.len(),
+    ))
 }
 
 /// Run one helper previously placed in the remote owner-only Stado directory.

@@ -1,0 +1,36 @@
+#!/bin/sh
+set -eu
+umask u=rwx,g=,o=
+version_file="$HOME/.stado/stado-release-version"
+if [ ! -f "$version_file" ]; then
+    echo "The pinned Stado release version is missing"
+    false
+fi
+version="$(cat "$version_file")"
+archive=
+for candidate in "$HOME"/.stado/releases/stado-runtime-amd64/"$version"/*/stado-runtime-amd64.tar.gz; do
+    if [ -f "$candidate" ]; then
+        archive=$candidate
+    fi
+done
+if [ -z "$archive" ]; then
+    echo "The qualified Stado runtime archive is missing"
+    false
+fi
+runtime_dir="$(mktemp -d)"
+trap 'rm -rf "$runtime_dir"' EXIT HUP INT TERM
+tar -xzf "$archive" -C "$runtime_dir"
+stado_source="$runtime_dir/stado"
+if [ ! -f "$stado_source" ]; then
+    echo "The qualified Stado agent binary is missing"
+    false
+fi
+watchdog_source="$runtime_dir/stado-watchdog"
+if [ ! -f "$watchdog_source" ]; then
+    echo "The qualified Stado watchdog binary is missing"
+    false
+fi
+mkdir -p "$HOME/.stado/bin"
+install -m u=rwx,go= "$stado_source" "$HOME/.stado/bin/stado-linux"
+install -m u=rwx,go= "$watchdog_source" "$HOME/.stado/bin/stado-watchdog-linux"
+printf '%s\n' "$HOME/.stado/bin/stado-linux"

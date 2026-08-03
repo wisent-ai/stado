@@ -111,11 +111,12 @@ pub async fn materialize(target: &str) -> Result<KeyFile, DeployError> {
 }
 
 /// Force OpenSSH to use only the target-scoped key. The first argv word must be
-/// `ssh`; callers retain the returned [`KeyFile`] until the process exits.
+/// `ssh` or `scp`; callers retain the returned [`KeyFile`] until the process
+/// exits.
 pub fn add_identity(mut argv: Vec<String>, key: &KeyFile) -> Result<Vec<String>, DeployError> {
-    if argv.first().map(String::as_str) != Some("ssh") {
+    if !matches!(argv.first().map(String::as_str), Some("ssh" | "scp")) {
         return Err(DeployError(
-            "SSH identity can only be attached to an ssh invocation".to_string(),
+            "SSH identity can only be attached to an ssh or scp invocation".to_string(),
         ));
     }
     let after_program = usize::from(true);
