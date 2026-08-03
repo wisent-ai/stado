@@ -1,7 +1,7 @@
 const { STATUS_CODES } = require("node:http");
 
 const RELEASE_URI = /^stado:\/\/releases\/stado\/([A-Za-z\p{N}._-]+)\/(linux-amd64|darwin-arm64)\/([A-Za-z\p{N}._-]+)$/u;
-const RELEASE_COORDINATES = new Set(["0.5.0-cobalt.1"]);
+const RELEASE_COORDINATES = new Set(["0.5.0-cobalt.1", "0.6.0"]);
 const RELEASE_OBJECTS = new Set([
   "SHA256SUMS",
   "release-manifest.json",
