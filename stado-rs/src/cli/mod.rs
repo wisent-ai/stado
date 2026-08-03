@@ -20,6 +20,7 @@ pub mod blast_radius;
 pub mod bootstrap;
 pub mod cancel;
 pub mod capabilities;
+pub mod cloudflare;
 pub mod config_cmd;
 pub mod control_plane;
 pub mod coordinator;
@@ -260,6 +261,10 @@ enum Commands {
     /// Authenticate an Azure operator and repair the Stado RBAC contract.
     #[command(subcommand)]
     Azure(azure::AzureCommands),
+
+    /// Configure Cloudflare Tunnel ingress and DNS through Stado-held credentials.
+    #[command(subcommand)]
+    Cloudflare(cloudflare::CloudflareCommands),
 
     /// Search and deterministically analyze Gmail messages without modifying them.
     #[command(subcommand)]
@@ -1064,6 +1069,23 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Install one credential field directly from Stado's selected store.
+    #[command(name = "install-credential")]
+    InstallCredential {
+        target: String,
+        /// Credential item id in the selected store.
+        item: String,
+        /// Exact string field to transfer.
+        field: String,
+        /// Absolute target home directory; omit to use the SSH account's home.
+        #[arg(long)]
+        home: Option<String>,
+        /// Safe basename under $HOME/.stado on the target.
+        name: String,
+        /// Emit the transfer report as JSON; credential content is never emitted.
+        #[arg(long)]
+        json: bool,
+    },
     /// Transfer one immutable product release archive through the registry SSH channel.
     #[command(name = "install-release")]
     InstallRelease {
@@ -1333,7 +1355,7 @@ fn failure_service(matches: &clap::ArgMatches) -> &'static str {
         "secrets" => "credentials",
         "billing" | "cost" | "quota" => "billing",
         "mail" => "mail",
-        "azure" | "vast" | "blast-radius" => "provider",
+        "azure" | "cloudflare" | "vast" | "blast-radius" => "provider",
         "coordinator"
         | "dashboard"
         | "schedule"
@@ -1373,6 +1395,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Optimize(command) => autonomy_cmd::dispatch_optimize(command).await,
         Commands::Billing(sub) => billing::dispatch(&sub).await,
         Commands::Azure(sub) => azure::dispatch(sub).await,
+        Commands::Cloudflare(sub) => cloudflare::dispatch(sub).await,
         Commands::Mail(sub) => mail::dispatch(&sub).await,
         Commands::Submit(args) => submit::run(&args).await,
         Commands::Status { filter_id } => status::run(filter_id.as_deref()).await,
@@ -1531,6 +1554,16 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 name,
                 json,
             } => host::install_secret(&target, &source, &name, json).await,
+            HostCommands::InstallCredential {
+                target,
+                item,
+                field,
+                home,
+                name,
+                json,
+            } => {
+                host::install_credential(&target, &item, &field, &name, home.as_deref(), json).await
+            }
             HostCommands::InstallRelease {
                 target,
                 source,
