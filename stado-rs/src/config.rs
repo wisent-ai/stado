@@ -927,7 +927,7 @@ static SKARBIEC_URL: LazyLock<String> = LazyLock::new(|| {
     cfg(
         "WC_SKARBIEC_URL",
         "secrets.skarbiec.url",
-        "http://127.0.0.1:8787",
+        "http://127.0.0.1:17602",
     )
 });
 static SKARBIEC_CONSUMER: LazyLock<String> = LazyLock::new(|| {
