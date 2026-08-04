@@ -319,7 +319,7 @@ jobs:
           STADO_CONFIG_SCHEMA_VERSION="$config_schema" \
           STADO_STORAGE_SCHEMA_VERSION="$storage_schema" \
           STADO_LICENSE_FILE="$STADO_SOURCE_DIR/LICENSE" \
-          STADO_RELEASE_STABLE_INTEGRATIONS="local-compute,local-filesystem-storage,skarbiec" \
+          STADO_RELEASE_STABLE_INTEGRATIONS="local-compute,local-filesystem-storage,skarbiec,stado-object-storage" \
           STADO_RELEASE_PREVIEW_INTEGRATIONS="gcs-storage,s3-storage,azure-blob-storage,gcp-compute,aws-ec2,azure-vm,box,vast" \
             "$STADO_SOURCE_DIR/scripts/release_manifest.sh"
           stado_bin="$STADO_SOURCE_DIR/stado-rs/target/release/stado"
