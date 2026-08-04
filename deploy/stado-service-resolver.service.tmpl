@@ -1,0 +1,17 @@
+[Unit]
+Description=Stado logical service resolver and local gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=HOME={HOME}
+EnvironmentFile=-{HOME}/.stado/resolver.env
+ExecStart={STADO_BIN} resolver serve --target {TARGET}
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
