@@ -98,12 +98,13 @@ grant amount and validity when the billing property is readable, billing
 status, and the paid-overage risk when the spending limit is off.
 
 The Azure billing service-principal object is read exclusively from the
-separate `skarbiec` repository/service. Configure a loopback HTTP endpoint or
-a TLS-protected remote endpoint with `WC_SKARBIEC_URL` (default
-`http://127.0.0.1:8787`), the consumer with `WC_SKARBIEC_CONSUMER` (default
-`stado`), and an owner-only grant file with `WC_SKARBIEC_TOKEN_FILE` (default
-`~/.stado/skarbiec-token`). Raw grants are not accepted from environment
-variables. `WC_AZURE_BILLING_SECRET` selects the item
+separate `skarbiec` repository/service. `WC_SKARBIEC_URL` addresses the local
+Stado resolver adapter (default `http://127.0.0.1:17602`), never a physical
+Skarbiec host. `WC_SKARBIEC_CONSUMER` selects the scoped consumer (default
+`stado-control-plane`), and `WC_SKARBIEC_TOKEN_FILE` selects its owner-only
+grant file (default `~/.stado/skarbiec-token`). Raw grants are not accepted
+from environment variables.
+`WC_AZURE_BILLING_SECRET` selects the item
 id (default `wisent-azure-billing-sp`). There is no credential fallback to
 Azure Key Vault, a local credential file, process environment, queue storage,
 or another cloud's secret manager.
@@ -775,6 +776,32 @@ stado service list
 stado service adopt com.wisent.weles-api --host control-host
 stado service restart com.wisent.weles-api
 stado service logs com.wisent.weles-api --lines 40
+```
+
+## `stado resolver`
+
+```bash
+stado resolver resolve stado://service/brama \
+  --consumer wisent-backend --json
+stado resolver serve --target gpu-host
+```
+
+`resolve` reads and validates the canonical versioned registry, enforces the
+service's exact consumer capability policy, and returns only the logical URI,
+routing generation, and capabilities. It does not disclose a host or endpoint.
+
+`serve` loads `targets[].service_resolver`, binds its API and adapters only on
+loopback, then watches the canonical registry. `GET
+/v1/resolve/service/<name>` requires `X-Stado-Consumer`; the response includes
+the matching local adapter URL when one is configured. Each adapter resolves
+again for every connection, connects directly when the service is local, and
+otherwise uses the target's registry-owned SSH transport. New connections fail
+closed during placement transactions and after the cache freshness deadline.
+
+Install the host daemon with:
+
+```bash
+deploy/install_service_resolver.sh [registry-target]
 ```
 
 ## `stado doctor [--json] [--fix-hints]`

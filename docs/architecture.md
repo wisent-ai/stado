@@ -25,6 +25,35 @@ Coordinator and agents use the same canonical object prefixes regardless of
 backend. There is no Cloud Function scheduler, provider-derived storage
 fallback, or direct client bucket path.
 
+## Logical service resolution
+
+Workloads address `stado://service/<name>`, never a host, tailnet address, or
+service port. Every registered host runs a loopback-only Stado resolver. New
+clients use its resolution API; clients that still require an HTTP origin use
+a stable local adapter owned by the same resolver.
+
+```text
+workload -> 127.0.0.1:stable-port -> local Stado resolver
+                                      |
+                                      +-> authenticated, versioned registry
+                                      +-> consumer capability policy
+                                      +-> active placement host
+                                      +-> direct loopback or registry SSH transport
+```
+
+`service_directory.generation` is the routing epoch. `placement move` updates
+the active host for every service in the placement group and increments that
+epoch in the same compare-and-swapped registry commit that moves the service
+declarations. While the transaction lock exists, resolution for that profile
+fails closed. Resolver caches reject generation rollback and stop accepting
+connections after `max_stale_seconds` without a successful registry refresh.
+
+Physical endpoint URLs are host-relative loopback origins. A resolver on the
+active host connects directly; another host uses only the active target's
+registry-declared SSH transport. Neither form is returned by the resolution
+API. Skarbiec remains the authority for narrow credentials, while Stado owns
+service discovery, workload-to-service capability admission, and transport.
+
 ## Canonical object layout
 
 Job state lives in the backend selected by `STADO_CONFIG`:
