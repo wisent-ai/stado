@@ -618,6 +618,8 @@ mod tests {
             spot: false,
             max_concurrent: None,
             team_id: None,
+            role: None,
+            host_heuristic: None,
             notes: String::new(),
             hostnames: Vec::new(),
             weles: None,
