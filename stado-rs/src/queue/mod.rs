@@ -40,6 +40,7 @@ pub mod runs;
 pub mod s3;
 #[cfg(test)]
 pub mod secrets;
+pub mod stado_object;
 pub mod storage;
 pub mod submit;
 pub mod tombstone;
@@ -57,6 +58,7 @@ pub use azure_blob::AzureBlobBackend;
 pub use gcs::GcsBackend;
 pub use local_file::LocalBackend;
 pub use s3::S3Backend;
+pub use stado_object::StadoObjectBackend;
 pub use storage::JobStorage;
 
 use crate::capabilities::StorageAdapter;
@@ -87,6 +89,11 @@ pub(crate) async fn construct_backend(
         StorageAdapter::S3 => Ok(Arc::new(
             S3Backend::new(locator.bucket, locator.region).await?,
         )),
+        StorageAdapter::StadoObject => Ok(Arc::new(StadoObjectBackend::new(
+            crate::config::wc_stado_storage_url(),
+            crate::config::wc_stado_storage_namespace(),
+            crate::config::wc_stado_storage_token_file(),
+        )?)),
         StorageAdapter::Local => Ok(Arc::new(LocalBackend::new(locator.path)?)),
     }
 }
@@ -126,6 +133,9 @@ pub enum StorageError {
     /// GCS JSON API returned a non-success status other than 404/412.
     #[error("GCS API error HTTP {status}: {body}")]
     Gcs { status: u16, body: String },
+    /// Stado object API returned a non-success status.
+    #[error("Stado object API error HTTP {status}: {body}")]
+    Stado { status: u16, body: String },
     /// GCP authentication could not be established (no gsutil fallback).
     #[error("GCP authentication failed: {0}")]
     Auth(String),
