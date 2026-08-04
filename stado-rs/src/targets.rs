@@ -582,6 +582,7 @@ pub fn validate_registry(data: &Value) -> Result<(), RegistryValidationError> {
     }
 
     crate::placement::validate_registry_contract(data).map_err(RegistryValidationError)?;
+    crate::service_resolution::validate_registry_contract(data).map_err(RegistryValidationError)?;
 
     crate::inference::schema::validate(data).map_err(RegistryValidationError)?;
     Ok(())
