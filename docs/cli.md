@@ -786,17 +786,22 @@ stado resolver resolve stado://service/brama \
 stado resolver serve --target ubuntu-server-rtx-pro-6000
 ```
 
-`resolve` reads and validates the canonical versioned registry, enforces the
-service's exact consumer capability policy, and returns only the logical URI,
-routing generation, and capabilities. It does not disclose a host or endpoint.
+`resolve` discovers the registry authority from the local bootstrap registry,
+fetches and validates its versioned snapshot over registry-owned SSH, enforces
+the service's exact consumer capability policy, and returns only the logical
+URI, routing generation, and capabilities. It does not disclose a host or
+endpoint.
 
-`serve` loads `targets[].service_resolver`, binds its API and adapters only on
-loopback, then watches the canonical registry. `GET
+`serve` validates that `--target` is this machine, loads
+`targets[].service_resolver` from the authority snapshot, binds its API and
+adapters only on loopback, then watches that authority. `GET
 /v1/resolve/service/<name>` requires `X-Stado-Consumer`; the response includes
 the matching local adapter URL when one is configured. Each adapter resolves
 again for every connection, connects directly when the service is local, and
 otherwise uses the target's registry-owned SSH transport. New connections fail
 closed during placement transactions and after the cache freshness deadline.
+If authority changes, resolvers adopt the new source only after the old
+authority has delivered a valid snapshot naming it.
 
 Install the host daemon with:
 

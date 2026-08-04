@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use clap::Subcommand;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -14,7 +15,7 @@ use tokio::process::Command;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
 
-use crate::service_resolution::{self, ResolvedService, ResolverAdapter};
+use crate::service_resolution::{self, ResolvedService, ResolverAdapter, ResolverConfig};
 use crate::targets::{self, RegistryStore};
 
 use super::CmdError;
@@ -40,6 +41,9 @@ pub enum ResolverCommands {
         #[arg(long)]
         target: String,
     },
+    /// Emit this host's versioned registry for authenticated resolver peers.
+    #[command(hide = true)]
+    Snapshot,
 }
 
 pub async fn dispatch(command: ResolverCommands) -> Result<(), CmdError> {
@@ -50,6 +54,7 @@ pub async fn dispatch(command: ResolverCommands) -> Result<(), CmdError> {
             json,
         } => resolve_once(&service, &consumer, json).await,
         ResolverCommands::Serve { target } => serve(&target).await,
+        ResolverCommands::Snapshot => emit_snapshot().await,
     }
 }
 
@@ -66,7 +71,27 @@ fn logical_name(value: &str) -> Result<&str, CmdError> {
     Ok(value)
 }
 
-async fn fetch_snapshot(store: &RegistryStore) -> Result<(Value, String, u64), String> {
+const SNAPSHOT_LIMIT: usize = 1024 * 1024;
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SnapshotPayload {
+    store_version: String,
+    document: Value,
+}
+
+fn validate_snapshot(payload: SnapshotPayload) -> Result<(Value, String, u64), String> {
+    targets::validate_registry(&payload.document).map_err(|error| error.to_string())?;
+    let directory = service_resolution::directory(&payload.document)?
+        .ok_or_else(|| "registry.service_directory is required".to_string())?;
+    Ok((
+        payload.document,
+        payload.store_version,
+        directory.generation,
+    ))
+}
+
+async fn read_local_snapshot(store: &RegistryStore) -> Result<(Value, String, u64), String> {
     let blob = store
         .read_versioned()
         .await
@@ -74,16 +99,153 @@ async fn fetch_snapshot(store: &RegistryStore) -> Result<(Value, String, u64), S
         .ok_or_else(|| format!("no registry document at {}", store.location()))?;
     let document: Value = serde_json::from_str(&blob.content)
         .map_err(|error| format!("invalid registry JSON: {error}"))?;
-    targets::validate_registry(&document).map_err(|error| error.to_string())?;
-    let directory = service_resolution::directory(&document)?
+    validate_snapshot(SnapshotPayload {
+        store_version: blob.version,
+        document,
+    })
+}
+
+fn ssh_command() -> Command {
+    let mut command = Command::new("ssh");
+    command.args([
+        "-T",
+        "-F",
+        "/dev/null",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=yes",
+        "-o",
+        "ConnectTimeout=10",
+        "-o",
+        "ServerAliveInterval=10",
+        "-o",
+        "ServerAliveCountMax=2",
+        "-o",
+        "ControlMaster=auto",
+        "-o",
+        "ControlPersist=60",
+    ]);
+    if let Ok(home) = std::env::var("HOME") {
+        command
+            .arg("-o")
+            .arg(format!("ControlPath={home}/.stado/resolver-ssh-%C"));
+    }
+    if let Ok(key_file) = std::env::var("STADO_RESOLVER_SSH_KEY_FILE") {
+        if !key_file.trim().is_empty() {
+            command
+                .args(["-o", "IdentitiesOnly=yes", "-i"])
+                .arg(key_file);
+        }
+    }
+    command
+}
+
+#[derive(Clone)]
+enum SnapshotSource {
+    Local(Arc<RegistryStore>),
+    Authority { ssh: String, command: String },
+}
+
+impl SnapshotSource {
+    async fn fetch(&self) -> Result<(Value, String, u64), String> {
+        match self {
+            Self::Local(store) => read_local_snapshot(store).await,
+            Self::Authority { ssh, command } => {
+                let remote_command =
+                    format!("{} resolver snapshot", crate::deploy::shlex_quote(command));
+                let output = ssh_command()
+                    .arg(ssh)
+                    .arg(remote_command)
+                    .stderr(Stdio::piped())
+                    .output()
+                    .await
+                    .map_err(|error| format!("registry authority SSH failed: {error}"))?;
+                if !output.status.success() {
+                    let detail = String::from_utf8_lossy(&output.stderr);
+                    let detail = detail.trim();
+                    return Err(if detail.is_empty() {
+                        format!("registry authority exited with {}", output.status)
+                    } else {
+                        format!(
+                            "registry authority exited with {}: {}",
+                            output.status,
+                            detail.chars().take(4096).collect::<String>()
+                        )
+                    });
+                }
+                if output.stdout.len() > SNAPSHOT_LIMIT {
+                    return Err("registry authority snapshot exceeds 1 MiB".to_string());
+                }
+                let payload: SnapshotPayload = serde_json::from_slice(&output.stdout)
+                    .map_err(|error| format!("invalid registry authority response: {error}"))?;
+                validate_snapshot(payload)
+            }
+        }
+    }
+}
+
+fn parsed_registry(document: &Value) -> Result<targets::Registry, String> {
+    targets::load_registry_from_str(
+        &serde_json::to_string(document).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn current_target(document: &Value) -> Result<String, String> {
+    let hostname = crate::providers::vast::system_hostname();
+    parsed_registry(document)?
+        .lookup_self(&hostname)
+        .map_err(|error| error.to_string())?
+        .map(|target| target.name.clone())
+        .ok_or_else(|| format!("resolver host {hostname:?} has no registry target identity"))
+}
+
+fn snapshot_source(
+    local_store: Arc<RegistryStore>,
+    document: &Value,
+    local_target: &str,
+) -> Result<SnapshotSource, String> {
+    let directory = service_resolution::directory(document)?
         .ok_or_else(|| "registry.service_directory is required".to_string())?;
-    Ok((document, blob.version, directory.generation))
+    if directory.authority.target == local_target {
+        return Ok(SnapshotSource::Local(local_store));
+    }
+    let registry = parsed_registry(document)?;
+    let target = registry
+        .lookup(&directory.authority.target)
+        .ok_or_else(|| "registry authority target disappeared".to_string())?;
+    let ssh = target
+        .ssh
+        .clone()
+        .ok_or_else(|| "registry authority has no SSH transport".to_string())?;
+    Ok(SnapshotSource::Authority {
+        ssh,
+        command: directory.authority.command,
+    })
+}
+
+async fn emit_snapshot() -> Result<(), CmdError> {
+    let store = RegistryStore::open().await?;
+    let (document, store_version, _) =
+        read_local_snapshot(&store).await.map_err(CmdError::click)?;
+    println!(
+        "{}",
+        serde_json::to_string(&SnapshotPayload {
+            store_version,
+            document,
+        })?
+    );
+    Ok(())
 }
 
 async fn resolve_once(service: &str, consumer: &str, json_output: bool) -> Result<(), CmdError> {
     let service = logical_name(service)?;
-    let store = RegistryStore::open().await?;
-    let (document, _, _) = fetch_snapshot(&store).await.map_err(CmdError::click)?;
+    let store = Arc::new(RegistryStore::open().await?);
+    let (bootstrap, _, _) = read_local_snapshot(&store).await.map_err(CmdError::click)?;
+    let target = current_target(&bootstrap).map_err(CmdError::click)?;
+    let source = snapshot_source(store, &bootstrap, &target).map_err(CmdError::click)?;
+    let (document, _, _) = source.fetch().await.map_err(CmdError::click)?;
     let resolved =
         service_resolution::resolve(&document, service, consumer).map_err(CmdError::click)?;
     let report = json!({
@@ -112,16 +274,25 @@ struct Snapshot {
 }
 
 struct ResolverState {
-    store: Arc<RegistryStore>,
+    local_store: Arc<RegistryStore>,
+    source: RwLock<SnapshotSource>,
     snapshot: RwLock<Snapshot>,
     max_stale: Duration,
     local_target: String,
     adapters: Vec<ResolverAdapter>,
+    config: ResolverConfig,
 }
 
 impl ResolverState {
-    async fn refresh(&self) -> Result<(), String> {
-        let (document, store_version, generation) = fetch_snapshot(&self.store).await?;
+    async fn refresh(&self) -> Result<bool, String> {
+        let source = self.source.read().await.clone();
+        let (document, store_version, generation) = source.fetch().await?;
+        let next_source =
+            snapshot_source(Arc::clone(&self.local_store), &document, &self.local_target)?;
+        let next_config = service_resolution::resolver_config(&document, &self.local_target)?;
+        if next_config != self.config {
+            return Ok(true);
+        }
         let mut current = self.snapshot.write().await;
         if generation < current.directory_generation {
             return Err(format!(
@@ -141,7 +312,9 @@ impl ResolverState {
         current.store_version = store_version;
         current.directory_generation = generation;
         current.loaded_at = Instant::now();
-        Ok(())
+        drop(current);
+        *self.source.write().await = next_source;
+        Ok(false)
     }
 
     async fn resolve(&self, service: &str, consumer: &str) -> Result<ResolvedService, String> {
@@ -164,30 +337,24 @@ impl ResolverState {
 }
 
 pub async fn serve(target: &str) -> Result<(), CmdError> {
-    let store = Arc::new(RegistryStore::open().await?);
-    let (document, store_version, directory_generation) =
-        fetch_snapshot(&store).await.map_err(CmdError::click)?;
-    let parsed_registry =
-        targets::load_registry_from_str(&serde_json::to_string(&document).map_err(CmdError::from)?)
-            .map_err(|error| CmdError::click(error.to_string()))?;
-    let hostname = crate::providers::vast::system_hostname();
-    let self_target = parsed_registry
-        .lookup_self(&hostname)
-        .map_err(|error| CmdError::click(error.to_string()))?
-        .ok_or_else(|| {
-            CmdError::click(format!(
-                "resolver host {hostname:?} has no registry target identity"
-            ))
-        })?;
-    if self_target.name != target {
+    let local_store = Arc::new(RegistryStore::open().await?);
+    let (bootstrap, _, _) = read_local_snapshot(&local_store)
+        .await
+        .map_err(CmdError::click)?;
+    let detected_target = current_target(&bootstrap).map_err(CmdError::click)?;
+    if detected_target != target {
         return Err(CmdError::click(format!(
-            "resolver target {target:?} does not match this host ({:?})",
-            self_target.name
+            "resolver target {target:?} does not match this host ({detected_target:?})"
         )));
     }
+    let source =
+        snapshot_source(Arc::clone(&local_store), &bootstrap, target).map_err(CmdError::click)?;
+    let (document, store_version, directory_generation) =
+        source.fetch().await.map_err(CmdError::click)?;
     let config = service_resolution::resolver_config(&document, target).map_err(CmdError::click)?;
     let state = Arc::new(ResolverState {
-        store,
+        local_store,
+        source: RwLock::new(source),
         snapshot: RwLock::new(Snapshot {
             document,
             store_version,
@@ -197,6 +364,7 @@ pub async fn serve(target: &str) -> Result<(), CmdError> {
         max_stale: Duration::from_secs(config.max_stale_seconds),
         local_target: target.to_string(),
         adapters: config.adapters.clone(),
+        config: config.clone(),
     });
 
     let api = bind_loopback(&config.api_bind).await?;
@@ -216,10 +384,7 @@ pub async fn serve(target: &str) -> Result<(), CmdError> {
 
     let mut tasks = JoinSet::new();
     let refresh_state = Arc::clone(&state);
-    tasks.spawn(async move {
-        watch_registry(refresh_state, config.refresh_seconds).await;
-        Ok::<(), String>(())
-    });
+    tasks.spawn(async move { watch_registry(refresh_state, config.refresh_seconds).await });
     let api_state = Arc::clone(&state);
     tasks.spawn(async move { serve_api(api, api_state).await });
     for (adapter, listener) in adapter_listeners {
@@ -249,14 +414,20 @@ async fn bind_loopback(value: &str) -> Result<TcpListener, CmdError> {
         .map_err(|error| CmdError::click(format!("could not bind {value}: {error}")))
 }
 
-async fn watch_registry(state: Arc<ResolverState>, refresh_seconds: u64) {
+async fn watch_registry(state: Arc<ResolverState>, refresh_seconds: u64) -> Result<(), String> {
     let mut interval = tokio::time::interval(Duration::from_secs(refresh_seconds));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     interval.tick().await;
     loop {
         interval.tick().await;
-        if let Err(error) = state.refresh().await {
-            eprintln!("stado resolver refresh failed: {error}");
+        match state.refresh().await {
+            Ok(true) => {
+                return Err(
+                    "resolver configuration changed; restarting to rebind listeners".to_string(),
+                )
+            }
+            Ok(false) => {}
+            Err(error) => eprintln!("stado resolver refresh failed: {error}"),
         }
     }
 }
@@ -321,37 +492,7 @@ async fn proxy_connection(
         )
     })?;
     let destination = format!("{host}:{port}");
-    let mut command = Command::new("ssh");
-    command.args([
-        "-T",
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "StrictHostKeyChecking=yes",
-        "-o",
-        "ConnectTimeout=10",
-        "-o",
-        "ServerAliveInterval=10",
-        "-o",
-        "ServerAliveCountMax=2",
-        "-o",
-        "ControlMaster=auto",
-        "-o",
-        "ControlPersist=60",
-    ]);
-    if let Ok(home) = std::env::var("HOME") {
-        command
-            .arg("-o")
-            .arg(format!("ControlPath={home}/.stado/resolver-ssh-%C"));
-    }
-    if let Ok(key_file) = std::env::var("STADO_RESOLVER_SSH_KEY_FILE") {
-        if !key_file.trim().is_empty() {
-            command
-                .args(["-o", "IdentitiesOnly=yes", "-i"])
-                .arg(key_file);
-        }
-    }
-    let mut child = command
+    let mut child = ssh_command()
         .args(["-W", &destination, &ssh])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
