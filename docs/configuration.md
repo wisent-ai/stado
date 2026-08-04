@@ -169,9 +169,12 @@ enforce the catalog in their preflights, before any write.
 ## Logical services and local resolvers
 
 The optional top-level `service_directory` is the fleet routing contract.
-`generation` is monotonic. Each logical service declares its active host,
-host-relative loopback origin on every eligible host, optional placement
-profile, and the exact consumers and capabilities allowed to resolve it.
+`authority` names the target and absolute Stado binary that serve canonical
+versioned snapshots and commit placement changes; other hosts use their local
+registry only to bootstrap that SSH path. `generation` is monotonic. Each
+logical service declares its active host, host-relative loopback origin on every
+eligible host, optional placement profile, and the exact consumers and
+capabilities allowed to resolve it.
 
 Per-target `service_resolver` policy declares the loopback resolution API and
 stable compatibility adapters for workloads on that host:
@@ -179,6 +182,10 @@ stable compatibility adapters for workloads on that host:
 ```jsonc
 {
   "service_directory": {
+    "authority": {
+      "target": "control-host",
+      "command": "/Users/charles/.stado/bin/stado"
+    },
     "generation": 7,
     "services": {
       "brama": {
@@ -211,10 +218,12 @@ stable compatibility adapters for workloads on that host:
 }
 ```
 
-All resolver and adapter binds must be loopback. Remote host-relative endpoints
-require `targets[].ssh`; they are never rewritten into client configuration.
-The resolver refuses an unknown consumer, an active placement transaction, a
-rolled-back directory generation, or a cache older than the configured limit.
+All resolver and adapter binds must be loopback. The authority target must have
+registry SSH transport, and the authority command must be an absolute,
+component-normal path. Remote host-relative endpoints require `targets[].ssh`;
+they are never rewritten into client configuration. The resolver refuses an
+unknown consumer, an active placement transaction, a rolled-back directory
+generation, or a cache older than the configured limit.
 
 ## Local inference
 
