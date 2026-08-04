@@ -832,15 +832,11 @@ async fn get(
     name: &str,
     field: Option<&str>,
 ) -> Result<(), CmdError> {
-    let value = vault
-        .read_item(name)
-        .await
-        .map_err(|err| CmdError::click(err.to_string()))?;
     if let Some(field) = field {
-        let raw = value
-            .as_object()
-            .and_then(|object| object.get(field))
-            .and_then(Value::as_str)
+        let raw = vault
+            .read_string(name, field)
+            .await
+            .map_err(|err| CmdError::click(err.to_string()))?
             .filter(|raw| !raw.is_empty())
             .ok_or_else(|| {
                 CmdError::click(format!(
@@ -850,6 +846,10 @@ async fn get(
         println!("{raw}");
         return Ok(());
     }
+    let value = vault
+        .read_item(name)
+        .await
+        .map_err(|err| CmdError::click(err.to_string()))?;
     if let Some(object) = value.as_object() {
         if object.len() == usize::from(true) {
             if let Some(raw) = object.get("value").and_then(Value::as_str) {
