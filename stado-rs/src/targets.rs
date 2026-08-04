@@ -1396,10 +1396,13 @@ mod tests {
     fn bundled_registry_loads() {
         let registry = load_bundled_registry().unwrap();
         assert_eq!(registry.local_targets().len(), registry.targets.len());
-        let coordinator = registry.lookup_coordinator("local-control-plane").unwrap();
-        assert!(coordinator.active);
-        assert_eq!(coordinator.runtime, "daemon");
-        assert_eq!(coordinator.state_uri, "stado://system/registry");
+        let legacy = registry.lookup_coordinator("local-control-plane").unwrap();
+        assert!(!legacy.active);
+        assert_eq!(legacy.runtime, "daemon");
+        assert_eq!(legacy.state_uri, "stado://system/registry");
+        let active = registry.lookup_coordinator_selector("always-on").unwrap();
+        assert!(active.active);
+        assert_eq!(active.name, "charless-control-plane");
 
         let workstation = registry.lookup("gpu-host").unwrap();
         assert_eq!(workstation.kind, "local");

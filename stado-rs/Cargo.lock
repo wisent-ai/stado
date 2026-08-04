@@ -2692,6 +2692,7 @@ dependencies = [
  "gcp_auth",
  "hex",
  "nix",
+ "parking_lot",
  "regex",
  "reqwest",
  "ring",
