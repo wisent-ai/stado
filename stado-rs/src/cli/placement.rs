@@ -7,6 +7,7 @@
 //! then commits the service declarations with a second CAS. Every failure before
 //! that commit restores destination files, routing, and source services.
 
+use std::process::Stdio;
 use std::sync::Arc;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -847,6 +848,81 @@ async fn execute_move(
     committer(committed, context.claim_generation.clone()).await
 }
 
+async fn delegate_to_registry_authority(
+    document: &Value,
+    registry: &Registry,
+    requested: &[String],
+    to_host: &str,
+    json_output: bool,
+) -> Result<bool, CmdError> {
+    let Some(directory) =
+        crate::service_resolution::directory(document).map_err(CmdError::click)?
+    else {
+        return Ok(false);
+    };
+    let hostname = crate::providers::vast::system_hostname();
+    let local = registry
+        .lookup_self(&hostname)
+        .map_err(|error| CmdError::click(error.to_string()))?
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "placement host {hostname:?} has no registry target identity"
+            ))
+        })?;
+    if local.name == directory.authority.target {
+        return Ok(false);
+    }
+    let authority = registry
+        .lookup(&directory.authority.target)
+        .ok_or_else(|| CmdError::click("registry authority target disappeared"))?;
+    let ssh = authority
+        .ssh
+        .as_deref()
+        .ok_or_else(|| CmdError::click("registry authority has no SSH transport"))?;
+    let mut argv = vec![
+        directory.authority.command,
+        "placement".to_string(),
+        "move".to_string(),
+        "--to-host".to_string(),
+        to_host.to_string(),
+    ];
+    if json_output {
+        argv.push("--json".to_string());
+    }
+    argv.extend(requested.iter().cloned());
+    let remote_command = argv
+        .iter()
+        .map(|argument| crate::deploy::shlex_quote(argument))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let status = tokio::process::Command::new("ssh")
+        .args([
+            "-T",
+            "-F",
+            "/dev/null",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "ConnectTimeout=10",
+            ssh,
+        ])
+        .arg(remote_command)
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .await
+        .map_err(|error| CmdError::click(format!("registry authority SSH failed: {error}")))?;
+    if !status.success() {
+        return Err(CmdError::click(format!(
+            "registry authority placement exited with {status}"
+        )));
+    }
+    Ok(true)
+}
+
 async fn move_services(
     requested: &[String],
     to_host: &str,
@@ -855,8 +931,13 @@ async fn move_services(
     let (document, generation) = registry::fetch_versioned_document().await?;
     crate::targets::validate_registry(&document)
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let profile = placement::profile_for_services(&document, requested).map_err(CmdError::click)?;
     let parsed_registry = parse_registry(&document)?;
+    if delegate_to_registry_authority(&document, &parsed_registry, requested, to_host, json_output)
+        .await?
+    {
+        return Ok(());
+    }
+    let profile = placement::profile_for_services(&document, requested).map_err(CmdError::click)?;
     let _destination_profile = profile_host(&profile, to_host)?;
     let destination = target(&parsed_registry, to_host)?.clone();
     let sources = declared_profile_hosts(&parsed_registry, &profile)?;

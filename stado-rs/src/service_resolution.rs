@@ -7,6 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
+use std::path::{Component, Path};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -16,8 +17,17 @@ const DIRECTORY_KEY: &str = "service_directory";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ServiceDirectory {
+    pub authority: ServiceAuthority,
     pub generation: u64,
     pub services: BTreeMap<String, ServiceRoute>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServiceAuthority {
+    pub target: String,
+    /// Absolute Stado executable on the authority host.
+    pub command: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -282,6 +292,32 @@ pub fn validate_registry_contract(document: &Value) -> Result<(), String> {
         ));
     }
     let target_entries = targets(document)?;
+    if !target_entries.contains_key(&directory.authority.target) {
+        return Err(format!(
+            "registry.{DIRECTORY_KEY}.authority.target: unknown registry target"
+        ));
+    }
+    let command = Path::new(&directory.authority.command);
+    if !command.is_absolute()
+        || directory.authority.command.chars().any(char::is_control)
+        || command
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(format!(
+            "registry.{DIRECTORY_KEY}.authority.command: must be an absolute path without '..'"
+        ));
+    }
+    if target_entries
+        .get(&directory.authority.target)
+        .and_then(|target| target.get("ssh"))
+        .and_then(Value::as_str)
+        .is_none()
+    {
+        return Err(format!(
+            "registry.{DIRECTORY_KEY}.authority.target: must declare SSH transport"
+        ));
+    }
     let profiles = crate::placement::profiles(document)?;
     let profiles: BTreeMap<_, _> = profiles
         .into_iter()
