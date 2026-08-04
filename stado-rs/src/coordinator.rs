@@ -93,15 +93,15 @@ pub enum ResolvedProvider {
     },
 }
 
-/// Pick the coordinator entry: explicit --target, or the active one, from the
-/// configured Stado registry with bundled fallback.
+/// Pick the coordinator entry: explicit name or host-placement selector, or
+/// the active one, from the configured Stado registry with bundled fallback.
 async fn resolve_coordinator(target: Option<&str>) -> Result<Coordinator, String> {
     let registry = load_registry_auto().await.map_err(|exc| exc.to_string())?;
     if let Some(target) = target {
         return registry
-            .lookup_coordinator(target)
+            .lookup_coordinator_selector(target)
             .cloned()
-            .ok_or_else(|| format!("coordinator '{target}' not found in registry"));
+            .ok_or_else(|| format!("coordinator selector '{target}' not found in registry"));
     }
     let active: Vec<&Coordinator> = registry.coordinators.iter().filter(|c| c.active).collect();
     if active.is_empty() {
@@ -711,7 +711,8 @@ pub async fn run(target: Option<&str>, once: bool) -> Result<i32, String> {
             // Exit ONLY when a registry we actually READ omits the entry.
             // An unreachable store says nothing about whether the operator
             // revoked us — see `targets::RegistryFetchError`.
-            if matches!(&survival, Ok(registry) if registry.lookup_coordinator(target).is_none()) {
+            if matches!(&survival, Ok(registry) if registry.lookup_coordinator_selector(target).is_none())
+            {
                 log(&format!(
                     "coordinator '{target}' not in the canonical registry; exiting. \
                      Operator removed/renamed the entry — daemon stops here so \

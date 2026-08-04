@@ -35,6 +35,7 @@ pub mod job;
 pub mod machine;
 pub mod mail;
 pub mod overview;
+pub mod placement;
 pub mod profiles_cmd;
 pub mod queue;
 pub mod quota;
@@ -358,7 +359,7 @@ enum Commands {
     /// registry, capacity, and schedule state use the configured Stado
     /// storage backend.
     Coordinator {
-        /// Coordinator name in registry (default: the one with active=true).
+        /// Coordinator name or host heuristic (default: active=true entry).
         #[arg(long)]
         target: Option<String>,
         /// Run a single scheduling tick and exit (cron-friendly).
@@ -485,6 +486,9 @@ enum Commands {
     /// adopt, retire, deploy, logs, env.
     #[command(subcommand)]
     Service(service::ServiceCommands),
+    /// Atomically relocate a declared service group between registered hosts.
+    #[command(subcommand)]
+    Placement(placement::PlacementCommands),
     /// Plan, deploy, route and operate local OpenAI-compatible inference.
     #[command(subcommand)]
     Inference(inference::InferenceCommands),
@@ -1599,6 +1603,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Secrets(sub) => secrets::dispatch(sub).await,
         Commands::Queue(sub) => queue::dispatch(sub).await,
         Commands::Service(sub) => service::dispatch(sub).await,
+        Commands::Placement(sub) => placement::dispatch(sub).await,
         Commands::Inference(sub) => inference::dispatch(sub).await,
         Commands::Doctor(args) => doctor::dispatch(args).await,
     }

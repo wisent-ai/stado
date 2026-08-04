@@ -30,6 +30,7 @@ pub mod mcp;
 pub mod models;
 pub mod monitor;
 pub mod object_store;
+pub mod placement;
 pub mod profiles;
 pub mod providers;
 pub mod queue;

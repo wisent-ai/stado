@@ -121,6 +121,8 @@ const UNIT_HEREDOC: &str = "STADO_UNIT_BODY";
 pub struct ManagedService {
     /// Registry target name of the host that runs it.
     pub host: String,
+    /// Declarative placement selector that resolved to this host.
+    pub host_heuristic: Option<String>,
     /// The name the CLI addresses it by.
     pub name: String,
     /// systemd unit name (`foo.service`); empty for a launchd service.
@@ -160,14 +162,24 @@ impl ManagedService {
 
     /// The `services[]` element written into the registry document.
     pub fn to_record(&self) -> Value {
-        json!({
+        let mut record = json!({
             "name": self.name,
             "unit": self.unit,
             "label": self.label,
             "path": self.path,
             "kind": self.kind,
             "managed_since": self.managed_since,
-        })
+        });
+        if let Some(heuristic) = &self.host_heuristic {
+            record
+                .as_object_mut()
+                .expect("managed service record")
+                .insert(
+                    "host_heuristic".to_string(),
+                    Value::String(heuristic.clone()),
+                );
+        }
+        record
     }
 
     /// The `--json` rendering: the record plus the resolved host and the
@@ -175,6 +187,7 @@ impl ManagedService {
     pub fn to_json(&self) -> Value {
         json!({
             "host": self.host,
+            "host_heuristic": self.host_heuristic,
             "name": self.name,
             "unit": self.unit,
             "label": self.label,
@@ -215,6 +228,10 @@ impl ManagedService {
         };
         Self {
             host: host.to_string(),
+            host_heuristic: record
+                .get("host_heuristic")
+                .and_then(Value::as_str)
+                .map(str::to_string),
             name,
             unit,
             label,
@@ -237,6 +254,7 @@ pub fn launchd_service(
 ) -> ManagedService {
     ManagedService {
         host: host.to_string(),
+        host_heuristic: None,
         name: label.to_string(),
         unit: String::new(),
         label: label.to_string(),
@@ -257,6 +275,7 @@ pub fn systemd_service(
 ) -> ManagedService {
     ManagedService {
         host: host.to_string(),
+        host_heuristic: None,
         name: unit.to_string(),
         unit: unit.to_string(),
         label: String::new(),
@@ -839,6 +858,8 @@ const RESTART_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
       say 'bootstrap_failed' \"$rc $detail\"
       exit 0
     fi
+    say 'restarted' \"$domain\"
+    exit 0
   fi
   /bin/launchctl enable \"$domain/$unit\" >/dev/null 2>&1 || true
   detail=$(/bin/launchctl kickstart -k \"$domain/$unit\" 2>&1)
@@ -1338,6 +1359,7 @@ pub async fn deploy_service(
 /// and the init system that answered.
 pub fn record_from_report(
     host: &str,
+    host_heuristic: Option<&str>,
     name: &str,
     report: &RemoteReport,
     managed_since: &str,
@@ -1360,6 +1382,7 @@ pub fn record_from_report(
         )
     };
     service.name = name.to_string();
+    service.host_heuristic = host_heuristic.map(str::to_string);
     service
 }
 
