@@ -6,7 +6,7 @@ use serde_json::json;
 
 use super::{provider_client, HandlerError, HandlerResult};
 
-const CONTENT_API_ITEM: &str = "oko-content-api";
+const ECHO_API_ITEM: &str = "oko-echo-api";
 const ASSIGNMENT_ACTION: &str = "experiments.assign";
 const ANALYTICS_ACTION: &str = "analytics.mobile.collect";
 const APP_ID: &str = "oko-macos";
@@ -92,9 +92,9 @@ fn allowed_event(value: &str) -> bool {
     )
 }
 
-async fn content_api_base_url() -> Result<Url, HandlerError> {
+async fn echo_api_base_url() -> Result<Url, HandlerError> {
     let provider = provider_client("oko").await?;
-    let configured = provider.read_string(CONTENT_API_ITEM, "base_url").await?;
+    let configured = provider.read_string(ECHO_API_ITEM, "base_url").await?;
     let url = Url::parse(&configured).map_err(|_| HandlerError::ProviderUnavailable)?;
     if url.scheme() != "https"
         || url.host_str().is_none()
@@ -124,7 +124,7 @@ async fn assign_experiment(body: &[u8]) -> HandlerResult {
     {
         return Err(HandlerError::BadRequest);
     }
-    let endpoint = content_api_base_url()
+    let endpoint = echo_api_base_url()
         .await?
         .join("api/experiments/assign")
         .map_err(|_| HandlerError::ProviderUnavailable)?;
@@ -162,7 +162,7 @@ async fn collect_analytics(body: &[u8]) -> HandlerResult {
     {
         return Err(HandlerError::BadRequest);
     }
-    let endpoint = content_api_base_url()
+    let endpoint = echo_api_base_url()
         .await?
         .join("api/analytics/mobile/collect")
         .map_err(|_| HandlerError::ProviderUnavailable)?;

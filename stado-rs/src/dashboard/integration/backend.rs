@@ -13,7 +13,7 @@ use super::{provider_client, HandlerError, HandlerResult};
 const ADMIN_ITEM: &str = "wisent-backend-admin-jwt-provider";
 const EMAIL_ITEM: &str = "wisent-backend-email-provider";
 const TWILIO_ITEM: &str = "wisent-backend-twilio-provider";
-const CONTENT_ITEM: &str = "content-platform-wisent-backend-data-provider";
+const ECHO_DATA_ITEM: &str = "echo-wisent-backend-data-provider";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -418,11 +418,11 @@ async fn webhook_verify(body: &[u8]) -> HandlerResult {
     Ok(json!({"valid": hmac::verify(&key, signed.as_bytes(), &signature).is_ok()}))
 }
 
-async fn content_credentials() -> Result<(Url, String), HandlerError> {
+async fn echo_credentials() -> Result<(Url, String), HandlerError> {
     let provider = provider_client("backend").await?;
-    let raw_url = provider.read_string(CONTENT_ITEM, "url").await?;
+    let raw_url = provider.read_string(ECHO_DATA_ITEM, "url").await?;
     let key = provider
-        .read_string(CONTENT_ITEM, "service_role_key")
+        .read_string(ECHO_DATA_ITEM, "service_role_key")
         .await?;
     let url = Url::parse(&raw_url).map_err(|_| HandlerError::ProviderUnavailable)?;
     let host = url.host_str().unwrap_or_default();
@@ -446,7 +446,7 @@ async fn content_request(
     query: &[(&str, String)],
     body: Option<Value>,
 ) -> Result<Value, HandlerError> {
-    let (mut base, key) = content_credentials().await?;
+    let (mut base, key) = echo_credentials().await?;
     base.set_path(&format!("/rest/v1/{table}"));
     {
         let mut pairs = base.query_pairs_mut();
