@@ -426,3 +426,162 @@ pub fn root_object(document: &mut Value) -> Result<&mut Map<String, Value>, Stri
         .as_object_mut()
         .ok_or_else(|| "registry: must be an object".to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn registry() -> Value {
+        json!({
+            "schema_version": 2,
+            "targets": [
+                {"name": "source", "kind": "local"},
+                {"name": "destination", "kind": "local"}
+            ],
+            "placement_profiles": [{
+                "name": "brama-skarbiec",
+                "services": ["brama", "skarbiec"],
+                "stop_order": ["brama", "skarbiec"],
+                "start_order": ["skarbiec", "brama"],
+                "state": [
+                    {"path": ".stado/vault.json", "required": true},
+                    {"path": ".stado/audit.jsonl", "required": false}
+                ],
+                "hosts": {
+                    "source": {
+                        "units": {
+                            "brama": {
+                                "name": "source-brama",
+                                "unit": "source.brama",
+                                "path": "/Library/LaunchDaemons/source.brama.plist",
+                                "kind": "launchd"
+                            },
+                            "skarbiec": {
+                                "name": "source-skarbiec",
+                                "unit": "source.skarbiec",
+                                "path": "/Library/LaunchDaemons/source.skarbiec.plist",
+                                "kind": "launchd"
+                            }
+                        },
+                        "probes": [
+                            {"service": "brama", "url": "http://127.0.0.1:8080/health"},
+                            {"service": "skarbiec", "url": "http://127.0.0.1:8895/health"}
+                        ]
+                    },
+                    "destination": {
+                        "units": {
+                            "brama": {
+                                "name": "destination-brama",
+                                "unit": "destination.brama",
+                                "path": "/Users/operator/Library/LaunchAgents/destination.brama.plist",
+                                "kind": "launchd"
+                            },
+                            "skarbiec": {
+                                "name": "destination-skarbiec",
+                                "unit": "destination.skarbiec",
+                                "path": "/Users/operator/Library/LaunchAgents/destination.skarbiec.plist",
+                                "kind": "launchd"
+                            }
+                        },
+                        "probes": [
+                            {"service": "brama", "url": "http://127.0.0.1:8080/health"},
+                            {"service": "skarbiec", "url": "http://127.0.0.1:8787/health"}
+                        ]
+                    }
+                },
+                "routing": [{
+                    "host": "destination",
+                    "unit": {
+                        "name": "service-forward",
+                        "unit": "service.forward",
+                        "path": "/Users/operator/Library/LaunchAgents/service.forward.plist",
+                        "kind": "launchd"
+                    },
+                    "active_when_destination": "source"
+                }]
+            }]
+        })
+    }
+
+    fn transaction() -> PlacementTransaction {
+        PlacementTransaction {
+            id: "bcff8a60-2436-4ec1-a832-10953c759a72".to_string(),
+            profile: "brama-skarbiec".to_string(),
+            from_host: "source".to_string(),
+            to_host: "destination".to_string(),
+            started_at: "2026-08-03T12:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn complete_profile_validates_and_resolves_in_any_argument_order() {
+        let document = registry();
+        validate_registry_contract(&document).unwrap();
+        let profile =
+            profile_for_services(&document, &["skarbiec".to_string(), "brama".to_string()])
+                .unwrap();
+        assert_eq!(profile.name, "brama-skarbiec");
+    }
+
+    #[test]
+    fn profile_rejects_path_escape_and_non_loopback_probe() {
+        let mut escaped = registry();
+        escaped["placement_profiles"][0]["state"][0]["path"] =
+            Value::String("../vault.json".to_string());
+        assert!(validate_registry_contract(&escaped)
+            .unwrap_err()
+            .contains("$HOME-relative"));
+
+        let mut external = registry();
+        external["placement_profiles"][0]["hosts"]["source"]["probes"][0]["url"] =
+            Value::String("https://example.com/health".to_string());
+        assert!(validate_registry_contract(&external)
+            .unwrap_err()
+            .contains("loopback"));
+    }
+
+    #[test]
+    fn profile_rejects_partial_orders_and_host_unit_sets() {
+        let mut order = registry();
+        order["placement_profiles"][0]["stop_order"] = json!(["brama"]);
+        assert!(validate_registry_contract(&order)
+            .unwrap_err()
+            .contains("every profile service exactly once"));
+
+        let mut units = registry();
+        units["placement_profiles"][0]["hosts"]["destination"]["units"]
+            .as_object_mut()
+            .unwrap()
+            .remove("skarbiec");
+        assert!(validate_registry_contract(&units)
+            .unwrap_err()
+            .contains("must define every profile service"));
+    }
+
+    #[test]
+    fn transaction_claim_is_exclusive_and_release_is_exact() {
+        let mut document = registry();
+        let first = transaction();
+        claim_transaction(&mut document, &first).unwrap();
+        assert!(claim_transaction(&mut document, &first)
+            .unwrap_err()
+            .contains("another placement transaction"));
+        assert!(!release_transaction(&mut document, "not-the-owner").unwrap());
+        assert!(document.get("placement_transactions").is_some());
+        assert!(release_transaction(&mut document, &first.id).unwrap());
+        assert!(document.get("placement_transactions").is_none());
+    }
+
+    #[test]
+    fn active_transaction_participates_in_registry_validation() {
+        let mut document = registry();
+        claim_transaction(&mut document, &transaction()).unwrap();
+        validate_registry_contract(&document).unwrap();
+
+        document["placement_transactions"][0]["to_host"] = Value::String("source".to_string());
+        assert!(validate_registry_contract(&document)
+            .unwrap_err()
+            .contains("two different registry targets"));
+    }
+}

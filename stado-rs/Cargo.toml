@@ -41,6 +41,9 @@ flate2 = "1"
 async-trait = "0.1"
 tempfile = "3"
 
+[dev-dependencies]
+parking_lot = "0.12"
+
 [[bin]]
 name = "stado"
 path = "src/bin/stado.rs"

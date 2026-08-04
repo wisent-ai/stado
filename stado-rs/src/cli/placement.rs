@@ -7,9 +7,12 @@
 //! then commits the service declarations with a second CAS. Every failure before
 //! that commit restores destination files, routing, and source services.
 
+use std::sync::Arc;
+
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::{SecondsFormat, Utc};
 use clap::Subcommand;
+use futures::future::BoxFuture;
 use serde_json::{json, Value};
 
 use crate::deploy::service::{self, ManagedService, SOURCE_REGISTRY};
@@ -20,6 +23,15 @@ use crate::placement::{
 use crate::targets::{self, ComputeTarget, Registry};
 
 use super::{registry, CmdError};
+
+type RegistryCommitter =
+    Arc<dyn Fn(Value, String) -> BoxFuture<'static, Result<String, CmdError>> + Send + Sync>;
+
+fn production_committer() -> RegistryCommitter {
+    Arc::new(|document, expected_generation| {
+        Box::pin(async move { registry::push_document_if(&document, &expected_generation).await })
+    })
+}
 
 #[derive(Subcommand)]
 pub enum PlacementCommands {
@@ -771,6 +783,7 @@ async fn execute_move(
     context: &MoveContext,
     progress: &mut Progress,
     runner: &Runner,
+    committer: &RegistryCommitter,
 ) -> Result<String, CmdError> {
     preflight(context, runner).await?;
     let source_profile = profile_host(&context.profile, &context.source.name)?;
@@ -825,7 +838,7 @@ async fn execute_move(
     progress.source_retired = true;
 
     let committed = prepare_committed_document(context)?;
-    registry::push_document_if(&committed, &context.claim_generation).await
+    committer(committed, context.claim_generation.clone()).await
 }
 
 async fn move_services(
@@ -891,8 +904,9 @@ async fn move_services(
         transaction,
     };
     let runner = production_runner();
+    let committer = production_committer();
     let mut progress = Progress::default();
-    match execute_move(&context, &mut progress, &runner).await {
+    match execute_move(&context, &mut progress, &runner, &committer).await {
         Ok(committed_generation) => {
             for path in &progress.destination_written {
                 if let Err(error) = cleanup_state_backup(
@@ -939,5 +953,517 @@ async fn move_services(
             }
             Err(CmdError::click(details.join("; ")))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use parking_lot::Mutex;
+
+    use futures::FutureExt;
+    use serde_json::json;
+    use tokio::io::AsyncWriteExt;
+
+    use super::*;
+    use crate::deploy::{runner_fn, CommandSpec};
+
+    fn topology() -> (Value, PlacementProfile, PlacementTransaction) {
+        let transaction = PlacementTransaction {
+            id: "882a6819-c004-4d58-9bad-5afe1223b725".to_string(),
+            profile: "brama-skarbiec".to_string(),
+            from_host: "source".to_string(),
+            to_host: "destination".to_string(),
+            started_at: "2026-08-03T12:00:00Z".to_string(),
+        };
+        let profile_value = json!({
+            "name": "brama-skarbiec",
+            "services": ["brama", "skarbiec"],
+            "stop_order": ["brama", "skarbiec"],
+            "start_order": ["skarbiec", "brama"],
+            "state": [{"path": ".stado/vault.json", "required": true}],
+            "hosts": {
+                "source": {
+                    "units": {
+                        "brama": {
+                            "name": "source-brama",
+                            "unit": "source.brama",
+                            "path": "/tmp/source.brama.plist",
+                            "kind": "launchd"
+                        },
+                        "skarbiec": {
+                            "name": "source-skarbiec",
+                            "unit": "source.skarbiec",
+                            "path": "/tmp/source.skarbiec.plist",
+                            "kind": "launchd"
+                        }
+                    },
+                    "probes": [
+                        {"service": "brama", "url": "http://127.0.0.1:18080/health"},
+                        {"service": "skarbiec", "url": "http://127.0.0.1:18895/health"}
+                    ]
+                },
+                "destination": {
+                    "units": {
+                        "brama": {
+                            "name": "destination-brama",
+                            "unit": "destination.brama",
+                            "path": "/tmp/destination.brama.plist",
+                            "kind": "launchd"
+                        },
+                        "skarbiec": {
+                            "name": "destination-skarbiec",
+                            "unit": "destination.skarbiec",
+                            "path": "/tmp/destination.skarbiec.plist",
+                            "kind": "launchd"
+                        }
+                    },
+                    "probes": [
+                        {"service": "brama", "url": "http://127.0.0.1:28080/health"},
+                        {"service": "skarbiec", "url": "http://127.0.0.1:28787/health"}
+                    ]
+                }
+            },
+            "routing": [{
+                "host": "destination",
+                "unit": {
+                    "name": "route-forward",
+                    "unit": "route.forward",
+                    "path": "/tmp/route.forward.plist",
+                    "kind": "launchd"
+                },
+                "active_when_destination": "destination"
+            }]
+        });
+        let profile: PlacementProfile = serde_json::from_value(profile_value.clone()).unwrap();
+        let hostname = crate::providers::vast::system_hostname();
+        let document = json!({
+            "schema_version": 2,
+            "placement_profiles": [profile_value],
+            "placement_transactions": [transaction.clone()],
+            "targets": [
+                {
+                    "name": "source",
+                    "kind": "local",
+                    "hostnames": [hostname],
+                    "services": [
+                        {
+                            "name": "source-brama",
+                            "unit": "",
+                            "label": "source.brama",
+                            "path": "/tmp/source.brama.plist",
+                            "kind": "launchd",
+                            "managed_since": "2026-08-03T11:00:00Z"
+                        },
+                        {
+                            "name": "source-skarbiec",
+                            "unit": "",
+                            "label": "source.skarbiec",
+                            "path": "/tmp/source.skarbiec.plist",
+                            "kind": "launchd",
+                            "managed_since": "2026-08-03T11:00:00Z"
+                        }
+                    ]
+                },
+                {
+                    "name": "destination",
+                    "kind": "local",
+                    "hostnames": [hostname]
+                }
+            ]
+        });
+        (document, profile, transaction)
+    }
+
+    fn context() -> MoveContext {
+        let (document, profile, transaction) = topology();
+        let registry = parse_registry(&document).unwrap();
+        MoveContext {
+            profile,
+            source: registry.lookup("source").unwrap().clone(),
+            destination: registry.lookup("destination").unwrap().clone(),
+            registry,
+            claimed_document: document,
+            claim_generation: "generation-1".to_string(),
+            transaction,
+        }
+    }
+
+    fn encoded_unit(script: &str) -> &'static str {
+        for (unit, name) in [
+            ("source.brama", "source.brama"),
+            ("source.skarbiec", "source.skarbiec"),
+            ("destination.brama", "destination.brama"),
+            ("destination.skarbiec", "destination.skarbiec"),
+            ("route.forward", "route.forward"),
+        ] {
+            if script.contains(&STANDARD.encode(unit.as_bytes())) {
+                return name;
+            }
+        }
+        "unknown"
+    }
+
+    fn marker_runner(log: Arc<Mutex<Vec<String>>>, fail_on: Option<&str>) -> Runner {
+        let fail_on = fail_on.map(str::to_string);
+        runner_fn(move |spec| {
+            let log = Arc::clone(&log);
+            let fail_on = fail_on.clone();
+            async move {
+                let script = spec.stdin.unwrap_or_default();
+                let unit = encoded_unit(&script);
+                let (event, stdout) = if script.contains("STADO_PLACEMENT_UNIT") {
+                    let loaded = unit.starts_with("source.") || unit == "route.forward";
+                    (
+                        format!("probe:{unit}"),
+                        format!(
+                            "STADO_PLACEMENT_UNIT\tyes\t{}\n",
+                            if loaded { "yes" } else { "no" }
+                        ),
+                    )
+                } else if script.contains("STADO_PLACEMENT_ACTION\\tstop") {
+                    (
+                        format!("action:stop:{unit}"),
+                        "STADO_PLACEMENT_ACTION\tstop\tok\n".to_string(),
+                    )
+                } else if script.contains("STADO_PLACEMENT_ACTION\\tstart") {
+                    (
+                        format!("action:start:{unit}"),
+                        "STADO_PLACEMENT_ACTION\tstart\tok\n".to_string(),
+                    )
+                } else if script.contains("STADO_PLACEMENT_ACTION\\tretire") {
+                    (
+                        format!("action:retire:{unit}"),
+                        "STADO_PLACEMENT_ACTION\tretire\tok\n".to_string(),
+                    )
+                } else if script.contains("STADO_PLACEMENT_WRITE") {
+                    (
+                        "state:write".to_string(),
+                        "STADO_PLACEMENT_WRITE\tok\tyes\n".to_string(),
+                    )
+                } else if script.contains("STADO_PLACEMENT_RESTORE") {
+                    (
+                        "state:restore".to_string(),
+                        "STADO_PLACEMENT_RESTORE\tok\n".to_string(),
+                    )
+                } else if script.contains("payload=$(") {
+                    (
+                        "state:read".to_string(),
+                        format!(
+                            "STADO_PLACEMENT_STATE\tpresent\t{}\n",
+                            STANDARD.encode(b"vault")
+                        ),
+                    )
+                } else if script.contains("STADO_PLACEMENT_STATE") {
+                    (
+                        "state:preflight".to_string(),
+                        "STADO_PLACEMENT_STATE\tpresent\n".to_string(),
+                    )
+                } else if script.contains("STADO_PLACEMENT_HEALTH") {
+                    (
+                        "health".to_string(),
+                        "STADO_PLACEMENT_HEALTH\tok\t200\n".to_string(),
+                    )
+                } else {
+                    ("unknown".to_string(), String::new())
+                };
+                log.lock().push(event.clone());
+                if fail_on.as_deref() == Some(event.as_str()) {
+                    return Ok(CommandOutput {
+                        code: 1,
+                        stdout: String::new(),
+                        stderr: "injected failure".to_string(),
+                    });
+                }
+                Ok(CommandOutput {
+                    code: 0,
+                    stdout,
+                    stderr: String::new(),
+                })
+            }
+        })
+    }
+
+    fn recording_committer(
+        log: Arc<Mutex<Vec<String>>>,
+        documents: Arc<Mutex<Vec<Value>>>,
+    ) -> RegistryCommitter {
+        Arc::new(move |document, expected_generation| {
+            let log = Arc::clone(&log);
+            let documents = Arc::clone(&documents);
+            async move {
+                assert_eq!(expected_generation, "generation-1");
+                log.lock().push("commit".to_string());
+                documents.lock().push(document);
+                Ok("generation-2".to_string())
+            }
+            .boxed()
+        })
+    }
+
+    fn failing_committer(log: Arc<Mutex<Vec<String>>>) -> RegistryCommitter {
+        Arc::new(move |_document, expected_generation| {
+            let log = Arc::clone(&log);
+            async move {
+                assert_eq!(expected_generation, "generation-1");
+                log.lock().push("commit".to_string());
+                Err(CmdError::click("registry CAS conflict"))
+            }
+            .boxed()
+        })
+    }
+
+    fn action_events(log: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
+        log.lock()
+            .iter()
+            .filter(|event| {
+                event.starts_with("action:") || event.starts_with("state:") || *event == "commit"
+            })
+            .cloned()
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn successful_move_fences_copies_routes_starts_probes_and_commits() {
+        let context = context();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let documents = Arc::new(Mutex::new(Vec::new()));
+        let runner = marker_runner(Arc::clone(&log), None);
+        let committer = recording_committer(Arc::clone(&log), Arc::clone(&documents));
+        let mut progress = Progress::default();
+
+        let generation = execute_move(&context, &mut progress, &runner, &committer)
+            .await
+            .unwrap();
+
+        assert_eq!(generation, "generation-2");
+        assert!(progress.source_stopped);
+        assert!(progress.destination_started);
+        assert!(progress.source_retired);
+        assert_eq!(
+            action_events(&log),
+            vec![
+                "state:preflight",
+                "action:stop:source.brama",
+                "action:stop:source.skarbiec",
+                "state:read",
+                "state:write",
+                "action:start:route.forward",
+                "action:start:destination.skarbiec",
+                "action:start:destination.brama",
+                "action:retire:source.brama",
+                "action:retire:source.skarbiec",
+                "commit",
+            ]
+        );
+        assert_eq!(
+            log.lock()
+                .iter()
+                .filter(|event| event.as_str() == "health")
+                .count(),
+            4
+        );
+        let committed_documents = documents.lock();
+        let committed = &committed_documents[0];
+        assert!(committed.get("placement_transactions").is_none());
+        assert!(committed["targets"][0].get("services").is_none());
+        assert_eq!(
+            committed["targets"][1]["services"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn destination_start_failure_restores_state_route_and_source() {
+        let context = context();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let documents = Arc::new(Mutex::new(Vec::new()));
+        let runner = marker_runner(Arc::clone(&log), Some("action:start:destination.brama"));
+        let committer = recording_committer(Arc::clone(&log), Arc::clone(&documents));
+        let mut progress = Progress::default();
+
+        let error = execute_move(&context, &mut progress, &runner, &committer)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("injected failure"));
+        let rollback_errors = rollback(&context, &progress, &runner).await;
+        assert!(rollback_errors.is_empty(), "{rollback_errors:?}");
+        assert!(documents.lock().is_empty());
+
+        let events = action_events(&log);
+        let failure_index = events
+            .iter()
+            .position(|event| event == "action:start:destination.brama")
+            .unwrap();
+        assert_eq!(
+            &events[failure_index + 1..],
+            [
+                "action:retire:destination.brama",
+                "action:retire:destination.skarbiec",
+                "state:restore",
+                "action:retire:route.forward",
+                "action:start:source.skarbiec",
+                "action:start:source.brama",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn registry_commit_failure_rolls_back_after_source_retirement() {
+        let context = context();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let runner = marker_runner(Arc::clone(&log), None);
+        let committer = failing_committer(Arc::clone(&log));
+        let mut progress = Progress::default();
+
+        let error = execute_move(&context, &mut progress, &runner, &committer)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("registry CAS conflict"));
+        assert!(progress.source_retired);
+        let rollback_errors = rollback(&context, &progress, &runner).await;
+        assert!(rollback_errors.is_empty(), "{rollback_errors:?}");
+
+        let events = action_events(&log);
+        let commit_index = events.iter().position(|event| event == "commit").unwrap();
+        assert_eq!(
+            &events[commit_index + 1..],
+            [
+                "action:retire:destination.brama",
+                "action:retire:destination.skarbiec",
+                "state:restore",
+                "action:retire:route.forward",
+                "action:start:source.skarbiec",
+                "action:start:source.brama",
+            ]
+        );
+    }
+
+    fn local_target(name: &str) -> ComputeTarget {
+        serde_json::from_value(json!({
+            "name": name,
+            "kind": "local",
+            "hostnames": [crate::providers::vast::system_hostname()]
+        }))
+        .unwrap()
+    }
+
+    fn isolated_bash_runner(home: PathBuf) -> Runner {
+        runner_fn(move |spec: CommandSpec| {
+            let home = home.clone();
+            async move {
+                let (program, args) = spec
+                    .argv
+                    .split_first()
+                    .ok_or_else(|| "empty command argv".to_string())?;
+                let mut command = tokio::process::Command::new(program);
+                command
+                    .args(args)
+                    .env("HOME", &home)
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped());
+                let mut child = command.spawn().map_err(|error| error.to_string())?;
+                if let (Some(payload), Some(mut input)) = (spec.stdin, child.stdin.take()) {
+                    input
+                        .write_all(payload.as_bytes())
+                        .await
+                        .map_err(|error| error.to_string())?;
+                }
+                let output = child
+                    .wait_with_output()
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Ok(CommandOutput {
+                    code: output.status.code().unwrap_or(-1),
+                    stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                    stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                })
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn state_install_restore_and_cleanup_are_reversible() {
+        let home = tempfile::tempdir().unwrap();
+        let state_dir = home.path().join(".stado");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        let path = state_dir.join("vault.json");
+        std::fs::write(&path, b"old").unwrap();
+        let runner = isolated_bash_runner(home.path().to_path_buf());
+        let target = local_target("local");
+        let snapshot = StateSnapshot {
+            spec: PlacementState {
+                path: ".stado/vault.json".to_string(),
+                required: true,
+            },
+            bytes: Some(b"new".to_vec()),
+        };
+
+        write_state(&target, &snapshot, "txn-one", &runner)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+        restore_state(&target, &snapshot.spec.path, "txn-one", &runner)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"old");
+
+        write_state(&target, &snapshot, "txn-two", &runner)
+            .await
+            .unwrap();
+        cleanup_state_backup(&target, &snapshot.spec.path, "txn-two", &runner)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+        assert!(!PathBuf::from(format!("{}.pre-stado-placement-txn-two", path.display())).exists());
+
+        let missing = StateSnapshot {
+            spec: PlacementState {
+                path: ".stado/new.json".to_string(),
+                required: false,
+            },
+            bytes: Some(b"created".to_vec()),
+        };
+        let missing_path = state_dir.join("new.json");
+        write_state(&target, &missing, "txn-three", &runner)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&missing_path).unwrap(), b"created");
+        restore_state(&target, &missing.spec.path, "txn-three", &runner)
+            .await
+            .unwrap();
+        assert!(!missing_path.exists());
+    }
+
+    #[tokio::test]
+    async fn state_read_distinguishes_required_and_optional_missing_files() {
+        let home = tempfile::tempdir().unwrap();
+        let runner = isolated_bash_runner(home.path().to_path_buf());
+        let target = local_target("local");
+        let optional = PlacementState {
+            path: ".stado/optional.json".to_string(),
+            required: false,
+        };
+        assert!(read_state(&target, &optional, &runner)
+            .await
+            .unwrap()
+            .bytes
+            .is_none());
+
+        let required = PlacementState {
+            required: true,
+            ..optional
+        };
+        assert!(read_state(&target, &required, &runner)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("required state"));
     }
 }
