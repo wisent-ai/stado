@@ -20,7 +20,11 @@
     }
   ],
   "service_directory": {
-    "generation": 1,
+    "authority": {
+      "target": "charless-mac-mini",
+      "command": "/Users/charles/.stado/bin/stado"
+    },
+    "generation": 3,
     "services": {
       "brama": {
         "placement_profile": "brama-skarbiec",
@@ -317,6 +321,7 @@
       "name": "ubuntu-server-rtx-pro-6000",
       "notes": "Operator RTX PRO 6000 workstation. External workloads, including ComfyUI, remain protected by default; local jobs use admission v2 accounting.",
       "slots": 2,
+      "ssh": "root@100.126.122.108",
       "vram_gb": 95,
       "role": "burst",
       "service_resolver": {
