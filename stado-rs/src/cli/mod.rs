@@ -41,6 +41,7 @@ pub mod queue;
 pub mod quota;
 pub mod recovery;
 pub mod registry;
+pub mod resolver;
 pub mod resources;
 pub mod results;
 pub mod schedule;
@@ -489,6 +490,9 @@ enum Commands {
     /// Atomically relocate a declared service group between registered hosts.
     #[command(subcommand)]
     Placement(placement::PlacementCommands),
+    /// Resolve logical services and run the local Stado data plane.
+    #[command(subcommand)]
+    Resolver(resolver::ResolverCommands),
     /// Plan, deploy, route and operate local OpenAI-compatible inference.
     #[command(subcommand)]
     Inference(inference::InferenceCommands),
@@ -1361,6 +1365,7 @@ fn failure_service(matches: &clap::ArgMatches) -> &'static str {
         "mail" => "mail",
         "azure" | "cloudflare" | "vast" | "blast-radius" => "provider",
         "coordinator"
+        | "resolver"
         | "dashboard"
         | "schedule"
         | "agent"
@@ -1604,6 +1609,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Queue(sub) => queue::dispatch(sub).await,
         Commands::Service(sub) => service::dispatch(sub).await,
         Commands::Placement(sub) => placement::dispatch(sub).await,
+        Commands::Resolver(sub) => resolver::dispatch(sub).await,
         Commands::Inference(sub) => inference::dispatch(sub).await,
         Commands::Doctor(args) => doctor::dispatch(args).await,
     }

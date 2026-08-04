@@ -39,6 +39,7 @@ pub mod release;
 pub mod scheduler;
 pub mod schedules;
 pub mod self_update;
+pub mod service_resolution;
 pub mod sizing;
 pub mod skarbiec;
 pub mod targets;

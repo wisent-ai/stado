@@ -19,6 +19,90 @@
       "state_uri": "stado://system/registry"
     }
   ],
+  "service_directory": {
+    "generation": 1,
+    "services": {
+      "brama": {
+        "placement_profile": "brama-skarbiec",
+        "active_host": "charless-mac-mini",
+        "endpoints": {
+          "charless-mac-mini": {
+            "url": "http://127.0.0.1:8080"
+          },
+          "lukasz-macbook": {
+            "url": "http://127.0.0.1:8080"
+          }
+        },
+        "consumers": {
+          "operator": {
+            "capabilities": [
+              "model-routing"
+            ]
+          },
+          "weles": {
+            "capabilities": [
+              "model-routing"
+            ]
+          },
+          "wisent-backend": {
+            "capabilities": [
+              "model-routing"
+            ]
+          }
+        }
+      },
+      "skarbiec": {
+        "placement_profile": "brama-skarbiec",
+        "active_host": "charless-mac-mini",
+        "endpoints": {
+          "charless-mac-mini": {
+            "url": "http://127.0.0.1:8895"
+          },
+          "lukasz-macbook": {
+            "url": "http://127.0.0.1:8787"
+          }
+        },
+        "consumers": {
+          "brama": {
+            "capabilities": [
+              "secret-acquisition"
+            ]
+          },
+          "operator": {
+            "capabilities": [
+              "secret-acquisition"
+            ]
+          },
+          "weles": {
+            "capabilities": [
+              "secret-acquisition"
+            ]
+          },
+          "wisent-backend": {
+            "capabilities": [
+              "secret-acquisition"
+            ]
+          }
+        }
+      },
+      "skarbiec-weles": {
+        "managed_service": "com.wisent.always-on.skarbiec-weles",
+        "active_host": "charless-mac-mini",
+        "endpoints": {
+          "charless-mac-mini": {
+            "url": "http://127.0.0.1:19095"
+          }
+        },
+        "consumers": {
+          "weles": {
+            "capabilities": [
+              "secret-acquisition"
+            ]
+          }
+        }
+      }
+    }
+  },
   "placement_profiles": [
     {
       "name": "brama-skarbiec",
@@ -102,18 +186,7 @@
           ]
         }
       },
-      "routing": [
-        {
-          "host": "lukasz-macbook",
-          "unit": {
-            "name": "com.wisent.always-on-forward",
-            "unit": "com.wisent.always-on-forward",
-            "path": "/Users/lukaszbartoszcze/Library/LaunchAgents/com.wisent.always-on-forward.plist",
-            "kind": "launchd"
-          },
-          "active_when_destination": "charless-mac-mini"
-        }
-      ]
+      "routing": []
     }
   ],
   "inference": {
@@ -150,6 +223,33 @@
       "ssh": "charles@100.120.25.24",
       "host_heuristic": "always-on",
       "role": "always-on",
+      "service_resolver": {
+        "api_bind": "127.0.0.1:17600",
+        "refresh_seconds": 5,
+        "max_stale_seconds": 15,
+        "adapters": [
+          {
+            "service": "brama",
+            "bind": "127.0.0.1:17601",
+            "consumer": "weles"
+          },
+          {
+            "service": "skarbiec",
+            "bind": "127.0.0.1:17602",
+            "consumer": "operator"
+          },
+          {
+            "service": "skarbiec-weles",
+            "bind": "127.0.0.1:17613",
+            "consumer": "weles"
+          },
+          {
+            "service": "skarbiec",
+            "bind": "127.0.0.1:17612",
+            "consumer": "brama"
+          }
+        ]
+      },
       "weles": {
         "actions": [],
         "enabled": true
@@ -218,11 +318,29 @@
       "notes": "Operator RTX PRO 6000 workstation. External workloads, including ComfyUI, remain protected by default; local jobs use admission v2 accounting.",
       "slots": 2,
       "vram_gb": 95,
-      "role": "burst"
+      "role": "burst",
+      "service_resolver": {
+        "api_bind": "127.0.0.1:17600",
+        "refresh_seconds": 5,
+        "max_stale_seconds": 15,
+        "adapters": [
+          {
+            "service": "brama",
+            "bind": "127.0.0.1:17601",
+            "consumer": "wisent-backend"
+          },
+          {
+            "service": "skarbiec",
+            "bind": "127.0.0.1:17602",
+            "consumer": "wisent-backend"
+          }
+        ]
+      }
     },
     {
       "name": "lukasz-macbook",
       "kind": "local",
+      "ssh": "lukaszbartoszcze@100.81.156.67",
       "hostnames": [
         "lukaszs-macbook-pro-5485.local"
       ],
@@ -239,7 +357,24 @@
         "max_scan_items": 10000,
         "cleaners": {}
       },
-      "role": "interactive"
+      "role": "interactive",
+      "service_resolver": {
+        "api_bind": "127.0.0.1:17600",
+        "refresh_seconds": 5,
+        "max_stale_seconds": 15,
+        "adapters": [
+          {
+            "service": "brama",
+            "bind": "127.0.0.1:17601",
+            "consumer": "operator"
+          },
+          {
+            "service": "skarbiec",
+            "bind": "127.0.0.1:17602",
+            "consumer": "operator"
+          }
+        ]
+      }
     }
   ]
 }
