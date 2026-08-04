@@ -101,6 +101,10 @@ pub fn deployment_substitutions(provider_name: &str) -> BTreeMap<String, String>
         crate::capabilities::StorageAdapter::StadoObject.id(),
         "token-file",
     );
+    let stado_ca_file = field(
+        crate::capabilities::StorageAdapter::StadoObject.id(),
+        "ca-file",
+    );
     let stado_namespace = field(
         crate::capabilities::StorageAdapter::StadoObject.id(),
         "namespace",
@@ -143,6 +147,10 @@ pub fn deployment_substitutions(provider_name: &str) -> BTreeMap<String, String>
         (
             stado_token_file.env.to_string(),
             config::wc_stado_storage_token_file().to_string(),
+        ),
+        (
+            stado_ca_file.env.to_string(),
+            config::wc_stado_storage_ca_file().to_string(),
         ),
         (
             stado_namespace.env.to_string(),
@@ -240,6 +248,7 @@ const REQUIRED_AGENT_EXPORTS: &[&str] = &[
     "WC_LOCAL_STORAGE_PATH",
     "WC_STADO_STORAGE_URL",
     "WC_STADO_STORAGE_TOKEN_FILE",
+    "WC_STADO_STORAGE_CA_FILE",
     "WC_STADO_STORAGE_NAMESPACE",
     "WC_BACKUP_STORAGE_BACKEND",
     "WC_BACKUP_BUCKET",
@@ -293,12 +302,25 @@ fn validate_storage_settings(deployment: &BTreeMap<String, String>) -> Result<()
         Some("local") => {
             require_deployment_setting(deployment, "WC_LOCAL_STORAGE_PATH", "storage.local.path")?;
         }
+        Some("stado") => {
+            require_deployment_setting(deployment, "WC_STADO_STORAGE_URL", "storage.stado.url")?;
+            require_deployment_setting(
+                deployment,
+                "WC_STADO_STORAGE_TOKEN_FILE",
+                "storage.stado.token_file",
+            )?;
+            require_deployment_setting(
+                deployment,
+                "WC_STADO_STORAGE_NAMESPACE",
+                "storage.stado.namespace",
+            )?;
+        }
         Some(_) | None => {
             return Err(SchedulerError::InvalidStartupSetting {
                 key: "WC_STORAGE_BACKEND".to_string(),
                 env: "WC_STORAGE_BACKEND",
                 config_key: "storage.backend",
-                reason: "expected gcs, azure, s3, or local",
+                reason: "expected gcs, azure, s3, stado, or local",
             });
         }
     }
@@ -938,6 +960,36 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let backend = LocalBackend::new(dir.path().to_str().unwrap()).unwrap();
         (dir, JobStorage::with_backend(Arc::new(backend), "local"))
+    }
+
+    #[test]
+    fn stado_storage_settings_are_accepted_for_remote_agents() {
+        let mut deployment = BTreeMap::from([
+            ("WC_STORAGE_BACKEND".to_string(), "stado".to_string()),
+            (
+                "WC_STADO_STORAGE_URL".to_string(),
+                "https://queue.example.test".to_string(),
+            ),
+            (
+                "WC_STADO_STORAGE_TOKEN_FILE".to_string(),
+                "/run/stado-agent-credentials/object-token".to_string(),
+            ),
+            (
+                "WC_STADO_STORAGE_NAMESPACE".to_string(),
+                "fleet".to_string(),
+            ),
+            ("WC_BACKUP_STORAGE_BACKEND".to_string(), String::new()),
+        ]);
+        validate_storage_settings(&deployment).expect("stado storage settings");
+
+        deployment.remove("WC_STADO_STORAGE_TOKEN_FILE");
+        assert!(matches!(
+            validate_storage_settings(&deployment),
+            Err(SchedulerError::MissingStartupSetting {
+                env: "WC_STADO_STORAGE_TOKEN_FILE",
+                ..
+            })
+        ));
     }
 
     fn job(job_id: &str, gpu_mem_gb: i64, gpu_type: &str, machine_type: &str) -> Job {

@@ -1006,6 +1006,11 @@ const STADO_OBJECT_STORAGE_CONFIG: &[ConfigField] = &[
     )
     .required(),
     ConfigField::scalar(
+        "ca-file",
+        "WC_STADO_STORAGE_CA_FILE",
+        "storage.stado.ca_file",
+    ),
+    ConfigField::scalar(
         "namespace",
         "WC_STADO_STORAGE_NAMESPACE",
         "storage.stado.namespace",
