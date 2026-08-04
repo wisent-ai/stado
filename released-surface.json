@@ -1,6 +1,6 @@
 {
   "version": "0.5.0",
-  "source": "git-archive:platform-surface-2026-07-31.1 rebuilt from the tag, which declares 0.5.0",
+  "source": "stado:stado/0.5.0/linux-amd64/stado release object published to the Stado channel",
   "surface": [
     "agent",
     "artifact",

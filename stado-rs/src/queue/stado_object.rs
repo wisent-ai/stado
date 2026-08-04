@@ -42,7 +42,12 @@ struct ObjectDescriptor {
 }
 
 impl StadoObjectBackend {
-    pub fn new(base_url: &str, namespace: &str, token_file: &str) -> Result<Self, StorageError> {
+    pub fn new(
+        base_url: &str,
+        namespace: &str,
+        token_file: &str,
+        ca_file: &str,
+    ) -> Result<Self, StorageError> {
         let mut base_url = Url::parse(base_url.trim())
             .map_err(|error| StorageError::Other(format!("invalid Stado storage URL: {error}")))?;
         let host = base_url.host_str().unwrap_or_default().to_ascii_lowercase();
@@ -102,11 +107,42 @@ impl StadoObjectBackend {
                 "Stado storage token file is empty or malformed".to_string(),
             ));
         }
+        let mut client = Client::builder().redirect(reqwest::redirect::Policy::none());
+        if !ca_file.trim().is_empty() {
+            let ca_path = crate::config_file::expand_tilde(ca_file);
+            let ca_metadata = std::fs::symlink_metadata(&ca_path).map_err(|error| {
+                StorageError::Other(format!(
+                    "cannot inspect Stado storage CA file {}: {error}",
+                    ca_path.display()
+                ))
+            })?;
+            if !ca_metadata.file_type().is_file() || ca_metadata.file_type().is_symlink() {
+                return Err(StorageError::Other(format!(
+                    "Stado storage CA file must be a regular file: {}",
+                    ca_path.display()
+                )));
+            }
+            let pem = std::fs::read(&ca_path).map_err(|error| {
+                StorageError::Other(format!(
+                    "cannot read Stado storage CA file {}: {error}",
+                    ca_path.display()
+                ))
+            })?;
+            let certificate = reqwest::Certificate::from_pem(&pem).map_err(|error| {
+                StorageError::Other(format!(
+                    "invalid Stado storage CA file {}: {error}",
+                    ca_path.display()
+                ))
+            })?;
+            client = client.add_root_certificate(certificate);
+        }
         Ok(Self {
             base_url,
             namespace: namespace.to_string(),
             token,
-            client: Client::new(),
+            client: client
+                .build()
+                .map_err(|error| StorageError::Other(error.to_string()))?,
         })
     }
 

@@ -725,6 +725,14 @@ static WC_STADO_STORAGE_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
         "",
     )
 });
+static WC_STADO_STORAGE_CA_FILE: LazyLock<String> = LazyLock::new(|| {
+    resolve_storage_binding(
+        crate::capabilities::StorageAdapter::StadoObject,
+        "ca-file",
+        false,
+        "",
+    )
+});
 static WC_STADO_STORAGE_NAMESPACE: LazyLock<String> = LazyLock::new(|| {
     resolve_storage_binding(
         crate::capabilities::StorageAdapter::StadoObject,
@@ -807,6 +815,11 @@ pub fn wc_stado_storage_url() -> &'static str {
 /// Owner-only file containing the scoped Stado object API bearer token.
 pub fn wc_stado_storage_token_file() -> &'static str {
     WC_STADO_STORAGE_TOKEN_FILE.as_str()
+}
+
+/// Optional PEM certificate authority for a private Stado object API origin.
+pub fn wc_stado_storage_ca_file() -> &'static str {
+    WC_STADO_STORAGE_CA_FILE.as_str()
 }
 
 /// Object namespace containing this deployment's complete queue state.
