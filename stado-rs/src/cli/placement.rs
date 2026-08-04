@@ -709,6 +709,12 @@ fn prepare_committed_document(context: &MoveContext) -> Result<Value, CmdError> 
         let managed = destination_record(&context.destination, destination_spec, &managed_since);
         service::add_service(&mut document, &managed).map_err(deploy_error)?;
     }
+    crate::service_resolution::retarget_profile(
+        &mut document,
+        &context.profile.name,
+        &context.destination.name,
+    )
+    .map_err(CmdError::click)?;
     if !placement::release_transaction(&mut document, &context.transaction.id)
         .map_err(CmdError::click)?
     {

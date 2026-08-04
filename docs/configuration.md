@@ -166,6 +166,56 @@ enforce the catalog in their preflights, before any write.
 }
 ```
 
+## Logical services and local resolvers
+
+The optional top-level `service_directory` is the fleet routing contract.
+`generation` is monotonic. Each logical service declares its active host,
+host-relative loopback origin on every eligible host, optional placement
+profile, and the exact consumers and capabilities allowed to resolve it.
+
+Per-target `service_resolver` policy declares the loopback resolution API and
+stable compatibility adapters for workloads on that host:
+
+```jsonc
+{
+  "service_directory": {
+    "generation": 7,
+    "services": {
+      "brama": {
+        "placement_profile": "brama-skarbiec",
+        "active_host": "control-host",
+        "endpoints": {
+          "control-host": {"url": "http://127.0.0.1:8080"},
+          "operator-host": {"url": "http://127.0.0.1:8080"}
+        },
+        "consumers": {
+          "wisent-backend": {"capabilities": ["model-routing"]}
+        }
+      }
+    }
+  },
+  "targets": [{
+    "name": "gpu-host",
+    "kind": "local",
+    "service_resolver": {
+      "api_bind": "127.0.0.1:17600",
+      "refresh_seconds": 5,
+      "max_stale_seconds": 15,
+      "adapters": [{
+        "service": "brama",
+        "bind": "127.0.0.1:17601",
+        "consumer": "wisent-backend"
+      }]
+    }
+  }]
+}
+```
+
+All resolver and adapter binds must be loopback. Remote host-relative endpoints
+require `targets[].ssh`; they are never rewritten into client configuration.
+The resolver refuses an unknown consumer, an active placement transaction, a
+rolled-back directory generation, or a cache older than the configured limit.
+
 ## Local inference
 
 The optional top-level `inference` section is the single desired-state and
