@@ -3,6 +3,7 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 stado_bin=${STADO_BIN:-$HOME/.stado/bin/stado}
+resolver_user=${STADO_RESOLVER_USER:-$(id -un)}
 if [ ! -x "$stado_bin" ]; then
   printf '%s\n' "Stado binary not found at $stado_bin" >&2
   exit 1
@@ -26,7 +27,7 @@ case $(uname -s) in
         -e "s|{STADO_BIN}|$stado_bin|g" \
         -e "s|{TARGET}|$target|g" \
         -e "s|{HOME}|$HOME|g" \
-        -e "s|{USER}|$(id -un)|g" \
+        -e "s|{USER}|$resolver_user|g" \
         "$script_dir/com.wisent.stado-resolver.system.plist.tmpl" > "$rendered"
       destination=/Library/LaunchDaemons/com.wisent.stado-resolver.plist
       sudo launchctl bootout system/com.wisent.stado-resolver >/dev/null 2>&1 || true
