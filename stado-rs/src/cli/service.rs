@@ -141,9 +141,16 @@ pub enum ServiceCommands {
     Adopt {
         /// launchd label or systemd unit name, as the host knows it.
         unit: String,
-        /// Registry host that runs it.
-        #[arg(long)]
-        host: String,
+        /// Explicit registry host that runs it.
+        #[arg(
+            long,
+            conflicts_with = "host_heuristic",
+            required_unless_present = "host_heuristic"
+        )]
+        host: Option<String>,
+        /// Declarative placement selector resolved against the registry.
+        #[arg(long, conflicts_with = "host")]
+        host_heuristic: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -167,9 +174,16 @@ pub enum ServiceCommands {
     Deploy {
         /// Service name; lowercase letters, digits, '.', '-' and '_'.
         name: String,
-        /// Registry host to install it on.
-        #[arg(long)]
-        host: String,
+        /// Explicit registry host to install it on.
+        #[arg(
+            long,
+            conflicts_with = "host_heuristic",
+            required_unless_present = "host_heuristic"
+        )]
+        host: Option<String>,
+        /// Declarative placement selector resolved against the registry.
+        #[arg(long, conflicts_with = "host")]
+        host_heuristic: Option<String>,
         /// Absolute path, ON THE TARGET HOST, of the program the unit runs.
         /// The plist / systemd unit is rendered around it by the same
         /// renderer `stado bootstrap --local` uses.
@@ -278,14 +292,29 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             })
             .await
         }
-        ServiceCommands::Adopt { unit, host, json } => adopt(&unit, &host, json).await,
+        ServiceCommands::Adopt {
+            unit,
+            host,
+            host_heuristic,
+            json,
+        } => adopt(&unit, host.as_deref(), host_heuristic.as_deref(), json).await,
         ServiceCommands::Retire { unit, host, json } => retire(&unit, &host, json).await,
         ServiceCommands::Deploy {
             name,
             host,
+            host_heuristic,
             from,
             json,
-        } => deploy(&name, &host, &from, json).await,
+        } => {
+            deploy(
+                &name,
+                host.as_deref(),
+                host_heuristic.as_deref(),
+                &from,
+                json,
+            )
+            .await
+        }
         ServiceCommands::Logs {
             name,
             host,
@@ -302,6 +331,34 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
 
 fn click(exc: DeployError) -> CmdError {
     CmdError::click(exc.to_string())
+}
+async fn resolve_placement(
+    host: Option<&str>,
+    host_heuristic: Option<&str>,
+) -> Result<(crate::targets::ComputeTarget, Option<String>), CmdError> {
+    let resolved_host = if let Some(host) = host {
+        host.to_string()
+    } else if let Some(heuristic) = host_heuristic {
+        let registry = targets::load_registry_auto()
+            .await
+            .map_err(|exc| CmdError::click(exc.to_string()))?;
+        registry
+            .lookup_host_heuristic(heuristic)
+            .map(|target| target.name.clone())
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "host heuristic '{heuristic}' matches no local registry target"
+                ))
+            })?
+    } else {
+        return Err(CmdError::click(
+            "either --host or --host-heuristic is required".to_string(),
+        ));
+    };
+    let target = host_channel::canonical_target(&resolved_host)
+        .await
+        .map_err(click)?;
+    Ok((target, host_heuristic.map(str::to_string)))
 }
 
 /// Reuse the host command's provider-neutral beacon store selection.
@@ -777,8 +834,14 @@ async fn record_declaration(record: &ManagedService) -> Result<String, CmdError>
     registry::push_document(&document).await
 }
 
-async fn adopt(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
-    let target = host_channel::canonical_target(host).await.map_err(click)?;
+async fn adopt(
+    unit: &str,
+    host: Option<&str>,
+    host_heuristic: Option<&str>,
+    json: bool,
+) -> Result<(), CmdError> {
+    let (target, host_heuristic) = resolve_placement(host, host_heuristic).await?;
+    let host = target.name.clone();
     let runner = production_runner();
     let report = service::probe_service(&target, unit, &runner)
         .await
@@ -799,7 +862,8 @@ async fn adopt(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
         )));
     }
 
-    let record = service::record_from_report(host, unit, &report, &now());
+    let record =
+        service::record_from_report(&host, host_heuristic.as_deref(), unit, &report, &now());
     let generation = record_declaration(&record).await?;
     render_mutation(
         "adopted",
@@ -850,8 +914,15 @@ async fn retire(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
     )
 }
 
-async fn deploy(name: &str, host: &str, from: &str, json: bool) -> Result<(), CmdError> {
-    let target = host_channel::canonical_target(host).await.map_err(click)?;
+async fn deploy(
+    name: &str,
+    host: Option<&str>,
+    host_heuristic: Option<&str>,
+    from: &str,
+    json: bool,
+) -> Result<(), CmdError> {
+    let (target, host_heuristic) = resolve_placement(host, host_heuristic).await?;
+    let host = target.name.clone();
     let plan = service::plan_deploy(name, from).map_err(click)?;
 
     // Refuse a colliding declaration BEFORE touching the host: pushing a
@@ -877,7 +948,8 @@ async fn deploy(name: &str, host: &str, from: &str, json: bool) -> Result<(), Cm
         )));
     }
 
-    let record = service::record_from_report(host, name, &report, &now());
+    let record =
+        service::record_from_report(&host, host_heuristic.as_deref(), name, &report, &now());
     let generation = match record_declaration(&record).await {
         Ok(generation) => generation,
         // The unit is on the host and running; only the declaration failed.

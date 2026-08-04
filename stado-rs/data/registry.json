@@ -1,13 +1,119 @@
 {
   "coordinators": [
     {
-      "active": true,
+      "active": false,
       "host": "https://stado.wisent.com",
       "interval_seconds": 180,
       "name": "local-control-plane",
-      "notes": "Sole Rust Stado control plane. Runs on the registered local Mac target with cloud providers fenced and provider-neutral Stado API routes.",
+      "notes": "Legacy coordinator retained for explicit rollback.",
       "runtime": "daemon",
       "state_uri": "stado://system/registry"
+    },
+    {
+      "active": true,
+      "host_heuristic": "always-on",
+      "interval_seconds": 180,
+      "name": "charless-control-plane",
+      "notes": "Always-on coordinator selected from the registered local fleet.",
+      "runtime": "daemon",
+      "state_uri": "stado://system/registry"
+    }
+  ],
+  "placement_profiles": [
+    {
+      "name": "brama-skarbiec",
+      "services": [
+        "brama",
+        "skarbiec"
+      ],
+      "stop_order": [
+        "brama",
+        "skarbiec"
+      ],
+      "start_order": [
+        "skarbiec",
+        "brama"
+      ],
+      "state": [
+        {
+          "path": ".stado/skarbiec.vault.json",
+          "required": true
+        },
+        {
+          "path": ".stado/skarbiec.vault.json.acquisitions.json",
+          "required": false
+        },
+        {
+          "path": ".stado/skarbiec.audit.jsonl",
+          "required": false
+        }
+      ],
+      "hosts": {
+        "charless-mac-mini": {
+          "units": {
+            "brama": {
+              "name": "com.wisent.always-on.brama",
+              "unit": "com.wisent.always-on.brama",
+              "path": "/Library/LaunchDaemons/com.wisent.always-on.brama.plist",
+              "kind": "launchd"
+            },
+            "skarbiec": {
+              "name": "com.wisent.always-on.skarbiec",
+              "unit": "com.wisent.always-on.skarbiec",
+              "path": "/Library/LaunchDaemons/com.wisent.always-on.skarbiec.plist",
+              "kind": "launchd"
+            }
+          },
+          "probes": [
+            {
+              "service": "skarbiec",
+              "url": "http://127.0.0.1:8895/health"
+            },
+            {
+              "service": "brama",
+              "url": "http://127.0.0.1:8080/health"
+            }
+          ]
+        },
+        "lukasz-macbook": {
+          "units": {
+            "brama": {
+              "name": "com.wisent.compute.service.com.wisent.brama",
+              "unit": "com.wisent.compute.service.com.wisent.brama",
+              "path": "/Users/lukaszbartoszcze/Library/LaunchAgents/com.wisent.compute.service.com.wisent.brama.plist",
+              "kind": "launchd"
+            },
+            "skarbiec": {
+              "name": "com.wisent.skarbiec",
+              "unit": "com.wisent.skarbiec",
+              "path": "/Users/lukaszbartoszcze/Library/LaunchAgents/com.wisent.skarbiec.plist",
+              "kind": "launchd"
+            }
+          },
+          "probes": [
+            {
+              "service": "skarbiec",
+              "url": "http://127.0.0.1:8787/health"
+            },
+            {
+              "service": "brama",
+              "url": "http://127.0.0.1:8080/health"
+            }
+          ]
+        }
+      },
+      "routing": [
+        {
+          "host": "lukasz-macbook",
+          "unit": {
+            "name": "com.wisent.always-on-forward",
+            "unit": "com.wisent.always-on-forward",
+            "path": "/Users/lukaszbartoszcze/Library/LaunchAgents/com.wisent.always-on-forward.plist",
+            "kind": "launchd"
+          },
+          "active_when_destination": "charless-mac-mini"
+        }
+      ]
     }
   ],
   "inference": {
@@ -40,20 +146,50 @@
       ],
       "kind": "local",
       "name": "charless-mac-mini",
-      "notes": "Primary Weles browser worker; placement is controlled by this policy.",
+      "notes": "Always-on Mac mini for Weles, Skarbiec, Brama, and the Stado control plane.",
       "ssh": "charles@100.120.25.24",
+      "host_heuristic": "always-on",
+      "role": "always-on",
       "weles": {
         "actions": [],
-        "enabled": false
+        "enabled": true
       },
       "services": [
         {
-          "name": "com.wisent.weles-api",
+          "name": "com.wisent.always-on.skarbiec",
           "unit": "",
-          "label": "com.wisent.weles-api",
-          "path": "$HOME/Library/LaunchAgents/com.wisent.weles-api.plist",
+          "label": "com.wisent.always-on.skarbiec",
+          "path": "/Library/LaunchDaemons/com.wisent.always-on.skarbiec.plist",
           "kind": "launchd",
-          "managed_since": ""
+          "managed_since": "2026-08-04T00:35:49.438547+00:00",
+          "host_heuristic": "always-on"
+        },
+        {
+          "name": "com.wisent.always-on.skarbiec-weles",
+          "unit": "",
+          "label": "com.wisent.always-on.skarbiec-weles",
+          "path": "/Library/LaunchDaemons/com.wisent.always-on.skarbiec-weles.plist",
+          "kind": "launchd",
+          "managed_since": "2026-08-04T01:03:51Z",
+          "host_heuristic": "always-on"
+        },
+        {
+          "name": "com.wisent.always-on.weles",
+          "unit": "",
+          "label": "com.wisent.always-on.weles",
+          "path": "/Library/LaunchDaemons/com.wisent.always-on.weles.plist",
+          "kind": "launchd",
+          "managed_since": "2026-08-04T00:36:01.183071+00:00",
+          "host_heuristic": "always-on"
+        },
+        {
+          "name": "com.wisent.always-on.brama",
+          "unit": "",
+          "label": "com.wisent.always-on.brama",
+          "path": "/Library/LaunchDaemons/com.wisent.always-on.brama.plist",
+          "kind": "launchd",
+          "managed_since": "2026-08-04T00:36:09.627166+00:00",
+          "host_heuristic": "always-on"
         }
       ],
       "pinned_only": true
@@ -81,7 +217,8 @@
       "name": "ubuntu-server-rtx-pro-6000",
       "notes": "Operator RTX PRO 6000 workstation. External workloads, including ComfyUI, remain protected by default; local jobs use admission v2 accounting.",
       "slots": 2,
-      "vram_gb": 95
+      "vram_gb": 95,
+      "role": "burst"
     },
     {
       "name": "lukasz-macbook",
@@ -101,7 +238,8 @@
         "max_items_per_pass": 50,
         "max_scan_items": 10000,
         "cleaners": {}
-      }
+      },
+      "role": "interactive"
     }
   ]
 }
