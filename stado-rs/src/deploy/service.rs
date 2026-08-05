@@ -898,6 +898,13 @@ const RESTART_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
     if ! /bin/launchctl print \"$domain/$unit\" >/dev/null; then
       program=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' \"$unit_path\" 2>/dev/null || /usr/libexec/PlistBuddy -c 'Print :Program' \"$unit_path\" 2>/dev/null || true)
       if [ -n \"$program\" ]; then
+        resolved_program=$(/usr/bin/python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' \"$program\" 2>/dev/null || true)
+        resolved_bin_dir=${resolved_program%/*}
+        if [ -n \"$resolved_bin_dir\" ] && [ \"$resolved_bin_dir\" != \"$resolved_program\" ]; then
+          /usr/bin/pkill -TERM -f \"^$resolved_bin_dir/\" >/dev/null 2>&1 || true
+          /bin/sleep 1
+          /usr/bin/pkill -KILL -f \"^$resolved_bin_dir/\" >/dev/null 2>&1 || true
+        fi
         recovery_unit=\"${unit}-recovery\"
         detail=$(/bin/launchctl submit -l \"$recovery_unit\" -- \"$program\")
         rc=$?
@@ -958,8 +965,16 @@ const STOP_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
     \"$HOME/.stado/services/\"*/current/*/bin/*)
       bin_dir=${program%/*}
       /usr/bin/pkill -TERM -f \"^$bin_dir/\" >/dev/null 2>&1 || true
+      resolved_program=$(/usr/bin/python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' \"$program\" 2>/dev/null || true)
+      resolved_bin_dir=${resolved_program%/*}
+      if [ -n \"$resolved_bin_dir\" ] && [ \"$resolved_bin_dir\" != \"$resolved_program\" ]; then
+        /usr/bin/pkill -TERM -f \"^$resolved_bin_dir/\" >/dev/null 2>&1 || true
+      fi
       /bin/sleep 1
       /usr/bin/pkill -KILL -f \"^$bin_dir/\" >/dev/null 2>&1 || true
+      if [ -n \"$resolved_bin_dir\" ] && [ \"$resolved_bin_dir\" != \"$resolved_program\" ]; then
+        /usr/bin/pkill -KILL -f \"^$resolved_bin_dir/\" >/dev/null 2>&1 || true
+      fi
       ;;
   esac
 else
