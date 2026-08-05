@@ -2509,11 +2509,21 @@ async fn authorize_object(
     if !in_scope {
         return Ok(false);
     }
-    let expected = crate::skarbiec::read_object_token(policy.item(), "token")
-        .await
-        .map_err(|_| ())?
-        .filter(|value| !value.is_empty())
-        .ok_or(())?;
+    let expected = match crate::skarbiec::read_object_token(policy.item(), "token").await {
+        Ok(Some(value)) if !value.is_empty() => value,
+        Ok(_) => {
+            eprintln!(
+                "[dashboard] object verifier item unavailable for namespace {namespace}"
+            );
+            return Err(());
+        }
+        Err(error) => {
+            eprintln!(
+                "[dashboard] object verifier failed for namespace {namespace}: {error}"
+            );
+            return Err(());
+        }
+    };
     let authorization = request.header("authorization").unwrap_or("").trim();
     let supplied = authorization.strip_prefix("Bearer ").unwrap_or_default();
     Ok(constant_time_eq(expected.as_bytes(), supplied.as_bytes()))
