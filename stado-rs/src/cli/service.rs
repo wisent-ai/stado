@@ -22,7 +22,7 @@ use clap::Subcommand;
 use serde_json::{json, Value};
 
 use crate::deploy::service::{
-    self, ManagedService, ServiceEnv, ServiceLog, ServiceStatus, SOURCE_RECOVERY,
+    self, ManagedService, ServiceEnv, ServiceLog, ServiceStatus, SOURCE_RECOVERY, SOURCE_REGISTRY,
 };
 use crate::deploy::{host_channel, production_runner, DeployError};
 use crate::queue::JobStorage;
