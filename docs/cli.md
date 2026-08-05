@@ -440,6 +440,22 @@ One row per registry target, sorted worst-first: hosts that never reported
 at all, then the oldest beacon, then the `gcp`/`vast` targets where no
 beacon is expected. The "has not reported in days" detector.
 
+## `stado release`
+
+| Subcommand | Behavior |
+|---|---|
+| `keygen --private-key PATH --public-key PATH --key-id ID` | Create an Ed25519 release authority. The private file is mode `0600`; only the public key belongs in registry trust policy. |
+| `prepare PRODUCT VERSION PLATFORM ...` | Hash an existing archive, bind source revision, schema compatibility and qualification evidence into a canonical manifest, sign it, then publish archive, signature and manifest create-only. The manifest is the last commit marker. |
+| `promote PRODUCT VERSION --channel candidate|stable` | Re-fetch every platform, verify exact bytes, signature and passed qualification, then compare-and-swap one `desired` registry generation. It never rebuilds. |
+| `agent --target TARGET [--once]` | Reconcile canonical desired state on a host: verify, stage immutably, start a private candidate, check readiness, switch the stable proxy, drain, monitor and commit or roll back. |
+| `status [PRODUCT] [--json]` | Join central desired/previous state with each host's observed rollout state. A host that has not published status is `unreported`, never healthy by assumption. |
+| `rollback PRODUCT [--json]` | Atomically swap the previous exact release back into desired state with a new rollout generation. |
+
+`prepare` accepts only an externally produced qualification record. It does not
+run or infer qualification. `promote` rejects `pending` and `failed` records,
+untrusted keys, mixed source revisions, missing target platforms, or any byte
+that differs from its signed manifest.
+
 ## `stado storage`
 
 | Subcommand | Behavior |

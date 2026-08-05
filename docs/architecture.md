@@ -59,6 +59,30 @@ registry-declared SSH transport. Neither form is returned by the resolution
 API. Skarbiec remains the authority for narrow credentials, while Stado owns
 service discovery, workload-to-service capability admission, and transport.
 
+## Signed product release flow
+
+```text
+tagged source -> build each platform once -> qualification evidence
+      -> signed immutable Stado coordinate -> desired registry generation
+      -> host release agent -> private candidate port -> readiness
+      -> stable loopback proxy cutover -> drain -> rollback window -> commit
+```
+
+Promotion changes references, never bytes. The signed manifest binds product,
+SemVer, platform, source revision, archive digest and size, binary/launcher
+paths, config/state schemas, minimum Stado version, rollback compatibility,
+qualification evidence, builder and key id. The host re-verifies every binding
+before extraction and rejects links, traversal, excessive entry counts or
+expanded size.
+
+Cutover intent is persisted before the proxy target changes, so reconciliation
+can finish an interrupted transition. The prior process remains live on its
+private port through the rollback window. Lost readiness, a failed proxy, or a
+failed drain returns routing to that process; a first migration restores the
+legacy launchd service. The failed artifact digest is quarantined per host, so
+the same desired generation cannot restart-loop. Desired, observed and
+quarantine state contain no provider or product secret material.
+
 ## Canonical object layout
 
 Job state lives in the backend selected by `STADO_CONFIG`:
