@@ -27,6 +27,11 @@ template="$script_dir/com.wisent.stado.release-agent.plist.tmpl"
 
 /usr/bin/install -d -o "$run_as_user" -g "$run_as_group" -m 0700 "$home/.stado/release-state"
 /usr/bin/install -d -o "$run_as_user" -g "$run_as_group" -m 0750 "$home/.stado/logs"
+/usr/bin/touch "$home/.stado/logs/release-agent.out" "$home/.stado/logs/release-agent.err"
+/usr/sbin/chown "$run_as_user:$run_as_group" \
+  "$home/.stado/logs/release-agent.out" \
+  "$home/.stado/logs/release-agent.err"
+/bin/chmod 0600 "$home/.stado/logs/release-agent.out" "$home/.stado/logs/release-agent.err"
 staging=$(mktemp /tmp/com.wisent.stado.release-agent.XXXXXX)
 trap 'rm -f "$staging"' EXIT HUP INT TERM
 escape_sed() { printf '%s' "$1" | sed 's/[|&\\]/\\&/g'; }
