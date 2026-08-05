@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@wisent-ai/onboarding-web": "file:../../echo-web/packages/onboarding-web",
     "@stripe/stripe-js": "^4.9.0",
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.47.10",

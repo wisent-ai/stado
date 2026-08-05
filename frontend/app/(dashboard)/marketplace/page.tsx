@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table';
+import { MarketplaceOnboarding } from '@/components/marketplace/MarketplaceOnboarding';
 
 interface Offer {
   id: string;
@@ -33,7 +34,7 @@ export default function MarketplacePage() {
   const [loading, setLoading] = useState(true);
   const [maxPrice, setMaxPrice] = useState('');
   const [minVram, setMinVram] = useState('');
-  const { getAccessToken } = useAuth();
+  const { user, loading: authLoading, getAccessToken } = useAuth();
 
   const fetchOffers = async () => {
     setLoading(true);
@@ -71,6 +72,12 @@ export default function MarketplacePage() {
     <div>
       <h1 className="mb-6 text-3xl font-bold">GPU Marketplace</h1>
 
+      <MarketplaceOnboarding
+        authLoading={authLoading}
+        userId={user?.id ?? null}
+        observedOfferId={!loading && offers.length > 0 ? offers[0].id : null}
+      />
+
       <Card className="mb-6">
         <CardHeader><CardTitle className="text-base">Filters</CardTitle></CardHeader>
         <CardContent>
@@ -90,7 +97,7 @@ export default function MarketplacePage() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card id="marketplace-offers">
         <CardHeader>
           <CardTitle className="text-base">{total} GPUs Available</CardTitle>
         </CardHeader>
