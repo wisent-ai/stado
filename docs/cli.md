@@ -456,6 +456,16 @@ run or infer qualification. `promote` rejects `pending` and `failed` records,
 untrusted keys, mixed source revisions, missing target platforms, or any byte
 that differs from its signed manifest.
 
+On macOS, install the reconciler as the registry target's runtime account:
+
+```bash
+deploy/install_release_agent.sh TARGET RUN_AS_USER HOME STADO_BIN STADO_CONFIG
+```
+
+The LaunchDaemon drops to `RUN_AS_USER` before reading or writing canonical
+storage and uses non-interactive `sudo` only for system launchd cutover and the
+declared candidate account.
+
 ## `stado storage`
 
 | Subcommand | Behavior |
