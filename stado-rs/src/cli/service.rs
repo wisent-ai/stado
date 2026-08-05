@@ -43,6 +43,12 @@ pub enum ServiceCommands {
         json: bool,
     },
 
+    /// Registry-managed services carrying Echo onboarding product metadata.
+    ///
+    /// Emits the versioned JSON envelope accepted by Echo's Stado catalog
+    /// synchronization endpoint.
+    OnboardingCatalog,
+
     /// One service's state everywhere it is managed.
     Status {
         /// Service name, or the host's own name for the unit.
@@ -148,6 +154,34 @@ pub enum ServiceCommands {
         json: bool,
     },
 
+    /// Attach central onboarding product metadata to a managed service.
+    ///
+    /// The metadata becomes part of the canonical Stado registry and is
+    /// emitted by `service list --json` for Echo catalog synchronization.
+    Onboarding {
+        /// Service name, launchd label, or systemd unit.
+        name: String,
+        /// Registry host that declares the service.
+        #[arg(long)]
+        host: String,
+        #[arg(long)]
+        product_id: String,
+        #[arg(long)]
+        display_name: String,
+        #[arg(long)]
+        repository: String,
+        #[arg(long, value_delimiter = ',', num_args = 1..)]
+        surfaces: Vec<String>,
+        #[arg(long)]
+        first_success_fact: String,
+        #[arg(long, default_value = "both")]
+        onboarding_kind: String,
+        #[arg(long, default_value = "active")]
+        status: String,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Remove a service from management: bootout/disable and forget.
     ///
     /// Unit files are left on disk. Retiring is a management decision, not
@@ -222,6 +256,7 @@ fn default_log_lines() -> usize {
 pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
     match command {
         ServiceCommands::List { json } => list(json).await,
+        ServiceCommands::OnboardingCatalog => onboarding_catalog().await,
         ServiceCommands::Status { name, json } => status(&name, json).await,
         ServiceCommands::Restart { name, host, json } => {
             restart(&name, host.as_deref(), json).await
@@ -279,6 +314,32 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             .await
         }
         ServiceCommands::Adopt { unit, host, json } => adopt(&unit, &host, json).await,
+        ServiceCommands::Onboarding {
+            name,
+            host,
+            product_id,
+            display_name,
+            repository,
+            surfaces,
+            first_success_fact,
+            onboarding_kind,
+            status,
+            json,
+        } => {
+            onboarding(OnboardingOptions {
+                name: &name,
+                host: &host,
+                product_id: &product_id,
+                display_name: &display_name,
+                repository: &repository,
+                surfaces,
+                first_success_fact: &first_success_fact,
+                onboarding_kind: &onboarding_kind,
+                status: &status,
+                as_json: json,
+            })
+            .await
+        }
         ServiceCommands::Retire { unit, host, json } => retire(&unit, &host, json).await,
         ServiceCommands::Deploy {
             name,
@@ -375,6 +436,17 @@ async fn list(json: bool) -> Result<(), CmdError> {
     let store = beacon_store().await?;
     let rows = service::list_services(&store).await.map_err(click)?;
     render_status(&rows, json)
+}
+
+async fn onboarding_catalog() -> Result<(), CmdError> {
+    let store = beacon_store().await?;
+    let rows = service::list_services(&store).await.map_err(click)?;
+    let services: Vec<Value> = rows
+        .iter()
+        .filter(|row| row.service.source == SOURCE_REGISTRY && row.service.onboarding.is_some())
+        .map(ServiceStatus::to_json)
+        .collect();
+    print_json(&json!({"schema_version": 1, "services": services}))
 }
 
 async fn status(name: &str, json: bool) -> Result<(), CmdError> {
@@ -775,6 +847,40 @@ async fn record_declaration(record: &ManagedService) -> Result<String, CmdError>
     let mut document = registry::fetch_document().await?;
     service::add_service(&mut document, record).map_err(click)?;
     registry::push_document(&document).await
+}
+
+struct OnboardingOptions<'a> {
+    name: &'a str,
+    host: &'a str,
+    product_id: &'a str,
+    display_name: &'a str,
+    repository: &'a str,
+    surfaces: Vec<String>,
+    first_success_fact: &'a str,
+    onboarding_kind: &'a str,
+    status: &'a str,
+    as_json: bool,
+}
+
+async fn onboarding(options: OnboardingOptions<'_>) -> Result<(), CmdError> {
+    let mut document = registry::fetch_document().await?;
+    let record = service::set_service_onboarding(
+        &mut document,
+        options.host,
+        options.name,
+        service::OnboardingProduct {
+            product_id: options.product_id.to_string(),
+            display_name: options.display_name.to_string(),
+            repository: options.repository.to_string(),
+            surface_kinds: options.surfaces,
+            first_success_fact: options.first_success_fact.to_string(),
+            onboarding_kind: options.onboarding_kind.to_string(),
+            status: options.status.to_string(),
+        },
+    )
+    .map_err(click)?;
+    let generation = registry::push_document(&document).await?;
+    render_mutation("onboarding", &record, &generation, None, options.as_json)
 }
 
 async fn adopt(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
