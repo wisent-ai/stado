@@ -1052,6 +1052,20 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Replace an owner-only Stado program on TARGET with a build proven to run there.
+    #[command(name = "install-binary")]
+    InstallBinary {
+        target: String,
+        /// Local executable to install.
+        #[arg(long)]
+        from: String,
+        /// Basename under $HOME/.stado/bin on the target.
+        #[arg(long, default_value = "stado")]
+        name: String,
+        /// Emit the installation report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Install one small operator helper in TARGET's owner-only Stado bin directory.
     #[command(name = "install-helper")]
     InstallHelper {
@@ -1549,6 +1563,12 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 dry_run,
                 json,
             } => host::cleanup(&target, dry_run, json).await,
+            HostCommands::InstallBinary {
+                target,
+                from,
+                name,
+                json,
+            } => host::install_binary(&target, &from, &name, json).await,
             HostCommands::InstallHelper {
                 target,
                 source,

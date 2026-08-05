@@ -1561,3 +1561,184 @@ printf '%s\n' "$final"
     }
     Ok(())
 }
+
+const INSTALL_BODY: &str = r#"dir="$HOME/.stado/bin"
+staged="$dir/.$name.install"
+installed="$dir/$name"
+previous="$dir/$name.previous"
+trap 'rm -f "$staged"' EXIT
+
+[ -s "$staged" ] || { printf '%s\n' 'delivered program is missing or empty' >&2; exit 1; }
+/bin/chmod 755 "$staged"
+
+if [ "$(/usr/bin/uname -s)" = "Darwin" ]; then
+  /usr/bin/xattr -c "$staged" 2>/dev/null || true
+  /usr/bin/codesign -s - --force "$staged" >/dev/null 2>&1 \
+    || { printf '%s\n' 'delivered program could not be signed on this host' >&2; exit 1; }
+fi
+
+new_version="$("$staged" --version 2>&1)" \
+  || { printf '%s\n' "delivered program does not run here: $new_version" >&2; exit 1; }
+
+old_version="absent"
+if [ -x "$installed" ]; then
+  old_version="$("$installed" --version 2>&1 || printf '%s' 'unreadable')"
+  /bin/cp -p "$installed" "$previous"
+fi
+
+/bin/mv "$staged" "$installed"
+trap - EXIT
+
+if ! "$installed" --version >/dev/null 2>&1; then
+  if [ -f "$previous" ]; then /bin/mv "$previous" "$installed"; fi
+  printf '%s\n' 'installed program does not run; rolled back to the previous build' >&2
+  exit 1
+fi
+
+printf 'STADO-BIN-OLD %s\n' "$old_version"
+printf 'STADO-BIN-NEW %s\n' "$new_version"
+"#;
+
+/// Replace an owner-only Stado program on TARGET with a build proven to run there.
+///
+/// These binaries are what every other operation on that host goes through, so
+/// installing one wrongly removes the means of repair. Three rules are encoded
+/// here rather than left to whoever is at the keyboard:
+///
+/// * the new binary is renamed into place, never written through the file that
+///   is already there -- overwriting a Mach-O in place invalidates its
+///   signature and the kernel answers the next exec with SIGKILL, no message;
+/// * it is signed and then executed on the target BEFORE it becomes the CLI,
+///   because a binary that is merely present is not evidence of anything;
+/// * the previous build is kept, and a version that will not run is rolled
+///   back automatically rather than reported as an installation.
+pub async fn install_binary(
+    target: &str,
+    source: &str,
+    name: &str,
+    json: bool,
+) -> Result<(), CmdError> {
+    if name.is_empty()
+        || name
+            .bytes()
+            .any(|byte| !(byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')))
+    {
+        return Err(CmdError::usage(
+            "program name must be a non-empty basename containing only letters, digits, '.', '_' or '-'",
+        ));
+    }
+    let bytes = std::fs::metadata(source)
+        .map_err(|error| CmdError::click(format!("cannot read {source}: {error}")))?
+        .len();
+    if bytes == u64::MIN {
+        return Err(CmdError::click(format!("{source} is empty")));
+    }
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let ssh_target = resolved.ssh.clone().unwrap_or_default();
+    if ssh_target.is_empty() {
+        return Err(CmdError::click(format!(
+            "{target} declares no ssh destination, so the CLI cannot be delivered"
+        )));
+    }
+    let runner = crate::deploy::production_runner();
+
+    let stage = crate::deploy::host_channel::run_script(
+        &resolved,
+        "set -euo pipefail\n/bin/mkdir -p \"$HOME/.stado/bin\"\n/bin/chmod 700 \"$HOME/.stado/bin\"\n",
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !stage.ok() {
+        return Err(CmdError::click(format!(
+            "{target}: cannot prepare the CLI directory: {}",
+            crate::deploy::host_channel::last_error_line(&stage, "remote mkdir failed")
+        )));
+    }
+
+    // The same command has to work on the machine running it, where there is no
+    // ssh listener to talk to and a copy is just a copy.
+    if crate::deploy::host_channel::target_is_this_host(&resolved) {
+        let home = std::env::var("HOME")
+            .map_err(|_| CmdError::click("HOME is not set, so the CLI path is unknown"))?;
+        let staged = std::path::Path::new(&home).join(format!(".stado/bin/.{name}.install"));
+        std::fs::copy(source, &staged).map_err(|error| {
+            CmdError::click(format!(
+                "cannot stage the CLI at {}: {error}",
+                staged.display()
+            ))
+        })?;
+        return finish_install(target, source, name, bytes, &resolved, &runner, json).await;
+    }
+    let mut copy_argv = crate::deploy::host_channel::ssh_options(&ssh_target);
+    copy_argv.pop();
+    let mut scp_argv = vec!["scp".to_string(), "-q".to_string()];
+    scp_argv.extend(copy_argv.into_iter().skip(usize::from(true)));
+    scp_argv.push(source.to_string());
+    scp_argv.push(format!("{ssh_target}:.stado/bin/.{name}.install"));
+    let copy = runner(crate::deploy::CommandSpec::new(scp_argv))
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if !copy.ok() {
+        return Err(CmdError::click(format!(
+            "{target}: cannot deliver the CLI: {}",
+            copy.detail()
+        )));
+    }
+
+    finish_install(target, source, name, bytes, &resolved, &runner, json).await
+}
+
+/// Sign, prove, swap and verify -- the half of `install-binary` that is identical
+/// whether the program arrived over ssh or was copied on the spot.
+async fn finish_install(
+    target: &str,
+    source: &str,
+    name: &str,
+    bytes: u64,
+    resolved: &crate::targets::ComputeTarget,
+    runner: &crate::deploy::Runner,
+    json: bool,
+) -> Result<(), CmdError> {
+    let quoted = crate::deploy::shlex_quote(name);
+    let script = format!("set -euo pipefail\nname={quoted}\n{INSTALL_BODY}");
+    let output = crate::deploy::host_channel::run_script(resolved, &script, runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if !output.ok() {
+        return Err(CmdError::click(format!(
+            "{target}: CLI update failed: {}",
+            crate::deploy::host_channel::last_error_line(&output, "remote install failed")
+        )));
+    }
+    let marker = |tag: &str| -> String {
+        output
+            .stdout
+            .lines()
+            .find_map(|line| line.strip_prefix(tag))
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    };
+    let old_version = marker("STADO-BIN-OLD ");
+    let new_version = marker("STADO-BIN-NEW ");
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": target,
+                "source": source,
+                "name": name,
+                "bytes": bytes,
+                "previous_version": old_version,
+                "installed_version": new_version,
+                "status": "installed",
+            }))?
+        );
+    } else {
+        println!("{target}: {name} {old_version} -> {new_version}");
+    }
+    Ok(())
+}
