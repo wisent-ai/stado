@@ -919,7 +919,13 @@ enum RegistryCommands {
     /// Validate a local registry-v2 JSON document.
     Validate { path: Option<String> },
     /// Upload local registry.json to the canonical registry object.
-    Push { path: Option<String> },
+    Push {
+        path: Option<String>,
+        /// Allow a write that deletes a top-level key the canonical document
+        /// still carries. Without this the upload is refused and names them.
+        #[arg(long)]
+        force: bool,
+    },
     /// Print the canonical registry to stdout.
     Pull,
     /// Print which registry target is this machine.
@@ -1445,7 +1451,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         } => control_plane::cloud(bind, port, interval).await,
         Commands::Registry(sub) => match sub {
             RegistryCommands::Validate { path } => registry::validate(path),
-            RegistryCommands::Push { path } => registry::push(path).await,
+            RegistryCommands::Push { path, force } => registry::push(path, force).await,
             RegistryCommands::Pull => registry::pull().await,
             RegistryCommands::SelfTarget { name_only } => registry::self_target(name_only).await,
             RegistryCommands::Doctor { json } => registry::doctor(json).await,
