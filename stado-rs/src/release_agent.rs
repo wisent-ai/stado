@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::net::SocketAddr;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -221,7 +222,10 @@ fn pid_alive(pid: i32) -> bool {
 
 fn terminate(record: &ProcessRecord) {
     if pid_alive(record.pid) {
-        let _ = kill(Pid::from_raw(record.pid), Signal::SIGTERM);
+        let group = Pid::from_raw(-record.pid);
+        if kill(group, Signal::SIGTERM).is_err() {
+            let _ = kill(Pid::from_raw(record.pid), Signal::SIGTERM);
+        }
     }
 }
 
@@ -288,6 +292,7 @@ fn spawn_release(
     }
     let child = command
         .arg(&launcher)
+        .process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr))
@@ -985,7 +990,6 @@ pub async fn proxy(state_path: &Path, bind: &str) -> Result<(), String> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1004,5 +1008,46 @@ mod tests {
         assert!(pid_alive(child.id() as i32));
         child.kill().unwrap();
         child.wait().unwrap();
+    }
+
+    #[test]
+    fn terminate_signals_the_release_process_group() {
+        let temporary = tempfile::tempdir().unwrap();
+        let child_pid_path = temporary.path().join("child.pid");
+        let shell = Command::new("/bin/sh")
+            .args(["-c", "sleep 30 & echo $! > \"$1\"; wait", "release-test"])
+            .arg(&child_pid_path)
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while !child_pid_path.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let child_pid: i32 = std::fs::read_to_string(&child_pid_path)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let record = ProcessRecord {
+            version: "test".to_string(),
+            artifact_sha256: "test".to_string(),
+            manifest_sha256: "test".to_string(),
+            port: 1,
+            pid: shell.id() as i32,
+            release_dir: "/tmp/test".to_string(),
+            started_at: Utc::now(),
+        };
+
+        terminate(&record);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while (pid_alive(record.pid) || kill(Pid::from_raw(child_pid), None).is_ok())
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!pid_alive(record.pid));
+        assert!(kill(Pid::from_raw(child_pid), None).is_err());
     }
 }
