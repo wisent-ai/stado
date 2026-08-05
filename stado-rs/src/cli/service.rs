@@ -51,12 +51,43 @@ pub enum ServiceCommands {
         json: bool,
     },
 
+    /// Query the unit directly on its registry host without changing it.
+    Probe {
+        /// Service name, or the host's own name for the unit.
+        name: String,
+        /// Restrict to one registry host; omit to query every placement.
+        #[arg(long)]
+        host: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Resolve exactly one fresh, active service placement.
+    Resolve {
+        /// Service name, or the host's own name for the unit.
+        name: String,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Restart one managed unit, without a full host-recovery pass.
     Restart {
         /// Service name, or the host's own name for the unit.
         name: String,
         /// Restrict to one registry host; omit to restart it everywhere it
         /// is managed.
+        #[arg(long)]
+        host: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Stop one managed unit without removing its registry declaration.
+    Stop {
+        /// Service name, or the host's own name for the unit.
+        name: String,
+        /// Restrict to one registry host; omit to stop it everywhere it is
+        /// managed.
         #[arg(long)]
         host: Option<String>,
         #[arg(long)]
@@ -223,9 +254,12 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
     match command {
         ServiceCommands::List { json } => list(json).await,
         ServiceCommands::Status { name, json } => status(&name, json).await,
+        ServiceCommands::Probe { name, host, json } => probe(&name, host.as_deref(), json).await,
+        ServiceCommands::Resolve { name, json } => resolve(&name, json).await,
         ServiceCommands::Restart { name, host, json } => {
             restart(&name, host.as_deref(), json).await
         }
+        ServiceCommands::Stop { name, host, json } => stop(&name, host.as_deref(), json).await,
         ServiceCommands::SecretSync {
             name,
             host,
@@ -386,6 +420,68 @@ async fn status(name: &str, json: bool) -> Result<(), CmdError> {
     render_status(&rows, json)
 }
 
+async fn probe(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdError> {
+    let services = declared_matching(name, host).await?;
+    let runner = production_runner();
+    let mut payload: Vec<Value> = Vec::new();
+    let mut cells: Vec<Vec<String>> = Vec::new();
+    let mut failures: Vec<String> = Vec::new();
+
+    for declared in &services {
+        let target = host_channel::canonical_target(&declared.host)
+            .await
+            .map_err(click)?;
+        let report = service::probe_managed_service(&target, declared, &runner)
+            .await
+            .map_err(click)?;
+        if !report.succeeded("probed") {
+            failures.push(format!("{}: {}", declared.host, report.failure()));
+        }
+        cells.push(vec![
+            declared.host.clone(),
+            declared.name.clone(),
+            declared.unit_id().to_string(),
+            dash(&report.file_state),
+            dash(&report.unit_state),
+            dash(&report.path),
+            dash(&report.detail),
+        ]);
+        let mut entry = report.to_json();
+        entry["host"] = Value::from(declared.host.clone());
+        entry["name"] = Value::from(declared.name.clone());
+        payload.push(entry);
+    }
+
+    if json {
+        print_json(&Value::Array(payload))?;
+    } else {
+        table::print(
+            &[
+                "HOST",
+                "SERVICE",
+                "UNIT",
+                "FILE_STATE",
+                "UNIT_STATE",
+                "PATH",
+                "DETAIL",
+            ],
+            &cells,
+        );
+    }
+    fail_if_any(&failures, "probe")
+}
+
+async fn resolve(name: &str, json: bool) -> Result<(), CmdError> {
+    let store = beacon_store().await?;
+    let row = service::resolve_active_service(&store, name)
+        .await
+        .map_err(click)?;
+    if json {
+        return print_json(&row.to_json());
+    }
+    render_status(std::slice::from_ref(&row), false)
+}
+
 fn render_status(rows: &[ServiceStatus], json: bool) -> Result<(), CmdError> {
     if json {
         let payload: Vec<Value> = rows.iter().map(ServiceStatus::to_json).collect();
@@ -400,6 +496,9 @@ fn render_status(rows: &[ServiceStatus], json: bool) -> Result<(), CmdError> {
                 row.service.unit_id().to_string(),
                 row.service.source.clone(),
                 row.state.clone(),
+                row.beacon_status.clone(),
+                row.beacon_age_seconds
+                    .map_or_else(|| "-".to_string(), |age| age.to_string()),
                 dash(&row.reported_at),
                 dash(&row.detail),
             ]
@@ -412,6 +511,8 @@ fn render_status(rows: &[ServiceStatus], json: bool) -> Result<(), CmdError> {
             "UNIT",
             "SOURCE",
             "STATE",
+            "BEACON",
+            "BEACON_AGE_SECONDS",
             "REPORTED_AT",
             "DETAIL",
         ],
@@ -460,19 +561,50 @@ async fn restart(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdEr
     fail_if_any(&failures, "restart")
 }
 
+async fn stop(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdError> {
+    let services = declared_matching(name, host).await?;
+    let runner = production_runner();
+    let mut payload: Vec<Value> = Vec::new();
+    let mut cells: Vec<Vec<String>> = Vec::new();
+    let mut failures: Vec<String> = Vec::new();
+
+    for declared in &services {
+        let target = host_channel::canonical_target(&declared.host)
+            .await
+            .map_err(click)?;
+        let report = service::stop_service(&target, declared, &runner)
+            .await
+            .map_err(click)?;
+        if !report.succeeded("stopped") {
+            failures.push(format!("{}: {}", declared.host, report.failure()));
+        }
+        cells.push(vec![
+            declared.host.clone(),
+            declared.unit_id().to_string(),
+            dash(&report.status),
+            dash(&report.detail),
+        ]);
+        let mut entry = report.to_json();
+        entry["host"] = Value::from(declared.host.clone());
+        payload.push(entry);
+    }
+
+    if json {
+        print_json(&Value::Array(payload))?;
+    } else {
+        table::print(&["HOST", "UNIT", "STATUS", "DETAIL"], &cells);
+    }
+    fail_if_any(&failures, "stop")
+}
+
 pub(crate) async fn service_secret(item: &str, field: &str) -> Result<String, CmdError> {
     let vault = crate::skarbiec::Client::service_verifier()
         .map_err(|err| CmdError::click(err.to_string()))?;
-    let stored = vault
-        .read_item(item)
+    vault
+        .read_string(item, field)
         .await
-        .map_err(|err| CmdError::click(err.to_string()))?;
-    stored
-        .as_object()
-        .and_then(|object| object.get(field))
-        .and_then(Value::as_str)
+        .map_err(|err| CmdError::click(err.to_string()))?
         .filter(|value| !value.is_empty())
-        .map(str::to_string)
         .ok_or_else(|| {
             CmdError::click(format!(
                 "Skarbiec item {item:?} has no non-empty string field {field:?}"

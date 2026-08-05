@@ -49,11 +49,14 @@ use std::path::{Component, Path};
 use std::sync::LazyLock;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use chrono::Utc;
 use regex::Regex;
 use serde_json::{json, Map, Value};
 
 use super::local_install::{self, InstallPlan, LocalOs};
-use super::{host_channel, host_recovery, py_str_repr, shlex_quote, DeployError, Runner};
+use super::{
+    host_channel, host_ping, host_recovery, py_str_repr, shlex_quote, DeployError, Runner,
+};
 use crate::monitor::host_health::{self, HostHealthError};
 use crate::queue::JobStorage;
 use crate::targets::{self, ComputeTarget};
@@ -315,6 +318,10 @@ pub struct ServiceStatus {
     /// The beacon's `reported_at`, so a confident-looking `active` from a
     /// five-day-old beacon is visibly five days old.
     pub reported_at: String,
+    /// Freshness verdict from the shared host-beacon policy.
+    pub beacon_status: String,
+    /// Age used for the freshness decision, when a timestamp was usable.
+    pub beacon_age_seconds: Option<i64>,
     /// Why the state is what it is, when that is not self-evident.
     pub detail: String,
 }
@@ -327,6 +334,11 @@ impl ServiceStatus {
         };
         report.insert("state".to_string(), json!(self.state));
         report.insert("reported_at".to_string(), json!(self.reported_at));
+        report.insert("beacon_status".to_string(), json!(self.beacon_status));
+        report.insert(
+            "beacon_age_seconds".to_string(),
+            json!(self.beacon_age_seconds),
+        );
         report.insert("detail".to_string(), json!(self.detail));
         Value::Object(report)
     }
@@ -395,17 +407,25 @@ pub async fn list_services(store: &JobStorage) -> Result<Vec<ServiceStatus>, Dep
             Err(exc) => return Err(DeployError(exc.to_string())),
         };
         let beacon = report.as_ref().map(|report| &report.beacon);
-        let reported_at = beacon
-            .and_then(|beacon| beacon.get("reported_at"))
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
+        let signal = report
+            .as_ref()
+            .map(|report| host_ping::grade_beacon(report, Utc::now()))
+            .unwrap_or_else(|| {
+                host_ping::BeaconSignal::unreadable(
+                    "host has published no health beacon".to_string(),
+                )
+            });
+        let reported_at = signal.reported_at.clone().unwrap_or_default();
+        let beacon_status = signal.verdict.as_str().to_string();
+        let beacon_age_seconds = signal.age_seconds;
         for service in declared {
             let (state, detail) = beacon_state(beacon, service.unit_id());
             rows.push(ServiceStatus {
                 service,
                 state,
                 reported_at: reported_at.clone(),
+                beacon_status: beacon_status.clone(),
+                beacon_age_seconds,
                 detail,
             });
         }
@@ -423,6 +443,56 @@ pub async fn find_services(
     let mut rows = list_services(store).await?;
     rows.retain(|row| row.service.matches(name));
     Ok(rows)
+}
+
+/// Resolve one fresh, active placement of NAME.
+///
+/// A stale `active` beacon is not active evidence. Multiple eligible rows
+/// are rejected: placement policy must identify one authority.
+pub async fn resolve_active_service(
+    store: &JobStorage,
+    name: &str,
+) -> Result<ServiceStatus, DeployError> {
+    let rows = find_services(store, name).await?;
+    if rows.is_empty() {
+        return Err(DeployError(format!(
+            "no registry-managed service named {name}"
+        )));
+    }
+    let eligible: Vec<&ServiceStatus> = rows
+        .iter()
+        .filter(|row| {
+            row.state == STATE_ACTIVE && row.beacon_status == host_ping::Verdict::Ok.as_str()
+        })
+        .collect();
+    match eligible.as_slice() {
+        [row] => Ok((**row).clone()),
+        [] => {
+            let evidence = rows
+                .iter()
+                .map(|row| {
+                    format!(
+                        "{}: state={}, beacon={}",
+                        row.service.host, row.state, row.beacon_status
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            Err(DeployError(format!(
+                "{name} has no fresh active placement ({evidence})"
+            )))
+        }
+        _ => {
+            let hosts = eligible
+                .iter()
+                .map(|row| row.service.host.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(DeployError(format!(
+                "{name} has multiple fresh active placements ({hosts}); placement is ambiguous"
+            )))
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -490,6 +560,8 @@ impl RemoteReport {
             "path": self.path,
             "status": self.status,
             "detail": self.detail,
+            "file_state": self.file_state,
+            "unit_state": self.unit_state,
             "exit_code": self.exit_code,
         })
     }
@@ -755,14 +827,19 @@ say() {
   printf 'STADO_SERVICE\\t%s\\t%s\\t%s\\n' \"$unit\" \"$1\" \"$detail\"
 }
 if [ \"$os\" = \"Darwin\" ]; then
-  if /bin/launchctl print \"$gui\" >/dev/null 2>&1; then
-    domain=\"$gui\"
-  elif /bin/launchctl print \"$user_domain\" >/dev/null 2>&1; then
-    domain=\"$user_domain\"
-  else
-    say 'no_launchd_domain' \"$gui\"
-    exit 66
-  fi
+  case \"$unit_path\" in
+    /Library/LaunchDaemons/*) domain='system' ;;
+    *)
+      if /bin/launchctl print \"$gui\" >/dev/null 2>&1; then
+        domain=\"$gui\"
+      elif /bin/launchctl print \"$user_domain\" >/dev/null 2>&1; then
+        domain=\"$user_domain\"
+      else
+        say 'no_launchd_domain' \"$gui\"
+        exit 66
+      fi
+      ;;
+  esac
   if [ -z \"$unit_path\" ]; then unit_path=\"$HOME/Library/LaunchAgents/$unit.plist\"; fi
 elif [ \"$os\" = \"Linux\" ]; then
   if [ -n \"$linux_unit\" ]; then unit=\"$linux_unit\"; fi
@@ -803,6 +880,7 @@ printf 'STADO_HOST\\t%s\\t%s\\t%s\\t%s\\n' \"$os\" \"$domain\" \"$unit\" \"$unit
 /// coordinator teardown, no other agents touched.
 const RESTART_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   if [ -f \"$unit_path\" ]; then
+    program=''
     /bin/launchctl bootout \"$domain/$unit\" >/dev/null 2>&1 || true
     /bin/launchctl enable \"$domain/$unit\" >/dev/null || true
     detail=$(/bin/launchctl bootstrap \"$domain\" \"$unit_path\" 2>&1)
@@ -811,8 +889,14 @@ const RESTART_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
       detail=$(/bin/launchctl asuser \"$uid\" /bin/launchctl bootstrap \"$domain\" \"$unit_path\")
       rc=$?
     fi
+    if ! /bin/launchctl print \"$domain/$unit\" >/dev/null && [ \"$domain\" = system ] && [ -x /usr/bin/sudo ]; then
+      /usr/bin/sudo -n /bin/launchctl bootout \"$domain/$unit\" >/dev/null 2>&1 || true
+      /usr/bin/sudo -n /bin/launchctl enable \"$domain/$unit\" >/dev/null 2>&1 || true
+      detail=$(/usr/bin/sudo -n /bin/launchctl bootstrap \"$domain\" \"$unit_path\" 2>&1)
+      rc=$?
+    fi
     if ! /bin/launchctl print \"$domain/$unit\" >/dev/null; then
-      program=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments' \"$unit_path\" | /usr/bin/sed -n '/^[[:space:]]*[/]/{s/^[[:space:]]*//;p;q;}')
+      program=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' \"$unit_path\" 2>/dev/null || /usr/libexec/PlistBuddy -c 'Print :Program' \"$unit_path\" 2>/dev/null || true)
       if [ -n \"$program\" ]; then
         recovery_unit=\"${unit}-recovery\"
         detail=$(/bin/launchctl submit -l \"$recovery_unit\" -- \"$program\")
@@ -824,17 +908,22 @@ const RESTART_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
       log=$(/usr/bin/plutil -extract StandardOutPath raw -o - \"$unit_path\")
       if [ -z \"$log\" ]; then log=\"$HOME/.stado/logs/$unit.log\"; fi
       /bin/mkdir -p \"$(/usr/bin/dirname \"$log\")\"
+      log_bytes=$(/usr/bin/stat -f '%z' \"$log\" 2>/dev/null || printf '0')
       /usr/bin/perl -e 'my $program = shift @ARGV; my $log = shift @ARGV; open STDIN, \"<\", \"/dev/null\" or die $!; open STDOUT, \">>\", $log or die $!; open STDERR, \">&STDOUT\" or die $!; exec {$program} $program;' \"$program\" \"$log\" &
       direct_pid=$!
       /bin/sleep \"${#rc}\"
       if /bin/kill -s CONT \"$direct_pid\" >/dev/null; then
         say 'restarted' \"direct process $direct_pid\"
       else
-        detail=$(/usr/bin/tail -n \"${#rc}\" \"$log\")
+        next_byte=$((log_bytes + 1))
+        detail=$(/usr/bin/tail -c +\"$next_byte\" \"$log\")
+        if [ -z \"$detail\" ]; then detail='direct process exited without new log output'; fi
         say 'restart_failed' \"$detail\"
+      fi
       fi
       exit
     fi
+    if /bin/launchctl print \"$domain/$unit\" >/dev/null; then rc=0; fi
     if [ \"$rc\" -ne 0 ]; then
       say 'bootstrap_failed' \"$rc $detail\"
       exit 0
@@ -843,6 +932,10 @@ const RESTART_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   /bin/launchctl enable \"$domain/$unit\" >/dev/null 2>&1 || true
   detail=$(/bin/launchctl kickstart -k \"$domain/$unit\" 2>&1)
   rc=$?
+  if [ \"$rc\" -ne 0 ] && [ \"$domain\" = system ] && [ -x /usr/bin/sudo ]; then
+    detail=$(/usr/bin/sudo -n /bin/launchctl kickstart -k \"$domain/$unit\" 2>&1)
+    rc=$?
+  fi
   if [ \"$rc\" -eq 0 ]; then say 'restarted' \"$domain\"; else say 'restart_failed' \"$rc $detail\"; fi
 else
   systemctl_user daemon-reload >/dev/null 2>&1 || true
@@ -860,6 +953,15 @@ const STOP_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   /bin/launchctl bootout \"$user_domain/$unit\" >/dev/null 2>&1 || true
   /bin/launchctl bootout \"$gui/$recovery_unit\" >/dev/null 2>&1 || true
   /bin/launchctl bootout \"$user_domain/$recovery_unit\" >/dev/null 2>&1 || true
+  program=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' \"$unit_path\" 2>/dev/null || /usr/libexec/PlistBuddy -c 'Print :Program' \"$unit_path\" 2>/dev/null || true)
+  case \"$program\" in
+    \"$HOME/.stado/services/\"*/current/*/bin/*)
+      bin_dir=${program%/*}
+      /usr/bin/pkill -TERM -f \"^$bin_dir/\" >/dev/null 2>&1 || true
+      /bin/sleep 1
+      /usr/bin/pkill -KILL -f \"^$bin_dir/\" >/dev/null 2>&1 || true
+      ;;
+  esac
 else
   systemctl_user stop \"$unit\" >/dev/null 2>&1 || true
 fi
@@ -873,13 +975,20 @@ say 'stopped' \"$unit_path\"
 const PROBE_BODY: &str = "file_state='absent'
 if [ -f \"$unit_path\" ]; then file_state='present'; fi
 unit_state='unloaded'
+program=''
 if [ \"$os\" = \"Darwin\" ]; then
   if /bin/launchctl print \"$domain/$unit\" >/dev/null 2>&1; then unit_state='loaded'; fi
+  if [ -f \"$unit_path\" ]; then
+    program=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' \"$unit_path\" 2>/dev/null || /usr/libexec/PlistBuddy -c 'Print :Program' \"$unit_path\" 2>/dev/null || true)
+  fi
 else
   if systemctl_user cat \"$unit\" >/dev/null 2>&1; then unit_state='loaded'; fi
+  if [ -f \"$unit_path\" ]; then
+    program=$(/usr/bin/sed -n 's/^ExecStart=//p' \"$unit_path\" | /usr/bin/sed -n '1p')
+  fi
 fi
 printf 'STADO_ADOPT\\t%s\\t%s\\n' \"$file_state\" \"$unit_state\"
-say 'probed' \"$unit_path\"
+say 'probed' \"$unit_path $program\"
 ";
 
 /// `service retire`: stop and forget. Files stay on disk — retiring is a
@@ -889,6 +998,10 @@ say 'probed' \"$unit_path\"
 /// `host_recovery`'s script decommissions the obsolete coordinator.
 const RETIRE_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   recovery_unit=\"${unit}-recovery\"
+  if [ \"$domain\" = system ] && [ -x /usr/bin/sudo ]; then
+    /usr/bin/sudo -n /bin/launchctl bootout \"$domain/$unit\" >/dev/null 2>&1 || true
+    /usr/bin/sudo -n /bin/launchctl disable \"$domain/$unit\" >/dev/null 2>&1 || true
+  fi
   /bin/launchctl bootout \"$gui/$unit\" >/dev/null 2>&1 || true
   /bin/launchctl bootout \"$user_domain/$unit\" >/dev/null 2>&1 || true
   /bin/launchctl bootout \"$gui/$recovery_unit\" >/dev/null 2>&1 || true
@@ -985,7 +1098,10 @@ fi
 const LOGS_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   log=''
   if [ -f \"$unit_path\" ]; then
-    log=$(/usr/bin/plutil -extract StandardOutPath raw -o - \"$unit_path\" 2>/dev/null)
+    log=$(/usr/bin/plutil -extract StandardErrorPath raw -o - \"$unit_path\" 2>/dev/null)
+    if [ -z \"$log\" ]; then
+      log=$(/usr/bin/plutil -extract StandardOutPath raw -o - \"$unit_path\" 2>/dev/null)
+    fi
   fi
   if [ -z \"$log\" ]; then log=\"$HOME/.stado/logs/$unit.log\"; fi
   if [ -f \"$log\" ]; then
@@ -1242,6 +1358,19 @@ pub async fn retire_service(
     runner: &Runner,
 ) -> Result<RemoteReport, DeployError> {
     let script = remote_script(service.unit_id(), "", &service.path, RETIRE_BODY)?;
+    run_remote(target, script, runner).await
+}
+
+/// Direct, read-only state query for an already managed service.
+///
+/// Unlike adoption this carries the registry's exact unit path, including
+/// system LaunchDaemons, and never mutates the registry.
+pub async fn probe_managed_service(
+    target: &ComputeTarget,
+    service: &ManagedService,
+    runner: &Runner,
+) -> Result<RemoteReport, DeployError> {
+    let script = remote_script(service.unit_id(), "", &service.path, PROBE_BODY)?;
     run_remote(target, script, runner).await
 }
 
