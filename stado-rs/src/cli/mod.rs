@@ -41,6 +41,7 @@ pub mod queue;
 pub mod quota;
 pub mod recovery;
 pub mod registry;
+pub mod release_cmd;
 pub mod resolver;
 pub mod resources;
 pub mod results;
@@ -428,6 +429,10 @@ enum Commands {
     /// Publish and consume immutable, versioned artifacts.
     #[command(subcommand)]
     Artifact(ArtifactCommands),
+
+    /// Build once, sign, promote, roll out, and roll back product releases.
+    #[command(subcommand)]
+    Release(release_cmd::ReleaseCommands),
 
     /// Manage recurring (cron) jobs — submit a command on a cron schedule.
     ///
@@ -1366,6 +1371,7 @@ fn failure_service(matches: &clap::ArgMatches) -> &'static str {
         "azure" | "cloudflare" | "vast" | "blast-radius" => "provider",
         "coordinator"
         | "resolver"
+        | "release"
         | "dashboard"
         | "schedule"
         | "agent"
@@ -1464,6 +1470,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         } => disk_cleanup::run(once, watch, dry_run).await,
         Commands::InstallDiskCleanup => disk_cleanup::install().await,
         Commands::Artifact(sub) => artifact::dispatch(sub).await,
+        Commands::Release(sub) => release_cmd::dispatch(sub).await,
         Commands::Cost(sub) => cost::dispatch(&sub).await,
         Commands::Vast(sub) => vast::dispatch(&sub).await,
         Commands::Quota { json, sub } => quota::dispatch(json, &sub).await,

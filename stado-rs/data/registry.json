@@ -19,6 +19,54 @@
       "state_uri": "stado://system/registry"
     }
   ],
+  "release_control": {
+    "schema_version": 1,
+    "generation": 1,
+    "trusted_keys": {
+      "brama-release-2026-08": "cFrI/ww/EiwBp6HozLu6HH/IdSnUO+P2Xsqvg4vfXIU="
+    },
+    "products": {
+      "brama": {
+        "binary": "bin/brama",
+        "service": "brama",
+        "config_schema": 1,
+        "state_schema": 1,
+        "launcher": "bin/start-with-skarbiec",
+        "install_root": "/Users/charles/.stado/services/brama",
+        "binary_env": "BRAMA_BIN",
+        "port_env": "BRAMA_PORT_OVERRIDE",
+        "runtime_env": "BRAMA_RUNTIME_DIR",
+        "environment": {
+          "BRAMA_SERVICE_ENV_FILE": "{home}/.config/brama/service.env"
+        },
+        "strategy": {
+          "kind": "blue-green",
+          "readiness_timeout_seconds": 30,
+          "drain_timeout_seconds": 60,
+          "rollback_window_seconds": 300,
+          "automatic_rollback": true
+        },
+        "targets": {
+          "charless-mac-mini": {
+            "platform": "darwin-arm64",
+            "run_as_user": "charles",
+            "home": "/Users/charles",
+            "state_dir": "/Users/charles/.stado/release-state",
+            "runtime_root": "/Users/charles/.stado/run",
+            "logs_root": "/Users/charles/.stado/logs",
+            "stable_bind": "127.0.0.1:8080",
+            "candidate_ports": [
+              18080,
+              18081
+            ],
+            "readiness_path": "/health",
+            "legacy_launchd_label": "com.wisent.always-on.brama",
+            "legacy_launchd_plist": "/Library/LaunchDaemons/com.wisent.always-on.brama.plist"
+          }
+        }
+      }
+    }
+  },
   "service_directory": {
     "authority": {
       "target": "charless-mac-mini",
