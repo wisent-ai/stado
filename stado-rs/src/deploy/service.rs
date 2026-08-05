@@ -50,6 +50,7 @@ use std::sync::LazyLock;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use super::local_install::{self, InstallPlan, LocalOs};
@@ -116,6 +117,17 @@ const UNIT_HEREDOC: &str = "STADO_UNIT_BODY";
 // The managed set
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OnboardingProduct {
+    pub product_id: String,
+    pub display_name: String,
+    pub repository: String,
+    pub surface_kinds: Vec<String>,
+    pub first_success_fact: String,
+    pub onboarding_kind: String,
+    pub status: String,
+}
+
 /// One unit Stado claims to manage on one host.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ManagedService {
@@ -137,6 +149,8 @@ pub struct ManagedService {
     /// When the unit entered management; empty for a recovery-sourced one,
     /// which has been managed for as long as the program has existed.
     pub managed_since: String,
+    /// Product-level onboarding metadata synchronized into Echo.
+    pub onboarding: Option<OnboardingProduct>,
 }
 
 impl ManagedService {
@@ -158,22 +172,26 @@ impl ManagedService {
         self.name == query || self.unit_id() == query
     }
 
-    /// The `services[]` element written into the registry document.
     pub fn to_record(&self) -> Value {
-        json!({
+        let mut record = json!({
             "name": self.name,
             "unit": self.unit,
             "label": self.label,
             "path": self.path,
             "kind": self.kind,
             "managed_since": self.managed_since,
-        })
+        });
+        if let Some(onboarding) = &self.onboarding {
+            record["onboarding"] = serde_json::to_value(onboarding)
+                .expect("OnboardingProduct is JSON serializable");
+        }
+        record
     }
 
     /// The `--json` rendering: the record plus the resolved host and the
     /// source that declared it.
     pub fn to_json(&self) -> Value {
-        json!({
+        let mut record = json!({
             "host": self.host,
             "name": self.name,
             "unit": self.unit,
@@ -183,7 +201,12 @@ impl ManagedService {
             "kind": self.kind,
             "source": self.source,
             "managed_since": self.managed_since,
-        })
+        });
+        if let Some(onboarding) = &self.onboarding {
+            record["onboarding"] = serde_json::to_value(onboarding)
+                .expect("OnboardingProduct is JSON serializable");
+        }
+        record
     }
 
     /// Read one `services[]` element back. Missing fields read as empty:
@@ -222,6 +245,9 @@ impl ManagedService {
             kind,
             source: SOURCE_REGISTRY.to_string(),
             managed_since: text("managed_since"),
+            onboarding: record
+                .get("onboarding")
+                .and_then(|value| serde_json::from_value(value.clone()).ok()),
         }
     }
 }
@@ -244,6 +270,7 @@ pub fn launchd_service(
         kind: KIND_LAUNCHD.to_string(),
         source: source.to_string(),
         managed_since: since.to_string(),
+        onboarding: None,
     }
 }
 
@@ -264,6 +291,7 @@ pub fn systemd_service(
         kind: KIND_SYSTEMD.to_string(),
         source: source.to_string(),
         managed_since: since.to_string(),
+        onboarding: None,
     }
 }
 
@@ -1511,6 +1539,41 @@ pub fn add_service(document: &mut Value, service: &ManagedService) -> Result<(),
     }
     declared.push(service.to_record());
     Ok(())
+}
+
+/// Attach product onboarding metadata to one already managed service.
+pub fn set_service_onboarding(
+    document: &mut Value,
+    host: &str,
+    service: &str,
+    onboarding: OnboardingProduct,
+) -> Result<ManagedService, DeployError> {
+    let entry = target_entry(document, host)?;
+    let declared = entry
+        .get_mut(SERVICES_KEY)
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| DeployError(format!("{} declares no managed services", py_str_repr(host))))?;
+    let record = declared
+        .iter_mut()
+        .find(|record| {
+            record
+                .as_object()
+                .is_some_and(|record| ManagedService::from_record(host, record).matches(service))
+        })
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| {
+            DeployError(format!(
+                "{} is not a registry-managed service on {}",
+                py_str_repr(service),
+                py_str_repr(host)
+            ))
+        })?;
+    record.insert(
+        "onboarding".to_string(),
+        serde_json::to_value(&onboarding)
+            .map_err(|error| DeployError(format!("invalid onboarding product: {error}")))?,
+    );
+    Ok(ManagedService::from_record(host, record))
 }
 
 /// Undeclare a service. Removing the last one drops the key entirely, so a
