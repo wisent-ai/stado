@@ -11,8 +11,8 @@ struct StadoApp: App {
     var body: some Scene {
         WindowGroup("Stado Operations Console") {
             WisentAuthGate(store: auth) {
-                ConsoleView(
-                    store: operationsStore,
+                StadoFirstUseRoot(
+                    operationsStore: operationsStore,
                     cleanupStore: cleanupStore,
                     deploymentStore: deploymentStore,
                     auth: auth
