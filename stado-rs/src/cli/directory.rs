@@ -55,6 +55,19 @@ pub enum DirectoryCommands {
         json: bool,
     },
 
+    /// The placement profiles the registry declares.
+    ///
+    /// A profile is what says a service is SUPPOSED to run somewhere, which is
+    /// a different fact from the directory's `active_host` and from whether
+    /// anything is listening. Reading it settles an argument this fleet has
+    /// already had: `brama-skarbiec` declares units on two hosts, so a Brama
+    /// missing from one of them is an unstarted unit rather than a service
+    /// that lives elsewhere.
+    Profiles {
+        #[arg(long)]
+        json: bool,
+    },
+
     /// The address this machine should use for one service.
     ///
     /// Resolves against the asking target rather than the active host,
@@ -154,6 +167,7 @@ async fn this_target() -> Result<String, CmdError> {
 pub async fn dispatch(command: DirectoryCommands) -> Result<(), CmdError> {
     match command {
         DirectoryCommands::Show { json } => show(json).await,
+        DirectoryCommands::Profiles { json } => profiles(json).await,
         DirectoryCommands::Endpoint { name, target, json } => endpoint(&name, target, json).await,
         DirectoryCommands::ConsumerAdd {
             name,
@@ -344,6 +358,72 @@ async fn consumer_rm(name: &str, consumer: &str, as_json: bool) -> Result<(), Cm
         );
     } else {
         println!("removed {consumer} from {name} generation={generation}");
+    }
+    Ok(())
+}
+
+const PROFILES_KEY: &str = "placement_profiles";
+
+/// Print every placement profile: which services it covers, the order they
+/// start and stop in, the state it requires, and which hosts declare units for
+/// it.
+///
+/// Read-only on purpose. A profile decides where services belong across the
+/// fleet, and editing that from a per-service command would put a
+/// fleet-shaped decision behind a service-shaped verb.
+async fn profiles(as_json: bool) -> Result<(), CmdError> {
+    let document = registry::fetch_document().await?;
+    let declared = document
+        .get(PROFILES_KEY)
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            click(format!(
+                "the registry at {} carries no {PROFILES_KEY}",
+                targets::registry_location()
+            ))
+        })?;
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(declared)?);
+        return Ok(());
+    }
+    for profile in declared {
+        let name = profile
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("(unnamed)");
+        println!("{name}");
+        for (label, key) in [
+            ("services", "services"),
+            ("start", "start_order"),
+            ("stop", "stop_order"),
+        ] {
+            if let Some(values) = profile.get(key).and_then(Value::as_array) {
+                let names: Vec<&str> = values.iter().filter_map(Value::as_str).collect();
+                println!("    {label}: {}", names.join(", "));
+            }
+        }
+        if let Some(hosts) = profile.get("hosts").and_then(Value::as_object) {
+            for (host, entry) in hosts {
+                let units = entry
+                    .get("units")
+                    .and_then(Value::as_object)
+                    .map(|units| units.keys().cloned().collect::<Vec<_>>().join(", "))
+                    .unwrap_or_else(|| "(no units)".to_string());
+                println!("    on {host}: {units}");
+            }
+        }
+        // Required state is what a migration has to carry with the service;
+        // naming it here is cheaper than discovering it during a cutover.
+        if let Some(state) = profile.get("state").and_then(Value::as_array) {
+            let required: Vec<&str> = state
+                .iter()
+                .filter(|entry| entry.get("required").and_then(Value::as_bool) == Some(true))
+                .filter_map(|entry| entry.get("path").and_then(Value::as_str))
+                .collect();
+            if !required.is_empty() {
+                println!("    required state: {}", required.join(", "));
+            }
+        }
     }
     Ok(())
 }
