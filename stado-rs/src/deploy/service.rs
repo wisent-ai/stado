@@ -191,6 +191,7 @@ impl ManagedService {
                     "host_heuristic".to_string(),
                     Value::String(heuristic.clone()),
                 );
+        }
         if let Some(onboarding) = &self.onboarding {
             record["onboarding"] = serde_json::to_value(onboarding)
                 .expect("OnboardingProduct is JSON serializable");

@@ -446,11 +446,26 @@ fn lock_contended(exc: &io::Error) -> bool {
         || matches!(exc.raw_os_error(), Some(c) if c == nix::libc::EACCES || c == nix::libc::EAGAIN)
 }
 
+/// An exclusive cleanup-run lock that always issues `LOCK_UN` before close.
+///
+/// Explicit unlock is required for consistent semantics on macOS, where
+/// closing one descriptor is not a sufficient release boundary when the
+/// process has opened the same lock file more than once.
+struct ExclusiveLock {
+    file: File,
+}
+
+impl Drop for ExclusiveLock {
+    fn drop(&mut self) {
+        let _ = fs2::FileExt::unlock(&self.file);
+    }
+}
+
 /// Python `_acquire_lock`: exclusive non-blocking flock; None when busy.
-fn acquire_lock(state_dir: &Path) -> Result<Option<File>, JanitorError> {
+fn acquire_lock(state_dir: &Path) -> Result<Option<ExclusiveLock>, JanitorError> {
     let file = open_lock(state_dir)?;
     match fs2::FileExt::try_lock_exclusive(&file) {
-        Ok(()) => Ok(Some(file)),
+        Ok(()) => Ok(Some(ExclusiveLock { file })),
         Err(exc) if lock_contended(&exc) => Ok(None),
         Err(exc) => Err(exc.into()),
     }
@@ -460,7 +475,15 @@ fn acquire_lock(state_dir: &Path) -> Result<Option<File>, JanitorError> {
 /// (Python's opaque `int` handle from `acquire_workload_lock`).
 #[derive(Debug)]
 pub struct WorkloadLock {
-    file: File,
+    file: Option<File>,
+}
+
+impl Drop for WorkloadLock {
+    fn drop(&mut self) {
+        if let Some(file) = self.file.take() {
+            let _ = fs2::FileExt::unlock(&file);
+        }
+    }
 }
 
 /// Python `acquire_workload_lock` at an explicit home (test seam).
@@ -468,7 +491,7 @@ pub fn acquire_workload_lock_in(home: &Path) -> Result<Option<WorkloadLock>, Jan
     let state_dir = ensure_state_dir(&secure_home(home)?)?;
     let file = open_lock(&state_dir)?;
     match fs2::FileExt::try_lock_shared(&file) {
-        Ok(()) => Ok(Some(WorkloadLock { file })),
+        Ok(()) => Ok(Some(WorkloadLock { file: Some(file) })),
         Err(exc) if lock_contended(&exc) => Ok(None),
         Err(exc) => Err(exc.into()),
     }
@@ -485,10 +508,13 @@ pub fn acquire_workload_lock() -> Result<Option<WorkloadLock>, JanitorError> {
 }
 
 /// Release a handle returned by [`acquire_workload_lock`]
-/// (Python `release_workload_lock`: flock UN, then close; close alone
-/// would also release the flock, so the Drop below is the backstop).
-pub fn release_workload_lock(lock: WorkloadLock, log_fn: &mut dyn FnMut(&str)) {
-    if let Err(exc) = fs2::FileExt::unlock(&lock.file) {
+/// (Python `release_workload_lock`: flock UN, then close; Drop provides the
+/// same explicit unlock backstop when a caller releases by scope).
+pub fn release_workload_lock(mut lock: WorkloadLock, log_fn: &mut dyn FnMut(&str)) {
+    let Some(file) = lock.file.take() else {
+        return;
+    };
+    if let Err(exc) = fs2::FileExt::unlock(&file) {
         log_fn(&format!(
             "disk cleanup workload lock release failed: {}",
             io_code(&exc)
@@ -1006,7 +1032,7 @@ fn finish(
 fn run_with_lock(
     home: &Path,
     state_dir: &Path,
-    _lock: File,
+    _lock: ExclusiveLock,
     registry: Result<Value, JanitorError>,
     mut report: CleanupReport,
     started: Instant,
