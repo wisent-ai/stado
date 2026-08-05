@@ -754,14 +754,27 @@ say() {
   detail=$(printf '%s' \"$2\" | /usr/bin/tr '\t\r\n' ' ' | /usr/bin/cut -c1-160)
   printf 'STADO_SERVICE\\t%s\\t%s\\t%s\\n' \"$unit\" \"$1\" \"$detail\"
 }
+launch=/bin/launchctl
 if [ \"$os\" = \"Darwin\" ]; then
-  if /bin/launchctl print \"$gui\" >/dev/null 2>&1; then
-    domain=\"$gui\"
-  elif /bin/launchctl print \"$user_domain\" >/dev/null 2>&1; then
-    domain=\"$user_domain\"
-  else
-    say 'no_launchd_domain' \"$gui\"
-    exit 66
+  case \"$unit_path\" in
+    /Library/LaunchDaemons/*)
+      # A system daemon does not live in this login's domain, and every
+      # launchctl verb aimed at gui/$uid silently misses it -- which is how
+      # such a unit reaches the last-resort fallback on every restart and
+      # gets started as a bare process instead of as the job it is.
+      domain=\"system\"
+      launch=\"/usr/bin/sudo -n /bin/launchctl\"
+      ;;
+  esac
+  if [ -z \"$domain\" ]; then
+    if /bin/launchctl print \"$gui\" >/dev/null 2>&1; then
+      domain=\"$gui\"
+    elif /bin/launchctl print \"$user_domain\" >/dev/null 2>&1; then
+      domain=\"$user_domain\"
+    else
+      say 'no_launchd_domain' \"$gui\"
+      exit 66
+    fi
   fi
   if [ -z \"$unit_path\" ]; then unit_path=\"$HOME/Library/LaunchAgents/$unit.plist\"; fi
 elif [ \"$os\" = \"Linux\" ]; then
@@ -803,28 +816,37 @@ printf 'STADO_HOST\\t%s\\t%s\\t%s\\t%s\\n' \"$os\" \"$domain\" \"$unit\" \"$unit
 /// coordinator teardown, no other agents touched.
 const RESTART_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   if [ -f \"$unit_path\" ]; then
-    /bin/launchctl bootout \"$domain/$unit\" >/dev/null 2>&1 || true
-    /bin/launchctl enable \"$domain/$unit\" >/dev/null || true
-    detail=$(/bin/launchctl bootstrap \"$domain\" \"$unit_path\" 2>&1)
+    $launch bootout \"$domain/$unit\" >/dev/null 2>&1 || true
+    $launch enable \"$domain/$unit\" >/dev/null || true
+    detail=$($launch bootstrap \"$domain\" \"$unit_path\" 2>&1)
     rc=$?
-    if ! /bin/launchctl print \"$domain/$unit\" >/dev/null; then
-      detail=$(/bin/launchctl asuser \"$uid\" /bin/launchctl bootstrap \"$domain\" \"$unit_path\")
+    if ! $launch print \"$domain/$unit\" >/dev/null; then
+      detail=$(/bin/launchctl asuser \"$uid\" $launch bootstrap \"$domain\" \"$unit_path\")
       rc=$?
     fi
-    if ! /bin/launchctl print \"$domain/$unit\" >/dev/null; then
-      program=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments' \"$unit_path\" | /usr/bin/sed -n '/^[[:space:]]*[/]/{s/^[[:space:]]*//;p;q;}')
+    if ! $launch print \"$domain/$unit\" >/dev/null; then
+      set --
+      while IFS= read -r line; do
+        case \"$line\" in
+          'Array {'|'}'|'') continue ;;
+        esac
+        set -- \"$@\" \"$(printf '%s' \"$line\" | /usr/bin/sed 's/^[[:space:]]*//;s/[[:space:]]*$//')\"
+      done <<PLIST
+$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments' \"$unit_path\" 2>/dev/null)
+PLIST
+      program=${1:-}
       if [ -n \"$program\" ]; then
         recovery_unit=\"${unit}-recovery\"
-        detail=$(/bin/launchctl submit -l \"$recovery_unit\" -- \"$program\")
+        detail=$(/bin/launchctl submit -l \"$recovery_unit\" -- \"$@\")
         rc=$?
-        if /bin/launchctl print \"$domain/$recovery_unit\" >/dev/null; then unit=\"$recovery_unit\"; fi
+        if $launch print \"$domain/$recovery_unit\" >/dev/null; then unit=\"$recovery_unit\"; fi
       fi
     fi
-    if ! /bin/launchctl print \"$domain/$unit\" >/dev/null && [ -n \"$program\" ]; then
+    if ! $launch print \"$domain/$unit\" >/dev/null && [ -n \"$program\" ]; then
       log=$(/usr/bin/plutil -extract StandardOutPath raw -o - \"$unit_path\")
       if [ -z \"$log\" ]; then log=\"$HOME/.stado/logs/$unit.log\"; fi
       /bin/mkdir -p \"$(/usr/bin/dirname \"$log\")\"
-      /usr/bin/perl -e 'my $program = shift @ARGV; my $log = shift @ARGV; open STDIN, \"<\", \"/dev/null\" or die $!; open STDOUT, \">>\", $log or die $!; open STDERR, \">&STDOUT\" or die $!; exec {$program} $program;' \"$program\" \"$log\" &
+      /usr/bin/perl -e 'my $log = shift @ARGV; open STDIN, \"<\", \"/dev/null\" or die $!; open STDOUT, \">>\", $log or die $!; open STDERR, \">&STDOUT\" or die $!; exec {$ARGV[0]} @ARGV;' \"$log\" \"$@\" &
       direct_pid=$!
       /bin/sleep \"${#rc}\"
       if /bin/kill -s CONT \"$direct_pid\" >/dev/null; then
@@ -840,8 +862,8 @@ const RESTART_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
       exit 0
     fi
   fi
-  /bin/launchctl enable \"$domain/$unit\" >/dev/null 2>&1 || true
-  detail=$(/bin/launchctl kickstart -k \"$domain/$unit\" 2>&1)
+  $launch enable \"$domain/$unit\" >/dev/null 2>&1 || true
+  detail=$($launch kickstart -k \"$domain/$unit\" 2>&1)
   rc=$?
   if [ \"$rc\" -eq 0 ]; then say 'restarted' \"$domain\"; else say 'restart_failed' \"$rc $detail\"; fi
 else
