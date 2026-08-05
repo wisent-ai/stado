@@ -208,7 +208,7 @@ fn execute_dispatches_via_local_claude_cli() {
         assert!(String::from_utf8(request_body)
             .unwrap()
             .contains(r#""id":"stado-anthropic""#));
-        let body = r#"{"value":{"api_key":"test-anthropic-key"}}"#;
+        let body = r#"{"value":"test-anthropic-key"}"#;
         write!(
             stream,
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
