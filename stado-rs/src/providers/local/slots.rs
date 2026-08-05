@@ -429,7 +429,7 @@ async fn resolve_job_secret_environment(
         } else {
             configured_url
         };
-        crate::skarbiec::Client::new(
+        crate::skarbiec::Client::direct(
             url,
             crate::config::agent_skarbiec_consumer(),
             agent_token_file,
