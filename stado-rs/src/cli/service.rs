@@ -32,6 +32,10 @@ use super::{registry, table, CmdError};
 
 #[derive(Subcommand)]
 pub enum ServiceCommands {
+    /// Where a service is reachable from here, and who may use it.
+    #[command(subcommand)]
+    Directory(crate::cli::directory::DirectoryCommands),
+
     /// Every registry-managed service across all hosts, with its state.
     ///
     /// Answered from the latest health beacons, so it costs no ssh and
@@ -221,6 +225,7 @@ fn default_log_lines() -> usize {
 
 pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
     match command {
+        ServiceCommands::Directory(sub) => crate::cli::directory::dispatch(sub).await,
         ServiceCommands::List { json } => list(json).await,
         ServiceCommands::Status { name, json } => status(&name, json).await,
         ServiceCommands::Restart { name, host, json } => {

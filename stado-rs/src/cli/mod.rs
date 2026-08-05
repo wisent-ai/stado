@@ -26,6 +26,7 @@ pub mod control_plane;
 pub mod coordinator;
 pub mod cost;
 pub mod dashboard;
+pub mod directory;
 pub mod disk_cleanup;
 pub mod doctor;
 pub mod host;
