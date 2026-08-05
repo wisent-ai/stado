@@ -1,0 +1,20 @@
+[Unit]
+Description=Stado signed release reconciler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/stado/release-agent.env
+ExecStart=/usr/local/bin/stado release agent --target ${STADO_RELEASE_TARGET} --interval-seconds 15
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/stado /var/log/stado /run/stado
+
+[Install]
+WantedBy=multi-user.target
