@@ -177,8 +177,16 @@ pub enum ServiceCommands {
         /// Absolute path, ON THE TARGET HOST, of the program the unit runs.
         /// The plist / systemd unit is rendered around it by the same
         /// renderer `stado bootstrap --local` uses.
-        #[arg(long)]
-        from: String,
+        #[arg(long, conflicts_with = "from_artifact")]
+        from: Option<String>,
+        /// Published artifact to install and run instead of a path already on
+        /// the host. The reference is resolved to an immutable version, that
+        /// version is placed under ~/.stado/services/NAME/<version>/, its
+        /// declared sha256 is verified there, and `current` is moved onto it.
+        /// The unit runs through `current`, so a later install or a rollback
+        /// is a relink rather than a redeploy.
+        #[arg(long = "from-artifact")]
+        from_artifact: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -289,8 +297,9 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             name,
             host,
             from,
+            from_artifact,
             json,
-        } => deploy(&name, &host, &from, json).await,
+        } => deploy(&name, &host, from, from_artifact, json).await,
         ServiceCommands::Logs {
             name,
             host,
@@ -855,8 +864,34 @@ async fn retire(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
     )
 }
 
-async fn deploy(name: &str, host: &str, from: &str, json: bool) -> Result<(), CmdError> {
+async fn deploy(
+    name: &str,
+    host: &str,
+    from: Option<String>,
+    from_artifact: Option<String>,
+    json: bool,
+) -> Result<(), CmdError> {
     let target = host_channel::canonical_target(host).await.map_err(click)?;
+    // Exactly one source. Neither is a sensible default: a path deploys
+    // whatever is on the host with no version identity, and an artifact
+    // deploys a named version; guessing between them is how a host ends up
+    // running something nobody can name.
+    let (from, installed) = match (from, from_artifact) {
+        (Some(path), None) => (path, None),
+        (None, Some(reference)) => {
+            let installed = install_from_artifact(&target, name, &reference).await?;
+            (installed.program_path.clone(), Some(installed))
+        }
+        (None, None) => {
+            return Err(CmdError::click(
+                "deploy needs --from PATH or --from-artifact REF",
+            ))
+        }
+        (Some(_), Some(_)) => {
+            return Err(CmdError::click("--from and --from-artifact are exclusive"))
+        }
+    };
+    let from = from.as_str();
     let plan = service::plan_deploy(name, from).map_err(click)?;
 
     // Refuse a colliding declaration BEFORE touching the host: pushing a
@@ -900,6 +935,18 @@ async fn deploy(name: &str, host: &str, from: &str, json: bool) -> Result<(), Cm
             )));
         }
     };
+    // The version is the point of --from-artifact: without it the operator is
+    // back to "something is deployed" with no way to say what. Reported beside
+    // the unit rather than inside the remote report, which describes the host
+    // action and not what was installed.
+    if let Some(installed) = installed.as_ref() {
+        if !json {
+            println!(
+                "installed {name} version {} (sha256 {})",
+                installed.version, installed.sha256
+            );
+        }
+    }
     render_mutation(
         "deployed",
         &record,
@@ -1040,4 +1087,27 @@ async fn env(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdError>
         }
     }
     Ok(())
+}
+
+/// Resolve one artifact reference and place that exact version on the host.
+///
+/// The alias is resolved before anything is written, so what lands on disk is
+/// an immutable version and the path names it. Verification happens on the
+/// host against the digest the manifest declares: a download that does not
+/// match never becomes a running unit, and the previous `current` is left
+/// where it was.
+async fn install_from_artifact(
+    target: &crate::targets::ComputeTarget,
+    name: &str,
+    reference: &str,
+) -> Result<crate::deploy::artifact_install::InstalledArtifact, CmdError> {
+    let registry = crate::artifacts::ArtifactRegistry::new()
+        .await
+        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    let parsed = crate::artifacts_models::ArtifactRef::parse(reference)?;
+    let manifest = registry.resolve_manifest(&parsed).await?;
+    let runner = production_runner();
+    crate::deploy::artifact_install::install_artifact(target, name, &manifest, &runner)
+        .await
+        .map_err(click)
 }
