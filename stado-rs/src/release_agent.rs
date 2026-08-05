@@ -329,8 +329,13 @@ fn stop_legacy(target: &ReleaseTargetPolicy) -> Result<(), String> {
     let Some(label) = target.legacy_launchd_label.as_deref() else {
         return Ok(());
     };
-    let status = Command::new("/bin/launchctl")
-        .args(["bootout", &format!("system/{label}")])
+    let status = Command::new("/usr/bin/sudo")
+        .args([
+            "-n",
+            "/bin/launchctl",
+            "bootout",
+            &format!("system/{label}"),
+        ])
         .status()
         .map_err(|error| format!("cannot disable legacy launchd service {label}: {error}"))?;
     if status.success() || status.code() == Some(3) || status.code() == Some(5) {
@@ -346,8 +351,8 @@ fn restore_legacy(target: &ReleaseTargetPolicy) -> Result<(), String> {
     let Some(plist) = target.legacy_launchd_plist.as_deref() else {
         return Ok(());
     };
-    let status = Command::new("/bin/launchctl")
-        .args(["bootstrap", "system", plist])
+    let status = Command::new("/usr/bin/sudo")
+        .args(["-n", "/bin/launchctl", "bootstrap", "system", plist])
         .status()
         .map_err(|error| format!("cannot restore legacy launchd service {plist}: {error}"))?;
     if status.success() || status.code() == Some(5) {
