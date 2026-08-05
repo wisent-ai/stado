@@ -1,7 +1,7 @@
 import SwiftUI
 import WisentAuth
 
-struct DeploymentOnboardingView: View {
+struct DeploymentSetupView: View {
     @ObservedObject var operationsStore: OperationsStore
     @ObservedObject var cleanupStore: CleanupStore
     @ObservedObject var deploymentStore: DeploymentStore

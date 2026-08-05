@@ -32,7 +32,7 @@ final class DeploymentStore: ObservableObject {
         return deployments.first { $0.id == selectedDeploymentID }
     }
 
-    var needsOnboarding: Bool {
+    var needsSetup: Bool {
         !isLoading && deployments.isEmpty
     }
 
