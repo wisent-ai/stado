@@ -309,6 +309,7 @@ define_capabilities! {
         id: "object-storage",
         summary: "Persist queue state, results, artifacts, and control objects.",
         providers: [
+            ProviderId::Stado => (Implemented, "queue::stado_object::StadoObjectBackend + dashboard object API", "Authenticated provider-neutral shared queue over HTTPS"),
             ProviderId::Gcp => (Implemented, "queue::gcs::GcsBackend", "Preview Google Cloud Storage; not stable without release-scoped live acceptance"),
             ProviderId::Azure => (Implemented, "queue::azure_blob::AzureBlobBackend", "Preview Azure Blob Storage; not stable without release-scoped live acceptance"),
             ProviderId::Aws => (Implemented, "queue::s3::S3Backend", "Preview Amazon S3; not stable without release-scoped live acceptance"),
@@ -662,6 +663,7 @@ pub enum StorageAdapter {
     Gcs,
     AzureBlob,
     S3,
+    StadoObject,
     Local,
 }
 
@@ -671,6 +673,7 @@ impl StorageAdapter {
             Self::Gcs => "gcs",
             Self::AzureBlob => ProviderId::Azure.as_str(),
             Self::S3 => "s3",
+            Self::StadoObject => ProviderId::Stado.as_str(),
             Self::Local => ProviderId::Local.as_str(),
         }
     }
@@ -687,6 +690,7 @@ impl StorageAdapter {
             Self::Gcs => ProviderId::Gcp,
             Self::AzureBlob => ProviderId::Azure,
             Self::S3 => ProviderId::Aws,
+            Self::StadoObject => ProviderId::Stado,
             Self::Local => ProviderId::Local,
         }
     }
@@ -993,6 +997,22 @@ const S3_CONFIG: &[ConfigField] = &[
         .with_backup("WC_BACKUP_S3_REGION", "storage.backup.s3.region", true),
 ];
 
+const STADO_OBJECT_STORAGE_CONFIG: &[ConfigField] = &[
+    ConfigField::scalar("url", "WC_STADO_STORAGE_URL", "storage.stado.url").required(),
+    ConfigField::scalar(
+        "token-file",
+        "WC_STADO_STORAGE_TOKEN_FILE",
+        "storage.stado.token_file",
+    )
+    .required(),
+    ConfigField::scalar(
+        "namespace",
+        "WC_STADO_STORAGE_NAMESPACE",
+        "storage.stado.namespace",
+    )
+    .required(),
+];
+
 const LOCAL_STORAGE_CONFIG: &[ConfigField] =
     &[
         ConfigField::scalar("path", "WC_LOCAL_STORAGE_PATH", "storage.local.path").with_backup(
@@ -1138,6 +1158,17 @@ const STORAGE: &[CapabilityVariant] = &[
         constructible: true,
         adapter: RuntimeAdapter::Storage(StorageAdapter::Local),
         config: LOCAL_STORAGE_CONFIG,
+    },
+    CapabilityVariant {
+        id: StorageAdapter::StadoObject.id(),
+        aliases: &["stado-object"],
+        provider: Some(ProviderId::Stado),
+        implementation: "queue::stado_object::StadoObjectBackend",
+        summary: "Shared provider-neutral queue through the authenticated Stado object API.",
+        configurable: true,
+        constructible: true,
+        adapter: RuntimeAdapter::Storage(StorageAdapter::StadoObject),
+        config: STADO_OBJECT_STORAGE_CONFIG,
     },
 ];
 

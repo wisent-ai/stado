@@ -207,15 +207,22 @@ impl Client {
         id: &str,
         field: &str,
     ) -> Result<Option<String>, SkarbiecError> {
-        match self.read_item(id).await {
-            Ok(value) => Ok(value.get(field).and_then(Value::as_str).map(str::to_string)),
-            Err(SkarbiecError::Response { status, .. })
-                if status == reqwest::StatusCode::NOT_FOUND.as_u16() =>
-            {
-                Ok(None)
-            }
-            Err(err) => Err(err),
+        if self.route_store {
+            return Box::pin(crate::credential_store::read_string(id, field)).await;
         }
+        let response = self
+            .request(reqwest::Method::POST, "/v1/items/read")?
+            .json(&json!({"id": id, "field": field}))
+            .send()
+            .await?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let body = Self::response_json(response).await?;
+        Ok(body
+            .get("value")
+            .and_then(Value::as_str)
+            .map(str::to_string))
     }
 
     /// Read one item with the configured Stado consumer grant. Flows through
