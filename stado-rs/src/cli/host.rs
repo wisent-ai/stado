@@ -201,13 +201,14 @@ async fn host_health_api_token() -> Result<String, CmdError> {
         .into_owned();
     let client = crate::skarbiec::Client::new(url.trim(), &consumer, &token_file)
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let item = client
-        .read_item("stado-host-health-api")
+    // One field, named. The whole-item read this used to do is exactly what
+    // the broker stopped answering, and the beacon died with it: the host
+    // published nothing for twenty-one hours while `stado service list` went
+    // on reporting its stale `active` for services that were not running.
+    let token = client
+        .read_string("stado-host-health-api", "token")
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let token = item
-        .get("token")
-        .and_then(Value::as_str)
+        .map_err(|error| CmdError::click(error.to_string()))?
         .unwrap_or_default()
         .trim()
         .to_string();

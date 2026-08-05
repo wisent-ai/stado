@@ -162,6 +162,25 @@ impl Client {
             .ok_or_else(|| SkarbiecError::MissingValue(id.to_string()))
     }
 
+    /// Read one named field, which is what this broker's `/v1/items/read`
+    /// contract asks for since Skarbiec 9aa7dd4.
+    ///
+    /// One round trip and one field, rather than fetching the item and picking
+    /// from it: that is both the newer contract and the smaller disclosure, so
+    /// there is no reason to prefer the whole-item read where the caller
+    /// already knows the field it wants.
+    pub async fn read_field(&self, id: &str, field: &str) -> Result<Value, SkarbiecError> {
+        let response = self
+            .request(reqwest::Method::POST, "/v1/items/read")?
+            .json(&json!({"id": id, "field": field}))
+            .send()
+            .await?;
+        let body = Self::response_json(response).await?;
+        body.get("value")
+            .cloned()
+            .ok_or_else(|| SkarbiecError::MissingValue(format!("{id}.{field}")))
+    }
+
     pub async fn write_item(
         &self,
         id: &str,
@@ -234,8 +253,11 @@ impl Client {
         id: &str,
         field: &str,
     ) -> Result<Option<String>, SkarbiecError> {
-        match self.read_item(id).await {
-            Ok(value) => Ok(value.get(field).and_then(Value::as_str).map(str::to_string)),
+        // One field, one request. Going through read_item asked the broker
+        // for the whole item and then discarded all but this field, which
+        // stopped working the moment the broker began requiring a named field.
+        match self.read_field(id, field).await {
+            Ok(value) => Ok(value.as_str().map(str::to_string)),
             Err(SkarbiecError::Response { status, .. })
                 if status == reqwest::StatusCode::NOT_FOUND.as_u16() =>
             {
