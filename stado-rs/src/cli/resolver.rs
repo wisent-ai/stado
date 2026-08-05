@@ -225,6 +225,23 @@ fn snapshot_source(
     })
 }
 
+/// Fetch the canonical registry document through the same authority path the
+/// local resolver uses. Release agents call this instead of trusting a stale
+/// bootstrap copy.
+pub async fn canonical_document(local_target: &str) -> Result<Value, CmdError> {
+    let store = Arc::new(RegistryStore::open().await?);
+    let (bootstrap, _, _) = read_local_snapshot(&store).await.map_err(CmdError::click)?;
+    let detected = current_target(&bootstrap).map_err(CmdError::click)?;
+    if detected != local_target {
+        return Err(CmdError::click(format!(
+            "release agent target {local_target:?} does not match this host {detected:?}"
+        )));
+    }
+    let source = snapshot_source(store, &bootstrap, local_target).map_err(CmdError::click)?;
+    let (document, _, _) = source.fetch().await.map_err(CmdError::click)?;
+    Ok(document)
+}
+
 async fn emit_snapshot() -> Result<(), CmdError> {
     let store = RegistryStore::open().await?;
     let (document, store_version, _) =

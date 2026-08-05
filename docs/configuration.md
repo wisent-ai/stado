@@ -225,6 +225,25 @@ they are never rewritten into client configuration. The resolver refuses an
 unknown consumer, an active placement transaction, a rolled-back directory
 generation, or a cache older than the configured limit.
 
+## Signed product release control
+
+The optional top-level `release_control` object owns product release trust and
+desired state. `trusted_keys` contains Ed25519 public keys only. Each product
+binds one logical service, exact archive paths, schema versions, a blue-green
+policy, and registered host policy. `desired` and `previous` are written only by
+`stado release promote|rollback`; their platform references point beneath the
+same immutable `stado://releases/<product>/<version>/<platform>/` coordinate.
+
+Each target uses two private candidate ports and one loopback stable bind. Its
+state, runtime, log, and install roots are absolute. A legacy launchd label and
+plist are optional one-time migration inputs: the agent starts and proves the
+candidate before disabling the legacy service, then owns the stable port.
+
+Registry validation rejects unknown products/services/targets, non-loopback
+stable binds, reused ports, unsafe paths, untrusted desired keys, incomplete
+platform sets, non-monotonic zero generations, and rollback windows shorter
+than drain.
+
 ## Local inference
 
 The optional top-level `inference` section is the single desired-state and
