@@ -1058,7 +1058,10 @@ enum HostCommands {
         target: String,
         /// Local executable to install.
         #[arg(long)]
-        from: String,
+        from: Option<String>,
+        /// Put the previous build back instead of installing a new one.
+        #[arg(long)]
+        rollback: bool,
         /// Basename under $HOME/.stado/bin on the target.
         #[arg(long, default_value = "stado")]
         name: String,
@@ -1567,8 +1570,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 target,
                 from,
                 name,
+                rollback,
                 json,
-            } => host::install_binary(&target, &from, &name, json).await,
+            } => host::install_binary(&target, from.as_deref(), &name, rollback, json).await,
             HostCommands::InstallHelper {
                 target,
                 source,

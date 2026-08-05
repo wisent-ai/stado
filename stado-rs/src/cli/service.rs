@@ -477,14 +477,15 @@ async fn restart(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdEr
 pub(crate) async fn service_secret(item: &str, field: &str) -> Result<String, CmdError> {
     let vault = crate::skarbiec::Client::service_verifier()
         .map_err(|err| CmdError::click(err.to_string()))?;
+    // Both callers -- auth-check and secret-sync -- want exactly one field, and
+    // asking for the whole item is refused outright by a broker that requires a
+    // named field. Ask for what is wanted.
     let stored = vault
-        .read_item(item)
+        .read_field(item, field)
         .await
         .map_err(|err| CmdError::click(err.to_string()))?;
     stored
-        .as_object()
-        .and_then(|object| object.get(field))
-        .and_then(Value::as_str)
+        .as_str()
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .ok_or_else(|| {

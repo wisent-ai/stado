@@ -1614,8 +1614,9 @@ printf 'STADO-BIN-NEW %s\n' "$new_version"
 ///   back automatically rather than reported as an installation.
 pub async fn install_binary(
     target: &str,
-    source: &str,
+    source: Option<&str>,
     name: &str,
+    rollback: bool,
     json: bool,
 ) -> Result<(), CmdError> {
     if name.is_empty()
@@ -1627,6 +1628,10 @@ pub async fn install_binary(
             "program name must be a non-empty basename containing only letters, digits, '.', '_' or '-'",
         ));
     }
+    if rollback {
+        return rollback_binary(target, name, json).await;
+    }
+    let source = source.ok_or_else(|| CmdError::usage("--from is required unless --rollback"))?;
     let bytes = std::fs::metadata(source)
         .map_err(|error| CmdError::click(format!("cannot read {source}: {error}")))?
         .len();
@@ -1739,6 +1744,57 @@ async fn finish_install(
         );
     } else {
         println!("{target}: {name} {old_version} -> {new_version}");
+    }
+    Ok(())
+}
+
+const ROLLBACK_BODY: &str = r#"dir="$HOME/.stado/bin"
+installed="$dir/$name"
+previous="$dir/$name.previous"
+
+[ -s "$previous" ] || { printf '%s\n' 'there is no previous build to restore' >&2; exit 1; }
+/bin/chmod 755 "$previous"
+"$previous" --version >/dev/null 2>&1 \
+  || { printf '%s\n' 'the previous build does not run either; not swapping' >&2; exit 1; }
+/bin/mv "$previous" "$installed"
+"$installed" --version >/dev/null 2>&1 \
+  || { printf '%s\n' 'restored build does not run' >&2; exit 1; }
+"#;
+
+/// Put the previous build of one owner-only Stado program back on TARGET.
+///
+/// `install-binary` verifies that a new build runs, which is not the same as
+/// verifying that the unit around it still works: a program can answer
+/// `--version` perfectly and still reject the arguments its launchd job passes.
+/// That failure appears after the swap, so the previous build is kept beside
+/// the new one and this is how it comes back.
+async fn rollback_binary(target: &str, name: &str, json: bool) -> Result<(), CmdError> {
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let quoted = crate::deploy::shlex_quote(name);
+    let script = format!("set -euo pipefail\nname={quoted}\n{ROLLBACK_BODY}");
+    let output = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if !output.ok() {
+        return Err(CmdError::click(format!(
+            "{target}: rollback failed: {}",
+            crate::deploy::host_channel::last_error_line(&output, "remote rollback failed")
+        )));
+    }
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": target,
+                "name": name,
+                "status": "rolled-back",
+            }))?
+        );
+    } else {
+        println!("{target}: {name} restored from the previous build");
     }
     Ok(())
 }
