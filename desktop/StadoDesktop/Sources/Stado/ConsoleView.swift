@@ -34,7 +34,7 @@ struct ConsoleView: View {
     @ObservedObject var deploymentStore: DeploymentStore
     @ObservedObject var auth: WisentAuthStore
     @State private var selection: ConsoleSection? = .overview
-    @State private var showsDeploymentOnboarding = false
+    @State private var showsDeploymentSetup = false
     @State private var showsDeploymentAccess = false
 
     var body: some View {
@@ -106,19 +106,19 @@ struct ConsoleView: View {
                     auth.identity != nil
                         && !deploymentStore.isLoading
                         && (
-                            showsDeploymentOnboarding
+                            showsDeploymentSetup
                                 || deploymentStore.selectedDeployment?.status != .ready
                         )
                 },
-                set: { showsDeploymentOnboarding = $0 }
+                set: { showsDeploymentSetup = $0 }
             )
         ) {
-            DeploymentOnboardingView(
+            DeploymentSetupView(
                 operationsStore: store,
                 cleanupStore: cleanupStore,
                 deploymentStore: deploymentStore,
                 identity: auth.identity,
-                onComplete: { showsDeploymentOnboarding = false }
+                onComplete: { showsDeploymentSetup = false }
             )
             .interactiveDismissDisabled()
         }
@@ -244,7 +244,7 @@ struct ConsoleView: View {
                         Divider()
                     }
                     Button {
-                        showsDeploymentOnboarding = true
+                        showsDeploymentSetup = true
                     } label: {
                         Label("New Deployment…", systemImage: "plus")
                     }

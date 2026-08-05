@@ -11,7 +11,7 @@ mod deployment;
 mod echo_paid_ads;
 mod enterprise;
 mod most;
-mod oko;
+mod onboarding;
 mod people;
 mod singularity;
 mod trading;
@@ -37,6 +37,7 @@ fn request_body_limit(domain: &str, action: &str) -> usize {
         )
         | ("echo-paid-ads", "webhook.verify") => LARGE_REQUEST_BODY_LIMIT,
         ("deployment", "echo.env.upsert") => MEDIUM_REQUEST_BODY_LIMIT,
+        ("onboarding", action) if action.ends_with(".events.collect") => MEDIUM_REQUEST_BODY_LIMIT,
         ("content", "stripe.webhook.verify" | "resend.email.send") | ("backend", "email.send") => {
             MEDIUM_REQUEST_BODY_LIMIT
         }
@@ -51,6 +52,11 @@ fn response_body_limit(domain: &str, action: &str) -> usize {
     let configured = match (domain, action) {
         ("content", "github.research.tex" | "tokchart.sounds" | "tokchart.hashtags")
         | ("enterprise", _) => LARGE_REQUEST_BODY_LIMIT,
+        ("onboarding", action)
+            if action.ends_with(".bundle.read") || action.ends_with(".state.read") =>
+        {
+            MEDIUM_REQUEST_BODY_LIMIT
+        }
         _ => DEFAULT_RESPONSE_BODY_LIMIT,
     };
     configured
@@ -123,7 +129,7 @@ fn supports(domain: &str, action: &str) -> bool {
         "deployment" => deployment::supports(action),
         "enterprise" => enterprise::supports(action),
         "people" => people::supports(action),
-        "oko" => oko::supports(action),
+        "onboarding" => onboarding::supports(action),
         "trading" => trading::supports(action),
         "most" => most::supports(action),
         "echo-paid-ads" => echo_paid_ads::supports(action),
@@ -161,7 +167,7 @@ async fn dispatch(
         "deployment" => deployment::handle(action, body).await,
         "enterprise" => enterprise::handle(action, body, store, state).await,
         "people" => people::handle(action, body).await,
-        "oko" => oko::handle(action, body).await,
+        "onboarding" => onboarding::handle(action, body).await,
         "trading" => trading::handle(action, body).await,
         "most" => most::handle(action, body).await,
         "echo-paid-ads" => echo_paid_ads::handle(action, body).await,
