@@ -655,3 +655,98 @@ pub fn install_directory(
         .join(&manifest.version)
         .join(&manifest.platform)
 }
+
+
+#[cfg(test)]
+mod tests {
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
+
+    use super::*;
+
+    fn valid_manifest() -> ReleaseManifest {
+        ReleaseManifest {
+            schema_version: 1,
+            product: "brama".to_string(),
+            version: "0.2.2".to_string(),
+            platform: "darwin-arm64".to_string(),
+            source_revision: "151ce0f907cc1e7b22a2c4e7356a4251444f4d42".to_string(),
+            artifact_sha256:
+                "119f93dd06634e9249eef8ae633d2bc02139c588f19fe05f1c7864224182c9ef"
+                    .to_string(),
+            artifact_bytes: 5_000_115,
+            binary: "bin/brama".to_string(),
+            launcher: "bin/start-with-skarbiec".to_string(),
+            config_schema: 1,
+            state_schema: 1,
+            minimum_stado_version: "0.5.1".to_string(),
+            rollback_compatible_with: Vec::new(),
+            qualification: ReleaseQualification {
+                status: QualificationStatus::Passed,
+                evidence_sha256: Some(
+                    "d50861c5b162c1d55c0479a47db34e56019211d9580ca621adf22919631f9b01"
+                        .to_string(),
+                ),
+                completed_at: Some("2026-08-05T04:00:00Z".to_string()),
+            },
+            key_id: "brama-release-2026-08".to_string(),
+            built_at: "2026-08-05T02:42:52Z".to_string(),
+            builder: "github-actions/30970402593/1".to_string(),
+        }
+    }
+
+    fn archive(path: &str, contents: &[u8]) -> Vec<u8> {
+        let encoder = GzEncoder::new(Vec::new(), Compression::default());
+        let mut builder = tar::Builder::new(encoder);
+        let mut header = tar::Header::new_gnu();
+        header.set_path(path).unwrap();
+        header.set_size(contents.len() as u64);
+        header.set_mode(0o755);
+        header.set_cksum();
+        builder.append(&header, contents).unwrap();
+        builder.into_inner().unwrap().finish().unwrap()
+    }
+
+    #[test]
+    fn manifest_signature_rejects_tampering() {
+        let manifest = valid_manifest();
+        let (private, public) = generate_signing_key().unwrap();
+        let signature = sign_manifest(&private, &manifest).unwrap();
+
+        verify_manifest(&BASE64.encode(public), &manifest, &signature).unwrap();
+
+        let mut tampered = manifest;
+        tampered.version = "0.2.3".to_string();
+        assert!(verify_manifest(&BASE64.encode(signing_public_key(&private).unwrap()), &tampered, &signature).is_err());
+    }
+
+    #[test]
+    fn passed_qualification_requires_evidence_and_completion_time() {
+        let mut manifest = valid_manifest();
+        validate_manifest(&manifest).unwrap();
+
+        manifest.qualification.evidence_sha256 = None;
+        assert_eq!(
+            validate_manifest(&manifest).unwrap_err(),
+            "passed release qualification requires evidence_sha256 and completed_at"
+        );
+
+        manifest.qualification.status = QualificationStatus::Pending;
+        validate_manifest(&manifest).unwrap();
+    }
+
+    #[test]
+    fn archive_extraction_is_bounded_and_immutable() {
+        let temporary = tempfile::tempdir().unwrap();
+        let destination = temporary.path().join("release");
+        let bytes = archive("bin/brama", b"release-binary");
+
+        safe_extract_archive(&bytes, &destination).unwrap();
+        assert_eq!(
+            std::fs::read(destination.join("bin/brama")).unwrap(),
+            b"release-binary"
+        );
+        assert!(safe_extract_archive(&bytes, &destination).is_err());
+        assert!(safe_extract_archive(&[], &temporary.path().join("empty")).is_err());
+    }
+}
