@@ -619,7 +619,7 @@ pub fn safe_extract_archive(bytes: &[u8], destination: &Path) -> Result<(), Stri
                 let mode = if source_mode & 0o111 != 0 {
                     0o755
                 } else {
-                    0o644
+                    0o600
                 };
                 std::fs::set_permissions(&output, std::fs::Permissions::from_mode(mode)).map_err(
                     |error| format!("cannot set release mode {}: {error}", output.display()),
@@ -695,15 +695,20 @@ mod tests {
         }
     }
 
-    fn archive(path: &str, contents: &[u8]) -> Vec<u8> {
+    fn archive() -> Vec<u8> {
         let encoder = GzEncoder::new(Vec::new(), Compression::default());
         let mut builder = tar::Builder::new(encoder);
-        let mut header = tar::Header::new_gnu();
-        header.set_path(path).unwrap();
-        header.set_size(contents.len() as u64);
-        header.set_mode(0o755);
-        header.set_cksum();
-        builder.append(&header, contents).unwrap();
+        for (path, contents, mode) in [
+            ("bin/brama", b"release-binary".as_slice(), 0o755),
+            ("etc/brama-skarbiec/trust.json", b"{}".as_slice(), 0o600),
+        ] {
+            let mut header = tar::Header::new_gnu();
+            header.set_path(path).unwrap();
+            header.set_size(contents.len() as u64);
+            header.set_mode(mode);
+            header.set_cksum();
+            builder.append(&header, contents).unwrap();
+        }
         builder.into_inner().unwrap().finish().unwrap()
     }
 
@@ -739,13 +744,33 @@ mod tests {
     fn archive_extraction_is_bounded_and_immutable() {
         let temporary = tempfile::tempdir().unwrap();
         let destination = temporary.path().join("release");
-        let bytes = archive("bin/brama", b"release-binary");
+        let bytes = archive();
 
         safe_extract_archive(&bytes, &destination).unwrap();
         assert_eq!(
             std::fs::read(destination.join("bin/brama")).unwrap(),
             b"release-binary"
         );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(destination.join("bin/brama"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o755
+            );
+            assert_eq!(
+                std::fs::metadata(destination.join("etc/brama-skarbiec/trust.json"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
         assert!(safe_extract_archive(&bytes, &destination).is_err());
         assert!(safe_extract_archive(&[], &temporary.path().join("empty")).is_err());
     }
