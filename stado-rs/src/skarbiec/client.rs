@@ -89,13 +89,40 @@ impl Client {
         })
     }
 
+    /// Read a whole item.
+    ///
+    /// Callers pick several fields out of the returned object, so this asks for
+    /// the item rather than a field. Skarbiec commit 9aa7dd4 ("Rebuild vault
+    /// contracts and credential lifecycle", 2026-08-04) made `field` mandatory
+    /// on this route, and a broker built from it answers
+    /// `400 {"error":"field required"}` to every call here. That surfaced as an
+    /// unattributable failure that took out the host-health beacon and Brama's
+    /// startup on the same machine, so the skew is named here rather than left
+    /// as a bare 400: the request is well-formed for the contract this client
+    /// was written against, and the broker is newer than the client.
     pub async fn read_item(&self, id: &str) -> Result<Value, SkarbiecError> {
         let response = self
             .request(reqwest::Method::POST, "/v1/items/read")?
             .json(&json!({"id": id}))
             .send()
             .await?;
-        let body = Self::response_json(response).await?;
+        let body = match Self::response_json(response).await {
+            Err(SkarbiecError::Response { status, detail })
+                if status == reqwest::StatusCode::BAD_REQUEST.as_u16()
+                    && detail.contains("field required") =>
+            {
+                return Err(SkarbiecError::Response {
+                    status,
+                    detail: format!(
+                        "{detail} — this broker requires a named field on /v1/items/read, \
+                         while this client asks for the whole item {id:?}. The broker is \
+                         newer than the client; read one field with read_string, or update \
+                         the client to the broker's contract."
+                    ),
+                });
+            }
+            other => other?,
+        };
         body.get("value")
             .cloned()
             .ok_or_else(|| SkarbiecError::MissingValue(id.to_string()))
