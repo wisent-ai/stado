@@ -41,7 +41,7 @@
         },
         "strategy": {
           "kind": "blue-green",
-          "readiness_timeout_seconds": 30,
+          "readiness_timeout_seconds": 90,
           "drain_timeout_seconds": 60,
           "rollback_window_seconds": 300,
           "automatic_rollback": true
