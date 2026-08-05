@@ -52,14 +52,46 @@ pub fn validate(path: Option<String>) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// Top-level keys the outgoing document would delete from the object that is
+/// already there.
+///
+/// A registry write is a whole-document replace, so a caller holding a stale
+/// or differently-modelled copy silently deletes every key its own model does
+/// not know about. That is not hypothetical: on 2026-08-04 the canonical
+/// document lost `channels`, `enrollment` and `fleets` between one read and
+/// the next, and gained a `service_directory` block that no checkout in the
+/// tree models — divergent builds writing the same object, each erasing what
+/// it could not name. `fetch_document` exists so read-modify-write callers
+/// keep the raw document; this is the backstop for everyone who does not.
+///
+/// Only removals are reported. Additions are how the document grows, and a
+/// changed value is an edit rather than a loss.
+fn removed_top_level_keys(current: &str, payload: &str) -> Vec<String> {
+    let (Ok(Value::Object(before)), Ok(Value::Object(after))) = (
+        serde_json::from_str::<Value>(current),
+        serde_json::from_str::<Value>(payload),
+    ) else {
+        return Vec::new();
+    };
+    before
+        .keys()
+        .filter(|key| !after.contains_key(*key))
+        .cloned()
+        .collect()
+}
+
 /// The upload half [`push`] and [`push_document`] share: read the current
-/// generation, compare-and-swap against it (or atomically create when the
-/// object is absent), then read back and verify BOTH the generation and
+/// generation, refuse a write that would delete a top-level key unless the
+/// operator said so, compare-and-swap against it (or atomically create when
+/// the object is absent), then read back and verify BOTH the generation and
 /// the bytes. Returns `(generation, previous_generation)`.
 ///
 /// `payload` is written verbatim, so [`push`] still uploads the operator's
 /// exact file bytes rather than a re-serialization of them.
-async fn upload_payload(payload: &str) -> Result<(String, String), CmdError> {
+async fn upload_payload(
+    payload: &str,
+    allow_removals: bool,
+) -> Result<(String, String), CmdError> {
     let store = RegistryStore::open()
         .await
         .map_err(|exc| CmdError::click(format!("registry upload failed: {exc}")))?;
@@ -71,6 +103,22 @@ async fn upload_payload(payload: &str) -> Result<(String, String), CmdError> {
         .as_ref()
         .map(|blob| blob.version.clone())
         .unwrap_or_else(|| "0".to_string());
+    if !allow_removals {
+        if let Some(blob) = current.as_ref() {
+            let removed = removed_top_level_keys(&blob.content, payload);
+            if !removed.is_empty() {
+                return Err(CmdError::click(format!(
+                    "registry upload refused: it would delete the top-level key(s) {} \
+                     that generation {} carries. A registry write replaces the whole \
+                     document, so this is what a stale copy or a build that does not \
+                     model those keys does to them. Re-pull, re-apply the edit, and \
+                     push again; pass --force only if the deletion is the intent.",
+                    removed.join(", "),
+                    blob.version
+                )));
+            }
+        }
+    }
     let generation = match current {
         Some(blob) => store
             .compare_and_swap(&blob.version, payload)
@@ -107,11 +155,11 @@ async fn upload_payload(payload: &str) -> Result<(String, String), CmdError> {
     Ok((generation, previous_generation))
 }
 
-pub async fn push(path: Option<String>) -> Result<(), CmdError> {
+pub async fn push(path: Option<String>, force: bool) -> Result<(), CmdError> {
     let source = source_path(path);
     validate_registry_file(&source).map_err(|exc| CmdError::click(exc.to_string()))?;
     let payload = std::fs::read_to_string(&source)?;
-    let (generation, previous_generation) = upload_payload(&payload).await?;
+    let (generation, previous_generation) = upload_payload(&payload, force).await?;
     println!(
         "pushed {} -> {} generation={generation} replaced={previous_generation}",
         source.display(),
@@ -130,7 +178,7 @@ pub async fn push(path: Option<String>) -> Result<(), CmdError> {
 pub async fn push_document(document: &Value) -> Result<String, CmdError> {
     validate_registry(document).map_err(|exc| CmdError::click(exc.to_string()))?;
     let payload = format!("{}\n", serde_json::to_string_pretty(document)?);
-    let (generation, _) = upload_payload(&payload).await?;
+    let (generation, _) = upload_payload(&payload, false).await?;
     Ok(generation)
 }
 
