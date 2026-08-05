@@ -616,10 +616,12 @@ pub fn safe_extract_archive(bytes: &[u8], destination: &Path) -> Result<(), Stri
             {
                 use std::os::unix::fs::PermissionsExt;
                 let source_mode = entry.header().mode().unwrap_or(0);
-                let mode = if source_mode & 0o111 != 0 {
-                    0o755
-                } else {
-                    0o600
+                let executable = source_mode & 0o111 != 0;
+                let owner_only = source_mode & 0o077 == 0;
+                let mode = match (executable, owner_only) {
+                    (true, true) => 0o700,
+                    (true, false) => 0o755,
+                    (false, _) => 0o600,
                 };
                 std::fs::set_permissions(&output, std::fs::Permissions::from_mode(mode)).map_err(
                     |error| format!("cannot set release mode {}: {error}", output.display()),
@@ -701,6 +703,11 @@ mod tests {
         for (path, contents, mode) in [
             ("bin/brama", b"release-binary".as_slice(), 0o755),
             ("etc/brama-skarbiec/trust.json", b"{}".as_slice(), 0o600),
+            (
+                "etc/brama-skarbiec/worm-receipt",
+                b"#!/bin/sh\nprintf receipt\n".as_slice(),
+                0o700,
+            ),
         ] {
             let mut header = tar::Header::new_gnu();
             header.set_path(path).unwrap();
@@ -769,6 +776,14 @@ mod tests {
                     .mode()
                     & 0o777,
                 0o600
+            );
+            assert_eq!(
+                std::fs::metadata(destination.join("etc/brama-skarbiec/worm-receipt"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o700
             );
         }
         assert!(safe_extract_archive(&bytes, &destination).is_err());
