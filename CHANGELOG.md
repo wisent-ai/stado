@@ -2,6 +2,17 @@
 
 All user-visible Stado changes are recorded here. Stado follows Semantic Versioning and the release, compatibility, migration, and rollback contract in [`docs/release.md`](docs/release.md).
 
+## Unreleased
+
+### Onboarding platform
+
+- Added product-scoped delivery for immutable onboarding bundles, sticky
+  experiment assignment, canonical event collection, and attempt-state reads.
+- Added Stado Desktop's product-owned first-use journey and gated completion on
+  a real authorized job result rather than deployment or setup navigation.
+- Replaced the Oko-specific onboarding relay with the same closed,
+  least-privilege operation contract used by every registered product client.
+
 ## 0.5.0-rc.1 - 2026-07-29
 
 ### Product contract
