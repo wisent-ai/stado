@@ -706,6 +706,12 @@ an arbitrary, per-host, declared set.
 | `adopt UNIT --host TARGET [--json]` | Bring an existing unit under management. |
 | `retire UNIT --host TARGET [--json]` | Bootout/disable and forget; files kept. |
 | `deploy NAME --host TARGET --from PATH [--json]` | Render, push, bootstrap, record. |
+| `deploy NAME --host TARGET --from-artifact REF [--json]` | Install one published version, then the above. |
+| `directory show [--json]` | The service directory: active host, per-caller endpoint, consumers. |
+| `directory profiles [--json]` | Placement profiles: services, start/stop order, hosts, required state. |
+| `directory endpoint NAME [--target T] [--json]` | The address THIS machine should use for a service. |
+| `directory consumer-add NAME CONSUMER [--capability C]...` | Declare that a consumer may use a service. |
+| `directory consumer-rm NAME CONSUMER` | Remove a consumer's declaration. |
 | `logs NAME [--host TARGET] [--lines N] [--json]` | Tail the unit's log. |
 | `env NAME [--host TARGET] [--json]` | Effective environment, secrets redacted. |
 
@@ -713,6 +719,37 @@ an arbitrary, per-host, declared set.
 the unit (launchd label, systemd unit name), so `service restart weles-api`
 and `service restart com.wisent.weles-api` are the same request. Omitting
 `--host` acts on every host that manages the name.
+
+### Deploying a version rather than a path
+
+`--from` takes the absolute path, on the target host, of a program that is
+already there; the unit is rendered around it and nothing versions it.
+`--from-artifact` takes a published reference instead: it resolves to an
+immutable version, places that version under
+`~/.stado/services/NAME/<version>/`, verifies the sha256 the manifest declares
+**before** anything is linked, and moves `current` onto it atomically. A failed
+install leaves the previous `current` running, and the unit points at `current`,
+so a rollback is a relink rather than a redeploy.
+
+Exactly one source is accepted. Neither is a safe default: a path deploys
+whatever happens to be on the host, with no version anybody can name.
+
+### The service directory answers "where is X"
+
+`service_directory` keys each service's `endpoints` by the machine **asking**,
+not by the machine serving, because these services bind loopback on their own
+host and so the true address differs per client. `directory endpoint` resolves
+against this target and refuses to invent an address when the target has no
+entry — an undeclared endpoint means nobody has said how this machine reaches
+the service, and a guessed loopback address is how a client ends up talking to
+the wrong process.
+
+`consumers` declares who may use a service. A system absent from that list is
+not provisioned however well its code works.
+
+These commands read and mutate the raw registry document. There is deliberately
+no typed model of the block: a model drops the keys it does not know, and this
+document has already lost keys that way.
 
 ### Where the managed set comes from
 
@@ -795,6 +832,7 @@ exits non-zero if anything FAILs.
 | registry | Reachable, parses, and names this host or an active coordinator. |
 | queue-control | Reports a paused queue, which otherwise looks exactly like an idle fleet. |
 | alerts | At least one channel, and not only the GCP one on a deployment with no GCP. |
+| skarbiec-contract | WARNs when the configured broker rejects a read that names no field. Every whole-item read in the build fails against such a broker, and that is what silences a health beacon without saying why. The probe carries no consumer and no bearer: the handler validates `id` and `field` before it looks at identity, so an unauthenticated request reveals which contract is in force and nothing else. |
 
 Checks are fault-isolated and individually deadline-bounded: one failure never
 prevents the rest from running, and a black-holed endpoint becomes one FAIL row
