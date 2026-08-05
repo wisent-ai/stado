@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use nix::sys::signal::{kill, Signal};
+use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
 use tokio::io::copy_bidirectional;
@@ -204,7 +205,18 @@ fn save_state(target: &ReleaseTargetPolicy, state: &mut HostReleaseState) -> Res
 }
 
 fn pid_alive(pid: i32) -> bool {
-    pid > 1 && kill(Pid::from_raw(pid), None).is_ok()
+    if pid <= 1 {
+        return false;
+    }
+    let pid = Pid::from_raw(pid);
+    match waitpid(pid, Some(WaitPidFlag::WNOHANG)) {
+        Ok(WaitStatus::StillAlive) => true,
+        Ok(WaitStatus::Exited(..) | WaitStatus::Signaled(..)) => false,
+        Ok(_) => true,
+        Err(nix::errno::Errno::ECHILD) => kill(pid, None).is_ok(),
+        Err(nix::errno::Errno::ESRCH) => false,
+        Err(_) => kill(pid, None).is_ok(),
+    }
 }
 
 fn terminate(record: &ProcessRecord) {
@@ -970,5 +982,27 @@ pub async fn proxy(state_path: &Path, bind: &str) -> Result<(), String> {
                 eprintln!("stado release proxy connection failed: {error}");
             }
         });
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pid_alive_reaps_an_exited_child() {
+        let child = Command::new("/usr/bin/true").spawn().unwrap();
+        let pid = child.id() as i32;
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(!pid_alive(pid));
+    }
+
+    #[test]
+    fn pid_alive_accepts_a_running_child() {
+        let mut child = Command::new("/bin/sleep").arg("5").spawn().unwrap();
+        assert!(pid_alive(child.id() as i32));
+        child.kill().unwrap();
+        child.wait().unwrap();
     }
 }
