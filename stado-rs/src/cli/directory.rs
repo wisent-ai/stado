@@ -113,7 +113,7 @@ fn directory(document: &Value) -> Result<&Map<String, Value>, CmdError> {
         })
 }
 
-fn services<'a>(block: &'a Map<String, Value>) -> Result<&'a Map<String, Value>, CmdError> {
+fn services(block: &Map<String, Value>) -> Result<&Map<String, Value>, CmdError> {
     block
         .get("services")
         .and_then(Value::as_object)
@@ -235,9 +235,9 @@ async fn endpoint(name: &str, target: Option<String>, as_json: bool) -> Result<(
         // Not a default and not an error: an undeclared endpoint means nobody
         // has said how this machine reaches the service, and inventing a
         // loopback address here is what sends a client to the wrong process.
-        None => println!(
-            "{name} active on {active}; {DIRECTORY_KEY} declares no endpoint for {target}"
-        ),
+        None => {
+            println!("{name} active on {active}; {DIRECTORY_KEY} declares no endpoint for {target}")
+        }
     }
     Ok(())
 }

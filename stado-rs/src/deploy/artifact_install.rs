@@ -73,7 +73,7 @@ fn primary_location(
         .ok_or_else(|| {
             DeployError(format!(
                 "artifact {} declares no primary location",
-                manifest.ref_.to_string()
+                manifest.ref_
             ))
         })
 }
@@ -152,7 +152,7 @@ pub async fn install_artifact(
         return Err(DeployError(format!(
             "artifact {} declares no sha256 for its primary location; \
              an unverifiable download must not become a running unit",
-            manifest.ref_.to_string()
+            manifest.ref_
         )));
     }
 
@@ -167,7 +167,7 @@ pub async fn install_artifact(
         return Err(DeployError(format!(
             "{}: could not install artifact {}: {}",
             target.name,
-            manifest.ref_.to_string(),
+            manifest.ref_,
             host_channel::last_error_line(&output, "install failed")
         )));
     }

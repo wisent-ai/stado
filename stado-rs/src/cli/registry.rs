@@ -88,10 +88,7 @@ fn removed_top_level_keys(current: &str, payload: &str) -> Vec<String> {
 ///
 /// `payload` is written verbatim, so [`push`] still uploads the operator's
 /// exact file bytes rather than a re-serialization of them.
-async fn upload_payload(
-    payload: &str,
-    allow_removals: bool,
-) -> Result<(String, String), CmdError> {
+async fn upload_payload(payload: &str, allow_removals: bool) -> Result<(String, String), CmdError> {
     let store = RegistryStore::open()
         .await
         .map_err(|exc| CmdError::click(format!("registry upload failed: {exc}")))?;
