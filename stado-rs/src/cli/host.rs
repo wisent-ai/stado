@@ -15,6 +15,8 @@ use super::CmdError;
 use crate::deploy::host_users::{provision_users, ProvisionOptions};
 use crate::targets::{ComputeTarget, Registry};
 
+const MAX_HOST_SECRET_BYTES: usize = 8 * 1024 * 1024;
+
 /// The store the health beacons live in.
 ///
 /// GCS retains its historical registry bucket. Provider-neutral backends
@@ -1117,10 +1119,10 @@ async fn transfer_secret(
     home: Option<&str>,
 ) -> Result<(String, usize), CmdError> {
     release_component("secret file name", name)?;
-    if bytes.is_empty() || bytes.len() > usize::from(u16::MAX) {
-        return Err(CmdError::click(
-            "host secret must contain between one and 65535 bytes",
-        ));
+    if bytes.is_empty() || bytes.len() > MAX_HOST_SECRET_BYTES {
+        return Err(CmdError::click(format!(
+            "host secret must contain between one and {MAX_HOST_SECRET_BYTES} bytes"
+        )));
     }
     let mut digest = Sha256::new();
     digest.update(bytes);
@@ -1557,6 +1559,133 @@ printf '%s\n' "$final"
         println!(
             "{target}: installed {family}/{version}/{platform}/{asset} ({bytes} bytes, sha256={sha256})"
         );
+    }
+    Ok(())
+}
+
+/// Atomically expose one previously installed immutable release as the active
+/// runtime for its product family. Installation and activation stay separate:
+/// the archive must already have passed `install-release` digest verification,
+/// and a failed extraction never moves the `current` link.
+pub async fn activate_release(
+    target: &str,
+    family: &str,
+    version: &str,
+    platform: &str,
+    json: bool,
+) -> Result<(), CmdError> {
+    release_component("family", family)?;
+    release_component("version", version)?;
+    release_component("platform", platform)?;
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let nonce = uuid::Uuid::new_v4().simple();
+    let script = format!(
+        r#"set -euo pipefail
+archive="$HOME/.stado/releases/{family}/{version}/{platform}/{family}.tar.gz"
+service_root="$HOME/.stado/services/{family}"
+release="$service_root/{version}"
+temporary="$service_root/.{version}.stado-{nonce}"
+next_link="$service_root/.current.stado-{nonce}"
+current="$service_root/current"
+platform="{platform}"
+previous=""
+moved_current=0
+cleanup() {{
+  /bin/rm -rf "$temporary"
+  /bin/rm -f "$next_link"
+  if [ "$moved_current" -eq 1 ] && [ ! -e "$current" ] && [ ! -L "$current" ]; then
+    /bin/mv "$previous" "$current"
+  fi
+}}
+trap cleanup EXIT HUP INT TERM
+if [ ! -f "$archive" ] || [ -L "$archive" ]; then
+  printf '%s\n' "installed release archive is missing or not a regular file" >/dev/stderr
+  false
+fi
+/bin/mkdir -p "$service_root"
+/bin/chmod u=rwx,go= "$service_root"
+if [ -e "$release" ] || [ -L "$release" ]; then
+  if [ ! -d "$release" ] || [ -L "$release" ]; then
+    printf '%s\n' "immutable runtime path is not a regular directory" >/dev/stderr
+    false
+  fi
+else
+  /bin/mkdir "$temporary"
+  /bin/chmod u=rwx,go= "$temporary"
+  /usr/bin/tar -xzf "$archive" -C "$temporary"
+  if [ ! -d "$temporary/$platform" ] || [ -L "$temporary/$platform" ]; then
+    printf '%s\n' "release archive does not contain the target platform directory" >/dev/stderr
+    false
+  fi
+  /bin/mv "$temporary" "$release"
+fi
+if [ -L "$current" ]; then
+  previous=$(/usr/bin/readlink "$current")
+elif [ -d "$current" ]; then
+  previous="$service_root/current.before-{version}-{nonce}"
+  if [ -e "$previous" ] || [ -L "$previous" ]; then
+    printf '%s\n' "runtime rollback path already exists" >/dev/stderr
+    false
+  fi
+  /bin/mv "$current" "$previous"
+  moved_current=1
+elif [ -e "$current" ]; then
+  printf '%s\n' "active runtime path is neither a directory nor a symbolic link" >/dev/stderr
+  false
+fi
+/bin/ln -s "$release" "$next_link"
+if [ "$(/usr/bin/uname -s)" = Darwin ]; then
+  /bin/mv -f -h "$next_link" "$current"
+else
+  /bin/mv -Tf "$next_link" "$current"
+fi
+moved_current=0
+trap - EXIT HUP INT TERM
+printf '%s\n%s\n' "$previous" "$release"
+"#,
+        family = family,
+        version = version,
+        platform = platform,
+        nonce = nonce,
+    );
+    let runner = crate::deploy::production_runner();
+    let report = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if !report.ok() {
+        return Err(CmdError::click(format!(
+            "{target}: release activation failed: {}",
+            crate::deploy::host_channel::last_error_line(
+                &report,
+                "remote release activation failed"
+            )
+        )));
+    }
+    let mut output = report.stdout.splitn(3, '\n');
+    let previous = output.next().unwrap_or_default();
+    let active = output.next().unwrap_or_default();
+    if active.is_empty() {
+        return Err(CmdError::click(format!(
+            "{target}: release activation returned no active runtime path"
+        )));
+    }
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": target,
+                "family": family,
+                "version": version,
+                "platform": platform,
+                "previous": previous,
+                "active": active,
+                "status": "activated",
+            }))?
+        );
+    } else {
+        println!("{target}: activated {family}/{version}/{platform} ({active})");
     }
     Ok(())
 }

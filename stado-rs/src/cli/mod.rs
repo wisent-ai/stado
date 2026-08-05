@@ -971,7 +971,7 @@ fn parse_target_kind(raw: &str) -> Result<String, String> {
 
 #[derive(Subcommand)]
 enum RegistryHostCommands {
-    /// Onboard HOST into the canonical registry, validated.
+    /// Declare a provider-managed target; local machines use stado_fleet enroll.
     Add {
         host: String,
         /// SSH destination ([user@]host[:port]) the fleet reaches HOST at.
@@ -1100,6 +1100,21 @@ enum HostCommands {
         #[arg(long, default_value = "darwin-arm64")]
         platform: String,
         /// Emit the transfer report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Atomically activate one previously installed immutable product release.
+    #[command(name = "activate-release")]
+    ActivateRelease {
+        target: String,
+        /// Path-safe release family.
+        family: String,
+        /// Previously installed immutable release version.
+        version: String,
+        /// Target platform.
+        #[arg(long, default_value = "darwin-arm64")]
+        platform: String,
+        /// Emit the activation report as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -1572,6 +1587,13 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 platform,
                 json,
             } => host::install_release(&target, &source, &family, &version, &platform, json).await,
+            HostCommands::ActivateRelease {
+                target,
+                family,
+                version,
+                platform,
+                json,
+            } => host::activate_release(&target, &family, &version, &platform, json).await,
             HostCommands::RunHelper { target, name, json } => {
                 host::run_helper(&target, &name, json).await
             }
