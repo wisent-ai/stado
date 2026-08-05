@@ -35,11 +35,14 @@ pub mod job;
 pub mod machine;
 pub mod mail;
 pub mod overview;
+pub mod placement;
 pub mod profiles_cmd;
 pub mod queue;
 pub mod quota;
 pub mod recovery;
 pub mod registry;
+pub mod release_cmd;
+pub mod resolver;
 pub mod resources;
 pub mod results;
 pub mod schedule;
@@ -358,7 +361,7 @@ enum Commands {
     /// registry, capacity, and schedule state use the configured Stado
     /// storage backend.
     Coordinator {
-        /// Coordinator name in registry (default: the one with active=true).
+        /// Coordinator name or host heuristic (default: active=true entry).
         #[arg(long)]
         target: Option<String>,
         /// Run a single scheduling tick and exit (cron-friendly).
@@ -427,6 +430,10 @@ enum Commands {
     #[command(subcommand)]
     Artifact(ArtifactCommands),
 
+    /// Build once, sign, promote, roll out, and roll back product releases.
+    #[command(subcommand)]
+    Release(release_cmd::ReleaseCommands),
+
     /// Manage recurring (cron) jobs — submit a command on a cron schedule.
     ///
     /// A schedule is evaluated every coordinator tick; when due, the
@@ -485,6 +492,12 @@ enum Commands {
     /// adopt, retire, deploy, logs, env.
     #[command(subcommand)]
     Service(service::ServiceCommands),
+    /// Atomically relocate a declared service group between registered hosts.
+    #[command(subcommand)]
+    Placement(placement::PlacementCommands),
+    /// Resolve logical services and run the local Stado data plane.
+    #[command(subcommand)]
+    Resolver(resolver::ResolverCommands),
     /// Plan, deploy, route and operate local OpenAI-compatible inference.
     #[command(subcommand)]
     Inference(inference::InferenceCommands),
@@ -1357,6 +1370,8 @@ fn failure_service(matches: &clap::ArgMatches) -> &'static str {
         "mail" => "mail",
         "azure" | "cloudflare" | "vast" | "blast-radius" => "provider",
         "coordinator"
+        | "resolver"
+        | "release"
         | "dashboard"
         | "schedule"
         | "agent"
@@ -1455,6 +1470,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         } => disk_cleanup::run(once, watch, dry_run).await,
         Commands::InstallDiskCleanup => disk_cleanup::install().await,
         Commands::Artifact(sub) => artifact::dispatch(sub).await,
+        Commands::Release(sub) => release_cmd::dispatch(sub).await,
         Commands::Cost(sub) => cost::dispatch(&sub).await,
         Commands::Vast(sub) => vast::dispatch(&sub).await,
         Commands::Quota { json, sub } => quota::dispatch(json, &sub).await,
@@ -1599,6 +1615,8 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Secrets(sub) => secrets::dispatch(sub).await,
         Commands::Queue(sub) => queue::dispatch(sub).await,
         Commands::Service(sub) => service::dispatch(sub).await,
+        Commands::Placement(sub) => placement::dispatch(sub).await,
+        Commands::Resolver(sub) => resolver::dispatch(sub).await,
         Commands::Inference(sub) => inference::dispatch(sub).await,
         Commands::Doctor(args) => doctor::dispatch(args).await,
     }
