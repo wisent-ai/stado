@@ -21,18 +21,18 @@
   ],
   "release_control": {
     "schema_version": 1,
-    "generation": 1,
+    "generation": 3,
     "trusted_keys": {
       "brama-release-2026-08": "cFrI/ww/EiwBp6HozLu6HH/IdSnUO+P2Xsqvg4vfXIU="
     },
     "products": {
       "brama": {
-        "binary": "bin/brama",
         "service": "brama",
         "config_schema": 1,
         "state_schema": 1,
-        "launcher": "bin/start-with-skarbiec",
         "install_root": "/Users/charles/.stado/services/brama",
+        "binary": "bin/brama",
+        "launcher": "bin/start-with-skarbiec",
         "binary_env": "BRAMA_BIN",
         "port_env": "BRAMA_PORT_OVERRIDE",
         "runtime_env": "BRAMA_RUNTIME_DIR",
@@ -63,6 +63,40 @@
             "legacy_launchd_label": "com.wisent.always-on.brama",
             "legacy_launchd_plist": "/Library/LaunchDaemons/com.wisent.always-on.brama.plist"
           }
+        },
+        "desired": {
+          "version": "0.2.2",
+          "channel": "stable",
+          "rollout_generation": 2,
+          "promoted_at": "2026-08-05T06:00:21.653112+00:00",
+          "artifacts": {
+            "darwin-arm64": {
+              "manifest_uri": "stado://releases/brama/0.2.2/darwin-arm64/release.json",
+              "signature_uri": "stado://releases/brama/0.2.2/darwin-arm64/release.sig",
+              "archive_uri": "stado://releases/brama/0.2.2/darwin-arm64/release.tar.gz",
+              "manifest_sha256": "45052b5d4124bc7329299ea94b97bf526114a01abd4e3a8c8278b1dd4a0d7b70",
+              "artifact_sha256": "119f93dd06634e9249eef8ae633d2bc02139c588f19fe05f1c7864224182c9ef",
+              "source_revision": "151ce0f907cc1e7b22a2c4e7356a4251444f4d42",
+              "key_id": "brama-release-2026-08"
+            }
+          }
+        },
+        "previous": {
+          "version": "0.2.2",
+          "channel": "candidate",
+          "rollout_generation": 1,
+          "promoted_at": "2026-08-05T05:14:24.115633+00:00",
+          "artifacts": {
+            "darwin-arm64": {
+              "manifest_uri": "stado://releases/brama/0.2.2/darwin-arm64/release.json",
+              "signature_uri": "stado://releases/brama/0.2.2/darwin-arm64/release.sig",
+              "archive_uri": "stado://releases/brama/0.2.2/darwin-arm64/release.tar.gz",
+              "manifest_sha256": "45052b5d4124bc7329299ea94b97bf526114a01abd4e3a8c8278b1dd4a0d7b70",
+              "artifact_sha256": "119f93dd06634e9249eef8ae633d2bc02139c588f19fe05f1c7864224182c9ef",
+              "source_revision": "151ce0f907cc1e7b22a2c4e7356a4251444f4d42",
+              "key_id": "brama-release-2026-08"
+            }
+          }
         }
       }
     }
@@ -72,7 +106,7 @@
       "target": "charless-mac-mini",
       "command": "/Users/charles/.stado/bin/stado"
     },
-    "generation": 3,
+    "generation": 4,
     "services": {
       "brama": {
         "placement_profile": "brama-skarbiec",
@@ -97,6 +131,11 @@
             ]
           },
           "wisent-backend": {
+            "capabilities": [
+              "model-routing"
+            ]
+          },
+          "brama-desktop": {
             "capabilities": [
               "model-routing"
             ]
@@ -131,6 +170,11 @@
             ]
           },
           "wisent-backend": {
+            "capabilities": [
+              "secret-acquisition"
+            ]
+          },
+          "brama-desktop": {
             "capabilities": [
               "secret-acquisition"
             ]
@@ -299,6 +343,16 @@
             "service": "skarbiec",
             "bind": "127.0.0.1:17612",
             "consumer": "brama"
+          },
+          {
+            "service": "brama",
+            "bind": "127.0.0.1:17621",
+            "consumer": "brama-desktop"
+          },
+          {
+            "service": "skarbiec",
+            "bind": "127.0.0.1:17622",
+            "consumer": "brama-desktop"
           }
         ]
       },
@@ -425,6 +479,16 @@
             "service": "skarbiec",
             "bind": "127.0.0.1:17602",
             "consumer": "operator"
+          },
+          {
+            "service": "brama",
+            "bind": "127.0.0.1:17621",
+            "consumer": "brama-desktop"
+          },
+          {
+            "service": "skarbiec",
+            "bind": "127.0.0.1:17622",
+            "consumer": "brama-desktop"
           }
         ]
       }
