@@ -299,6 +299,42 @@ async fn resolve(r#ref: &str, as_json: bool) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// A release is a claim about the fleet, so it cannot rest on a store only one
+/// machine can read.
+///
+/// `stado://` resolves through whichever object store this host is configured
+/// with, and the default is a directory on this disk. Publishing a fleet
+/// coordinate backed by that store does not fail -- it succeeds, and produces a
+/// version every other machine reports as absent. The store is the operator's
+/// choice and stays that way; what is refused here is only the combination of a
+/// fleet coordinate with a store that cannot answer for the fleet.
+fn fleet_visible(manifest: &ArtifactManifest) -> Result<(), CmdError> {
+    let fleet_scheme = manifest
+        .locations
+        .iter()
+        .any(|location| location.uri.starts_with("stado://"));
+    if !fleet_scheme {
+        return Ok(());
+    }
+    let backend = crate::config::wc_storage_backend();
+    let machine_local = backend.is_empty() || backend == "local";
+    if machine_local {
+        return Err(CmdError::click(format!(
+            "{} publishes a stado:// location while this host's object store is {}, \
+             which is a directory on this machine: every other host would report the \
+             release absent. Point WC_STORAGE_BACKEND at a store the fleet shares, or \
+             publish the bytes at a location the fleet can already reach.",
+            manifest.ref_,
+            if backend.is_empty() {
+                "unset (local)"
+            } else {
+                backend
+            }
+        )));
+    }
+    Ok(())
+}
+
 async fn publish(
     manifest_path: &str,
     verify: bool,
@@ -316,6 +352,7 @@ async fn publish(
         });
     }
     let manifest = ArtifactManifest::from_json(&std::fs::read_to_string(path)?)?;
+    fleet_visible(&manifest)?;
     let registry = registry().await?;
     let published = registry.publish(&manifest, verify, full).await?;
     if as_json {
