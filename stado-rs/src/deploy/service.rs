@@ -876,6 +876,19 @@ fi
 /// Recovery fencing: stop the unit without disabling it or changing the
 /// registry. A later restart loads the same unit after its Stado config has
 /// been atomically cut over.
+const SHOW_BODY: &str = "if [ ! -f \"$unit_path\" ]; then
+  say 'missing' \"$unit_path\"
+  exit 0
+fi
+if [ \"$os\" = \"Darwin\" ]; then
+  args=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments' \"$unit_path\" 2>/dev/null | /usr/bin/sed -n '/^[[:space:]]*[^A-Z}]/{s/^[[:space:]]*//;s/[[:space:]]*$//;p;}' | /usr/bin/tr '\\n' ' ')
+  if [ -z \"$args\" ]; then args=$(/usr/libexec/PlistBuddy -c 'Print :Program' \"$unit_path\" 2>/dev/null); fi
+else
+  args=$(/usr/bin/sed -n 's/^ExecStart=//p' \"$unit_path\" | /usr/bin/tr '\\n' ' ')
+fi
+say 'runs' \"$args\"
+";
+
 const STOP_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   recovery_unit=\"${unit}-recovery\"
   $launch bootout \"$domain/$unit\" >/dev/null 2>&1 || true
@@ -1202,6 +1215,16 @@ fn remote_script(
 // ---------------------------------------------------------------------------
 
 /// `service restart` on one host.
+/// Report the argument vector a managed unit runs, exactly as declared.
+pub async fn show_service(
+    target: &ComputeTarget,
+    service: &ManagedService,
+    runner: &Runner,
+) -> Result<RemoteReport, DeployError> {
+    let script = remote_script(service.unit_id(), "", &service.path, SHOW_BODY)?;
+    run_remote(target, script, runner).await
+}
+
 pub async fn restart_service(
     target: &ComputeTarget,
     service: &ManagedService,

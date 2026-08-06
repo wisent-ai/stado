@@ -115,8 +115,19 @@ version_dir="$root/@VERSION@"
 program="$version_dir/@NAME@"
 mkdir -p "$version_dir"
 
+uri=@URI@
+# `stado storage copy` moves queue state between backends; it was never a
+# downloader. Fetch the declared location with the tool that fetches.
+case "$uri" in
+  https://*|http://*) ;;
+  *)
+    echo "STADO_STATUS=failed"
+    echo "STADO_DETAIL=artifact location $uri cannot be fetched by a host; publish it over https"
+    exit 1
+    ;;
+esac
 if [ ! -f "$program" ]; then
-  stado storage copy "@URI@" "$program"
+  /usr/bin/curl -fsSL --retry 3 "$uri" -o "$program"
 fi
 
 actual="$(shasum -a 256 "$program" | awk '{print $1}')"
@@ -132,6 +143,45 @@ ln -sfn "$version_dir" "$root/.current.new"
 mv -f "$root/.current.new" "$root/current"
 echo "STADO_STATUS=installed"
 echo "STADO_DETAIL=$program"
+"#;
+
+const INSTALL_ARCHIVE_BODY: &str = r#"
+set -eu
+root="$HOME/@SERVICES_ROOT@/@NAME@"
+version_dir="$root/@VERSION@"
+dest="$version_dir/@SUBDIR@"
+archive="$version_dir/.artifact-download"
+mkdir -p "$dest"
+
+uri=@URI@
+# `stado storage copy` moves queue state between backends; it was never a
+# downloader. Fetch the declared location with the tool that fetches.
+case "$uri" in
+  https://*|http://*) ;;
+  *)
+    echo "STADO_STATUS=failed"
+    echo "STADO_DETAIL=artifact location $uri cannot be fetched by a host; publish it over https"
+    exit 1
+    ;;
+esac
+if [ ! -f "$archive" ]; then
+  /usr/bin/curl -fsSL --retry 3 "$uri" -o "$archive"
+fi
+
+actual="$(shasum -a 256 "$archive" | awk '{print $1}')"
+if [ "$actual" != "@SHA256@" ]; then
+  rm -f "$archive"
+  echo "STADO_STATUS=failed"
+  echo "STADO_DETAIL=digest mismatch: manifest says @SHA256@, downloaded $actual"
+  exit 1
+fi
+
+tar -xzf "$archive" -C "$dest"
+rm -f "$archive"
+ln -sfn "$version_dir" "$root/.current.new"
+mv -f "$root/.current.new" "$root/current"
+echo "STADO_STATUS=installed"
+echo "STADO_DETAIL=$dest"
 "#;
 
 /// Place one artifact version on the host and point `current` at it.
@@ -156,10 +206,38 @@ pub async fn install_artifact(
         )));
     }
 
-    let script = INSTALL_BODY
+    // A bundle is not a program. When the manifest says the location is an
+    // archive, the verified download is unpacked into the version directory
+    // instead of becoming the executable itself -- brama ships its launcher,
+    // its entitlements router and its config beside the binary, and installing
+    // only the tarball would leave `current` pointing at a tarball.
+    let archive = manifest.labels.get("archive").map(String::as_str);
+    let subdir = manifest
+        .labels
+        .get("extract_subdir")
+        .map(String::as_str)
+        .unwrap_or_default();
+    if subdir.contains("..") || subdir.starts_with('/') {
+        return Err(DeployError(format!(
+            "artifact {} declares an unusable extract_subdir {subdir:?}",
+            manifest.ref_
+        )));
+    }
+    let body = match archive {
+        Some("tar.gz" | "tgz") => INSTALL_ARCHIVE_BODY,
+        Some(other) => {
+            return Err(DeployError(format!(
+                "artifact {} declares an unsupported archive format {other:?}",
+                manifest.ref_
+            )))
+        }
+        None => INSTALL_BODY,
+    };
+    let script = body
         .replace("@SERVICES_ROOT@", SERVICES_ROOT)
         .replace("@NAME@", name)
         .replace("@VERSION@", &version)
+        .replace("@SUBDIR@", subdir)
         .replace("@URI@", &shlex_quote(&location.uri))
         .replace("@SHA256@", &location.sha256);
     let output = host_channel::run_script(target, &script, runner).await?;
