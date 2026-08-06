@@ -84,38 +84,6 @@ impl Client {
         )
     }
 
-    /// Dedicated verifier for exact Stado push ingress client bearers.
-    pub fn backend_push_verifier() -> Result<Self, SkarbiecError> {
-        if crate::config::backend_push_skarbiec_consumer()
-            != crate::config::BACKEND_PUSH_API_VERIFIER_CONSUMER
-        {
-            return Err(SkarbiecError::Deployment(format!(
-                "backend push verifier consumer must be {:?}",
-                crate::config::BACKEND_PUSH_API_VERIFIER_CONSUMER
-            )));
-        }
-        let token_file = crate::config::backend_push_skarbiec_token_file();
-        if token_file == crate::config::skarbiec_token_file()
-            || token_file == crate::config::agent_skarbiec_token_file()
-            || token_file == crate::config::object_skarbiec_token_file()
-            || token_file == crate::config::release_skarbiec_token_file()
-            || token_file == crate::config::machine_skarbiec_token_file()
-            || token_file == crate::config::service_skarbiec_token_file()
-            || token_file == crate::config::rate_limit_skarbiec_token_file()
-            || token_file == crate::config::backend_messaging_skarbiec_token_file()
-        {
-            return Err(SkarbiecError::Deployment(
-                "backend push verifier token file must be distinct from every control, workload, messaging, and API verifier grant"
-                    .to_string(),
-            ));
-        }
-        Self::new(
-            crate::config::backend_push_skarbiec_url(),
-            crate::config::backend_push_skarbiec_consumer(),
-            token_file,
-        )
-    }
-
     /// Dedicated verifier for exact managed-service deployer bearers.
     pub fn service_verifier() -> Result<Self, SkarbiecError> {
         if crate::config::service_skarbiec_consumer()
@@ -161,7 +129,6 @@ impl Client {
             || token_file == crate::config::machine_skarbiec_token_file()
             || token_file == crate::config::service_skarbiec_token_file()
             || token_file == crate::config::agent_skarbiec_token_file()
-            || token_file == crate::config::backend_push_skarbiec_token_file()
             || token_file == crate::config::backend_messaging_skarbiec_token_file()
         {
             return Err(SkarbiecError::Deployment(
@@ -195,7 +162,6 @@ impl Client {
             crate::config::machine_skarbiec_token_file(),
             crate::config::service_skarbiec_token_file(),
             crate::config::rate_limit_skarbiec_token_file(),
-            crate::config::backend_push_skarbiec_token_file(),
             crate::config::backend_messaging_skarbiec_token_file(),
         ]
         .contains(&token_file)
@@ -229,7 +195,6 @@ impl Client {
             crate::config::machine_skarbiec_token_file(),
             crate::config::service_skarbiec_token_file(),
             crate::config::rate_limit_skarbiec_token_file(),
-            crate::config::backend_push_skarbiec_token_file(),
             crate::config::backend_messaging_skarbiec_token_file(),
         ]
         .contains(&token_file)
