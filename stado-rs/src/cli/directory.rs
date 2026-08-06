@@ -68,6 +68,49 @@ pub enum DirectoryCommands {
         json: bool,
     },
 
+    /// The serving parameters for the host this service is placed on.
+    ///
+    /// The other side of `connect`: a caller asks how to reach the service,
+    /// and the placed host asks how it should serve. Both answers come from
+    /// the same placement and the same host records, so moving a service needs
+    /// no edit on either side. Refused on a host the service is not placed on,
+    /// because a gateway that binds where nothing placed it is the thing every
+    /// caller then has to be protected from.
+    Bind {
+        /// Service name as the directory keys it, e.g. `brama`.
+        name: String,
+        /// Answer for this target instead of this machine.
+        #[arg(long)]
+        target: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// A usable route to one service, derived from where it is placed.
+    ///
+    /// `endpoint` reports what the directory was told; this works out what is
+    /// true. The service is placed on exactly one host, so the address is a
+    /// function of that placement and of who is asking: loopback when the
+    /// asker is the placed host, and the placed host's routable address
+    /// otherwise. Nothing per-caller is stored, so moving the service moves
+    /// every caller with it.
+    ///
+    /// There is no fallback. If the service is placed somewhere that does not
+    /// answer, that is what this says -- resolving to something local instead
+    /// is how a caller ends up talking to a process nobody placed.
+    Connect {
+        /// Service name as the directory keys it, e.g. `brama`.
+        name: String,
+        /// Resolve as this target instead of this machine.
+        #[arg(long)]
+        target: Option<String>,
+        /// Report the address without proving anything answers there.
+        #[arg(long)]
+        no_verify: bool,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// The address this machine should use for one service.
     ///
     /// Resolves against the asking target rather than the active host,
@@ -168,6 +211,13 @@ pub async fn dispatch(command: DirectoryCommands) -> Result<(), CmdError> {
     match command {
         DirectoryCommands::Show { json } => show(json).await,
         DirectoryCommands::Profiles { json } => profiles(json).await,
+        DirectoryCommands::Bind { name, target, json } => bind(&name, target, json).await,
+        DirectoryCommands::Connect {
+            name,
+            target,
+            no_verify,
+            json,
+        } => connect(&name, target, no_verify, json).await,
         DirectoryCommands::Endpoint { name, target, json } => endpoint(&name, target, json).await,
         DirectoryCommands::ConsumerAdd {
             name,
@@ -209,6 +259,221 @@ async fn show(as_json: bool) -> Result<(), CmdError> {
         if let Some(consumers) = entry.get("consumers").and_then(Value::as_object) {
             let names: Vec<&str> = consumers.keys().map(String::as_str).collect();
             println!("    consumers: {}", names.join(", "));
+        }
+    }
+    Ok(())
+}
+
+/// The address a host is reachable at from off-box, taken from its own record.
+///
+/// `ssh` carries `user@address` for the channel Stado already trusts, so its
+/// address half is the one this fleet has agreed on. A declared hostname is
+/// accepted after it, for hosts reached by name rather than by number.
+fn routable_address(target: &targets::ComputeTarget) -> Option<String> {
+    if let Some(ssh) = target.ssh.as_deref() {
+        let address = ssh.rsplit('@').next().unwrap_or(ssh).trim();
+        if !address.is_empty() {
+            return Some(address.to_string());
+        }
+    }
+    target
+        .hostnames
+        .iter()
+        .map(|name| name.trim())
+        .find(|name| !name.is_empty())
+        .map(str::to_string)
+}
+
+/// The port the service listens on.
+///
+/// `port` on the service record is the answer. Until every record carries one,
+/// the port is read back out of the address declared for the placed host --
+/// that address is the one written by whoever started the service, so its port
+/// is a fact even while the address around it is not.
+fn service_port(entry: &Value, active: &str) -> Option<u16> {
+    if let Some(port) = entry.get("port").and_then(Value::as_u64) {
+        return u16::try_from(port).ok();
+    }
+    let declared = entry
+        .get("endpoints")
+        .and_then(Value::as_object)
+        .and_then(|endpoints| endpoints.get(active))
+        .and_then(|endpoint| endpoint.get("url"))
+        .and_then(Value::as_str)?;
+    declared
+        .rsplit(':')
+        .next()
+        .and_then(|tail| tail.trim_end_matches('/').parse().ok())
+}
+
+/// Prove something answers HTTP there. A gateway that refuses an
+/// unauthenticated caller has still answered, so any status counts; what does
+/// not count is a socket that accepts and says nothing, which is what a stale
+/// forward looks like from the outside.
+async fn answers(url: &str) -> Result<u16, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(
+            "5".parse().expect("static number"),
+        ))
+        .no_proxy()
+        .build()
+        .map_err(|error| error.to_string())?;
+    client
+        .get(url)
+        .send()
+        .await
+        .map(|response| response.status().as_u16())
+        .map_err(|error| error.to_string())
+}
+
+async fn bind(name: &str, target: Option<String>, as_json: bool) -> Result<(), CmdError> {
+    let document = registry::fetch_document().await?;
+    let block = directory(&document)?;
+    let entry = service(block, name)?;
+    let asking = match target {
+        Some(value) => value,
+        None => this_target().await?,
+    };
+    let active = entry
+        .get("active_host")
+        .and_then(Value::as_str)
+        .filter(|host| !host.is_empty())
+        .ok_or_else(|| click(format!("{name} declares no active_host")))?;
+    if asking != active {
+        return Err(click(format!(
+            "{name} is placed on {active}, not on {asking}; only the placed host serves it"
+        )));
+    }
+    let registry = targets::fetch_registry_remote()
+        .await
+        .map_err(|exc| click(exc.to_string()))?;
+    let placed = registry
+        .targets
+        .iter()
+        .find(|candidate| candidate.name == active)
+        .ok_or_else(|| click(format!("{active} is not a host in the registry")))?;
+    let bind_address = routable_address(placed).ok_or_else(|| {
+        click(format!(
+            "{active} carries no address the rest of the fleet can reach it at"
+        ))
+    })?;
+    // Every other host in the registry: the mesh encrypts those hops, and a
+    // peer that is not in the registry is not one of ours.
+    let peers: Vec<String> = registry
+        .targets
+        .iter()
+        .filter(|candidate| candidate.name != active)
+        .filter_map(routable_address)
+        .collect();
+    if as_json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "service": name,
+                "host": active,
+                "bind_address": bind_address,
+                "encrypted_peers": peers,
+            }))?
+        );
+    } else {
+        // Neutral keys: this verb answers for any service, and the names a
+        // given program wants them under are that program's business.
+        println!("bind_address={bind_address}");
+        println!("encrypted_peers={}", peers.join(","));
+    }
+    Ok(())
+}
+
+async fn connect(
+    name: &str,
+    target: Option<String>,
+    no_verify: bool,
+    as_json: bool,
+) -> Result<(), CmdError> {
+    let document = registry::fetch_document().await?;
+    let block = directory(&document)?;
+    let entry = service(block, name)?;
+    let asking = match target {
+        Some(value) => value,
+        None => this_target().await?,
+    };
+    let active = entry
+        .get("active_host")
+        .and_then(Value::as_str)
+        .filter(|host| !host.is_empty())
+        .ok_or_else(|| {
+            click(format!(
+                "{name} declares no active_host, so there is no placement to route to"
+            ))
+        })?;
+    let port = service_port(entry, active).ok_or_else(|| {
+        click(format!(
+            "{name} is placed on {active} but declares no port, and none can be read \
+             back from an address for that host"
+        ))
+    })?;
+    let scheme = entry
+        .get("scheme")
+        .and_then(Value::as_str)
+        .filter(|scheme| !scheme.is_empty())
+        .unwrap_or("http");
+
+    let url = if asking == active {
+        format!("{scheme}://127.0.0.1:{port}")
+    } else {
+        let registry = targets::fetch_registry_remote()
+            .await
+            .map_err(|exc| click(exc.to_string()))?;
+        let placed = registry
+            .targets
+            .iter()
+            .find(|candidate| candidate.name == active)
+            .ok_or_else(|| {
+                click(format!(
+                    "{name} is placed on {active}, which is not a host in the registry"
+                ))
+            })?;
+        let address = routable_address(placed).ok_or_else(|| {
+            click(format!(
+                "{name} is placed on {active}, and that host's record carries no address \
+                 reachable from {asking}"
+            ))
+        })?;
+        format!("{scheme}://{address}:{port}")
+    };
+
+    let status = if no_verify {
+        None
+    } else {
+        match answers(&url).await {
+            Ok(status) => Some(status),
+            // Deliberately terminal. The caller asked where this service is,
+            // and the honest answer is that it is placed somewhere that did
+            // not answer -- not some other address that happens to be up.
+            Err(detail) => {
+                return Err(click(format!(
+                    "{name} is placed on {active} and did not answer at {url}: {detail}"
+                )))
+            }
+        }
+    };
+
+    if as_json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "service": name,
+                "placed_on": active,
+                "from": asking,
+                "url": url,
+                "verified": status.is_some(),
+                "status": status,
+            }))?
+        );
+    } else {
+        match status {
+            Some(status) => println!("{url}  ({name} on {active}, answered {status})"),
+            None => println!("{url}  ({name} on {active}, unverified)"),
         }
     }
     Ok(())
