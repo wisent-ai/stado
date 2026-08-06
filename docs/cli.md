@@ -389,12 +389,233 @@ unavailable.
 | `stado host disk <target>` | Disk usage plus the registry cleanup policy and the janitor's own state: last pass, bytes freed, next scheduled pass. |
 | `stado host cleanup <target> --dry-run` | Preview what the registry cleanup would delete. `--dry-run` is mandatory; it drives the janitor's own planning phase and writes no state. |
 | `stado host exec <target> -- CMD` | Run one approved read-only command. An allowlist, not a shell: the operator's words select a fixed argv entry and never join the command line. A refusal prints the allowlist. |
+| `stado host inventory <target>` | The stado-managed binaries under `$HOME/.stado/bin`, the `$HOME/.stado/forwards/*.url` markers, the listening loopback TCP ports, the Skarbiec vault files under `$HOME/.stado` as metadata, whether the installed `stado` knows a fixed set of subcommands — and, the point of the command, whether each forward marker still matches a live listener. |
+| `stado host release <target> --binary NAME --version X.Y.Z` | Put one registry-declared managed binary on the host: fetch the exact coordinate, verify the operator's configured SHA-256, check the layout, stage it under a versioned directory, and only then atomically repoint the active binary and restart its declared unit. The write counterpart of `host inventory`. `--dry-run` probes read-only and reports the plan. |
 
 Diagnostic and recovery commands resolve their target from the canonical registry and
 refuse a target that is unknown, not a local host, or has no registry-managed
 ssh destination. They share one channel, `deploy/host_channel.rs`, which
 derives its ssh options from `host reboot`'s rather than copying them, so the
 commands cannot drift apart. All accept `--json`.
+
+### `stado host inventory`
+
+The three facts this command reports could not be read any other way. `host
+exec`'s allowlist gives none of them, and must not be extended to: every
+entry there is a compile-time argv of absolute paths with no
+operator-supplied path in it, and all three of these need `$HOME`. Without
+the command, reading them meant a raw `ssh user@ip '<inline script>'` with a
+hardcoded address — which is exactly what this replaces, repeatably and
+through the registry-authorized channel.
+
+It takes a registry target name and nothing else. There is no path, file
+name, port or pattern to pass, because a command that accepted one would be
+a command that could be pointed at `~/.ssh/id_ed25519`. Its remote program is
+one compile-time script with no interpolation in it at all, run over the same
+`deploy/host_channel.rs` every other read-only `host` command uses.
+
+| Section | Contents |
+|---|---|
+| `managed_binaries` | `$HOME/.stado/bin/stado` and `$HOME/.stado/bin/skarbiec`: whether each exists, is a regular file, is executable, and what version it declares. A missing binary or a failed version call is an explicit `version_state` (`missing`, `not_executable`, `version_failed`, `version_empty`, `refused_symlink`, `refused_not_regular`), never a blank string. Symlinks are refused, not followed. Each row also carries `declared_version` — what the registry requires of this host — and `version_verdict`. |
+| `forwards` | Every `$HOME/.stado/forwards/*.url` marker with its one-line loopback URL. A marker that is a symlink or not a regular file is reported as refused rather than read. |
+| `listeners` | Listening loopback TCP ports and the pid that owns each, from `netstat -anv -p tcp`. |
+| `subcommands` | Whether the installed `stado` knows each of a fixed, in-code list of subcommand paths, decided from the exit code of `SUBCOMMAND --help`. The subcommand itself is never run. This is version-skew detection. |
+| `vaults` | The ACTIVE Skarbiec vaults: exactly `$HOME/.stado/*.vault.json`. Per file, metadata only — `name`, `state` (`regular`, `refused_symlink`, `refused_not_regular`), `bytes`, `mode` in octal, and `owner_only`. Symlinks are refused, not followed: the size and mode reported belong to the link, never to what it points at. |
+| `vault_sidecars` | Everything else matching `$HOME/.stado/*.vault*.json`: snapshots, pre-migration copies such as `weles.vault.pre-v2.json`, and `*.acquisitions.json`. Same five fields, same refusals. |
+| `reconciliation` | The answer, on three axes: per marker `matched`, `stale` or `unreadable` against the socket table; per marker `matched`, `disagrees` or `undeclared` against the registry; per binary `matched`, `behind`, `ahead`, `mismatched`, `undeclared` or `unknown` against `managed_versions`. Plus counts and the names behind each finding, and for vaults `vaults_not_owner_only` and `vaults_refused`. |
+
+`vaults` and `vault_sidecars` are separate sections because the distinction
+is operational, not tidiness. The active vault is state; a sidecar is
+history. An operator who cannot tell them apart edits the wrong file, and
+the file they meant to leave alone is the one holding live secrets.
+
+Both sections are capped at 64 files each. Going over the cap is stated, not
+silently swallowed: `vaults_seen` and `vault_sidecars_seen` carry how many
+files actually matched, and `vaults_truncated` / `vault_sidecars_truncated`
+say outright that the list above them is short.
+
+Two vault findings are lifted into `reconciliation` because they are
+conclusions, not table rows, and they print in the human-readable output as
+well as under `--json`:
+
+- **`vaults_not_owner_only`** — vaults whose group or other permission bits
+  are set. A vault the group can read is an incident, not a cosmetic
+  detail. Only regular files are judged here; a symlink is `lrwxrwxrwx` by
+  construction, so listing one would report the link's permissions as a
+  vault's and bury the real finding.
+- **`vaults_refused`** — vaults refused as a symlink or as a non-regular
+  file.
+
+Neither turns `status` into a failure, for the same reason a stale marker
+does not: the inventory reports drift, it does not punish it. A host with
+every vault clean says so explicitly rather than printing nothing.
+
+Reconciliation is the reason the command exists, and it runs on two
+INDEPENDENT axes. They answer different questions, and a marker can pass one
+while failing the other:
+
+- **Marker against the socket table** (`reconciliation` on each marker,
+  `stale_markers` in the summary). On `control-host` the marker
+  `stado-weles-api.url` said `http://127.0.0.1:8766` while the admission API
+  was listening on `8794`, and nothing in the fleet noticed, because nothing
+  in the fleet read the markers. `stale` is that divergence, named.
+- **Marker against the registry** (`declared_url` and
+  `declaration_verdict` on each marker, `disagreeing_markers` and
+  `undeclared_markers` in the summary). The marker is compared with the
+  endpoint `service_directory` declares for THIS host — `endpoints[target]`,
+  not the active host's endpoint, because a host standing by for a service
+  still carries a declared endpoint for it. On `control-host` the marker
+  `skarbiec-weles` says `8895`, something IS listening on `8895`, and the
+  registry declares `19095`. The first axis calls that marker `matched`; the
+  second calls it `disagrees`. That combination is the dangerous one:
+  nothing is down, so no health check fires, and consumers resolving through
+  the directory arrive somewhere else entirely. When both sides are loopback
+  endpoints the port is compared, so `http://localhost:8895` and
+  `http://127.0.0.1:8895` are one endpoint rather than a spelling dispute.
+
+A third comparison runs over the binaries: `managed_versions` on the
+registry target is the DECLARED version of each stado-managed binary, and
+`version_verdict` is the host measured against it. `behind` and `ahead` are
+decided numerically when both sides are three dot-separated numbers —
+`0.4.392` is newer than `0.4.5`, which a text sort gets backwards — and by
+exact equality otherwise, which yields `mismatched` rather than an invented
+ordering. A target that declares nothing reports `undeclared`, never
+`matched`: an unverified host must not read as a verified one. The number is
+taken out of each binary's own answer shape by name — `stado --version`
+prints `stado 0.5.1`, `skarbiec version` prints JSON whose `version` member
+the remote script has already extracted — and an unfamiliar banner is
+carried through whole rather than guessed at.
+
+All three findings print in the human-readable output as explicit
+conclusion lines, not as columns to interpret, and a host on which
+everything agrees prints one line saying so.
+
+Detection comes first on purpose. Nothing here deploys, restarts or
+installs anything: a fleet that automates delivery before it can see the
+difference between declared and actual state is a fleet with a faster way to
+break production. `managed_versions` is the declaration, `host inventory` is
+the visibility, and delivery is a separate command that has both to work
+from.
+
+Drift is reported, not punished: `status` stays `inventory` whenever the
+inventory was collected, because a forward that was deliberately torn down
+is not a broken host. Read `reconciliation.stale_markers`,
+`reconciliation.disagreeing_markers` and `reconciliation.versions_behind`
+for the verdicts.
+
+What it deliberately does not show, and why:
+
+- **No `lsof`, no `pgrep -f`, no process argv, no process environment.**
+  That is where tokens, passwords and vault paths live. Listener ownership
+  comes from the kernel socket table, which is why the `netstat -anv -p tcp`
+  entry is already in `host exec`'s allowlist. Owners are bare pids; map one
+  to a program with
+  `stado host exec TARGET -- ps ax -o pid -o ppid -o etime -o comm`, or to a
+  login user with `stado host exec TARGET -- ps ax -o user -o pid -o comm`.
+  Both spell `-o comm`, the executable's name. `-o command` — the full argv
+  — is deliberately absent from the allowlist and unreachable through it,
+  because entries match exactly and the operator's words never join the
+  command line. When `subcommands` comes back `probe_failed`, the follow-up
+  question is `stado host exec TARGET -- sysctl -n kern.maxproc
+  kern.maxprocperuid`: a host out of process slots is not a host running an
+  old `stado`.
+- **No file contents beyond the marker URLs**, which are non-secret loopback
+  addresses. Every value it does read is reduced to a JSON-inert character
+  set and capped in length on both the host and the control plane, so a
+  corrupt or hostile file under `~/.stado` cannot push arbitrary text into an
+  operator's terminal.
+- **No vault contents, ever.** The vault sections report that a file exists,
+  how large it is, its mode and whether anyone but its owner can read it.
+  The remote script never opens a vault: not to read a byte of ciphertext,
+  not to count items, not to name a consumer, not to check that the JSON
+  parses. This is a boundary, not an oversight. `stat(2)` answers "which
+  Skarbiec vaults are on this host" completely, so nothing in this command
+  needs `open(2)`, and a diagnostic that reads secret files is a diagnostic
+  that copies them into terminals, scrollback and CI logs every time
+  somebody runs it. There is no flag to turn this off, because the field
+  that would carry the content does not exist in the report shape. Read a
+  vault with `skarbiec`, on purpose, not as a side effect of asking what is
+  installed.
+
+### `stado host release`
+
+The command the section above ends by pointing at, and the only thing in the
+pack that owns "get this build onto that host". `managed_versions` is the
+declaration, `host inventory` is the visibility, and this is the delivery.
+It does not decide anything: `host inventory` says a host is behind, and
+this closes the gap by carrying out exactly what the registry already
+declares.
+
+```
+stado host release TARGET --binary NAME --version X.Y.Z [--platform P] [--dry-run] [--json]
+```
+
+The order of operations is the design, and it is Weles's shipped auto-deploy
+order (`weles/scripts/worker/deploy/README.md`) applied to one binary:
+
+1. **probe** — read the host: its platform, the version the installed binary
+   declares, whether the coordinate is already staged. Writes nothing.
+2. **stage** — fetch the exact coordinate through `/api/release/object`,
+   verify the configured SHA-256, check the layout, confirm the artifact
+   itself declares the requested version, and publish it into
+   `$HOME/.stado/releases/<binary>/<version>/<platform>/`.
+3. **activate** — re-verify the staged digest, hard-link it beside the live
+   binary and `rename(2)` it over `$HOME/.stado/bin/<binary>`.
+4. **restart** — restart the unit the registry declares runs it, through the
+   same program `stado service restart` uses.
+
+The three remote phases are three separate programs on the shared channel,
+not one script with three sections. That is what makes the guarantee
+structural: the activate program is only ever sent after the stage program
+reported a verified artifact, so a failed fetch, a mismatched digest or a
+staged file that declares the wrong version all stop with the running
+version untouched. `active_version_unchanged: true` says so in the report.
+
+| Refusal | Why |
+|---|---|
+| `--binary` not in the compile-time table (`stado`, `skarbiec`) | The operator's word selects a fixed entry and never becomes a path or a URI segment — `host exec`'s rule. A refusal prints the list. |
+| `--version` is not an exact semantic version | A coordinate is immutable. `latest` is a legal path segment, which is exactly why nothing here resolves an alias, a channel or a range. `+build` is refused too: it is not a canonical coordinate segment. |
+| `--platform` not in the published set | Same closed-table rule. The host's own `uname` is checked against it as well, so a plan built for one platform cannot be applied on another. |
+| No configured SHA-256 for the coordinate | The digest is the operator's independent record of what the coordinate contains. A checksum computed from whatever the host downloaded would only prove the transfer was not corrupted, which TLS already covers. |
+| The registry declares no version for this host and binary | Delivery carries out a declaration; it does not stand in for one. |
+| `--version` disagrees with the declaration | Change the declaration if that is the intent. Delivering past it would make the registry describe a host it no longer describes. |
+| The release origin is not HTTPS | Checked here and again on the host. |
+| The host's field sanitizer failed its own probe | Every string the host reported is then suspect, including the version this command would compare against. |
+
+The digest lives in the operator-owned config under `release.managed_digests`
+(or the `STADO_MANAGED_RELEASE_DIGESTS` environment override), keyed by the
+exact coordinate:
+
+```yaml
+release:
+  managed_digests:
+    stado/0.5.1/darwin-arm64: 3f6c...  # 64 lowercase hex characters
+```
+
+Running it twice is not running it twice: when the host already declares the
+requested version the command reports `already_active` and sends no further
+program — it does not re-fetch and call that a deployment. `--dry-run` runs
+the read-only probe and nothing else, so "planned, not applied" is a
+property of which programs were sent rather than a flag a longer script
+promises to honour.
+
+What it deliberately does not do:
+
+- **No build, clone, tag lookup, package manager or channel pointer.** Weles's
+  auto-deploy does none of those either. A host-side build is a host-side
+  toolchain to keep alive, and a channel is a mutable coordinate.
+- **No version choice.** It never picks "the newest" and never writes the
+  registry. Deciding what a host should run is upstream of putting it there.
+- **No rollback**, because there is nothing to roll back from: every failure
+  happens before activation. Rolling back is `host release` naming the
+  previous version, which is why the versioned staging tree is kept.
+- **No invented unit.** A binary with no registry-declared unit — `skarbiec`,
+  a CLI rather than a daemon — is activated and reported as having no unit,
+  never as "restarted".
+- **No symlink at `$HOME/.stado/bin/<binary>`.** The active path stays a
+  regular file, hard-linked to the staged inode, because `host inventory`
+  refuses to read through a symlink and would otherwise report the active
+  binary as unreadable.
 
 ## `stado registry`
 
@@ -413,6 +634,41 @@ deployment that needed it.
 | `stado registry doctor [--json]` | Diff registry declarations against live host state. Exits non-zero on any divergence. |
 | `stado registry host add HOST --ssh DEST [--kind local]` | Onboard a machine into the registry, validated, refusing duplicates. |
 | `stado registry beacon-age [--json]` | Every registry host and its last beacon, worst first. |
+
+### Registry document shape
+
+Beyond `schema_version`, `targets` and `coordinators`, the canonical
+document carries two blocks the fleet resolves services with:
+
+- **`service_directory`** — `authority` (the `target` allowed to publish and
+  the `command` it publishes with), a monotonic `generation`, and `services`.
+  Each service names its `active_host`, an `endpoints` map of `host -> url`
+  (standby hosts included), a `consumers` map of `consumer -> capabilities`,
+  and either the `placement_profile` that relocates it or the
+  `managed_service` unit that owns it. The `active_host` entry of `endpoints`
+  is the only endpoint a consumer may call: a host carrying an endpoint is
+  not thereby serving.
+- **`placement_profiles`** — service groups that move between hosts together:
+  `services`, the separate `stop_order` and `start_order`, the `state` files
+  that travel with them (`required` state missing aborts the move), a `hosts`
+  map giving each host's launchd/systemd `units` and health `probes`, and
+  `routing`.
+
+**Unknown keys are preserved.** A registry write replaces the whole
+document, so a writer that does not model a key used to delete it — on
+2026-08-04 the canonical document lost `channels`, `enrollment` and `fleets`
+that way. Every top-level key this build does not model (`inference` today)
+round-trips verbatim through `Registry::extra`, `stado registry push` still
+refuses a payload that removes a top-level key unless forced, and a
+`service_directory` or `placement_profiles` block that is present and
+malformed is an error rather than a silently empty one.
+
+**`SERVICE_DIRECTORY_STALE`** is the code a consumer holding a directory
+older than the published `generation` gets back, with the message naming
+both generations and telling the caller to refresh (`stado registry pull`)
+and retry. It is a distinct, retryable code precisely so a handed-over
+service does not surface as a refused connection and send the operator to
+the network instead of to the directory.
 
 ### `stado registry doctor`
 

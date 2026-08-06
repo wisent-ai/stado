@@ -51,6 +51,64 @@ All six ride one channel, `deploy/host_channel.rs`, which derives its ssh
 option set from `host_reboot::ssh_reboot_argv` (it calls it and drops the
 trailing program) rather than copying it, so the commands cannot drift apart.
 
+Two more joined them after a 2026-08 diagnosis that the six could not
+finish. The first reads what a host actually has; the second is the only
+write in the group, and carries out what the registry declares:
+
+6a. **host inventory TARGET** — the stado-managed binaries under
+   `$HOME/.stado/bin`, the `$HOME/.stado/forwards/*.url` markers, the
+   listening loopback ports, and whether the installed `stado` knows a fixed
+   list of subcommands.
+   (Shipped as `stado host inventory TARGET [--json]`,
+   `deploy/host_inventory.rs`. None of those facts were reachable: they all
+   need `$HOME`, and item six's contract is a fixed argv of absolute paths
+   with NO operator-supplied path in it, so extending that allowlist was the
+   wrong fix — reading them instead meant a raw
+   `ssh user@ip '<inline script>'` with a hardcoded address, plus `pgrep -fl`
+   and `printenv`, the two things the allowlist deliberately withholds
+   because argv and environments carry secrets. The command takes a registry
+   target name and nothing else — no path, file name, port or pattern — and
+   its remote program is one compile-time script with no interpolation in
+   it. Its real output is the reconciliation: for each forward marker,
+   whether anything is listening on the port the marker names. It was
+   written because on `control-host` the `stado-weles-api.url` marker
+   said `http://127.0.0.1:8766` while the admission API was on `8794`, and
+   nothing in the fleet read the markers. Listener ownership comes from
+   `netstat -anv -p tcp` — already justified in item six's table — as bare
+   pids; no `lsof`, no `pgrep -f`, no argv, no environment.)
+
+6b. **host release TARGET --binary NAME --version X.Y.Z** — put one
+   registry-declared managed binary on a host.
+   (Shipped as
+   `stado host release TARGET --binary NAME --version X.Y.Z [--platform P]
+   [--dry-run] [--json]`, `deploy/host_release.rs`. This is the gap
+   `ARCHITECTURE.md` names outright: "no system in the pack currently owns
+   'get this build onto that host'. That is a gap". Item 6a reads what a
+   host HAS and `targets[].managed_versions` declares what it SHOULD have;
+   nothing carried out the difference, so closing it meant copying a binary
+   by hand. The order is Weles's shipped auto-deploy order
+   (`weles/scripts/worker/deploy/README.md`) applied to one binary: fetch
+   the exact coordinate through `/api/release/object`, verify the
+   OPERATOR-configured SHA-256 — not one computed from the download, and not
+   a manifest fetched from the same endpoint as the artifact, which is where
+   this is deliberately stricter than `bootstrap` — check the layout, stage
+   under `$HOME/.stado/releases/<binary>/<version>/<platform>/`, and only
+   then hard-link and `rename(2)` the artifact over
+   `$HOME/.stado/bin/<binary>` and restart the registry-declared unit
+   through the same program `service restart` uses. The three remote phases
+   are three separate compile-time programs on the shared channel rather
+   than one script, so "nothing activates before it verified" is a property
+   of which programs were sent and is observable at the `Runner` seam; a
+   failed fetch or a mismatched digest leaves the running version untouched.
+   `--binary` and `--platform` are closed compile-time tables and `--version`
+   is an exact semantic version, so the operator's words select entries and
+   never become path or URI segments — item six's rule, kept. It refuses
+   when the registry declares no version for that host and binary, or
+   declares a different one: delivery carries out a declaration, it does not
+   stand in for one. Idempotent by reporting rather than by repeating —
+   an already-current host answers `already_active` and receives no further
+   program.)
+
 ## Service management (the "full service management" layer)
 
 7. **service list** — every registry-managed service across all hosts with
