@@ -86,8 +86,15 @@ pub enum ServiceCommands {
         #[arg(long)]
         host: String,
         /// Published artifact to install.
-        #[arg(long)]
-        from_artifact: String,
+        #[arg(long, conflicts_with = "from_archive")]
+        from_artifact: Option<String>,
+        /// Local release archive to install, for a bundle that no object store
+        /// the fleet shares is carrying yet.
+        #[arg(long, conflicts_with = "from_artifact")]
+        from_archive: Option<String>,
+        /// Point `current` back at a version directory already on the host.
+        #[arg(long, conflicts_with_all = ["from_artifact", "from_archive"])]
+        rollback_to: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -340,8 +347,20 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             name,
             host,
             from_artifact,
+            from_archive,
+            rollback_to,
             json,
-        } => update(&name, &host, &from_artifact, json).await,
+        } => {
+            update(
+                &name,
+                &host,
+                from_artifact.as_deref(),
+                from_archive.as_deref(),
+                rollback_to.as_deref(),
+                json,
+            )
+            .await
+        }
         ServiceCommands::Show { name, host, json } => show(&name, host.as_deref(), json).await,
         ServiceCommands::Stop { name, host, json } => stop(&name, host.as_deref(), json).await,
         ServiceCommands::Restart { name, host, json } => {
@@ -663,7 +682,14 @@ async fn restart(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdEr
     fail_if_any(&failures, "restart")
 }
 
-async fn update(name: &str, host: &str, reference: &str, json: bool) -> Result<(), CmdError> {
+async fn update(
+    name: &str,
+    host: &str,
+    reference: Option<&str>,
+    archive: Option<&str>,
+    rollback_to: Option<&str>,
+    json: bool,
+) -> Result<(), CmdError> {
     let target = host_channel::canonical_target(host).await.map_err(click)?;
     // The service must already be managed here: this moves a unit forward, and
     // silently installing a version for a unit nobody runs would look like a
@@ -694,7 +720,42 @@ async fn update(name: &str, host: &str, reference: &str, json: bool) -> Result<(
                 "{host}: {name} runs {program:?}, which is not under a managed services directory,                  so there is no artifact directory to update"
             ))
         })?;
-    let installed = install_from_artifact(&target, directory, reference).await?;
+    // Two sources, one install. A published artifact is the durable route; a
+    // local archive is how a bundle reaches a host before there is an object
+    // store the whole fleet can read, and it is checksummed on the far side the
+    // same way rather than trusted for arriving.
+    if let Some(version) = rollback_to {
+        let script = format!(
+            "set -euo pipefail\nname={}\nversion={}\n{ROLLBACK_BODY}",
+            crate::deploy::shlex_quote(directory),
+            crate::deploy::shlex_quote(version),
+        );
+        let output = host_channel::run_script(&target, &script, &runner)
+            .await
+            .map_err(click)?;
+        if !output.ok() {
+            return Err(CmdError::click(format!(
+                "{host}: {}",
+                host_channel::last_error_line(&output, "rollback failed")
+            )));
+        }
+        println!("{host}: {name} -> {version} (takes effect on the next restart)");
+        return Ok(());
+    }
+    let installed = match (reference, archive) {
+        (Some(reference), None) => install_from_artifact(&target, directory, reference).await?,
+        (None, Some(path)) => install_from_archive(&target, directory, path, &runner).await?,
+        (None, None) => {
+            return Err(CmdError::click(
+                "update needs --from-artifact REF or --from-archive PATH",
+            ))
+        }
+        (Some(_), Some(_)) => {
+            return Err(CmdError::click(
+                "--from-artifact and --from-archive are exclusive",
+            ))
+        }
+    };
     if json {
         print_json(&json!({
             "host": host,
@@ -1462,3 +1523,145 @@ async fn install_from_artifact(
         .await
         .map_err(click)
 }
+
+/// Install a release archive that is not in an object store yet.
+///
+/// The published route is `--from-artifact`, and it stays the durable one. This
+/// exists because a bundle has to reach a host before the fleet has a store
+/// both machines can read, and the alternative people reach for in that gap is
+/// copying a file by hand onto a running service. The archive is streamed over
+/// the approved channel, checksummed on the far side, unpacked into a version
+/// directory named for its own digest, and `current` is relinked only after the
+/// digest matches.
+async fn install_from_archive(
+    target: &crate::targets::ComputeTarget,
+    directory: &str,
+    path: &str,
+    runner: &crate::deploy::Runner,
+) -> Result<crate::deploy::artifact_install::InstalledArtifact, CmdError> {
+    let bytes = std::fs::read(path)?;
+    let digest = {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        hex::encode(hasher.finalize())
+    };
+    let version = format!("sha256-{}", &digest[..usize::from(u8::from(12u8))]);
+    let staged = format!(".stado/.{directory}-{version}.tar.gz");
+
+    if crate::deploy::host_channel::target_is_this_host(target) {
+        let home = std::env::var("HOME")
+            .map_err(|_| CmdError::click("HOME is not set, so the staging path is unknown"))?;
+        let destination = std::path::Path::new(&home).join(&staged);
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::copy(path, destination)?;
+    } else {
+        let ssh_target = target.ssh.clone().unwrap_or_default();
+        if ssh_target.is_empty() {
+            return Err(CmdError::click(format!(
+                "{} declares no ssh destination",
+                target.name
+            )));
+        }
+        let prepare = host_channel::run_script(
+            target,
+            "set -euo pipefail\n/bin/mkdir -p \"$HOME/.stado\"\n/bin/chmod 700 \"$HOME/.stado\"\n",
+            runner,
+        )
+        .await
+        .map_err(click)?;
+        if !prepare.ok() {
+            return Err(CmdError::click(format!(
+                "{}: cannot prepare the staging directory",
+                target.name
+            )));
+        }
+        let mut options = host_channel::ssh_options(&ssh_target);
+        options.pop();
+        let mut argv = vec!["scp".to_string(), "-q".to_string()];
+        argv.extend(options.into_iter().skip(usize::from(true)));
+        argv.push(path.to_string());
+        argv.push(format!("{ssh_target}:{staged}"));
+        let copy = runner(crate::deploy::CommandSpec::new(argv))
+            .await
+            .map_err(CmdError::click)?;
+        if !copy.ok() {
+            return Err(CmdError::click(format!(
+                "{}: cannot deliver the archive: {}",
+                target.name,
+                copy.detail()
+            )));
+        }
+    }
+
+    let script = format!(
+        "set -euo pipefail\nname={}\nversion={}\nexpected={}\nstaged={}\n{ARCHIVE_INSTALL_BODY}",
+        crate::deploy::shlex_quote(directory),
+        crate::deploy::shlex_quote(&version),
+        crate::deploy::shlex_quote(&digest),
+        crate::deploy::shlex_quote(&staged),
+    );
+    let output = host_channel::run_script(target, &script, runner)
+        .await
+        .map_err(click)?;
+    if !output.ok() {
+        return Err(CmdError::click(format!(
+            "{}: {}",
+            target.name,
+            host_channel::last_error_line(&output, "the archive did not install")
+        )));
+    }
+    Ok(crate::deploy::artifact_install::InstalledArtifact {
+        program_path: format!("$HOME/.stado/services/{directory}/current"),
+        version,
+        sha256: digest,
+    })
+}
+
+const ARCHIVE_INSTALL_BODY: &str = r#"
+root="$HOME/.stado/services/$name"
+version_dir="$root/$version"
+archive="$HOME/$staged"
+trap 'rm -f "$archive"' EXIT
+
+[ -s "$archive" ] || { printf '%s\n' 'delivered archive is missing or empty' >&2; exit 1; }
+actual="$(/usr/bin/shasum -a 256 "$archive" | /usr/bin/awk '{print $1}')"
+if [ "$actual" != "$expected" ]; then
+  printf '%s\n' "digest mismatch: expected $expected, delivered $actual" >&2
+  exit 1
+fi
+
+rm -rf "$version_dir"
+/bin/mkdir -p "$version_dir/darwin-arm"
+/usr/bin/tar -xzf "$archive" -C "$version_dir/darwin-arm"
+
+# `current` is a directory here on some hosts and a symlink on others; either
+# way the previous one is kept beside the new version rather than deleted, so a
+# rollback is a rename.
+if [ -e "$root/current" ] && [ ! -L "$root/current" ]; then
+  /bin/mv "$root/current" "$root/current.before-$version"
+else
+  rm -f "$root/current"
+fi
+/bin/ln -sfn "$version_dir" "$root/.current.new"
+/bin/mv -f "$root/.current.new" "$root/current"
+trap - EXIT
+rm -f "$archive"
+printf '%s\n' "$version_dir"
+"#;
+
+const ROLLBACK_BODY: &str = r#"
+root="$HOME/.stado/services/$name"
+target="$root/$version"
+[ -d "$target" ] || { printf '%s\n' "no version directory $version on this host" >&2; exit 1; }
+if [ -e "$root/current" ] && [ ! -L "$root/current" ]; then
+  /bin/mv "$root/current" "$root/current.replaced-$(/bin/date -u +%Y%m%dT%H%M%SZ)"
+else
+  rm -f "$root/current"
+fi
+/bin/ln -sfn "$target" "$root/.current.new"
+/bin/mv -f "$root/.current.new" "$root/current"
+printf '%s\n' "$target"
+"#;
