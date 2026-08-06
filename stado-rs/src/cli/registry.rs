@@ -59,10 +59,12 @@ pub fn validate(path: Option<String>) -> Result<(), CmdError> {
 /// or differently-modelled copy silently deletes every key its own model does
 /// not know about. That is not hypothetical: on 2026-08-04 the canonical
 /// document lost `channels`, `enrollment` and `fleets` between one read and
-/// the next, and gained a `service_directory` block that no checkout in the
-/// tree models — divergent builds writing the same object, each erasing what
-/// it could not name. `fetch_document` exists so read-modify-write callers
-/// keep the raw document; this is the backstop for everyone who does not.
+/// the next, and gained a `service_directory` block no checkout in the tree
+/// modelled at the time — divergent builds writing the same object, each
+/// erasing what it could not name. `targets::Registry` now keeps unmodelled
+/// top-level keys in `extra`, and `fetch_document` hands read-modify-write
+/// callers the raw document; this is the backstop for a payload that came
+/// from neither.
 ///
 /// Only removals are reported. Additions are how the document grows, and a
 /// changed value is an edit rather than a loss.
@@ -220,9 +222,13 @@ pub async fn fetch_versioned_document() -> Result<(Value, String), CmdError> {
 /// The canonical registry as its raw document, off the same object
 /// [`push_document`] compare-and-swaps.
 ///
-/// Read-modify-write callers need this rather than
-/// [`targets::fetch_registry_remote`]: [`Registry`] drops every key it
-/// does not model, so serializing it back would silently delete them.
+/// Read-modify-write callers work on the raw document rather than on
+/// [`Registry`] because an edit here is a surgical key change, and the raw
+/// value is the shortest path to one. [`Registry`] is no longer lossy —
+/// unmodelled top-level keys round-trip through `Registry::extra` and
+/// `Registry::to_document` writes them back — so either route preserves the
+/// document; this one simply does not re-serialize the parts it never
+/// touched.
 pub async fn fetch_document() -> Result<Value, CmdError> {
     let store = RegistryStore::open().await?;
     let text = store
