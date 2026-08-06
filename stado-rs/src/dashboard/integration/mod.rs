@@ -1,73 +1,49 @@
 //! Authenticated finite business-integration boundary.
 //!
 //! The router authenticates product callers against exact client/item/action
-//! policy before a domain handler can resolve provider credentials. Domain
-//! handlers expose finite typed actions; this module never accepts a URL,
-//! method, provider item, or credential field from an HTTP request.
+//! policy before a domain handler runs. Domain handlers expose finite typed
+//! actions; this module never accepts a URL, method, provider item, or
+//! credential field from an HTTP request.
+//!
+//! Only the `enterprise` domain is served here. Its four actions are a
+//! read-only projection of the fleet Stado already owns — jobs, capacity
+//! broadcasts, host-health beacons, install beacons — so they stay next to
+//! `JobStorage` instead of contracting on Stado's private blob layout from
+//! another repository. Every other domain proxied a product's provider
+//! credentials (Stripe, Resend, SendGrid, GitHub, HuggingFace, captcha) and
+//! now lives in the private `wisent-integrations` service; the route prefix is
+//! unchanged there, so no client had to move.
 
-mod backend;
-mod content;
-mod deployment;
-mod echo_paid_ads;
 mod enterprise;
-mod most;
-mod onboarding;
-mod people;
-mod singularity;
-mod trading;
 
 use serde_json::{json, Value};
 
 use super::{constant_time_eq, http_status, Request, Response};
 
-const DEFAULT_REQUEST_BODY_LIMIT: &str = "32768";
-const MEDIUM_REQUEST_BODY_LIMIT: &str = "524288";
-const LARGE_REQUEST_BODY_LIMIT: &str = "4194304";
-const DEFAULT_RESPONSE_BODY_LIMIT: &str = "65536";
+/// Request body cap. The four `enterprise` actions each take an empty `{}`
+/// body, so the router's default cap is the only one this boundary needs.
+const REQUEST_BODY_LIMIT: &str = "32768";
 
-fn request_body_limit(domain: &str, action: &str) -> usize {
-    let configured = match (domain, action) {
-        (
-            "singularity",
-            "huggingface_publish_dataset"
-            | "captcha_solve_image"
-            | "resend_send_email"
-            | "sendgrid_send_email"
-            | "github_create_gist",
-        )
-        | ("echo-paid-ads", "webhook.verify") => LARGE_REQUEST_BODY_LIMIT,
-        ("deployment", "echo.env.upsert") => MEDIUM_REQUEST_BODY_LIMIT,
-        ("onboarding", action) if action.ends_with(".events.collect") => MEDIUM_REQUEST_BODY_LIMIT,
-        ("content", "stripe.webhook.verify" | "resend.email.send") | ("backend", "email.send") => {
-            MEDIUM_REQUEST_BODY_LIMIT
-        }
-        _ => DEFAULT_REQUEST_BODY_LIMIT,
-    };
-    configured
-        .parse::<usize>()
+/// Response body cap for `("enterprise", _)`. The fleet projections carry
+/// whole job lists and beacon documents, so they keep the 4 MiB ceiling they
+/// had while the full domain table lived here.
+const RESPONSE_BODY_LIMIT: &str = "4194304";
+
+fn request_body_limit() -> usize {
+    REQUEST_BODY_LIMIT
+        .parse()
         .expect("static integration request cap")
 }
 
-fn response_body_limit(domain: &str, action: &str) -> usize {
-    let configured = match (domain, action) {
-        ("content", "github.research.tex" | "tokchart.sounds" | "tokchart.hashtags")
-        | ("enterprise", _) => LARGE_REQUEST_BODY_LIMIT,
-        ("onboarding", action)
-            if action.ends_with(".bundle.read") || action.ends_with(".state.read") =>
-        {
-            MEDIUM_REQUEST_BODY_LIMIT
-        }
-        _ => DEFAULT_RESPONSE_BODY_LIMIT,
-    };
-    configured
-        .parse::<usize>()
+fn response_body_limit() -> usize {
+    RESPONSE_BODY_LIMIT
+        .parse()
         .expect("static integration response cap")
 }
 
 #[derive(Debug)]
 pub(super) enum HandlerError {
     BadRequest,
-    Conflict,
     ProviderUnavailable,
     UpstreamFailure,
     ResponseTooLarge,
@@ -75,64 +51,9 @@ pub(super) enum HandlerError {
 
 pub(super) type HandlerResult = Result<Value, HandlerError>;
 
-/// A domain-scoped provider reader. The constructor verifies that the grant can
-/// list exactly the configured items. Reads outside that set fail closed.
-pub(super) struct ProviderClient {
-    client: crate::skarbiec::Client,
-    policy: &'static crate::config::IntegrationProvider,
-}
-
-impl ProviderClient {
-    pub(super) async fn read_string(
-        &self,
-        item: &str,
-        field: &str,
-    ) -> Result<String, HandlerError> {
-        if field.is_empty() || !self.policy.items().iter().any(|allowed| allowed == item) {
-            return Err(HandlerError::ProviderUnavailable);
-        }
-        self.client
-            .read_string(item, field)
-            .await
-            .map_err(|_| HandlerError::ProviderUnavailable)?
-            .filter(|value| !value.trim().is_empty())
-            .ok_or(HandlerError::ProviderUnavailable)
-    }
-
-    pub(super) async fn read_item(&self, item: &str) -> Result<Value, HandlerError> {
-        if !self.policy.items().iter().any(|allowed| allowed == item) {
-            return Err(HandlerError::ProviderUnavailable);
-        }
-        self.client
-            .read_item(item)
-            .await
-            .map_err(|_| HandlerError::ProviderUnavailable)
-    }
-}
-
-pub(super) async fn provider_client(domain: &str) -> Result<ProviderClient, HandlerError> {
-    crate::skarbiec::validate_integration_provider(domain)
-        .await
-        .map_err(|_| HandlerError::ProviderUnavailable)?;
-    let policy =
-        crate::config::integration_provider(domain).ok_or(HandlerError::ProviderUnavailable)?;
-    let client = crate::skarbiec::Client::integration_provider(domain)
-        .map_err(|_| HandlerError::ProviderUnavailable)?;
-    Ok(ProviderClient { client, policy })
-}
-
 fn supports(domain: &str, action: &str) -> bool {
     match domain {
-        "backend" => backend::supports(action),
-        "content" => content::supports(action),
-        "singularity" => singularity::supports(action),
-        "deployment" => deployment::supports(action),
         "enterprise" => enterprise::supports(action),
-        "people" => people::supports(action),
-        "onboarding" => onboarding::supports(action),
-        "trading" => trading::supports(action),
-        "most" => most::supports(action),
-        "echo-paid-ads" => echo_paid_ads::supports(action),
         _ => false,
     }
 }
@@ -161,16 +82,7 @@ async fn dispatch(
     state: &Value,
 ) -> HandlerResult {
     match domain {
-        "backend" => backend::handle(action, body).await,
-        "content" => content::handle(action, body).await,
-        "singularity" => singularity::handle(action, body).await,
-        "deployment" => deployment::handle(action, body).await,
         "enterprise" => enterprise::handle(action, body, store, state).await,
-        "people" => people::handle(action, body).await,
-        "onboarding" => onboarding::handle(action, body).await,
-        "trading" => trading::handle(action, body).await,
-        "most" => most::handle(action, body).await,
-        "echo-paid-ads" => echo_paid_ads::handle(action, body).await,
         _ => Err(HandlerError::BadRequest),
     }
 }
@@ -187,7 +99,6 @@ fn envelope(status: u16, value: Value, cap: usize) -> Response {
 fn error_response(error: HandlerError) -> Response {
     let (status, code) = match error {
         HandlerError::BadRequest => (http_status("400"), "invalid_request"),
-        HandlerError::Conflict => (http_status("409"), "conflict"),
         HandlerError::ProviderUnavailable => (http_status("503"), "integration_unavailable"),
         HandlerError::UpstreamFailure => (http_status("502"), "upstream_failure"),
         HandlerError::ResponseTooLarge => (http_status("502"), "response_too_large"),
@@ -258,8 +169,8 @@ pub(super) async fn handle(
             json!({"ok": false, "error": {"code": "not_found"}}),
         );
     };
-    // The finite handler registry is checked before any bearer or provider item
-    // is read, so unknown domains/actions cannot be used as a secret oracle.
+    // The finite handler registry is checked before any bearer is read, so
+    // unknown domains/actions cannot be used as a secret oracle.
     if !supports(domain, action) {
         return envelope_uncapped(
             http_status("404"),
@@ -275,7 +186,7 @@ pub(super) async fn handle(
     if !verifier_available {
         return unavailable();
     }
-    let body_cap = request_body_limit(domain, action);
+    let body_cap = request_body_limit();
     if request.content_length > body_cap {
         return envelope_uncapped(
             http_status("413"),
@@ -302,7 +213,7 @@ pub(super) async fn handle(
         Ok(value) => envelope(
             http_status("200"),
             json!({"ok": true, "result": value}),
-            response_body_limit(domain, action),
+            response_body_limit(),
         ),
         Err(error) => error_response(error),
     }

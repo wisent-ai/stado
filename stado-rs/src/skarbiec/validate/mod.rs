@@ -16,7 +16,7 @@ mod service;
 pub use machine::validate_machine_verifier;
 pub use object::validate_object_verifier;
 pub use release::validate_release_verifier;
-pub use service::{validate_backend_push_verifier, validate_service_verifier};
+pub use service::validate_service_verifier;
 
 /// Read one `token` field per item through one shared verifier client,
 /// concurrently. The Skarbiec listener is thread-per-connection, so sweeping
