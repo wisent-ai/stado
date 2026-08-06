@@ -5,12 +5,14 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde_json::Value;
 
 use super::DeployError;
 use crate::skarbiec::{Client, SkarbiecError};
 
 const ITEM_PREFIX: &str = "stado-ssh-";
+
+/// The one field these items carry, and the only one this ever needs.
+const PRIVATE_KEY_FIELD: &str = "private_key";
 
 /// Owner-only transient private key. Dropping it removes the file on every
 /// success and error path.
@@ -99,13 +101,16 @@ pub async fn materialize(target: &str) -> Result<KeyFile, DeployError> {
         &credentials.token_file,
     )
     .map_err(|error| DeployError(error.to_string()))?;
-    let item = client
-        .read_item(&id)
+    // Ask for the one field this needs. A broker that requires a named field
+    // refuses a whole-item read outright, and the refusal arrives as a bare
+    // 400 that reads like a malformed request rather than a version skew --
+    // which is how this call silently took every host command down with it.
+    let private_key = client
+        .read_field(&id, PRIVATE_KEY_FIELD)
         .await
         .map_err(|error| missing_key(&id, error))?;
-    let private_key = item
-        .get("private_key")
-        .and_then(Value::as_str)
+    let private_key = private_key
+        .as_str()
         .ok_or_else(|| DeployError(format!("credential item {id} has no private_key field")))?;
     write_key(private_key)
 }
