@@ -1,0 +1,277 @@
+name: Version check
+
+# Refuse a change whose declared version disagrees with what the change did to the
+# public contract of `stado` -- the command list the binary advertises.
+#
+# The rule that turns a surface change into a version has one home for the whole
+# fleet and is never copied here: https://github.com/lbartoszcze/AutoVersion. Nor is
+# the gate copied: this repository already owns every piece of it, and this workflow
+# only arranges for them to run on a change instead of on a release.
+#
+#   scripts/surface.py            reads the advertised command list out of a binary
+#   released-surface.json         the surface of the version actually published
+#   scripts/version_check.sh      the gate: decide, compare, assert the marker,
+#                                 assert the baseline is not superseded
+#   scripts/version_check_proof.sh  five cases proving that gate refuses -- one pass,
+#                                 two surface mutations, two dishonest baselines
+#   scripts/baseline.py           regenerates the baseline from the best tier
+#
+# Why this workflow exists at all. deploy.yml already runs scripts/version_check.sh,
+# but only in front of the first `storage put`, and only on a `stado-v*` tag push. So
+# until somebody cut a release nothing measured the contract, and the answer arrived
+# at the one moment it is most expensive to act on: release objects are create-only.
+# This workflow asks the same question on the change that causes it.
+#
+# Why it runs on the control plane and not on ubuntu-latest. scripts/version_check.sh
+# refuses without an executable `stado` that can read the release channel, and it is
+# right to: `stado storage objects` requires STADO_API_TOKEN against STADO_API_URL,
+# while `stado storage stat` -- the control that keeps silence from being read as
+# absence -- answers about the host's own configured store. On a hosted runner with
+# neither, the listing and the stat would both answer about an empty local directory
+# and agree that nothing is published, which is exactly the false green the baseline
+# assertions exist to prevent. This runner is the one machine that holds the
+# credential, so it is the one machine where the answer means anything.
+#
+# The cost of that is the fork guard below. This repository is public, and a
+# pull_request from a fork would otherwise run its own code on a self-hosted runner
+# that holds the release publisher's credential. A fork's change is not left
+# unchecked: it is checked by the push to main that lands it, and a maintainer can
+# run this workflow against any ref by hand.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Deliberately not deploy.yml's group: a superseded check may be cancelled, a
+  # half-finished publish may not.
+  group: wisent-compute-version-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  version-check:
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, stado-control-plane]
+    env:
+      STADO_API_URL: https://stado.wisent.com
+      WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
+      WC_SKARBIEC_CONSUMER: stado-release-publisher
+      WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-skarbiec-token
+    steps:
+      # Held at the same major as deploy.yml, for the same reason: v4 runs on a Node
+      # GitHub has deprecated, and this control plane is the runner both jobs share.
+      - uses: actions/checkout@v5
+
+      - name: Make tags and history visible to the version check
+        # actions/checkout fetches one commit and no tags, and scripts/baseline.py
+        # refuses outright on such a clone -- assert_refs_visible() reads
+        # `git rev-parse --is-shallow-repository` and cross-checks `git tag --list`
+        # against `git ls-remote --tags origin`, precisely so a tier cannot be ranked
+        # blind. scripts/version_check.sh calls that generator to ask whether a better
+        # artifact than the committed baseline has appeared, so without this step the
+        # gate does not go quietly green: it reports that staleness is unproven. The
+        # tag trees matter separately, because the git-archive tier rebuilds one.
+        # --unshallow refuses on an already complete repository, hence the fallback.
+        run: git fetch --force --tags --unshallow || git fetch --force --tags
+
+      - name: Install the shared rule and establish that it is the one answering
+        run: |
+          set -euo pipefail
+          # Into a virtual environment. A bare `pip install` cannot succeed on a
+          # current runner image -- python3 there carries the externally-managed
+          # marker and the install dies before any check runs -- and this control
+          # plane carries no global pip at all, which deploy.yml already had to work
+          # around. RUNNER_TEMP and GITHUB_PATH exist only on a runner, hence the
+          # fallbacks, which are also what let this body be extracted and run by hand.
+          : "${RUNNER_TEMP:=$(mktemp -d)}"
+          : "${GITHUB_PATH:=$(mktemp)}"
+          python3 -m venv "$RUNNER_TEMP/rule"
+          # The same pinned coordinate deploy.yml installs. A moving rule would change
+          # what a release is allowed to be called without anybody editing this
+          # repository.
+          "$RUNNER_TEMP/rule/bin/python" -m pip install --quiet \
+            "git+https://github.com/lbartoszcze/AutoVersion@v0.1.0"
+          echo "$RUNNER_TEMP/rule/bin" >> "$GITHUB_PATH"
+          # GITHUB_PATH takes effect for LATER steps only, so without this export the
+          # probes below could not see the venv this step just built.
+          export PATH="$RUNNER_TEMP/rule/bin:$PATH"
+
+          # Establish WHICH autoversion is about to answer before asking it anything.
+          # A liveness probe like `autoversion --help` is satisfied by any executable
+          # that exits zero, so a stranger earlier on PATH would pass it and this step
+          # would go green while vouching for a rule nobody asked for. Naming the
+          # resolved path is also what makes the export above verifiable: delete that
+          # line and this guard refuses instead of quietly passing.
+          resolved="$(command -v autoversion || true)"
+          case "$resolved" in
+            "$RUNNER_TEMP/rule/bin/"*) ;;
+            *)
+              echo "::error::autoversion resolves to '${resolved:-nothing}', outside the" \
+                "venv this step just built. Whatever would answer below is not the" \
+                "pinned rule, so no verdict it gives means anything."
+              false ;;
+          esac
+          echo "autoversion resolves to $resolved"
+
+          # Then demand TWO different known answers. One constant cannot suffice: a
+          # stranger replying `internal` forever passes a liveness probe and every
+          # branch of scripts/version_check.sh, because when the declared version
+          # equals the baseline's, `internal` IS the passing branch. Both arms are
+          # built from the COMMITTED baseline rather than from a synthetic pair, so
+          # this step also proves the frozen file is well formed and is really what
+          # reaches the decision. It reads that file and writes only under
+          # RUNNER_TEMP, so it cannot touch the release channel.
+          probe="$RUNNER_TEMP/rule-probe"
+          mkdir -p "$probe"
+          jq '{surface: .surface}' released-surface.json > "$probe/identical.json"
+          # `- [first]` drops one element without a bare numeric subscript.
+          jq '{surface: (.surface - [(.surface | sort | first)])}' \
+            released-surface.json > "$probe/removed.json"
+          if [ "$(jq -r '.surface | length' "$probe/removed.json")" = \
+               "$(jq -r '.surface | length' released-surface.json)" ]; then
+            echo "::error::the removal arm removed nothing, so it would prove nothing." \
+              "released-surface.json is malformed or its surface is empty."
+            false
+          fi
+          current="$(jq -r .version released-surface.json)"
+          for arm in identical:internal removed:breaking; do
+            name="${arm%%:*}"
+            want="${arm##*:}"
+            # Into a file, with the status tested on its own line: inside a command
+            # substitution containing a pipeline the rule's status is discarded and
+            # `set -e` does not reach it, so a dead rule would read as an empty answer.
+            if ! autoversion decide --current "$current" \
+                 --published-surface released-surface.json \
+                 --candidate-surface "$probe/$name.json" --json \
+                 > "$probe/verdict-$name.json"; then
+              echo "::error::the rule at $resolved failed outright on the $name arm," \
+                "so whether it can answer at all is unknown."
+              false
+            fi
+            got="$(jq -r .change "$probe/verdict-$name.json")"
+            echo "probe: $name -> $got (wanted $want)"
+            if [ "$got" != "$want" ]; then
+              echo "::error::the rule at $resolved called the $name arm '$got' and not" \
+                "'$want'. Whatever is answering is not the pinned rule, so no verdict" \
+                "below means anything."
+              false
+            fi
+          done
+
+      - name: Build the binary whose help text is the contract
+        # The contract is what `stado help` advertises, not what src/cli/mod.rs
+        # declares: three top-level variants carry `hide = true`, so they dispatch
+        # without being offered, and reading the source would count them and inflate
+        # the surface. That means a binary has to exist. deploy.yml reads the
+        # linux/amd64 release image because it is publishing those exact bytes; a
+        # check is not publishing anything, and no top-level command is behind a
+        # `cfg`, so the cheaper native build advertises the same list. --locked,
+        # because a check that silently resolved a different dependency graph would be
+        # measuring a tree nobody is going to ship.
+        run: cargo build --release --locked --bin stado
+        working-directory: stado-rs
+
+      - name: Read the public surface
+        # No import, no source scan: scripts/surface.py asks the artifact itself and
+        # refuses an empty answer rather than reporting a shrunken surface, because a
+        # shrink reads as a breaking removal that never happened.
+        run: |
+          set -euo pipefail
+          python3 scripts/surface.py --binary stado-rs/target/release/stado \
+            > "$RUNNER_TEMP/candidate-surface.json"
+          echo "advertised commands: $(jq -r '.surface | length' \
+            "$RUNNER_TEMP/candidate-surface.json")"
+
+      - name: Prove the gate can refuse, and let it judge this revision
+        run: |
+          set -euo pipefail
+          : "${RUNNER_TEMP:=$(mktemp -d)}"
+
+          # The venv reached this step through GITHUB_PATH, which is a different
+          # mechanism from the export in the install step. Assert it again here rather
+          # than assume it: this is the step whose verdict is consumed, and it is the
+          # only one where being wrong about which rule answered is fatal.
+          rule="$(command -v autoversion || true)"
+          case "$rule" in
+            "$RUNNER_TEMP/rule/bin/"*) ;;
+            *)
+              echo "::error::autoversion resolves to '${rule:-nothing}', outside the venv" \
+                "the install step built, so the verdict below would come from a stranger."
+              false ;;
+          esac
+
+          # scripts/version_check.sh asserts the baseline against the release channel
+          # in both directions, and reads absence only from the channel's own
+          # testimony. All of that is answered by the host's configured store and by
+          # STADO_API_URL: with either credential missing, `stado storage objects`
+          # falls back to a local job store and an empty directory would testify that
+          # nothing has ever been published. The gate cannot detect that from inside,
+          # so it is asserted here, before it is asked anything.
+          stado_bin="$HOME/.stado/bin/stado"
+          test -x "$stado_bin"
+          if [ -z "${STADO_API_URL:-}" ]; then
+            echo "::error::STADO_API_URL is empty, so the channel assertions below would" \
+              "be answered by this runner's local store instead of the release channel."
+            false
+          fi
+          # `if ! var="$(cmd)"` rather than a bare assignment: the credential store
+          # failing and the credential being empty are different faults, and a bare
+          # assignment would end the step on the first with no message naming it.
+          if ! token="$("$stado_bin" secrets get stado-release-publisher --field token)"; then
+            echo "::error::the credential store would not answer for" \
+              "stado-release-publisher, so nothing below could read the release channel."
+            false
+          fi
+          if [ -z "$token" ]; then
+            echo "::error::the release publisher credential read empty, so every answer" \
+              "about the channel below would be a local store's answer."
+            false
+          fi
+          export STADO_API_TOKEN="$token"
+
+          # The verdict on this revision. Its status is captured rather than allowed to
+          # end the step, so the refusal proof below still runs and reports: a red build
+          # that says only "the version is wrong" hides whether the gate saying so is
+          # one that can also say no.
+          judged=pass
+          if ! AUTOVERSION="$rule" STADO_BIN="$stado_bin" \
+               scripts/version_check.sh "$RUNNER_TEMP/candidate-surface.json"; then
+            judged=refuse
+          fi
+
+          # And the proof that it can refuse, in the same step that consumed that
+          # verdict -- because a rule answering a constant `internal` survives
+          # everything above, and when declared equals released `internal` IS the
+          # passing branch. This is not written again here: scripts/version_check_proof.sh
+          # already drives scripts/version_check.sh through five cases against the
+          # committed baseline and a built binary -- surface untouched must pass, a
+          # removed command and an added command must refuse, and a baseline whose
+          # source is prose or names an object the channel does not serve must refuse.
+          # It writes nothing into the repository.
+          proved=yes
+          if ! AUTOVERSION="$rule" STADO_BIN="$stado_bin" \
+               scripts/version_check_proof.sh stado-rs/target/release/stado; then
+            proved=no
+          fi
+
+          if [ "$proved" != yes ]; then
+            echo "::error::scripts/version_check_proof.sh did not behave as specified, so" \
+              "this gate has not been shown to refuse and any pass it reports is" \
+              "worthless. Read its per-case output above before trusting the verdict."
+          fi
+          if [ "$judged" != pass ]; then
+            echo "::error::the version check refused this revision. Its own message above" \
+              "names the required version. Neither this workflow nor that script bumps a" \
+              "version or regenerates a baseline; a person does."
+          fi
+          if [ "$proved" != yes ] || [ "$judged" != pass ]; then
+            false
+          fi
+          echo "The gate refused all four of its refusal cases and passed this revision."
