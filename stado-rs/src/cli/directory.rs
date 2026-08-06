@@ -442,7 +442,13 @@ async fn connect(
         format!("{scheme}://{address}:{port}")
     };
 
-    let status = if no_verify {
+    // Verification happens from this process, so it can only speak for this
+    // machine. Asked to compute another target's view, the honest answer is the
+    // address and an admission that nobody checked it -- probing anyway would
+    // knock on this host's own loopback and report the result as if it came
+    // from somewhere else, which is the confusion this command exists to end.
+    let here = this_target().await.unwrap_or_default();
+    let status = if no_verify || asking != here {
         None
     } else {
         match answers(&url).await {
@@ -468,11 +474,17 @@ async fn connect(
                 "url": url,
                 "verified": status.is_some(),
                 "status": status,
+                "checked_from": if asking == here { Some(here.clone()) } else { None },
             }))?
         );
     } else {
         match status {
             Some(status) => println!("{url}  ({name} on {active}, answered {status})"),
+            None if asking != here => {
+                println!(
+                    "{url}  ({name} on {active}, computed for {asking}, not checked from here)"
+                )
+            }
             None => println!("{url}  ({name} on {active}, unverified)"),
         }
     }
