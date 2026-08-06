@@ -42,6 +42,7 @@ pub mod queue;
 pub mod quota;
 pub mod recovery;
 pub mod registry;
+pub mod release_build;
 pub mod release_cmd;
 pub mod resolver;
 pub mod resources;
