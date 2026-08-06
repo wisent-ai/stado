@@ -17,6 +17,13 @@
 //! `_load_from_gcs` docstring: a broken gsutil install knocked the agent
 //! offline on 2026-05-08 even though the registry was in GCS.
 //!
+//! The same document carries the fleet's [`ServiceDirectory`] — which host
+//! currently serves each service and which consumers may call it — and the
+//! [`PlacementProfile`] groups that move those services between hosts.
+//! [`Registry`] keeps every top-level key it does not model in `extra`, so a
+//! writer built from this checkout cannot delete a block a newer publisher
+//! added.
+//!
 //! DEVIATION from Python: the fetch follows `WC_STORAGE_BACKEND` instead of
 //! hardcoding GCS. Python reads GCS unconditionally, so on an Azure-only
 //! deployment the dashboard compare-and-swaps `registry.json` into the
@@ -768,6 +775,20 @@ pub struct ComputeTarget {
     /// shared workstations from picking up stray queue backlog.
     #[serde(default)]
     pub pinned_only: bool,
+    /// Required version of each stado-managed binary under `~/.stado/bin`,
+    /// keyed by binary name (`stado`, `skarbiec`) and holding the bare
+    /// version number (`0.5.1`), never a prefixed banner like
+    /// `stado 0.5.1`.
+    ///
+    /// This is the registry's DECLARATION of target state, and it is the
+    /// half that was missing: `stado host inventory` could always read what
+    /// a host actually runs, and had nothing to compare it against, so a
+    /// host three releases behind looked exactly like a host at the tip.
+    /// Optional on purpose — a target that declares nothing is reported as
+    /// `undeclared` rather than as drift, so every registry written before
+    /// this field existed stays valid.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub managed_versions: BTreeMap<String, String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -780,6 +801,12 @@ impl ComputeTarget {
 
     pub fn is_provider(&self, provider: crate::capabilities::ProviderId) -> bool {
         self.provider() == Some(provider)
+    }
+
+    /// The version the registry requires of one stado-managed binary on
+    /// this host, or `None` when it declares none.
+    pub fn declared_version(&self, binary: &str) -> Option<&str> {
+        self.managed_versions.get(binary).map(String::as_str)
     }
 }
 
@@ -806,6 +833,253 @@ pub struct Coordinator {
     pub active: bool,
     #[serde(default)]
     pub notes: String,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+// ---------------------------------------------------------------------------
+// registry.json — service directory and placement profiles
+// ---------------------------------------------------------------------------
+
+/// Which host publishes the service directory, and with which binary.
+///
+/// One authority per fleet: a directory written from two boxes is two
+/// directories, and the loser silently serves endpoints nobody is listening
+/// on any more.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DirectoryAuthority {
+    /// Registry target name of the publishing host.
+    pub target: String,
+    /// Absolute path of the `stado` binary that publishes from it.
+    pub command: String,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// Where one host answers for a service.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServiceEndpoint {
+    pub url: String,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// What one consumer is entitled to ask a service for. The directory is the
+/// only place this is written down, so a consumer absent from the map is not
+/// authorized rather than unrestricted.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServiceConsumer {
+    #[serde(default, deserialize_with = "de_null_as_default")]
+    pub capabilities: Vec<String>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// One directory entry: where a service currently runs, and who may call it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Service {
+    /// Placement profile that relocates this service, when it belongs to one.
+    /// Profile members move as a group, in the profile's declared order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement_profile: Option<String>,
+    /// launchd/systemd unit that owns this service when no placement profile
+    /// does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_service: Option<String>,
+    /// Registry target currently serving it — the key consumers resolve
+    /// [`Service::endpoints`] with.
+    pub active_host: String,
+    /// Endpoint per host, including hosts that are standing by. A host that
+    /// carries an endpoint is not thereby serving: only `active_host` is.
+    #[serde(default)]
+    pub endpoints: BTreeMap<String, ServiceEndpoint>,
+    #[serde(default)]
+    pub consumers: BTreeMap<String, ServiceConsumer>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// The fleet's service directory: the single answer to "where does X run
+/// right now, and may I call it".
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServiceDirectory {
+    pub authority: DirectoryAuthority,
+    /// Bumped by the authority on every publication. A consumer that cached
+    /// an older generation is holding endpoints that may already point at a
+    /// host which has handed the service over — see
+    /// [`ServiceDirectoryError::Stale`].
+    pub generation: u64,
+    #[serde(default)]
+    pub services: BTreeMap<String, Service>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// The stable code a machine caller branches on when the service directory it
+/// is holding is older than the one the authority published.
+///
+/// It exists because the alternative was silence: a consumer with a stale
+/// directory dials the previous active host, gets a refused connection, and
+/// reports "connection refused" — which sends the operator to the network
+/// instead of to `stado registry pull`.
+pub const SERVICE_DIRECTORY_STALE_CODE: &str = "SERVICE_DIRECTORY_STALE";
+
+/// Why a service could not be resolved from the directory. Every variant is
+/// a refusal: a lookup NEVER falls back to a guessed host or a default port,
+/// because both produce a call to the wrong process rather than an error.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ServiceDirectoryError {
+    #[error(
+        "{code}: the cached service directory is generation {cached}, the authority \
+         published generation {authority}; refresh it (stado registry pull) and retry — \
+         the cached endpoint for '{service}' may name a host that has already handed \
+         the service over",
+        code = SERVICE_DIRECTORY_STALE_CODE
+    )]
+    Stale {
+        service: String,
+        cached: u64,
+        authority: u64,
+    },
+    #[error("service '{0}' is not declared in the service directory")]
+    UnknownService(String),
+    #[error(
+        "service '{service}' declares active host '{host}', which has no endpoint in the \
+         service directory"
+    )]
+    NoEndpoint { service: String, host: String },
+}
+
+impl ServiceDirectoryError {
+    /// The stable code a machine caller branches on, in the spelling
+    /// `machine::MachineError` emits.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Stale { .. } => SERVICE_DIRECTORY_STALE_CODE,
+            Self::UnknownService(_) => "SERVICE_NOT_IN_DIRECTORY",
+            Self::NoEndpoint { .. } => "SERVICE_ENDPOINT_MISSING",
+        }
+    }
+
+    /// A stale cache is fixed by re-reading the directory, so the same call
+    /// is worth making again. A service the directory does not declare is
+    /// not: that one needs an edit.
+    pub fn retryable(&self) -> bool {
+        matches!(self, Self::Stale { .. })
+    }
+}
+
+impl ServiceDirectory {
+    /// The URL a consumer should call for `service`, fenced against the
+    /// generation the authority last published.
+    ///
+    /// The generation is checked FIRST: a stale directory that happens to
+    /// still name a reachable endpoint is the dangerous case, because the
+    /// call succeeds against the host that no longer owns the service.
+    pub fn endpoint(
+        &self,
+        service: &str,
+        authority_generation: u64,
+    ) -> Result<&str, ServiceDirectoryError> {
+        self.require_generation(service, authority_generation)?;
+        let entry = self
+            .services
+            .get(service)
+            .ok_or_else(|| ServiceDirectoryError::UnknownService(service.to_string()))?;
+        entry
+            .endpoints
+            .get(&entry.active_host)
+            .map(|endpoint| endpoint.url.as_str())
+            .ok_or_else(|| ServiceDirectoryError::NoEndpoint {
+                service: service.to_string(),
+                host: entry.active_host.clone(),
+            })
+    }
+
+    /// Refuse a directory older than the generation the authority published.
+    pub fn require_generation(
+        &self,
+        service: &str,
+        authority_generation: u64,
+    ) -> Result<(), ServiceDirectoryError> {
+        if self.generation < authority_generation {
+            return Err(ServiceDirectoryError::Stale {
+                service: service.to_string(),
+                cached: self.generation,
+                authority: authority_generation,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// A state file a placement profile must carry with the services it moves.
+/// `required` state that is absent aborts the move: half-migrated state is
+/// how a vault ends up on the box that is no longer serving it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlacementState {
+    pub path: String,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// The launchd/systemd unit running one service on one host.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlacementUnit {
+    pub name: String,
+    pub unit: String,
+    pub path: String,
+    /// "launchd" | "systemd".
+    pub kind: String,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// A health check that proves a service came up on the host it moved to.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlacementProbe {
+    pub service: String,
+    pub url: String,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// What one host needs in order to run a placement profile's services.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlacementHost {
+    #[serde(default)]
+    pub units: BTreeMap<String, PlacementUnit>,
+    #[serde(default)]
+    pub probes: Vec<PlacementProbe>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+/// A group of services that move between hosts together, with the order they
+/// stop and start in and the state that travels with them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlacementProfile {
+    pub name: String,
+    #[serde(default)]
+    pub services: Vec<String>,
+    /// Stop order on the host handing over; `start_order` is deliberately
+    /// separate rather than the reverse, because a dependency that must stop
+    /// last does not always start first.
+    #[serde(default)]
+    pub stop_order: Vec<String>,
+    #[serde(default)]
+    pub start_order: Vec<String>,
+    #[serde(default)]
+    pub state: Vec<PlacementState>,
+    #[serde(default)]
+    pub hosts: BTreeMap<String, PlacementHost>,
+    /// Routing rules the mover rewrites, kept verbatim: this checkout does
+    /// not model an entry's shape, and inventing one would delete the parts
+    /// it guessed wrong.
+    #[serde(default)]
+    pub routing: Vec<Value>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -847,12 +1121,37 @@ pub enum RegistryError {
     AmbiguousIdentity { identity: String, names: String },
 }
 
-/// A parsed registry document: targets plus coordinator entries.
-#[derive(Debug, Clone, Default, PartialEq)]
+/// A parsed registry document: targets, coordinator entries, the service
+/// directory, the placement profiles — and, verbatim, every top-level key
+/// this build does not model.
+///
+/// [`Registry::extra`] is load-bearing, not cosmetic. A registry write
+/// replaces the WHOLE document, so a writer built from a checkout that does
+/// not model a key deletes it for everyone: on 2026-08-04 the canonical
+/// document lost `channels`, `enrollment` and `fleets` exactly that way,
+/// between one read and the next. Round-tripping the unmodelled keys
+/// (`schema_version` and `inference` today) makes serializing a `Registry`
+/// back a lossless copy of what was read, whatever the writer's vintage.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct Registry {
     pub targets: Vec<ComputeTarget>,
     pub coordinators: Vec<Coordinator>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_directory: Option<ServiceDirectory>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub placement_profiles: Vec<PlacementProfile>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
+
+/// Top-level registry keys this build models; everything else round-trips
+/// through [`Registry::extra`].
+const MODELLED_TOP_LEVEL_KEYS: [&str; 4] = [
+    "targets",
+    "coordinators",
+    "service_directory",
+    "placement_profiles",
+];
 
 /// Entries with a truthy `name` survive; the rest are skipped (Python
 /// `if isinstance(d, dict) and d.get("name")`).
@@ -903,6 +1202,45 @@ fn parse_coordinators(data: &Value) -> Result<Vec<Coordinator>, RegistryError> {
     Ok(coordinators)
 }
 
+/// The service directory, or `None` when the document carries none. A block
+/// that IS there and does not parse is an error rather than a `None`: a
+/// silently empty directory reads as "no service runs anywhere", which is
+/// indistinguishable from a fleet that is down.
+fn parse_service_directory(data: &Value) -> Result<Option<ServiceDirectory>, RegistryError> {
+    match data
+        .as_object()
+        .and_then(|map| map.get("service_directory"))
+    {
+        None | Some(Value::Null) => Ok(None),
+        Some(raw) => serde_json::from_value(raw.clone())
+            .map(Some)
+            .map_err(|exc| RegistryError::InvalidEntry(format!("service_directory: {exc}"))),
+    }
+}
+
+fn parse_placement_profiles(data: &Value) -> Result<Vec<PlacementProfile>, RegistryError> {
+    match data
+        .as_object()
+        .and_then(|map| map.get("placement_profiles"))
+    {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(raw) => serde_json::from_value(raw.clone())
+            .map_err(|exc| RegistryError::InvalidEntry(format!("placement_profiles: {exc}"))),
+    }
+}
+
+/// Every top-level key this build does not model, kept verbatim so a
+/// read-modify-write cycle cannot drop it.
+fn parse_extra(data: &Value) -> Map<String, Value> {
+    let Value::Object(map) = data else {
+        return Map::new();
+    };
+    map.iter()
+        .filter(|(key, _)| !MODELLED_TOP_LEVEL_KEYS.contains(&key.as_str()))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
 /// Parse a registry document from a JSON string.
 pub fn load_registry_from_str(text: &str) -> Result<Registry, RegistryError> {
     let data: Value =
@@ -910,6 +1248,9 @@ pub fn load_registry_from_str(text: &str) -> Result<Registry, RegistryError> {
     Ok(Registry {
         targets: parse_targets(&data)?,
         coordinators: parse_coordinators(&data)?,
+        service_directory: parse_service_directory(&data)?,
+        placement_profiles: parse_placement_profiles(&data)?,
+        extra: parse_extra(&data),
     })
 }
 
@@ -1222,6 +1563,32 @@ impl Registry {
         self.coordinators.iter().find(|c| c.name == name)
     }
 
+    /// The directory entry for a service, when the registry carries one.
+    pub fn service(&self, name: &str) -> Option<&Service> {
+        self.service_directory.as_ref()?.services.get(name)
+    }
+
+    /// The named placement profile.
+    pub fn placement_profile(&self, name: &str) -> Option<&PlacementProfile> {
+        self.placement_profiles
+            .iter()
+            .find(|profile| profile.name == name)
+    }
+
+    /// The document as JSON, including every top-level key this build does
+    /// not model.
+    ///
+    /// This is what a writer must serialize: unmodelled top-level keys come
+    /// back verbatim out of [`Registry::extra`], so a read-modify-write
+    /// through this method keeps the blocks a newer publisher added. The one
+    /// thing it does not reproduce is what the loader deliberately drops —
+    /// target and coordinator entries with no `name` (Python parity) — and
+    /// `targets` / `coordinators` are always emitted, empty if the document
+    /// carried none.
+    pub fn to_document(&self) -> Value {
+        serde_json::to_value(self).expect("registry serialization is infallible")
+    }
+
     /// Find the unique target declaring the normalized host identity.
     ///
     /// Names, explicit hostname aliases, and the host part of legacy SSH
@@ -1304,6 +1671,240 @@ mod tests {
         );
         assert_eq!(registry.coordinators[0].extra["custom"], Value::Bool(true));
         assert_eq!(registry.coordinators[0].runtime, "daemon");
+    }
+
+    /// A registry document this build reads and writes back must come out the
+    /// way it went in: the service directory, the placement profiles, and —
+    /// crucially — every key this checkout does not model. The fixture is
+    /// inline because the guarantee is about the document shape, not about
+    /// whatever the operator's `~/.stado` happens to hold today.
+    const ROUND_TRIP_DOCUMENT: &str = r#"{
+        "schema_version": 2,
+        "targets": [{"name": "charless-mac-mini", "kind": "local"}],
+        "coordinators": [{"name": "local-control-plane", "active": true}],
+        "service_directory": {
+            "authority": {
+                "target": "charless-mac-mini",
+                "command": "/opt/stado/bin/stado",
+                "published_by": "stado 0.4.392"
+            },
+            "generation": 7,
+            "services": {
+                "skarbiec": {
+                    "placement_profile": "vault",
+                    "managed_service": "com.wisent.skarbiec",
+                    "active_host": "charless-mac-mini",
+                    "endpoints": {
+                        "charless-mac-mini": {"url": "http://100.120.25.24:8200", "tls": false},
+                        "ubuntu-server-rtx-pro-6000": {"url": "http://100.90.11.4:8200"}
+                    },
+                    "consumers": {"weles": {"capabilities": ["read"], "quota": 32}},
+                    "handed_over_at": "2026-08-04T11:02:00Z"
+                }
+            },
+            "published_at": "2026-08-04T11:03:00Z"
+        },
+        "placement_profiles": [{
+            "name": "vault",
+            "services": ["skarbiec"],
+            "stop_order": ["skarbiec"],
+            "start_order": ["skarbiec"],
+            "state": [{"path": "/var/lib/skarbiec", "required": true, "owner": "root"}],
+            "hosts": {
+                "charless-mac-mini": {
+                    "units": {"skarbiec": {
+                        "name": "skarbiec",
+                        "unit": "com.wisent.skarbiec",
+                        "path": "/Library/LaunchDaemons/com.wisent.skarbiec.plist",
+                        "kind": "launchd",
+                        "keep_alive": true
+                    }},
+                    "probes": [{
+                        "service": "skarbiec",
+                        "url": "http://127.0.0.1:8200/health",
+                        "timeout_seconds": 5
+                    }],
+                    "notes": "primary"
+                }
+            },
+            "routing": [{"kind": "caddy", "site": "vault.wisent.internal"}],
+            "rehearsed_at": "2026-08-01T09:00:00Z"
+        }],
+        "inference": {"pools": [{"name": "default", "targets": ["charless-mac-mini"]}]}
+    }"#;
+
+    #[test]
+    fn document_round_trip_keeps_directory_profiles_and_unmodelled_keys() {
+        let registry = load_registry_from_str(ROUND_TRIP_DOCUMENT).expect("fixture loads");
+
+        // The modelled blocks are parsed, not merely carried.
+        let directory = registry
+            .service_directory
+            .as_ref()
+            .expect("service_directory is parsed");
+        assert_eq!(directory.generation, 7);
+        assert_eq!(directory.authority.target, "charless-mac-mini");
+        let service = registry.service("skarbiec").expect("directory entry");
+        assert_eq!(service.active_host, "charless-mac-mini");
+        assert_eq!(
+            directory
+                .endpoint("skarbiec", directory.generation)
+                .unwrap(),
+            "http://100.120.25.24:8200"
+        );
+        let profile = registry.placement_profile("vault").expect("profile");
+        assert_eq!(profile.stop_order, ["skarbiec"]);
+        assert_eq!(profile.state[0].path, "/var/lib/skarbiec");
+
+        // Keys this build does not model survive the parse, at the top level
+        // and inside every nested block.
+        assert_eq!(
+            registry.extra["inference"],
+            serde_json::json!({"pools": [{"name": "default", "targets": ["charless-mac-mini"]}]})
+        );
+        assert_eq!(registry.extra["schema_version"], serde_json::json!(2));
+        assert_eq!(
+            directory.extra["published_at"],
+            serde_json::json!("2026-08-04T11:03:00Z")
+        );
+        assert_eq!(
+            directory.authority.extra["published_by"],
+            serde_json::json!("stado 0.4.392")
+        );
+        assert_eq!(
+            service.extra["handed_over_at"],
+            serde_json::json!("2026-08-04T11:02:00Z")
+        );
+        assert_eq!(
+            service.endpoints["charless-mac-mini"].extra["tls"],
+            serde_json::json!(false)
+        );
+        assert_eq!(
+            service.consumers["weles"].extra["quota"],
+            serde_json::json!(32)
+        );
+        assert_eq!(
+            profile.extra["rehearsed_at"],
+            serde_json::json!("2026-08-01T09:00:00Z")
+        );
+        assert_eq!(profile.state[0].extra["owner"], serde_json::json!("root"));
+        let host = &profile.hosts["charless-mac-mini"];
+        assert_eq!(host.extra["notes"], serde_json::json!("primary"));
+        assert_eq!(
+            host.units["skarbiec"].extra["keep_alive"],
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            host.probes[0].extra["timeout_seconds"],
+            serde_json::json!(5)
+        );
+        assert_eq!(
+            profile.routing,
+            [serde_json::json!({"kind": "caddy", "site": "vault.wisent.internal"})]
+        );
+
+        // The write side is what the 2026-08-04 data loss came through: every
+        // block above must reappear in the serialized document, unmodelled
+        // keys at their original top-level position rather than nested under
+        // a field name.
+        let source: Value = serde_json::from_str(ROUND_TRIP_DOCUMENT).expect("fixture is JSON");
+        let document = registry.to_document();
+        for key in [
+            "schema_version",
+            "inference",
+            "service_directory",
+            "placement_profiles",
+        ] {
+            assert_eq!(document[key], source[key], "{key} did not round-trip");
+        }
+        assert!(
+            document.get("extra").is_none(),
+            "unmodelled keys must be flattened into the document, not nested: {document}"
+        );
+
+        // And the whole cycle is lossless: re-reading what we wrote yields the
+        // same registry, so a read-modify-write cannot erode the document.
+        let reloaded = load_registry_from_str(&document.to_string()).expect("reload");
+        assert_eq!(reloaded, registry);
+    }
+
+    /// `managed_versions` is the registry's declaration of what each host
+    /// SHOULD be running. It is optional in both directions: a target
+    /// without it stays valid and serializes without the key, and a target
+    /// with it round-trips the map intact.
+    #[test]
+    fn managed_versions_is_optional_and_round_trips() {
+        // The fixture declares none, and must keep loading and writing
+        // exactly as it did before the field existed.
+        let registry = load_registry_from_str(ROUND_TRIP_DOCUMENT).expect("fixture loads");
+        let target = registry.lookup("charless-mac-mini").expect("target loads");
+        assert!(target.managed_versions.is_empty());
+        assert_eq!(target.declared_version("stado"), None);
+        let document = registry.to_document();
+        assert!(
+            document["targets"][0].get("managed_versions").is_none(),
+            "an empty declaration must not appear in the document: {document}"
+        );
+
+        let declared = load_registry_from_str(
+            r#"{
+                "targets": [{
+                    "name": "charless-mac-mini",
+                    "kind": "local",
+                    "managed_versions": {"stado": "0.5.1", "skarbiec": "0.1.3"},
+                    "role": "authority"
+                }]
+            }"#,
+        )
+        .expect("declaring document loads");
+        let target = declared
+            .lookup("charless-mac-mini")
+            .expect("declaring target loads");
+        assert_eq!(target.declared_version("stado"), Some("0.5.1"));
+        assert_eq!(target.declared_version("skarbiec"), Some("0.1.3"));
+        assert_eq!(target.declared_version("weles"), None);
+        // Unmodelled per-target keys still ride along in `extra`, and the
+        // declaration is written back where it was read from.
+        assert_eq!(target.extra["role"], serde_json::json!("authority"));
+        let reloaded = load_registry_from_str(&declared.to_document().to_string())
+            .expect("declaring document reloads");
+        assert_eq!(reloaded, declared);
+    }
+
+    #[test]
+    fn malformed_directory_blocks_are_errors_not_silence() {
+        // A directory that IS there but does not parse must not read as "no
+        // service runs anywhere": that is indistinguishable from a fleet that
+        // is down, and it is what a writer would then publish.
+        let err =
+            load_registry_from_str(r#"{"service_directory": {"generation": 7}}"#).unwrap_err();
+        assert!(
+            matches!(err, RegistryError::InvalidEntry(_)),
+            "expected InvalidEntry, got {err:?}"
+        );
+        assert!(err.to_string().contains("service_directory"), "{err}");
+
+        let err = load_registry_from_str(
+            r#"{"service_directory": {"authority": {"target": "t", "command": "c"},
+                "generation": "seven"}}"#,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, RegistryError::InvalidEntry(_)),
+            "expected InvalidEntry, got {err:?}"
+        );
+
+        let err = load_registry_from_str(r#"{"placement_profiles": {"vault": {}}}"#).unwrap_err();
+        assert!(
+            matches!(err, RegistryError::InvalidEntry(_)),
+            "expected InvalidEntry, got {err:?}"
+        );
+        assert!(err.to_string().contains("placement_profiles"), "{err}");
+
+        // An absent block, by contrast, is legitimately empty.
+        let empty = load_registry_from_str(r#"{"targets": []}"#).unwrap();
+        assert!(empty.service_directory.is_none());
+        assert!(empty.placement_profiles.is_empty());
     }
 
     #[test]

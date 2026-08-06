@@ -361,6 +361,7 @@ mod tests {
             agent_args: Vec::new(),
             vram_gb: None,
             pinned_only: false,
+            managed_versions: Default::default(),
             extra: Default::default(),
         }
     }

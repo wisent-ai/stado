@@ -8,9 +8,10 @@
 //!
 //! Errors are [`MachineError`] with a stable `code` (INVALID_REQUEST,
 //! IDEMPOTENCY_CONFLICT, NOT_FOUND, INVALID_CURSOR, NOT_TERMINAL,
-//! ARTIFACT_SECURITY, NO_ARTIFACTS, ...) and a `retryable` flag, exactly the
-//! contract Python's `_invoke` emits. Unexpected storage/IO/JSON failures
-//! map to code INTERNAL with retryable=false (Python `_invoke`'s catch-all).
+//! ARTIFACT_SECURITY, NO_ARTIFACTS, SERVICE_DIRECTORY_STALE, ...) and a
+//! `retryable` flag, exactly the contract Python's `_invoke` emits.
+//! Unexpected storage/IO/JSON failures map to code INTERNAL with
+//! retryable=false (Python `_invoke`'s catch-all).
 
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -132,6 +133,21 @@ impl From<std::io::Error> for MachineError {
 impl From<serde_json::Error> for MachineError {
     fn from(exc: serde_json::Error) -> Self {
         Self::new("INTERNAL", exc.to_string())
+    }
+}
+
+/// A service-directory refusal keeps its own code instead of collapsing into
+/// INTERNAL. SERVICE_DIRECTORY_STALE is the one a caller can act on without
+/// a human: re-read the directory and call again, rather than treating a
+/// handed-over service as an outage.
+impl From<crate::targets::ServiceDirectoryError> for MachineError {
+    fn from(exc: crate::targets::ServiceDirectoryError) -> Self {
+        let (code, message) = (exc.code(), exc.to_string());
+        if exc.retryable() {
+            Self::retryable(code, message)
+        } else {
+            Self::new(code, message)
+        }
     }
 }
 

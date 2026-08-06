@@ -41,7 +41,7 @@ Job state lives in the backend selected by `STADO_CONFIG`:
 | `capacity/<consumer-id>.json` | Per-consumer resource broadcast. |
 | `control/...` | Pause, drain, migration, and coordinator control state. |
 | `config/quotas.json` | Provider-neutral reservation overlay. |
-| `registry.json` | Versioned compute-target and coordinator registry. |
+| `registry.json` | Versioned compute-target and coordinator registry, plus the `service_directory` and `placement_profiles` blocks. Each target may carry `managed_versions`, the declared version of every stado-managed binary on that host. Top-level keys a reader does not model round-trip verbatim, so a write never deletes them. |
 | `system/storage-layout.json` | Versioned storage-layout marker. |
 
 The queued-to-running claim is create-if-absent and therefore has one winner.
@@ -121,3 +121,40 @@ The cloud scheduler reads these to decide whether to *yield* a queued
 job to a free local consumer instead of dispatching a paid VM. The
 yield decision uses the cost-optimal knapsack: jobs with the highest
 `$-saved-per-GB-of-local-VRAM` get marked for local pickup first.
+
+## Declared host state and reconciliation
+
+The registry is the fleet's declaration of what SHOULD be true, in two
+places:
+
+- `targets[].managed_versions` — the version each stado-managed binary
+  (`stado`, `skarbiec`) is required to be at on that host. Optional: a
+  target that omits it declares nothing, and is reported as `undeclared`
+  rather than as agreeing.
+- `service_directory.services[].endpoints[<target>]` — the endpoint that
+  host answers on for a service, whether or not it is the active host.
+
+`stado host inventory <target>` is the observation, and it reconciles the
+two along axes that are deliberately independent of each other:
+
+| Axis | Question | States |
+|---|---|---|
+| Marker vs listener | Is anything listening where `$HOME/.stado/forwards/<name>.url` points? | `matched`, `stale`, `unreadable`, `unknown` |
+| Marker vs registry | Does that marker point where `service_directory` declares this host answers? | `matched`, `disagrees`, `undeclared` |
+| Binary vs registry | Is the installed binary at the version `managed_versions` requires? | `matched`, `behind`, `ahead`, `mismatched`, `undeclared`, `unknown` |
+
+Keeping the first two apart is the whole point. A marker can be `matched`
+against the socket table and `disagrees` against the registry at the same
+time — on `charless-mac-mini`, `skarbiec-weles` names `8895`, something is
+listening on `8895`, and the directory declares `19095`. Every liveness
+check passes, and every consumer that resolves through the directory lands
+somewhere the marker never mentioned. Collapsing the two axes into one
+"drift" verdict hides exactly that case.
+
+Detection precedes automatic delivery, in that order and on purpose.
+Software that installs builds onto hosts without being able to state the
+declared version, read the actual version, and name the difference is not
+automation; it is a faster way to break production. The declaration
+(`managed_versions`) came first, the visibility (`host inventory`
+reconciliation) second, and delivery is built on top of both rather than
+beside them.

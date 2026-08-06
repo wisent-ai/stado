@@ -266,7 +266,7 @@ fn prefilter_candidates_with_routing(
             .to_string();
         cand.push((-prio, ts, jid));
     }
-    cand.sort_by(|left, right| (left.0, left.1).cmp(&(right.0, right.1)));
+    cand.sort_by_key(|left| (left.0, left.1));
     cand.truncate(window_budget);
     (
         cand.into_iter().map(|(_, _, job_id)| job_id).collect(),
