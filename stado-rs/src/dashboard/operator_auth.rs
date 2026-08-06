@@ -5,8 +5,8 @@
 //! only through the dedicated business-messaging grant, so the grant contract
 //! is enforced here exactly as the deployment configuration declares it. The
 //! application-plane consumers of the same grant (APNs, FCM, the device
-//! registry, and email) now live in the private `wisent-backend-adapters`
-//! service; only this operator lookup remains in Stado.
+//! registry, and email) now live in the private `wisent-backend` service; only
+//! this operator lookup remains in Stado.
 
 use std::collections::BTreeSet;
 
