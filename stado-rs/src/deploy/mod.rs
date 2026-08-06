@@ -44,6 +44,7 @@ use std::time::Duration;
 
 use futures::future::BoxFuture;
 
+pub mod artifact_install;
 pub mod bootstrap;
 pub mod host_build_caches;
 pub mod host_channel;
