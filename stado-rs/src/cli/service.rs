@@ -22,7 +22,7 @@ use clap::Subcommand;
 use serde_json::{json, Value};
 
 use crate::deploy::service::{
-    self, ManagedService, ServiceEnv, ServiceLog, ServiceStatus, SOURCE_RECOVERY,
+    self, ManagedService, ServiceEnv, ServiceLog, ServiceStatus, SOURCE_RECOVERY, SOURCE_REGISTRY,
 };
 use crate::deploy::{host_channel, production_runner, DeployError};
 use crate::queue::JobStorage;
@@ -46,6 +46,12 @@ pub enum ServiceCommands {
         #[arg(long)]
         json: bool,
     },
+
+    /// Registry-managed services carrying Echo onboarding product metadata.
+    ///
+    /// Emits the versioned JSON envelope accepted by Echo's Stado catalog
+    /// synchronization endpoint.
+    OnboardingCatalog,
 
     /// One service's state everywhere it is managed.
     Status {
@@ -196,9 +202,44 @@ pub enum ServiceCommands {
     Adopt {
         /// launchd label or systemd unit name, as the host knows it.
         unit: String,
-        /// Registry host that runs it.
+        /// Explicit registry host that runs it.
+        #[arg(
+            long,
+            conflicts_with = "host_heuristic",
+            required_unless_present = "host_heuristic"
+        )]
+        host: Option<String>,
+        /// Declarative placement selector resolved against the registry.
+        #[arg(long, conflicts_with = "host")]
+        host_heuristic: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Attach central onboarding product metadata to a managed service.
+    ///
+    /// The metadata becomes part of the canonical Stado registry and is
+    /// emitted by `service list --json` for Echo catalog synchronization.
+    Onboarding {
+        /// Service name, launchd label, or systemd unit.
+        name: String,
+        /// Registry host that declares the service.
         #[arg(long)]
         host: String,
+        #[arg(long)]
+        product_id: String,
+        #[arg(long)]
+        display_name: String,
+        #[arg(long)]
+        repository: String,
+        #[arg(long, value_delimiter = ',', num_args = 1..)]
+        surfaces: Vec<String>,
+        #[arg(long)]
+        first_success_fact: String,
+        #[arg(long, default_value = "both")]
+        onboarding_kind: String,
+        #[arg(long, default_value = "active")]
+        status: String,
         #[arg(long)]
         json: bool,
     },
@@ -222,9 +263,16 @@ pub enum ServiceCommands {
     Deploy {
         /// Service name; lowercase letters, digits, '.', '-' and '_'.
         name: String,
-        /// Registry host to install it on.
-        #[arg(long)]
-        host: String,
+        /// Explicit registry host to install it on.
+        #[arg(
+            long,
+            conflicts_with = "host_heuristic",
+            required_unless_present = "host_heuristic"
+        )]
+        host: Option<String>,
+        /// Declarative placement selector resolved against the registry.
+        #[arg(long, conflicts_with = "host")]
+        host_heuristic: Option<String>,
         /// Absolute path, ON THE TARGET HOST, of the program the unit runs.
         /// The plist / systemd unit is rendered around it by the same
         /// renderer `stado bootstrap --local` uses.
@@ -286,6 +334,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
     match command {
         ServiceCommands::Directory(sub) => crate::cli::directory::dispatch(sub).await,
         ServiceCommands::List { json } => list(json).await,
+        ServiceCommands::OnboardingCatalog => onboarding_catalog().await,
         ServiceCommands::Status { name, json } => status(&name, json).await,
         ServiceCommands::Update {
             name,
@@ -350,15 +399,57 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             })
             .await
         }
-        ServiceCommands::Adopt { unit, host, json } => adopt(&unit, &host, json).await,
+        ServiceCommands::Adopt {
+            unit,
+            host,
+            host_heuristic,
+            json,
+        } => adopt(&unit, host.as_deref(), host_heuristic.as_deref(), json).await,
+        ServiceCommands::Onboarding {
+            name,
+            host,
+            product_id,
+            display_name,
+            repository,
+            surfaces,
+            first_success_fact,
+            onboarding_kind,
+            status,
+            json,
+        } => {
+            onboarding(OnboardingOptions {
+                name: &name,
+                host: &host,
+                product_id: &product_id,
+                display_name: &display_name,
+                repository: &repository,
+                surfaces,
+                first_success_fact: &first_success_fact,
+                onboarding_kind: &onboarding_kind,
+                status: &status,
+                as_json: json,
+            })
+            .await
+        }
         ServiceCommands::Retire { unit, host, json } => retire(&unit, &host, json).await,
         ServiceCommands::Deploy {
             name,
             host,
+            host_heuristic,
             from,
             from_artifact,
             json,
-        } => deploy(&name, &host, from, from_artifact, json).await,
+        } => {
+            deploy(
+                &name,
+                host.as_deref(),
+                host_heuristic.as_deref(),
+                from,
+                from_artifact,
+                json,
+            )
+            .await
+        }
         ServiceCommands::Logs {
             name,
             host,
@@ -375,6 +466,34 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
 
 fn click(exc: DeployError) -> CmdError {
     CmdError::click(exc.to_string())
+}
+async fn resolve_placement(
+    host: Option<&str>,
+    host_heuristic: Option<&str>,
+) -> Result<(crate::targets::ComputeTarget, Option<String>), CmdError> {
+    let resolved_host = if let Some(host) = host {
+        host.to_string()
+    } else if let Some(heuristic) = host_heuristic {
+        let registry = targets::load_registry_auto()
+            .await
+            .map_err(|exc| CmdError::click(exc.to_string()))?;
+        registry
+            .lookup_host_heuristic(heuristic)
+            .map(|target| target.name.clone())
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "host heuristic '{heuristic}' matches no local registry target"
+                ))
+            })?
+    } else {
+        return Err(CmdError::click(
+            "either --host or --host-heuristic is required".to_string(),
+        ));
+    };
+    let target = host_channel::canonical_target(&resolved_host)
+        .await
+        .map_err(click)?;
+    Ok((target, host_heuristic.map(str::to_string)))
 }
 
 /// Reuse the host command's provider-neutral beacon store selection.
@@ -448,6 +567,17 @@ async fn list(json: bool) -> Result<(), CmdError> {
     let store = beacon_store().await?;
     let rows = service::list_services(&store).await.map_err(click)?;
     render_status(&rows, json)
+}
+
+async fn onboarding_catalog() -> Result<(), CmdError> {
+    let store = beacon_store().await?;
+    let rows = service::list_services(&store).await.map_err(click)?;
+    let services: Vec<Value> = rows
+        .iter()
+        .filter(|row| row.service.source == SOURCE_REGISTRY && row.service.onboarding.is_some())
+        .map(ServiceStatus::to_json)
+        .collect();
+    print_json(&json!({"schema_version": 1, "services": services}))
 }
 
 async fn status(name: &str, json: bool) -> Result<(), CmdError> {
@@ -968,8 +1098,48 @@ async fn record_declaration(record: &ManagedService) -> Result<String, CmdError>
     registry::push_document(&document).await
 }
 
-async fn adopt(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
-    let target = host_channel::canonical_target(host).await.map_err(click)?;
+struct OnboardingOptions<'a> {
+    name: &'a str,
+    host: &'a str,
+    product_id: &'a str,
+    display_name: &'a str,
+    repository: &'a str,
+    surfaces: Vec<String>,
+    first_success_fact: &'a str,
+    onboarding_kind: &'a str,
+    status: &'a str,
+    as_json: bool,
+}
+
+async fn onboarding(options: OnboardingOptions<'_>) -> Result<(), CmdError> {
+    let mut document = registry::fetch_document().await?;
+    let record = service::set_service_onboarding(
+        &mut document,
+        options.host,
+        options.name,
+        service::OnboardingProduct {
+            product_id: options.product_id.to_string(),
+            display_name: options.display_name.to_string(),
+            repository: options.repository.to_string(),
+            surface_kinds: options.surfaces,
+            first_success_fact: options.first_success_fact.to_string(),
+            onboarding_kind: options.onboarding_kind.to_string(),
+            status: options.status.to_string(),
+        },
+    )
+    .map_err(click)?;
+    let generation = registry::push_document(&document).await?;
+    render_mutation("onboarding", &record, &generation, None, options.as_json)
+}
+
+async fn adopt(
+    unit: &str,
+    host: Option<&str>,
+    host_heuristic: Option<&str>,
+    json: bool,
+) -> Result<(), CmdError> {
+    let (target, host_heuristic) = resolve_placement(host, host_heuristic).await?;
+    let host = target.name.clone();
     let runner = production_runner();
     let report = service::probe_service(&target, unit, &runner)
         .await
@@ -990,7 +1160,8 @@ async fn adopt(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
         )));
     }
 
-    let record = service::record_from_report(host, unit, &report, &now());
+    let record =
+        service::record_from_report(&host, host_heuristic.as_deref(), unit, &report, &now());
     let generation = record_declaration(&record).await?;
     render_mutation(
         "adopted",
@@ -1043,12 +1214,14 @@ async fn retire(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
 
 async fn deploy(
     name: &str,
-    host: &str,
+    host: Option<&str>,
+    host_heuristic: Option<&str>,
     from: Option<String>,
     from_artifact: Option<String>,
     json: bool,
 ) -> Result<(), CmdError> {
-    let target = host_channel::canonical_target(host).await.map_err(click)?;
+    let (target, host_heuristic) = resolve_placement(host, host_heuristic).await?;
+    let host = target.name.clone();
     // Exactly one source. Neither is a sensible default: a path deploys
     // whatever is on the host with no version identity, and an artifact
     // deploys a named version; guessing between them is how a host ends up
@@ -1094,7 +1267,8 @@ async fn deploy(
         )));
     }
 
-    let record = service::record_from_report(host, name, &report, &now());
+    let record =
+        service::record_from_report(&host, host_heuristic.as_deref(), name, &report, &now());
     let generation = match record_declaration(&record).await {
         Ok(generation) => generation,
         // The unit is on the host and running; only the declaration failed.

@@ -832,21 +832,17 @@ async fn get(
     name: &str,
     field: Option<&str>,
 ) -> Result<(), CmdError> {
-    // A named field is what the broker's read contract asks for, so ask for it
-    // that way rather than pulling the whole item back and slicing here. The
-    // difference is not stylistic: a broker that requires a field refuses the
-    // whole-item read outright, and every caller that sliced locally started
-    // failing the moment the contract moved.
     if let Some(field) = field {
         let raw = vault
-            .read_field(name, field)
+            .read_string(name, field)
             .await
-            .map_err(|err| CmdError::click(err.to_string()))?;
-        let raw = raw.as_str().filter(|raw| !raw.is_empty()).ok_or_else(|| {
-            CmdError::click(format!(
-                "credential item {name:?} has no non-empty string field {field:?}"
-            ))
-        })?;
+            .map_err(|err| CmdError::click(err.to_string()))?
+            .filter(|raw| !raw.is_empty())
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "credential item {name:?} has no non-empty string field {field:?}"
+                ))
+            })?;
         println!("{raw}");
         return Ok(());
     }
