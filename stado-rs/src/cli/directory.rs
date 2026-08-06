@@ -290,7 +290,7 @@ fn routable_address(target: &targets::ComputeTarget) -> Option<String> {
 /// the port is read back out of the address declared for the placed host --
 /// that address is the one written by whoever started the service, so its port
 /// is a fact even while the address around it is not.
-fn service_port(entry: &Value, active: &str) -> Option<u16> {
+pub(crate) fn service_port(entry: &Value, active: &str) -> Option<u16> {
     if let Some(port) = entry.get("port").and_then(Value::as_u64) {
         return u16::try_from(port).ok();
     }
