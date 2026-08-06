@@ -117,6 +117,8 @@ print(f"source_specs={shlex.quote(source_specs)}")
 stage = recipe.get("stage") or {}
 pairs = " ".join(f"{shlex.quote(dest)}={shlex.quote(src)}" for dest, src in stage.items())
 print(f"stage_pairs={shlex.quote(pairs)}")
+after = recipe.get("after_stage") or []
+print(f"after_stage={shlex.quote(chr(10).join(after))}")
 PY
 eval "$(/usr/bin/python3 "$reader" "$recipe" "$platform")"
 
@@ -152,6 +154,17 @@ for pair in $stage_pairs; do
   mkdir -p "$stage/$(dirname "$dest")"
   cp -R "$src" "$stage/$dest"
 done
+
+# Some bundles are not finished by copying: a config generator has to run with
+# the staged tree in front of it. Declared separately from the build so it runs
+# after staging, with STAGE pointing at what will be archived.
+if [ -n "${after_stage:-}" ]; then
+  STAGE="$stage" sh -c "$after_stage" || {
+    echo "STADO_STATUS=failed"
+    echo "STADO_DETAIL=after_stage step failed"
+    exit 1
+  }
+fi
 
 archive="$work/@SLUG@.tar.gz"
 rm -f "$archive"
