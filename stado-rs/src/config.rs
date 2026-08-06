@@ -1471,7 +1471,6 @@ pub const ACTIVE_RELEASE_PUBLISHERS: &[&str] = &[
     "stado",
     "trading-autonomy",
     "wisent-backend",
-    "wisent-images",
 ];
 
 pub const RELEASE_API_VERIFIER_CONSUMER: &str = "stado-release-api-verifier";
