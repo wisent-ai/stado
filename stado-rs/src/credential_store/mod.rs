@@ -241,3 +241,16 @@ pub async fn read_item_with(
         Backend::File { path } => file::file_read_item(&path, id),
     }
 }
+
+/// The broker's base URL when the selected store is a Skarbiec, and `None`
+/// when it is a file. Exposed for diagnostics that need to talk to the broker
+/// directly rather than through a `Client`, which would need a grant the probe
+/// deliberately does without.
+pub fn skarbiec_url() -> Option<String> {
+    match selected().ok()? {
+        Backend::Skarbiec { url } => {
+            Some(url.unwrap_or_else(|| crate::config::skarbiec_url().to_string()))
+        }
+        Backend::File { .. } => None,
+    }
+}

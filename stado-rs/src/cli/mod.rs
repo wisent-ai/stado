@@ -26,6 +26,7 @@ pub mod control_plane;
 pub mod coordinator;
 pub mod cost;
 pub mod dashboard;
+pub mod directory;
 pub mod disk_cleanup;
 pub mod doctor;
 pub mod host;
@@ -941,7 +942,13 @@ enum RegistryCommands {
     /// Validate a local registry-v2 JSON document.
     Validate { path: Option<String> },
     /// Upload local registry.json to the canonical registry object.
-    Push { path: Option<String> },
+    Push {
+        path: Option<String>,
+        /// Allow a write that deletes a top-level key the canonical document
+        /// still carries. Without this the upload is refused and names them.
+        #[arg(long)]
+        force: bool,
+    },
     /// Print the canonical registry to stdout.
     Pull,
     /// Print which registry target is this machine.
@@ -1055,6 +1062,23 @@ enum HostCommands {
         #[arg(long)]
         dry_run: bool,
         /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Replace an owner-only Stado program on TARGET with a build proven to run there.
+    #[command(name = "install-binary")]
+    InstallBinary {
+        target: String,
+        /// Local executable to install.
+        #[arg(long)]
+        from: Option<String>,
+        /// Put the previous build back instead of installing a new one.
+        #[arg(long)]
+        rollback: bool,
+        /// Basename under $HOME/.stado/bin on the target.
+        #[arg(long, default_value = "stado")]
+        name: String,
+        /// Emit the installation report as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -1488,7 +1512,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         } => control_plane::cloud(bind, port, interval).await,
         Commands::Registry(sub) => match sub {
             RegistryCommands::Validate { path } => registry::validate(path),
-            RegistryCommands::Push { path } => registry::push(path).await,
+            RegistryCommands::Push { path, force } => registry::push(path, force).await,
             RegistryCommands::Pull => registry::pull().await,
             RegistryCommands::SelfTarget { name_only } => registry::self_target(name_only).await,
             RegistryCommands::Doctor { json } => registry::doctor(json).await,
@@ -1558,6 +1582,13 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 dry_run,
                 json,
             } => host::cleanup(&target, dry_run, json).await,
+            HostCommands::InstallBinary {
+                target,
+                from,
+                name,
+                rollback,
+                json,
+            } => host::install_binary(&target, from.as_deref(), &name, rollback, json).await,
             HostCommands::InstallHelper {
                 target,
                 source,

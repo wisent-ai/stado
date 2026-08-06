@@ -32,6 +32,10 @@ use super::{registry, table, CmdError};
 
 #[derive(Subcommand)]
 pub enum ServiceCommands {
+    /// Where a service is reachable from here, and who may use it.
+    #[command(subcommand)]
+    Directory(crate::cli::directory::DirectoryCommands),
+
     /// Every registry-managed service across all hosts, with its state.
     ///
     /// Answered from the latest health beacons, so it costs no ssh and
@@ -63,6 +67,57 @@ pub enum ServiceCommands {
         name: String,
         /// Restrict to one registry host; omit to restart it everywhere it
         /// is managed.
+        #[arg(long)]
+        host: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Move an already-managed service onto a new artifact version.
+    ///
+    /// `deploy` installs a unit that is not yet managed and refuses to touch one
+    /// that is. This is the other half: the unit is left exactly as it is, the
+    /// new version is placed beside the running one and `current` is relinked,
+    /// so the change takes effect on the next restart and a rollback is a
+    /// relink rather than a redeploy.
+    Update {
+        /// Service name as the registry manages it.
+        name: String,
+        #[arg(long)]
+        host: String,
+        /// Published artifact to install.
+        #[arg(long)]
+        from_artifact: String,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// What a managed unit actually runs: its program, arguments and unit file.
+    ///
+    /// `env` answers what the unit runs *with*; nothing answered what it runs.
+    /// That gap is why a restart that dropped every argument after the program
+    /// path looked like a broken service rather than a broken restart.
+    Show {
+        /// Service name, or the host's own name for the unit.
+        name: String,
+        /// Restrict to one registry host.
+        #[arg(long)]
+        host: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Stop one managed unit, including a process the unit no longer owns.
+    ///
+    /// `retire` removes a service from management; this only stops it. The
+    /// difference matters when a restart has previously spawned the program
+    /// outside its own label: launchctl then disowns it, the stale process
+    /// keeps the port, and every later restart dies on "address already in
+    /// use" while the broken instance serves on.
+    Stop {
+        /// Service name, or the host's own name for the unit.
+        name: String,
+        /// Restrict to one registry host; omit to stop it everywhere it is managed.
         #[arg(long)]
         host: Option<String>,
         #[arg(long)]
@@ -221,8 +276,16 @@ pub enum ServiceCommands {
         /// Absolute path, ON THE TARGET HOST, of the program the unit runs.
         /// The plist / systemd unit is rendered around it by the same
         /// renderer `stado bootstrap --local` uses.
-        #[arg(long)]
-        from: String,
+        #[arg(long, conflicts_with = "from_artifact")]
+        from: Option<String>,
+        /// Published artifact to install and run instead of a path already on
+        /// the host. The reference is resolved to an immutable version, that
+        /// version is placed under ~/.stado/services/NAME/<version>/, its
+        /// declared sha256 is verified there, and `current` is moved onto it.
+        /// The unit runs through `current`, so a later install or a rollback
+        /// is a relink rather than a redeploy.
+        #[arg(long = "from-artifact")]
+        from_artifact: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -269,9 +332,18 @@ fn default_log_lines() -> usize {
 
 pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
     match command {
+        ServiceCommands::Directory(sub) => crate::cli::directory::dispatch(sub).await,
         ServiceCommands::List { json } => list(json).await,
         ServiceCommands::OnboardingCatalog => onboarding_catalog().await,
         ServiceCommands::Status { name, json } => status(&name, json).await,
+        ServiceCommands::Update {
+            name,
+            host,
+            from_artifact,
+            json,
+        } => update(&name, &host, &from_artifact, json).await,
+        ServiceCommands::Show { name, host, json } => show(&name, host.as_deref(), json).await,
+        ServiceCommands::Stop { name, host, json } => stop(&name, host.as_deref(), json).await,
         ServiceCommands::Restart { name, host, json } => {
             restart(&name, host.as_deref(), json).await
         }
@@ -365,13 +437,15 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             host,
             host_heuristic,
             from,
+            from_artifact,
             json,
         } => {
             deploy(
                 &name,
                 host.as_deref(),
                 host_heuristic.as_deref(),
-                &from,
+                from,
+                from_artifact,
                 json,
             )
             .await
@@ -589,17 +663,135 @@ async fn restart(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdEr
     fail_if_any(&failures, "restart")
 }
 
+async fn update(name: &str, host: &str, reference: &str, json: bool) -> Result<(), CmdError> {
+    let target = host_channel::canonical_target(host).await.map_err(click)?;
+    // The service must already be managed here: this moves a unit forward, and
+    // silently installing a version for a unit nobody runs would look like a
+    // deployment while changing nothing.
+    let services = declared_matching(name, Some(host)).await?;
+    if services.is_empty() {
+        return Err(CmdError::click(format!(
+            "{host} does not manage {name}; deploy it first"
+        )));
+    }
+    // The registry name is the unit label; the artifact directory is whatever
+    // the unit's own program path reads from. Deriving it from the unit means
+    // the new version lands where the running one is actually read, instead of
+    // beside it under a directory that only matches the name.
+    let runner = production_runner();
+    let declared = &services[usize::default()];
+    let report = service::show_service(&target, declared, &runner)
+        .await
+        .map_err(click)?;
+    let program = report.detail.trim();
+    let directory = program
+        .split("/services/")
+        .nth(usize::from(true))
+        .and_then(|rest| rest.split('/').next())
+        .filter(|segment| !segment.is_empty())
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{host}: {name} runs {program:?}, which is not under a managed services directory,                  so there is no artifact directory to update"
+            ))
+        })?;
+    let installed = install_from_artifact(&target, directory, reference).await?;
+    if json {
+        print_json(&json!({
+            "host": host,
+            "service": name,
+            "version": installed.version,
+            "sha256": installed.sha256,
+            "status": "updated",
+            "effective": "on next restart",
+        }))?;
+    } else {
+        println!(
+            "{host}: {name} -> {} (takes effect on the next restart)",
+            installed.version
+        );
+    }
+    Ok(())
+}
+
+async fn show(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdError> {
+    let services = declared_matching(name, host).await?;
+    let runner = production_runner();
+    let mut payload: Vec<Value> = Vec::new();
+    let mut cells: Vec<Vec<String>> = Vec::new();
+
+    for declared in &services {
+        let target = host_channel::canonical_target(&declared.host)
+            .await
+            .map_err(click)?;
+        let report = service::show_service(&target, declared, &runner)
+            .await
+            .map_err(click)?;
+        cells.push(vec![
+            declared.host.clone(),
+            declared.unit_id().to_string(),
+            dash(&report.detail),
+        ]);
+        let mut entry = report.to_json();
+        entry["host"] = Value::from(declared.host.clone());
+        payload.push(entry);
+    }
+
+    if json {
+        print_json(&Value::Array(payload))?;
+    } else {
+        table::print(&["HOST", "UNIT", "RUNS"], &cells);
+    }
+    Ok(())
+}
+
+async fn stop(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdError> {
+    let services = declared_matching(name, host).await?;
+    let runner = production_runner();
+    let mut payload: Vec<Value> = Vec::new();
+    let mut cells: Vec<Vec<String>> = Vec::new();
+    let mut failures: Vec<String> = Vec::new();
+
+    for declared in &services {
+        let target = host_channel::canonical_target(&declared.host)
+            .await
+            .map_err(click)?;
+        let report = service::stop_service(&target, declared, &runner)
+            .await
+            .map_err(click)?;
+        if !report.succeeded("stopped") {
+            failures.push(format!("{}: {}", declared.host, report.failure()));
+        }
+        cells.push(vec![
+            declared.host.clone(),
+            declared.unit_id().to_string(),
+            dash(&report.status),
+            dash(&report.detail),
+        ]);
+        let mut entry = report.to_json();
+        entry["host"] = Value::from(declared.host.clone());
+        payload.push(entry);
+    }
+
+    if json {
+        print_json(&Value::Array(payload))?;
+    } else {
+        table::print(&["HOST", "UNIT", "STATUS", "DETAIL"], &cells);
+    }
+    fail_if_any(&failures, "stop")
+}
+
 pub(crate) async fn service_secret(item: &str, field: &str) -> Result<String, CmdError> {
     let vault = crate::skarbiec::Client::service_verifier()
         .map_err(|err| CmdError::click(err.to_string()))?;
+    // Both callers -- auth-check and secret-sync -- want exactly one field, and
+    // asking for the whole item is refused outright by a broker that requires a
+    // named field. Ask for what is wanted.
     let stored = vault
-        .read_item(item)
+        .read_field(item, field)
         .await
         .map_err(|err| CmdError::click(err.to_string()))?;
     stored
-        .as_object()
-        .and_then(|object| object.get(field))
-        .and_then(Value::as_str)
+        .as_str()
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .ok_or_else(|| {
@@ -1024,11 +1216,32 @@ async fn deploy(
     name: &str,
     host: Option<&str>,
     host_heuristic: Option<&str>,
-    from: &str,
+    from: Option<String>,
+    from_artifact: Option<String>,
     json: bool,
 ) -> Result<(), CmdError> {
     let (target, host_heuristic) = resolve_placement(host, host_heuristic).await?;
     let host = target.name.clone();
+    // Exactly one source. Neither is a sensible default: a path deploys
+    // whatever is on the host with no version identity, and an artifact
+    // deploys a named version; guessing between them is how a host ends up
+    // running something nobody can name.
+    let (from, installed) = match (from, from_artifact) {
+        (Some(path), None) => (path, None),
+        (None, Some(reference)) => {
+            let installed = install_from_artifact(&target, name, &reference).await?;
+            (installed.program_path.clone(), Some(installed))
+        }
+        (None, None) => {
+            return Err(CmdError::click(
+                "deploy needs --from PATH or --from-artifact REF",
+            ))
+        }
+        (Some(_), Some(_)) => {
+            return Err(CmdError::click("--from and --from-artifact are exclusive"))
+        }
+    };
+    let from = from.as_str();
     let plan = service::plan_deploy(name, from).map_err(click)?;
 
     // Refuse a colliding declaration BEFORE touching the host: pushing a
@@ -1073,6 +1286,18 @@ async fn deploy(
             )));
         }
     };
+    // The version is the point of --from-artifact: without it the operator is
+    // back to "something is deployed" with no way to say what. Reported beside
+    // the unit rather than inside the remote report, which describes the host
+    // action and not what was installed.
+    if let Some(installed) = installed.as_ref() {
+        if !json {
+            println!(
+                "installed {name} version {} (sha256 {})",
+                installed.version, installed.sha256
+            );
+        }
+    }
     render_mutation(
         "deployed",
         &record,
@@ -1213,4 +1438,27 @@ async fn env(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdError>
         }
     }
     Ok(())
+}
+
+/// Resolve one artifact reference and place that exact version on the host.
+///
+/// The alias is resolved before anything is written, so what lands on disk is
+/// an immutable version and the path names it. Verification happens on the
+/// host against the digest the manifest declares: a download that does not
+/// match never becomes a running unit, and the previous `current` is left
+/// where it was.
+async fn install_from_artifact(
+    target: &crate::targets::ComputeTarget,
+    name: &str,
+    reference: &str,
+) -> Result<crate::deploy::artifact_install::InstalledArtifact, CmdError> {
+    let registry = crate::artifacts::ArtifactRegistry::new()
+        .await
+        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    let parsed = crate::artifacts_models::ArtifactRef::parse(reference)?;
+    let manifest = registry.resolve_manifest(&parsed).await?;
+    let runner = production_runner();
+    crate::deploy::artifact_install::install_artifact(target, name, &manifest, &runner)
+        .await
+        .map_err(click)
 }

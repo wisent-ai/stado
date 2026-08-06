@@ -319,6 +319,7 @@ pub async fn run() -> Report {
         registry_check,
         control_check,
         alerts_check,
+        contract_check,
     ) = tokio::join!(
         bounded(CONFIG_ID, CONFIG_TITLE, CONFIG_REMEDY, async {
             check_config()
@@ -378,6 +379,12 @@ pub async fn run() -> Report {
             check_queue_control(store, &store_error)
         ),
         bounded(ALERTS_ID, ALERTS_TITLE, ALERTS_REMEDY, check_alerts()),
+        bounded(
+            CONTRACT_ID,
+            CONTRACT_TITLE,
+            CONTRACT_REMEDY,
+            skarbiec_contract_check()
+        ),
     );
 
     Report {
@@ -399,6 +406,7 @@ pub async fn run() -> Report {
             registry_check,
             control_check,
             alerts_check,
+            contract_check,
         ],
     }
 }
@@ -1450,4 +1458,95 @@ async fn check_alerts() -> Check {
     }
 
     findings.into_check(ALERTS_ID, ALERTS_TITLE, ALERTS_REMEDY)
+}
+
+const CONTRACT_ID: &str = "skarbiec-contract";
+const CONTRACT_TITLE: &str = "Skarbiec read contract";
+const CONTRACT_REMEDY: &str =
+    "move whole-item reads to Client::read_field, or pin the broker to the build these callers expect";
+
+/// Does the configured broker still answer a whole-item read?
+///
+/// Skarbiec 9aa7dd4 made `field` mandatory on `/v1/items/read`. Callers that
+/// ask for an item and pick fields out of it get `400 {"error":"field
+/// required"}` from a broker built after that change, and the failure carries
+/// no hint that the contract moved underneath them. On 2026-08-04 that took
+/// out this machine's host-health beacon for twenty-one hours, during which
+/// `stado service list` went on reporting a stale `active` for services that
+/// were not running — the fleet's own view of the host was fiction and nothing
+/// said so.
+///
+/// The probe is unauthenticated on purpose: the handler validates `id` and
+/// `field` before it looks at any identity, so a request carrying neither a
+/// consumer nor a bearer still reveals which contract is in force, and reveals
+/// nothing else.
+async fn skarbiec_contract_check() -> Check {
+    let url = match crate::credential_store::skarbiec_url() {
+        Some(url) => url,
+        // A file-backed credential store has no broker and no contract to
+        // disagree with, which is a different thing from a broker that is
+        // fine.
+        None => {
+            return Check::pass(
+                CONTRACT_ID,
+                CONTRACT_TITLE,
+                "credential store is not a Skarbiec broker; no read contract applies".to_string(),
+                CONTRACT_REMEDY,
+            )
+        }
+    };
+    let endpoint = format!("{}/v1/items/read", url.trim_end_matches('/'));
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+    {
+        Ok(client) => client,
+        Err(err) => {
+            return Check::new(
+                CONTRACT_ID,
+                CONTRACT_TITLE,
+                Status::Warn,
+                format!("could not build an HTTP client to probe {endpoint}: {err}"),
+                CONTRACT_REMEDY,
+            )
+        }
+    };
+    let response = client
+        .post(&endpoint)
+        .json(&json!({"id": "stado-doctor-contract-probe"}))
+        .send()
+        .await;
+    match response {
+        Err(err) => Check::new(
+            CONTRACT_ID,
+            CONTRACT_TITLE,
+            Status::Warn,
+            format!("{endpoint} is unreachable, so the read contract is unknown: {err}"),
+            CONTRACT_REMEDY,
+        ),
+        Ok(response) => {
+            let status = response.status().as_u16();
+            let body = response.text().await.unwrap_or_default();
+            if body.contains("field required") {
+                Check::new(
+                    CONTRACT_ID,
+                    CONTRACT_TITLE,
+                    Status::Warn,
+                    format!(
+                        "{endpoint} requires a named field (HTTP {status}); every whole-item \
+                         read in this build fails against it, which is what silences a health \
+                         beacon without saying why"
+                    ),
+                    CONTRACT_REMEDY,
+                )
+            } else {
+                Check::pass(
+                    CONTRACT_ID,
+                    CONTRACT_TITLE,
+                    format!("{endpoint} accepts a read without a named field (HTTP {status})"),
+                    CONTRACT_REMEDY,
+                )
+            }
+        }
+    }
 }
