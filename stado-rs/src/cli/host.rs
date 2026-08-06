@@ -201,13 +201,14 @@ async fn host_health_api_token() -> Result<String, CmdError> {
         .into_owned();
     let client = crate::skarbiec::Client::new(url.trim(), &consumer, &token_file)
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let item = client
-        .read_item("stado-host-health-api")
+    // One field, named. The whole-item read this used to do is exactly what
+    // the broker stopped answering, and the beacon died with it: the host
+    // published nothing for twenty-one hours while `stado service list` went
+    // on reporting its stale `active` for services that were not running.
+    let token = client
+        .read_string("stado-host-health-api", "token")
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let token = item
-        .get("token")
-        .and_then(Value::as_str)
+        .map_err(|error| CmdError::click(error.to_string()))?
         .unwrap_or_default()
         .trim()
         .to_string();
@@ -1042,8 +1043,16 @@ pub async fn install_secret(
             "secret source must be a regular owner-only file without group or other permission bits",
         ));
     }
-    let bytes = std::fs::read(source)?;
-    let (path, byte_count) = transfer_secret(target, name, &bytes, None).await?;
+    // Embedding the payload in the script is what caps an inline transfer, not
+    // anything about the secret itself, so a file too large to embed is streamed
+    // instead of refused. Both paths land owner-only and are checksummed on the
+    // far side before they take the name.
+    let (path, byte_count) = if metadata.len() > u64::from(u16::MAX) {
+        stream_secret(target, source, name).await?
+    } else {
+        let bytes = std::fs::read(source)?;
+        transfer_secret(target, name, &bytes, None).await?
+    };
     if json {
         println!(
             "{}",
@@ -1559,4 +1568,341 @@ printf '%s\n' "$final"
         );
     }
     Ok(())
+}
+
+const INSTALL_BODY: &str = r#"dir="$HOME/.stado/bin"
+staged="$dir/.$name.install"
+installed="$dir/$name"
+previous="$dir/$name.previous"
+trap 'rm -f "$staged"' EXIT
+
+[ -s "$staged" ] || { printf '%s\n' 'delivered program is missing or empty' >&2; exit 1; }
+/bin/chmod 755 "$staged"
+
+if [ "$(/usr/bin/uname -s)" = "Darwin" ]; then
+  /usr/bin/xattr -c "$staged" 2>/dev/null || true
+  /usr/bin/codesign -s - --force "$staged" >/dev/null 2>&1 \
+    || { printf '%s\n' 'delivered program could not be signed on this host' >&2; exit 1; }
+fi
+
+new_version="$("$staged" --version 2>&1)" \
+  || { printf '%s\n' "delivered program does not run here: $new_version" >&2; exit 1; }
+
+old_version="absent"
+if [ -x "$installed" ]; then
+  old_version="$("$installed" --version 2>&1 || printf '%s' 'unreadable')"
+  /bin/cp -p "$installed" "$previous"
+fi
+
+/bin/mv "$staged" "$installed"
+trap - EXIT
+
+if ! "$installed" --version >/dev/null 2>&1; then
+  if [ -f "$previous" ]; then /bin/mv "$previous" "$installed"; fi
+  printf '%s\n' 'installed program does not run; rolled back to the previous build' >&2
+  exit 1
+fi
+
+printf 'STADO-BIN-OLD %s\n' "$old_version"
+printf 'STADO-BIN-NEW %s\n' "$new_version"
+"#;
+
+/// Replace an owner-only Stado program on TARGET with a build proven to run there.
+///
+/// These binaries are what every other operation on that host goes through, so
+/// installing one wrongly removes the means of repair. Three rules are encoded
+/// here rather than left to whoever is at the keyboard:
+///
+/// * the new binary is renamed into place, never written through the file that
+///   is already there -- overwriting a Mach-O in place invalidates its
+///   signature and the kernel answers the next exec with SIGKILL, no message;
+/// * it is signed and then executed on the target BEFORE it becomes the CLI,
+///   because a binary that is merely present is not evidence of anything;
+/// * the previous build is kept, and a version that will not run is rolled
+///   back automatically rather than reported as an installation.
+pub async fn install_binary(
+    target: &str,
+    source: Option<&str>,
+    name: &str,
+    rollback: bool,
+    json: bool,
+) -> Result<(), CmdError> {
+    if name.is_empty()
+        || name
+            .bytes()
+            .any(|byte| !(byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')))
+    {
+        return Err(CmdError::usage(
+            "program name must be a non-empty basename containing only letters, digits, '.', '_' or '-'",
+        ));
+    }
+    if rollback {
+        return rollback_binary(target, name, json).await;
+    }
+    let source = source.ok_or_else(|| CmdError::usage("--from is required unless --rollback"))?;
+    let bytes = std::fs::metadata(source)
+        .map_err(|error| CmdError::click(format!("cannot read {source}: {error}")))?
+        .len();
+    if bytes == u64::MIN {
+        return Err(CmdError::click(format!("{source} is empty")));
+    }
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let ssh_target = resolved.ssh.clone().unwrap_or_default();
+    if ssh_target.is_empty() {
+        return Err(CmdError::click(format!(
+            "{target} declares no ssh destination, so the CLI cannot be delivered"
+        )));
+    }
+    let runner = crate::deploy::production_runner();
+
+    let stage = crate::deploy::host_channel::run_script(
+        &resolved,
+        "set -euo pipefail\n/bin/mkdir -p \"$HOME/.stado/bin\"\n/bin/chmod 700 \"$HOME/.stado/bin\"\n",
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !stage.ok() {
+        return Err(CmdError::click(format!(
+            "{target}: cannot prepare the CLI directory: {}",
+            crate::deploy::host_channel::last_error_line(&stage, "remote mkdir failed")
+        )));
+    }
+
+    // The same command has to work on the machine running it, where there is no
+    // ssh listener to talk to and a copy is just a copy.
+    if crate::deploy::host_channel::target_is_this_host(&resolved) {
+        let home = std::env::var("HOME")
+            .map_err(|_| CmdError::click("HOME is not set, so the CLI path is unknown"))?;
+        let staged = std::path::Path::new(&home).join(format!(".stado/bin/.{name}.install"));
+        std::fs::copy(source, &staged).map_err(|error| {
+            CmdError::click(format!(
+                "cannot stage the CLI at {}: {error}",
+                staged.display()
+            ))
+        })?;
+        return finish_install(target, source, name, bytes, &resolved, &runner, json).await;
+    }
+    let mut copy_argv = crate::deploy::host_channel::ssh_options(&ssh_target);
+    copy_argv.pop();
+    let mut scp_argv = vec!["scp".to_string(), "-q".to_string()];
+    scp_argv.extend(copy_argv.into_iter().skip(usize::from(true)));
+    scp_argv.push(source.to_string());
+    scp_argv.push(format!("{ssh_target}:.stado/bin/.{name}.install"));
+    let copy = runner(crate::deploy::CommandSpec::new(scp_argv))
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if !copy.ok() {
+        return Err(CmdError::click(format!(
+            "{target}: cannot deliver the CLI: {}",
+            copy.detail()
+        )));
+    }
+
+    finish_install(target, source, name, bytes, &resolved, &runner, json).await
+}
+
+/// Sign, prove, swap and verify -- the half of `install-binary` that is identical
+/// whether the program arrived over ssh or was copied on the spot.
+async fn finish_install(
+    target: &str,
+    source: &str,
+    name: &str,
+    bytes: u64,
+    resolved: &crate::targets::ComputeTarget,
+    runner: &crate::deploy::Runner,
+    json: bool,
+) -> Result<(), CmdError> {
+    let quoted = crate::deploy::shlex_quote(name);
+    let script = format!("set -euo pipefail\nname={quoted}\n{INSTALL_BODY}");
+    let output = crate::deploy::host_channel::run_script(resolved, &script, runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if !output.ok() {
+        return Err(CmdError::click(format!(
+            "{target}: CLI update failed: {}",
+            crate::deploy::host_channel::last_error_line(&output, "remote install failed")
+        )));
+    }
+    let marker = |tag: &str| -> String {
+        output
+            .stdout
+            .lines()
+            .find_map(|line| line.strip_prefix(tag))
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    };
+    let old_version = marker("STADO-BIN-OLD ");
+    let new_version = marker("STADO-BIN-NEW ");
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": target,
+                "source": source,
+                "name": name,
+                "bytes": bytes,
+                "previous_version": old_version,
+                "installed_version": new_version,
+                "status": "installed",
+            }))?
+        );
+    } else {
+        println!("{target}: {name} {old_version} -> {new_version}");
+    }
+    Ok(())
+}
+
+const ROLLBACK_BODY: &str = r#"dir="$HOME/.stado/bin"
+installed="$dir/$name"
+previous="$dir/$name.previous"
+
+[ -s "$previous" ] || { printf '%s\n' 'there is no previous build to restore' >&2; exit 1; }
+/bin/chmod 755 "$previous"
+"$previous" --version >/dev/null 2>&1 \
+  || { printf '%s\n' 'the previous build does not run either; not swapping' >&2; exit 1; }
+/bin/mv "$previous" "$installed"
+"$installed" --version >/dev/null 2>&1 \
+  || { printf '%s\n' 'restored build does not run' >&2; exit 1; }
+"#;
+
+/// Put the previous build of one owner-only Stado program back on TARGET.
+///
+/// `install-binary` verifies that a new build runs, which is not the same as
+/// verifying that the unit around it still works: a program can answer
+/// `--version` perfectly and still reject the arguments its launchd job passes.
+/// That failure appears after the swap, so the previous build is kept beside
+/// the new one and this is how it comes back.
+async fn rollback_binary(target: &str, name: &str, json: bool) -> Result<(), CmdError> {
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let quoted = crate::deploy::shlex_quote(name);
+    let script = format!("set -euo pipefail\nname={quoted}\n{ROLLBACK_BODY}");
+    let output = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if !output.ok() {
+        return Err(CmdError::click(format!(
+            "{target}: rollback failed: {}",
+            crate::deploy::host_channel::last_error_line(&output, "remote rollback failed")
+        )));
+    }
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": target,
+                "name": name,
+                "status": "rolled-back",
+            }))?
+        );
+    } else {
+        println!("{target}: {name} restored from the previous build");
+    }
+    Ok(())
+}
+
+const STREAM_SECRET_BODY: &str = r#"dir="$HOME/.stado"
+staged="$dir/.$name.stado-secret.stream"
+trap 'rm -f "$staged"' EXIT
+[ -s "$staged" ] || { printf '%s\n' 'delivered secret is missing or empty' >&2; exit 1; }
+/bin/chmod 600 "$staged"
+line=$(/usr/bin/openssl dgst -sha256 -r "$staged")
+actual="${line%% *}"
+if [ "$actual" != "$expected" ]; then
+  printf '%s\n' 'secret transfer checksum mismatch' >&2
+  exit 1
+fi
+/bin/mv "$staged" "$dir/$name"
+trap - EXIT
+printf '%s\n' "$dir/$name"
+"#;
+
+/// Deliver an owner-only file too large to embed in a script.
+///
+/// Same contract as the inline path -- 0600, checksummed on the far side before
+/// it takes the name -- with the bytes carried by the transport instead of the
+/// command line.
+async fn stream_secret(
+    target: &str,
+    source: &str,
+    name: &str,
+) -> Result<(String, usize), CmdError> {
+    release_component("secret file name", name)?;
+    let bytes = std::fs::metadata(source)?.len();
+    let mut digest = Sha256::new();
+    digest.update(std::fs::read(source)?);
+    let expected_sha256 = hex::encode(digest.finalize());
+
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let staged = format!(".stado/.{name}.stado-secret.stream");
+
+    let prepare = crate::deploy::host_channel::run_script(
+        &resolved,
+        "set -euo pipefail\n/bin/mkdir -p \"$HOME/.stado\"\n/bin/chmod 700 \"$HOME/.stado\"\n",
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !prepare.ok() {
+        return Err(CmdError::click(format!(
+            "{target}: cannot prepare the secret directory: {}",
+            crate::deploy::host_channel::last_error_line(&prepare, "remote mkdir failed")
+        )));
+    }
+
+    if crate::deploy::host_channel::target_is_this_host(&resolved) {
+        let home = std::env::var("HOME")
+            .map_err(|_| CmdError::click("HOME is not set, so the secret path is unknown"))?;
+        std::fs::copy(source, std::path::Path::new(&home).join(&staged))?;
+    } else {
+        let ssh_target = resolved.ssh.clone().unwrap_or_default();
+        if ssh_target.is_empty() {
+            return Err(CmdError::click(format!(
+                "{target} declares no ssh destination, so the secret cannot be delivered"
+            )));
+        }
+        let mut options = crate::deploy::host_channel::ssh_options(&ssh_target);
+        options.pop();
+        let mut argv = vec!["scp".to_string(), "-q".to_string()];
+        argv.extend(options.into_iter().skip(usize::from(true)));
+        argv.push(source.to_string());
+        argv.push(format!("{ssh_target}:{staged}"));
+        let copy = runner(crate::deploy::CommandSpec::new(argv))
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        if !copy.ok() {
+            return Err(CmdError::click(format!(
+                "{target}: cannot deliver the secret: {}",
+                copy.detail()
+            )));
+        }
+    }
+
+    let quoted_name = crate::deploy::shlex_quote(name);
+    let quoted_sha = crate::deploy::shlex_quote(&expected_sha256);
+    let script = format!(
+        "set -euo pipefail\nname={quoted_name}\nexpected={quoted_sha}\n{STREAM_SECRET_BODY}"
+    );
+    let output = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if !output.ok() {
+        return Err(CmdError::click(format!(
+            "{target}: secret installation failed: {}",
+            crate::deploy::host_channel::last_error_line(&output, "remote secret write failed")
+        )));
+    }
+    Ok((
+        format!("$HOME/.stado/{name}"),
+        usize::try_from(bytes).unwrap_or(usize::MAX),
+    ))
 }
