@@ -1177,6 +1177,38 @@ enum HostCommands {
         #[arg(last = true)]
         command: Vec<String>,
     },
+    /// Report TARGET's stado-managed binaries, forward markers and loopback
+    /// listeners, and whether each marker still matches a live listener.
+    Inventory {
+        target: String,
+        /// Emit the inventory and its reconciliation as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Deliver one registry-declared managed binary to TARGET: fetch the
+    /// exact coordinate, verify its configured SHA-256, stage it, and only
+    /// then repoint the active binary and restart its unit.
+    Release {
+        target: String,
+        /// Managed binary to deliver. Run with an unmanaged one to see the
+        /// list; the name selects a fixed entry and never becomes a path.
+        #[arg(long)]
+        binary: String,
+        /// Exact immutable version, and it must match what the registry
+        /// declares for this host. Not a channel and not an alias.
+        #[arg(long)]
+        version: String,
+        /// Published release platform.
+        #[arg(long, default_value = crate::deploy::host_release::DEFAULT_PLATFORM)]
+        platform: String,
+        /// Probe the host read-only and report the plan without fetching,
+        /// staging, activating or restarting anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// Emit the delivery report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1634,6 +1666,15 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 json,
                 command,
             } => host::exec(&target, command, json).await,
+            HostCommands::Inventory { target, json } => host::inventory(&target, json).await,
+            HostCommands::Release {
+                target,
+                binary,
+                version,
+                platform,
+                dry_run,
+                json,
+            } => host::release(&target, &binary, &version, &platform, dry_run, json).await,
         },
         Commands::Bootstrap {
             target,
