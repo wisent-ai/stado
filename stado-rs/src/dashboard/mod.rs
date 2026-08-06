@@ -23,8 +23,10 @@
 //! GET /healthz           - liveness (before auth, after the Host guard)
 //! GET /livez             - Cloud Run liveness alias
 //!
-//! The application plane was extracted into the private `wisent-backend-adapters` service; Stado keeps only the generic object plane.
-//! The product integrations (Stripe, Resend, SendGrid, GitHub, HuggingFace, captcha proxies) were extracted into the private `wisent-integrations` service.
+//! The application plane was extracted into the private `wisent-backend`
+//! service; Stado keeps only the generic object plane. The product
+//! integrations (Stripe, Resend, SendGrid, GitHub, HuggingFace, captcha
+//! proxies) were extracted into the private `wisent-integrations` service.
 //!
 //! Summary and rendering helpers live in `dashboard/summary.rs` +
 //! `dashboard/web_view.rs` (Python `dashboard_summary/`). This module holds
