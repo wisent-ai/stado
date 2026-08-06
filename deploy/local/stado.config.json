@@ -246,8 +246,7 @@
       "skarbiec": {"item": "skarbiec-release-publisher", "prefix": "skarbiec/"},
       "stado": {"item": "stado-release-publisher", "prefix": "stado/"},
       "trading-autonomy": {"item": "trading-autonomy-release-publisher", "prefix": "trading-autonomy/"},
-      "wisent-backend": {"item": "wisent-backend-release-publisher", "prefix": "wisent-backend/"},
-      "wisent-images": {"item": "wisent-images-release-publisher", "prefix": "wisent-images/"}
+      "wisent-backend": {"item": "wisent-backend-release-publisher", "prefix": "wisent-backend/"}
     }
   },
   "service_api": {
