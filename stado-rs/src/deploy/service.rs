@@ -878,10 +878,42 @@ fi
 /// been atomically cut over.
 const STOP_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   recovery_unit=\"${unit}-recovery\"
+  $launch bootout \"$domain/$unit\" >/dev/null 2>&1 || true
+  $launch bootout \"$domain/$recovery_unit\" >/dev/null 2>&1 || true
   /bin/launchctl bootout \"$gui/$unit\" >/dev/null 2>&1 || true
   /bin/launchctl bootout \"$user_domain/$unit\" >/dev/null 2>&1 || true
   /bin/launchctl bootout \"$gui/$recovery_unit\" >/dev/null 2>&1 || true
   /bin/launchctl bootout \"$user_domain/$recovery_unit\" >/dev/null 2>&1 || true
+  # Booting out the label is not the same as the program being gone. A unit
+  # started once outside its own label -- by a recovery fallback, or by hand --
+  # survives every bootout, keeps the listening socket, and makes each later
+  # restart die on 'address already in use' while the stale instance serves on.
+  program=\"\"
+  if [ -f \"$unit_path\" ]; then
+    program=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments' \"$unit_path\" 2>/dev/null | /usr/bin/sed -n '/^[[:space:]]*[/]/{s/^[[:space:]]*//;s/[[:space:]]*$//;p;q;}')
+  fi
+  # The unit points at .../services/NAME/current/..., while the process that is
+  # actually running shows the version directory that link resolved to. Matching
+  # the exact string finds nothing and reports a stop that did not happen, so
+  # match the service directory that both spellings share.
+  match=\"$program\"
+  case \"$program\" in
+    */current/*) match=\"${program%%/current/*}/\" ;;
+  esac
+  if [ -n \"$program\" ]; then
+    left=$(/usr/bin/pgrep -f \"^$match\" 2>/dev/null | /usr/bin/tr '\\n' ' ')
+    if [ -n \"$left\" ]; then
+      for pid in $left; do /bin/kill -TERM \"$pid\" >/dev/null 2>&1 || true; done
+      /bin/sleep 2
+      still=$(/usr/bin/pgrep -f \"^$match\" 2>/dev/null | /usr/bin/tr '\\n' ' ')
+      if [ -n \"$still\" ]; then
+        say 'stop_failed' \"disowned process still running: $still\"
+        exit 0
+      fi
+      say 'stopped' \"booted out, and ended disowned process(es): $left\"
+      exit 0
+    fi
+  fi
 else
   systemctl_user stop \"$unit\" >/dev/null 2>&1 || true
 fi

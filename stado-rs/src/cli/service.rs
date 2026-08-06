@@ -67,6 +67,23 @@ pub enum ServiceCommands {
         json: bool,
     },
 
+    /// Stop one managed unit, including a process the unit no longer owns.
+    ///
+    /// `retire` removes a service from management; this only stops it. The
+    /// difference matters when a restart has previously spawned the program
+    /// outside its own label: launchctl then disowns it, the stale process
+    /// keeps the port, and every later restart dies on "address already in
+    /// use" while the broken instance serves on.
+    Stop {
+        /// Service name, or the host's own name for the unit.
+        name: String,
+        /// Restrict to one registry host; omit to stop it everywhere it is managed.
+        #[arg(long)]
+        host: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Synchronize one Skarbiec field into a service's runtime env file.
     ///
     /// The value is read through the isolated service-verifier grant and carried
@@ -236,6 +253,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
         ServiceCommands::Directory(sub) => crate::cli::directory::dispatch(sub).await,
         ServiceCommands::List { json } => list(json).await,
         ServiceCommands::Status { name, json } => status(&name, json).await,
+        ServiceCommands::Stop { name, host, json } => stop(&name, host.as_deref(), json).await,
         ServiceCommands::Restart { name, host, json } => {
             restart(&name, host.as_deref(), json).await
         }
@@ -472,6 +490,42 @@ async fn restart(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdEr
         table::print(&["HOST", "UNIT", "STATUS", "DETAIL"], &cells);
     }
     fail_if_any(&failures, "restart")
+}
+
+async fn stop(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdError> {
+    let services = declared_matching(name, host).await?;
+    let runner = production_runner();
+    let mut payload: Vec<Value> = Vec::new();
+    let mut cells: Vec<Vec<String>> = Vec::new();
+    let mut failures: Vec<String> = Vec::new();
+
+    for declared in &services {
+        let target = host_channel::canonical_target(&declared.host)
+            .await
+            .map_err(click)?;
+        let report = service::stop_service(&target, declared, &runner)
+            .await
+            .map_err(click)?;
+        if !report.succeeded("stopped") {
+            failures.push(format!("{}: {}", declared.host, report.failure()));
+        }
+        cells.push(vec![
+            declared.host.clone(),
+            declared.unit_id().to_string(),
+            dash(&report.status),
+            dash(&report.detail),
+        ]);
+        let mut entry = report.to_json();
+        entry["host"] = Value::from(declared.host.clone());
+        payload.push(entry);
+    }
+
+    if json {
+        print_json(&Value::Array(payload))?;
+    } else {
+        table::print(&["HOST", "UNIT", "STATUS", "DETAIL"], &cells);
+    }
+    fail_if_any(&failures, "stop")
 }
 
 pub(crate) async fn service_secret(item: &str, field: &str) -> Result<String, CmdError> {
