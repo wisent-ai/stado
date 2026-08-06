@@ -4,11 +4,19 @@
 //! literal appears in source.
 
 use super::*;
-use std::sync::{Mutex, MutexGuard};
+use tokio::sync::{Mutex, MutexGuard};
 
+static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+/// Sync tests take the guard directly.
 fn env_lock() -> MutexGuard<'static, ()> {
-    static LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-    LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    ENV_LOCK.blocking_lock()
+}
+
+/// Async tests hold the guard across `.await`, so they must take an
+/// async-aware guard instead of parking the runtime thread on a blocking one.
+async fn env_lock_async() -> MutexGuard<'static, ()> {
+    ENV_LOCK.lock().await
 }
 
 struct StoreEnv;
@@ -47,14 +55,20 @@ fn write_store(contents: &str, mode: &str) -> (tempfile::TempDir, PathBuf) {
 fn unset_selects_skarbiec() {
     let _guard = env_lock();
     let _env = StoreEnv::unset();
-    assert_eq!(selected().expect("selected"), Backend::Skarbiec { url: None });
+    assert_eq!(
+        selected().expect("selected"),
+        Backend::Skarbiec { url: None }
+    );
 }
 
 #[test]
 fn bare_skarbiec_selects_skarbiec() {
     let _guard = env_lock();
     let _env = StoreEnv::set("skarbiec");
-    assert_eq!(selected().expect("selected"), Backend::Skarbiec { url: None });
+    assert_eq!(
+        selected().expect("selected"),
+        Backend::Skarbiec { url: None }
+    );
 }
 
 #[test]
@@ -91,7 +105,7 @@ fn unsupported_scheme_is_a_hard_error() {
 
 #[tokio::test]
 async fn file_backend_reads_values() {
-    let _guard = env_lock();
+    let _guard = env_lock_async().await;
     let (_dir, path) = write_store(
         r#"{"stado-vast": {"api_key": "vast-key"}, "stado-box": {"api_key": "box-key", "note": "n"}}"#,
         "600",
@@ -113,7 +127,7 @@ async fn file_backend_reads_values() {
 
 #[tokio::test]
 async fn file_backend_missing_item_and_field() {
-    let _guard = env_lock();
+    let _guard = env_lock_async().await;
     let (_dir, path) = write_store(r#"{"stado-vast": {"api_key": "vast-key"}}"#, "600");
     let _env = StoreEnv::set(&format!("file://{}", path.display()));
     match read_item("stado-missing").await {
@@ -132,7 +146,7 @@ async fn file_backend_missing_item_and_field() {
 
 #[tokio::test]
 async fn file_backend_refuses_group_readable_file() {
-    let _guard = env_lock();
+    let _guard = env_lock_async().await;
     let (_dir, path) = write_store(r#"{"stado-vast": {"api_key": "vast-key"}}"#, "644");
     let _env = StoreEnv::set(&format!("file://{}", path.display()));
     match read_string("stado-vast", "api_key").await {
@@ -143,7 +157,7 @@ async fn file_backend_refuses_group_readable_file() {
 
 #[tokio::test]
 async fn skarbiec_helpers_honor_file_backend() {
-    let _guard = env_lock();
+    let _guard = env_lock_async().await;
     let (_dir, path) = write_store(
         r#"{"stado-vast": {"api_key": "vast-key"}, "stado-box": {"api_key": "box-key", "note": "n"}}"#,
         "600",
@@ -168,9 +182,7 @@ async fn skarbiec_helpers_honor_file_backend() {
     }
     // The operator's scratch store (created for the STADO_CREDENTIAL_STORE
     // manual verification) must serve the same helpers when present.
-    let scratch = Path::new(
-        "/Users/lukaszbartoszcze/.stado/tmp-recovery/cred-store/creds.json",
-    );
+    let scratch = Path::new("/Users/lukaszbartoszcze/.stado/tmp-recovery/cred-store/creds.json");
     if scratch.exists() {
         std::env::set_var(ENV_STORE, format!("file://{}", scratch.display()));
         assert_eq!(
@@ -185,7 +197,7 @@ async fn skarbiec_helpers_honor_file_backend() {
 #[cfg(unix)]
 #[tokio::test]
 async fn file_backend_refuses_symlink() {
-    let _guard = env_lock();
+    let _guard = env_lock_async().await;
     let (_dir, path) = write_store(r#"{"stado-vast": {"api_key": "vast-key"}}"#, "600");
     let link = path.with_extension("link.json");
     std::os::unix::fs::symlink(&path, &link).expect("symlink");

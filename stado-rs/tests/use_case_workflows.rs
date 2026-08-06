@@ -250,7 +250,9 @@ fn spawn_skarbiec() -> (String, thread::JoinHandle<String>) {
                         .set_nonblocking(false)
                         .expect("accepted Skarbiec connection becomes blocking");
                     let request = read_request(&mut stream);
-                    let body = format!(r#"{{"value":{{"token":"{WORKLOAD_SECRET}"}}}}"#);
+                    // The broker answers a field-scoped read with that
+                    // field's value alone, not with the whole item.
+                    let body = format!(r#"{{"value":"{WORKLOAD_SECRET}"}}"#);
                     write!(
                         stream,
                         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -635,7 +637,14 @@ async fn ai_agent_request_materializes_pinned_input_and_scoped_secret_without_le
     assert!(request_lower.starts_with("post /v1/items/read http/1.1"));
     assert!(request_lower.contains("x-consumer: workflow-test-agent"));
     assert!(request_lower.contains("authorization: bearer test-agent-grant"));
-    assert!(request_text.contains(r#"{"id":"model-provider"}"#));
+    assert!(
+        request_text.contains(r#""id":"model-provider""#),
+        "{request_text}"
+    );
+    assert!(
+        request_text.contains(r#""field":"token""#),
+        "{request_text}"
+    );
 
     let completed = store
         .read_job("completed", &job_id)

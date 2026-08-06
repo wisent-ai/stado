@@ -71,6 +71,32 @@ PLATFORMS = {
 # one for every version, so it is the coordinate most likely to exist if anything does.
 PROBE_PLATFORM = PLATFORMS[("Linux", "x86_64")]
 
+# Reading a published surface means executing the published bytes, and the host that
+# has to read them is not always the host they were built for: the channel publishes
+# linux-amd64 while the control-plane runner is a Mac. Without a way across, the top
+# tier would be unrecoverable exactly where the gate runs, and the baseline would sit
+# at a lower tier describing an artifact the channel has already superseded. So a
+# Linux release is read inside a container -- the same move deploy.yml already makes
+# to read the candidate surface out of the release image. A darwin release has no
+# such shim: it runs on a Mac or it is not read here.
+CONTAINER_PLATFORMS = frozenset({"linux-amd64"})
+CONTAINER = "docker"
+# The runtime stage of stado-rs/Dockerfile. The published bytes are linked against
+# this image's libc, so another base would measure that mismatch and call it a surface.
+CONTAINER_IMAGE = "debian:bookworm-slim"
+
+# Which machine a container must offer is asked of the bytes, not of the object key
+# they were filed under. The key is a label an operator chose and this channel already
+# serves one that disagrees with its own payload; the loader is not fooled by a label,
+# so neither is this. ELF states the machine in a fixed little-endian field at 0x12,
+# after declaring its own byte order at 0x05.
+ELF_MAGIC = b"\x7fELF"
+ELF_LITTLE = 1
+ELF_DATA = 5
+ELF_MACHINE = 18
+ELF_MACHINE_WIDTH = ONE + ONE
+ELF_MACHINES = {0x3E: "linux/amd64", 0xB7: "linux/arm64"}
+
 
 class Unreachable(SystemExit):
     """A tier that exists but cannot be recovered here. Never degrade past it."""
@@ -88,15 +114,26 @@ def run(command: list, **extra) -> str:
     return finished.stdout
 
 
-def host_platform() -> str:
-    """The release platform this machine can execute."""
-    key = (platform.system(), platform.machine())
-    if key not in PLATFORMS:
-        raise Unreachable(
-            f"no release platform for {key}; the channel publishes only "
-            f"{sorted(PLATFORMS.values())}"
-        )
-    return PLATFORMS[key]
+def native_platform():
+    """The release platform this machine executes directly, if it is one at all."""
+    return PLATFORMS.get((platform.system(), platform.machine()))
+
+
+def readable_platform(available) -> str:
+    """A published platform whose bytes can be executed here, native first.
+
+    Native execution is preferred because it borrows nothing. The remaining tiers are
+    ordered among themselves deterministically, so two hosts of the same shape never
+    disagree about which published artifact the baseline describes.
+    """
+    for name in [native_platform(), *sorted(CONTAINER_PLATFORMS)]:
+        if name in available:
+            return name
+    raise Unreachable(
+        f"{PRODUCT} is published for {sorted(available)}, none of which can run "
+        "here; a published surface is read from the bytes that run, so regenerate "
+        f"the baseline on a {sorted(available)[OK]} host"
+    )
 
 
 def assert_refs_visible() -> None:
@@ -191,6 +228,62 @@ def published(stado: str) -> dict:
     return versions
 
 
+def container_platform(binary: pathlib.Path) -> str:
+    """The container platform the published bytes themselves ask to run on."""
+    with binary.open("rb") as handle:
+        header = handle.read(ELF_MACHINE + ELF_MACHINE_WIDTH)
+    if not header.startswith(ELF_MAGIC):
+        raise Unreachable(f"{binary} is not an ELF executable, so no container runs it")
+    if header[ELF_DATA] != ELF_LITTLE:
+        raise Unreachable(f"{binary} is big-endian ELF, which no release platform is")
+    machine = int.from_bytes(header[ELF_MACHINE:], "little")
+    if machine not in ELF_MACHINES:
+        raise Unreachable(
+            f"{binary} needs ELF machine {machine:#x}, which is none of "
+            f"{sorted(ELF_MACHINES.values())}"
+        )
+    return ELF_MACHINES[machine]
+
+
+def container_help(binary: pathlib.Path, platform_name: str) -> str:
+    """What a published binary prints on a host that cannot execute it directly.
+
+    The image supplies a loader and nothing else: the binary is mounted read-only and
+    replaces the entrypoint, so the answer still comes from the published bytes and
+    not from anything the image ships under the same name. No network is offered,
+    because a help screen that needed one would not be a help screen.
+    """
+    if shutil.which(CONTAINER) is None:
+        raise Unreachable(
+            f"{platform_name} does not run on this host and {CONTAINER} is not "
+            f"installed, so the published {platform_name} surface cannot be read here"
+        )
+    wanted = container_platform(binary)
+    if wanted != platform_name.replace("-", "/", ONE):
+        print(
+            f"note: {PRODUCT} is published under {platform_name} but its bytes are "
+            f"{wanted}; reading the surface from what actually runs",
+            file=sys.stderr,
+        )
+    return run(
+        [
+            CONTAINER,
+            "run",
+            "--rm",
+            "--platform",
+            wanted,
+            "--network",
+            "none",
+            "--volume",
+            f"{binary}:/{BINARY}:ro",
+            "--entrypoint",
+            f"/{BINARY}",
+            CONTAINER_IMAGE,
+            "help",
+        ]
+    )
+
+
 def channel_surface(stado: str, version: str, platform_name: str) -> list:
     """The surface of a published release, read from the published bytes."""
     uri = f"stado://{NAMESPACE}/{PRODUCT}/{version}/{platform_name}/{BINARY}"
@@ -199,7 +292,9 @@ def channel_surface(stado: str, version: str, platform_name: str) -> list:
         run([stado, "storage", "get", uri, str(local)])
         executable = stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
         local.chmod(local.stat().st_mode | executable)
-        return advertised(help_text(local))
+        if platform_name == native_platform():
+            return advertised(help_text(local))
+        return advertised(container_help(local, platform_name))
 
 
 def build_surface(ref: str) -> list:
@@ -302,14 +397,7 @@ def document(stado: str) -> dict:
     releases = published(stado)
     if releases:
         version = newest(releases)
-        platform_name = host_platform()
-        if platform_name not in releases[version]:
-            raise Unreachable(
-                f"{PRODUCT} {version} is published for "
-                f"{sorted(releases[version])} but not for {platform_name}; its "
-                "surface can only be read where it can run, so regenerate the "
-                f"baseline on a {sorted(releases[version])[OK]} host"
-            )
+        platform_name = readable_platform(releases[version])
         key = f"{PRODUCT}/{version}/{platform_name}/{BINARY}"
         return {
             "version": version,
