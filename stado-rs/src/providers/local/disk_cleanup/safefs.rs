@@ -73,10 +73,7 @@ pub fn open_path(root_fd: RawFd, parts: &[OsString]) -> io::Result<OwnedFd> {
     for part in parts {
         let child = open_dir_at(descriptor.as_raw_fd(), part);
         drop(descriptor);
-        match child {
-            Ok(child) => descriptor = child,
-            Err(exc) => return Err(exc),
-        }
+        descriptor = child?;
     }
     Ok(descriptor)
 }

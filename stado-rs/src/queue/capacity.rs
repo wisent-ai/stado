@@ -232,7 +232,7 @@ pub fn consumers_by_free_vram(
         };
         rows.push((cid.to_string(), v));
     }
-    rows.sort_by(|a, b| b.1.cmp(&a.1));
+    rows.sort_by_key(|row| std::cmp::Reverse(row.1));
     rows
 }
 

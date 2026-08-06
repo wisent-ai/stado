@@ -34,7 +34,13 @@ jobs:
       WC_SKARBIEC_CONSUMER: stado-release-publisher
       WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-skarbiec-token
     steps:
-      - uses: actions/checkout@v4
+      # v4 runs on Node 20, which GitHub has deprecated and already forces onto Node
+      # 24; v5 is the first major that targets Node 24 itself. It needs a runner of at
+      # least 2.327.1 and this control plane runs 2.336.0. Held at the oldest major
+      # that resolves the deprecation rather than the newest one published, because
+      # this job publishes create-only release objects and a checkout that changes
+      # behaviour under it cannot be corrected after the fact.
+      - uses: actions/checkout@v5
       - name: Resolve exact release identity
         id: release_identity
         env:
@@ -78,9 +84,15 @@ jobs:
         run: git fetch --force --tags --unshallow || git fetch --force --tags
 
       - name: Build provider-neutral Rust release
+        # Pinned to linux/amd64 because that is the name these bytes are published
+        # under, and the name is load-bearing: self_update.rs, bootstrap.rs and
+        # local_install.rs all resolve Linux x86_64 to `linux-amd64` and fetch that
+        # key. Left unpinned, the build follows whatever the runner happens to be --
+        # this control plane is an arm64 Mac -- and the channel serves an aarch64
+        # binary under an x86_64 name, which no consumer of that key can execute.
         run: |
-          docker build --tag stado-rust-release stado-rs
-          container="$(docker create stado-rust-release)"
+          docker build --platform linux/amd64 --tag stado-rust-release stado-rs
+          container="$(docker create --platform linux/amd64 stado-rust-release)"
           mkdir -p "$RUNNER_TEMP/stado-release"
           docker cp "$container:/out/." "$RUNNER_TEMP/stado-release/"
           docker rm "$container" >/dev/null
@@ -191,7 +203,8 @@ jobs:
           # which dispatch but are not offered, and inflate the contract. The image
           # is used rather than the copied-out binary so this works whatever the
           # runner's own platform is.
-          docker run --rm --entrypoint /out/stado stado-rust-release help \
+          docker run --rm --platform linux/amd64 \
+            --entrypoint /out/stado stado-rust-release help \
             > "$RUNNER_TEMP/stado-help.txt"
           python3 scripts/surface.py --help-text "$RUNNER_TEMP/stado-help.txt" \
             > "$RUNNER_TEMP/candidate-surface.json"

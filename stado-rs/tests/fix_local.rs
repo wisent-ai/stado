@@ -205,10 +205,19 @@ fn execute_dispatches_via_local_claude_cli() {
         }
         let mut request_body = vec![u8::MIN; content_length];
         reader.read_exact(&mut request_body).unwrap();
-        assert!(String::from_utf8(request_body)
-            .unwrap()
-            .contains(r#""id":"stado-anthropic""#));
-        let body = r#"{"value":{"api_key":"test-anthropic-key"}}"#;
+        // `/v1/items/read` takes a named field and answers with that field's
+        // value alone (skarbiec `net::handle_items_read`): a fieldless read is
+        // a 400 on the real broker, so the mock must be asked for `api_key`.
+        let request_body = String::from_utf8(request_body).unwrap();
+        assert!(
+            request_body.contains(r#""id":"stado-anthropic""#),
+            "{request_body}"
+        );
+        assert!(
+            request_body.contains(r#""field":"api_key""#),
+            "{request_body}"
+        );
+        let body = r#"{"value":"test-anthropic-key"}"#;
         write!(
             stream,
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",

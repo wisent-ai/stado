@@ -439,7 +439,7 @@ pub async fn assign_jobs_at(
         let mut top = skip_by_key.clone();
         // Python `sorted(..., key=lambda kv: -kv[1])` — stable, so ties keep
         // first-seen order.
-        top.sort_by(|a, b| b.1.cmp(&a.1));
+        top.sort_by_key(|entry| std::cmp::Reverse(entry.1));
         let top: Vec<String> = top
             .into_iter()
             .take(5)
