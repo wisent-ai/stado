@@ -116,18 +116,38 @@ program="$version_dir/@NAME@"
 mkdir -p "$version_dir"
 
 uri=@URI@
-# `stado storage copy` moves queue state between backends; it was never a
-# downloader. Fetch the declared location with the tool that fetches.
-case "$uri" in
-  https://*|http://*) ;;
-  *)
-    echo "STADO_STATUS=failed"
-    echo "STADO_DETAIL=artifact location $uri cannot be fetched by a host; publish it over https"
-    exit 1
-    ;;
-esac
+# The fleet's own release channel first: stado:// resolves through whatever
+# object store this host is configured with, so a release does not depend on
+# any one vendor being reachable. An https location is still a location -- it
+# is how something published outside the fleet arrives -- and anything else is
+# refused by name rather than handed to a command that means something else.
+if [ -x "$HOME/.stado/bin/stado" ]; then
+  stado_bin="$HOME/.stado/bin/stado"
+else
+  stado_bin="$(command -v stado || true)"
+fi
+fetch_object() {
+  case "$uri" in
+    stado://*)
+      if [ -z "$stado_bin" ]; then
+        echo "STADO_STATUS=failed"
+        echo "STADO_DETAIL=$uri needs stado on this host to read the release channel"
+        exit 1
+      fi
+      "$stado_bin" storage cat "$uri" > "$1"
+      ;;
+    https://*)
+      /usr/bin/curl -fsSL --retry 3 "$uri" -o "$1"
+      ;;
+    *)
+      echo "STADO_STATUS=failed"
+      echo "STADO_DETAIL=artifact location $uri is neither the fleet release channel nor https"
+      exit 1
+      ;;
+  esac
+}
 if [ ! -f "$program" ]; then
-  /usr/bin/curl -fsSL --retry 3 "$uri" -o "$program"
+  fetch_object "$program"
 fi
 
 actual="$(shasum -a 256 "$program" | awk '{print $1}')"
@@ -154,18 +174,38 @@ archive="$version_dir/.artifact-download"
 mkdir -p "$dest"
 
 uri=@URI@
-# `stado storage copy` moves queue state between backends; it was never a
-# downloader. Fetch the declared location with the tool that fetches.
-case "$uri" in
-  https://*|http://*) ;;
-  *)
-    echo "STADO_STATUS=failed"
-    echo "STADO_DETAIL=artifact location $uri cannot be fetched by a host; publish it over https"
-    exit 1
-    ;;
-esac
+# The fleet's own release channel first: stado:// resolves through whatever
+# object store this host is configured with, so a release does not depend on
+# any one vendor being reachable. An https location is still a location -- it
+# is how something published outside the fleet arrives -- and anything else is
+# refused by name rather than handed to a command that means something else.
+if [ -x "$HOME/.stado/bin/stado" ]; then
+  stado_bin="$HOME/.stado/bin/stado"
+else
+  stado_bin="$(command -v stado || true)"
+fi
+fetch_object() {
+  case "$uri" in
+    stado://*)
+      if [ -z "$stado_bin" ]; then
+        echo "STADO_STATUS=failed"
+        echo "STADO_DETAIL=$uri needs stado on this host to read the release channel"
+        exit 1
+      fi
+      "$stado_bin" storage cat "$uri" > "$1"
+      ;;
+    https://*)
+      /usr/bin/curl -fsSL --retry 3 "$uri" -o "$1"
+      ;;
+    *)
+      echo "STADO_STATUS=failed"
+      echo "STADO_DETAIL=artifact location $uri is neither the fleet release channel nor https"
+      exit 1
+      ;;
+  esac
+}
 if [ ! -f "$archive" ]; then
-  /usr/bin/curl -fsSL --retry 3 "$uri" -o "$archive"
+  fetch_object "$archive"
 fi
 
 actual="$(shasum -a 256 "$archive" | awk '{print $1}')"
