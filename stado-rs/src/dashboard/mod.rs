@@ -11,14 +11,6 @@
 //! GET/PUT/DELETE /api/object?uri=stado://... - product object data plane
 //! GET /api/object/list?namespace=...&prefix=... - product object listing
 //! GET /api/object/stat?uri=stado://... - product object metadata
-//! GET/PUT /api/object/delivery - short-lived HMAC-bound product object delivery
-//! POST /api/backend/auth/verify - locally verify an application session JWT
-//! POST /api/backend/data/query - durable provider-neutral application data adapter
-//! POST /api/backend/alerts - durable local operational alert sink
-//! POST /api/backend/email - authenticated Resend delivery with durable outcome state
-//! POST /api/backend/push/inactivity - APNs/FCM delivery via the scoped device registry
-//! POST /api/backend/push/{register,unregister,reachability} - scoped device-registry lifecycle
-//! POST/DELETE /api/backend/schedules[/id] - durable one-shot callback scheduler
 //! PUT /api/host-health?host=... - route-scoped authenticated host beacon publication
 //! GET /api/release/object?uri=stado://releases/... - public software release download
 //! POST /api/machine/submit - submit a canonical machine request
@@ -27,8 +19,12 @@
 //! GET /api/service/status?name=... - read one managed service's beacon status
 //! POST /api/service/restart?name=... - restart one managed service on every declared host
 //! POST /api/rate-limit/consume - authenticated shared atomic rate-limit consume
+//! POST /api/integration/enterprise/<action> - authenticated read-only fleet projection
 //! GET /healthz           - liveness (before auth, after the Host guard)
 //! GET /livez             - Cloud Run liveness alias
+//!
+//! The application plane was extracted into the private `wisent-backend-adapters` service; Stado keeps only the generic object plane.
+//! The product integrations (Stripe, Resend, SendGrid, GitHub, HuggingFace, captcha proxies) were extracted into the private `wisent-integrations` service.
 //!
 //! Summary and rendering helpers live in `dashboard/summary.rs` +
 //! `dashboard/web_view.rs` (Python `dashboard_summary/`). This module holds
@@ -44,9 +40,8 @@
 //!   rather than a process-local lock, so concurrent dashboard revisions
 //!   cannot overwrite each other.
 
-mod backend;
 mod integration;
-mod outbound;
+mod operator_auth;
 pub mod policy;
 pub mod summary;
 pub mod web_view;
@@ -102,7 +97,6 @@ struct BoundaryAvailability {
     object: bool,
     release: bool,
     machine: bool,
-    backend_push: bool,
     service: bool,
     rate_limit_verifier: bool,
     rate_limit_state: bool,
@@ -115,7 +109,6 @@ impl BoundaryAvailability {
             "object": self.object,
             "release": self.release,
             "machine": self.machine,
-            "backend_push": self.backend_push,
             "service": self.service,
             "rate_limit_verifier": self.rate_limit_verifier,
             "rate_limit_state": self.rate_limit_state,
@@ -127,7 +120,6 @@ impl BoundaryAvailability {
         self.object
             && self.release
             && self.machine
-            && self.backend_push
             && self.service
             && self.rate_limit_verifier
             && self.rate_limit_state
@@ -368,7 +360,6 @@ impl Dashboard {
             object,
             release,
             machine,
-            backend_push,
             service,
             rate_verifier,
             rate_state,
@@ -382,10 +373,6 @@ impl Dashboard {
             tokio::time::timeout(
                 startup_timeout,
                 crate::skarbiec::validate_machine_verifier()
-            ),
-            tokio::time::timeout(
-                startup_timeout,
-                crate::skarbiec::validate_backend_push_verifier(),
             ),
             tokio::time::timeout(
                 startup_timeout,
@@ -408,7 +395,6 @@ impl Dashboard {
             object: matches!(object, Ok(Ok(_))),
             release: matches!(release, Ok(Ok(_))),
             machine: matches!(machine, Ok(Ok(_))),
-            backend_push: matches!(backend_push, Ok(Ok(_))),
             service: matches!(service, Ok(Ok(_))),
             rate_limit_verifier: matches!(rate_verifier, Ok(Ok(_))),
             rate_limit_state: matches!(rate_state, Ok(Ok(_))),
@@ -418,7 +404,6 @@ impl Dashboard {
             (boundaries.object, "object authorization"),
             (boundaries.release, "release publication"),
             (boundaries.machine, "machine authorization"),
-            (boundaries.backend_push, "backend push authorization"),
             (boundaries.service, "service authorization"),
             (boundaries.rate_limit_verifier, "rate-limit authorization"),
             (boundaries.rate_limit_state, "rate-limit state"),
@@ -432,10 +417,6 @@ impl Dashboard {
             .boundaries
             .write()
             .expect("dashboard boundary state lock") = boundaries;
-        let schedule_store = self.store.clone();
-        tokio::spawn(async move {
-            backend::run_schedule_loop(schedule_store).await;
-        });
         // The refresh loop's future trips a `&str` lifetime-generalization
         // issue in the artifact-listing chain (Send "not general enough"),
         // so — like Python's daemon refresher thread — it runs on its own
@@ -479,9 +460,7 @@ impl Dashboard {
         let Some(mut request) = read_request(&mut stream).await? else {
             return Ok(());
         };
-        let is_object_put = request.method == "PUT"
-            && (request.path.starts_with("/api/object?")
-                || request.path.starts_with("/api/object/delivery?"));
+        let is_object_put = request.method == "PUT" && request.path.starts_with("/api/object?");
         if is_object_put {
             if let Some(response) = self.object_put_preflight(&request).await {
                 stream.write_all(&response.bytes).await?;
@@ -518,34 +497,6 @@ impl Dashboard {
             let state = self.snapshot();
             return integration::handle(request, available, &self.store, &state).await;
         }
-        if config::BACKEND_PUSH_PATHS.contains(&path) {
-            if !self
-                .trusted_request_host(request.header("host"), request.header("x-forwarded-proto"))
-            {
-                return send_json(http_status("403"), &json!({"error": "forbidden"}));
-            }
-            if !self
-                .boundaries
-                .read()
-                .expect("dashboard boundary state lock")
-                .backend_push
-            {
-                return send_json(
-                    http_status("503"),
-                    &json!({"error": "backend push unavailable"}),
-                );
-            }
-        }
-        if backend::is_route(path) {
-            if !self
-                .trusted_request_host(request.header("host"), request.header("x-forwarded-proto"))
-            {
-                return send_json(http_status("403"), &json!({"error": "forbidden"}));
-            }
-            if let Some(response) = backend::handle(self, request).await {
-                return response;
-            }
-        }
         match request.method.as_str() {
             "" => empty_response(400, "Bad Request"),
             "GET" => self.do_get(request).await,
@@ -567,9 +518,6 @@ impl Dashboard {
             .path
             .split_once('?')
             .unwrap_or((request.path.as_str(), ""));
-        if path == "/api/object/delivery" {
-            return backend::delivery_put_preflight(request, query).await;
-        }
         if path != "/api/object" {
             return Some(empty_response(http_status("404"), "Not Found"));
         }
@@ -1694,7 +1642,7 @@ impl Dashboard {
         if let Some(metadata) = &self.operator_auth_override {
             return Ok((metadata.supabase_url.clone(), metadata.anon_key.clone()));
         }
-        outbound::operator_auth_metadata().await.map_err(|_| ())
+        operator_auth::operator_auth_metadata().await.map_err(|_| ())
     }
 
     /// Validate host-health publication or a Wisent session/deployment grant.
@@ -1915,8 +1863,7 @@ async fn read_request(stream: &mut TcpStream) -> std::io::Result<Option<Request>
         .iter()
         .find(|(name, _)| name == "content-length")
         .map(|(_, value)| value.as_str());
-    let object_put = method == "PUT"
-        && (path.starts_with("/api/object?") || path.starts_with("/api/object/delivery?"));
+    let object_put = method == "PUT" && path.starts_with("/api/object?");
     let content_length = match content_length_header {
         Some(value) => value.parse::<usize>().map_err(|_| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid Content-Length")
@@ -1931,10 +1878,6 @@ async fn read_request(stream: &mut TcpStream) -> std::io::Result<Option<Request>
     };
     let max_body_bytes = if object_put {
         crate::object_store::max_object_bytes()
-    } else if path.starts_with("/api/integration/") {
-        "4194304"
-            .parse::<usize>()
-            .expect("static integration request cap")
     } else {
         MAX_HEAD_BYTES
     };
@@ -2652,7 +2595,6 @@ mod tests {
                     "object": false,
                     "release": false,
                     "machine": false,
-                    "backend_push": false,
                     "service": false,
                     "rate_limit_verifier": false,
                     "rate_limit_state": false,

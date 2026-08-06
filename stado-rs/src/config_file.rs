@@ -747,79 +747,6 @@ pub fn validate(data: &Value) -> Vec<String> {
         );
         }
     }
-    let push_enabled = get_in(root, "backend.push_clients").is_some()
-        || get_in(root, "backend.push_skarbiec").is_some();
-    if push_enabled {
-        if let Err(push_problems) =
-            crate::config::parse_backend_push_clients(get_in(root, "backend.push_clients"))
-        {
-            problems.extend(push_problems);
-        }
-        let push_skarbiec = get_in(root, "backend.push_skarbiec").and_then(Value::as_object);
-        if push_skarbiec
-            .and_then(|section| section.get("url"))
-            .is_some_and(|url| !py_truthy(url))
-        {
-            problems.push(
-                "backend.push_skarbiec.url, when set, must be a non-empty verifier endpoint"
-                    .to_string(),
-            );
-        }
-        if push_skarbiec
-            .and_then(|section| section.get("consumer"))
-            .and_then(Value::as_str)
-            != Some(crate::config::BACKEND_PUSH_API_VERIFIER_CONSUMER)
-        {
-            problems.push(format!(
-                "backend.push_skarbiec.consumer must be the dedicated verifier {:?}",
-                crate::config::BACKEND_PUSH_API_VERIFIER_CONSUMER
-            ));
-        }
-        let push_token_file = push_skarbiec
-            .and_then(|section| section.get("token_file"))
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if push_token_file.is_empty() {
-            problems.push(
-            "backend.push_skarbiec.token_file must name the owner-only push verifier grant file"
-                .to_string(),
-        );
-        }
-        for other_path in [
-            "secrets.skarbiec.token_file",
-            "agent.skarbiec.token_file",
-            "backend.messaging.skarbiec.token_file",
-            "object_api.skarbiec.token_file",
-            "release_api.skarbiec.token_file",
-            "machine_api.skarbiec.token_file",
-            "service_api.skarbiec.token_file",
-            "rate_limit.skarbiec.token_file",
-        ] {
-            if !push_token_file.is_empty()
-                && get_in(root, other_path).and_then(Value::as_str) == Some(push_token_file)
-            {
-                problems.push(format!(
-                    "backend.push_skarbiec.token_file must be distinct from {other_path}"
-                ));
-            }
-        }
-        if push_skarbiec.is_some_and(|section| section.contains_key("token")) {
-            problems.push(
-            "backend.push_skarbiec.token is forbidden; store the grant only in its owner-only token_file"
-                .to_string(),
-        );
-        }
-        for item in ["wisent-app-push-router", "wisent-backend-push-router"] {
-            if configured_items
-                .iter()
-                .any(|configured| configured.as_str() == Some(item))
-            {
-                problems.push(format!(
-                    "agent.skarbiec.items must not expose push verifier item {item:?} to jobs"
-                ));
-            }
-        }
-    }
     let rate_limit = root.get("rate_limit").and_then(Value::as_object);
     if rate_limit.is_some() {
         if let Err(problem) = crate::rate_limit::parse_clients(
@@ -865,7 +792,6 @@ pub fn validate(data: &Value) -> Vec<String> {
             "secrets.skarbiec.token_file",
             "agent.skarbiec.token_file",
             "backend.messaging.skarbiec.token_file",
-            "backend.push_skarbiec.token_file",
             "object_api.skarbiec.token_file",
             "release_api.skarbiec.token_file",
             "machine_api.skarbiec.token_file",
@@ -957,7 +883,6 @@ pub fn validate(data: &Value) -> Vec<String> {
             "secrets.skarbiec.token_file",
             "agent.skarbiec.token_file",
             "backend.messaging.skarbiec.token_file",
-            "backend.push_skarbiec.token_file",
             "rate_limit.skarbiec.token_file",
             "object_api.skarbiec.token_file",
             "release_api.skarbiec.token_file",
