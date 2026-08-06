@@ -26,6 +26,24 @@ for command_name in jq openssl wc; do
     command -v "$command_name" >/dev/null || die "required command is unavailable: $command_name"
 done
 
+# Resolving the name is not the same as having the tool, and `wc` is the one
+# dependency this release also ships under that name: the loop below reads a release
+# directory that contains a `wc` which is a copy of the stado binary. Wherever such a
+# copy has been installed earlier on PATH, the guard above is satisfied by it while
+# `wc -c` counts nothing, and the failure surfaces much later inside jq as invalid
+# JSON -- a message about the wrong problem entirely. So this dependency is settled by
+# behaviour: counting one byte and two bytes must differ by exactly one byte.
+one_byte="$(printf x | wc -c | tr -d '[:space:]')"
+two_bytes="$(printf xx | wc -c | tr -d '[:space:]')"
+case "$one_byte:$two_bytes" in
+    *[!0-9:]* | *::* | :* | *:) counts_bytes=no ;;
+    *) test "$((two_bytes - one_byte))" = "$one_byte" && counts_bytes=yes || counts_bytes=no ;;
+esac
+test "$counts_bytes" = yes ||
+    die "wc on this PATH ($(command -v wc)) does not count bytes; it answered
+'$one_byte' for one byte and '$two_bytes' for two. A stado release ships a binary
+named wc beside stado, so check whether one is installed ahead of coreutils."
+
 case "$CHANNEL" in
     nightly|candidate|stable) ;;
     *) die "release channel must be nightly, candidate, or stable" ;;
@@ -37,7 +55,7 @@ for name in stado wc stado-coverage stado-fix stado-watchdog stado-mcp; do
     path="$RELEASE_DIR/$name"
     [ -f "$path" ] || die "release binary is missing: $name"
     digest="$(openssl dgst -sha256 "$path" | sed 's/^.*= //')"
-    size="$(/usr/bin/wc -c < "$path" | tr -d '[:space:]')"
+    size="$(wc -c < "$path" | tr -d '[:space:]')"
     updated="$RELEASE_DIR/.artifacts.next.json"
     jq \
         --arg name "$name" \
