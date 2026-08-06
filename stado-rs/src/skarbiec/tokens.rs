@@ -27,15 +27,6 @@ pub async fn read_machine_token(item: &str, field: &str) -> Result<Option<String
     Client::machine_verifier()?.read_string(item, field).await
 }
 
-pub async fn read_backend_push_token(
-    item: &str,
-    field: &str,
-) -> Result<Option<String>, SkarbiecError> {
-    Client::backend_push_verifier()?
-        .read_string(item, field)
-        .await
-}
-
 pub async fn read_service_token(item: &str, field: &str) -> Result<Option<String>, SkarbiecError> {
     Client::service_verifier()?.read_string(item, field).await
 }
