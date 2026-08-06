@@ -667,7 +667,31 @@ pub enum StorageAdapter {
     Local,
 }
 
+/// Whether a store answers for the whole fleet or only for the machine it sits
+/// on.
+///
+/// Written as data rather than inferred from a name so that adding a backend is
+/// a decision the compiler asks for. It decides one thing: whether a coordinate
+/// published here means the same object on every other host. A release is a
+/// claim about the fleet, and a claim resting on a device store does not fail
+/// -- it succeeds, and every other host reports the object absent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StorageReach {
+    /// Every host resolves the same coordinate to the same object.
+    Fleet,
+    /// The coordinate is meaningful only on the machine that wrote it.
+    Device,
+}
+
 impl StorageAdapter {
+    /// How far a coordinate written to this store carries.
+    pub const fn reach(self) -> StorageReach {
+        match self {
+            Self::Gcs | Self::AzureBlob | Self::S3 | Self::StadoObject => StorageReach::Fleet,
+            Self::Local => StorageReach::Device,
+        }
+    }
+
     pub const fn id(self) -> &'static str {
         match self {
             Self::Gcs => "gcs",
