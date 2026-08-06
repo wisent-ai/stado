@@ -951,6 +951,462 @@ pub async fn exec(target: &str, words: Vec<String>, json: bool) -> Result<(), Cm
     report_outcome(&report, expected)
 }
 
+/// `stado host inventory TARGET [--json]` — the stado-managed binaries,
+/// forward markers and loopback listeners of TARGET, and the verdict on
+/// whether each marker still matches a live listener.
+///
+/// The only thing it takes is the registry target name. There is no path,
+/// file name, port or pattern to pass, because a command that took one
+/// would be a command that could be pointed at `~/.ssh/id_ed25519`.
+pub async fn inventory(target: &str, json: bool) -> Result<(), CmdError> {
+    let runner = crate::deploy::production_runner();
+    let report = crate::deploy::host_inventory::inventory_host(target, &runner)
+        .await
+        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    let expected = crate::deploy::host_inventory::OK_STATUS;
+    if json {
+        print_json(&report);
+        return report_outcome(&report, expected);
+    }
+    let section = |key: &str| {
+        report
+            .get(key)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
+
+    println!("target:   {}", cell(report.get("target")));
+    // Said before the tables, not after them, because it decides whether the
+    // strings in those tables mean anything. A host whose sanitizer does not
+    // work reports blank names, and a table of blanks reads like a host with
+    // nothing installed on it.
+    let sanitizer = report.get("sanitizer_state");
+    if sanitizer.and_then(Value::as_str) != Some(crate::deploy::host_inventory::SANITIZER_OK) {
+        println!(
+            "sanitizer: {} — the host's own field sanitizer failed its probe, so \
+             every name, mode, version and URL below is unreliable",
+            cell(sanitizer)
+        );
+    }
+    super::table::print(
+        &[
+            "BINARY",
+            "STATE",
+            "EXECUTABLE",
+            "VERSION STATE",
+            "VERSION",
+            "DECLARED",
+            "VERDICT",
+        ],
+        &section("managed_binaries")
+            .iter()
+            .map(|binary| {
+                vec![
+                    cell(binary.get("name")),
+                    cell(binary.get("state")),
+                    cell(binary.get("executable")),
+                    cell(binary.get("version_state")),
+                    cell(binary.get("version")),
+                    cell(binary.get("declared_version")),
+                    cell(binary.get("version_verdict")),
+                ]
+            })
+            .collect::<Vec<Vec<String>>>(),
+    );
+
+    let markers = section("forwards");
+    if markers.is_empty() {
+        println!(
+            "\nforward markers: none ($HOME/.stado/forwards is {})",
+            cell(report.get("forwards_dir_state"))
+        );
+    } else {
+        // Two verdict columns because the marker is reconciled against two
+        // independent things: LISTENING is whether anything answers where
+        // the marker points, DECLARATION is whether the registry sends
+        // consumers to the same place. A marker can pass one and fail the
+        // other, and collapsing them would hide exactly that case.
+        super::table::print(
+            &[
+                "MARKER",
+                "STATE",
+                "URL",
+                "PORT",
+                "LISTENING",
+                "DECLARED URL",
+                "DECLARATION",
+            ],
+            &markers
+                .iter()
+                .map(|marker| {
+                    vec![
+                        cell(marker.get("name")),
+                        cell(marker.get("state")),
+                        cell(marker.get("url")),
+                        cell(marker.get("port")),
+                        cell(marker.get("reconciliation")),
+                        cell(marker.get("declared_url")),
+                        cell(marker.get("declaration_verdict")),
+                    ]
+                })
+                .collect::<Vec<Vec<String>>>(),
+        );
+    }
+
+    let listeners = section("listeners");
+    super::table::print(
+        &["PORT", "PID", "ADDRESS"],
+        &listeners
+            .iter()
+            .map(|listener| {
+                vec![
+                    cell(listener.get("port")),
+                    cell(listener.get("pid")),
+                    cell(listener.get("address")),
+                ]
+            })
+            .collect::<Vec<Vec<String>>>(),
+    );
+    let listeners_state = report.get("listeners_state");
+    if listeners_state.and_then(Value::as_str)
+        != Some(crate::deploy::host_inventory::LISTENERS_READ)
+    {
+        // An empty table above and this line missing would read as "nothing
+        // is listening on this host", which is the opposite of what happened.
+        println!(
+            "listeners: {} — the kernel socket table could not be read, so no \
+             marker above could be checked against it",
+            cell(listeners_state)
+        );
+    }
+    if !listeners.is_empty() {
+        // Say what the pid column is NOT, once, where it is being read.
+        println!(
+            "Owners are pids. Map one to a program with stado host exec {target} \
+             -- ps ax -o pid -o ppid -o etime -o comm; this command never reads \
+             process arguments or environments."
+        );
+    }
+
+    super::table::print(
+        &["SUBCOMMAND", "INSTALLED BINARY"],
+        &section("subcommands")
+            .iter()
+            .map(|subcommand| vec![cell(subcommand.get("name")), cell(subcommand.get("state"))])
+            .collect::<Vec<Vec<String>>>(),
+    );
+
+    let vaults = section("vaults");
+    if vaults.is_empty() {
+        println!("\nvaults: none — $HOME/.stado holds no *.vault.json");
+    } else {
+        super::table::print(
+            &["VAULT", "STATE", "BYTES", "MODE", "OWNER ONLY"],
+            &vaults
+                .iter()
+                .map(|vault| {
+                    vec![
+                        cell(vault.get("name")),
+                        cell(vault.get("state")),
+                        cell(vault.get("bytes")),
+                        cell(vault.get("mode")),
+                        cell(vault.get("owner_only")),
+                    ]
+                })
+                .collect::<Vec<Vec<String>>>(),
+        );
+    }
+    // Snapshots, pre-migration copies and acquisitions files, kept in their
+    // own table on purpose: the active vault is state, a sidecar is history,
+    // and editing the wrong one is the mistake this separation prevents.
+    let sidecars = section("vault_sidecars");
+    if !sidecars.is_empty() {
+        super::table::print(
+            &["VAULT SIDECAR", "STATE", "BYTES", "MODE", "OWNER ONLY"],
+            &sidecars
+                .iter()
+                .map(|sidecar| {
+                    vec![
+                        cell(sidecar.get("name")),
+                        cell(sidecar.get("state")),
+                        cell(sidecar.get("bytes")),
+                        cell(sidecar.get("mode")),
+                        cell(sidecar.get("owner_only")),
+                    ]
+                })
+                .collect::<Vec<Vec<String>>>(),
+        );
+    }
+    if report.get("vaults_truncated") == Some(&Value::Bool(true))
+        || report.get("vault_sidecars_truncated") == Some(&Value::Bool(true))
+    {
+        println!(
+            "$HOME/.stado holds more vault files than this command lists; \
+             vaults_seen and vault_sidecars_seen carry the real counts."
+        );
+    }
+    println!(
+        "Vault rows are metadata only. This command never opens a vault, so no \
+         ciphertext, item id, consumer name or token can appear above."
+    );
+
+    // The answer, not the raw tables above it.
+    let summary = report.get("reconciliation");
+    let counted = |key: &str| cell(summary.and_then(|value| value.get(key)));
+    println!(
+        "\nreconciliation: {} of {} forward markers matched, {} stale, {} unreadable, \
+         {} unjudged",
+        counted("matched"),
+        counted("markers"),
+        counted("stale"),
+        counted("unreadable"),
+        counted("unknown"),
+    );
+    let name_list = |key: &str| -> Vec<String> {
+        summary
+            .and_then(|value| value.get(key))
+            .and_then(Value::as_array)
+            .map(|names| names.iter().map(|name| cell(Some(name))).collect())
+            .unwrap_or_default()
+    };
+    let stale = name_list("stale_markers");
+    if !stale.is_empty() {
+        println!(
+            "stale markers:  {} — the marker names a port nothing is listening on",
+            stale.join(", ")
+        );
+    }
+
+    // The registry axis, said in words. It is deliberately not folded into
+    // the line above: "matched" there means something is listening, and a
+    // marker can be listening and still send consumers to a port the
+    // directory does not declare — which is the drift that survives every
+    // health check.
+    println!(
+        "declaration:    {} of {} forward markers agree with the registry, {} disagree, \
+         {} undeclared",
+        counted("declaration_matched"),
+        counted("markers"),
+        counted("declaration_disagrees"),
+        counted("declaration_undeclared"),
+    );
+    let disagreeing = name_list("disagreeing_markers");
+    let undeclared_markers = name_list("undeclared_markers");
+    if !disagreeing.is_empty() {
+        println!(
+            "marker vs registry: {} — the marker points at one endpoint and the \
+             service directory declares another for this host; consumers resolving \
+             through the directory do not arrive where the marker says",
+            disagreeing.join(", ")
+        );
+    }
+    if !undeclared_markers.is_empty() {
+        println!(
+            "undeclared markers: {} — no service in the directory carries an endpoint \
+             for this host under that name, so there is nothing to hold the marker to",
+            undeclared_markers.join(", ")
+        );
+    }
+
+    // The version axis. `undeclared` is printed too: a host nobody declared
+    // a version for is not a host that passed a version check.
+    let behind = name_list("versions_behind");
+    let ahead = name_list("versions_ahead");
+    let mismatched = name_list("versions_mismatched");
+    let unjudged = name_list("versions_unjudged");
+    let undeclared_versions = name_list("versions_undeclared");
+    if !behind.is_empty() {
+        println!(
+            "versions behind: {} — older than registry managed_versions declares \
+             for this host",
+            behind.join(", ")
+        );
+    }
+    if !ahead.is_empty() {
+        println!(
+            "versions ahead:  {} — newer than registry managed_versions declares; \
+             the declaration is the thing that is stale",
+            ahead.join(", ")
+        );
+    }
+    if !mismatched.is_empty() {
+        println!(
+            "versions differ: {} — installed and declared are not the same string, \
+             and one of them is not three numbers, so neither is older",
+            mismatched.join(", ")
+        );
+    }
+    if !unjudged.is_empty() {
+        println!(
+            "versions unjudged: {} — the registry declares a version and the host \
+             reported none that could be read",
+            unjudged.join(", ")
+        );
+    }
+    if !undeclared_versions.is_empty() {
+        println!(
+            "versions undeclared: {} — the registry declares no required version for \
+             this host, so nothing here was verified against a target state",
+            undeclared_versions.join(", ")
+        );
+    }
+    if disagreeing.is_empty()
+        && undeclared_markers.is_empty()
+        && behind.is_empty()
+        && ahead.is_empty()
+        && mismatched.is_empty()
+        && unjudged.is_empty()
+        && undeclared_versions.is_empty()
+    {
+        // One confirming line, for the same reason the vault section has
+        // one: a verified host must read as verified, not as a section that
+        // printed nothing.
+        println!(
+            "declared state: every marker matches the endpoint the registry declares, \
+             and every managed binary is at its declared version"
+        );
+    }
+    // The two vault findings, in the human output and not only under --json:
+    // a signal an operator has to ask for in JSON is a signal they will miss.
+    let not_owner_only = name_list("vaults_not_owner_only");
+    let refused = name_list("vaults_refused");
+    if !not_owner_only.is_empty() {
+        println!(
+            "vault perms:    {} — readable past the owner; a vault the group \
+             can read is an incident, not cosmetics",
+            not_owner_only.join(", ")
+        );
+    }
+    if !refused.is_empty() {
+        println!(
+            "vaults refused: {} — a symlink or not a regular file, reported \
+             rather than followed",
+            refused.join(", ")
+        );
+    }
+    if not_owner_only.is_empty() && refused.is_empty() {
+        // Say it, rather than printing nothing: a clean host must read as
+        // checked, not as a section that quietly had nothing to add.
+        println!(
+            "vaults:         {} active, {} sidecar — all owner-only, none refused",
+            vaults.len(),
+            sidecars.len()
+        );
+    }
+    report_outcome(&report, expected)
+}
+
+/// `stado host release TARGET --binary NAME --version X.Y.Z` — put one
+/// registry-declared managed binary onto TARGET.
+///
+/// The write counterpart of `host inventory`: that command says a host is
+/// behind its declared version, this one closes the gap, and it refuses to
+/// do anything the declaration does not already say. `--binary` selects a
+/// compile-time entry and never becomes a path; `--version` is an exact
+/// immutable coordinate that has to equal what the registry declares.
+pub async fn release(
+    target: &str,
+    binary: &str,
+    version: &str,
+    platform: &str,
+    dry_run: bool,
+    json: bool,
+) -> Result<(), CmdError> {
+    use crate::deploy::host_release;
+
+    let runner = crate::deploy::production_runner();
+    let report = host_release::release_host(target, binary, version, platform, dry_run, &runner)
+        .await
+        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    // Three outcomes are success, and conflating them would be the lie this
+    // command exists to avoid: a delivery, a host that already ran the
+    // requested version, and a dry run that mutated nothing.
+    let expected = match report.get("status").and_then(Value::as_str) {
+        Some(host_release::ALREADY_ACTIVE_STATUS) => host_release::ALREADY_ACTIVE_STATUS,
+        Some(host_release::PLANNED_STATUS) if dry_run => host_release::PLANNED_STATUS,
+        _ => host_release::RELEASED_STATUS,
+    };
+    if json {
+        print_json(&report);
+        return report_outcome(&report, expected);
+    }
+
+    println!("target:   {}", cell(report.get("target")));
+    println!(
+        "binary:   {} {} ({})",
+        cell(report.get("binary")),
+        cell(report.get("version")),
+        cell(report.get("platform"))
+    );
+    println!("declared: {}", cell(report.get("declared_version")));
+    println!("artifact: {}", cell(report.get("release_uri")));
+    println!("sha256:   {} (configured)", cell(report.get("sha256")));
+    println!(
+        "installed: {} ({})",
+        cell(report.get("active_version")),
+        cell(report.get("active_state"))
+    );
+    println!("unit:     {}", cell(report.get("unit")));
+
+    let steps = report
+        .get("steps")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    super::table::print(
+        &["STEP", "STATE", "DETAIL"],
+        &steps
+            .iter()
+            .map(|step| {
+                vec![
+                    cell(step.get("step")),
+                    cell(step.get("state")),
+                    cell(step.get("detail")),
+                ]
+            })
+            .collect::<Vec<Vec<String>>>(),
+    );
+
+    match report.get("status").and_then(Value::as_str) {
+        Some(host_release::ALREADY_ACTIVE_STATUS) => println!(
+            "\nalready active: {} is the running version, so nothing was fetched, \
+             staged, activated or restarted",
+            cell(report.get("version"))
+        ),
+        Some(host_release::PLANNED_STATUS) => {
+            // Named one by one, because the value of a dry run is the order.
+            println!("\nplanned, nothing was mutated on the host:");
+            for step in report
+                .get("planned_steps")
+                .and_then(Value::as_array)
+                .unwrap_or(&Vec::new())
+            {
+                println!("  {}", cell(Some(step)));
+            }
+        }
+        Some(host_release::RELEASED_STATUS) => println!(
+            "\nreleased: {} now runs {} {}",
+            cell(report.get("target")),
+            cell(report.get("binary")),
+            cell(report.get("version"))
+        ),
+        _ => {
+            // The question an operator asks after a failure is what is
+            // running now, and the answer is almost always "the same thing
+            // as before". Say so rather than making them re-run inventory.
+            if report.get("active_version_unchanged") == Some(&Value::Bool(true)) {
+                println!(
+                    "\nnothing was activated: {} still runs {}",
+                    cell(report.get("target")),
+                    cell(report.get("active_version"))
+                );
+            }
+        }
+    }
+    report_outcome(&report, expected)
+}
+
 /// `stado host install-helper TARGET SOURCE NAME` — transfer one bounded,
 /// owner-executable operator helper without opening an arbitrary remote shell.
 pub async fn install_helper(
