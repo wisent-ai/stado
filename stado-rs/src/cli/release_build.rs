@@ -102,11 +102,47 @@ print(f"build_cmd={shlex.quote(recipe['build'])}")
 print(f"binary={shlex.quote(recipe['binary'])}")
 print(f"launcher={shlex.quote(recipe['launcher'])}")
 print(f"minimum_stado={shlex.quote(str(recipe.get('minimum_stado_version','')))}")
+sources = recipe.get("sources") or {}
+for path, spec in sources.items():
+    if "/" in path or not spec.get("repo") or not spec.get("revision"):
+        print("echo STADO_STATUS=failed")
+        print(f"echo STADO_DETAIL={shlex.quote(f'source {path} needs a repo and an exact revision, and one path segment')}")
+        print("exit 1")
+        raise SystemExit(0)
+source_specs = " ".join(
+    f"{shlex.quote(path)}={shlex.quote(spec['repo'])}={shlex.quote(spec['revision'])}"
+    for path, spec in sources.items()
+)
+print(f"source_specs={shlex.quote(source_specs)}")
 stage = recipe.get("stage") or {}
 pairs = " ".join(f"{shlex.quote(dest)}={shlex.quote(src)}" for dest, src in stage.items())
 print(f"stage_pairs={shlex.quote(pairs)}")
+after = recipe.get("after_stage") or []
+print(f"after_stage={shlex.quote(chr(10).join(after))}")
 PY
 eval "$(/usr/bin/python3 "$reader" "$recipe" "$platform")"
+
+# Dependent sources are pinned by exact revision, never by branch: a release
+# built twice from the same tag must contain the same dependency, and a moving
+# reference makes the archive a function of when it was built.
+for spec in ${source_specs:-}; do
+  path="${spec%%=*}"
+  rest="${spec#*=}"
+  src_repo="${rest%%=*}"
+  src_rev="${rest#*=}"
+  rm -rf "$work/src/$path"
+  git clone --quiet "$src_repo" "$work/src/$path" 2>/dev/null || {
+    echo "STADO_STATUS=failed"
+    echo "STADO_DETAIL=cannot clone dependent source $src_repo"
+    exit 1
+  }
+  git -C "$work/src/$path" checkout --quiet "$src_rev" 2>/dev/null || {
+    echo "STADO_STATUS=failed"
+    echo "STADO_DETAIL=$src_repo has no revision $src_rev"
+    exit 1
+  }
+  echo "STADO_SOURCE=$path@$src_rev"
+done
 
 sh -c "$build_cmd"
 
@@ -118,6 +154,17 @@ for pair in $stage_pairs; do
   mkdir -p "$stage/$(dirname "$dest")"
   cp -R "$src" "$stage/$dest"
 done
+
+# Some bundles are not finished by copying: a config generator has to run with
+# the staged tree in front of it. Declared separately from the build so it runs
+# after staging, with STAGE pointing at what will be archived.
+if [ -n "${after_stage:-}" ]; then
+  STAGE="$stage" sh -c "$after_stage" || {
+    echo "STADO_STATUS=failed"
+    echo "STADO_DETAIL=after_stage step failed"
+    exit 1
+  }
+fi
 
 archive="$work/@SLUG@.tar.gz"
 rm -f "$archive"
