@@ -21,6 +21,8 @@ use super::CmdError;
 pub enum ReleaseCommands {
     /// Generate an Ed25519 release authority key pair.
     Keygen(ReleaseKeygenArgs),
+    /// Produce a release archive on a fleet host chosen for the platform.
+    Build(crate::cli::release_build::ReleaseBuildArgs),
     /// Build, sign, and publish one immutable candidate coordinate.
     Prepare(ReleasePrepareArgs),
     /// Promote exact qualified candidate bytes into registry desired state.
@@ -546,6 +548,7 @@ async fn rollback(args: &ReleaseRollbackArgs) -> Result<(), CmdError> {
 pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
     match command {
         ReleaseCommands::Keygen(args) => keygen(&args).await,
+        ReleaseCommands::Build(args) => crate::cli::release_build::build(&args).await,
         ReleaseCommands::Prepare(args) => prepare(&args).await,
         ReleaseCommands::Promote(args) => promote(&args).await,
         ReleaseCommands::Agent(args) => agent(&args).await,
