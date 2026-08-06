@@ -1824,197 +1824,6 @@ static MACHINE_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
     .into_owned()
 });
 
-pub const BACKEND_PUSH_API_VERIFIER_CONSUMER: &str = "stado-backend-push-api-verifier";
-pub const BACKEND_PUSH_ACTIONS: &[&str] = &["register", "send", "status", "unregister"];
-pub const BACKEND_PUSH_PATHS: &[&str] = &[
-    "/api/backend/push/inactivity",
-    "/api/backend/push/reachability",
-    "/api/backend/push/register",
-    "/api/backend/push/unregister",
-];
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BackendPushClient {
-    item: String,
-    actions: Vec<String>,
-    paths: Vec<String>,
-}
-
-impl BackendPushClient {
-    pub fn item(&self) -> &str {
-        &self.item
-    }
-
-    pub fn allows(&self, path: &str, action: &str) -> bool {
-        self.paths.iter().any(|allowed| allowed == path)
-            && self.actions.iter().any(|allowed| allowed == action)
-    }
-}
-
-pub(crate) fn parse_backend_push_clients(
-    value: Option<&Value>,
-) -> Result<BTreeMap<String, BackendPushClient>, Vec<String>> {
-    let Some(Value::Object(entries)) = value else {
-        return Err(vec![
-            "backend.push_clients must be a non-empty exact client mapping".to_string(),
-        ]);
-    };
-    if entries.is_empty() {
-        return Err(vec!["backend.push_clients must not be empty".to_string()]);
-    }
-    let mut problems = Vec::new();
-    let mut clients = BTreeMap::new();
-    let mut items = BTreeSet::new();
-    for (name, raw) in entries {
-        let start = problems.len();
-        if !canonical_machine_name(name) {
-            problems.push(format!(
-                "backend.push_clients key {name:?} is not canonical"
-            ));
-        }
-        let Some(entry) = raw.as_object() else {
-            problems.push(format!("backend.push_clients.{name} must be an object"));
-            continue;
-        };
-        for key in entry.keys() {
-            if !matches!(key.as_str(), "item" | "actions" | "paths") {
-                problems.push(format!(
-                    "backend.push_clients.{name} contains unsupported key {key:?}"
-                ));
-            }
-        }
-        let item = entry
-            .get("item")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let expected_item = format!("{name}-push-router");
-        if item != expected_item {
-            problems.push(format!(
-                "backend.push_clients.{name}.item must be {expected_item:?}"
-            ));
-        }
-        if !items.insert(item.to_string()) {
-            problems.push(format!(
-                "backend.push_clients maps more than one client to item {item:?}"
-            ));
-        }
-        let mut actions = Vec::new();
-        match entry.get("actions") {
-            Some(Value::Array(values)) if !values.is_empty() => {
-                let mut seen = BTreeSet::new();
-                for value in values {
-                    let Some(action) = value.as_str() else {
-                        problems.push(format!(
-                            "backend.push_clients.{name}.actions entries must be strings"
-                        ));
-                        continue;
-                    };
-                    if !BACKEND_PUSH_ACTIONS.contains(&action) || !seen.insert(action) {
-                        problems.push(format!(
-                            "backend.push_clients.{name}.actions contains unsupported or duplicate {action:?}"
-                        ));
-                        continue;
-                    }
-                    actions.push(action.to_string());
-                }
-            }
-            _ => problems.push(format!(
-                "backend.push_clients.{name}.actions must be a non-empty array"
-            )),
-        }
-        let mut paths = Vec::new();
-        match entry.get("paths") {
-            Some(Value::Array(values)) if !values.is_empty() => {
-                let mut seen = BTreeSet::new();
-                for value in values {
-                    let Some(path) = value.as_str() else {
-                        problems.push(format!(
-                            "backend.push_clients.{name}.paths entries must be strings"
-                        ));
-                        continue;
-                    };
-                    if !BACKEND_PUSH_PATHS.contains(&path) || !seen.insert(path) {
-                        problems.push(format!(
-                            "backend.push_clients.{name}.paths contains unsupported or duplicate {path:?}"
-                        ));
-                        continue;
-                    }
-                    paths.push(path.to_string());
-                }
-            }
-            _ => problems.push(format!(
-                "backend.push_clients.{name}.paths must be a non-empty array"
-            )),
-        }
-        if problems.len() == start {
-            clients.insert(
-                name.to_string(),
-                BackendPushClient {
-                    item: item.to_string(),
-                    actions,
-                    paths,
-                },
-            );
-        }
-    }
-    if problems.is_empty() {
-        Ok(clients)
-    } else {
-        Err(problems)
-    }
-}
-
-static BACKEND_PUSH_CLIENTS: LazyLock<Result<BTreeMap<String, BackendPushClient>, Vec<String>>> =
-    LazyLock::new(|| {
-        let configured = match std::env::var("WC_BACKEND_PUSH_CLIENTS")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-        {
-            Some(encoded) => match serde_json::from_str::<Value>(&encoded) {
-                Ok(value) => Some(value),
-                Err(error) => {
-                    return Err(vec![format!(
-                        "WC_BACKEND_PUSH_CLIENTS must be a JSON object: {error}"
-                    )])
-                }
-            },
-            None => crate::config_file::get("backend.push_clients"),
-        };
-        parse_backend_push_clients(configured.as_ref())
-    });
-static BACKEND_PUSH_SKARBIEC_URL: LazyLock<String> = LazyLock::new(|| {
-    cfg(
-        "WC_BACKEND_PUSH_SKARBIEC_URL",
-        "backend.push_skarbiec.url",
-        skarbiec_url(),
-    )
-});
-static BACKEND_PUSH_SKARBIEC_CONSUMER: LazyLock<String> = LazyLock::new(|| {
-    cfg(
-        "WC_BACKEND_PUSH_SKARBIEC_CONSUMER",
-        "backend.push_skarbiec.consumer",
-        BACKEND_PUSH_API_VERIFIER_CONSUMER,
-    )
-});
-static BACKEND_PUSH_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
-    let default = std::env::var("HOME")
-        .map(|home| {
-            std::path::Path::new(&home)
-                .join(".stado")
-                .join("stado-backend-push-api-verifier-skarbiec-token")
-                .to_string_lossy()
-                .into_owned()
-        })
-        .unwrap_or_default();
-    expand_tilde(&cfg(
-        "WC_BACKEND_PUSH_SKARBIEC_TOKEN_FILE",
-        "backend.push_skarbiec.token_file",
-        &default,
-    ))
-    .to_string_lossy()
-    .into_owned()
-});
-
 pub const SERVICE_API_VERIFIER_CONSUMER: &str = "stado-service-api-verifier";
 pub const SERVICE_API_ACTIONS: &[&str] = &["status", "restart"];
 pub const ACTIVE_DEPLOYED_SERVICES: &[&str] = &["com.wisent.weles-api"];
@@ -2302,18 +2111,15 @@ static RATE_LIMIT_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
 });
 
 pub const INTEGRATION_API_VERIFIER_CONSUMER: &str = "stado-integration-api-verifier";
-pub const INTEGRATION_DOMAINS: &[&str] = &[
-    "backend",
-    "content",
-    "deployment",
-    "enterprise",
-    "people",
-    "singularity",
-    "oko",
-    "trading",
-    "most",
-    "echo-paid-ads",
-];
+/// Domains reachable through `/api/integration/`. Stado serves only the
+/// read-only fleet projection; every product-integration domain moved to the
+/// private `wisent-integrations` service together with its client grants.
+pub const INTEGRATION_CLIENT_DOMAINS: &[&str] = &["enterprise"];
+
+/// Domains whose provider grant Stado itself resolves. `most` is the SMS
+/// escalation path the monitor uses for alerting, so its Twilio credential
+/// stays a fleet concern.
+pub const INTEGRATION_PROVIDER_DOMAINS: &[&str] = &["most"];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IntegrationClient {
@@ -2428,7 +2234,7 @@ pub(crate) fn parse_integration_clients(
                     let canonical = value.split_once('/').is_some_and(|(domain, action)| {
                         !domain.contains('.')
                             && canonical_integration_component(domain)
-                            && INTEGRATION_DOMAINS.contains(&domain)
+                            && INTEGRATION_CLIENT_DOMAINS.contains(&domain)
                             && canonical_integration_component(action)
                     });
                     if !canonical || !seen.insert(value) {
@@ -2488,7 +2294,7 @@ pub(crate) fn parse_integration_providers(
                 "integration.providers key {domain:?} is not canonical"
             ));
         }
-        if !INTEGRATION_DOMAINS.contains(&domain.as_str()) {
+        if !INTEGRATION_PROVIDER_DOMAINS.contains(&domain.as_str()) {
             problems.push(format!(
                 "integration.providers contains unsupported domain {domain:?}"
             ));
@@ -2774,26 +2580,6 @@ pub fn release_skarbiec_token_file() -> &'static str {
     RELEASE_SKARBIEC_TOKEN_FILE.as_str()
 }
 
-pub fn backend_push_clients(
-) -> Result<&'static BTreeMap<String, BackendPushClient>, &'static [String]> {
-    match &*BACKEND_PUSH_CLIENTS {
-        Ok(clients) => Ok(clients),
-        Err(problems) => Err(problems.as_slice()),
-    }
-}
-
-pub fn backend_push_skarbiec_url() -> &'static str {
-    BACKEND_PUSH_SKARBIEC_URL.as_str()
-}
-
-pub fn backend_push_skarbiec_consumer() -> &'static str {
-    BACKEND_PUSH_SKARBIEC_CONSUMER.as_str()
-}
-
-pub fn backend_push_skarbiec_token_file() -> &'static str {
-    BACKEND_PUSH_SKARBIEC_TOKEN_FILE.as_str()
-}
-
 pub fn machine_api_clients(
 ) -> Result<&'static BTreeMap<String, MachineApiClient>, &'static [String]> {
     match &*MACHINE_API_CLIENTS {
@@ -2920,7 +2706,8 @@ pub fn agent_skarbiec_secret_fields() -> &'static [String] {
     &AGENT_SKARBIEC_SECRET_FIELDS
 }
 
-/// HTTPS Skarbiec endpoint used by the backend outbound-messaging adapter.
+/// HTTPS Skarbiec endpoint of the backend business-messaging grant, which
+/// Stado reads only to resolve the operator-session Supabase project.
 pub fn backend_messaging_skarbiec_url() -> &'static str {
     BACKEND_MESSAGING_SKARBIEC_URL.as_str()
 }
@@ -2930,7 +2717,7 @@ pub fn backend_messaging_skarbiec_consumer() -> &'static str {
     BACKEND_MESSAGING_SKARBIEC_CONSUMER.as_str()
 }
 
-/// Owner-only grant file for the backend outbound-messaging adapter.
+/// Owner-only grant file for the backend business-messaging grant.
 pub fn backend_messaging_skarbiec_token_file() -> &'static str {
     BACKEND_MESSAGING_SKARBIEC_TOKEN_FILE.as_str()
 }
