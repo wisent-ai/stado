@@ -1382,21 +1382,35 @@ mod tests {
     /// Delivery and `host inventory` must judge the same host against the
     /// same declaration, so both read it through the registry's own
     /// accessor rather than each parsing the document its own way.
+    ///
+    /// The one thing this wrapper adds is that a blank string is not a
+    /// declaration, so that is what the fixture is built to exercise: the
+    /// registry accessor answers `Some("")` for `skarbiec` and the wrapper
+    /// must answer `None`. Asserting the two agree on a populated key would
+    /// be asserting nothing — on that input the wrapper IS the accessor.
     #[test]
     fn the_declaration_is_read_through_the_registrys_own_accessor() {
         let document = json!({
             "name": "charless-mac-mini",
             "kind": "local",
             "ssh": "charles@charless-mac-mini.local",
-            "managed_versions": {"stado": "0.5.1"},
+            "managed_versions": {"stado": "0.5.1", "skarbiec": ""},
         });
         let target: ComputeTarget = serde_json::from_value(document).expect("registry target");
+
+        // Declared: the wrapper hands back exactly what the registry holds,
+        // so delivery and inventory cannot judge against different strings.
         assert_eq!(declared_version(&target, "stado"), Some("0.5.1"));
-        assert_eq!(
-            declared_version(&target, "stado"),
-            target.declared_version("stado")
-        );
+        assert_eq!(target.declared_version("stado"), Some("0.5.1"));
+
+        // Present but blank: a key someone emptied instead of removing. The
+        // registry reports it verbatim; delivery must treat it as no
+        // declaration rather than as a declaration of "".
+        assert_eq!(target.declared_version("skarbiec"), Some(""));
         assert_eq!(declared_version(&target, "skarbiec"), None);
+
+        // Absent entirely.
+        assert_eq!(declared_version(&target, "stado-fix"), None);
     }
 
     // -----------------------------------------------------------------
