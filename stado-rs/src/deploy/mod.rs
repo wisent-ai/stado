@@ -28,6 +28,22 @@
 //!   own janitor in preview mode; contains no cleanup policy itself.
 //! - [`host_exec`] — `stado host exec`: one command from a fixed
 //!   read-only allowlist. Not a shell.
+//! - [`host_inventory`] — `stado host inventory`: the stado-managed
+//!   binaries, forward markers and loopback listeners of one host, plus
+//!   the verdict on whether each marker still matches a live listener.
+//!   It needs `$HOME`, which is exactly why it is NOT an `host_exec`
+//!   allowlist entry: that table's contract is a fixed argv of absolute
+//!   paths with no operator-supplied path in it.
+//!
+//! [`host_release`] is the one WRITE command in that group, and the only
+//! thing in this crate that owns "get this build onto that host" — the gap
+//! `ARCHITECTURE.md` names. It rides the same channel and follows Weles's
+//! shipped auto-deploy order exactly: fetch the exact coordinate, verify it
+//! against the operator's configured SHA-256, check the layout, stage it
+//! under a versioned directory, and only then atomically repoint the active
+//! binary and restart the declared unit. The three phases are three separate
+//! programs on the channel, so "nothing activates before it verified" is
+//! visible at the [`Runner`] seam rather than promised inside one script.
 //!
 //! Every subprocess is orchestrated through the [`Runner`] seam so tests
 //! can inject a fake command runner and never spawn real
@@ -52,9 +68,11 @@ pub mod host_cleanup;
 pub mod host_disk;
 pub mod host_exec;
 pub mod host_gui_automation;
+pub mod host_inventory;
 pub mod host_ping;
 pub mod host_reboot;
 pub mod host_recovery;
+pub mod host_release;
 pub mod host_uptime;
 pub mod host_user_delete;
 pub mod host_users;
