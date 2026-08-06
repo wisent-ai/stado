@@ -317,22 +317,33 @@ fn fleet_visible(manifest: &ArtifactManifest) -> Result<(), CmdError> {
         return Ok(());
     }
     let backend = crate::config::wc_storage_backend();
-    let machine_local = backend.is_empty() || backend == "local";
-    if machine_local {
-        return Err(CmdError::click(format!(
-            "{} publishes a stado:// location while this host's object store is {}, \
-             which is a directory on this machine: every other host would report the \
-             release absent. Point WC_STORAGE_BACKEND at a store the fleet shares, or \
-             publish the bytes at a location the fleet can already reach.",
-            manifest.ref_,
-            if backend.is_empty() {
-                "unset (local)"
-            } else {
-                backend
-            }
-        )));
+    // Ask the store how far it carries. Every storage adapter declares this, so
+    // a backend added later is classified by whoever adds it rather than by
+    // whether its name happens to be matched here.
+    let reach = crate::capabilities::constructible_variant(
+        crate::capabilities::RuntimeFacet::Storage,
+        backend,
+    )
+    .and_then(|variant| match variant.adapter {
+        crate::capabilities::RuntimeAdapter::Storage(adapter) => Some(adapter.reach()),
+        _ => None,
+    });
+    match reach {
+        Some(crate::capabilities::StorageReach::Fleet) => Ok(()),
+        Some(crate::capabilities::StorageReach::Device) => Err(CmdError::click(format!(
+            "{} publishes a stado:// coordinate while this host's object store is {backend:?}, \
+             which answers only for this machine: every other host would report the release \
+             absent. Select a store that answers for the fleet, or give the manifest a \
+             location the fleet can already reach.",
+            manifest.ref_
+        ))),
+        None => Err(CmdError::click(format!(
+            "{} publishes a stado:// coordinate, and this host's object store {backend:?} is \
+             not a storage backend this build knows, so how far it carries cannot be \
+             established",
+            manifest.ref_
+        ))),
     }
-    Ok(())
 }
 
 async fn publish(
