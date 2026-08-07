@@ -146,7 +146,7 @@ Confidence meanings:
 
 | VM | Snapshot state | Zone | Machine / GPU | Attached GB | Repository | Usage | Confidence |
 |---|---:|---|---|---:|---|---|---|
-| `image-gen-comfyui-mig-62fj` | RUNNING | `us-central1-a` | `g2-standard-8` / 1 L4 | 200 | `wisent-ai/content-platform` | ComfyUI/Z-Image gateway and fallback image generation | high |
+| `image-gen-comfyui-mig-62fj` | RUNNING | `us-central1-a` | `g2-standard-8` / 1 L4 | 200 | `wisent-ai/echo-web` | ComfyUI/Z-Image gateway and fallback image generation | high |
 | `vatt-a100` | TERMINATED | `us-central1-a` | `a2-highgpu-1g` / 1 A100 40 GB | 300 | unknown | VATT A100 experiment; no repository reference found | low |
 | `wisent-agent-80gb-1777754741-3` | TERMINATED | `us-central1-a` | `a2-ultragpu-1g` / 1 A100 80 GB | 575 | `wisent-ai/wisent-compute` | ephemeral Stado/wisent-compute queue worker | high |
 | `wisent-mig-inference-blue-wqj9` | RUNNING | `us-central1-a` | `a2-ultragpu-1g` / 1 A100 80 GB | 675 | `wisent-ai/wisent-backend` | GPU inference service in blue/green MIG | high |
@@ -165,11 +165,11 @@ Confidence meanings:
 | `wisent-mig-images-green-cq1d` | RUNNING | `us-central1-b` | `a2-highgpu-1g` / 1 A100 40 GB | 475 | `wisent-ai/wisent-backend` | GPU image service in blue/green MIG | high |
 | `wisent-mig-images-green-vlrb` | RUNNING | `us-central1-b` | `a2-highgpu-1g` / 1 A100 40 GB | 475 | `wisent-ai/wisent-backend` | GPU image service in blue/green MIG | high |
 | `wisent-mig-inference-blue-035m` | RUNNING | `us-central1-b` | `a2-highgpu-1g` / 1 A100 40 GB | 200 | `wisent-ai/wisent-backend` | GPU inference service in blue/green MIG | high |
-| `wisent-zimage-interp-jt` | TERMINATED | `us-central1-b` | `a2-highgpu-1g` / 1 A100 40 GB | 300 | `wisent-ai/content-platform` | Z-Image interpolation experiment | medium |
-| `needher-watermark-a100-80gb-20260622` | RUNNING | `us-central1-c` | `a2-ultragpu-1g` / 1 A100 80 GB | 575 | `content-platform` + `needher-ai-web` | Needher watermark/content pipeline | medium |
-| `sapiens2-bodyhorror` | TERMINATED | `us-central1-c` | `a2-ultragpu-1g` / 1 A100 80 GB | 575 | `content-platform` + `needher-ai-web` | Sapiens2/Needher content or watermark experiment | low |
+| `wisent-zimage-interp-jt` | TERMINATED | `us-central1-b` | `a2-highgpu-1g` / 1 A100 40 GB | 300 | `wisent-ai/echo-web` | Z-Image interpolation experiment | medium |
+| `needher-watermark-a100-80gb-20260622` | RUNNING | `us-central1-c` | `a2-ultragpu-1g` / 1 A100 80 GB | 575 | `echo-web` + `needher-ai-web` | Needher watermark/content pipeline | medium |
+| `sapiens2-bodyhorror` | TERMINATED | `us-central1-c` | `a2-ultragpu-1g` / 1 A100 80 GB | 575 | `echo-web` + `needher-ai-web` | Sapiens2/Needher content or watermark experiment | low |
 | `wisent-b5d3e0ee` | TERMINATED | `us-central1-f` | `n1-standard-4` / 1 T4 | 200 | `wisent-ai/wisent-compute` | legacy ephemeral T4 queue worker | high |
-| `content-platform-vm` | RUNNING | `us-west1-b` | `n2-standard-16` | 500 | `wisent-ai/content-platform` | long-lived content/Weles worker and recordings host | high |
+| `content-platform-vm` | RUNNING | `us-west1-b` | `n2-standard-16` | 500 | `wisent-ai/echo-web` | long-lived Echo Web/Weles worker and recordings host | high |
 | `image-video-router-vm` | RUNNING | `us-west1-b` | `e2-small` | 20 | `wisent-ai/image-video-router` | long-lived image/video routing service | high |
 | `wisent-agent-a100-1777737822-27` | TERMINATED | `us-east1-b` | `a2-highgpu-1g` / 1 A100 40 GB | 200 | `wisent-ai/wisent-compute` | ephemeral Stado/wisent-compute queue worker | high |
 | `wisent-agent-l4-1783938808-1` | STAGING | `us-east4-a` | `g2-standard-4` / 1 L4 | 500 | `wisent-ai/wisent-compute` | ephemeral Stado/wisent-compute queue worker | high |
@@ -192,7 +192,7 @@ Configuration drift: the snapshot places `image-video-router-vm` in `us-west1-b`
 
 | Manager | Repository | Use |
 |---|---|---|
-| `us-central1-a/image-gen-comfyui-mig` | `content-platform` | L4 ComfyUI gateway; autoscaling declaration min 1, max 3 |
+| `us-central1-a/image-gen-comfyui-mig` | `echo-web` | L4 ComfyUI gateway; autoscaling declaration min 1, max 3 |
 | `us-central1-a/wisent-mig-inference-blue` | `wisent-backend` | A100 80 GB inference |
 | `us-central1-b/wisent-mig-api-blue` | `wisent-backend` | CPU API blue deployment |
 | `us-central1-b/wisent-mig-api-green` | `wisent-backend` | CPU API green deployment |
@@ -219,10 +219,10 @@ Six concrete bucket names appear in operational or migration code. Their current
 
 | Bucket | Main users | Data stored and operational role | Evidence |
 |---|---|---|---|
-| `gs://stado` | `wisent-compute`, `content-platform`, `wisent-tools`, `wisent-tester/probierz` | canonical queue, lifecycle records, capacity, schedules, config, artifacts, Probierz inputs/results | current default and deployment |
+| `gs://stado` | `wisent-compute`, `echo-web`, `wisent-tools`, `wisent-tester/probierz` | canonical queue, lifecycle records, capacity, schedules, config, artifacts, Probierz inputs/results | current default and deployment |
 | `gs://wisent-compute` | `wisent-compute`, `compute.wisent.com`, `wisent-tools`, `OpenEnv` | legacy queue/registry, release binaries, agent binary/logs, host health, status output, Supabase token fallback | code and deployment |
-| `gs://wisent-gcp-pipeline` | `content-platform`, `needher-ai-web`, `wisent-backend` | generated images, Needher watermarks and feed snapshots, LoRA training output, ComfyUI batch inputs/results, model staging | code |
-| `gs://wisent-images-bucket` | `content-platform`, `wisent-backend`, `wisent` | SmoothMix models and videos, LoRAs, control vectors, optimization checkpoints | code |
+| `gs://wisent-gcp-pipeline` | `echo-web`, `needher-ai-web`, `wisent-backend` | generated images, Needher watermarks and feed snapshots, LoRA training output, ComfyUI batch inputs/results, model staging | code |
+| `gs://wisent-images-bucket` | `echo-web`, `wisent-backend`, `wisent` | SmoothMix models and videos, LoRAs, control vectors, optimization checkpoints | code |
 | `gs://kantbench-training` | `OpenEnv` | training code, checkpoints, evaluation output, sweep state | code and session record |
 | `gs://wisent-gcp-bucket` | `wisent-backend` | legacy S3-to-GCS mirror for control vectors, images, characters, models, and training | migration script; current use unverified |
 
@@ -240,7 +240,7 @@ Object-count records disagree and must not be treated as live:
 | `us-central1-docker.pkg.dev/wisent-480400/compute-backend` | `compute.wisent.com` | marketplace backend image |
 | `us-central1-docker.pkg.dev/wisent-480400/image-video-router` | `image-video-router` | router service image |
 | `us-central1-docker.pkg.dev/wisent-480400/wisent-backend` | `wisent-backend` | API, inference, image service, combined service, ASC bridge images |
-| `us-central1-docker.pkg.dev/wisent-480400/smoothmix-comfyui` | `content-platform` | ComfyUI/SmoothMix GPU workload images |
+| `us-central1-docker.pkg.dev/wisent-480400/smoothmix-comfyui` | `echo-web` | ComfyUI/SmoothMix GPU workload images |
 | `gs://wisent-compute/releases/stado/<version>/linux-amd64` | all Stado hosts | released Rust binaries, checksums, and `latest.json` channel pointer |
 
 Current repository/image counts and latest successful Cloud Builds are unknown.
@@ -260,9 +260,9 @@ These are named resources declared by deploy code or previously recorded as crea
 | `billing_export` | BigQuery dataset | `wisent-compute` | GCP billing export read by billing-health collector |
 | `gcp_billing_export_v1_017364_D3B657_F207B5` | BigQuery table | `wisent-compute` | gross cost, credits, net cost, and burn history |
 | `default` | VPC network | content and backend compute | common VM, firewall, and internal-LB network |
-| `comfyui-static-ip` | regional static address | `content-platform` | stable external ComfyUI endpoint |
-| `allow-comfyui-8188` | firewall rule | `content-platform` | public and health-check access to ComfyUI port 8188 |
-| `image-gen-comfyui-health` | health check | `content-platform` | `/system_stats` auto-healing check |
+| `comfyui-static-ip` | regional static address | `echo-web` | stable external ComfyUI endpoint |
+| `allow-comfyui-8188` | firewall rule | `echo-web` | public and health-check access to ComfyUI port 8188 |
+| `image-gen-comfyui-health` | health check | `echo-web` | `/system_stats` auto-healing check |
 | `wisent-api-hc` | health check | `wisent-backend` | API `/health` |
 | `wisent-inference-hc` | regional health check | `wisent-backend` | inference `/health` on port 8001 |
 | `wisent-allow-api-health` | firewall rule | `wisent-backend` | health-check access to API |
@@ -273,7 +273,7 @@ These are named resources declared by deploy code or previously recorded as crea
 | `wisent-bs-api-green` | global backend service | `wisent-backend` | API green backend |
 | `wisent-inference-internal-bs` | regional backend service | `wisent-backend` | internal inference backend |
 | `wisent-inference-internal-fwd` | forwarding rule | `wisent-backend` | stable internal inference VIP on port 8001 |
-| `image-gen-comfyui` | custom image family | `content-platform` | baked ComfyUI, Z-Image, models, and LoRAs |
+| `image-gen-comfyui` | custom image family | `echo-web` | baked ComfyUI, Z-Image, models, and LoRAs |
 | `wisent-agent` | custom image family | `wisent-compute` | baked Stado cloud-agent VM image |
 
 The retired `gcp_setup.sh` path used `wisent-compute-alerts`, while the Rust
@@ -291,7 +291,7 @@ The legacy Gen2 function `wisent-compute-tick` is explicitly deleted during Rust
 |---|---|---|
 | `wisent-compute-sa@wisent-480400.iam.gserviceaccount.com` | `wisent-compute` | coordinator, scheduler OIDC, GCS, Compute, Pub/Sub, Secret Manager, and BigQuery access |
 | `stado-sa@wisent-480400.iam.gserviceaccount.com` | `wisent-compute` migration | renamed agent identity recorded as created; current coordinator still deploys with `wisent-compute-sa` |
-| `droid-441@wisent-480400.iam.gserviceaccount.com` | `wisent-backend`, `content-platform` | backend MIG templates and ComfyUI template |
+| `droid-441@wisent-480400.iam.gserviceaccount.com` | `wisent-backend`, `echo-web` | backend MIG templates and ComfyUI template |
 | `wisent-images-sa@wisent-480400.iam.gserviceaccount.com` | `wisent-backend` image service | objectAdmin on image bucket and objectViewer on pipeline bucket |
 | `kantbench-training@wisent-480400.iam.gserviceaccount.com` | `OpenEnv` | training VM, GCS, Secret Manager, and Vertex AI access |
 | `asc-webhook-bridge@wisent-480400.iam.gserviceaccount.com` | `wisent-backend` | Cloud Run runtime identity for ASC webhook bridge |
@@ -323,7 +323,7 @@ Secret existence, versions, IAM bindings, and rotation state are not currently v
 | Repository | Dependency | Incident effect |
 |---|---|---|
 | `wisent-ai/wisent-compute` | Stado queue, coordinator, registry, workers, provisioning, releases | critical control-plane outage |
-| `wisent-ai/content-platform` | `wc submit`, GCS output/DONE markers, ComfyUI gateway, GCP image assets | new renders and their status/artifacts unavailable |
+| `wisent-ai/echo-web` | `wc submit`, GCS output/DONE markers, ComfyUI gateway, GCP image assets | new renders and their status/artifacts unavailable |
 | `wisent-ai/wisent-tools` | direct `stado.queue.submit`, `JobStorage`, coverage plugin, GCS activation data | submission, deduplication, status, and activation pipelines unavailable |
 | `lbartoszcze/wisent-tester` (`probierz`) | `gs://stado/probierz-inputs`, `wc submit`, `probierz-results` | remote run/author flows unavailable; local-only flows remain usable |
 
@@ -338,7 +338,7 @@ Secret existence, versions, IAM bindings, and rotation state are not currently v
 | `wisent-ai/needher-ai-web` | `wisent-gcp-pipeline` generated and watermarked content | content backfills, snapshots, and poster ingestion dependent on GCS are unavailable |
 | `wisent-ai/wisent` | optional Stado HF rate limiter and `wisent-images-bucket` checkpoints | core local library is not globally down; GCP-backed coordination/checkpoints are affected |
 
-Local clones and worktrees are deduplicated by Git remote. For example, `echo`, `content-platform-production`, and content-platform worktrees represent `wisent-ai/content-platform`, not separate production repositories.
+Local clones and worktrees are deduplicated by Git remote. For example, local `echo` and `echo-production` both point at `wisent-ai/echo`, and `echo-web` is the repository formerly named `content-platform`; neither pair is a separate production repository.
 
 ## Recovery inventory order
 
