@@ -44,6 +44,14 @@ const RECIPE_PATH: &str = ".stado/release.json";
 
 const BUILD_BODY: &str = r#"
 set -eu
+
+# A build over this channel gets the ssh session's PATH, not a login shell's, so
+# a host with Homebrew or a user-local toolchain has none of it: the first
+# non-Rust product to be built here failed on `npm: command not found` while npm
+# sat in /opt/homebrew/bin. The prefixes are appended, never substituted, so a
+# recipe that names an absolute toolchain still wins.
+PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.cargo/bin:$HOME/.local/bin"
+export PATH
 repo=@REPO@
 version=@VERSION@
 platform=@PLATFORM@
