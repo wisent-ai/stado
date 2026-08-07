@@ -1,15 +1,17 @@
-//! Optional Slack, Telegram, SendGrid, most (SMS), and GCP Pub/Sub alert
-//! delivery. `alerts.channels` is the explicit enablement fence: with no
+//! Optional Slack, Telegram, SendGrid, Resend, most (SMS), and GCP Pub/Sub
+//! alert delivery. `alerts.channels` is the explicit enablement fence: with no
 //! enabled channels, dispatch performs no credential or network lookup, and
 //! each delivery is fault-isolated with a bounded structured failure line.
-
-use serde_json::Value;
 
 mod send;
 #[cfg(test)]
 mod tests;
 
-use send::{email_subject, send_email, send_most, send_pubsub, send_slack, send_telegram};
+use send::{
+    email_subject, send_email, send_most, send_pubsub, send_resend_email, send_slack,
+    send_telegram,
+};
+pub(crate) use send::resend_verified_domains;
 
 /// GCP OAuth scope for the Pub/Sub publish call.
 const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
@@ -17,6 +19,8 @@ const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platfo
 const TELEGRAM_API_BASE: &str = "https://api.telegram.org";
 /// SendGrid mail-send endpoint.
 const SENDGRID_URL: &str = "https://api.sendgrid.com/v3/mail/send";
+/// Resend mail-send endpoint.
+const RESEND_URL: &str = "https://api.resend.com/emails";
 /// Pub/Sub REST base.
 const PUBSUB_BASE: &str = "https://pubsub.googleapis.com";
 /// Twilio REST base for the most (SMS) channel.
@@ -65,6 +69,16 @@ pub struct SendgridChannel {
     pub url: String,
 }
 
+/// Resend channel config. The key is this deployment's own `RESEND_API_KEY`
+/// vault item rather than a copy inside `stado-alerts`: one secret, one place.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResendChannel {
+    pub api_key: String,
+    pub to: String,
+    pub from: String,
+    pub url: String,
+}
+
 /// Pub/Sub channel config: full `projects/{p}/topics/{t}` topic path plus a
 /// pre-fetched OAuth token.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,6 +111,7 @@ pub struct AlertChannels {
     pub slack_webhook: Option<String>,
     pub telegram: Option<TelegramChannel>,
     pub sendgrid: Option<SendgridChannel>,
+    pub resend: Option<ResendChannel>,
     pub pubsub: Option<PubSubChannel>,
     pub most: Option<MostChannel>,
 }
@@ -113,31 +128,61 @@ impl AlertChannels {
         let needs_stored = is_enabled("slack")
             || is_enabled("telegram")
             || is_enabled("sendgrid")
+            || is_enabled("resend")
             || is_enabled("most");
-        let stored = if needs_stored {
+        let stored: std::collections::BTreeMap<String, String> = if needs_stored {
+            // Per field, not the whole item: the listener refuses a read that
+            // names no field ("field required"), so asking for the item as a
+            // whole silently emptied every channel and the operator was left
+            // with an alerting path that resolved to nothing.
+            let mut wanted: Vec<&str> = Vec::new();
+            if is_enabled("slack") {
+                wanted.push("slack_webhook");
+            }
+            if is_enabled("telegram") {
+                wanted.push("telegram_bot_token");
+                wanted.push("telegram_chat_id");
+            }
+            if is_enabled("sendgrid") {
+                wanted.push("sendgrid_api_key");
+            }
+            if is_enabled("resend") {
+                // Only ask the vault for what the config document does not
+                // already answer: a deployment that names its destination in
+                // config holds no such field, and the read would be refused.
+                if crate::config::alert_email_to().is_empty() {
+                    wanted.push("email_to");
+                }
+                if crate::config::alert_email_from().is_empty() {
+                    wanted.push("email_from");
+                }
+            }
+            if is_enabled("most") {
+                wanted.push("most_phone");
+            }
             match crate::skarbiec::Client::configured() {
-                Ok(vault) => match vault.read_item("stado-alerts").await {
-                    Ok(value) => value,
-                    Err(err) => {
-                        channel_failed("configuration", &err.to_string());
-                        Value::Null
+                Ok(vault) => {
+                    let mut found = std::collections::BTreeMap::new();
+                    for field in wanted {
+                        match vault.read_string("stado-alerts", field).await {
+                            Ok(Some(value)) if !value.is_empty() => {
+                                found.insert(field.to_string(), value);
+                            }
+                            Ok(_) => {}
+                            Err(err) => channel_failed("configuration", &err.to_string()),
+                        }
                     }
-                },
+                    found
+                }
                 Err(err) => {
                     channel_failed("configuration", &err.to_string());
-                    Value::Null
+                    std::collections::BTreeMap::new()
                 }
             }
         } else {
-            Value::Null
+            std::collections::BTreeMap::new()
         };
-        let secret = |field: &str| {
-            stored
-                .get(field)
-                .and_then(Value::as_str)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-        };
+        let secret = |field: &str| stored.get(field).cloned();
 
         let slack_webhook = is_enabled("slack")
             .then(|| secret("slack_webhook"))
@@ -173,6 +218,11 @@ impl AlertChannels {
         } else {
             None
         };
+        let resend = if is_enabled("resend") {
+            resolve_resend(secret("email_to"), secret("email_from")).await
+        } else {
+            None
+        };
         let most = if is_enabled("most") {
             resolve_most(secret("most_phone")).await
         } else {
@@ -198,10 +248,58 @@ impl AlertChannels {
             slack_webhook,
             telegram,
             sendgrid,
+            resend,
             pubsub,
             most,
         }
     }
+}
+
+/// Resolve the Resend email channel: destination and sender from the config
+/// document (`alerts.email_to`, `alerts.email_from`, or their `WC_EMAIL_*`
+/// env names), falling back to the alerts item for a deployment that keeps
+/// them in the vault; key from the vault item named by `alerts.resend_item`.
+/// A gap degrades to no channel with a structured failure line.
+async fn resolve_resend(to: Option<String>, from: Option<String>) -> Option<ResendChannel> {
+    let configured = |value: &str| (!value.is_empty()).then(|| value.to_string());
+    let Some(to) = configured(crate::config::alert_email_to())
+        .or(to)
+        .filter(|value| !value.is_empty())
+    else {
+        channel_failed(
+            "resend-configuration",
+            "no destination: set alerts.email_to (or WC_EMAIL_TO)",
+        );
+        return None;
+    };
+    let vault = crate::skarbiec::Client::configured()
+        .map_err(|err| channel_failed("resend-configuration", &err.to_string()))
+        .ok()?;
+    let item = crate::config::alert_resend_item();
+    let field = crate::config::alert_resend_field();
+    let key = match vault.read_string(item, field).await {
+        Ok(Some(value)) if !value.is_empty() => value,
+        Ok(_) => {
+            channel_failed(
+                "resend-configuration",
+                &format!("{item}/{field} is empty; point alerts.resend_item at the live key"),
+            );
+            return None;
+        }
+        Err(err) => {
+            channel_failed("resend-configuration", &err.to_string());
+            return None;
+        }
+    };
+    Some(ResendChannel {
+        api_key: key,
+        to,
+        from: configured(crate::config::alert_email_from())
+            .or(from)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| DEFAULT_EMAIL_FROM.to_string()),
+        url: RESEND_URL.to_string(),
+    })
 }
 
 /// Resolve the most (SMS) channel: destination from the alerts item, Twilio
@@ -212,17 +310,29 @@ async fn resolve_most(phone: Option<String>) -> Option<MostChannel> {
     let provider = crate::skarbiec::Client::integration_provider("most")
         .map_err(|err| channel_failed("most-configuration", &err.to_string()))
         .ok()?;
-    let item = provider
-        .read_item("most-twilio")
-        .await
-        .map_err(|err| channel_failed("most-configuration", &err.to_string()))
-        .ok()?;
-    let field = |name: &str| {
-        item.get(name)
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
-    };
+    // Field by field: the listener refuses a read that names no field, so the
+    // whole-item form resolved to no channel and the deployment believed it
+    // had no way to page anyone.
+    let mut values = std::collections::BTreeMap::new();
+    for name in [
+        "account_sid",
+        "auth_token",
+        "api_version",
+        "messaging_service_sid",
+        "from_number",
+    ] {
+        match provider.read_string("most-twilio", name).await {
+            Ok(Some(value)) if !value.is_empty() => {
+                values.insert(name, value);
+            }
+            Ok(_) => {}
+            Err(err) => {
+                channel_failed("most-configuration", &err.to_string());
+                return None;
+            }
+        }
+    }
+    let field = |name: &str| values.get(name).cloned();
     match (
         field("account_sid"),
         field("auth_token"),
@@ -238,9 +348,19 @@ async fn resolve_most(phone: Option<String>) -> Option<MostChannel> {
             api_base: TWILIO_API_BASE.to_string(),
         }),
         _ => {
+            // Name what the grant actually returned: "needs three fields" hid
+            // which read came back empty and cost a day of guessing.
+            let missing: Vec<&str> = ["account_sid", "auth_token", "api_version"]
+                .into_iter()
+                .filter(|name| !values.contains_key(name))
+                .collect();
             channel_failed(
                 "most-configuration",
-                "most-twilio needs account_sid, auth_token, and api_version",
+                &format!(
+                    "most-twilio resolved {} of 5 fields; missing {}",
+                    values.len(),
+                    missing.join(", ")
+                ),
             );
             None
         }
@@ -282,6 +402,13 @@ pub async fn send_alert_with(channels: &AlertChannels, message: &str, subject: &
         match send_email(&client, sendgrid, &subject, message).await {
             Ok(()) => log("Email sent"),
             Err(err) => channel_failed("email", &err),
+        }
+    }
+    if let Some(resend) = &channels.resend {
+        let subject = email_subject(subject, message);
+        match send_resend_email(&client, resend, &subject, message).await {
+            Ok(()) => log("Email sent"),
+            Err(err) => channel_failed("resend", &err),
         }
     }
     if let Some(most) = &channels.most {
