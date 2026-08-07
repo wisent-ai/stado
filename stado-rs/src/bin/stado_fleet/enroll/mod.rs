@@ -5,10 +5,10 @@
 //! OS and architecture as an `enrollments/<hostname>.json` request in the
 //! configured store (and prints it, for setups where the store is not
 //! shared and the request travels by any channel). The operator lists
-//! requests with `pending` and turns one into a registered target with
-//! `approve` — the same validated compare-and-swap registry write as every
-//! other fleet command, so a colliding host identity is refused by the
-//! registry-v2 contract, never papered over.
+//! requests with `pending`; `approve` requires an SSH installation channel,
+//! installs the agent, waits for a fresh capacity attestation, and only then
+//! promotes the request into a registered target. A request can never create
+//! an agentless fleet member.
 //!
 //! Both `join` and `approve` honor the fleet's central enrollment catalog
 //! (`registry.enrollment`, see [`catalog`]): a path the catalog disables
@@ -18,11 +18,9 @@ pub mod catalog;
 pub mod legacy;
 
 use serde_json::{json, Value};
-use stado::cli::registry::{fetch_document, push_document};
+use stado::cli::registry::fetch_document;
 use stado::queue::JobStorage;
 use stado::targets::normalize_hostname;
-
-use crate::ops::register_target;
 
 /// Store prefix every enrollment request lives under.
 const REQUESTS_PREFIX: &str = "enrollments/";
@@ -100,7 +98,7 @@ pub async fn join() -> Result<bool, String> {
         serde_json::to_string_pretty(&request).map_err(|exc| exc.to_string())?
     );
     println!(
-        "next step, on the control plane: stado_fleet approve '{}'",
+        "next step, on the control plane: stado_fleet approve '{}' --ssh USER@HOST",
         target_name_for(&hostname)
     );
     Ok(true)
@@ -139,16 +137,20 @@ pub async fn pending() -> Result<bool, String> {
     Ok(true)
 }
 
-/// `stado_fleet approve HOSTNAME [--fleet FLEET]` — convert a pending
-/// request into a registered target, optionally in one fleet.
-pub async fn approve(hostname: &str, fleet_name: Option<&str>) -> Result<bool, String> {
-    let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
+/// `stado_fleet approve HOSTNAME --ssh DEST [--fleet FLEET]` — install and
+/// attest the agent before converting a pending request into a target.
+pub async fn approve(
+    hostname: &str,
+    destination: &str,
+    fleet_name: Option<&str>,
+) -> Result<bool, String> {
+    let store = JobStorage::new().await.map_err(|error| error.to_string())?;
     let text = store
         .download_text(&request_path(hostname))
         .await
-        .map_err(|exc| exc.to_string())?
+        .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("no join request for '{hostname}'"))?;
-    let request: Value = serde_json::from_str(&text).map_err(|exc| exc.to_string())?;
+    let request: Value = serde_json::from_str(&text).map_err(|error| error.to_string())?;
     let request_hostname = pending_request(&request)?.to_string();
     let name = target_name_for(&request_hostname);
     let kind = request
@@ -156,24 +158,24 @@ pub async fn approve(hostname: &str, fleet_name: Option<&str>) -> Result<bool, S
         .and_then(Value::as_str)
         .unwrap_or("local")
         .to_string();
-    let document = fetch_document().await.map_err(|exc| exc.to_string())?;
-    catalog::require_join_allowed(&document)?;
-    let next = register_target(&document, &name, &kind, &[request_hostname.clone()])?;
-    let generation = push_document(&next).await.map_err(|exc| exc.to_string())?;
-    println!("approved '{request_hostname}' as target '{name}' (generation {generation})");
-    if let Some(fleet) = fleet_name {
-        crate::ops::assign(&name, fleet).await?;
-    }
+    crate::ops::enroll(
+        &name,
+        Some(destination),
+        &kind,
+        fleet_name,
+        Some(&request_hostname),
+    )
+    .await?;
     let mut decided = request;
     decided["status"] = Value::String(STATUS_APPROVED.to_string());
     store
         .upload_text(
             &request_path(hostname),
-            &serde_json::to_string_pretty(&decided).map_err(|exc| exc.to_string())?,
+            &serde_json::to_string_pretty(&decided).map_err(|error| error.to_string())?,
         )
         .await
-        .map_err(|exc| exc.to_string())?;
-    println!("install the agent on the machine: stado bootstrap --local --target '{name}'");
+        .map_err(|error| error.to_string())?;
+    println!("approved '{request_hostname}' as attested target '{name}'");
     Ok(true)
 }
 

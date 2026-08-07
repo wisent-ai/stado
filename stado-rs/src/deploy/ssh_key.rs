@@ -5,8 +5,6 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde_json::Value;
-
 use super::DeployError;
 use crate::skarbiec::{Client, SkarbiecError};
 
@@ -99,15 +97,13 @@ pub async fn materialize(target: &str) -> Result<KeyFile, DeployError> {
         &credentials.token_file,
     )
     .map_err(|error| DeployError(error.to_string()))?;
-    let item = client
-        .read_item(&id)
+    let private_key = client
+        .read_string(&id, "private_key")
         .await
-        .map_err(|error| missing_key(&id, error))?;
-    let private_key = item
-        .get("private_key")
-        .and_then(Value::as_str)
+        .map_err(|error| missing_key(&id, error))?
+        .filter(|value| !value.is_empty())
         .ok_or_else(|| DeployError(format!("credential item {id} has no private_key field")))?;
-    write_key(private_key)
+    write_key(&private_key)
 }
 
 /// Force OpenSSH to use only the target-scoped key. The first argv word must be

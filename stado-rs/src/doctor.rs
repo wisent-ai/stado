@@ -277,15 +277,59 @@ async fn bounded(
     remedy: &str,
     probe: impl Future<Output = Check>,
 ) -> Check {
-    match tokio::time::timeout(PROBE_TIMEOUT, probe).await {
+    bounded_within(PROBE_TIMEOUT, id, title, remedy, probe).await
+}
+
+/// Run a probe under an explicit deadline.
+///
+/// [`PROBE_TIMEOUT`] is a flat allowance for a probe that makes one or two
+/// calls. The gateway-auth row is not that shape: it reads every mapped item
+/// of four verifiers through a listener that serves one connection per
+/// thread, while the other eleven probes are hitting the same listener. Its
+/// deadline therefore scales with the work it was asked to do, so a slow
+/// vault reports slowly instead of reporting a failure that is not there.
+async fn bounded_within(
+    deadline: Duration,
+    id: &'static str,
+    title: &'static str,
+    remedy: &str,
+    probe: impl Future<Output = Check>,
+) -> Check {
+    match tokio::time::timeout(deadline, probe).await {
         Ok(check) => check,
         Err(_) => Check::fail(
             id,
             title,
-            format!("probe did not answer within {PROBE_TIMEOUT:?}"),
+            format!("probe did not answer within {deadline:?}"),
             remedy,
         ),
     }
+}
+
+/// Per-item allowance for the gateway-auth sweep, multiplied by the number of
+/// items the four verifier mappings actually declare.
+fn object_auth_deadline() -> Duration {
+    let mapped = crate::config::object_api_namespaces()
+        .map(|value| value.len())
+        .unwrap_or_default()
+        + crate::config::release_api_publishers()
+            .map(|value| value.len())
+            .unwrap_or_default()
+        + crate::config::machine_api_clients()
+            .map(|value| value.len())
+            .unwrap_or_default()
+        + crate::config::service_api_deployers()
+            .map(|value| value.len())
+            .unwrap_or_default();
+    PROBE_TIMEOUT + PROBE_TIMEOUT * u32::try_from(mapped).unwrap_or_default()
+}
+
+/// Allowance for resolving alert channels. Each enabled channel reads its own
+/// destination and provider material out of the vault, through the same
+/// single-threaded listener the gateway sweep is using at the same moment.
+fn alerts_deadline() -> Duration {
+    let channels = crate::config::alert_channels().len();
+    PROBE_TIMEOUT + PROBE_TIMEOUT * u32::try_from(channels).unwrap_or_default()
 }
 
 /// Run the whole preflight. Never returns an error: an unreachable
@@ -335,7 +379,8 @@ pub async fn run() -> Report {
             BACKUP_REMEDY,
             check_backup(&store_error)
         ),
-        bounded(
+        bounded_within(
+            object_auth_deadline(),
             OBJECT_AUTH_ID,
             OBJECT_AUTH_TITLE,
             OBJECT_AUTH_REMEDY,
@@ -377,7 +422,13 @@ pub async fn run() -> Report {
             CONTROL_REMEDY,
             check_queue_control(store, &store_error)
         ),
-        bounded(ALERTS_ID, ALERTS_TITLE, ALERTS_REMEDY, check_alerts()),
+        bounded_within(
+            alerts_deadline(),
+            ALERTS_ID,
+            ALERTS_TITLE,
+            ALERTS_REMEDY,
+            check_alerts()
+        ),
     );
 
     Report {
@@ -793,6 +844,12 @@ const OBJECT_AUTH_REMEDY: &str =
      token field";
 
 async fn check_object_auth() -> Check {
+    // Deliberately one verifier at a time. The Skarbiec listener is
+    // thread-per-connection, and a sweep of every mapped item measured under a
+    // second over loopback, so the budget is not spent on latency. Running the
+    // four validators together opened roughly sixty connections at once and
+    // the probe began missing its deadline intermittently; the concurrency
+    // inside each validator is already bounded to one verifier's item set.
     let objects = crate::skarbiec::validate_object_verifier().await;
     let releases = crate::skarbiec::validate_release_verifier().await;
     let machines = crate::skarbiec::validate_machine_verifier().await;
@@ -1396,6 +1453,9 @@ async fn check_alerts() -> Check {
     }
     if channels.sendgrid.is_some() {
         configured.push("sendgrid");
+    }
+    if channels.most.is_some() {
+        configured.push("most");
     }
 
     let topic = config::alerts_topic();

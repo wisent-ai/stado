@@ -547,7 +547,7 @@ pub async fn run_bootstrap(
             )
             .await;
         }
-        if let Some(t) = registry.lookup(target) {
+        if let Some(t) = registry.lookup_for_agent(target) {
             if t.is_provider(crate::capabilities::ProviderId::Local) {
                 return local_install::install_local(
                     &t.name, "agent", dry_run, runner, hf_fetch, echo,

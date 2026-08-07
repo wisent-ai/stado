@@ -231,14 +231,18 @@ pub async fn self_target(name_only: bool) -> Result<(), CmdError> {
     Ok(())
 }
 
-/// `stado registry host add HOST --ssh DEST [--kind local]` — onboard a
-/// machine into the canonical registry.
-///
-/// Refuses a name the registry already declares, and runs the exact
-/// validation [`push`] runs BEFORE anything is written, so a colliding
-/// hostname alias or an ssh destination with no host is rejected with the
-/// registry-v2 contract's own message instead of landing in the store.
+/// `stado registry host add HOST --ssh DEST --kind KIND` — declare a
+/// provider-managed non-local target. Local machines are refused here:
+/// their only registration path is the agent-attested `stado_fleet enroll`
+/// transaction.
 pub async fn host_add(host: &str, ssh: &str, kind: &str) -> Result<(), CmdError> {
+    if crate::capabilities::ProviderId::Local.matches(kind) {
+        return Err(CmdError::click(
+            "local targets cannot be declared with `stado registry host add`; \
+             use `stado_fleet enroll NAME --ssh DEST` so the agent is installed \
+             and attested before registration",
+        ));
+    }
     let name = targets::normalize_hostname(host);
     if name.is_empty() {
         return Err(CmdError::click("HOST must not be empty"));

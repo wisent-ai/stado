@@ -18,20 +18,28 @@ pub use object::validate_object_verifier;
 pub use release::validate_release_verifier;
 pub use service::{validate_backend_push_verifier, validate_service_verifier};
 
-/// Read one `token` field per item through one shared verifier client,
-/// concurrently. The Skarbiec listener is thread-per-connection, so sweeping
-/// N items serially would multiply the vault's gpg latency by N for no
-/// benefit. Results come back in the same order as `items`.
+/// Read one `token` field per item through one shared verifier client, with
+/// bounded concurrency. The Skarbiec listener is thread-per-connection, so
+/// sweeping N items serially multiplies the vault's gpg latency by N, while
+/// opening one connection per item floods the listener and the caller's
+/// deadline elapses with requests still queued. The bound is the machine's
+/// parallelism, which is what the listener can actually serve at once.
+/// Results come back in the same order as `items`.
 pub(crate) async fn read_token_fields(
     client: &Client,
     items: Vec<&str>,
 ) -> Result<Vec<Option<String>>, SkarbiecError> {
-    futures::future::try_join_all(
-        items
-            .into_iter()
-            .map(|item| client.read_string(item, "token")),
-    )
-    .await
+    use futures::stream::StreamExt;
+
+    let in_flight = std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or_else(|_| std::num::NonZeroUsize::MIN.get());
+    futures::stream::iter(items.into_iter().map(|item| client.read_string(item, "token")))
+        .buffered(in_flight)
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect()
 }
 
 /// Validate the auth verifier independently from all provider domains.
