@@ -29,6 +29,28 @@ impl Client {
         )
     }
 
+    /// Dedicated reader for the one credential the alert path needs.
+    ///
+    /// Alerts used the coordinator's own grant, which does not carry the
+    /// resend key, so the only configured channel resolved to nothing and
+    /// `doctor` reported that nothing anywhere would page an operator -- while
+    /// the fleet had already provisioned a least-privilege consumer for
+    /// exactly this key, with exactly one read on it, and put its token on
+    /// disk. Paging is the last thing that should need a broad grant.
+    pub fn alert_key_reader() -> Result<Self, SkarbiecError> {
+        if crate::config::alert_skarbiec_token_file() == crate::config::skarbiec_token_file() {
+            return Err(SkarbiecError::Deployment(
+                "alert key reader token file must be distinct from the coordinator grant"
+                    .to_string(),
+            ));
+        }
+        Self::direct(
+            crate::config::skarbiec_url(),
+            crate::config::alert_skarbiec_consumer(),
+            crate::config::alert_skarbiec_token_file(),
+        )
+    }
+
     /// Dedicated verifier for immutable authenticated release publication.
     pub fn release_verifier() -> Result<Self, SkarbiecError> {
         if crate::config::release_skarbiec_consumer()
