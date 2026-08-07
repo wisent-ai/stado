@@ -48,6 +48,23 @@ pub enum PlacementCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Stop an instance running where the directory places nothing.
+    ///
+    /// `doctor`'s placement row tells the operator to end exactly this, and
+    /// until now no command could: `service stop` refuses a host that
+    /// declares no such unit, which is the definition of the squatter it is
+    /// asked to remove. The port comes from the directory, so an instance can
+    /// only be evicted from a host the directory does NOT place it on.
+    Evict {
+        /// Logical service the directory declares.
+        service: String,
+        /// Registered host holding the port it should not hold.
+        #[arg(long)]
+        host: String,
+        /// Emit the eviction report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 pub async fn dispatch(command: PlacementCommands) -> Result<(), CmdError> {
@@ -57,7 +74,83 @@ pub async fn dispatch(command: PlacementCommands) -> Result<(), CmdError> {
             to_host,
             json,
         } => move_services(&services, &to_host, json).await,
+        PlacementCommands::Evict {
+            service,
+            host,
+            json,
+        } => evict(&service, &host, json).await,
     }
+}
+
+/// Stop the process holding a declared service's port on a host the directory
+/// does not place it on.
+///
+/// The guard is the directory itself: eviction is refused on the host that
+/// holds the placement, so the command can never take down the real instance.
+/// The remote step is the same listener reset launchd already needs when an
+/// unmanaged fallback keeps the port.
+async fn evict(service: &str, host: &str, json: bool) -> Result<(), CmdError> {
+    let document = registry::fetch_document().await?;
+    let entry = document
+        .get("service_directory")
+        .and_then(|block| block.get("services"))
+        .and_then(|services| services.get(service))
+        .ok_or_else(|| {
+            CmdError::click(format!("the directory declares no service named {service:?}"))
+        })?;
+    let active = entry
+        .get("active_host")
+        .and_then(Value::as_str)
+        .ok_or_else(|| CmdError::click(format!("{service} has no active_host in the directory")))?;
+    if active.starts_with(host) || host.starts_with(active) {
+        return Err(CmdError::click(format!(
+            "{service} is placed on {active}; evicting its own host would end the real instance. \
+             Use `stado service stop {service} --host {host}` to stop a placed service"
+        )));
+    }
+    let port = super::directory::service_port(entry, active).ok_or_else(|| {
+        CmdError::click(format!("the directory declares no port for {service}"))
+    })?;
+    let target = host_channel::canonical_target(host)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    // The listener reset takes a probe URL and reads its port; the unit id and
+    // path are only markers here, because the squatter has no unit on this
+    // host - that is what makes it a squatter.
+    let squatter = service::launchd_service(
+        host,
+        &format!("unmanaged.{service}"),
+        "",
+        SOURCE_REGISTRY,
+        &Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true),
+    );
+    let report = service::reset_service_listener(
+        &target,
+        &squatter,
+        &format!("http://127.0.0.1:{port}/"),
+        &production_runner(),
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "service": service,
+                "host": host,
+                "placed_on": active,
+                "port": port,
+                "status": report.status,
+                "detail": report.detail,
+            }))?
+        );
+    } else {
+        println!(
+            "{host}\t{service}\tport {port}\t{}\t{}",
+            report.status, report.detail
+        );
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
