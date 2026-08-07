@@ -1,0 +1,40 @@
+#!/bin/sh
+set -eu
+umask u=rwx,g=,o=
+transport_home="$HOME"
+service_home_file="$transport_home/.stado/stado-release-home"
+service_home="$transport_home"
+if [ -f "$service_home_file" ]; then
+    service_home="$(cat "$service_home_file")"
+fi
+case "$service_home" in
+    /*) ;;
+    *)
+        echo "The pinned Stado release service home must be absolute"
+        false
+        ;;
+esac
+version_file="$transport_home/.stado/stado-release-version"
+if [ ! -f "$version_file" ]; then
+    echo "The pinned Stado release version is missing"
+    false
+fi
+version="$(cat "$version_file")"
+archive=
+for candidate in "$transport_home"/.stado/releases/stado-public-store/"$version"/*/stado-public-store.tar.gz; do
+    if [ -f "$candidate" ]; then
+        archive=$candidate
+    fi
+done
+if [ -z "$archive" ]; then
+    echo "The immutable Stado release store archive is missing"
+    false
+fi
+store_root="$service_home/.stado/local-storage"
+mkdir -p "$store_root"
+tar -xzf "$archive" -C "$store_root"
+if [ ! -d "$store_root/ecosystem/releases" ]; then
+    echo "The immutable Stado release store is incomplete"
+    false
+fi
+printf '%s\n' "$store_root"

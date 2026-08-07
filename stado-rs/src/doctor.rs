@@ -271,6 +271,77 @@ impl Report {
 
 /// Run a probe under [`PROBE_TIMEOUT`]. An elapsed probe becomes a FAIL
 /// row rather than a hung command, so the remaining probes still report.
+/// Nothing serving here that is placed somewhere else.
+///
+/// A gateway is placed on exactly one host. A second copy listening on the same
+/// port on another machine does not announce itself: callers that resolve a
+/// loopback address reach it, it authenticates against its own stale view, and
+/// the refusal reads as a credential fault. Cheap to detect from here, because
+/// the only thing to look at is whether this host is holding the port of a
+/// service the directory places elsewhere.
+async fn check_placement() -> Check {
+    let document = match crate::cli::registry::fetch_document().await {
+        Ok(document) => document,
+        Err(error) => {
+            return Check::new(
+                PLACEMENT_ID,
+                PLACEMENT_TITLE,
+                Status::Warn,
+                format!("the registry could not be read: {error}"),
+                PLACEMENT_REMEDY,
+            )
+        }
+    };
+    let here = crate::providers::vast::system_hostname();
+    let services = document
+        .get("service_directory")
+        .and_then(|block| block.get("services"))
+        .and_then(serde_json::Value::as_object);
+    let Some(services) = services else {
+        return Check::pass(
+            PLACEMENT_ID,
+            PLACEMENT_TITLE,
+            "the directory declares no services".to_string(),
+            PLACEMENT_REMEDY,
+        );
+    };
+    let mut squatting: Vec<String> = Vec::new();
+    for (name, entry) in services {
+        let Some(active) = entry.get("active_host").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if active.starts_with(&here) || here.starts_with(active) {
+            continue;
+        }
+        let Some(port) = crate::cli::directory::service_port(entry, active) else {
+            continue;
+        };
+        if tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_ok()
+        {
+            squatting.push(format!(
+                "{name} is placed on {active}, and port {port} answers here"
+            ));
+        }
+    }
+    if squatting.is_empty() {
+        Check::pass(
+            PLACEMENT_ID,
+            PLACEMENT_TITLE,
+            "this host holds no port belonging to a service placed elsewhere".to_string(),
+            PLACEMENT_REMEDY,
+        )
+    } else {
+        Check::fail(
+            PLACEMENT_ID,
+            PLACEMENT_TITLE,
+            squatting.join("; "),
+            PLACEMENT_REMEDY,
+        )
+    }
+}
+
 async fn bounded(
     id: &'static str,
     title: &'static str,
@@ -319,6 +390,8 @@ pub async fn run() -> Report {
         registry_check,
         control_check,
         alerts_check,
+        contract_check,
+        placement_check,
     ) = tokio::join!(
         bounded(CONFIG_ID, CONFIG_TITLE, CONFIG_REMEDY, async {
             check_config()
@@ -378,6 +451,18 @@ pub async fn run() -> Report {
             check_queue_control(store, &store_error)
         ),
         bounded(ALERTS_ID, ALERTS_TITLE, ALERTS_REMEDY, check_alerts()),
+        bounded(
+            CONTRACT_ID,
+            CONTRACT_TITLE,
+            CONTRACT_REMEDY,
+            skarbiec_contract_check()
+        ),
+        bounded(
+            PLACEMENT_ID,
+            PLACEMENT_TITLE,
+            PLACEMENT_REMEDY,
+            check_placement(),
+        ),
     );
 
     Report {
@@ -399,6 +484,8 @@ pub async fn run() -> Report {
             registry_check,
             control_check,
             alerts_check,
+            contract_check,
+            placement_check,
         ],
     }
 }
@@ -1322,6 +1409,11 @@ async fn check_registry() -> Check {
 // 9. Queue control
 // ---------------------------------------------------------------------------
 
+const PLACEMENT_ID: &str = "placement";
+const PLACEMENT_TITLE: &str = "Service placement";
+const PLACEMENT_REMEDY: &str =
+    "`stado service stop NAME --host HOST` ends an instance nothing placed here";
+
 const CONTROL_ID: &str = "queue-control";
 const CONTROL_TITLE: &str = "Queue control";
 const CONTROL_REMEDY: &str = "`stado queue pause` / `stado queue resume` own this state";
@@ -1450,4 +1542,95 @@ async fn check_alerts() -> Check {
     }
 
     findings.into_check(ALERTS_ID, ALERTS_TITLE, ALERTS_REMEDY)
+}
+
+const CONTRACT_ID: &str = "skarbiec-contract";
+const CONTRACT_TITLE: &str = "Skarbiec read contract";
+const CONTRACT_REMEDY: &str =
+    "move whole-item reads to Client::read_field, or pin the broker to the build these callers expect";
+
+/// Does the configured broker still answer a whole-item read?
+///
+/// Skarbiec 9aa7dd4 made `field` mandatory on `/v1/items/read`. Callers that
+/// ask for an item and pick fields out of it get `400 {"error":"field
+/// required"}` from a broker built after that change, and the failure carries
+/// no hint that the contract moved underneath them. On 2026-08-04 that took
+/// out this machine's host-health beacon for twenty-one hours, during which
+/// `stado service list` went on reporting a stale `active` for services that
+/// were not running — the fleet's own view of the host was fiction and nothing
+/// said so.
+///
+/// The probe is unauthenticated on purpose: the handler validates `id` and
+/// `field` before it looks at any identity, so a request carrying neither a
+/// consumer nor a bearer still reveals which contract is in force, and reveals
+/// nothing else.
+async fn skarbiec_contract_check() -> Check {
+    let url = match crate::credential_store::skarbiec_url() {
+        Some(url) => url,
+        // A file-backed credential store has no broker and no contract to
+        // disagree with, which is a different thing from a broker that is
+        // fine.
+        None => {
+            return Check::pass(
+                CONTRACT_ID,
+                CONTRACT_TITLE,
+                "credential store is not a Skarbiec broker; no read contract applies".to_string(),
+                CONTRACT_REMEDY,
+            )
+        }
+    };
+    let endpoint = format!("{}/v1/items/read", url.trim_end_matches('/'));
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+    {
+        Ok(client) => client,
+        Err(err) => {
+            return Check::new(
+                CONTRACT_ID,
+                CONTRACT_TITLE,
+                Status::Warn,
+                format!("could not build an HTTP client to probe {endpoint}: {err}"),
+                CONTRACT_REMEDY,
+            )
+        }
+    };
+    let response = client
+        .post(&endpoint)
+        .json(&json!({"id": "stado-doctor-contract-probe"}))
+        .send()
+        .await;
+    match response {
+        Err(err) => Check::new(
+            CONTRACT_ID,
+            CONTRACT_TITLE,
+            Status::Warn,
+            format!("{endpoint} is unreachable, so the read contract is unknown: {err}"),
+            CONTRACT_REMEDY,
+        ),
+        Ok(response) => {
+            let status = response.status().as_u16();
+            let body = response.text().await.unwrap_or_default();
+            if body.contains("field required") {
+                Check::new(
+                    CONTRACT_ID,
+                    CONTRACT_TITLE,
+                    Status::Warn,
+                    format!(
+                        "{endpoint} requires a named field (HTTP {status}); every whole-item \
+                         read in this build fails against it, which is what silences a health \
+                         beacon without saying why"
+                    ),
+                    CONTRACT_REMEDY,
+                )
+            } else {
+                Check::pass(
+                    CONTRACT_ID,
+                    CONTRACT_TITLE,
+                    format!("{endpoint} accepts a read without a named field (HTTP {status})"),
+                    CONTRACT_REMEDY,
+                )
+            }
+        }
+    }
 }

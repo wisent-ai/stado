@@ -299,6 +299,53 @@ async fn resolve(r#ref: &str, as_json: bool) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// A release is a claim about the fleet, so it cannot rest on a store only one
+/// machine can read.
+///
+/// `stado://` resolves through whichever object store this host is configured
+/// with, and the default is a directory on this disk. Publishing a fleet
+/// coordinate backed by that store does not fail -- it succeeds, and produces a
+/// version every other machine reports as absent. The store is the operator's
+/// choice and stays that way; what is refused here is only the combination of a
+/// fleet coordinate with a store that cannot answer for the fleet.
+fn fleet_visible(manifest: &ArtifactManifest) -> Result<(), CmdError> {
+    let fleet_scheme = manifest
+        .locations
+        .iter()
+        .any(|location| location.uri.starts_with("stado://"));
+    if !fleet_scheme {
+        return Ok(());
+    }
+    let backend = crate::config::wc_storage_backend();
+    // Ask the store how far it carries. Every storage adapter declares this, so
+    // a backend added later is classified by whoever adds it rather than by
+    // whether its name happens to be matched here.
+    let reach = crate::capabilities::constructible_variant(
+        crate::capabilities::RuntimeFacet::Storage,
+        backend,
+    )
+    .and_then(|variant| match variant.adapter {
+        crate::capabilities::RuntimeAdapter::Storage(adapter) => Some(adapter.reach()),
+        _ => None,
+    });
+    match reach {
+        Some(crate::capabilities::StorageReach::Fleet) => Ok(()),
+        Some(crate::capabilities::StorageReach::Device) => Err(CmdError::click(format!(
+            "{} publishes a stado:// coordinate while this host's object store is {backend:?}, \
+             which answers only for this machine: every other host would report the release \
+             absent. Select a store that answers for the fleet, or give the manifest a \
+             location the fleet can already reach.",
+            manifest.ref_
+        ))),
+        None => Err(CmdError::click(format!(
+            "{} publishes a stado:// coordinate, and this host's object store {backend:?} is \
+             not a storage backend this build knows, so how far it carries cannot be \
+             established",
+            manifest.ref_
+        ))),
+    }
+}
+
 async fn publish(
     manifest_path: &str,
     verify: bool,
@@ -316,6 +363,7 @@ async fn publish(
         });
     }
     let manifest = ArtifactManifest::from_json(&std::fs::read_to_string(path)?)?;
+    fleet_visible(&manifest)?;
     let registry = registry().await?;
     let published = registry.publish(&manifest, verify, full).await?;
     if as_json {

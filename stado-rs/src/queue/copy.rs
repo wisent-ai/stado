@@ -180,6 +180,9 @@ impl Endpoint {
                 format!("azure://{}/{}", self.account, self.container)
             }
             Some(StorageAdapter::S3) => format!("s3://{}", self.bucket),
+            Some(StorageAdapter::StadoObject) => {
+                format!("stado://{}", crate::config::wc_stado_storage_namespace())
+            }
             Some(StorageAdapter::Local) => format!("local://{}", self.path),
             None => self.kind.clone(),
         }

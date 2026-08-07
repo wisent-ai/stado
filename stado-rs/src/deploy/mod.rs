@@ -60,6 +60,7 @@ use std::time::Duration;
 
 use futures::future::BoxFuture;
 
+pub mod artifact_install;
 pub mod bootstrap;
 pub mod host_build_caches;
 pub mod host_channel;
@@ -75,8 +76,12 @@ pub mod host_release;
 pub mod host_uptime;
 pub mod host_user_delete;
 pub mod host_users;
+pub mod inference;
+pub mod inference_process;
+pub mod inference_routes;
 pub mod local_install;
 pub mod service;
+pub mod ssh_key;
 
 /// Deploy-layer failure carrying the exact Python exception message
 /// (RuntimeError / ValueError / LookupError text). The CLI maps it to a

@@ -4,37 +4,48 @@
 //! literal appears in source.
 
 use super::*;
-use tokio::sync::{Mutex, MutexGuard};
+use std::sync::MutexGuard;
 
 static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 /// Sync tests take the guard directly.
 fn env_lock() -> MutexGuard<'static, ()> {
-    ENV_LOCK.blocking_lock()
+    test_env_lock()
 }
 
-/// Async tests hold the guard across `.await`, so they must take an
-/// async-aware guard instead of parking the runtime thread on a blocking one.
-async fn env_lock_async() -> MutexGuard<'static, ()> {
-    ENV_LOCK.lock().await
+struct StoreEnv {
+    _config: tempfile::TempDir,
 }
-
-struct StoreEnv;
 
 impl StoreEnv {
     fn set(value: &str) -> Self {
+        let config = tempfile::tempdir().expect("config tempdir");
+        let path = config.path().join("config.json");
+        let document = serde_json::json!({"credentials": {"store": value}});
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&document).expect("serialize config"),
+        )
+        .expect("write config");
+        std::env::set_var("STADO_CONFIG", path);
         std::env::set_var(ENV_STORE, value);
-        Self
+        Self { _config: config }
     }
+
     fn unset() -> Self {
+        let config = tempfile::tempdir().expect("config tempdir");
+        let path = config.path().join("config.json");
+        std::fs::write(&path, b"{}").expect("write config");
+        std::env::set_var("STADO_CONFIG", path);
         std::env::remove_var(ENV_STORE);
-        Self
+        Self { _config: config }
     }
 }
 
 impl Drop for StoreEnv {
     fn drop(&mut self) {
         std::env::remove_var(ENV_STORE);
+        std::env::remove_var("STADO_CONFIG");
     }
 }
 
@@ -180,18 +191,7 @@ async fn skarbiec_helpers_honor_file_backend() {
         Err(SkarbiecError::MissingValue(id)) => assert_eq!(id, "stado-missing"),
         other => panic!("missing item must be MissingValue, got {other:?}"),
     }
-    // The operator's scratch store (created for the STADO_CREDENTIAL_STORE
-    // manual verification) must serve the same helpers when present.
-    let scratch = Path::new("/Users/lukaszbartoszcze/.stado/tmp-recovery/cred-store/creds.json");
-    if scratch.exists() {
-        std::env::set_var(ENV_STORE, format!("file://{}", scratch.display()));
-        assert_eq!(
-            crate::skarbiec::read_string("stado-vast", "api_key")
-                .await
-                .expect("read"),
-            Some("demo-vast-key-not-real".to_string())
-        );
-    }
+
 }
 
 #[cfg(unix)]

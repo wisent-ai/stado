@@ -98,12 +98,13 @@ grant amount and validity when the billing property is readable, billing
 status, and the paid-overage risk when the spending limit is off.
 
 The Azure billing service-principal object is read exclusively from the
-separate `skarbiec` repository/service. Configure a loopback HTTP endpoint or
-a TLS-protected remote endpoint with `WC_SKARBIEC_URL` (default
-`http://127.0.0.1:8787`), the consumer with `WC_SKARBIEC_CONSUMER` (default
-`stado`), and an owner-only grant file with `WC_SKARBIEC_TOKEN_FILE` (default
-`~/.stado/skarbiec-token`). Raw grants are not accepted from environment
-variables. `WC_AZURE_BILLING_SECRET` selects the item
+separate `skarbiec` repository/service. `WC_SKARBIEC_URL` addresses the local
+Stado resolver adapter (default `http://127.0.0.1:17602`), never a physical
+Skarbiec host. `WC_SKARBIEC_CONSUMER` selects the scoped consumer (default
+`stado-control-plane`), and `WC_SKARBIEC_TOKEN_FILE` selects its owner-only
+grant file (default `~/.stado/skarbiec-token`). Raw grants are not accepted
+from environment variables.
+`WC_AZURE_BILLING_SECRET` selects the item
 id (default `wisent-azure-billing-sp`). There is no credential fallback to
 Azure Key Vault, a local credential file, process environment, queue storage,
 or another cloud's secret manager.
@@ -695,6 +696,32 @@ One row per registry target, sorted worst-first: hosts that never reported
 at all, then the oldest beacon, then the `gcp`/`vast` targets where no
 beacon is expected. The "has not reported in days" detector.
 
+## `stado release`
+
+| Subcommand | Behavior |
+|---|---|
+| `keygen --private-key PATH --public-key PATH --key-id ID` | Create an Ed25519 release authority. The private file is mode `0600`; only the public key belongs in registry trust policy. |
+| `prepare PRODUCT VERSION PLATFORM ...` | Hash an existing archive, bind source revision, schema compatibility and qualification evidence into a canonical manifest, sign it, then publish archive, signature and manifest create-only. The manifest is the last commit marker. |
+| `promote PRODUCT VERSION --channel candidate|stable` | Re-fetch every platform, verify exact bytes, signature and passed qualification, then compare-and-swap one `desired` registry generation. It never rebuilds. |
+| `agent --target TARGET [--once]` | Reconcile canonical desired state on a host: verify, stage immutably, start a private candidate, check readiness, switch the stable proxy, drain, monitor and commit or roll back. |
+| `status [PRODUCT] [--json]` | Join central desired/previous state with each host's observed rollout state. A host that has not published status is `unreported`, never healthy by assumption. |
+| `rollback PRODUCT [--json]` | Atomically swap the previous exact release back into desired state with a new rollout generation. |
+
+`prepare` accepts only an externally produced qualification record. It does not
+run or infer qualification. `promote` rejects `pending` and `failed` records,
+untrusted keys, mixed source revisions, missing target platforms, or any byte
+that differs from its signed manifest.
+
+On macOS, install the reconciler as the registry target's runtime account:
+
+```bash
+deploy/install_release_agent.sh TARGET RUN_AS_USER HOME STADO_BIN STADO_CONFIG
+```
+
+The LaunchDaemon drops to `RUN_AS_USER` before reading or writing canonical
+storage and uses non-interactive `sudo` only for system launchd cutover and the
+declared candidate account.
+
 ## `stado storage`
 
 | Subcommand | Behavior |
@@ -962,6 +989,12 @@ an arbitrary, per-host, declared set.
 | `adopt UNIT --host TARGET [--json]` | Bring an existing unit under management. |
 | `retire UNIT --host TARGET [--json]` | Bootout/disable and forget; files kept. |
 | `deploy NAME --host TARGET --from PATH [--json]` | Render, push, bootstrap, record. |
+| `deploy NAME --host TARGET --from-artifact REF [--json]` | Install one published version, then the above. |
+| `directory show [--json]` | The service directory: active host, per-caller endpoint, consumers. |
+| `directory profiles [--json]` | Placement profiles: services, start/stop order, hosts, required state. |
+| `directory endpoint NAME [--target T] [--json]` | The address THIS machine should use for a service. |
+| `directory consumer-add NAME CONSUMER [--capability C]...` | Declare that a consumer may use a service. |
+| `directory consumer-rm NAME CONSUMER` | Remove a consumer's declaration. |
 | `logs NAME [--host TARGET] [--lines N] [--json]` | Tail the unit's log. |
 | `env NAME [--host TARGET] [--json]` | Effective environment, secrets redacted. |
 
@@ -969,6 +1002,37 @@ an arbitrary, per-host, declared set.
 the unit (launchd label, systemd unit name), so `service restart weles-api`
 and `service restart com.wisent.weles-api` are the same request. Omitting
 `--host` acts on every host that manages the name.
+
+### Deploying a version rather than a path
+
+`--from` takes the absolute path, on the target host, of a program that is
+already there; the unit is rendered around it and nothing versions it.
+`--from-artifact` takes a published reference instead: it resolves to an
+immutable version, places that version under
+`~/.stado/services/NAME/<version>/`, verifies the sha256 the manifest declares
+**before** anything is linked, and moves `current` onto it atomically. A failed
+install leaves the previous `current` running, and the unit points at `current`,
+so a rollback is a relink rather than a redeploy.
+
+Exactly one source is accepted. Neither is a safe default: a path deploys
+whatever happens to be on the host, with no version anybody can name.
+
+### The service directory answers "where is X"
+
+`service_directory` keys each service's `endpoints` by the machine **asking**,
+not by the machine serving, because these services bind loopback on their own
+host and so the true address differs per client. `directory endpoint` resolves
+against this target and refuses to invent an address when the target has no
+entry — an undeclared endpoint means nobody has said how this machine reaches
+the service, and a guessed loopback address is how a client ends up talking to
+the wrong process.
+
+`consumers` declares who may use a service. A system absent from that list is
+not provisioned however well its code works.
+
+These commands read and mutate the raw registry document. There is deliberately
+no typed model of the block: a model drops the keys it does not know, and this
+document has already lost keys that way.
 
 ### Where the managed set comes from
 
@@ -1033,6 +1097,37 @@ stado service restart com.wisent.weles-api
 stado service logs com.wisent.weles-api --lines 40
 ```
 
+## `stado resolver`
+
+```bash
+stado resolver resolve stado://service/brama \
+  --consumer wisent-backend --json
+stado resolver serve --target gpu-host
+```
+
+`resolve` discovers the registry authority from the local bootstrap registry,
+fetches and validates its versioned snapshot over registry-owned SSH, enforces
+the service's exact consumer capability policy, and returns only the logical
+URI, routing generation, and capabilities. It does not disclose a host or
+endpoint.
+
+`serve` validates that `--target` is this machine, loads
+`targets[].service_resolver` from the authority snapshot, binds its API and
+adapters only on loopback, then watches that authority. `GET
+/v1/resolve/service/<name>` requires `X-Stado-Consumer`; the response includes
+the matching local adapter URL when one is configured. Each adapter resolves
+again for every connection, connects directly when the service is local, and
+otherwise uses the target's registry-owned SSH transport. New connections fail
+closed during placement transactions and after the cache freshness deadline.
+If authority changes, resolvers adopt the new source only after the old
+authority has delivered a valid snapshot naming it.
+
+Install the host daemon with:
+
+```bash
+deploy/install_service_resolver.sh [registry-target]
+```
+
 ## `stado doctor [--json] [--fix-hints]`
 
 Ordered deployment preflight. Every check reports PASS, WARN or FAIL with a
@@ -1051,6 +1146,7 @@ exits non-zero if anything FAILs.
 | registry | Reachable, parses, and names this host or an active coordinator. |
 | queue-control | Reports a paused queue, which otherwise looks exactly like an idle fleet. |
 | alerts | At least one channel, and not only the GCP one on a deployment with no GCP. |
+| skarbiec-contract | WARNs when the configured broker rejects a read that names no field. Every whole-item read in the build fails against such a broker, and that is what silences a health beacon without saying why. The probe carries no consumer and no bearer: the handler validates `id` and `field` before it looks at identity, so an unauthenticated request reveals which contract is in force and nothing else. |
 
 Checks are fault-isolated and individually deadline-bounded: one failure never
 prevents the rest from running, and a black-holed endpoint becomes one FAIL row

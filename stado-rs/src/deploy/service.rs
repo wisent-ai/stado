@@ -50,6 +50,7 @@ use std::sync::LazyLock;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use super::local_install::{self, InstallPlan, LocalOs};
@@ -116,11 +117,24 @@ const UNIT_HEREDOC: &str = "STADO_UNIT_BODY";
 // The managed set
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OnboardingProduct {
+    pub product_id: String,
+    pub display_name: String,
+    pub repository: String,
+    pub surface_kinds: Vec<String>,
+    pub first_success_fact: String,
+    pub onboarding_kind: String,
+    pub status: String,
+}
+
 /// One unit Stado claims to manage on one host.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ManagedService {
     /// Registry target name of the host that runs it.
     pub host: String,
+    /// Declarative placement selector that resolved to this host.
+    pub host_heuristic: Option<String>,
     /// The name the CLI addresses it by.
     pub name: String,
     /// systemd unit name (`foo.service`); empty for a launchd service.
@@ -137,6 +151,8 @@ pub struct ManagedService {
     /// When the unit entered management; empty for a recovery-sourced one,
     /// which has been managed for as long as the program has existed.
     pub managed_since: String,
+    /// Product-level onboarding metadata synchronized into Echo.
+    pub onboarding: Option<OnboardingProduct>,
 }
 
 impl ManagedService {
@@ -158,23 +174,37 @@ impl ManagedService {
         self.name == query || self.unit_id() == query
     }
 
-    /// The `services[]` element written into the registry document.
     pub fn to_record(&self) -> Value {
-        json!({
+        let mut record = json!({
             "name": self.name,
             "unit": self.unit,
             "label": self.label,
             "path": self.path,
             "kind": self.kind,
             "managed_since": self.managed_since,
-        })
+        });
+        if let Some(heuristic) = &self.host_heuristic {
+            record
+                .as_object_mut()
+                .expect("managed service record")
+                .insert(
+                    "host_heuristic".to_string(),
+                    Value::String(heuristic.clone()),
+                );
+        }
+        if let Some(onboarding) = &self.onboarding {
+            record["onboarding"] = serde_json::to_value(onboarding)
+                .expect("OnboardingProduct is JSON serializable");
+        }
+        record
     }
 
     /// The `--json` rendering: the record plus the resolved host and the
     /// source that declared it.
     pub fn to_json(&self) -> Value {
-        json!({
+        let mut record = json!({
             "host": self.host,
+            "host_heuristic": self.host_heuristic,
             "name": self.name,
             "unit": self.unit,
             "label": self.label,
@@ -183,7 +213,12 @@ impl ManagedService {
             "kind": self.kind,
             "source": self.source,
             "managed_since": self.managed_since,
-        })
+        });
+        if let Some(onboarding) = &self.onboarding {
+            record["onboarding"] = serde_json::to_value(onboarding)
+                .expect("OnboardingProduct is JSON serializable");
+        }
+        record
     }
 
     /// Read one `services[]` element back. Missing fields read as empty:
@@ -215,6 +250,10 @@ impl ManagedService {
         };
         Self {
             host: host.to_string(),
+            host_heuristic: record
+                .get("host_heuristic")
+                .and_then(Value::as_str)
+                .map(str::to_string),
             name,
             unit,
             label,
@@ -222,6 +261,9 @@ impl ManagedService {
             kind,
             source: SOURCE_REGISTRY.to_string(),
             managed_since: text("managed_since"),
+            onboarding: record
+                .get("onboarding")
+                .and_then(|value| serde_json::from_value(value.clone()).ok()),
         }
     }
 }
@@ -237,6 +279,7 @@ pub fn launchd_service(
 ) -> ManagedService {
     ManagedService {
         host: host.to_string(),
+        host_heuristic: None,
         name: label.to_string(),
         unit: String::new(),
         label: label.to_string(),
@@ -244,6 +287,7 @@ pub fn launchd_service(
         kind: KIND_LAUNCHD.to_string(),
         source: source.to_string(),
         managed_since: since.to_string(),
+        onboarding: None,
     }
 }
 
@@ -257,6 +301,7 @@ pub fn systemd_service(
 ) -> ManagedService {
     ManagedService {
         host: host.to_string(),
+        host_heuristic: None,
         name: unit.to_string(),
         unit: unit.to_string(),
         label: String::new(),
@@ -264,6 +309,7 @@ pub fn systemd_service(
         kind: KIND_SYSTEMD.to_string(),
         source: source.to_string(),
         managed_since: since.to_string(),
+        onboarding: None,
     }
 }
 
@@ -754,19 +800,56 @@ say() {
   detail=$(printf '%s' \"$2\" | /usr/bin/tr '\t\r\n' ' ' | /usr/bin/cut -c1-160)
   printf 'STADO_SERVICE\\t%s\\t%s\\t%s\\n' \"$unit\" \"$1\" \"$detail\"
 }
+launch=/bin/launchctl
 if [ \"$os\" = \"Darwin\" ]; then
-  if /bin/launchctl print \"$gui\" >/dev/null 2>&1; then
-    domain=\"$gui\"
-  elif /bin/launchctl print \"$user_domain\" >/dev/null 2>&1; then
-    domain=\"$user_domain\"
-  else
-    say 'no_launchd_domain' \"$gui\"
-    exit 66
+  case \"$unit_path\" in
+    /Library/LaunchDaemons/*)
+      # A system daemon does not live in this login's domain, and every
+      # launchctl verb aimed at gui/$uid silently misses it -- which is how
+      # such a unit reaches the last-resort fallback on every restart and
+      # gets started as a bare process instead of as the job it is.
+      domain=\"system\"
+      launch=\"/usr/bin/sudo -n /bin/launchctl\"
+      ;;
+  esac
+  if [ -z \"$domain\" ]; then
+    if /bin/launchctl print \"$gui\" >/dev/null 2>&1; then
+      domain=\"$gui\"
+    elif /bin/launchctl print \"$user_domain\" >/dev/null 2>&1; then
+      domain=\"$user_domain\"
+    else
+      say 'no_launchd_domain' \"$gui\"
+      exit 66
+    fi
   fi
   if [ -z \"$unit_path\" ]; then unit_path=\"$HOME/Library/LaunchAgents/$unit.plist\"; fi
 elif [ \"$os\" = \"Linux\" ]; then
   if [ -n \"$linux_unit\" ]; then unit=\"$linux_unit\"; fi
   if [ -z \"$unit_path\" ]; then unit_path=\"$HOME/.config/systemd/user/$unit\"; fi
+  case \"$unit_path\" in
+    */.config/systemd/user/*) owner_path=\"${unit_path%%/.config/systemd/user/*}\" ;;
+    *) owner_path=\"$unit_path\" ;;
+  esac
+  while [ ! -e \"$owner_path\" ] && [ \"$owner_path\" != \"/\" ]; do
+    owner_path=$(/usr/bin/dirname \"$owner_path\")
+  done
+  service_user=$(/usr/bin/stat -c %U \"$owner_path\")
+  service_uid=$(/usr/bin/id -u \"$service_user\")
+  systemctl_user() {
+    runtime=\"/run/user/$service_uid\"
+    if [ \"$service_uid\" = \"$uid\" ]; then
+      /usr/bin/env \
+        XDG_RUNTIME_DIR=\"$runtime\" \
+        DBUS_SESSION_BUS_ADDRESS=\"unix:path=$runtime/bus\" \
+        /usr/bin/systemctl --user \"$@\"
+      return
+    fi
+    if [ -x /usr/bin/sudo ]; then sudo_bin=/usr/bin/sudo; else sudo_bin=/bin/sudo; fi
+    \"$sudo_bin\" -u \"$service_user\" /usr/bin/env \
+      XDG_RUNTIME_DIR=\"$runtime\" \
+      DBUS_SESSION_BUS_ADDRESS=\"unix:path=$runtime/bus\" \
+      /usr/bin/systemctl --user \"$@\"
+  }
 else
   say 'unsupported_os' \"$os\"
   exit 65
@@ -779,28 +862,37 @@ printf 'STADO_HOST\\t%s\\t%s\\t%s\\t%s\\n' \"$os\" \"$domain\" \"$unit\" \"$unit
 /// coordinator teardown, no other agents touched.
 const RESTART_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   if [ -f \"$unit_path\" ]; then
-    /bin/launchctl bootout \"$domain/$unit\" >/dev/null 2>&1 || true
-    /bin/launchctl enable \"$domain/$unit\" >/dev/null || true
-    detail=$(/bin/launchctl bootstrap \"$domain\" \"$unit_path\" 2>&1)
+    $launch bootout \"$domain/$unit\" >/dev/null 2>&1 || true
+    $launch enable \"$domain/$unit\" >/dev/null || true
+    detail=$($launch bootstrap \"$domain\" \"$unit_path\" 2>&1)
     rc=$?
-    if ! /bin/launchctl print \"$domain/$unit\" >/dev/null; then
-      detail=$(/bin/launchctl asuser \"$uid\" /bin/launchctl bootstrap \"$domain\" \"$unit_path\")
+    if ! $launch print \"$domain/$unit\" >/dev/null; then
+      detail=$(/bin/launchctl asuser \"$uid\" $launch bootstrap \"$domain\" \"$unit_path\")
       rc=$?
     fi
-    if ! /bin/launchctl print \"$domain/$unit\" >/dev/null; then
-      program=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments' \"$unit_path\" | /usr/bin/sed -n '/^[[:space:]]*[/]/{s/^[[:space:]]*//;p;q;}')
+    if ! $launch print \"$domain/$unit\" >/dev/null; then
+      set --
+      while IFS= read -r line; do
+        case \"$line\" in
+          'Array {'|'}'|'') continue ;;
+        esac
+        set -- \"$@\" \"$(printf '%s' \"$line\" | /usr/bin/sed 's/^[[:space:]]*//;s/[[:space:]]*$//')\"
+      done <<PLIST
+$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments' \"$unit_path\" 2>/dev/null)
+PLIST
+      program=${1:-}
       if [ -n \"$program\" ]; then
         recovery_unit=\"${unit}-recovery\"
-        detail=$(/bin/launchctl submit -l \"$recovery_unit\" -- \"$program\")
+        detail=$(/bin/launchctl submit -l \"$recovery_unit\" -- \"$@\")
         rc=$?
-        if /bin/launchctl print \"$domain/$recovery_unit\" >/dev/null; then unit=\"$recovery_unit\"; fi
+        if $launch print \"$domain/$recovery_unit\" >/dev/null; then unit=\"$recovery_unit\"; fi
       fi
     fi
-    if ! /bin/launchctl print \"$domain/$unit\" >/dev/null && [ -n \"$program\" ]; then
+    if ! $launch print \"$domain/$unit\" >/dev/null && [ -n \"$program\" ]; then
       log=$(/usr/bin/plutil -extract StandardOutPath raw -o - \"$unit_path\")
       if [ -z \"$log\" ]; then log=\"$HOME/.stado/logs/$unit.log\"; fi
       /bin/mkdir -p \"$(/usr/bin/dirname \"$log\")\"
-      /usr/bin/perl -e 'my $program = shift @ARGV; my $log = shift @ARGV; open STDIN, \"<\", \"/dev/null\" or die $!; open STDOUT, \">>\", $log or die $!; open STDERR, \">&STDOUT\" or die $!; exec {$program} $program;' \"$program\" \"$log\" &
+      /usr/bin/perl -e 'my $log = shift @ARGV; open STDIN, \"<\", \"/dev/null\" or die $!; open STDOUT, \">>\", $log or die $!; open STDERR, \">&STDOUT\" or die $!; exec {$ARGV[0]} @ARGV;' \"$log\" \"$@\" &
       direct_pid=$!
       /bin/sleep \"${#rc}\"
       if /bin/kill -s CONT \"$direct_pid\" >/dev/null; then
@@ -815,14 +907,16 @@ const RESTART_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
       say 'bootstrap_failed' \"$rc $detail\"
       exit 0
     fi
+    say 'restarted' \"$domain\"
+    exit 0
   fi
-  /bin/launchctl enable \"$domain/$unit\" >/dev/null 2>&1 || true
-  detail=$(/bin/launchctl kickstart -k \"$domain/$unit\" 2>&1)
+  $launch enable \"$domain/$unit\" >/dev/null 2>&1 || true
+  detail=$($launch kickstart -k \"$domain/$unit\" 2>&1)
   rc=$?
   if [ \"$rc\" -eq 0 ]; then say 'restarted' \"$domain\"; else say 'restart_failed' \"$rc $detail\"; fi
 else
-  /usr/bin/systemctl --user daemon-reload >/dev/null 2>&1 || true
-  detail=$(/usr/bin/systemctl --user restart \"$unit\" 2>&1)
+  systemctl_user daemon-reload >/dev/null 2>&1 || true
+  detail=$(systemctl_user restart \"$unit\" 2>&1)
   rc=$?
   if [ \"$rc\" -eq 0 ]; then say 'restarted' 'systemd --user'; else say 'restart_failed' \"$rc $detail\"; fi
 fi
@@ -830,14 +924,59 @@ fi
 /// Recovery fencing: stop the unit without disabling it or changing the
 /// registry. A later restart loads the same unit after its Stado config has
 /// been atomically cut over.
+const SHOW_BODY: &str = "if [ ! -f \"$unit_path\" ]; then
+  say 'missing' \"$unit_path\"
+  exit 0
+fi
+if [ \"$os\" = \"Darwin\" ]; then
+  args=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments' \"$unit_path\" 2>/dev/null | /usr/bin/sed -n '/^[[:space:]]*[^A-Z}]/{s/^[[:space:]]*//;s/[[:space:]]*$//;p;}' | /usr/bin/tr '\\n' ' ')
+  if [ -z \"$args\" ]; then args=$(/usr/libexec/PlistBuddy -c 'Print :Program' \"$unit_path\" 2>/dev/null); fi
+else
+  args=$(/usr/bin/sed -n 's/^ExecStart=//p' \"$unit_path\" | /usr/bin/tr '\\n' ' ')
+fi
+say 'runs' \"$args\"
+";
+
 const STOP_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   recovery_unit=\"${unit}-recovery\"
+  $launch bootout \"$domain/$unit\" >/dev/null 2>&1 || true
+  $launch bootout \"$domain/$recovery_unit\" >/dev/null 2>&1 || true
   /bin/launchctl bootout \"$gui/$unit\" >/dev/null 2>&1 || true
   /bin/launchctl bootout \"$user_domain/$unit\" >/dev/null 2>&1 || true
   /bin/launchctl bootout \"$gui/$recovery_unit\" >/dev/null 2>&1 || true
   /bin/launchctl bootout \"$user_domain/$recovery_unit\" >/dev/null 2>&1 || true
+  # Booting out the label is not the same as the program being gone. A unit
+  # started once outside its own label -- by a recovery fallback, or by hand --
+  # survives every bootout, keeps the listening socket, and makes each later
+  # restart die on 'address already in use' while the stale instance serves on.
+  program=\"\"
+  if [ -f \"$unit_path\" ]; then
+    program=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments' \"$unit_path\" 2>/dev/null | /usr/bin/sed -n '/^[[:space:]]*[/]/{s/^[[:space:]]*//;s/[[:space:]]*$//;p;q;}')
+  fi
+  # The unit points at .../services/NAME/current/..., while the process that is
+  # actually running shows the version directory that link resolved to. Matching
+  # the exact string finds nothing and reports a stop that did not happen, so
+  # match the service directory that both spellings share.
+  match=\"$program\"
+  case \"$program\" in
+    */current/*) match=\"${program%%/current/*}/\" ;;
+  esac
+  if [ -n \"$program\" ]; then
+    left=$(/usr/bin/pgrep -f \"^$match\" 2>/dev/null | /usr/bin/tr '\\n' ' ')
+    if [ -n \"$left\" ]; then
+      for pid in $left; do /bin/kill -TERM \"$pid\" >/dev/null 2>&1 || true; done
+      /bin/sleep 2
+      still=$(/usr/bin/pgrep -f \"^$match\" 2>/dev/null | /usr/bin/tr '\\n' ' ')
+      if [ -n \"$still\" ]; then
+        say 'stop_failed' \"disowned process still running: $still\"
+        exit 0
+      fi
+      say 'stopped' \"booted out, and ended disowned process(es): $left\"
+      exit 0
+    fi
+  fi
 else
-  /usr/bin/systemctl --user stop \"$unit\" >/dev/null 2>&1 || true
+  systemctl_user stop \"$unit\" >/dev/null 2>&1 || true
 fi
 say 'stopped' \"$unit_path\"
 ";
@@ -852,7 +991,7 @@ unit_state='unloaded'
 if [ \"$os\" = \"Darwin\" ]; then
   if /bin/launchctl print \"$domain/$unit\" >/dev/null 2>&1; then unit_state='loaded'; fi
 else
-  if /usr/bin/systemctl --user cat \"$unit\" >/dev/null 2>&1; then unit_state='loaded'; fi
+  if systemctl_user cat \"$unit\" >/dev/null 2>&1; then unit_state='loaded'; fi
 fi
 printf 'STADO_ADOPT\\t%s\\t%s\\n' \"$file_state\" \"$unit_state\"
 say 'probed' \"$unit_path\"
@@ -874,7 +1013,7 @@ const RETIRE_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   /bin/launchctl disable \"$gui/$recovery_unit\" >/dev/null 2>&1 || true
   /bin/launchctl disable \"$user_domain/$recovery_unit\" >/dev/null 2>&1 || true
 else
-  /usr/bin/systemctl --user disable --now \"$unit\" >/dev/null 2>&1 || true
+  systemctl_user disable --now \"$unit\" >/dev/null 2>&1 || true
 fi
 say 'retired' \"$unit_path\"
 ";
@@ -948,8 +1087,8 @@ else
   /bin/cat > \"$unit_path\" <<'@HEREDOC@'
 @LINUX_UNIT@
 @HEREDOC@
-  /usr/bin/systemctl --user daemon-reload >/dev/null 2>&1 || true
-  detail=$(/usr/bin/systemctl --user enable --now \"$unit\" 2>&1)
+  systemctl_user daemon-reload >/dev/null 2>&1 || true
+  detail=$(systemctl_user enable --now \"$unit\" 2>&1)
   rc=$?
   if [ \"$rc\" -eq 0 ]; then say 'deployed' \"$unit_path\"; else say 'enable_failed' \"$rc $detail\"; fi
 fi
@@ -1124,6 +1263,16 @@ fn remote_script(
 // ---------------------------------------------------------------------------
 
 /// `service restart` on one host.
+/// Report the argument vector a managed unit runs, exactly as declared.
+pub async fn show_service(
+    target: &ComputeTarget,
+    service: &ManagedService,
+    runner: &Runner,
+) -> Result<RemoteReport, DeployError> {
+    let script = remote_script(service.unit_id(), "", &service.path, SHOW_BODY)?;
+    run_remote(target, script, runner).await
+}
+
 pub async fn restart_service(
     target: &ComputeTarget,
     service: &ManagedService,
@@ -1314,6 +1463,7 @@ pub async fn deploy_service(
 /// and the init system that answered.
 pub fn record_from_report(
     host: &str,
+    host_heuristic: Option<&str>,
     name: &str,
     report: &RemoteReport,
     managed_since: &str,
@@ -1336,6 +1486,7 @@ pub fn record_from_report(
         )
     };
     service.name = name.to_string();
+    service.host_heuristic = host_heuristic.map(str::to_string);
     service
 }
 
@@ -1487,6 +1638,41 @@ pub fn add_service(document: &mut Value, service: &ManagedService) -> Result<(),
     }
     declared.push(service.to_record());
     Ok(())
+}
+
+/// Attach product onboarding metadata to one already managed service.
+pub fn set_service_onboarding(
+    document: &mut Value,
+    host: &str,
+    service: &str,
+    onboarding: OnboardingProduct,
+) -> Result<ManagedService, DeployError> {
+    let entry = target_entry(document, host)?;
+    let declared = entry
+        .get_mut(SERVICES_KEY)
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| DeployError(format!("{} declares no managed services", py_str_repr(host))))?;
+    let record = declared
+        .iter_mut()
+        .find(|record| {
+            record
+                .as_object()
+                .is_some_and(|record| ManagedService::from_record(host, record).matches(service))
+        })
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| {
+            DeployError(format!(
+                "{} is not a registry-managed service on {}",
+                py_str_repr(service),
+                py_str_repr(host)
+            ))
+        })?;
+    record.insert(
+        "onboarding".to_string(),
+        serde_json::to_value(&onboarding)
+            .map_err(|error| DeployError(format!("invalid onboarding product: {error}")))?,
+    );
+    Ok(ManagedService::from_record(host, record))
 }
 
 /// Undeclare a service. Removing the last one drops the key entirely, so a
