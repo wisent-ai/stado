@@ -22,7 +22,7 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 
 use super::local_install::{self, TokenFetcher};
-use super::{shlex_quote, CommandSpec, DeployError, Runner};
+use super::{runner_fn, shlex_quote, ssh_key, CommandSpec, DeployError, Runner};
 use crate::targets::{ComputeTarget, Registry};
 
 /// Remote install script BODY (fed as the remote command argument, not
@@ -474,6 +474,40 @@ pub async fn run(
     }
 }
 
+/// Production remote bootstrap: every SSH/SCP operation carries the
+/// registry target's scoped private key. The key exists only for this target
+/// provision and is deleted when the keyed runner is dropped.
+async fn run_with_target_keys(
+    targets: &[&ComputeTarget],
+    runner: &Runner,
+    echo: &mut dyn FnMut(&str),
+) {
+    for target in targets {
+        let key = match ssh_key::materialize(&target.name).await {
+            Ok(key) => Arc::new(key),
+            Err(exc) => {
+                echo(&format!("[err]  {}: {exc}", target.name));
+                continue;
+            }
+        };
+        let base_runner = Arc::clone(runner);
+        let keyed_runner = runner_fn(move |mut spec| {
+            let base_runner = Arc::clone(&base_runner);
+            let key = Arc::clone(&key);
+            async move {
+                if matches!(spec.argv.first().map(String::as_str), Some("ssh" | "scp")) {
+                    spec.argv = ssh_key::add_identity(spec.argv, &key)
+                        .map_err(|error| error.to_string())?;
+                }
+                base_runner(spec).await
+            }
+        });
+        if let Err(exc) = provision_target(target, false, &keyed_runner, echo).await {
+            echo(&format!("[err]  {}: {exc}", target.name));
+        }
+    }
+}
+
 /// Python `run_bootstrap`: top-level dispatcher used by `stado bootstrap`.
 /// Decides between the SSH-based remote install and the local
 /// launchd/systemd --user install, and accepts either a kind=local target
@@ -553,7 +587,11 @@ pub async fn run_bootstrap(
         }
         None => registry.local_targets(),
     };
-    run(&targets, dry_run, runner, echo).await;
+    if dry_run {
+        run(&targets, true, runner, echo).await;
+    } else {
+        run_with_target_keys(&targets, runner, echo).await;
+    }
     Ok(())
 }
 
@@ -580,6 +618,8 @@ mod tests {
             spot: false,
             max_concurrent: None,
             team_id: None,
+            role: None,
+            host_heuristic: None,
             notes: String::new(),
             hostnames: Vec::new(),
             weles: None,

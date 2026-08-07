@@ -1,15 +1,294 @@
 {
   "coordinators": [
     {
-      "active": true,
+      "active": false,
       "host": "https://stado.wisent.com",
       "interval_seconds": 180,
       "name": "local-control-plane",
-      "notes": "Sole Rust Stado control plane. Runs on the registered local Mac target with cloud providers fenced and provider-neutral Stado API routes.",
+      "notes": "Legacy coordinator retained for explicit rollback.",
+      "runtime": "daemon",
+      "state_uri": "stado://system/registry"
+    },
+    {
+      "active": true,
+      "host_heuristic": "always-on",
+      "interval_seconds": 180,
+      "name": "charless-control-plane",
+      "notes": "Always-on coordinator selected from the registered local fleet.",
       "runtime": "daemon",
       "state_uri": "stado://system/registry"
     }
   ],
+  "release_control": {
+    "schema_version": 1,
+    "generation": 3,
+    "trusted_keys": {
+      "brama-release-2026-08": "cFrI/ww/EiwBp6HozLu6HH/IdSnUO+P2Xsqvg4vfXIU="
+    },
+    "products": {
+      "brama": {
+        "service": "brama",
+        "config_schema": 1,
+        "state_schema": 1,
+        "install_root": "/Users/charles/.stado/services/brama",
+        "binary": "bin/brama",
+        "launcher": "bin/start-with-skarbiec",
+        "binary_env": "BRAMA_BIN",
+        "port_env": "BRAMA_PORT_OVERRIDE",
+        "runtime_env": "BRAMA_RUNTIME_DIR",
+        "environment": {
+          "BRAMA_SERVICE_ENV_FILE": "{home}/.config/brama/service.env"
+        },
+        "strategy": {
+          "kind": "blue-green",
+          "readiness_timeout_seconds": 90,
+          "drain_timeout_seconds": 60,
+          "rollback_window_seconds": 300,
+          "automatic_rollback": true
+        },
+        "targets": {
+          "charless-mac-mini": {
+            "platform": "darwin-arm64",
+            "run_as_user": "charles",
+            "home": "/Users/charles",
+            "state_dir": "/Users/charles/.stado/release-state",
+            "runtime_root": "/Users/charles/.stado/run",
+            "logs_root": "/Users/charles/.stado/logs",
+            "stable_bind": "127.0.0.1:8080",
+            "candidate_ports": [
+              18080,
+              18081
+            ],
+            "readiness_path": "/health",
+            "legacy_launchd_label": "com.wisent.always-on.brama",
+            "legacy_launchd_plist": "/Library/LaunchDaemons/com.wisent.always-on.brama.plist"
+          }
+        },
+        "desired": {
+          "version": "0.2.2",
+          "channel": "stable",
+          "rollout_generation": 2,
+          "promoted_at": "2026-08-05T06:00:21.653112+00:00",
+          "artifacts": {
+            "darwin-arm64": {
+              "manifest_uri": "stado://releases/brama/0.2.2/darwin-arm64/release.json",
+              "signature_uri": "stado://releases/brama/0.2.2/darwin-arm64/release.sig",
+              "archive_uri": "stado://releases/brama/0.2.2/darwin-arm64/release.tar.gz",
+              "manifest_sha256": "45052b5d4124bc7329299ea94b97bf526114a01abd4e3a8c8278b1dd4a0d7b70",
+              "artifact_sha256": "119f93dd06634e9249eef8ae633d2bc02139c588f19fe05f1c7864224182c9ef",
+              "source_revision": "151ce0f907cc1e7b22a2c4e7356a4251444f4d42",
+              "key_id": "brama-release-2026-08"
+            }
+          }
+        },
+        "previous": {
+          "version": "0.2.2",
+          "channel": "candidate",
+          "rollout_generation": 1,
+          "promoted_at": "2026-08-05T05:14:24.115633+00:00",
+          "artifacts": {
+            "darwin-arm64": {
+              "manifest_uri": "stado://releases/brama/0.2.2/darwin-arm64/release.json",
+              "signature_uri": "stado://releases/brama/0.2.2/darwin-arm64/release.sig",
+              "archive_uri": "stado://releases/brama/0.2.2/darwin-arm64/release.tar.gz",
+              "manifest_sha256": "45052b5d4124bc7329299ea94b97bf526114a01abd4e3a8c8278b1dd4a0d7b70",
+              "artifact_sha256": "119f93dd06634e9249eef8ae633d2bc02139c588f19fe05f1c7864224182c9ef",
+              "source_revision": "151ce0f907cc1e7b22a2c4e7356a4251444f4d42",
+              "key_id": "brama-release-2026-08"
+            }
+          }
+        }
+      }
+    }
+  },
+  "service_directory": {
+    "authority": {
+      "target": "charless-mac-mini",
+      "command": "/Users/charles/.stado/bin/stado"
+    },
+    "generation": 4,
+    "services": {
+      "brama": {
+        "placement_profile": "brama-skarbiec",
+        "active_host": "charless-mac-mini",
+        "endpoints": {
+          "charless-mac-mini": {
+            "url": "http://127.0.0.1:8080"
+          },
+          "lukasz-macbook": {
+            "url": "http://127.0.0.1:8080"
+          }
+        },
+        "consumers": {
+          "operator": {
+            "capabilities": [
+              "model-routing"
+            ]
+          },
+          "weles": {
+            "capabilities": [
+              "model-routing"
+            ]
+          },
+          "wisent-backend": {
+            "capabilities": [
+              "model-routing"
+            ]
+          },
+          "brama-desktop": {
+            "capabilities": [
+              "model-routing"
+            ]
+          }
+        }
+      },
+      "skarbiec": {
+        "placement_profile": "brama-skarbiec",
+        "active_host": "charless-mac-mini",
+        "endpoints": {
+          "charless-mac-mini": {
+            "url": "http://127.0.0.1:8895"
+          },
+          "lukasz-macbook": {
+            "url": "http://127.0.0.1:8787"
+          }
+        },
+        "consumers": {
+          "brama": {
+            "capabilities": [
+              "secret-acquisition"
+            ]
+          },
+          "operator": {
+            "capabilities": [
+              "secret-acquisition"
+            ]
+          },
+          "weles": {
+            "capabilities": [
+              "secret-acquisition"
+            ]
+          },
+          "wisent-backend": {
+            "capabilities": [
+              "secret-acquisition"
+            ]
+          },
+          "brama-desktop": {
+            "capabilities": [
+              "secret-acquisition"
+            ]
+          }
+        }
+      },
+      "skarbiec-weles": {
+        "managed_service": "com.wisent.always-on.skarbiec-weles",
+        "active_host": "charless-mac-mini",
+        "endpoints": {
+          "charless-mac-mini": {
+            "url": "http://127.0.0.1:19095"
+          }
+        },
+        "consumers": {
+          "weles": {
+            "capabilities": [
+              "secret-acquisition"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "placement_profiles": [
+    {
+      "name": "brama-skarbiec",
+      "services": [
+        "brama",
+        "skarbiec"
+      ],
+      "stop_order": [
+        "brama",
+        "skarbiec"
+      ],
+      "start_order": [
+        "skarbiec",
+        "brama"
+      ],
+      "state": [
+        {
+          "path": ".stado/skarbiec.vault.json",
+          "required": true
+        },
+        {
+          "path": ".stado/skarbiec.vault.json.acquisitions.json",
+          "required": false
+        },
+        {
+          "path": ".stado/skarbiec.audit.jsonl",
+          "required": false
+        }
+      ],
+      "hosts": {
+        "charless-mac-mini": {
+          "units": {
+            "brama": {
+              "name": "com.wisent.always-on.brama",
+              "unit": "com.wisent.always-on.brama",
+              "path": "/Library/LaunchDaemons/com.wisent.always-on.brama.plist",
+              "kind": "launchd"
+            },
+            "skarbiec": {
+              "name": "com.wisent.always-on.skarbiec",
+              "unit": "com.wisent.always-on.skarbiec",
+              "path": "/Library/LaunchDaemons/com.wisent.always-on.skarbiec.plist",
+              "kind": "launchd"
+            }
+          },
+          "probes": [
+            {
+              "service": "skarbiec",
+              "url": "http://127.0.0.1:8895/health"
+            },
+            {
+              "service": "brama",
+              "url": "http://127.0.0.1:8080/health"
+            }
+          ]
+        },
+        "lukasz-macbook": {
+          "units": {
+            "brama": {
+              "name": "com.wisent.compute.service.com.wisent.brama",
+              "unit": "com.wisent.compute.service.com.wisent.brama",
+              "path": "/Users/lukaszbartoszcze/Library/LaunchAgents/com.wisent.compute.service.com.wisent.brama.plist",
+              "kind": "launchd"
+            },
+            "skarbiec": {
+              "name": "com.wisent.skarbiec",
+              "unit": "com.wisent.skarbiec",
+              "path": "/Users/lukaszbartoszcze/Library/LaunchAgents/com.wisent.skarbiec.plist",
+              "kind": "launchd"
+            }
+          },
+          "probes": [
+            {
+              "service": "skarbiec",
+              "url": "http://127.0.0.1:8787/health"
+            },
+            {
+              "service": "brama",
+              "url": "http://127.0.0.1:8080/health"
+            }
+          ]
+        }
+      },
+      "routing": []
+    }
+  ],
+  "inference": {
+    "deployments": [],
+    "routes": {}
+  },
   "schema_version": 2,
   "targets": [
     {
@@ -36,20 +315,87 @@
       ],
       "kind": "local",
       "name": "charless-mac-mini",
-      "notes": "Primary Weles browser worker; placement is controlled by this policy.",
+      "notes": "Always-on Mac mini for Weles, Skarbiec, Brama, and the Stado control plane.",
       "ssh": "charles@100.120.25.24",
+      "host_heuristic": "always-on",
+      "role": "always-on",
+      "service_resolver": {
+        "api_bind": "127.0.0.1:17600",
+        "refresh_seconds": 5,
+        "max_stale_seconds": 15,
+        "adapters": [
+          {
+            "service": "brama",
+            "bind": "127.0.0.1:17601",
+            "consumer": "weles"
+          },
+          {
+            "service": "skarbiec",
+            "bind": "127.0.0.1:17602",
+            "consumer": "operator"
+          },
+          {
+            "service": "skarbiec-weles",
+            "bind": "127.0.0.1:17613",
+            "consumer": "weles"
+          },
+          {
+            "service": "skarbiec",
+            "bind": "127.0.0.1:17612",
+            "consumer": "brama"
+          },
+          {
+            "service": "brama",
+            "bind": "127.0.0.1:17621",
+            "consumer": "brama-desktop"
+          },
+          {
+            "service": "skarbiec",
+            "bind": "127.0.0.1:17622",
+            "consumer": "brama-desktop"
+          }
+        ]
+      },
       "weles": {
         "actions": [],
-        "enabled": false
+        "enabled": true
       },
       "services": [
         {
-          "name": "com.wisent.weles-api",
+          "name": "com.wisent.always-on.skarbiec",
           "unit": "",
-          "label": "com.wisent.weles-api",
-          "path": "$HOME/Library/LaunchAgents/com.wisent.weles-api.plist",
+          "label": "com.wisent.always-on.skarbiec",
+          "path": "/Library/LaunchDaemons/com.wisent.always-on.skarbiec.plist",
           "kind": "launchd",
-          "managed_since": ""
+          "managed_since": "2026-08-04T00:35:49.438547+00:00",
+          "host_heuristic": "always-on"
+        },
+        {
+          "name": "com.wisent.always-on.skarbiec-weles",
+          "unit": "",
+          "label": "com.wisent.always-on.skarbiec-weles",
+          "path": "/Library/LaunchDaemons/com.wisent.always-on.skarbiec-weles.plist",
+          "kind": "launchd",
+          "managed_since": "2026-08-04T01:03:51Z",
+          "host_heuristic": "always-on"
+        },
+        {
+          "name": "com.wisent.always-on.weles",
+          "unit": "",
+          "label": "com.wisent.always-on.weles",
+          "path": "/Library/LaunchDaemons/com.wisent.always-on.weles.plist",
+          "kind": "launchd",
+          "managed_since": "2026-08-04T00:36:01.183071+00:00",
+          "host_heuristic": "always-on"
+        },
+        {
+          "name": "com.wisent.always-on.brama",
+          "unit": "",
+          "label": "com.wisent.always-on.brama",
+          "path": "/Library/LaunchDaemons/com.wisent.always-on.brama.plist",
+          "kind": "launchd",
+          "managed_since": "2026-08-04T00:36:09.627166+00:00",
+          "host_heuristic": "always-on"
         }
       ],
       "pinned_only": true
@@ -77,11 +423,31 @@
       "name": "ubuntu-server-rtx-pro-6000",
       "notes": "Operator RTX PRO 6000 workstation. External workloads, including ComfyUI, remain protected by default; local jobs use admission v2 accounting.",
       "slots": 2,
-      "vram_gb": 95
+      "ssh": "root@100.126.122.108",
+      "vram_gb": 95,
+      "role": "burst",
+      "service_resolver": {
+        "api_bind": "127.0.0.1:17600",
+        "refresh_seconds": 5,
+        "max_stale_seconds": 15,
+        "adapters": [
+          {
+            "service": "brama",
+            "bind": "127.0.0.1:17601",
+            "consumer": "wisent-backend"
+          },
+          {
+            "service": "skarbiec",
+            "bind": "127.0.0.1:17602",
+            "consumer": "wisent-backend"
+          }
+        ]
+      }
     },
     {
       "name": "lukasz-macbook",
       "kind": "local",
+      "ssh": "lukaszbartoszcze@100.81.156.67",
       "hostnames": [
         "lukaszs-macbook-pro-5485.local"
       ],
@@ -97,6 +463,34 @@
         "max_items_per_pass": 50,
         "max_scan_items": 10000,
         "cleaners": {}
+      },
+      "role": "interactive",
+      "service_resolver": {
+        "api_bind": "127.0.0.1:17600",
+        "refresh_seconds": 5,
+        "max_stale_seconds": 15,
+        "adapters": [
+          {
+            "service": "brama",
+            "bind": "127.0.0.1:17601",
+            "consumer": "operator"
+          },
+          {
+            "service": "skarbiec",
+            "bind": "127.0.0.1:17602",
+            "consumer": "operator"
+          },
+          {
+            "service": "brama",
+            "bind": "127.0.0.1:17621",
+            "consumer": "brama-desktop"
+          },
+          {
+            "service": "skarbiec",
+            "bind": "127.0.0.1:17622",
+            "consumer": "brama-desktop"
+          }
+        ]
       }
     }
   ]

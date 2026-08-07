@@ -139,7 +139,9 @@ impl AlertChannels {
                 .map(str::to_string)
         };
 
-        let slack_webhook = is_enabled("slack").then(|| secret("slack_webhook")).flatten();
+        let slack_webhook = is_enabled("slack")
+            .then(|| secret("slack_webhook"))
+            .flatten();
         let telegram = if is_enabled("telegram") {
             match (secret("telegram_bot_token"), secret("telegram_chat_id")) {
                 (Some(token), Some(chat_id)) => Some(TelegramChannel {
@@ -221,7 +223,11 @@ async fn resolve_most(phone: Option<String>) -> Option<MostChannel> {
             .filter(|value| !value.is_empty())
             .map(str::to_string)
     };
-    match (field("account_sid"), field("auth_token"), field("api_version")) {
+    match (
+        field("account_sid"),
+        field("auth_token"),
+        field("api_version"),
+    ) {
         (Some(account_sid), Some(auth_token), Some(api_version)) => Some(MostChannel {
             phone,
             account_sid,

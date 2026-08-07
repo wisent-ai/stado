@@ -370,6 +370,131 @@ fn target_identities(
     Ok(identities)
 }
 
+fn is_product_identifier(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() <= 128
+        && bytes.first().is_some_and(u8::is_ascii_alphabetic)
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+fn validate_service_onboarding(
+    target: &Map<String, Value>,
+    location: &str,
+) -> Result<(), RegistryValidationError> {
+    let Some(services) = target.get("services") else {
+        return Ok(());
+    };
+    let services = services
+        .as_array()
+        .ok_or_else(|| verr(&format!("{location}.services"), "must be an array"))?;
+    for (index, service) in services.iter().enumerate() {
+        let service_location = format!("{location}.services[{index}]");
+        let service = service
+            .as_object()
+            .ok_or_else(|| verr(&service_location, "must be an object"))?;
+        let Some(onboarding) = service.get("onboarding") else {
+            continue;
+        };
+        let onboarding_location = format!("{service_location}.onboarding");
+        let onboarding = onboarding
+            .as_object()
+            .ok_or_else(|| verr(&onboarding_location, "must be an object"))?;
+        const KEYS: [&str; 7] = [
+            "display_name",
+            "first_success_fact",
+            "onboarding_kind",
+            "product_id",
+            "repository",
+            "status",
+            "surface_kinds",
+        ];
+        let keys: HashSet<&str> = onboarding.keys().map(String::as_str).collect();
+        if keys != KEYS.into_iter().collect() {
+            return Err(verr(
+                &onboarding_location,
+                &format!("must contain exactly {}", py_list_repr(&KEYS)),
+            ));
+        }
+        for field in ["product_id", "first_success_fact"] {
+            if !onboarding[field]
+                .as_str()
+                .is_some_and(is_product_identifier)
+            {
+                return Err(verr(
+                    &format!("{onboarding_location}.{field}"),
+                    "must be a product identifier",
+                ));
+            }
+        }
+        if !onboarding["display_name"]
+            .as_str()
+            .is_some_and(|value| !value.trim().is_empty() && value.len() <= 512)
+        {
+            return Err(verr(
+                &format!("{onboarding_location}.display_name"),
+                "must be a non-empty string of at most 512 bytes",
+            ));
+        }
+        let repository_ok = onboarding["repository"].as_str().is_some_and(|value| {
+            let mut parts = value.split('/');
+            let valid = |part: &str| {
+                !part.is_empty()
+                    && part.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
+                    })
+            };
+            matches!((parts.next(), parts.next(), parts.next()), (Some(owner), Some(repo), None) if valid(owner) && valid(repo))
+        });
+        if !repository_ok {
+            return Err(verr(
+                &format!("{onboarding_location}.repository"),
+                "must be an owner/repository identifier",
+            ));
+        }
+        let surfaces = onboarding["surface_kinds"]
+            .as_array()
+            .ok_or_else(|| verr(&format!("{onboarding_location}.surface_kinds"), "must be an array"))?;
+        const SURFACES: [&str; 10] = [
+            "web", "ios", "android", "macos", "desktop", "cli", "api", "worker", "operator",
+            "python",
+        ];
+        let mut seen = HashSet::new();
+        if surfaces.is_empty()
+            || surfaces.iter().any(|surface| {
+                !surface
+                    .as_str()
+                    .is_some_and(|value| SURFACES.contains(&value) && seen.insert(value))
+            })
+        {
+            return Err(verr(
+                &format!("{onboarding_location}.surface_kinds"),
+                "must contain unique supported surfaces",
+            ));
+        }
+        if !matches!(
+            onboarding["onboarding_kind"].as_str(),
+            Some("human" | "machine" | "both")
+        ) {
+            return Err(verr(
+                &format!("{onboarding_location}.onboarding_kind"),
+                "must be human, machine, or both",
+            ));
+        }
+        if !matches!(
+            onboarding["status"].as_str(),
+            Some("planned" | "active" | "archived")
+        ) {
+            return Err(verr(
+                &format!("{onboarding_location}.status"),
+                "must be planned, active, or archived",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Validate a registry-v2 document without modifying it. Python returns the
 /// input dict; here the borrowed input simply remains valid on `Ok(())`.
 pub fn validate_registry(data: &Value) -> Result<(), RegistryValidationError> {
@@ -393,6 +518,8 @@ pub fn validate_registry(data: &Value) -> Result<(), RegistryValidationError> {
 
     let mut names: HashSet<&str> = HashSet::new();
     let mut identities: HashMap<String, String> = HashMap::new();
+    let mut target_heuristics: HashMap<&str, &str> = HashMap::new();
+    let mut coordinator_heuristics: HashSet<&str> = HashSet::new();
     let valid_kinds =
         crate::capabilities::configurable_ids(crate::capabilities::RuntimeFacet::HostTarget)
             .collect::<Vec<_>>();
@@ -425,6 +552,65 @@ pub fn validate_registry(data: &Value) -> Result<(), RegistryValidationError> {
                 &format!("{location}.kind"),
                 &format!("must be one of {}", py_list_repr(&valid_kinds)),
             ));
+        }
+        if let Some(role) = target.get("role") {
+            if !role.as_str().is_some_and(is_target_name) {
+                return Err(verr(
+                    &format!("{location}.role"),
+                    "must be a lowercase target identifier",
+                ));
+            }
+        }
+        if let Some(heuristic) = target.get("host_heuristic") {
+            let heuristic_location = format!("{location}.host_heuristic");
+            let Some(heuristic) = heuristic.as_str() else {
+                return Err(verr(&heuristic_location, "must be a string"));
+            };
+            if heuristic != "always-on" {
+                return Err(verr(
+                    &heuristic_location,
+                    "must be the supported selector 'always-on'",
+                ));
+            }
+            if !crate::capabilities::ProviderId::Local.matches(kind) {
+                return Err(verr(
+                    &heuristic_location,
+                    "is allowed only for kind='local'",
+                ));
+            }
+            if let Some(previous) = target_heuristics.insert(heuristic, name) {
+                return Err(verr(
+                    &heuristic_location,
+                    &format!("selector '{heuristic}' is already declared by target '{previous}'"),
+                ));
+            }
+        }
+
+        if let Some(services) = target.get("services") {
+            let services_location = format!("{location}.services");
+            let services = services
+                .as_array()
+                .ok_or_else(|| verr(&services_location, "must be an array"))?;
+            for (service_index, service) in services.iter().enumerate() {
+                let service_location = format!("{services_location}[{service_index}]");
+                let service = service
+                    .as_object()
+                    .ok_or_else(|| verr(&service_location, "must be an object"))?;
+                if let Some(heuristic) = service.get("host_heuristic") {
+                    let heuristic = heuristic.as_str().ok_or_else(|| {
+                        verr(
+                            &format!("{service_location}.host_heuristic"),
+                            "must be a string",
+                        )
+                    })?;
+                    if target.get("host_heuristic").and_then(Value::as_str) != Some(heuristic) {
+                        return Err(verr(
+                            &format!("{service_location}.host_heuristic"),
+                            "must match the containing target's host_heuristic",
+                        ));
+                    }
+                }
+            }
         }
 
         if let Some(weles) = target.get("weles") {
@@ -470,6 +656,7 @@ pub fn validate_registry(data: &Value) -> Result<(), RegistryValidationError> {
                 }
             }
         }
+        validate_service_onboarding(target, &location)?;
 
         if let Some(cleanup) = target.get("disk_cleanup") {
             if !crate::capabilities::ProviderId::Local.matches(kind) {
@@ -491,6 +678,47 @@ pub fn validate_registry(data: &Value) -> Result<(), RegistryValidationError> {
             identities.insert(identity, identity_location);
         }
     }
+    if let Some(coordinators) = root.get("coordinators") {
+        let coordinators = coordinators
+            .as_array()
+            .ok_or_else(|| verr("registry.coordinators", "must be an array"))?;
+        for (index, coordinator) in coordinators.iter().enumerate() {
+            let location = format!("registry.coordinators[{index}]");
+            let coordinator = coordinator
+                .as_object()
+                .ok_or_else(|| verr(&location, "must be an object"))?;
+            let Some(heuristic) = coordinator.get("host_heuristic") else {
+                continue;
+            };
+            let heuristic = heuristic
+                .as_str()
+                .ok_or_else(|| verr(&format!("{location}.host_heuristic"), "must be a string"))?;
+            if coordinator.get("host").is_some_and(|host| !host.is_null()) {
+                return Err(verr(
+                    &location,
+                    "must not declare both host and host_heuristic",
+                ));
+            }
+            if !target_heuristics.contains_key(heuristic) {
+                return Err(verr(
+                    &format!("{location}.host_heuristic"),
+                    &format!("matches no local target: '{heuristic}'"),
+                ));
+            }
+            if !coordinator_heuristics.insert(heuristic) {
+                return Err(verr(
+                    &format!("{location}.host_heuristic"),
+                    &format!("selector '{heuristic}' is already used by another coordinator"),
+                ));
+            }
+        }
+    }
+
+    crate::placement::validate_registry_contract(data).map_err(RegistryValidationError)?;
+    crate::service_resolution::validate_registry_contract(data).map_err(RegistryValidationError)?;
+    crate::release_control::validate_registry_contract(data).map_err(RegistryValidationError)?;
+
+    crate::inference::schema::validate(data).map_err(RegistryValidationError)?;
     Ok(())
 }
 
@@ -748,6 +976,12 @@ pub struct ComputeTarget {
     pub max_concurrent: Option<i64>,
     #[serde(default)]
     pub team_id: Option<i64>,
+    /// Stable placement class used by operators and service declarations.
+    #[serde(default)]
+    pub role: Option<String>,
+    /// Declarative selector resolved to exactly one local target.
+    #[serde(default)]
+    pub host_heuristic: Option<String>,
     #[serde(default)]
     pub notes: String,
     #[serde(default, deserialize_with = "de_null_as_default")]
@@ -825,6 +1059,10 @@ pub struct Coordinator {
     /// ssh user@host for daemon/cron, None = local.
     #[serde(default)]
     pub host: Option<String>,
+    /// Resolve this coordinator onto the unique local target carrying the
+    /// same declarative placement selector.
+    #[serde(default)]
+    pub host_heuristic: Option<String>,
     #[serde(default = "default_interval_seconds")]
     pub interval_seconds: i64,
     #[serde(default = "default_state_uri")]
@@ -1557,10 +1795,26 @@ impl Registry {
             .filter(|target| target.is_provider(crate::capabilities::ProviderId::Local))
             .collect()
     }
+    /// Return the unique local target selected by a validated placement
+    /// heuristic.
+    pub fn lookup_host_heuristic(&self, heuristic: &str) -> Option<&ComputeTarget> {
+        self.targets
+            .iter()
+            .find(|target| target.host_heuristic.as_deref() == Some(heuristic))
+    }
 
     /// Return the named coordinator entry.
     pub fn lookup_coordinator(&self, name: &str) -> Option<&Coordinator> {
         self.coordinators.iter().find(|c| c.name == name)
+    }
+    /// Resolve an operator selector as an exact coordinator name first, then
+    /// as its declarative host placement.
+    pub fn lookup_coordinator_selector(&self, selector: &str) -> Option<&Coordinator> {
+        self.lookup_coordinator(selector).or_else(|| {
+            self.coordinators
+                .iter()
+                .find(|coordinator| coordinator.host_heuristic.as_deref() == Some(selector))
+        })
     }
 
     /// The directory entry for a service, when the registry carries one.
@@ -1637,10 +1891,13 @@ mod tests {
     fn bundled_registry_loads() {
         let registry = load_bundled_registry().unwrap();
         assert_eq!(registry.local_targets().len(), registry.targets.len());
-        let coordinator = registry.lookup_coordinator("local-control-plane").unwrap();
-        assert!(coordinator.active);
-        assert_eq!(coordinator.runtime, "daemon");
-        assert_eq!(coordinator.state_uri, "stado://system/registry");
+        let legacy = registry.lookup_coordinator("local-control-plane").unwrap();
+        assert!(!legacy.active);
+        assert_eq!(legacy.runtime, "daemon");
+        assert_eq!(legacy.state_uri, "stado://system/registry");
+        let active = registry.lookup_coordinator_selector("always-on").unwrap();
+        assert!(active.active);
+        assert_eq!(active.name, "charless-control-plane");
 
         let workstation = registry.lookup("ubuntu-server-rtx-pro-6000").unwrap();
         assert_eq!(workstation.kind, "local");

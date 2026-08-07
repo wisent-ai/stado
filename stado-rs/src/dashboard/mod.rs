@@ -827,11 +827,23 @@ impl Dashboard {
             Err(response) => return Ok(response),
         };
         let path = object.storage_path();
-        let Some(bytes) = self.store.read_bytes(&path).await? else {
-            return Ok(send_json(
-                http_status("404"),
-                &json!({"state": "absent", "uri": object.to_string()}),
-            ));
+        let versioned = query_value(&parse_qs(query), "versioned").as_deref() == Some("true");
+        let (bytes, version) = if versioned {
+            let Some(value) = self.store.read_text_versioned(&path).await? else {
+                return Ok(send_json(
+                    http_status("404"),
+                    &json!({"state": "absent", "uri": object.to_string()}),
+                ));
+            };
+            (value.content.into_bytes(), Some(value.version))
+        } else {
+            let Some(bytes) = self.store.read_bytes(&path).await? else {
+                return Ok(send_json(
+                    http_status("404"),
+                    &json!({"state": "absent", "uri": object.to_string()}),
+                ));
+            };
+            (bytes, None)
         };
         let metadata = self
             .store
@@ -870,12 +882,16 @@ impl Dashboard {
                 ],
             ));
         }
+        let mut headers = vec![("Accept-Ranges", "bytes".to_string())];
+        if let Some(version) = version {
+            headers.push(("X-Stado-Version", version));
+        }
         Ok(Response::new_with_headers(
             http_status("200"),
             "OK",
             content_type,
             &bytes,
-            &[("Accept-Ranges", "bytes".to_string())],
+            &headers,
         ))
     }
 
@@ -1206,7 +1222,79 @@ impl Dashboard {
     ) -> Result<Response, DashboardError> {
         let values = parse_qs(query);
         let if_absent = query_value(&values, "if_absent").as_deref() == Some("true");
+        let if_version = query_value(&values, "if_version").filter(|value| !value.is_empty());
+        let metadata_only = query_value(&values, "metadata_only").as_deref() == Some("true");
+        let selected =
+            usize::from(if_absent) + usize::from(if_version.is_some()) + usize::from(metadata_only);
+        if selected > 1 {
+            return Ok(send_json(
+                http_status("400"),
+                &json!({"error": "if_absent, if_version, and metadata_only are mutually exclusive"}),
+            ));
+        }
         let path = object.storage_path();
+        if metadata_only {
+            if !self.store.backend().exists(&path).await? {
+                return Ok(send_json(
+                    http_status("404"),
+                    &json!({"state": "absent", "uri": object.to_string()}),
+                ));
+            }
+            let metadata: std::collections::BTreeMap<String, String> =
+                match serde_json::from_slice(&request.body) {
+                    Ok(metadata) => metadata,
+                    Err(error) => {
+                        return Ok(send_json(
+                            http_status("400"),
+                            &json!({"error": format!("invalid metadata: {error}")}),
+                        ))
+                    }
+                };
+            self.store.backend().set_metadata(&path, &metadata).await?;
+            return Ok(send_json(
+                http_status("200"),
+                &json!({"state": "metadata-updated", "uri": object.to_string()}),
+            ));
+        }
+        if let Some(expected_version) = if_version {
+            let content = match std::str::from_utf8(&request.body) {
+                Ok(content) => content,
+                Err(error) => {
+                    return Ok(send_json(
+                        http_status("400"),
+                        &json!({"error": format!("conditional object writes require UTF-8: {error}")}),
+                    ))
+                }
+            };
+            let version = match self
+                .store
+                .compare_and_swap_text(&path, &expected_version, content)
+                .await
+            {
+                Ok(version) => version,
+                Err(StorageError::StorageConflict(_)) => {
+                    return Ok(send_json(
+                        http_status("409"),
+                        &json!({"error": "object version changed", "uri": object.to_string()}),
+                    ))
+                }
+                Err(StorageError::NotFound(_)) => {
+                    return Ok(send_json(
+                        http_status("404"),
+                        &json!({"state": "absent", "uri": object.to_string()}),
+                    ))
+                }
+                Err(error) => return Err(error.into()),
+            };
+            return Ok(send_json(
+                http_status("200"),
+                &json!({
+                    "state": "stored",
+                    "uri": object.to_string(),
+                    "version": version,
+                }),
+            ));
+        }
         if if_absent {
             let mut source = tempfile::NamedTempFile::new()?;
             source.write_all(&request.body)?;
