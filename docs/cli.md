@@ -411,7 +411,7 @@ deployment that needed it.
 | `stado registry pull` | Print the canonical registry to stdout. |
 | `stado registry self [--name-only]` | Which registry target this machine is. |
 | `stado registry doctor [--json]` | Diff registry declarations against live host state. Exits non-zero on any divergence. |
-| `stado registry host add HOST --ssh DEST [--kind local]` | Onboard a machine into the registry, validated, refusing duplicates. |
+| `stado registry host add HOST --ssh DEST --kind KIND` | Declare a provider-managed non-local target. Local targets are refused; use `stado_fleet enroll NAME --ssh DEST`. |
 | `stado registry beacon-age [--json]` | Every registry host and its last beacon, worst first. |
 
 ### `stado registry doctor`
@@ -690,6 +690,46 @@ honour-system flag; `stado queue drain --wait` returning zero is what
 makes it true. Copying a live queue produces split-brain — a job claimed
 from the old store, written to the new one, and reaped from neither.
 
+## `stado alerts`
+
+`doctor` reports whether an alert channel *resolves*. Nothing could make one
+deliver on purpose, so a deployment could pass preflight holding a key the
+provider had already rejected — which is exactly what this one did, with the
+dead key sitting in an item called `RESEND_API_KEY`.
+
+| Subcommand | Behavior |
+|---|---|
+| `channels [--json]` | Which channels resolved, and the destination each one would page. No secret is printed. |
+| `send MESSAGE [--subject TEXT]` | Fan one message out through exactly those channels; every per-channel outcome prints as an `[alert]` line. |
+
+```bash
+stado alerts channels
+# resend  ops@example.com from alerts@verified.example.com
+stado alerts send "paging test from $(hostname)"
+# [alert] Email sent
+```
+
+Channel material and the `alerts.*` config keys are in
+[configuration.md](configuration.md).
+
+## `stado config set KEY VALUE`
+
+`show`, `validate`, `init` and `migrate` read or create the config document;
+`set` changes one dotted key in it. `VALUE` is parsed as JSON when it parses,
+so lists and booleans keep their type and a bare word is stored as a string.
+
+The new document is validated before anything is written and the write is
+atomic, so a rejected value leaves the running configuration untouched:
+
+```bash
+stado config set alerts.channels '["resend"]'
+stado config set alerts.email_to ops@example.com
+```
+
+Enabling a channel, pointing a URL at a live listener or naming a destination
+used to mean hand-editing the deployment's JSON, which is how one deployment
+ended up with a literal `\n` inside a URL.
+
 ## `stado service`
 
 Full service management for the units registry hosts run. The group exists
@@ -702,6 +742,8 @@ an arbitrary, per-host, declared set.
 |---|---|
 | `list [--json]` | Every managed service on every host, with its state. |
 | `status NAME [--json]` | One service everywhere it is managed. |
+| `probe NAME [--host TARGET] [--json]` | Query the registered unit directly; read-only. |
+| `resolve NAME [--json]` | Return exactly one fresh, active placement or fail closed. |
 | `restart NAME [--host TARGET] [--json]` | Restart one unit; no recovery pass. |
 | `adopt UNIT --host TARGET [--json]` | Bring an existing unit under management. |
 | `retire UNIT --host TARGET [--json]` | Bootout/disable and forget; files kept. |
@@ -745,9 +787,18 @@ being the broken thing.
 is not the same fact as a vanished unit, and treating them alike is how a
 dead box reads as a healthy one.
 
+`resolve` applies a stricter policy to the same stored evidence: exactly one
+matching service must report `active` in a fresh beacon. It performs no host
+round trip and returns the selected registry host.
+
+`probe` answers the different live question. It contacts each selected host
+through Stado's approved channel, checks the exact registered unit path and
+init-system identity, and reports `file_state` plus `unit_state`. It does not
+start, stop, adopt, retire, or rewrite the service or registry.
+
 ### Everything else rides one ssh channel
 
-`restart`, `adopt`, `retire`, `deploy`, `logs` and `env` go through
+`probe`, `restart`, `adopt`, `retire`, `deploy`, `logs` and `env` go through
 `deploy/host_channel.rs`, whose option set is derived from `host reboot`'s
 rather than re-typed (`BatchMode=yes`, `ConnectTimeout`,
 `StrictHostKeyChecking=accept-new`). The remote program is fixed per
