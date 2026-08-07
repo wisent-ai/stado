@@ -159,6 +159,15 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               tokens or passwords",
     },
     ApprovedCommand {
+        argv: &["/usr/bin/dscl", ".", "-list", "/Users"],
+        why: "lists the local account names on the host. An identity binding may name a user \
+              other than the login user, and `defaults read` answers only for whoever the \
+              channel logs in as, so such a binding reports unknown forever. Whether that user \
+              exists at all is the question that separates a real gap from a declaration \
+              nobody can ever satisfy. `.` is the local node, `-list` is the read-only verb, \
+              and account names are not secrets",
+    },
+    ApprovedCommand {
         argv: &[
             "/usr/sbin/sysctl",
             "-n",
