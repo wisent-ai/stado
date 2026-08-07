@@ -11,7 +11,7 @@ mod channel;
 pub use channel::channel_argv;
 pub mod rotate;
 
-use serde_json::{json, Value};
+use serde_json::json;
 use stado::deploy::{CommandSpec, Runner};
 use stado::skarbiec::Client;
 
@@ -114,10 +114,17 @@ pub async fn add(runner: &Runner, target: &str, from: &str) -> Result<bool, Stri
         )
         .await
         .map_err(|exc| exc.to_string())?;
-    let stored = client.read_item(&id).await.map_err(|exc| exc.to_string())?;
-    let verified = stored.get("private_key").and_then(Value::as_str) == Some(private_key.trim())
-        && stored.get("public_key").and_then(Value::as_str) == Some(public_key.trim())
-        && stored.get("fingerprint").and_then(Value::as_str) == Some(fingerprint.as_str());
+    // Read back the three fields by name: a broker that requires a named
+    // field refuses the whole-item form, and this verification is the only
+    // thing standing between a half-written key and a deleted source file.
+    let read_back = |field: &'static str| {
+        let client = &client;
+        let id = id.clone();
+        async move { client.read_string(&id, field).await.ok().flatten() }
+    };
+    let verified = read_back("private_key").await.as_deref() == Some(private_key.trim())
+        && read_back("public_key").await.as_deref() == Some(public_key.trim())
+        && read_back("fingerprint").await.as_deref() == Some(fingerprint.as_str());
     if !verified {
         let _ = client.delete_item(&id).await;
         return Err(format!(
@@ -149,18 +156,16 @@ pub async fn ls() -> Result<bool, String> {
         if !item.id.starts_with(ITEM_PREFIX) {
             continue;
         }
-        let document = client
-            .read_item(&item.id)
-            .await
-            .map_err(|exc| exc.to_string())?;
-        let fingerprint = document
-            .get("fingerprint")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let key_type = document
-            .get("key_type")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        // Two named fields, never the private one: a broker that requires a
+        // named field refuses the whole-item form, and `ls` must not pull a
+        // private key into memory to print a fingerprint.
+        let field = |name: &'static str| {
+            let client = &client;
+            let id = item.id.clone();
+            async move { client.read_string(&id, name).await.ok().flatten() }
+        };
+        let fingerprint = field("fingerprint").await.unwrap_or_default();
+        let key_type = field("key_type").await.unwrap_or_default();
         shown.push(format!("{}\t{}\t{}", item.id, key_type, fingerprint));
     }
     if shown.is_empty() {
@@ -188,13 +193,10 @@ pub async fn rm(target: &str) -> Result<bool, String> {
 /// authorized_keys through the existing credential-store-backed channel.
 pub async fn install(runner: &Runner, target: &str) -> Result<bool, String> {
     let client = configured_client()?;
-    let document = client
-        .read_item(&item_id(target))
+    let public_key = client
+        .read_string(&item_id(target), "public_key")
         .await
-        .map_err(|exc| exc.to_string())?;
-    let public_key = document
-        .get("public_key")
-        .and_then(Value::as_str)
+        .map_err(|exc| exc.to_string())?
         .ok_or_else(|| {
             format!(
                 "credential item {} has no public_key field",
@@ -211,7 +213,7 @@ pub async fn install(runner: &Runner, target: &str) -> Result<bool, String> {
         .ssh
         .as_deref()
         .ok_or_else(|| format!("target '{target}' has no remote channel (ssh=null)"))?;
-    let line = authorized_keys_line(public_key, &item_id(target));
+    let line = authorized_keys_line(&public_key, &item_id(target));
     let command = format!(
         "mkdir -p \"$HOME/.ssh\" && touch \"$HOME/.ssh/authorized_keys\" && grep -qF '{line}' \"$HOME/.ssh/authorized_keys\" || echo '{line}' >> \"$HOME/.ssh/authorized_keys\""
     );
