@@ -756,10 +756,17 @@ async fn update(
             ))
         }
     };
+    // A unit pinned to a version directory never sees an install: `current`
+    // moves and the job keeps executing the path it was rendered with, so the
+    // deployment reports success and the machine runs what it ran before. Point
+    // it at `current`, which is what makes a later install or a rollback a
+    // relink rather than a redeploy.
+    let followed = follow_current(&target, declared, directory, &runner).await?;
     if json {
         print_json(&json!({
             "host": host,
             "service": name,
+            "unit_repointed": followed,
             "version": installed.version,
             "sha256": installed.sha256,
             "status": "updated",
@@ -1664,4 +1671,60 @@ fi
 /bin/ln -sfn "$target" "$root/.current.new"
 /bin/mv -f "$root/.current.new" "$root/current"
 printf '%s\n' "$target"
+"#;
+
+/// Make the unit execute through `current`, if it was rendered against a
+/// version directory instead.
+///
+/// Returns whether anything had to change.
+async fn follow_current(
+    target: &crate::targets::ComputeTarget,
+    declared: &crate::deploy::service::ManagedService,
+    directory: &str,
+    runner: &crate::deploy::Runner,
+) -> Result<bool, CmdError> {
+    let report = service::show_service(target, declared, runner)
+        .await
+        .map_err(click)?;
+    let program = report.detail.trim();
+    let marker = format!("/services/{directory}/");
+    let Some((root, rest)) = program.split_once(&marker) else {
+        return Ok(false);
+    };
+    let Some((segment, tail)) = rest.split_once('/') else {
+        return Ok(false);
+    };
+    if segment == "current" {
+        return Ok(false);
+    }
+    let wanted = format!("{root}{marker}current/{tail}");
+    let script = format!(
+        "set -euo pipefail\nunit_path={}\nwanted={}\n{REPOINT_BODY}",
+        crate::deploy::shlex_quote(&declared.path),
+        crate::deploy::shlex_quote(&wanted),
+    );
+    let output = host_channel::run_script(target, &script, runner)
+        .await
+        .map_err(click)?;
+    if !output.ok() {
+        return Err(CmdError::click(format!(
+            "{}: installed the version but could not point {} at current: {}",
+            target.name,
+            declared.unit_id(),
+            host_channel::last_error_line(&output, "repoint failed")
+        )));
+    }
+    Ok(true)
+}
+
+const REPOINT_BODY: &str = r#"
+[ -f "$unit_path" ] || { printf '%s
+' "no unit file at $unit_path" >&2; exit 1; }
+case "$unit_path" in
+  /Library/*) sudo_prefix="/usr/bin/sudo -n" ;;
+  *) sudo_prefix="" ;;
+esac
+$sudo_prefix /usr/libexec/PlistBuddy -c "Set :ProgramArguments:0 $wanted" "$unit_path"   || $sudo_prefix /usr/libexec/PlistBuddy -c "Set :Program $wanted" "$unit_path"
+printf '%s
+' "$wanted"
 "#;
