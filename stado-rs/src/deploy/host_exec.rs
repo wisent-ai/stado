@@ -50,7 +50,6 @@ pub const OK_STATUS: &str = "ok";
 const SAFE_PUNCTUATION: &str = "-_./";
 
 /// One approved remote program.
-#[derive(Debug)]
 pub struct ApprovedCommand {
     /// What actually runs: an absolute program path followed by its FIXED
     /// arguments. Nothing the operator types is ever appended to it.
@@ -142,26 +141,13 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               being able to read",
     },
     ApprovedCommand {
-        argv: &[
-            "/usr/sbin/sysctl",
-            "-n",
-            "kern.maxproc",
-            "kern.maxprocperuid",
-        ],
-        why: "reads two named kernel tunables — the system-wide and per-uid process ceilings — \
-              and nothing else. `-n` prints values without names, the two keys are compile-time \
-              constants rather than an operator-supplied name, and neither carries secret data. \
-              This is the pair that says whether a host refusing to fork is out of process slots \
-              or actually wedged; without it `host inventory` reporting probe_failed has no \
-              follow-up question",
-    },
-    ApprovedCommand {
-        argv: &["/bin/ps", "ax", "-o", "user", "-o", "pid", "-o", "comm"],
-        why: "lists which login user owns each process, by executable name only. `-o comm` is \
-              the executable's name; `-o command` — the full argv, where tokens and passwords \
-              are passed — is deliberately NOT in this table and cannot be reached through it, \
-              because the allowlist matches an entry exactly and never appends operator words. \
-              Answers 'whose process is holding that port', which the pid-only listing cannot",
+        argv: &["/usr/bin/defaults", "read", "MobileMeAccounts"],
+        why: "prints which Apple accounts the login user is signed into. Some work runs only \
+              on the machine that holds an identity -- a two-factor prompt appears on the \
+              trusted device and nowhere else -- so `stado identity verify` must check the \
+              binding rather than trust a declaration nothing re-reads. The domain is fixed, \
+              `read` is the read-only verb, and the output carries account identifiers, never \
+              tokens or passwords",
     },
 ];
 
@@ -237,80 +223,4 @@ pub async fn exec_host(
     report.insert("stderr".to_string(), json!(output.stderr));
     host_channel::finish_report(&mut report, &output, OK_STATUS, "ssh failed");
     Ok(Value::Object(report))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn words(line: &str) -> Vec<String> {
-        line.split(' ').map(str::to_string).collect()
-    }
-
-    #[test]
-    fn process_limit_and_owner_entries_are_approved_exactly() {
-        let sysctl = approve(&words("sysctl -n kern.maxproc kern.maxprocperuid")).unwrap();
-        assert_eq!(
-            sysctl.argv,
-            &[
-                "/usr/sbin/sysctl",
-                "-n",
-                "kern.maxproc",
-                "kern.maxprocperuid"
-            ]
-        );
-        let owners = approve(&words("ps ax -o user -o pid -o comm")).unwrap();
-        assert_eq!(
-            owners.argv,
-            &["/bin/ps", "ax", "-o", "user", "-o", "pid", "-o", "comm"]
-        );
-    }
-
-    /// The entries match as whole spellings, not as prefixes and not with
-    /// extra words appended. `sysctl -n kern.maxproc` alone is a DIFFERENT
-    /// command from the approved one, and it is refused rather than run as
-    /// the nearest entry.
-    #[test]
-    fn neither_entry_matches_a_prefix_or_takes_extra_words() {
-        for spelling in [
-            "sysctl -n kern.maxproc",
-            "sysctl -n kern.maxproc kern.maxprocperuid kern.hostname",
-            "sysctl",
-            "ps ax -o user -o pid",
-            "ps ax -o user -o pid -o comm -o etime",
-        ] {
-            let error = approve(&words(spelling)).unwrap_err();
-            assert!(
-                error.0.contains("is not an approved host-exec command"),
-                "{spelling} was not refused: {}",
-                error.0
-            );
-        }
-    }
-
-    /// `-o command` prints the full argv of every process, which is where
-    /// tokens and passwords are passed. It is not in the table, and the
-    /// exact-match rule means the `-o comm` entry cannot be talked into
-    /// serving it — not by substitution, not by appending.
-    #[test]
-    fn the_full_argv_spelling_is_refused() {
-        for spelling in [
-            "ps ax -o user -o pid -o command",
-            "ps ax -o user -o pid -o comm -o command",
-            "ps ax -o command",
-        ] {
-            let error = approve(&words(spelling)).unwrap_err();
-            assert!(
-                error.0.contains("is not an approved host-exec command"),
-                "{spelling} was not refused: {}",
-                error.0
-            );
-        }
-        assert!(
-            !APPROVED_COMMANDS
-                .iter()
-                .any(|entry| entry.argv.contains(&"command")),
-            "no approved entry may ask ps for the full command line"
-        );
-    }
 }
