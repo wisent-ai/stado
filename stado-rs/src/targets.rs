@@ -927,6 +927,37 @@ pub struct WelesPolicy {
     pub recordings_dir: Option<String>,
 }
 
+/// One identity a host is expected to hold, as opposed to one action it may run.
+///
+/// The distinction is the whole point. `WelesPolicy.actions` answers "may this host
+/// do X" -- permission and capacity. It cannot answer "is this the machine where a
+/// two-factor prompt for controlyourai@gmail.com will appear", because that is not a
+/// permission at all: it is a property the machine either has or has not, granted by
+/// a third party and revocable without telling us.
+///
+/// Routing such work by an action allowlist buries the discovery of a missing
+/// identity at the deepest point of the flow -- a browser trajectory waiting for a
+/// code no machine will ever display, until it times out. Declaring the binding here
+/// lets the fleet refuse at dispatch and name the host that must be enrolled.
+///
+/// `verified_at` is deliberately not part of the declaration. A binding is a claim
+/// until a host observes it, exactly like a release phase.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IdentityBinding {
+    /// Identity family, e.g. "apple-account".
+    pub kind: String,
+    /// The identity itself, e.g. "controlyourai@gmail.com".
+    pub identity: String,
+    /// Operating-system user holding it, when the identity is per-user rather than
+    /// per-machine. An Apple account signed into one macOS user does not make the
+    /// other users on that Mac trusted.
+    #[serde(default)]
+    pub user: Option<String>,
+    /// Observed, never declared: when a host last proved it still holds this.
+    #[serde(default)]
+    pub verified_at: Option<String>,
+}
+
 /// One disk cleaner's policy.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DiskCleanerPolicy {
@@ -988,6 +1019,10 @@ pub struct ComputeTarget {
     pub hostnames: Vec<String>,
     #[serde(default)]
     pub weles: Option<WelesPolicy>,
+    /// Identities this host is expected to hold. Empty for the ordinary compute
+    /// target that holds none.
+    #[serde(default, deserialize_with = "de_null_as_default")]
+    pub identities: Vec<IdentityBinding>,
     #[serde(default)]
     pub disk_cleanup: Option<DiskCleanupPolicy>,
     /// env_overrides and agent_args propagate via the GCS registry to
