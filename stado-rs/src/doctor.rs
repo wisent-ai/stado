@@ -1635,18 +1635,24 @@ async fn check_alerts() -> Check {
 const CONTRACT_ID: &str = "skarbiec-contract";
 const CONTRACT_TITLE: &str = "Skarbiec read contract";
 const CONTRACT_REMEDY: &str =
-    "move whole-item reads to Client::read_field, or pin the broker to the build these callers expect";
+    "read one field at a time with Client::read_field; a broker that answers without a named field is the thing to fix, not the one that asks for it";
 
-/// Does the configured broker still answer a whole-item read?
+/// Which read contract is the broker enforcing?
 ///
-/// Skarbiec 9aa7dd4 made `field` mandatory on `/v1/items/read`. Callers that
-/// ask for an item and pick fields out of it get `400 {"error":"field
-/// required"}` from a broker built after that change, and the failure carries
-/// no hint that the contract moved underneath them. On 2026-08-04 that took
-/// out this machine's host-health beacon for twenty-one hours, during which
-/// `stado service list` went on reporting a stale `active` for services that
-/// were not running — the fleet's own view of the host was fiction and nothing
-/// said so.
+/// Skarbiec makes `field` mandatory on `/v1/items/read`, and that is correct:
+/// a read grant is per field, so answering an item-wide read would hand back
+/// fields the caller was never granted. This check used to report that as the
+/// fault and a broker answering without a field as healthy, which is exactly
+/// backwards -- and a check that calls the secure behaviour a failure teaches
+/// operators to skim past `doctor`, which is how a real FAIL sat unread here
+/// for hours.
+///
+/// The drift it exists for is real. On 2026-08-04 callers that asked for a
+/// whole item and picked fields out of it got `400 {"error":"field required"}`
+/// with no hint the contract had moved, and this machine's host-health beacon
+/// stayed down for twenty-one hours while `stado service list` reported a
+/// stale `active` for services that were not running. The repair is to move
+/// those callers to per-field reads, which the remedy now says.
 ///
 /// The probe is unauthenticated on purpose: the handler validates `id` and
 /// `field` before it looks at any identity, so a request carrying neither a
@@ -1700,22 +1706,26 @@ async fn skarbiec_contract_check() -> Check {
             let status = response.status().as_u16();
             let body = response.text().await.unwrap_or_default();
             if body.contains("field required") {
+                Check::pass(
+                    CONTRACT_ID,
+                    CONTRACT_TITLE,
+                    format!(
+                        "{endpoint} requires a named field (HTTP {status}), which is the \
+                         contract in force: the authority grants read per field, so an \
+                         item-wide read would hand back fields nobody was granted"
+                    ),
+                    CONTRACT_REMEDY,
+                )
+            } else {
                 Check::new(
                     CONTRACT_ID,
                     CONTRACT_TITLE,
                     Status::Warn,
                     format!(
-                        "{endpoint} requires a named field (HTTP {status}); every whole-item \
-                         read in this build fails against it, which is what silences a health \
-                         beacon without saying why"
+                        "{endpoint} answered a read that named no field (HTTP {status}); read \
+                         grants are per field, so something here can return fields the caller \
+                         was never granted"
                     ),
-                    CONTRACT_REMEDY,
-                )
-            } else {
-                Check::pass(
-                    CONTRACT_ID,
-                    CONTRACT_TITLE,
-                    format!("{endpoint} accepts a read without a named field (HTTP {status})"),
                     CONTRACT_REMEDY,
                 )
             }
