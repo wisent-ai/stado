@@ -1136,6 +1136,16 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Remove one previously installed owner-only helper from TARGET.
+    #[command(name = "remove-helper")]
+    RemoveHelper {
+        target: String,
+        /// Safe basename under $HOME/.stado/bin on the target.
+        name: String,
+        /// Emit the removal report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Open an encrypted reverse SSH forwarding channel to TARGET.
     #[command(name = "forward-local")]
     ForwardLocal {
@@ -1606,6 +1616,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             } => host::activate_release(&target, &family, &version, &platform, json).await,
             HostCommands::RunHelper { target, name, json } => {
                 host::run_helper(&target, &name, json).await
+            }
+            HostCommands::RemoveHelper { target, name, json } => {
+                host::remove_helper(&target, &name, json).await
             }
             HostCommands::ForwardLocal {
                 target,
