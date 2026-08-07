@@ -934,7 +934,24 @@ if [ \"$os\" = \"Darwin\" ]; then
 else
   args=$(/usr/bin/sed -n 's/^ExecStart=//p' \"$unit_path\" | /usr/bin/tr '\\n' ' ')
 fi
-say 'runs' \"$args\"
+# A unit that runs .../services/NAME/current/... names a link, not a version,
+# and the link is what every rollback and every competing operator moves. The
+# declared path therefore stays identical while the code under it changes,
+# which makes 'what does this unit run' unanswerable from the unit alone --
+# and answering it by guessing has ended badly enough to be worth one readlink.
+program=\"${args%% *}\"
+resolved=\"\"
+case \"$program\" in
+  */current/*)
+    link=\"${program%%/current/*}/current\"
+    if [ -L \"$link\" ]; then resolved=$(/usr/bin/readlink \"$link\"); fi
+    ;;
+esac
+if [ -n \"$resolved\" ]; then
+  say 'runs' \"$args(current -> $resolved)\"
+else
+  say 'runs' \"$args\"
+fi
 ";
 
 const STOP_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
