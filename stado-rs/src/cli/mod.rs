@@ -1183,6 +1183,22 @@ enum HostCommands {
         #[arg(last = true)]
         command: Vec<String>,
     },
+    /// Deliver one file of any size to TARGET's owner-only Stado files
+    /// directory, checksummed on arrival.
+    #[command(name = "install-file")]
+    InstallFile {
+        target: String,
+        /// Local file to transfer.
+        source: String,
+        /// Safe basename under $HOME/.stado/files on the target.
+        name: String,
+        /// Land it owner-executable instead of owner-readable only.
+        #[arg(long)]
+        executable: bool,
+        /// Emit the transfer report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Report TARGET's stado-managed binaries, forward markers and loopback
     /// listeners, and whether each marker still matches a live listener.
     Inventory {
@@ -1639,6 +1655,13 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 name,
                 json,
             } => host::install_helper(&target, &source, &name, json).await,
+            HostCommands::InstallFile {
+                target,
+                source,
+                name,
+                executable,
+                json,
+            } => host::install_file(&target, &source, &name, executable, json).await,
             HostCommands::InstallSecret {
                 target,
                 source,
