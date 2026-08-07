@@ -272,7 +272,9 @@ async fn resolve_resend(to: Option<String>, from: Option<String>) -> Option<Rese
         );
         return None;
     };
-    let vault = crate::skarbiec::Client::configured()
+    // The coordinator's grant does not carry the resend key, and reading with
+    // it turned the only configured channel into no channel at all.
+    let vault = crate::skarbiec::Client::alert_key_reader()
         .map_err(|err| channel_failed("resend-configuration", &err.to_string()))
         .ok()?;
     let item = crate::config::alert_resend_item();

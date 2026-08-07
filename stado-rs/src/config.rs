@@ -1467,6 +1467,45 @@ static OBJECT_API_NAMESPACES: LazyLock<Result<BTreeMap<String, ObjectApiNamespac
         };
         parse_object_api_namespaces(configured.as_ref())
     });
+
+/// The least-privilege consumer that may read the alert credential.
+///
+/// Paging is the last thing that should hold a broad grant, and the fleet
+/// already provisions a consumer carrying exactly one read on the resend key.
+pub const ALERT_KEY_READER_CONSUMER: &str = "weles-resend-management-client";
+static ALERT_SKARBIEC_CONSUMER: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "WC_ALERT_SKARBIEC_CONSUMER",
+        "alerts.skarbiec.consumer",
+        ALERT_KEY_READER_CONSUMER,
+    )
+});
+static ALERT_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
+    let default = std::env::var("HOME")
+        .map(|home| {
+            std::path::Path::new(&home)
+                .join(".stado")
+                .join("weles-resend-management-client-skarbiec-token")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .unwrap_or_default();
+    expand_tilde(&cfg(
+        "WC_ALERT_SKARBIEC_TOKEN_FILE",
+        "alerts.skarbiec.token_file",
+        &default,
+    ))
+    .to_string_lossy()
+    .into_owned()
+});
+
+pub fn alert_skarbiec_consumer() -> &'static str {
+    &ALERT_SKARBIEC_CONSUMER
+}
+
+pub fn alert_skarbiec_token_file() -> &'static str {
+    &ALERT_SKARBIEC_TOKEN_FILE
+}
 static OBJECT_SKARBIEC_URL: LazyLock<String> = LazyLock::new(|| {
     cfg(
         "WC_OBJECT_SKARBIEC_URL",
