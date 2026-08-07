@@ -9,7 +9,9 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/wisent-ai/wisent-desktop-auth.git", from: "0.1.0"),
-        .package(path: "../../../echo"),
+        // By url, not by sibling path: CI checks out this repository alone, and
+        // a missing sibling makes the whole graph unresolvable there.
+        .package(url: "https://github.com/wisent-ai/echo.git", from: "0.1.2"),
     ],
     targets: [
         .executableTarget(
