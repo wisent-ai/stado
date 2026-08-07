@@ -16,7 +16,7 @@
       "location" : "https://github.com/wisent-ai/wisent-desktop-auth.git",
       "state" : {
         "revision" : "8d8dc8a7b0cb4118223ee2cff6d992ccbe328b98",
-        "version" : "0.1.11"
+        "version" : "0.2.0"
       }
     }
   ],
