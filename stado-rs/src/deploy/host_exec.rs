@@ -142,6 +142,15 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               being able to read",
     },
     ApprovedCommand {
+        argv: &["/usr/bin/defaults", "read", "MobileMeAccounts"],
+        why: "prints which Apple accounts the login user is signed into. Some work runs only \
+              on the machine that holds an identity -- a two-factor prompt appears on the \
+              trusted device and nowhere else -- so `stado identity verify` must check the \
+              binding rather than trust a declaration nothing re-reads. The domain is fixed, \
+              `read` is the read-only verb, and the output carries account identifiers, never \
+              tokens or passwords",
+    },
+    ApprovedCommand {
         argv: &[
             "/usr/sbin/sysctl",
             "-n",
