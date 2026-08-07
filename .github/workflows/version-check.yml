@@ -61,9 +61,18 @@ jobs:
     runs-on: [self-hosted, stado-control-plane]
     env:
       STADO_API_URL: https://stado.wisent.com
-      WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
-      WC_SKARBIEC_CONSUMER: stado-release-publisher
-      WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-skarbiec-token
+      # This job only reads the release channel; it never publishes to it. Reading it
+      # as `stado-release-publisher` borrowed the publishing identity to answer a
+      # question, and that identity's grant file on this control plane is stale --
+      # its bearer matches none of the store's tokens, so every run since it was
+      # re-minted has died at the first credential read. `stado-release-api-verifier`
+      # is the identity that exists for exactly this: read on the release-publisher
+      # token and nothing else. `WC_SKARBIEC_URL` is not set here on purpose -- it
+      # named a repository variable that does not exist, so it always expanded to
+      # empty and the store came from the host's configured `secrets.skarbiec.url`
+      # anyway. Naming it added a second, silent source of truth.
+      WC_SKARBIEC_CONSUMER: stado-release-api-verifier
+      WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-api-verifier-skarbiec-token
     steps:
       # Held at the same major as deploy.yml, for the same reason: v4 runs on a Node
       # GitHub has deprecated, and this control plane is the runner both jobs share.
