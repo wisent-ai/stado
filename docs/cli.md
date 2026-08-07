@@ -389,6 +389,9 @@ unavailable.
 | `stado host disk <target>` | Disk usage plus the registry cleanup policy and the janitor's own state: last pass, bytes freed, next scheduled pass. |
 | `stado host cleanup <target> --dry-run` | Preview what the registry cleanup would delete. `--dry-run` is mandatory; it drives the janitor's own planning phase and writes no state. |
 | `stado host exec <target> -- CMD` | Run one approved read-only command. An allowlist, not a shell: the operator's words select a fixed argv entry and never join the command line. A refusal prints the allowlist. |
+| `stado host install-helper <target> <source> <name>` | Transfer one reviewed operator helper into the target's owner-only `~/.stado/bin`. This is how Stado runs what the `exec` allowlist refuses, without opening a remote shell. |
+| `stado host run-helper <target> <name>` | Run one installed helper and wait for its result. No arguments: the helper is the reviewed program, not a shell escape. |
+| `stado host remove-helper <target> <name>` | Delete one installed helper. Idempotent — a second call reports `absent` — and it refuses a symlink, because nothing `install-helper` writes is one. |
 
 Diagnostic and recovery commands resolve their target from the canonical registry and
 refuse a target that is unknown, not a local host, or has no registry-managed

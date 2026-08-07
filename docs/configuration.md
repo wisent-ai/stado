@@ -118,6 +118,13 @@ outside the selected store: putting the grant needed to unlock a manager inside
 that same manager would be circular. For Skarbiec, this is the owner-only admin
 token file named above.
 
+Reads name a field. `stado credentials get NAME --field F` asks the store for
+that one field, because the Skarbiec listener refuses a read that names none:
+a bundle item is a set of independently authorized fields, not one blob. A
+grant is written the same way, one `read:item#field` capability at a time, so
+the whole-item form has no consumer it could satisfy and `get` without
+`--field` says to name one.
+
 
 ## Registry
 
