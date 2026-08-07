@@ -9,7 +9,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/wisent-ai/wisent-desktop-auth.git", from: "0.1.0"),
-        .package(path: "../../../echo-web"),
+        .package(path: "../../../echo"),
     ],
     targets: [
         .executableTarget(
