@@ -5,7 +5,7 @@
 
 use serde_json::json;
 
-use super::{MostChannel, PubSubChannel, SendgridChannel, TelegramChannel};
+use super::{MostChannel, PubSubChannel, ResendChannel, SendgridChannel, TelegramChannel};
 
 /// Error on a non-2xx response, including the upstream body.
 async fn ensure_success(response: reqwest::Response) -> Result<(), String> {
@@ -65,6 +65,69 @@ pub(super) async fn send_email(
         .await
         .map_err(|e| e.to_string())?;
     ensure_success(response).await
+}
+
+/// Resend delivery. This deployment holds a Resend key and a verified sending
+/// domain, and no SendGrid account, so `resend` is the email channel that can
+/// actually page an operator here.
+pub(super) async fn send_resend_email(
+    client: &reqwest::Client,
+    channel: &ResendChannel,
+    subject: &str,
+    body: &str,
+) -> Result<(), String> {
+    let response = client
+        .post(&channel.url)
+        .bearer_auth(&channel.api_key)
+        .json(&json!({
+            "from": channel.from,
+            "to": [channel.to],
+            "subject": subject,
+            "text": body,
+        }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    ensure_success(response).await
+}
+
+/// Ask Resend which sender domains this key may use. Answers the two ways an
+/// email channel is dead while looking configured: a key the provider has
+/// revoked, and a sender on a domain nobody verified. Reads only; it sends
+/// nothing.
+pub(crate) async fn resend_verified_domains(
+    client: &reqwest::Client,
+    channel: &ResendChannel,
+) -> Result<Vec<String>, String> {
+    let base = channel
+        .url
+        .strip_suffix("/emails")
+        .unwrap_or(&channel.url)
+        .to_string();
+    let response = client
+        .get(format!("{base}/domains"))
+        .bearer_auth(&channel.api_key)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = response.status();
+    let body = response.text().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(format!("HTTP {status}: {body}"));
+    }
+    let document: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+    Ok(document
+        .get("data")
+        .and_then(serde_json::Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter(|entry| entry.get("status").and_then(serde_json::Value::as_str) == Some("verified"))
+                .filter_map(|entry| entry.get("name").and_then(serde_json::Value::as_str))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default())
 }
 
 pub(super) async fn send_pubsub(

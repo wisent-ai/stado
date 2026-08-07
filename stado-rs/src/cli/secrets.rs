@@ -846,10 +846,11 @@ async fn get(
         println!("{raw}");
         return Ok(());
     }
-    let value = vault
-        .read_item(name)
-        .await
-        .map_err(|err| CmdError::click(err.to_string()))?;
+    let value = vault.read_item(name).await.map_err(|err| {
+        CmdError::click(format!(
+            "{err}; this store answers per field: name one with --field"
+        ))
+    })?;
     if let Some(object) = value.as_object() {
         if object.len() == usize::from(true) {
             if let Some(raw) = object.get("value").and_then(Value::as_str) {
