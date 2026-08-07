@@ -5,7 +5,7 @@
 
 use serde_json::json;
 
-use super::{MostChannel, PubSubChannel, SendgridChannel, TelegramChannel};
+use super::{MostChannel, PubSubChannel, ResendChannel, SendgridChannel, TelegramChannel};
 
 /// Error on a non-2xx response, including the upstream body.
 async fn ensure_success(response: reqwest::Response) -> Result<(), String> {
@@ -60,6 +60,30 @@ pub(super) async fn send_email(
             "from": {"email": channel.from},
             "subject": subject,
             "content": [{"type": "text/plain", "value": body}],
+        }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    ensure_success(response).await
+}
+
+/// Resend delivery. This deployment holds a Resend key and a verified sending
+/// domain, and no SendGrid account, so `resend` is the email channel that can
+/// actually page an operator here.
+pub(super) async fn send_resend_email(
+    client: &reqwest::Client,
+    channel: &ResendChannel,
+    subject: &str,
+    body: &str,
+) -> Result<(), String> {
+    let response = client
+        .post(&channel.url)
+        .bearer_auth(&channel.api_key)
+        .json(&json!({
+            "from": channel.from,
+            "to": [channel.to],
+            "subject": subject,
+            "text": body,
         }))
         .send()
         .await

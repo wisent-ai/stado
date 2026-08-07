@@ -70,9 +70,15 @@ trailing program) rather than copying it, so the commands cannot drift apart.
 14. **service env NAME** — show the effective environment a managed service
     runs with (from its plist), secrets redacted.
 
-All eight are shipped: `stado service list|status|restart|adopt|retire|
-deploy|logs|env`, engine in `deploy/service.rs`, surface in
-`cli/service.rs`. `list` and `status` answer from the health beacons alone,
+Read-only companions are also shipped: **service probe NAME
+[--host TARGET]** contacts the registered host and checks the exact unit path
+without mutation, while **service resolve NAME** selects exactly one fresh,
+active placement from stored beacon evidence.
+
+The complete surface is shipped: `stado service list|status|probe|resolve|
+restart|adopt|retire|deploy|logs|env`, engine in `deploy/service.rs`,
+surface in `cli/service.rs`. `list`, `status`, and `resolve` answer from the
+health beacons alone,
 so the fleet-wide question costs no ssh. The managed set has two sources,
 shown in a SOURCE column: the per-target `services` array in the registry
 (what `adopt`/`retire`/`deploy` edit) and the fixed `MANAGED_AGENTS` list
@@ -91,8 +97,9 @@ can print a value.
 
 15. **registry doctor** — diff registry declarations against live host state:
     unmanaged agents, missing plists, stale beacons, hosts with no heartbeat.
-16. **registry host add HOST --ssh DEST** — onboard a new machine into the
-    canonical registry (validated).
+16. **registry host add HOST --ssh DEST --kind KIND** — declare a
+    provider-managed non-local target. Local onboarding is exclusively the
+    agent-attested `stado_fleet enroll` transaction.
 17. **registry beacon-age** — one table: every host and its last beacon
     timestamp (the "hasn't reported in 5 days" detector).
 
@@ -100,7 +107,8 @@ All three shipped. `registry doctor` reports no-heartbeat, stale-beacon,
 missing-plist, unit-not-active, unmanaged-host and unmanaged-agent, sourced
 from the beacon prefix and the capacity broadcasts — never ssh — and exits
 non-zero when declaration and reality disagree. `registry host add` reuses
-`push_document`'s validation rather than a second implementation.
+`push_document` validation but refuses local targets, which cannot enter the
+registry without a live agent receipt.
 `registry beacon-age` gives every registry target a row, including targets
 with no beacon at all, worst first.
 
