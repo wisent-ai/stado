@@ -89,45 +89,65 @@ case "$marker" in
     ;;
 esac
 
-listing="$("$stado_bin" storage objects releases stado/ --json)"
+# What the channel itself says about the exact object the baseline names.
+#
+# This used to list `releases` through the object API and search the result. That
+# route does not exist on the release channel and never did: releases are published
+# and served by their own route, which answers a served object with a redirect to
+# where the bytes live. The listing therefore returned a 404 on every run, and under
+# `set -e` the gate died before judging anything -- a gate that cannot say yes is as
+# useless as one that cannot say no.
+#
+# `storage stat` on a full stado:// URI asks the channel and names one of three
+# states, where a listing had only silence. Only a stated present or absent counts.
+# Anything else -- unreachable, an empty field, a state this script does not know --
+# is an answer nobody gave, and refusing is the direction that cannot certify a lie.
+# Its stderr is deliberately not swallowed: when the channel fails to answer, the
+# reason belongs in the log next to the refusal it caused.
+channel_state() {
+  "$stado_bin" storage stat "$1" --json | jq -r '.state // ""' || true
+}
+
 if [ "$claims_channel" = yes ]; then
   key="${marker#stado:}"
-  if ! printf '%s' "$listing" |
-    jq -e --arg key "$key" '.objects | any(.key == $key)' >/dev/null; then
-    echo "::error::$baseline claims the published object $key, which the release" \
-      "channel does not serve. Regenerate it: python3 scripts/baseline.py"
-    false
-  fi
-  echo "The channel serves $key, as the baseline claims."
-else
-  # An empty listing and an unreachable store are the same silence, and here the wrong
-  # answer is the passing one: the assertion would conclude "nothing is published"
-  # precisely when it learned nothing. So absence is read only from testimony. `stat`
-  # given a full stado:// URI is the control, because it names one of three states for
-  # one object — present, absent, unreachable — where the listing has only silence. A
-  # bare path would answer about the queue store instead and say absent forever.
-  #
-  # Only a stated present or absent counts. Anything else — unreachable, an empty
-  # field, a state this script does not know — is an answer nobody gave, and refusing
-  # is the direction that cannot certify a lie. The forward branch above needs no
-  # control: it demands a positive answer, so silence there already refuses.
-  probe="stado://releases/stado/$released/linux-amd64/stado"
-  probe_state="$("$stado_bin" storage stat "$probe" --json | jq -r '.state // ""')"
-  case "$probe_state" in
-    present | absent) ;;
+  published="stado://releases/$key"
+  state="$(channel_state "$published")"
+  case "$state" in
+    present) ;;
+    absent)
+      echo "::error::$baseline claims the published object $key, which the release" \
+        "channel does not serve. Regenerate it: python3 scripts/baseline.py"
+      false
+      ;;
     *)
-      echo "::error::the release channel did not testify about $probe (state" \
-        "'${probe_state:-none}'), so the absence of a published stado release is" \
-        "unproven. Refusing rather than assuming $marker is honest."
+      echo "::error::the release channel did not testify about $published (state" \
+        "'${state:-none}'), so the baseline's claim that it is published is unproven." \
+        "Refusing rather than assuming $marker is honest."
       false
       ;;
   esac
-  if printf '%s' "$listing" | jq -e '.objects | any(has("key"))' >/dev/null; then
-    echo "::error::$baseline claims nothing is published ($marker), but the release" \
-      "channel already serves stado releases, so every comparison is measured" \
-      "against the wrong artifact. Regenerate it: python3 scripts/baseline.py"
-    false
-  fi
+  echo "The channel serves $key, as the baseline claims."
+else
+  # A bare path would answer about the queue store instead and say absent forever, so
+  # the probe names the full URI. The forward branch above needs no separate control:
+  # it demands a positive answer, so silence there already refuses.
+  probe="stado://releases/stado/$released/linux-amd64/stado"
+  state="$(channel_state "$probe")"
+  case "$state" in
+    absent) ;;
+    present)
+      echo "::error::$baseline claims nothing is published ($marker), but the release" \
+        "channel already serves $probe, so every comparison is measured against the" \
+        "wrong artifact. Regenerate it: python3 scripts/baseline.py"
+      false
+      ;;
+    *)
+      echo "::error::the release channel did not testify about $probe (state" \
+        "'${state:-none}'), so the absence of a published stado release is unproven." \
+        "Refusing rather than assuming $marker is honest."
+      false
+      ;;
+  esac
   echo "The channel is readable and serves no stado release, as the baseline claims."
 fi
 
