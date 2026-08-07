@@ -275,7 +275,7 @@ fn coordinator_unknown_target_exits_1() {
     );
     assert_eq!(out.status.code(), Some(1));
     assert!(
-        stderr(&out).contains("coordinator 'no-such-coord' not found in registry"),
+        stderr(&out).contains("coordinator selector 'no-such-coord' not found in registry"),
         "{}",
         stderr(&out)
     );

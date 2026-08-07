@@ -98,10 +98,7 @@ pub(super) async fn send_most(
         "{}/{}/Accounts/{}/Messages.json",
         channel.api_base, channel.api_version, channel.account_sid
     );
-    let mut form = vec![
-        ("To", channel.phone.clone()),
-        ("Body", message.to_string()),
-    ];
+    let mut form = vec![("To", channel.phone.clone()), ("Body", message.to_string())];
     if let Some(service_sid) = &channel.messaging_service_sid {
         form.push(("MessagingServiceSid", service_sid.clone()));
     } else if let Some(from) = &channel.from_number {

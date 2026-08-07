@@ -250,8 +250,7 @@ fn spawn_skarbiec() -> (String, thread::JoinHandle<String>) {
                         .set_nonblocking(false)
                         .expect("accepted Skarbiec connection becomes blocking");
                     let request = read_request(&mut stream);
-                    // The broker answers a field-scoped read with that
-                    // field's value alone, not with the whole item.
+
                     let body = format!(r#"{{"value":"{WORKLOAD_SECRET}"}}"#);
                     write!(
                         stream,
@@ -626,7 +625,10 @@ async fn ai_agent_request_materializes_pinned_input_and_scoped_secret_without_le
         .expect("trusted agent starts machine job");
     let slot = match slot {
         Some(slot) => slot,
-        None => panic!("machine job is admitted"),
+        None => {
+            drop(logger);
+            panic!("machine job is admitted; agent log:\n{}", agent_log.join("\n"));
+        }
     };
     advance_to_done(slot, &store, &mut logger).await;
 
@@ -637,14 +639,7 @@ async fn ai_agent_request_materializes_pinned_input_and_scoped_secret_without_le
     assert!(request_lower.starts_with("post /v1/items/read http/1.1"));
     assert!(request_lower.contains("x-consumer: workflow-test-agent"));
     assert!(request_lower.contains("authorization: bearer test-agent-grant"));
-    assert!(
-        request_text.contains(r#""id":"model-provider""#),
-        "{request_text}"
-    );
-    assert!(
-        request_text.contains(r#""field":"token""#),
-        "{request_text}"
-    );
+    assert!(request_text.contains(r#"{"id":"model-provider","field":"token"}"#));
 
     let completed = store
         .read_job("completed", &job_id)

@@ -96,6 +96,15 @@ pub fn deployment_substitutions(provider_name: &str) -> BTreeMap<String, String>
     let s3_bucket = field(crate::capabilities::StorageAdapter::S3.id(), "bucket");
     let s3_region = field(crate::capabilities::StorageAdapter::S3.id(), "region");
     let local_path = field(crate::capabilities::StorageAdapter::Local.id(), "path");
+    let stado_url = field(crate::capabilities::StorageAdapter::StadoObject.id(), "url");
+    let stado_token_file = field(
+        crate::capabilities::StorageAdapter::StadoObject.id(),
+        "token-file",
+    );
+    let stado_namespace = field(
+        crate::capabilities::StorageAdapter::StadoObject.id(),
+        "namespace",
+    );
     let provider_kind =
         crate::capabilities::variant(crate::capabilities::RuntimeFacet::Execution, provider_name)
             .map(|variant| variant.id)
@@ -126,6 +135,18 @@ pub fn deployment_substitutions(provider_name: &str) -> BTreeMap<String, String>
         (
             local_path.env.to_string(),
             config::wc_local_storage_path().to_string(),
+        ),
+        (
+            stado_url.env.to_string(),
+            config::wc_stado_storage_url().to_string(),
+        ),
+        (
+            stado_token_file.env.to_string(),
+            config::wc_stado_storage_token_file().to_string(),
+        ),
+        (
+            stado_namespace.env.to_string(),
+            config::wc_stado_storage_namespace().to_string(),
         ),
         (
             crate::capabilities::STORAGE_BACKEND_CONFIG
@@ -217,6 +238,9 @@ const REQUIRED_AGENT_EXPORTS: &[&str] = &[
     "WC_S3_BUCKET",
     "WC_S3_REGION",
     "WC_LOCAL_STORAGE_PATH",
+    "WC_STADO_STORAGE_URL",
+    "WC_STADO_STORAGE_TOKEN_FILE",
+    "WC_STADO_STORAGE_NAMESPACE",
     "WC_BACKUP_STORAGE_BACKEND",
     "WC_BACKUP_BUCKET",
     "WC_BACKUP_AZURE_STORAGE_ACCOUNT",
