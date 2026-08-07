@@ -25,44 +25,47 @@ use crate::targets::{load_registry_auto, ComputeTarget, IdentityBinding};
 
 const APPLE_ACCOUNT: &str = "apple-account";
 
-/// Read one host's live Apple-account bindings over the registry's own SSH route.
+/// Read a host's live Apple-account bindings through Stado's own approved channel.
 ///
-/// macOS keeps this per user under MobileMeAccounts, so a per-user declaration is
-/// checked against that user's own preferences: an account signed into `charles`
-/// does not make `weles-apple` trusted, and treating the Mac as a unit would report
-/// a trusted device that cannot display a single prompt for the user we drive.
+/// Not `ssh`. A one-liner over ssh is the same action with the audit trail removed,
+/// and this file previously did exactly that -- teaching the anti-pattern from inside
+/// the tool meant to replace it. `host exec` runs one fixed, read-only, allowlisted
+/// argv, so the probe cannot be pointed at a path and cannot grow into a shell.
 ///
-/// `None` means the probe could not run -- unreachable host, no passwordless sudo,
-/// missing plutil. That is reported as unknown rather than absent, because sending
-/// an operator to re-enroll a machine that is actually signed in is a worse error
-/// than admitting we could not look.
-fn observe_apple_accounts(ssh: &str, user: &str) -> Option<Vec<String>> {
-    let script = format!(
-        "sudo -n /usr/bin/plutil -p /Users/{user}/Library/Preferences/MobileMeAccounts.plist \
-         2>/dev/null | /usr/bin/awk -F'\"' '/AccountID/ {{ print $4 }}'"
-    );
-    let output = std::process::Command::new("ssh")
-        .args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "--", ssh])
-        .arg(script)
-        .output()
+/// The reading is the login user's own, because `defaults read` carries no path and
+/// no sudo. A binding naming some other user on that machine is therefore reported
+/// unknown rather than guessed at: an account signed into `charles` says nothing
+/// about whether `weles-apple` can display a prompt.
+///
+/// `None` means the probe could not run -- unreachable host, refused channel, no such
+/// domain. That is unknown, never absent, because sending an operator to re-enroll a
+/// machine that is actually signed in is the worse error.
+fn account_ids(text: &str) -> Vec<String> {
+    text.lines()
+        .filter(|line| line.contains("AccountID"))
+        .filter_map(|line| {
+            let mut quoted = line.split('"');
+            quoted.next();
+            quoted.next().map(str::to_string)
+        })
+        .collect()
+}
+
+async fn observe_apple_accounts(target_name: &str) -> Option<Vec<String>> {
+    let runner = crate::deploy::production_runner();
+    let words = vec![
+        "defaults".to_string(),
+        "read".to_string(),
+        "MobileMeAccounts".to_string(),
+    ];
+    let report = crate::deploy::host_exec::exec_host(target_name, &words, &runner)
+        .await
         .ok()?;
-    if !output.status.success() {
+    if report.get("status").and_then(Value::as_str) != Some(crate::deploy::host_exec::OK_STATUS) {
         return None;
     }
-    let text = String::from_utf8_lossy(&output.stdout);
-    // An empty reading is ambiguous on macOS: a user signed into nothing and a user
-    // whose preferences we could not read both print nothing, and only the exit
-    // status told us the difference, which sudo already swallowed.
-    if text.trim().is_empty() {
-        return None;
-    }
-    Some(
-        text.lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .map(str::to_string)
-            .collect(),
-    )
+    let found = account_ids(report.get("stdout").and_then(Value::as_str)?);
+    if found.is_empty() { None } else { Some(found) }
 }
 
 /// Is this registry target the machine we are running on?
@@ -107,6 +110,11 @@ fn local_apple_accounts() -> Option<Vec<String>> {
 fn binding_row(target: &ComputeTarget, binding: &IdentityBinding, observed: Option<bool>) -> Value {
     json!({
         "host": target.name,
+        // Callers route work to the holder, so the row has to carry enough to reach
+        // it. Without the ssh destination a consumer knows which host qualifies and
+        // still has to be told separately how to get there, which is how the
+        // hand-written APPLE_2FA_MAC_* variables came to exist in the first place.
+        "ssh": target.ssh,
         "kind": binding.kind,
         "identity": binding.identity,
         "user": binding.user,
@@ -173,11 +181,10 @@ pub async fn verify(kind: String, identity: String, json_output: bool) -> Result
                 APPLE_ACCOUNT if is_local_target(target) => {
                     local_apple_accounts().map(|found| found.iter().any(|e| e == &identity))
                 }
-                APPLE_ACCOUNT => target.ssh.as_deref().and_then(|ssh| {
-                    let user = binding.user.clone().unwrap_or_else(|| "root".to_string());
-                    observe_apple_accounts(ssh, &user)
-                        .map(|found| found.iter().any(|entry| entry == &identity))
-                }),
+                APPLE_ACCOUNT => match observe_apple_accounts(&target.name).await {
+                    Some(found) => Some(found.iter().any(|entry| entry == &identity)),
+                    None => None,
+                },
                 // An identity family we cannot probe stays unknown rather than being
                 // reported as present: claiming verification we did not perform is
                 // worse than admitting the gap.
