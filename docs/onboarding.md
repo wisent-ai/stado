@@ -57,19 +57,20 @@ Expected result: status progresses from queued or running to completed. The down
 
 ## Onboard another machine
 
-The coordinator must be able to reach the host through the explicit SSH destination. Add it to the canonical registry, inspect drift, then install its persistent worker:
+The coordinator must be able to reach the host through an explicit SSH
+destination. Enrollment is one transaction: Stado stages a non-routable
+entry, installs the agent, waits for fresh capacity, and only then registers
+the target:
 
 ```bash
-stado registry host add <target-name> --ssh <user@host> --kind local
+stado_fleet enroll <target-name> --ssh <user@host>
 stado registry doctor
-stado bootstrap --target <target-name> --dry-run
-stado bootstrap --target <target-name>
-stado host health <target-name>
 ```
 
-Review the dry-run unit before installation. The worker host must already provide every runtime and driver its jobs require. Registry identity, SSH reachability, workload dependencies, and health publication are separate checks; passing one does not imply the others.
-
-For the current machine, `stado bootstrap --local --target <target-name>` installs the launchd or systemd-user unit directly.
+SSH reachability alone is not registration. Installation failure or missing
+agent attestation rolls the staging entry back. To adopt the current machine
+from a legacy registry entry without SSH, run
+`stado_fleet reconcile <target-name>` on that machine.
 
 ## Failure guidance
 
