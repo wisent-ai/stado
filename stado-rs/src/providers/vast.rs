@@ -610,6 +610,33 @@ pub async fn auto_list_loop(
         Err(exc) => log(&format!("startup probe failed: {exc}")),
     }
     loop {
+        if let Some(reservation) = crate::inference::reservation::active() {
+            idle_since = None;
+            if listed {
+                if params.dry_run {
+                    log(&format!(
+                        "DRY-RUN would unlist for inference reservation '{}'",
+                        reservation.deployment
+                    ));
+                } else {
+                    match client.unlist_machine().await {
+                        Ok(_) => {
+                            listed = false;
+                            log(&format!(
+                                "unlisted for inference reservation '{}'",
+                                reservation.deployment
+                            ));
+                        }
+                        Err(exc) => log(&format!(
+                            "unlist for inference reservation '{}' failed: {exc}",
+                            reservation.deployment
+                        )),
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(params.poll_interval_s)).await;
+            continue;
+        }
         let state = match is_stado_busy(store, hostname).await {
             Ok(state) => state,
             Err(exc) => {

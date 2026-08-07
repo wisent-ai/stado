@@ -134,11 +134,7 @@ fn release_manifest_covers_every_binary_and_schema_contract() {
     assert_eq!(manifest["platform"], "test-platform");
     assert_eq!(
         manifest["stable_integrations"],
-        serde_json::json!([
-            "local-compute",
-            "local-filesystem-storage",
-            "skarbiec"
-        ])
+        serde_json::json!(["local-compute", "local-filesystem-storage", "skarbiec"])
     );
     assert_eq!(
         manifest["preview_integrations"],

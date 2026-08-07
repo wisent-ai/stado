@@ -20,24 +20,31 @@ pub mod blast_radius;
 pub mod bootstrap;
 pub mod cancel;
 pub mod capabilities;
+pub mod cloudflare;
 pub mod config_cmd;
 pub mod control_plane;
 pub mod coordinator;
 pub mod cost;
 pub mod dashboard;
+pub mod directory;
 pub mod disk_cleanup;
 pub mod doctor;
 pub mod host;
+pub mod inference;
 pub mod instances;
 pub mod job;
 pub mod machine;
 pub mod mail;
 pub mod overview;
+pub mod placement;
 pub mod profiles_cmd;
 pub mod queue;
 pub mod quota;
 pub mod recovery;
 pub mod registry;
+pub mod release_build;
+pub mod release_cmd;
+pub mod resolver;
 pub mod resources;
 pub mod results;
 pub mod schedule;
@@ -260,6 +267,10 @@ enum Commands {
     #[command(subcommand)]
     Azure(azure::AzureCommands),
 
+    /// Configure Cloudflare Tunnel ingress and DNS through Stado-held credentials.
+    #[command(subcommand)]
+    Cloudflare(cloudflare::CloudflareCommands),
+
     /// Search and deterministically analyze Gmail messages without modifying them.
     #[command(subcommand)]
     Mail(MailCommands),
@@ -352,7 +363,7 @@ enum Commands {
     /// registry, capacity, and schedule state use the configured Stado
     /// storage backend.
     Coordinator {
-        /// Coordinator name in registry (default: the one with active=true).
+        /// Coordinator name or host heuristic (default: active=true entry).
         #[arg(long)]
         target: Option<String>,
         /// Run a single scheduling tick and exit (cron-friendly).
@@ -421,6 +432,10 @@ enum Commands {
     #[command(subcommand)]
     Artifact(ArtifactCommands),
 
+    /// Build once, sign, promote, roll out, and roll back product releases.
+    #[command(subcommand)]
+    Release(release_cmd::ReleaseCommands),
+
     /// Manage recurring (cron) jobs — submit a command on a cron schedule.
     ///
     /// A schedule is evaluated every coordinator tick; when due, the
@@ -469,8 +484,8 @@ enum Commands {
     /// Move queue state between storage backends (billing-outage migration).
     #[command(subcommand)]
     Storage(storage::StorageCommands),
-    /// Read and manage application credentials in Skarbiec.
-    #[command(subcommand)]
+    /// Read, migrate, and manage application credentials in the selected store.
+    #[command(name = "credentials", visible_alias = "secrets", subcommand)]
     Secrets(secrets::SecretsCommands),
     /// Maintenance mode: pause/resume dispatching, and drain the fleet.
     #[command(subcommand)]
@@ -479,6 +494,15 @@ enum Commands {
     /// adopt, retire, deploy, logs, env.
     #[command(subcommand)]
     Service(service::ServiceCommands),
+    /// Atomically relocate a declared service group between registered hosts.
+    #[command(subcommand)]
+    Placement(placement::PlacementCommands),
+    /// Resolve logical services and run the local Stado data plane.
+    #[command(subcommand)]
+    Resolver(resolver::ResolverCommands),
+    /// Plan, deploy, route and operate local OpenAI-compatible inference.
+    #[command(subcommand)]
+    Inference(inference::InferenceCommands),
     /// Ordered deployment preflight: config, storage, provider auth, quota,
     /// release channel, agent template, VM identity, registry, queue pause
     /// state and alert channels. Exits non-zero if any check FAILs.
@@ -1042,6 +1066,23 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Replace an owner-only Stado program on TARGET with a build proven to run there.
+    #[command(name = "install-binary")]
+    InstallBinary {
+        target: String,
+        /// Local executable to install.
+        #[arg(long)]
+        from: Option<String>,
+        /// Put the previous build back instead of installing a new one.
+        #[arg(long)]
+        rollback: bool,
+        /// Basename under $HOME/.stado/bin on the target.
+        #[arg(long, default_value = "stado")]
+        name: String,
+        /// Emit the installation report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Install one small operator helper in TARGET's owner-only Stado bin directory.
     #[command(name = "install-helper")]
     InstallHelper {
@@ -1066,13 +1107,30 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Transfer one immutable Weles release archive through the registry SSH channel.
+    /// Install one credential field directly from Stado's selected store.
+    #[command(name = "install-credential")]
+    InstallCredential {
+        target: String,
+        /// Credential item id in the selected store.
+        item: String,
+        /// Exact string field to transfer.
+        field: String,
+        /// Absolute target home directory; omit to use the SSH account's home.
+        #[arg(long)]
+        home: Option<String>,
+        /// Safe basename under $HOME/.stado on the target.
+        name: String,
+        /// Emit the transfer report as JSON; credential content is never emitted.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Transfer one immutable product release archive through the registry SSH channel.
     #[command(name = "install-release")]
     InstallRelease {
         target: String,
         /// Local .tar.gz release archive.
         source: String,
-        /// Release family: weles-worker, weles-chromium, or weles-firefox.
+        /// Path-safe release family; the remote asset is FAMILY.tar.gz.
         family: String,
         /// Immutable release version.
         version: String,
@@ -1364,11 +1422,13 @@ fn failure_service(matches: &clap::ArgMatches) -> &'static str {
         | "doctor"
         | "disk-cleanup"
         | "install-disk-cleanup" => "fleet",
-        "secrets" => "skarbiec",
+        "secrets" => "credentials",
         "billing" | "cost" | "quota" => "billing",
         "mail" => "mail",
-        "azure" | "vast" | "blast-radius" => "provider",
+        "azure" | "cloudflare" | "vast" | "blast-radius" => "provider",
         "coordinator"
+        | "resolver"
+        | "release"
         | "dashboard"
         | "schedule"
         | "agent"
@@ -1407,6 +1467,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Optimize(command) => autonomy_cmd::dispatch_optimize(command).await,
         Commands::Billing(sub) => billing::dispatch(&sub).await,
         Commands::Azure(sub) => azure::dispatch(sub).await,
+        Commands::Cloudflare(sub) => cloudflare::dispatch(sub).await,
         Commands::Mail(sub) => mail::dispatch(&sub).await,
         Commands::Submit(args) => submit::run(&args).await,
         Commands::Status { filter_id } => status::run(filter_id.as_deref()).await,
@@ -1466,6 +1527,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         } => disk_cleanup::run(once, watch, dry_run).await,
         Commands::InstallDiskCleanup => disk_cleanup::install().await,
         Commands::Artifact(sub) => artifact::dispatch(sub).await,
+        Commands::Release(sub) => release_cmd::dispatch(sub).await,
         Commands::Cost(sub) => cost::dispatch(&sub).await,
         Commands::Vast(sub) => vast::dispatch(&sub).await,
         Commands::Quota { json, sub } => quota::dispatch(json, &sub).await,
@@ -1553,6 +1615,13 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 dry_run,
                 json,
             } => host::cleanup(&target, dry_run, json).await,
+            HostCommands::InstallBinary {
+                target,
+                from,
+                name,
+                rollback,
+                json,
+            } => host::install_binary(&target, from.as_deref(), &name, rollback, json).await,
             HostCommands::InstallHelper {
                 target,
                 source,
@@ -1565,6 +1634,16 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 name,
                 json,
             } => host::install_secret(&target, &source, &name, json).await,
+            HostCommands::InstallCredential {
+                target,
+                item,
+                field,
+                home,
+                name,
+                json,
+            } => {
+                host::install_credential(&target, &item, &field, &name, home.as_deref(), json).await
+            }
             HostCommands::InstallRelease {
                 target,
                 source,
@@ -1609,6 +1688,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Secrets(sub) => secrets::dispatch(sub).await,
         Commands::Queue(sub) => queue::dispatch(sub).await,
         Commands::Service(sub) => service::dispatch(sub).await,
+        Commands::Placement(sub) => placement::dispatch(sub).await,
+        Commands::Resolver(sub) => resolver::dispatch(sub).await,
+        Commands::Inference(sub) => inference::dispatch(sub).await,
         Commands::Doctor(args) => doctor::dispatch(args).await,
     }
 }

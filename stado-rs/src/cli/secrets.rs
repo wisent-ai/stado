@@ -1,8 +1,8 @@
-//! `stado secrets` — operator surface for the separate Skarbiec service.
+//! `stado secrets` — operator surface for the selected credential store.
 //!
-//! Secret values travel in request bodies, never argv. Skarbiec performs
-//! encryption, authorization, versioning, recovery-recipient handling, and
-//! audit logging. Stado retains no local or cloud-secret-manager fallback.
+//! Secret values travel in request bodies, never argv. The backend selected by
+//! `STADO_CREDENTIALS_STORE` owns every item; changing it is completed through
+//! the verified `migrate` command before normal credential access resumes.
 
 use std::io::{Read, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
@@ -14,29 +14,35 @@ use super::{table, CmdError};
 
 #[derive(Subcommand)]
 pub enum SecretsCommands {
-    /// Store an item in Skarbiec, reading its value from STDIN.
+    /// Store an item in the selected credential store, reading from STDIN.
     Put {
-        /// Skarbiec item id.
+        /// Credential item id.
         name: String,
     },
-    /// Print one Skarbiec item value or one exact string field to stdout.
+    /// Print one credential item value or one exact string field to stdout.
     Get {
-        /// Skarbiec item id.
+        /// Credential item id.
         name: String,
         /// Print only this string field. The item id and field remain separate.
         #[arg(long)]
         field: Option<String>,
     },
-    /// List metadata for items authorized by the current grant.
+    /// List metadata for items visible to the credential-store admin.
     Ls {
         /// Emit JSON instead of a table.
         #[arg(long)]
         json: bool,
     },
-    /// Soft-delete a Skarbiec item.
+    /// Delete one item from the selected credential store.
     Rm {
-        /// Skarbiec item id.
+        /// Credential item id.
         name: String,
+    },
+    /// Move every credential to a new backend and commit the selector.
+    Migrate {
+        /// Destination selector. Omit when STADO_CREDENTIALS_STORE changed.
+        #[arg(long)]
+        to: Option<String>,
     },
     /// Mint one request-only bootstrap token directly into an owner-only file.
     #[command(name = "mint-acquisition-token")]
@@ -79,8 +85,8 @@ pub enum SecretsCommands {
         /// Emit JSON instead of a table.
         #[arg(long)]
         json: bool,
-        /// Restore one exact name into the vault, newest observed value first.
-        /// The value streams to Skarbiec and is never printed.
+        /// Restore one exact name into the selected store, newest observation first.
+        /// The value is never printed.
         #[arg(long)]
         restore: Option<String>,
         /// Also scan payloads that merely quoted a file. Those are source code,
@@ -103,10 +109,13 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
         SecretsCommands::BootstrapWeles { json } => bootstrap_weles(json),
         // Same reasoning as `doctor`: the transcripts are readable when the
         // vault is not, which is the only reason this verb is worth having.
-        SecretsCommands::Harvest { json, restore, all } => harvest(json, restore.as_deref(), all),
+        SecretsCommands::Harvest { json, restore, all } => {
+            harvest(json, restore.as_deref(), all).await
+        }
         // Also answered without a client: a protected key that nothing can
         // unlock is precisely the state where every other verb is unavailable.
         SecretsCommands::TryUnlock {} => try_unlock(),
+        SecretsCommands::Migrate { to } => migrate(to.as_deref()).await,
         SecretsCommands::Put { name } => put(&client()?, &name).await,
         SecretsCommands::Get { name, field } => get(&client()?, &name, field.as_deref()).await,
         SecretsCommands::Ls { json } => ls(&client()?, json).await,
@@ -127,47 +136,37 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
 /// values, because the defect it measures is values reaching places that only
 /// needed names — printing them here would add a terminal, a shell history and
 /// this process's own transcript to that list. `--restore NAME` is the one path
-/// a value travels, and it goes straight into Skarbiec's stdin.
-fn harvest(json: bool, restore: Option<&str>, all: bool) -> Result<(), CmdError> {
+/// a value travels, and it writes directly to the selected credential store.
+async fn harvest(json: bool, restore: Option<&str>, all: bool) -> Result<(), CmdError> {
     if let Some(name) = restore {
         let value = crate::transcripts::value_for(name).ok_or_else(|| {
             CmdError::click(format!(
                 "no secret-shaped value for {name} in any transcript; run without --restore to see what is there"
             ))
         })?;
-        let binary = skarbiec_binary()?;
-        // Encrypting needs only public halves, so a write into a vault nobody
-        // can open SUCCEEDS and produces one more unreadable item. Refuse: the
-        // recovered value would be buried in the same hole it is being pulled
-        // out of.
-        let report = key_doctor_report(&binary)?;
-        match report.get("status").and_then(Value::as_str) {
-            Some("readable") | Some("empty") => {}
-            _ => {
-                return Err(CmdError::click(format!(
-                    "refusing to restore {name}: the vault cannot be opened by any key here, so the write would be encrypted to recipients nobody holds. Own a readable vault first (see `stado secrets doctor`)"
-                )))
+        if crate::credential_store::configured_selector()
+            .map_err(|error| CmdError::click(error.to_string()))?
+            .starts_with("skarbiec")
+        {
+            let binary = skarbiec_binary()?;
+            // Skarbiec can encrypt with public recipients even when no owner
+            // here can decrypt. Refuse to bury the recovered value in that
+            // state; other backends enforce their own write preconditions.
+            let report = key_doctor_report(&binary)?;
+            match report.get("status").and_then(Value::as_str) {
+                Some("readable") | Some("empty") => {}
+                _ => {
+                    return Err(CmdError::click(format!(
+                        "refusing to restore {name}: Skarbiec cannot be opened by any key here; own a readable vault first (see `stado secrets doctor`)"
+                    )))
+                }
             }
         }
-        let mut child = std::process::Command::new(&binary)
-            .arg("set")
-            .arg(name)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .spawn()?;
-        if let Some(stdin) = child.stdin.as_mut() {
-            use std::io::Write;
-            stdin.write_all(value.as_bytes())?;
-        }
-        let finished = child.wait_with_output()?;
-        if !finished.status.success() {
-            return Err(CmdError::click(format!(
-                "{} set {name} failed: {}",
-                binary.display(),
-                String::from_utf8_lossy(&finished.stderr).trim()
-            )));
-        }
-        println!("restored {name} into the vault from transcript history");
+        client()?
+            .write_item(name, "stado-secret", &json!({"value": value}))
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        println!("restored {name} into the selected credential store from transcript history");
         return Ok(());
     }
     let findings = crate::transcripts::scan(all);
@@ -221,7 +220,32 @@ fn harvest(json: bool, restore: Option<&str>, all: bool) -> Result<(), CmdError>
 }
 
 fn client() -> Result<crate::skarbiec::Client, CmdError> {
-    crate::skarbiec::Client::configured().map_err(|err| CmdError::click(err.to_string()))
+    let credentials = crate::credential_store::admin_credentials()
+        .map_err(|err| CmdError::click(err.to_string()))?;
+    crate::skarbiec::Client::new(
+        &credentials.url,
+        &credentials.consumer,
+        &credentials.token_file,
+    )
+    .map_err(|err| CmdError::click(err.to_string()))
+}
+
+async fn migrate(destination: Option<&str>) -> Result<(), CmdError> {
+    let credentials = crate::credential_store::admin_credentials()
+        .map_err(|err| CmdError::click(err.to_string()))?;
+    let report = crate::credential_store::migrate::migrate(
+        destination,
+        &credentials.url,
+        &credentials.consumer,
+        &credentials.token_file,
+    )
+    .await
+    .map_err(|err| CmdError::click(err.to_string()))?;
+    println!(
+        "migrated {} credential item(s): {} -> {}",
+        report.moved_items, report.source, report.destination
+    );
+    Ok(())
 }
 
 /// Where Stado installs Skarbiec, mirroring
@@ -799,7 +823,7 @@ async fn put(vault: &crate::skarbiec::Client, name: &str) -> Result<(), CmdError
         .write_item(name, "stado-secret", &value)
         .await
         .map_err(|err| CmdError::click(err.to_string()))?;
-    println!("stored Skarbiec item {name:?}");
+    println!("stored credential item {name:?}");
     Ok(())
 }
 
@@ -808,24 +832,24 @@ async fn get(
     name: &str,
     field: Option<&str>,
 ) -> Result<(), CmdError> {
-    let value = vault
-        .read_item(name)
-        .await
-        .map_err(|err| CmdError::click(err.to_string()))?;
     if let Some(field) = field {
-        let raw = value
-            .as_object()
-            .and_then(|object| object.get(field))
-            .and_then(Value::as_str)
+        let raw = vault
+            .read_string(name, field)
+            .await
+            .map_err(|err| CmdError::click(err.to_string()))?
             .filter(|raw| !raw.is_empty())
             .ok_or_else(|| {
                 CmdError::click(format!(
-                    "Skarbiec item {name:?} has no non-empty string field {field:?}"
+                    "credential item {name:?} has no non-empty string field {field:?}"
                 ))
             })?;
         println!("{raw}");
         return Ok(());
     }
+    let value = vault
+        .read_item(name)
+        .await
+        .map_err(|err| CmdError::click(err.to_string()))?;
     if let Some(object) = value.as_object() {
         if object.len() == usize::from(true) {
             if let Some(raw) = object.get("value").and_then(Value::as_str) {
@@ -848,7 +872,7 @@ async fn ls(vault: &crate::skarbiec::Client, as_json: bool) -> Result<(), CmdErr
         return Ok(());
     }
     if stored.is_empty() {
-        println!("No Skarbiec items are visible to this grant.");
+        println!("No credential items are visible to this store administrator.");
         return Ok(());
     }
     let rows: Vec<Vec<String>> = stored
@@ -879,6 +903,6 @@ async fn rm(vault: &crate::skarbiec::Client, name: &str) -> Result<(), CmdError>
         .delete_item(name)
         .await
         .map_err(|err| CmdError::click(err.to_string()))?;
-    println!("soft-deleted Skarbiec item {name:?}");
+    println!("removed credential item {name:?}");
     Ok(())
 }

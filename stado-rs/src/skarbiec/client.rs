@@ -13,6 +13,7 @@ pub struct Client {
     base_url: String,
     consumer: String,
     token_file: String,
+    route_store: bool,
 }
 
 impl Client {
@@ -25,21 +26,45 @@ impl Client {
     }
 
     pub fn new(base_url: &str, consumer: &str, token_file: &str) -> Result<Self, SkarbiecError> {
-        let consumer = consumer.trim();
-        if consumer.is_empty() {
+        Self::build(base_url, consumer, token_file, true)
+    }
+
+    pub(crate) fn direct(
+        base_url: &str,
+        consumer: &str,
+        token_file: &str,
+    ) -> Result<Self, SkarbiecError> {
+        Self::build(base_url, consumer, token_file, false)
+    }
+
+    fn build(
+        base_url: &str,
+        consumer: &str,
+        token_file: &str,
+        route_store: bool,
+    ) -> Result<Self, SkarbiecError> {
+        let consumer = consumer.trim().to_string();
+        let token_file = token_file.trim().to_string();
+        if !route_store && consumer.is_empty() {
             return Err(SkarbiecError::MissingConsumer);
         }
-        if token_file.trim().is_empty() {
+        if !route_store && token_file.is_empty() {
             return Err(SkarbiecError::MissingTokenFile);
         }
         let http = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .build()?;
+        let base_url = if route_store {
+            base_url.trim().to_string()
+        } else {
+            checked_url(base_url)?
+        };
         Ok(Self {
             http,
-            base_url: checked_url(base_url)?,
-            consumer: consumer.to_string(),
-            token_file: token_file.to_string(),
+            base_url,
+            consumer,
+            token_file,
+            route_store,
         })
     }
 
@@ -101,6 +126,15 @@ impl Client {
     /// as a bare 400: the request is well-formed for the contract this client
     /// was written against, and the broker is newer than the client.
     pub async fn read_item(&self, id: &str) -> Result<Value, SkarbiecError> {
+        if self.route_store {
+            return Box::pin(crate::credential_store::read_item_with(
+                &self.base_url,
+                &self.consumer,
+                &self.token_file,
+                id,
+            ))
+            .await;
+        }
         let response = self
             .request(reqwest::Method::POST, "/v1/items/read")?
             .json(&json!({"id": id}))
@@ -128,12 +162,42 @@ impl Client {
             .ok_or_else(|| SkarbiecError::MissingValue(id.to_string()))
     }
 
+    /// Read one named field, which is what this broker's `/v1/items/read`
+    /// contract asks for since Skarbiec 9aa7dd4.
+    ///
+    /// One round trip and one field, rather than fetching the item and picking
+    /// from it: that is both the newer contract and the smaller disclosure, so
+    /// there is no reason to prefer the whole-item read where the caller
+    /// already knows the field it wants.
+    pub async fn read_field(&self, id: &str, field: &str) -> Result<Value, SkarbiecError> {
+        let response = self
+            .request(reqwest::Method::POST, "/v1/items/read")?
+            .json(&json!({"id": id, "field": field}))
+            .send()
+            .await?;
+        let body = Self::response_json(response).await?;
+        body.get("value")
+            .cloned()
+            .ok_or_else(|| SkarbiecError::MissingValue(format!("{id}.{field}")))
+    }
+
     pub async fn write_item(
         &self,
         id: &str,
         item_type: &str,
         value: &Value,
     ) -> Result<(), SkarbiecError> {
+        if self.route_store {
+            return Box::pin(crate::credential_store::write::write_item_with(
+                &self.base_url,
+                &self.consumer,
+                &self.token_file,
+                id,
+                item_type,
+                value,
+            ))
+            .await;
+        }
         let response = self
             .request(reqwest::Method::PUT, "/v1/items")?
             .json(&json!({"id": id, "type": item_type, "value": value}))
@@ -144,6 +208,14 @@ impl Client {
     }
 
     pub async fn list_items(&self) -> Result<Vec<ItemInfo>, SkarbiecError> {
+        if self.route_store {
+            return Box::pin(crate::credential_store::write::list_items_with(
+                &self.base_url,
+                &self.consumer,
+                &self.token_file,
+            ))
+            .await;
+        }
         let response = self
             .request(reqwest::Method::POST, "/v1/items/list")?
             .json(&json!({}))
@@ -157,6 +229,15 @@ impl Client {
     }
 
     pub async fn delete_item(&self, id: &str) -> Result<(), SkarbiecError> {
+        if self.route_store {
+            return Box::pin(crate::credential_store::write::delete_item_with(
+                &self.base_url,
+                &self.consumer,
+                &self.token_file,
+                id,
+            ))
+            .await;
+        }
         let response = self
             .request(reqwest::Method::DELETE, "/v1/items")?
             .json(&json!({"id": id}))
@@ -172,6 +253,9 @@ impl Client {
         id: &str,
         field: &str,
     ) -> Result<Option<String>, SkarbiecError> {
+        if self.route_store {
+            return Box::pin(crate::credential_store::read_string(id, field)).await;
+        }
         let response = self
             .request(reqwest::Method::POST, "/v1/items/read")?
             .json(&json!({"id": id, "field": field}))

@@ -55,7 +55,7 @@ for name in stado wc stado-coverage stado-fix stado-watchdog stado-mcp; do
     path="$RELEASE_DIR/$name"
     [ -f "$path" ] || die "release binary is missing: $name"
     digest="$(openssl dgst -sha256 "$path" | sed 's/^.*= //')"
-    size="$(wc -c < "$path" | tr -d '[:space:]')"
+    size="$(/usr/bin/wc -c < "$path" | tr -d '[:space:]')"
     updated="$RELEASE_DIR/.artifacts.next.json"
     jq \
         --arg name "$name" \

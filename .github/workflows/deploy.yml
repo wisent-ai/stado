@@ -28,11 +28,6 @@ jobs:
     runs-on: [self-hosted, stado-control-plane]
     permissions:
       contents: read
-    env:
-      STADO_API_URL: https://stado.wisent.com
-      WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
-      WC_SKARBIEC_CONSUMER: stado-release-publisher
-      WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-skarbiec-token
     steps:
       # v4 runs on Node 20, which GitHub has deprecated and already forces onto Node
       # 24; v5 is the first major that targets Node 24 itself. It needs a runner of at
@@ -97,13 +92,16 @@ jobs:
           docker cp "$container:/out/." "$RUNNER_TEMP/stado-release/"
           docker rm "$container" >/dev/null
 
+      - name: Build native release publisher CLI
+        run: cargo build --manifest-path stado-rs/Cargo.toml --locked --bin stado
+
       - name: Create Linux release manifest
         run: |
           machine_schema="$(
             sed -n '/pub const SCHEMA_VERSION:/{s/.*= //;s/;//;p;q;}' \
               stado-rs/src/machine.rs
           )"
-          schema_unit="$(printf x | wc -c | tr -d '[:space:]')"
+          schema_unit="$(printf x | /usr/bin/wc -c | tr -d '[:space:]')"
           config_schema="$(
             sed -n '/pub const SCHEMA_VERSION:/{s/.*= //;s/;//;p;q;}' \
               stado-rs/src/config_file.rs
@@ -128,8 +126,8 @@ jobs:
           STADO_CONFIG_SCHEMA_VERSION="$config_schema" \
           STADO_STORAGE_SCHEMA_VERSION="$storage_schema" \
           STADO_LICENSE_FILE="$GITHUB_WORKSPACE/LICENSE" \
-          STADO_RELEASE_STABLE_INTEGRATIONS="local-compute,local-filesystem-storage,skarbiec" \
-          STADO_RELEASE_PREVIEW_INTEGRATIONS="gcs-storage,s3-storage,azure-blob-storage,gcp-compute,aws-ec2,azure-vm,box,vast" \
+          STADO_RELEASE_STABLE_INTEGRATIONS="local-compute,local-filesystem-storage,skarbiec,stado-object-storage" \
+          STADO_RELEASE_PREVIEW_INTEGRATIONS="gcs-storage,s3-storage,azure-blob-storage,gcp-compute,aws-ec2,azure-vm,cloudflare,box,vast" \
             scripts/release_manifest.sh
 
       - name: Refuse a release whose version disagrees with its contract
@@ -209,20 +207,20 @@ jobs:
           python3 scripts/surface.py --help-text "$RUNNER_TEMP/stado-help.txt" \
             > "$RUNNER_TEMP/candidate-surface.json"
 
-          stado_bin="$HOME/.stado/bin/stado"
-          STADO_API_TOKEN="$("$stado_bin" secrets get stado-release-publisher --field token)"
-          export STADO_API_TOKEN
+          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/debug/stado"
+          # The publisher is on the owner control-plane host. Its configured
+          # Stado store is the source of truth; public ingress is deployment
+          # output and therefore cannot be a release prerequisite.
+          unset STADO_API_URL STADO_API_TOKEN
           AUTOVERSION="$RUNNER_TEMP/autoversion/bin/autoversion" \
             STADO_BIN="$stado_bin" \
             scripts/version_check.sh "$RUNNER_TEMP/candidate-surface.json"
 
       - name: Create immutable Linux release through Stado
         run: |
-          stado_bin="$HOME/.stado/bin/stado"
+          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/debug/stado"
           test -x "$stado_bin"
-          test -n "$WC_SKARBIEC_URL"
-          STADO_API_TOKEN="$("$stado_bin" secrets get stado-release-publisher --field token)"
-          export STADO_API_TOKEN
+          unset STADO_API_URL STADO_API_TOKEN
           for source in "$RUNNER_TEMP"/stado-release/*; do
             name="${source##*/}"
             uri="stado://releases/stado/$STADO_VERSION/linux-amd64/$name"
@@ -247,10 +245,10 @@ jobs:
       STADO_ENABLE_AZURE_DEPLOY: ${{ vars.STADO_ENABLE_AZURE_DEPLOY }}
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
       COORD_TARGET: ${{ vars.STADO_COORDINATOR_TARGET }}
-      STADO_API_URL: https://stado.wisent.com
+      STADO_API_URL: ${{ vars.STADO_API_URL }}
       WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
       WC_SKARBIEC_CONSUMER: stado-release-publisher
-      WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-skarbiec-token
+      WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
       STADO_CONTROL_PLATFORM: ${{ vars.STADO_CONTROL_PLATFORM }}
       STADO_API_HOST: stado.wisent.com
       STADO_DASHBOARD_UPSTREAM: ${{ vars.STADO_DASHBOARD_UPSTREAM }}
@@ -309,7 +307,7 @@ jobs:
             sed -n '/pub const SCHEMA_VERSION:/{s/.*= //;s/;//;p;q;}' \
               "$STADO_SOURCE_DIR/stado-rs/src/machine.rs"
           )"
-          schema_unit="$(printf x | wc -c | tr -d '[:space:]')"
+          schema_unit="$(printf x | /usr/bin/wc -c | tr -d '[:space:]')"
           config_schema="$(
             sed -n '/pub const SCHEMA_VERSION:/{s/.*= //;s/;//;p;q;}' \
               "$STADO_SOURCE_DIR/stado-rs/src/config_file.rs"
@@ -334,12 +332,13 @@ jobs:
           STADO_CONFIG_SCHEMA_VERSION="$config_schema" \
           STADO_STORAGE_SCHEMA_VERSION="$storage_schema" \
           STADO_LICENSE_FILE="$STADO_SOURCE_DIR/LICENSE" \
-          STADO_RELEASE_STABLE_INTEGRATIONS="local-compute,local-filesystem-storage,skarbiec" \
+          STADO_RELEASE_STABLE_INTEGRATIONS="local-compute,local-filesystem-storage,skarbiec,stado-object-storage" \
           STADO_RELEASE_PREVIEW_INTEGRATIONS="gcs-storage,s3-storage,azure-blob-storage,gcp-compute,aws-ec2,azure-vm,box,vast" \
             "$STADO_SOURCE_DIR/scripts/release_manifest.sh"
-          stado_bin="$HOME/.stado/bin/stado"
-          STADO_API_TOKEN="$("$stado_bin" secrets get stado-release-publisher --field token)"
-          export STADO_API_TOKEN
+          stado_bin="$STADO_SOURCE_DIR/stado-rs/target/release/stado"
+          # Publish through the host's configured Stado store before replacing
+          # the host runtime or reloading its public ingress.
+          unset STADO_API_URL STADO_API_TOKEN
           for source in "$release_dir"/*; do
             name="${source##*/}"
             uri="stado://releases/stado/$version/$platform/$name"
@@ -361,7 +360,7 @@ jobs:
           if [ -z "$STADO_DASHBOARD_UPSTREAM" ]; then
             STADO_DASHBOARD_UPSTREAM="$(
               "$HOME/.stado/bin/stado" config show |
-                jq -er '.dashboard_bind + ":" + (.dashboard_port | tostring)'
+                jq -er '.resolved.dashboard_bind + ":" + (.resolved.dashboard_port | tostring)'
             )"
             export STADO_DASHBOARD_UPSTREAM
           fi

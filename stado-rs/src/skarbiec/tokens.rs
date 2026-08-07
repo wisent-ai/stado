@@ -1,6 +1,6 @@
-//! Scoped bearer readers through the dedicated verifier grants. These are
-//! serve-side auth-boundary reads: they always talk to Skarbiec and never
-//! route through the credential store selector.
+//! Scoped bearer readers through dedicated verifier coordinates. Item reads
+//! route through the globally selected credential store; when Skarbiec is the
+//! backend, its scoped grants remain the authorization boundary.
 
 use super::{Client, SkarbiecError};
 
