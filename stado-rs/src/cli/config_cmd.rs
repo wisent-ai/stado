@@ -8,16 +8,85 @@ use crate::config_file;
 
 use super::CmdError;
 
-pub fn run(sub: &str) -> Result<(), CmdError> {
+pub fn run(sub: &str, key: Option<&str>, value: Option<&str>) -> Result<(), CmdError> {
     match sub {
         "init" => init(),
         "migrate" => migrate(),
         "validate" => validate(),
         "show" => show(),
+        "set" => match (key, value) {
+            (Some(key), Some(value)) => set(key, value),
+            _ => Err(CmdError::click(
+                "config set needs a dotted key and a value, e.g. \
+                 stado config set alerts.channels '[\"resend\"]'",
+            )),
+        },
         other => Err(CmdError::click(format!(
-            "unknown config subcommand: {other} (show|validate|init|migrate)"
+            "unknown config subcommand: {other} (show|validate|init|migrate|set)"
         ))),
     }
+}
+
+/// `config set KEY VALUE`: change one dotted key in the config file.
+///
+/// Enabling an alert channel, pointing a URL at a live listener, or naming a
+/// destination used to mean hand-editing the deployment's JSON. The document
+/// is validated before it is written and the write is atomic, so a rejected
+/// value leaves the running configuration exactly as it was.
+fn set(key: &str, raw: &str) -> Result<(), CmdError> {
+    let path = config_file::config_path()
+        .map_err(|exc| CmdError::click(exc.to_string()))?
+        .ok_or_else(|| CmdError::click("no config file exists; run: stado config init"))?;
+    let original = std::fs::read_to_string(&path)?;
+    let mut document: Value = serde_json::from_str(&original)?;
+    if !document.is_object() {
+        return Err(CmdError::click("config file must contain a JSON object"));
+    }
+    // A bare word is what an operator types for a string value; anything that
+    // parses as JSON keeps its type, so lists and booleans need no quoting
+    // dance.
+    let parsed: Value = serde_json::from_str(raw).unwrap_or_else(|_| Value::from(raw));
+
+    let mut cursor = &mut document;
+    let segments: Vec<&str> = key.split('.').collect();
+    let (last, parents) = segments
+        .split_last()
+        .ok_or_else(|| CmdError::click("config set needs a non-empty key"))?;
+    for segment in parents {
+        let object = cursor
+            .as_object_mut()
+            .ok_or_else(|| CmdError::click(format!("{key}: {segment} is not an object")))?;
+        cursor = object
+            .entry((*segment).to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
+    }
+    let object = cursor
+        .as_object_mut()
+        .ok_or_else(|| CmdError::click(format!("{key}: parent is not an object")))?;
+    let previous = object.insert((*last).to_string(), parsed.clone());
+
+    let problems = config_file::validate(&document);
+    if !problems.is_empty() {
+        return Err(CmdError::click(format!(
+            "{key} rejected, config unchanged: {}",
+            problems.join("; ")
+        )));
+    }
+
+    let body = format!("{}\n", serde_json::to_string_pretty(&document)?);
+    let temporary = std::path::PathBuf::from(format!("{}.setting", path.display()));
+    std::fs::write(&temporary, body)?;
+    if let Ok(metadata) = std::fs::metadata(&path) {
+        std::fs::set_permissions(&temporary, metadata.permissions())?;
+    }
+    std::fs::rename(&temporary, &path)?;
+    println!(
+        "{key}: {} -> {} ({})",
+        previous.unwrap_or(Value::Null),
+        parsed,
+        path.display()
+    );
+    Ok(())
 }
 
 fn initialize_local_registry(home: &std::path::Path) -> Result<(), CmdError> {
