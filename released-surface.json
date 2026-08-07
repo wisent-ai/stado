@@ -1,6 +1,6 @@
 {
-  "version": "0.5.0",
-  "source": "git-archive:platform-surface-2026-07-31.1 rebuilt from the tag, which declares 0.5.0",
+  "version": "0.6.0",
+  "source": "stado:stado/0.6.0/darwin-arm64/stado release object published to the Stado channel, fetched through /api/release/object and byte-identical to the v0.6.0 GitHub Release asset and to the SHA256SUMS it ships",
   "surface": [
     "agent",
     "artifact",
@@ -10,6 +10,7 @@
     "bootstrap",
     "cancel",
     "capabilities",
+    "cloudflare",
     "config",
     "coordinator",
     "cost",
