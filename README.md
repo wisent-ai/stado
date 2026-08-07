@@ -8,15 +8,21 @@
 <!-- wisent-readme-signals:end -->
 
 
-**Stado runs policy-controlled AI workloads across machines you own or explicitly authorize, using one durable queue, one result contract, and bounded cost and safety rules.**
+**Stado is a self-hosted compute fleet control plane for teams that need to run
+policy-controlled AI workloads across machines they own or explicitly
+authorize.**
 
-Stado is a self-hosted Rust control plane. An operator submits the result a
-workload must produce and the constraints it must respect; Stado records the
-request, assigns eligible capacity, executes it through an agent, preserves the
-result and evidence, and exposes the outcome through human and machine
-interfaces.
+Stado accepts the result a workload must produce and the constraints it must
+respect, assigns eligible capacity through one durable queue, preserves result
+evidence, and enforces explicit cost, ownership, and safety boundaries.
 
-> One queue. Every authorized machine. Explicit cost and safety boundaries.
+[Quick start](#quick-start) · [CLI reference](docs/cli.md) ·
+[Architecture](docs/architecture.md) · [Operations](docs/operations.md)
+
+Current proof boundary: the 0.5 contract has a stable local-filesystem execution
+scope for macOS arm64 and Linux amd64 release candidates. Cloud storage and VM
+adapters remain preview until their release-scoped live acceptance evidence is
+recorded.
 
 ## Problem and intended users
 
@@ -113,50 +119,75 @@ in the release documentation.
 
 ### Run a workload on an existing machine
 
-An operator registers a workstation or server and starts an agent. A workload
-owner submits a shell command with optional CPU, GPU, deadline, artifact, and
-verification constraints. Stado leases the job to one eligible agent, records
-every state transition, and makes output available by job ID.
+- **Actor:** an operator and a workload owner.
+- **Initial state:** the operator has registered a workstation or server and
+  started an agent with the required runtime and capacity.
+- **Outcome:** the owner submits a command with optional CPU, GPU, deadline,
+  artifact, and verification constraints; Stado leases it to one eligible agent,
+  records every transition, and returns output by job ID.
+- **Safety boundary:** the workload receives only admitted capacity and named
+  secret references; host registration does not grant general provider access.
 
 ### Share one queue across a fleet
 
-Multiple agents publish capacity and claim from one canonical store. Leases,
-fencing, and compare-and-swap state prevent two workers or coordinators from
-owning the same transition.
+- **Actor:** an infrastructure operator managing multiple authorized agents.
+- **Initial state:** agents publish capacity to one configured canonical store.
+- **Outcome:** eligible workers claim work from the same queue while operators
+  see one job lifecycle and result contract.
+- **Safety boundary:** leases, fencing, and compare-and-swap revisions prevent
+  two workers or coordinators from owning the same transition.
 
 ### Pause and drain safely
 
-Before maintenance or migration, an operator pauses new claims and dispatches,
-waits for running jobs to finish or yield, verifies that the queue is drained,
-and resumes without deleting queued work.
+- **Actor:** an operator preparing maintenance or migration.
+- **Initial state:** queued and running jobs may exist across the fleet.
+- **Outcome:** the operator pauses new claims and dispatches, waits for running
+  jobs to finish or yield, verifies drain state, and resumes without deleting
+  queued work.
+- **Safety boundary:** pause and drain are durable control state, not a best-
+  effort process signal on one machine.
 
 ### Recover from a storage outage
 
-An operator previews and executes a fenced copy from local storage, GCS, S3,
-or Azure Blob to another configured backend, verifies names, metadata, and
-bodies, then changes the canonical store without allowing two active writers.
+- **Actor:** an operator responsible for the canonical queue and artifact store.
+- **Initial state:** the active local, GCS, S3, or Azure Blob backend is degraded
+  or must be replaced.
+- **Outcome:** the operator previews and executes a fenced copy, verifies names,
+  metadata, and bodies, then selects the recovered canonical store.
+- **Safety boundary:** migration does not allow two active writers and does not
+  silently treat an unavailable backend as an empty queue.
 
 ### Run with reproducible inputs and bounded secrets
 
-A workload can pin source to an immutable revision, resolve immutable input
-artifacts, request only named secret fields, enforce a postcondition, and
-publish output plus SHA-256 evidence. Secret plaintext is materialized only in
-the trusted workload process and is not part of durable job JSON.
+- **Actor:** a workload owner submitting repeatable AI work.
+- **Initial state:** source, immutable inputs, requested secret fields,
+  postcondition, and output contract are explicit.
+- **Outcome:** the worker resolves those inputs, executes the workload, and
+  publishes output plus SHA-256 evidence.
+- **Safety boundary:** secret plaintext is materialized only inside the trusted
+  workload process and is excluded from durable job JSON.
 
 ### Give automation safe compute access
 
-An external service or AI agent uses the versioned `stado machine` JSON
-interface for mutations and status, or the read-only `stado-mcp` interface for
-inspection. It receives bounded actions and machine-readable errors rather
-than unrestricted shell or provider access.
+- **Actor:** an external service or AI agent.
+- **Initial state:** the caller has credentials for the exact Stado interface and
+  action it needs.
+- **Outcome:** it uses versioned `stado machine` JSON for authorized mutations
+  and status, or read-only `stado-mcp` for inspection, and receives stable
+  machine-readable errors.
+- **Safety boundary:** neither interface provides unrestricted shell access or
+  cloud-administrator credentials.
 
 ### Burst to an explicitly enabled cloud provider
 
-After an operator configures identity, network, quota, image, ownership, cost,
-and recovery boundaries, Stado may provision an eligible VM, bootstrap an
-agent, execute the same job contract, collect the result, and retire the
-owned instance. Each cloud adapter remains preview until its live acceptance
-suite is recorded for the released version.
+- **Actor:** an operator-controlled workload workflow.
+- **Initial state:** identity, network, quota, image, ownership, cost, recovery,
+  and provider-specific capability boundaries are configured.
+- **Outcome:** Stado may provision an eligible VM, bootstrap an agent, execute
+  the same job contract, collect the result, and retire the owned instance.
+- **Safety boundary:** each cloud adapter remains preview until its live
+  acceptance suite is recorded for the released version; missing evidence is not
+  promoted to stable support.
 
 ## How Stado works
 
