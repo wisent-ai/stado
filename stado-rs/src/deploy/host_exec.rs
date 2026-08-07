@@ -47,7 +47,7 @@ pub const OK_STATUS: &str = "ok";
 /// The punctuation an operator's word may contain on top of ASCII
 /// alphanumerics. Every one of these is inert to `/bin/sh`: no expansion,
 /// no word splitting, no redirection, no globbing.
-const SAFE_PUNCTUATION: &str = "-_./";
+const SAFE_PUNCTUATION: &str = "-_./:";
 
 /// One approved remote program.
 #[derive(Debug)]
@@ -112,6 +112,14 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
         argv: &["/usr/sbin/netstat", "-anv", "-p", "tcp"],
         why: "reads the kernel TCP socket table without connecting to any endpoint; fixed \
               flags expose listeners and owning processes but accept no remote address",
+    },
+    ApprovedCommand {
+        argv: &["/usr/sbin/lsof", "-nP", "-iTCP", "-sTCP:LISTEN"],
+        why: "names the process behind every listening TCP port. `netstat -anv -p tcp` above \
+              never shows an owner, so the one question the fleet asks most often - which \
+              process holds this port - was answered over ssh instead. The flags fix the \
+              selection to listeners and take no argument, so it cannot be pointed at a file, \
+              a user, or a remote address",
     },
     ApprovedCommand {
         argv: &["/usr/bin/uname", "-a"],
