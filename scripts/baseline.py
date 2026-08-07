@@ -200,7 +200,7 @@ def assert_channel_readable(stado: str) -> None:
         f"stado://{NAMESPACE}/{PRODUCT}/{declared_version(REPOSITORY)}"
         f"/{PROBE_PLATFORM}/{BINARY}"
     )
-    state = json.loads(run([stado, "storage", "stat", probe, "--json"])).get("state")
+    state = channel_state(stado, probe)
     if state not in STATED:
         raise Unreachable(
             f"the release channel did not testify about {probe} (state {state!r}), so "
@@ -209,20 +209,47 @@ def assert_channel_readable(stado: str) -> None:
         )
 
 
+def channel_state(stado: str, uri: str) -> str:
+    """What the channel says about one exact object: present, absent, or neither.
+
+    Neither is not absence. Anything outside `STATED` is an answer nobody gave, and
+    every caller here treats it as a reason to refuse rather than a reason to conclude.
+    """
+    return json.loads(run([stado, "storage", "stat", uri, "--json"])).get("state")
+
+
 def published(stado: str) -> dict:
-    """Published versions of this product mapped to the platforms they carry."""
-    listing = json.loads(
-        run([stado, "storage", "objects", NAMESPACE, f"{PRODUCT}/", "--json"])
-    )
+    """Published versions of this product mapped to the platforms they carry.
+
+    The channel serves one object per request and offers no listing: releases are
+    handed to its own route, which answers a served object by redirecting to where the
+    bytes live. Enumerating `releases` through the object API used to stand in for
+    that, and it quietly stopped being possible -- that route does not exist on the
+    channel, so the call answered 404 for every caller. Under the gate's `set -e` the
+    whole check died before judging anything; read any other way it would have meant
+    "nothing is published", which is the one wrong answer that certifies a stale
+    baseline.
+
+    So candidates come from the tags this repository can see, and whether each is
+    actually published comes from the channel, one exact coordinate at a time. A tag
+    nobody released contributes nothing, which keeps the channel tier strictly above
+    the tag tier instead of collapsing the two into "someone tagged it".
+    """
     versions: dict = {}
-    for entry in listing["objects"]:
-        parts = str(entry.get("key", "")).split("/")
-        if len(parts) != KEY_PARTS or parts[OK] != PRODUCT:
-            continue
-        version, platform_name, name = parts[ONE], parts[ONE + ONE], parts[TRIPLE]
-        if not as_triple(version):
-            continue
-        versions.setdefault(version, {}).setdefault(platform_name, set()).add(name)
+    for version in tags_by_version():
+        for platform_name in sorted(set(PLATFORMS.values())):
+            key = f"{PRODUCT}/{version}/{platform_name}/{BINARY}"
+            state = channel_state(stado, f"stado://{NAMESPACE}/{key}")
+            if state not in STATED:
+                raise Unreachable(
+                    f"the release channel did not testify about {key} (state "
+                    f"{state!r}), so what it publishes cannot be established; refusing "
+                    "rather than assuming it either way"
+                )
+            if state == "present":
+                versions.setdefault(version, {}).setdefault(platform_name, set()).add(
+                    BINARY
+                )
     if not versions:
         assert_channel_readable(stado)
     return versions
