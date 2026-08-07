@@ -121,12 +121,12 @@ fn local_apple_accounts() -> Option<Vec<String>> {
 
 fn binding_row(target: &ComputeTarget, binding: &IdentityBinding, observed: Option<bool>) -> Value {
     json!({
+        // The registry's name for the machine, and deliberately not an address.
+        // Callers route work to the holder through the registry channel, which
+        // resolves the target itself; handing them a destination as well would be a
+        // second way to say where a host is, and the one that goes stale -- which is
+        // exactly how the hand-written APPLE_2FA_MAC_* variables came to exist.
         "host": target.name,
-        // Callers route work to the holder, so the row has to carry enough to reach
-        // it. Without the ssh destination a consumer knows which host qualifies and
-        // still has to be told separately how to get there, which is how the
-        // hand-written APPLE_2FA_MAC_* variables came to exist in the first place.
-        "ssh": target.ssh,
         "kind": binding.kind,
         "identity": binding.identity,
         "user": binding.user,
