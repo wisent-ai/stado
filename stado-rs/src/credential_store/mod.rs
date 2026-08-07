@@ -241,3 +241,22 @@ pub async fn read_item_with(
         Backend::File { path } => file::file_read_item(&path, id),
     }
 }
+
+/// Read one optional string field through the selected store for callers that
+/// already carry their own Skarbiec coordinates.
+pub async fn read_string_with(
+    url: &str,
+    consumer: &str,
+    token_file: &str,
+    id: &str,
+    field: &str,
+) -> Result<Option<String>, SkarbiecError> {
+    match selected()? {
+        Backend::Skarbiec { url: store_url } => {
+            Client::direct(store_url.as_deref().unwrap_or(url), consumer, token_file)?
+                .read_string(id, field)
+                .await
+        }
+        Backend::File { path } => file::file_read_string(&path, id, field),
+    }
+}

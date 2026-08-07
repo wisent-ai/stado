@@ -114,30 +114,48 @@ impl AlertChannels {
             || is_enabled("telegram")
             || is_enabled("sendgrid")
             || is_enabled("most");
-        let stored = if needs_stored {
+        let stored: std::collections::BTreeMap<String, String> = if needs_stored {
+            // Per field, not the whole item: the listener refuses a read that
+            // names no field ("field required"), so asking for the item as a
+            // whole silently emptied every channel and the operator was left
+            // with an alerting path that resolved to nothing.
+            let mut wanted: Vec<&str> = Vec::new();
+            if is_enabled("slack") {
+                wanted.push("slack_webhook");
+            }
+            if is_enabled("telegram") {
+                wanted.push("telegram_bot_token");
+                wanted.push("telegram_chat_id");
+            }
+            if is_enabled("sendgrid") {
+                wanted.push("sendgrid_api_key");
+            }
+            if is_enabled("most") {
+                wanted.push("most_phone");
+            }
             match crate::skarbiec::Client::configured() {
-                Ok(vault) => match vault.read_item("stado-alerts").await {
-                    Ok(value) => value,
-                    Err(err) => {
-                        channel_failed("configuration", &err.to_string());
-                        Value::Null
+                Ok(vault) => {
+                    let mut found = std::collections::BTreeMap::new();
+                    for field in wanted {
+                        match vault.read_string("stado-alerts", field).await {
+                            Ok(Some(value)) if !value.is_empty() => {
+                                found.insert(field.to_string(), value);
+                            }
+                            Ok(_) => {}
+                            Err(err) => channel_failed("configuration", &err.to_string()),
+                        }
                     }
-                },
+                    found
+                }
                 Err(err) => {
                     channel_failed("configuration", &err.to_string());
-                    Value::Null
+                    std::collections::BTreeMap::new()
                 }
             }
         } else {
-            Value::Null
+            std::collections::BTreeMap::new()
         };
-        let secret = |field: &str| {
-            stored
-                .get(field)
-                .and_then(Value::as_str)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-        };
+        let secret = |field: &str| stored.get(field).cloned();
 
         let slack_webhook = is_enabled("slack")
             .then(|| secret("slack_webhook"))
@@ -212,17 +230,29 @@ async fn resolve_most(phone: Option<String>) -> Option<MostChannel> {
     let provider = crate::skarbiec::Client::integration_provider("most")
         .map_err(|err| channel_failed("most-configuration", &err.to_string()))
         .ok()?;
-    let item = provider
-        .read_item("most-twilio")
-        .await
-        .map_err(|err| channel_failed("most-configuration", &err.to_string()))
-        .ok()?;
-    let field = |name: &str| {
-        item.get(name)
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
-    };
+    // Field by field: the listener refuses a read that names no field, so the
+    // whole-item form resolved to no channel and the deployment believed it
+    // had no way to page anyone.
+    let mut values = std::collections::BTreeMap::new();
+    for name in [
+        "account_sid",
+        "auth_token",
+        "api_version",
+        "messaging_service_sid",
+        "from_number",
+    ] {
+        match provider.read_string("most-twilio", name).await {
+            Ok(Some(value)) if !value.is_empty() => {
+                values.insert(name, value);
+            }
+            Ok(_) => {}
+            Err(err) => {
+                channel_failed("most-configuration", &err.to_string());
+                return None;
+            }
+        }
+    }
+    let field = |name: &str| values.get(name).cloned();
     match (
         field("account_sid"),
         field("auth_token"),
@@ -238,9 +268,19 @@ async fn resolve_most(phone: Option<String>) -> Option<MostChannel> {
             api_base: TWILIO_API_BASE.to_string(),
         }),
         _ => {
+            // Name what the grant actually returned: "needs three fields" hid
+            // which read came back empty and cost a day of guessing.
+            let missing: Vec<&str> = ["account_sid", "auth_token", "api_version"]
+                .into_iter()
+                .filter(|name| !values.contains_key(name))
+                .collect();
             channel_failed(
                 "most-configuration",
-                "most-twilio needs account_sid, auth_token, and api_version",
+                &format!(
+                    "most-twilio resolved {} of 5 fields; missing {}",
+                    values.len(),
+                    missing.join(", ")
+                ),
             );
             None
         }

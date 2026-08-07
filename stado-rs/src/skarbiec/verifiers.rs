@@ -22,7 +22,7 @@ impl Client {
                     .to_string(),
             ));
         }
-        Self::new(
+        Self::direct(
             crate::config::object_skarbiec_url(),
             crate::config::object_skarbiec_consumer(),
             crate::config::object_skarbiec_token_file(),
@@ -48,7 +48,7 @@ impl Client {
                     .to_string(),
             ));
         }
-        Self::new(
+        Self::direct(
             crate::config::release_skarbiec_url(),
             crate::config::release_skarbiec_consumer(),
             token_file,
@@ -77,7 +77,7 @@ impl Client {
                     .to_string(),
             ));
         }
-        Self::new(
+        Self::direct(
             crate::config::machine_skarbiec_url(),
             crate::config::machine_skarbiec_consumer(),
             token_file,
@@ -109,7 +109,7 @@ impl Client {
                     .to_string(),
             ));
         }
-        Self::new(
+        Self::direct(
             crate::config::backend_push_skarbiec_url(),
             crate::config::backend_push_skarbiec_consumer(),
             token_file,
@@ -137,7 +137,7 @@ impl Client {
                     .to_string(),
             ));
         }
-        Self::new(
+        Self::direct(
             crate::config::service_skarbiec_url(),
             crate::config::service_skarbiec_consumer(),
             token_file,
@@ -169,7 +169,7 @@ impl Client {
                     .to_string(),
             ));
         }
-        Self::new(
+        Self::direct(
             crate::config::rate_limit_skarbiec_url(),
             crate::config::rate_limit_skarbiec_consumer(),
             token_file,
@@ -205,7 +205,7 @@ impl Client {
                     .to_string(),
             ));
         }
-        Self::new(
+        Self::direct(
             crate::config::integration_skarbiec_url(),
             crate::config::integration_skarbiec_consumer(),
             token_file,
@@ -238,7 +238,7 @@ impl Client {
                 "integration provider token file for domain {domain:?} is not isolated"
             )));
         }
-        Self::new(
+        Self::direct(
             crate::config::integration_provider_skarbiec_url(),
             provider.consumer(),
             token_file,

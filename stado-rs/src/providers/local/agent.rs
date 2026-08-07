@@ -133,17 +133,19 @@ pub async fn load_registry_auto() -> Result<Registry, RegistryError> {
     targets::load_registry_auto().await
 }
 
-/// Find the unique target declaring this host's identity.
-/// Python `targets.lookup_self(hostname, source="auto")`.
+/// Find the unique registered or provisioning target declaring this host's
+/// identity. Provisioning visibility is confined to the agent handshake;
+/// schedulers and ordinary registry consumers still see registered targets
+/// only.
 pub async fn lookup_self_auto(hostname: &str) -> Result<Option<ComputeTarget>, RegistryError> {
     let registry = load_registry_auto().await?;
-    Ok(registry.lookup_self(hostname)?.cloned())
+    Ok(registry.lookup_self_for_agent(hostname)?.cloned())
 }
 
-/// Return the named target (Python `targets.lookup(name, source="auto")`).
+/// Return a named registered or provisioning target for agent startup.
 pub async fn lookup_auto(name: &str) -> Result<Option<ComputeTarget>, RegistryError> {
     let registry = load_registry_auto().await?;
-    Ok(registry.lookup(name).cloned())
+    Ok(registry.lookup_for_agent(name).cloned())
 }
 
 // ---------------------------------------------------------------------------

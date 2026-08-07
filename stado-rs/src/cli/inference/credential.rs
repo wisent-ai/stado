@@ -44,16 +44,11 @@ pub async fn init(json_output: bool) -> Result<(), CmdError> {
 pub async fn read() -> Result<String, CmdError> {
     let vault = crate::skarbiec::Client::configured()
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let stored = vault
-        .read_item(LOCAL_PROVIDER_CREDENTIAL)
+    vault
+        .read_string(LOCAL_PROVIDER_CREDENTIAL, "token")
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    stored
-        .as_object()
-        .and_then(|object| object.get("token"))
-        .and_then(serde_json::Value::as_str)
+        .map_err(|error| CmdError::click(error.to_string()))?
         .filter(|token| !token.is_empty())
-        .map(str::to_string)
         .ok_or_else(|| {
             CmdError::click(format!(
                 "Skarbiec item {LOCAL_PROVIDER_CREDENTIAL:?} has no non-empty string field \"token\""
