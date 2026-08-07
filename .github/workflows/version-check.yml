@@ -218,12 +218,16 @@ jobs:
 
           # scripts/version_check.sh asserts the baseline against the release channel
           # in both directions, and reads absence only from the channel's own
-          # testimony. All of that is answered by the host's configured store and by
-          # STADO_API_URL: with either credential missing, `stado storage objects`
-          # falls back to a local job store and an empty directory would testify that
-          # nothing has ever been published. The gate cannot detect that from inside,
-          # so it is asserted here, before it is asked anything.
-          stado_bin="$HOME/.stado/bin/stado"
+          # testimony. That testimony is only as current as the binary asked for it:
+          # this used to ask the installed `~/.stado/bin/stado`, so the gate measured
+          # this revision's surface with one binary and questioned the channel with
+          # another, older one. A revision that changes how the channel is read could
+          # then never be seen to work -- which is exactly what happened.
+          #
+          # The binary under judgement is the one that answers. It is also the one that
+          # would be published, so if it cannot read the channel, that is a defect this
+          # gate should surface rather than paper over with a predecessor.
+          stado_bin="stado-rs/target/release/stado"
           test -x "$stado_bin"
           if [ -z "${STADO_API_URL:-}" ]; then
             echo "::error::STADO_API_URL is empty, so the channel assertions below would" \
