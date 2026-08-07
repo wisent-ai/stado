@@ -1635,22 +1635,24 @@ async fn check_alerts() -> Check {
 const CONTRACT_ID: &str = "skarbiec-contract";
 const CONTRACT_TITLE: &str = "Skarbiec read contract";
 const CONTRACT_REMEDY: &str =
-    "move whole-item reads to Client::read_field, or pin the broker to the build these callers expect";
+    "read one field at a time with Client::read_field; a broker that answers without a named field is the thing to fix, not the one that asks for it";
 
-/// Which read contract is the configured broker enforcing?
+/// Which read contract is the broker enforcing?
 ///
-/// Skarbiec 9aa7dd4 made `field` mandatory on `/v1/items/read`. Callers that
-/// asked for an item and picked fields out of it got `400 {"error":"field
-/// required"}` with no hint that the contract had moved underneath them. On
-/// 2026-08-04 that took out this machine's host-health beacon for twenty-one
-/// hours, during which `stado service list` went on reporting a stale
-/// `active` for services that were not running.
+/// Skarbiec makes `field` mandatory on `/v1/items/read`, and that is correct:
+/// a read grant is per field, so answering an item-wide read would hand back
+/// fields the caller was never granted. This check used to report that as the
+/// fault and a broker answering without a field as healthy, which is exactly
+/// backwards -- and a check that calls the secure behaviour a failure teaches
+/// operators to skim past `doctor`, which is how a real FAIL sat unread here
+/// for hours.
 ///
-/// Every credential caller in this build now names its field - alerts, the
-/// gateway verifiers, azure, cloudflare, billing, the dashboard's operator
-/// auth and the fleet key store - so a broker demanding one is the contract
-/// this build speaks, and the row says which contract is in force rather than
-/// warning about a mismatch that no longer exists.
+/// The drift it exists for is real. On 2026-08-04 callers that asked for a
+/// whole item and picked fields out of it got `400 {"error":"field required"}`
+/// with no hint the contract had moved, and this machine's host-health beacon
+/// stayed down for twenty-one hours while `stado service list` reported a
+/// stale `active` for services that were not running. The repair is to move
+/// those callers to per-field reads, which the remedy now says.
 ///
 /// The probe is unauthenticated on purpose: the handler validates `id` and
 /// `field` before it looks at any identity, so a request carrying neither a
@@ -1708,8 +1710,9 @@ async fn skarbiec_contract_check() -> Check {
                     CONTRACT_ID,
                     CONTRACT_TITLE,
                     format!(
-                        "{endpoint} requires a named field (HTTP {status}), which is what this \
-                         build sends: every credential read names its field"
+                        "{endpoint} requires a named field (HTTP {status}), which is the \
+                         contract in force: the authority grants read per field, so an \
+                         item-wide read would hand back fields nobody was granted"
                     ),
                     CONTRACT_REMEDY,
                 )
@@ -1719,9 +1722,9 @@ async fn skarbiec_contract_check() -> Check {
                     CONTRACT_TITLE,
                     Status::Warn,
                     format!(
-                        "{endpoint} accepts a read without a named field (HTTP {status}); this \
-                         broker predates the field requirement, so an item read here returns \
-                         whatever the grant allows rather than the one field asked for"
+                        "{endpoint} answered a read that named no field (HTTP {status}); read \
+                         grants are per field, so something here can return fields the caller \
+                         was never granted"
                     ),
                     CONTRACT_REMEDY,
                 )
