@@ -60,7 +60,17 @@ pub async fn validate_object_verifier() -> Result<usize, SkarbiecError> {
         }))
         .await;
     for (namespace, result) in reads {
-        let token = result?
+        // Which namespace could not be read is the whole content of this
+        // failure, and `?` alone drops it: the check then reports a bare
+        // "HTTP 403" for a sweep over seventeen items and leaves the operator
+        // to find the one by hand.
+        let token = result
+            .map_err(|error| {
+                SkarbiecError::Deployment(format!(
+                    "reading {}/token for namespace {namespace} failed: {error}",
+                    namespaces[namespace].item()
+                ))
+            })?
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| {
                 SkarbiecError::Deployment(format!(
