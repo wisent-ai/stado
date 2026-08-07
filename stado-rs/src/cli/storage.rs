@@ -907,26 +907,65 @@ fn backend_prefix(prefix: &str) -> Result<String, CmdError> {
 /// "is it gone?" check on the exit status therefore never mistakes a dead
 /// store for a drained one; branch on `state` for present-vs-absent.
 async fn stat(args: &StorageStatArgs) -> Result<(), CmdError> {
-    let store = JobStorage::new().await?;
-    let backend = store.backend();
-    let probe_path = backend_key(&args.path)?;
-    let presence = probe(backend, &probe_path).await;
+    // Which store is even being asked. A `stado://releases/...` object lives in the
+    // release channel, reached by its own route; the job store never held those bytes,
+    // so asking it reports `absent` for every release ever published -- an answer
+    // indistinguishable from a real absence. Only the witness differs here: one
+    // rendering below reports whichever answered, so the two cannot drift.
+    let release = match crate::object_store::ObjectRef::parse(&args.path) {
+        Ok(object) if object.namespace() == "releases" => {
+            RemoteObjectApi::configured_release_reader()?.map(|remote| (remote, object.to_string()))
+        }
+        _ => None,
+    };
 
-    // Metadata and the timestamp come from the listing, which is a separate
-    // grant from object read: if listing is denied while the read worked,
-    // say so rather than downgrading a known-present object to unreachable.
-    let (metadata, updated, metadata_error) = match &presence {
-        Presence::Present { .. } => match backend.list_blobs_with_meta(&probe_path).await {
-            Ok(blobs) => blobs
-                .into_iter()
-                .find(|blob| blob.name == probe_path)
-                .map_or_else(
-                    || (BTreeMap::new(), None, None),
-                    |blob| (blob.metadata, blob.updated, None),
-                ),
-            Err(err) => (BTreeMap::new(), None, Some(err.to_string())),
-        },
-        Presence::Absent | Presence::Unreachable(_) => (BTreeMap::new(), None, None),
+    let (presence, store_bucket, store_backend, metadata, updated, metadata_error) = match release {
+        Some((remote, uri)) => {
+            let presence = remote.stat_release(&uri).await?;
+            // The channel answers presence, not bookkeeping: it serves bytes by
+            // redirect, so there is no listing to carry metadata or a timestamp.
+            // Reporting empty is honest; inventing them from the job store would
+            // attach one store's bookkeeping to another store's answer.
+            (
+                presence,
+                remote.base_url.to_string(),
+                "release-channel".to_string(),
+                BTreeMap::new(),
+                None,
+                None,
+            )
+        }
+        None => {
+            let store = JobStorage::new().await?;
+            let backend = store.backend();
+            let probe_path = backend_key(&args.path)?;
+            let presence = probe(backend, &probe_path).await;
+
+            // Metadata and the timestamp come from the listing, which is a separate
+            // grant from object read: if listing is denied while the read worked,
+            // say so rather than downgrading a known-present object to unreachable.
+            let (metadata, updated, metadata_error) = match &presence {
+                Presence::Present { .. } => match backend.list_blobs_with_meta(&probe_path).await {
+                    Ok(blobs) => blobs
+                        .into_iter()
+                        .find(|blob| blob.name == probe_path)
+                        .map_or_else(
+                            || (BTreeMap::new(), None, None),
+                            |blob| (blob.metadata, blob.updated, None),
+                        ),
+                    Err(err) => (BTreeMap::new(), None, Some(err.to_string())),
+                },
+                Presence::Absent | Presence::Unreachable(_) => (BTreeMap::new(), None, None),
+            };
+            (
+                presence,
+                store.bucket_name().to_string(),
+                store.backend_name().to_string(),
+                metadata,
+                updated,
+                metadata_error,
+            )
+        }
     };
 
     let (state, size, version, detail) = match &presence {
@@ -941,8 +980,8 @@ async fn stat(args: &StorageStatArgs) -> Result<(), CmdError> {
 
     if args.json {
         echo_json(&json!({
-            "backend": store.backend_name(),
-            "bucket": store.bucket_name(),
+            "backend": store_backend,
+            "bucket": store_bucket,
             "path": args.path,
             "state": state,
             "size": size,
@@ -958,7 +997,7 @@ async fn stat(args: &StorageStatArgs) -> Result<(), CmdError> {
             vec!["state".to_string(), state.to_string()],
             vec![
                 "store".to_string(),
-                format!("{} ({})", store.bucket_name(), store.backend_name()),
+                format!("{store_bucket} ({store_backend})"),
             ],
         ];
         if let Some(size) = size {
@@ -1154,6 +1193,47 @@ impl RemoteObjectApi {
         let response = self.request(reqwest::Method::GET, endpoint).send().await?;
         self.success_body(response, max_object_api_download_body(), "release GET")
             .await
+    }
+
+    /// Ask the release channel itself whether it serves one object.
+    ///
+    /// `stat` otherwise answers from the configured job store, and for a
+    /// `stado://releases/...` URI that is the wrong witness entirely: the channel
+    /// publishes through this route, and the local store has never held those bytes.
+    /// Reading its silence as `absent` is how a baseline naming a published artifact
+    /// gets certified against a store that could not have served it either way.
+    ///
+    /// Three states, because two would let silence pass for absence. A redirect
+    /// counts as present: this route answers a served object by redirecting to where
+    /// the bytes live, and the client does not follow it, so the redirect IS the
+    /// testimony. An explicit 404 is absence. Anything else -- a refused connection,
+    /// a proxy's error page, a status this does not know -- is unreachable, which the
+    /// exit-code contract reports as a question nobody answered.
+    async fn stat_release(&self, uri: &str) -> Result<Presence, CmdError> {
+        let endpoint = self.endpoint("/api/release/object", &[("uri", uri)])?;
+        match self.request(reqwest::Method::GET, endpoint).send().await {
+            Ok(response) => {
+                let status = response.status();
+                if status.is_success() || status.is_redirection() {
+                    let size = response
+                        .content_length()
+                        .and_then(|value| usize::try_from(value).ok())
+                        .unwrap_or_default();
+                    Ok(Presence::Present {
+                        size,
+                        version: None,
+                        detail: None,
+                    })
+                } else if status == reqwest::StatusCode::NOT_FOUND {
+                    Ok(Presence::Absent)
+                } else {
+                    Ok(Presence::Unreachable(format!(
+                        "the release channel answered HTTP {status}"
+                    )))
+                }
+            }
+            Err(error) => Ok(Presence::Unreachable(error.to_string())),
+        }
     }
 
     async fn list(&self, namespace: &str, prefix: &str) -> Result<Vec<Value>, CmdError> {

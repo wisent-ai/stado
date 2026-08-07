@@ -72,9 +72,23 @@ jq '.source = "handwritten by someone in a hurry"' released-surface.json \
 jq '.source = "stado:stado/9.9.9/nowhere-noarch/stado published to the Stado channel"' \
   released-surface.json > "$work/absent-object.json"
 
+# Case 3 needs a baseline that already carries this tree's surface at the version this
+# tree declares. Compared against the published baseline instead, it proves nothing:
+# this tree is normally already additive over what the channel serves, so one more
+# command changes neither the class of the change nor the version it demands, and the
+# case passes for a reason that has nothing to do with the command it added. The
+# marker is left untouched, because the gate uses it only to confirm the channel still
+# serves the object the baseline names, which stays true.
+version_line="$(sed -n '/^version = /p' stado-rs/Cargo.toml)"
+declared="${version_line#*\"}"
+declared="${declared%%\"*}"
+jq --arg declared "$declared" --slurpfile candidate "$work/candidate.json" \
+  '.version = $declared | .surface = $candidate[0].surface' released-surface.json \
+  > "$work/current.json"
+
 check_case "surface untouched" pass released-surface.json "$work/candidate.json"
 check_case "removed $removed" refuse released-surface.json "$work/removed.json"
-check_case "added teleport" refuse released-surface.json "$work/added.json"
+check_case "added teleport" refuse "$work/current.json" "$work/added.json"
 check_case "prose baseline source" refuse "$work/prose.json" "$work/candidate.json"
 check_case "baseline claims absent object" refuse "$work/absent-object.json" \
   "$work/candidate.json"
