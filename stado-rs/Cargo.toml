@@ -1,6 +1,6 @@
 [package]
 name = "stado"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 description = "Policy-controlled queue and compute control plane for AI workloads"
 license-file = "../LICENSE"
@@ -40,6 +40,9 @@ tar = "0.4"
 flate2 = "1"
 async-trait = "0.1"
 tempfile = "3"
+
+[dev-dependencies]
+parking_lot = "0.12"
 
 [[bin]]
 name = "stado"

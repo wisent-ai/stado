@@ -27,8 +27,8 @@ use std::time::Duration;
 use serde_json::{json, Map, Value};
 
 use super::{
-    host_reboot, host_recovery, py_str_repr, shlex_quote, CommandOutput, CommandSpec, DeployError,
-    Runner,
+    host_reboot, host_recovery, py_str_repr, shlex_quote, ssh_key, CommandOutput, CommandSpec,
+    DeployError, Runner,
 };
 use crate::targets::{ComputeTarget, Registry};
 
@@ -159,10 +159,15 @@ pub async fn run_program(
     program: &[&str],
     runner: &Runner,
 ) -> Result<CommandOutput, DeployError> {
-    let argv = if target_is_this_host(target) {
-        program.iter().map(|word| word.to_string()).collect()
+    let (argv, _key) = if target_is_this_host(target) {
+        (program.iter().map(|word| word.to_string()).collect(), None)
     } else {
-        ssh_program_argv(target.ssh.as_deref().unwrap_or(""), program)
+        let key = ssh_key::materialize(&target.name).await?;
+        let argv = ssh_key::add_identity(
+            ssh_program_argv(target.ssh.as_deref().unwrap_or(""), program),
+            &key,
+        )?;
+        (argv, Some(key))
     };
     runner(CommandSpec {
         argv,
@@ -183,15 +188,29 @@ pub async fn run_script(
     script: &str,
     runner: &Runner,
 ) -> Result<CommandOutput, DeployError> {
-    let argv = if target_is_this_host(target) {
-        vec!["/bin/bash".to_string(), "-s".to_string()]
+    run_script_with_timeout(target, script, remote_timeout(), runner).await
+}
+
+/// Run a fixed remote script with an operation-specific wall-clock bound.
+/// Connection setup remains bounded by the shared SSH options.
+pub async fn run_script_with_timeout(
+    target: &ComputeTarget,
+    script: &str,
+    timeout: Duration,
+    runner: &Runner,
+) -> Result<CommandOutput, DeployError> {
+    let (argv, _key) = if target_is_this_host(target) {
+        (vec!["/bin/bash".to_string(), "-s".to_string()], None)
     } else {
-        ssh_script_argv(target.ssh.as_deref().unwrap_or(""))
+        let key = ssh_key::materialize(&target.name).await?;
+        let argv =
+            ssh_key::add_identity(ssh_script_argv(target.ssh.as_deref().unwrap_or("")), &key)?;
+        (argv, Some(key))
     };
     runner(CommandSpec {
         argv,
         stdin: Some(script.to_string()),
-        timeout: Some(remote_timeout()),
+        timeout: Some(timeout),
     })
     .await
     .map_err(DeployError)

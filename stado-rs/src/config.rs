@@ -709,6 +709,30 @@ static WC_S3_REGION: LazyLock<String> = LazyLock::new(|| {
         "us-east-1",
     )
 });
+static WC_STADO_STORAGE_URL: LazyLock<String> = LazyLock::new(|| {
+    resolve_storage_binding(
+        crate::capabilities::StorageAdapter::StadoObject,
+        "url",
+        false,
+        "",
+    )
+});
+static WC_STADO_STORAGE_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
+    resolve_storage_binding(
+        crate::capabilities::StorageAdapter::StadoObject,
+        "token-file",
+        false,
+        "",
+    )
+});
+static WC_STADO_STORAGE_NAMESPACE: LazyLock<String> = LazyLock::new(|| {
+    resolve_storage_binding(
+        crate::capabilities::StorageAdapter::StadoObject,
+        "namespace",
+        false,
+        "",
+    )
+});
 static WC_LOCAL_STORAGE_PATH: LazyLock<String> = LazyLock::new(|| {
     let default = expand_tilde("~/.stado/local-storage");
     resolve_storage_binding(
@@ -773,6 +797,21 @@ pub fn wc_s3_bucket() -> &'static str {
 /// us-east-1).
 pub fn wc_s3_region() -> &'static str {
     WC_S3_REGION.as_str()
+}
+
+/// HTTPS origin of the Stado object API used as shared queue storage.
+pub fn wc_stado_storage_url() -> &'static str {
+    WC_STADO_STORAGE_URL.as_str()
+}
+
+/// Owner-only file containing the scoped Stado object API bearer token.
+pub fn wc_stado_storage_token_file() -> &'static str {
+    WC_STADO_STORAGE_TOKEN_FILE.as_str()
+}
+
+/// Object namespace containing this deployment's complete queue state.
+pub fn wc_stado_storage_namespace() -> &'static str {
+    WC_STADO_STORAGE_NAMESPACE.as_str()
 }
 
 /// Root directory of the device-local storage backend (env
@@ -888,7 +927,7 @@ static SKARBIEC_URL: LazyLock<String> = LazyLock::new(|| {
     cfg(
         "WC_SKARBIEC_URL",
         "secrets.skarbiec.url",
-        "http://127.0.0.1:8787",
+        "http://127.0.0.1:17602",
     )
 });
 static SKARBIEC_CONSUMER: LazyLock<String> = LazyLock::new(|| {
