@@ -40,6 +40,7 @@ pub mod placement;
 pub mod profiles_cmd;
 pub mod queue;
 pub mod quota;
+pub mod identity;
 pub mod recovery;
 pub mod registry;
 pub mod release_build;
@@ -451,6 +452,10 @@ enum Commands {
     /// Manage the canonical compute-target registry in configured Stado storage.
     #[command(subcommand)]
     Registry(RegistryCommands),
+
+    /// Which host holds which identity, and whether that is still true.
+    #[command(subcommand)]
+    Identity(IdentityCommands),
 
     /// Manage operating-system resources on registry hosts.
     #[command(subcommand)]
@@ -1570,6 +1575,12 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             }
             RegistryCommands::BeaconAge { json } => registry::beacon_age(json).await,
         },
+        Commands::Identity(sub) => match sub {
+            IdentityCommands::List { json } => identity::list(json).await,
+            IdentityCommands::Verify { kind, identity, json } => {
+                identity::verify(kind, identity, json).await
+            }
+        },
         Commands::Host(sub) => match sub {
             HostCommands::Health { target, json } => host::health(&target, json).await,
             HostCommands::PublishBeacon { source } => host::publish_beacon(&source).await,
@@ -1716,4 +1727,23 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Inference(sub) => inference::dispatch(sub).await,
         Commands::Doctor(args) => doctor::dispatch(args).await,
     }
+}
+
+/// Identity bindings: which host holds what, and whether it still does.
+#[derive(Subcommand)]
+enum IdentityCommands {
+    /// Every declared identity binding across the fleet.
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Check a binding against the hosts themselves, not the declaration.
+    Verify {
+        #[arg(long)]
+        kind: String,
+        #[arg(long)]
+        identity: String,
+        #[arg(long)]
+        json: bool,
+    },
 }
