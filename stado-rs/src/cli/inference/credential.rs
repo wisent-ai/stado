@@ -44,14 +44,14 @@ pub async fn init(json_output: bool) -> Result<(), CmdError> {
 pub async fn read() -> Result<String, CmdError> {
     let vault = crate::skarbiec::Client::configured()
         .map_err(|error| CmdError::click(error.to_string()))?;
+    // One named field, not the whole item: this broker refuses a read that
+    // names none, and the caller has always wanted exactly "token".
     let stored = vault
-        .read_item(LOCAL_PROVIDER_CREDENTIAL)
+        .read_field(LOCAL_PROVIDER_CREDENTIAL, "token")
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     stored
-        .as_object()
-        .and_then(|object| object.get("token"))
-        .and_then(serde_json::Value::as_str)
+        .as_str()
         .filter(|token| !token.is_empty())
         .map(str::to_string)
         .ok_or_else(|| {
