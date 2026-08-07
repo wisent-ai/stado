@@ -1152,6 +1152,10 @@ enum HostCommands {
         target: String,
         /// Safe basename under $HOME/.stado/bin on the target.
         name: String,
+        /// Correlation identifier to hand the helper, repeatable. UUIDs only: a
+        /// helper that takes operator words is a remote shell.
+        #[arg(long = "uuid")]
+        uuid: Vec<String>,
         /// Emit the execution report as JSON.
         #[arg(long)]
         json: bool,
@@ -1686,9 +1690,12 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 platform,
                 json,
             } => host::install_release(&target, &source, &family, &version, &platform, json).await,
-            HostCommands::RunHelper { target, name, json } => {
-                host::run_helper(&target, &name, json).await
-            }
+            HostCommands::RunHelper {
+                target,
+                name,
+                uuid,
+                json,
+            } => host::run_helper(&target, &name, &uuid, json).await,
             HostCommands::ForwardLocal {
                 target,
                 name,
