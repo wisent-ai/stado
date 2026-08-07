@@ -392,6 +392,7 @@ unavailable.
 | `stado host exec <target> -- CMD` | Run one approved read-only command. An allowlist, not a shell: the operator's words select a fixed argv entry and never join the command line. A refusal prints the allowlist. |
 | `stado host inventory <target>` | The stado-managed binaries under `$HOME/.stado/bin`, the `$HOME/.stado/forwards/*.url` markers, the listening loopback TCP ports, the Skarbiec vault files under `$HOME/.stado` as metadata, whether the installed `stado` knows a fixed set of subcommands — and, the point of the command, whether each forward marker still matches a live listener. |
 | `stado host release <target> --binary NAME --version X.Y.Z` | Put one registry-declared managed binary on the host: fetch the exact coordinate, verify the operator's configured SHA-256, check the layout, stage it under a versioned directory, and only then atomically repoint the active binary and restart its declared unit. The write counterpart of `host inventory`. `--dry-run` probes read-only and reports the plan. |
+| `stado host install-binary <target> --from PATH [--name NAME]` | Replace one owner-only Stado program on the host with a build proven to run there. It is delivered over the approved channel, signed, executed BEFORE it becomes the installed one, renamed into place rather than written through the file already there — overwriting a Mach-O in place invalidates its signature and the kernel answers the next exec with SIGKILL and no message — verified again, and the previous build is kept. `--rollback` puts that previous build back. |
 
 Diagnostic and recovery commands resolve their target from the canonical registry and
 refuse a target that is unknown, not a local host, or has no registry-managed
@@ -701,6 +702,7 @@ beacon is expected. The "has not reported in days" detector.
 | Subcommand | Behavior |
 |---|---|
 | `keygen --private-key PATH --public-key PATH --key-id ID` | Create an Ed25519 release authority. The private file is mode `0600`; only the public key belongs in registry trust policy. |
+| `build --repo URL --version TAG --platform P [--host H]` | Produce the archive `prepare` signs. A builder is chosen from the registry by the platform it reports, the tag is checked out clean, and the product's own `.stado/release.json` says what to build and what belongs in the archive — Stado never learns how a particular product is assembled. The archive is brought back to the caller rather than signed on the builder, so the release authority's key never travels to a build host, and the builder avoids the host a service is placed on where another can do the work. |
 | `prepare PRODUCT VERSION PLATFORM ...` | Hash an existing archive, bind source revision, schema compatibility and qualification evidence into a canonical manifest, sign it, then publish archive, signature and manifest create-only. The manifest is the last commit marker. |
 | `promote PRODUCT VERSION --channel candidate|stable` | Re-fetch every platform, verify exact bytes, signature and passed qualification, then compare-and-swap one `desired` registry generation. It never rebuilds. |
 | `agent --target TARGET [--once]` | Reconcile canonical desired state on a host: verify, stage immutably, start a private candidate, check readiness, switch the stable proxy, drain, monitor and commit or roll back. |
@@ -986,13 +988,20 @@ an arbitrary, per-host, declared set.
 | `list [--json]` | Every managed service on every host, with its state. |
 | `status NAME [--json]` | One service everywhere it is managed. |
 | `restart NAME [--host TARGET] [--json]` | Restart one unit; no recovery pass. |
+| `stop NAME [--host TARGET] [--json]` | Stop one unit, including a process it disowned. |
+| `show NAME [--host TARGET] [--json]` | What the unit actually runs: program and arguments. |
 | `adopt UNIT --host TARGET [--json]` | Bring an existing unit under management. |
 | `retire UNIT --host TARGET [--json]` | Bootout/disable and forget; files kept. |
 | `deploy NAME --host TARGET --from PATH [--json]` | Render, push, bootstrap, record. |
 | `deploy NAME --host TARGET --from-artifact REF [--json]` | Install one published version, then the above. |
+| `update NAME --host TARGET --from-artifact REF [--json]` | Move a unit already managed onto a new version. |
+| `update NAME --host TARGET --from-archive PATH [--json]` | The same, from a local bundle no store carries yet. |
+| `update NAME --host TARGET --rollback-to VERSION [--json]` | Point `current` back at a version already on the host. |
 | `directory show [--json]` | The service directory: active host, per-caller endpoint, consumers. |
 | `directory profiles [--json]` | Placement profiles: services, start/stop order, hosts, required state. |
-| `directory endpoint NAME [--target T] [--json]` | The address THIS machine should use for a service. |
+| `directory endpoint NAME [--target T] [--json]` | The address the directory declares for a target. |
+| `directory connect NAME [--target T] [--no-verify] [--json]` | A route derived from placement, proven to answer, with no fallback. |
+| `directory bind NAME [--target T] [--json]` | Serving parameters for the placed host: listen address and encrypted peers. |
 | `directory consumer-add NAME CONSUMER [--capability C]...` | Declare that a consumer may use a service. |
 | `directory consumer-rm NAME CONSUMER` | Remove a consumer's declaration. |
 | `logs NAME [--host TARGET] [--lines N] [--json]` | Tail the unit's log. |
