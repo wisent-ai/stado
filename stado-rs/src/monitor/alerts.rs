@@ -11,6 +11,7 @@ use send::{
     email_subject, send_email, send_most, send_pubsub, send_resend_email, send_slack,
     send_telegram,
 };
+pub(crate) use send::resend_verified_domains;
 
 /// GCP OAuth scope for the Pub/Sub publish call.
 const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
