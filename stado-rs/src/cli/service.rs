@@ -22,7 +22,7 @@ use clap::Subcommand;
 use serde_json::{json, Value};
 
 use crate::deploy::service::{
-    self, ManagedService, ServiceEnv, ServiceLog, ServiceStatus, SOURCE_RECOVERY,
+    self, ManagedService, ServiceEnv, ServiceLog, ServiceStatus, SOURCE_RECOVERY, SOURCE_REGISTRY,
 };
 use crate::deploy::{host_channel, production_runner, DeployError};
 use crate::queue::JobStorage;
@@ -32,6 +32,10 @@ use super::{registry, table, CmdError};
 
 #[derive(Subcommand)]
 pub enum ServiceCommands {
+    /// Where a service is reachable from here, and who may use it.
+    #[command(subcommand)]
+    Directory(crate::cli::directory::DirectoryCommands),
+
     /// Every registry-managed service across all hosts, with its state.
     ///
     /// Answered from the latest health beacons, so it costs no ssh and
@@ -42,6 +46,12 @@ pub enum ServiceCommands {
         #[arg(long)]
         json: bool,
     },
+
+    /// Registry-managed services carrying Echo onboarding product metadata.
+    ///
+    /// Emits the versioned JSON envelope accepted by Echo's Stado catalog
+    /// synchronization endpoint.
+    OnboardingCatalog,
 
     /// One service's state everywhere it is managed.
     Status {
@@ -57,6 +67,64 @@ pub enum ServiceCommands {
         name: String,
         /// Restrict to one registry host; omit to restart it everywhere it
         /// is managed.
+        #[arg(long)]
+        host: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Move an already-managed service onto a new artifact version.
+    ///
+    /// `deploy` installs a unit that is not yet managed and refuses to touch one
+    /// that is. This is the other half: the unit is left exactly as it is, the
+    /// new version is placed beside the running one and `current` is relinked,
+    /// so the change takes effect on the next restart and a rollback is a
+    /// relink rather than a redeploy.
+    Update {
+        /// Service name as the registry manages it.
+        name: String,
+        #[arg(long)]
+        host: String,
+        /// Published artifact to install.
+        #[arg(long, conflicts_with = "from_archive")]
+        from_artifact: Option<String>,
+        /// Local release archive to install, for a bundle that no object store
+        /// the fleet shares is carrying yet.
+        #[arg(long, conflicts_with = "from_artifact")]
+        from_archive: Option<String>,
+        /// Point `current` back at a version directory already on the host.
+        #[arg(long, conflicts_with_all = ["from_artifact", "from_archive"])]
+        rollback_to: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// What a managed unit actually runs: its program, arguments and unit file.
+    ///
+    /// `env` answers what the unit runs *with*; nothing answered what it runs.
+    /// That gap is why a restart that dropped every argument after the program
+    /// path looked like a broken service rather than a broken restart.
+    Show {
+        /// Service name, or the host's own name for the unit.
+        name: String,
+        /// Restrict to one registry host.
+        #[arg(long)]
+        host: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Stop one managed unit, including a process the unit no longer owns.
+    ///
+    /// `retire` removes a service from management; this only stops it. The
+    /// difference matters when a restart has previously spawned the program
+    /// outside its own label: launchctl then disowns it, the stale process
+    /// keeps the port, and every later restart dies on "address already in
+    /// use" while the broken instance serves on.
+    Stop {
+        /// Service name, or the host's own name for the unit.
+        name: String,
+        /// Restrict to one registry host; omit to stop it everywhere it is managed.
         #[arg(long)]
         host: Option<String>,
         #[arg(long)]
@@ -141,9 +209,44 @@ pub enum ServiceCommands {
     Adopt {
         /// launchd label or systemd unit name, as the host knows it.
         unit: String,
-        /// Registry host that runs it.
+        /// Explicit registry host that runs it.
+        #[arg(
+            long,
+            conflicts_with = "host_heuristic",
+            required_unless_present = "host_heuristic"
+        )]
+        host: Option<String>,
+        /// Declarative placement selector resolved against the registry.
+        #[arg(long, conflicts_with = "host")]
+        host_heuristic: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Attach central onboarding product metadata to a managed service.
+    ///
+    /// The metadata becomes part of the canonical Stado registry and is
+    /// emitted by `service list --json` for Echo catalog synchronization.
+    Onboarding {
+        /// Service name, launchd label, or systemd unit.
+        name: String,
+        /// Registry host that declares the service.
         #[arg(long)]
         host: String,
+        #[arg(long)]
+        product_id: String,
+        #[arg(long)]
+        display_name: String,
+        #[arg(long)]
+        repository: String,
+        #[arg(long, value_delimiter = ',', num_args = 1..)]
+        surfaces: Vec<String>,
+        #[arg(long)]
+        first_success_fact: String,
+        #[arg(long, default_value = "both")]
+        onboarding_kind: String,
+        #[arg(long, default_value = "active")]
+        status: String,
         #[arg(long)]
         json: bool,
     },
@@ -167,14 +270,29 @@ pub enum ServiceCommands {
     Deploy {
         /// Service name; lowercase letters, digits, '.', '-' and '_'.
         name: String,
-        /// Registry host to install it on.
-        #[arg(long)]
-        host: String,
+        /// Explicit registry host to install it on.
+        #[arg(
+            long,
+            conflicts_with = "host_heuristic",
+            required_unless_present = "host_heuristic"
+        )]
+        host: Option<String>,
+        /// Declarative placement selector resolved against the registry.
+        #[arg(long, conflicts_with = "host")]
+        host_heuristic: Option<String>,
         /// Absolute path, ON THE TARGET HOST, of the program the unit runs.
         /// The plist / systemd unit is rendered around it by the same
         /// renderer `stado bootstrap --local` uses.
-        #[arg(long)]
-        from: String,
+        #[arg(long, conflicts_with = "from_artifact")]
+        from: Option<String>,
+        /// Published artifact to install and run instead of a path already on
+        /// the host. The reference is resolved to an immutable version, that
+        /// version is placed under ~/.stado/services/NAME/<version>/, its
+        /// declared sha256 is verified there, and `current` is moved onto it.
+        /// The unit runs through `current`, so a later install or a rollback
+        /// is a relink rather than a redeploy.
+        #[arg(long = "from-artifact")]
+        from_artifact: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -221,8 +339,30 @@ fn default_log_lines() -> usize {
 
 pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
     match command {
+        ServiceCommands::Directory(sub) => crate::cli::directory::dispatch(sub).await,
         ServiceCommands::List { json } => list(json).await,
+        ServiceCommands::OnboardingCatalog => onboarding_catalog().await,
         ServiceCommands::Status { name, json } => status(&name, json).await,
+        ServiceCommands::Update {
+            name,
+            host,
+            from_artifact,
+            from_archive,
+            rollback_to,
+            json,
+        } => {
+            update(
+                &name,
+                &host,
+                from_artifact.as_deref(),
+                from_archive.as_deref(),
+                rollback_to.as_deref(),
+                json,
+            )
+            .await
+        }
+        ServiceCommands::Show { name, host, json } => show(&name, host.as_deref(), json).await,
+        ServiceCommands::Stop { name, host, json } => stop(&name, host.as_deref(), json).await,
         ServiceCommands::Restart { name, host, json } => {
             restart(&name, host.as_deref(), json).await
         }
@@ -278,14 +418,57 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             })
             .await
         }
-        ServiceCommands::Adopt { unit, host, json } => adopt(&unit, &host, json).await,
+        ServiceCommands::Adopt {
+            unit,
+            host,
+            host_heuristic,
+            json,
+        } => adopt(&unit, host.as_deref(), host_heuristic.as_deref(), json).await,
+        ServiceCommands::Onboarding {
+            name,
+            host,
+            product_id,
+            display_name,
+            repository,
+            surfaces,
+            first_success_fact,
+            onboarding_kind,
+            status,
+            json,
+        } => {
+            onboarding(OnboardingOptions {
+                name: &name,
+                host: &host,
+                product_id: &product_id,
+                display_name: &display_name,
+                repository: &repository,
+                surfaces,
+                first_success_fact: &first_success_fact,
+                onboarding_kind: &onboarding_kind,
+                status: &status,
+                as_json: json,
+            })
+            .await
+        }
         ServiceCommands::Retire { unit, host, json } => retire(&unit, &host, json).await,
         ServiceCommands::Deploy {
             name,
             host,
+            host_heuristic,
             from,
+            from_artifact,
             json,
-        } => deploy(&name, &host, &from, json).await,
+        } => {
+            deploy(
+                &name,
+                host.as_deref(),
+                host_heuristic.as_deref(),
+                from,
+                from_artifact,
+                json,
+            )
+            .await
+        }
         ServiceCommands::Logs {
             name,
             host,
@@ -303,6 +486,34 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
 fn click(exc: DeployError) -> CmdError {
     CmdError::click(exc.to_string())
 }
+async fn resolve_placement(
+    host: Option<&str>,
+    host_heuristic: Option<&str>,
+) -> Result<(crate::targets::ComputeTarget, Option<String>), CmdError> {
+    let resolved_host = if let Some(host) = host {
+        host.to_string()
+    } else if let Some(heuristic) = host_heuristic {
+        let registry = targets::load_registry_auto()
+            .await
+            .map_err(|exc| CmdError::click(exc.to_string()))?;
+        registry
+            .lookup_host_heuristic(heuristic)
+            .map(|target| target.name.clone())
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "host heuristic '{heuristic}' matches no local registry target"
+                ))
+            })?
+    } else {
+        return Err(CmdError::click(
+            "either --host or --host-heuristic is required".to_string(),
+        ));
+    };
+    let target = host_channel::canonical_target(&resolved_host)
+        .await
+        .map_err(click)?;
+    Ok((target, host_heuristic.map(str::to_string)))
+}
 
 /// Reuse the host command's provider-neutral beacon store selection.
 async fn beacon_store() -> Result<JobStorage, CmdError> {
@@ -314,7 +525,7 @@ async fn beacon_store() -> Result<JobStorage, CmdError> {
 /// The write-side commands need the declaration — its unit id and its
 /// unit-file path — not its state, so they must not pay for a beacon read
 /// per host to get it.
-async fn declared_matching(
+pub(crate) async fn declared_matching(
     name: &str,
     host: Option<&str>,
 ) -> Result<Vec<ManagedService>, CmdError> {
@@ -375,6 +586,17 @@ async fn list(json: bool) -> Result<(), CmdError> {
     let store = beacon_store().await?;
     let rows = service::list_services(&store).await.map_err(click)?;
     render_status(&rows, json)
+}
+
+async fn onboarding_catalog() -> Result<(), CmdError> {
+    let store = beacon_store().await?;
+    let rows = service::list_services(&store).await.map_err(click)?;
+    let services: Vec<Value> = rows
+        .iter()
+        .filter(|row| row.service.source == SOURCE_REGISTRY && row.service.onboarding.is_some())
+        .map(ServiceStatus::to_json)
+        .collect();
+    print_json(&json!({"schema_version": 1, "services": services}))
 }
 
 async fn status(name: &str, json: bool) -> Result<(), CmdError> {
@@ -460,17 +682,177 @@ async fn restart(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdEr
     fail_if_any(&failures, "restart")
 }
 
-async fn service_secret(item: &str, field: &str) -> Result<String, CmdError> {
+async fn update(
+    name: &str,
+    host: &str,
+    reference: Option<&str>,
+    archive: Option<&str>,
+    rollback_to: Option<&str>,
+    json: bool,
+) -> Result<(), CmdError> {
+    let target = host_channel::canonical_target(host).await.map_err(click)?;
+    // The service must already be managed here: this moves a unit forward, and
+    // silently installing a version for a unit nobody runs would look like a
+    // deployment while changing nothing.
+    let services = declared_matching(name, Some(host)).await?;
+    if services.is_empty() {
+        return Err(CmdError::click(format!(
+            "{host} does not manage {name}; deploy it first"
+        )));
+    }
+    // The registry name is the unit label; the artifact directory is whatever
+    // the unit's own program path reads from. Deriving it from the unit means
+    // the new version lands where the running one is actually read, instead of
+    // beside it under a directory that only matches the name.
+    let runner = production_runner();
+    let declared = &services[usize::default()];
+    let report = service::show_service(&target, declared, &runner)
+        .await
+        .map_err(click)?;
+    let program = report.detail.trim();
+    let directory = program
+        .split("/services/")
+        .nth(usize::from(true))
+        .and_then(|rest| rest.split('/').next())
+        .filter(|segment| !segment.is_empty())
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{host}: {name} runs {program:?}, which is not under a managed services directory,                  so there is no artifact directory to update"
+            ))
+        })?;
+    // Two sources, one install. A published artifact is the durable route; a
+    // local archive is how a bundle reaches a host before there is an object
+    // store the whole fleet can read, and it is checksummed on the far side the
+    // same way rather than trusted for arriving.
+    if let Some(version) = rollback_to {
+        let script = format!(
+            "set -euo pipefail\nname={}\nversion={}\n{ROLLBACK_BODY}",
+            crate::deploy::shlex_quote(directory),
+            crate::deploy::shlex_quote(version),
+        );
+        let output = host_channel::run_script(&target, &script, &runner)
+            .await
+            .map_err(click)?;
+        if !output.ok() {
+            return Err(CmdError::click(format!(
+                "{host}: {}",
+                host_channel::last_error_line(&output, "rollback failed")
+            )));
+        }
+        println!("{host}: {name} -> {version} (takes effect on the next restart)");
+        return Ok(());
+    }
+    let installed = match (reference, archive) {
+        (Some(reference), None) => install_from_artifact(&target, directory, reference).await?,
+        (None, Some(path)) => install_from_archive(&target, directory, path, &runner).await?,
+        (None, None) => {
+            return Err(CmdError::click(
+                "update needs --from-artifact REF or --from-archive PATH",
+            ))
+        }
+        (Some(_), Some(_)) => {
+            return Err(CmdError::click(
+                "--from-artifact and --from-archive are exclusive",
+            ))
+        }
+    };
+    if json {
+        print_json(&json!({
+            "host": host,
+            "service": name,
+            "version": installed.version,
+            "sha256": installed.sha256,
+            "status": "updated",
+            "effective": "on next restart",
+        }))?;
+    } else {
+        println!(
+            "{host}: {name} -> {} (takes effect on the next restart)",
+            installed.version
+        );
+    }
+    Ok(())
+}
+
+async fn show(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdError> {
+    let services = declared_matching(name, host).await?;
+    let runner = production_runner();
+    let mut payload: Vec<Value> = Vec::new();
+    let mut cells: Vec<Vec<String>> = Vec::new();
+
+    for declared in &services {
+        let target = host_channel::canonical_target(&declared.host)
+            .await
+            .map_err(click)?;
+        let report = service::show_service(&target, declared, &runner)
+            .await
+            .map_err(click)?;
+        cells.push(vec![
+            declared.host.clone(),
+            declared.unit_id().to_string(),
+            dash(&report.detail),
+        ]);
+        let mut entry = report.to_json();
+        entry["host"] = Value::from(declared.host.clone());
+        payload.push(entry);
+    }
+
+    if json {
+        print_json(&Value::Array(payload))?;
+    } else {
+        table::print(&["HOST", "UNIT", "RUNS"], &cells);
+    }
+    Ok(())
+}
+
+async fn stop(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdError> {
+    let services = declared_matching(name, host).await?;
+    let runner = production_runner();
+    let mut payload: Vec<Value> = Vec::new();
+    let mut cells: Vec<Vec<String>> = Vec::new();
+    let mut failures: Vec<String> = Vec::new();
+
+    for declared in &services {
+        let target = host_channel::canonical_target(&declared.host)
+            .await
+            .map_err(click)?;
+        let report = service::stop_service(&target, declared, &runner)
+            .await
+            .map_err(click)?;
+        if !report.succeeded("stopped") {
+            failures.push(format!("{}: {}", declared.host, report.failure()));
+        }
+        cells.push(vec![
+            declared.host.clone(),
+            declared.unit_id().to_string(),
+            dash(&report.status),
+            dash(&report.detail),
+        ]);
+        let mut entry = report.to_json();
+        entry["host"] = Value::from(declared.host.clone());
+        payload.push(entry);
+    }
+
+    if json {
+        print_json(&Value::Array(payload))?;
+    } else {
+        table::print(&["HOST", "UNIT", "STATUS", "DETAIL"], &cells);
+    }
+    fail_if_any(&failures, "stop")
+}
+
+pub(crate) async fn service_secret(item: &str, field: &str) -> Result<String, CmdError> {
     let vault = crate::skarbiec::Client::service_verifier()
         .map_err(|err| CmdError::click(err.to_string()))?;
+    // Both callers -- auth-check and secret-sync -- want exactly one field, and
+    // asking for the whole item is refused outright by a broker that requires a
+    // named field. Ask for what is wanted.
     let stored = vault
-        .read_item(item)
+        .read_field(item, field)
         .await
         .map_err(|err| CmdError::click(err.to_string()))?;
     stored
-        .as_object()
-        .and_then(|object| object.get(field))
-        .and_then(Value::as_str)
+        .as_str()
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .ok_or_else(|| {
@@ -777,8 +1159,48 @@ async fn record_declaration(record: &ManagedService) -> Result<String, CmdError>
     registry::push_document(&document).await
 }
 
-async fn adopt(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
-    let target = host_channel::canonical_target(host).await.map_err(click)?;
+struct OnboardingOptions<'a> {
+    name: &'a str,
+    host: &'a str,
+    product_id: &'a str,
+    display_name: &'a str,
+    repository: &'a str,
+    surfaces: Vec<String>,
+    first_success_fact: &'a str,
+    onboarding_kind: &'a str,
+    status: &'a str,
+    as_json: bool,
+}
+
+async fn onboarding(options: OnboardingOptions<'_>) -> Result<(), CmdError> {
+    let mut document = registry::fetch_document().await?;
+    let record = service::set_service_onboarding(
+        &mut document,
+        options.host,
+        options.name,
+        service::OnboardingProduct {
+            product_id: options.product_id.to_string(),
+            display_name: options.display_name.to_string(),
+            repository: options.repository.to_string(),
+            surface_kinds: options.surfaces,
+            first_success_fact: options.first_success_fact.to_string(),
+            onboarding_kind: options.onboarding_kind.to_string(),
+            status: options.status.to_string(),
+        },
+    )
+    .map_err(click)?;
+    let generation = registry::push_document(&document).await?;
+    render_mutation("onboarding", &record, &generation, None, options.as_json)
+}
+
+async fn adopt(
+    unit: &str,
+    host: Option<&str>,
+    host_heuristic: Option<&str>,
+    json: bool,
+) -> Result<(), CmdError> {
+    let (target, host_heuristic) = resolve_placement(host, host_heuristic).await?;
+    let host = target.name.clone();
     let runner = production_runner();
     let report = service::probe_service(&target, unit, &runner)
         .await
@@ -799,7 +1221,8 @@ async fn adopt(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
         )));
     }
 
-    let record = service::record_from_report(host, unit, &report, &now());
+    let record =
+        service::record_from_report(&host, host_heuristic.as_deref(), unit, &report, &now());
     let generation = record_declaration(&record).await?;
     render_mutation(
         "adopted",
@@ -850,8 +1273,36 @@ async fn retire(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
     )
 }
 
-async fn deploy(name: &str, host: &str, from: &str, json: bool) -> Result<(), CmdError> {
-    let target = host_channel::canonical_target(host).await.map_err(click)?;
+async fn deploy(
+    name: &str,
+    host: Option<&str>,
+    host_heuristic: Option<&str>,
+    from: Option<String>,
+    from_artifact: Option<String>,
+    json: bool,
+) -> Result<(), CmdError> {
+    let (target, host_heuristic) = resolve_placement(host, host_heuristic).await?;
+    let host = target.name.clone();
+    // Exactly one source. Neither is a sensible default: a path deploys
+    // whatever is on the host with no version identity, and an artifact
+    // deploys a named version; guessing between them is how a host ends up
+    // running something nobody can name.
+    let (from, installed) = match (from, from_artifact) {
+        (Some(path), None) => (path, None),
+        (None, Some(reference)) => {
+            let installed = install_from_artifact(&target, name, &reference).await?;
+            (installed.program_path.clone(), Some(installed))
+        }
+        (None, None) => {
+            return Err(CmdError::click(
+                "deploy needs --from PATH or --from-artifact REF",
+            ))
+        }
+        (Some(_), Some(_)) => {
+            return Err(CmdError::click("--from and --from-artifact are exclusive"))
+        }
+    };
+    let from = from.as_str();
     let plan = service::plan_deploy(name, from).map_err(click)?;
 
     // Refuse a colliding declaration BEFORE touching the host: pushing a
@@ -877,7 +1328,8 @@ async fn deploy(name: &str, host: &str, from: &str, json: bool) -> Result<(), Cm
         )));
     }
 
-    let record = service::record_from_report(host, name, &report, &now());
+    let record =
+        service::record_from_report(&host, host_heuristic.as_deref(), name, &report, &now());
     let generation = match record_declaration(&record).await {
         Ok(generation) => generation,
         // The unit is on the host and running; only the declaration failed.
@@ -895,6 +1347,18 @@ async fn deploy(name: &str, host: &str, from: &str, json: bool) -> Result<(), Cm
             )));
         }
     };
+    // The version is the point of --from-artifact: without it the operator is
+    // back to "something is deployed" with no way to say what. Reported beside
+    // the unit rather than inside the remote report, which describes the host
+    // action and not what was installed.
+    if let Some(installed) = installed.as_ref() {
+        if !json {
+            println!(
+                "installed {name} version {} (sha256 {})",
+                installed.version, installed.sha256
+            );
+        }
+    }
     render_mutation(
         "deployed",
         &record,
@@ -1036,3 +1500,168 @@ async fn env(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdError>
     }
     Ok(())
 }
+
+/// Resolve one artifact reference and place that exact version on the host.
+///
+/// The alias is resolved before anything is written, so what lands on disk is
+/// an immutable version and the path names it. Verification happens on the
+/// host against the digest the manifest declares: a download that does not
+/// match never becomes a running unit, and the previous `current` is left
+/// where it was.
+async fn install_from_artifact(
+    target: &crate::targets::ComputeTarget,
+    name: &str,
+    reference: &str,
+) -> Result<crate::deploy::artifact_install::InstalledArtifact, CmdError> {
+    let registry = crate::artifacts::ArtifactRegistry::new()
+        .await
+        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    let parsed = crate::artifacts_models::ArtifactRef::parse(reference)?;
+    let manifest = registry.resolve_manifest(&parsed).await?;
+    let runner = production_runner();
+    crate::deploy::artifact_install::install_artifact(target, name, &manifest, &runner)
+        .await
+        .map_err(click)
+}
+
+/// Install a release archive that is not in an object store yet.
+///
+/// The published route is `--from-artifact`, and it stays the durable one. This
+/// exists because a bundle has to reach a host before the fleet has a store
+/// both machines can read, and the alternative people reach for in that gap is
+/// copying a file by hand onto a running service. The archive is streamed over
+/// the approved channel, checksummed on the far side, unpacked into a version
+/// directory named for its own digest, and `current` is relinked only after the
+/// digest matches.
+async fn install_from_archive(
+    target: &crate::targets::ComputeTarget,
+    directory: &str,
+    path: &str,
+    runner: &crate::deploy::Runner,
+) -> Result<crate::deploy::artifact_install::InstalledArtifact, CmdError> {
+    let bytes = std::fs::read(path)?;
+    let digest = {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        hex::encode(hasher.finalize())
+    };
+    let version = format!("sha256-{}", &digest[..usize::from(u8::from(12u8))]);
+    let staged = format!(".stado/.{directory}-{version}.tar.gz");
+
+    if crate::deploy::host_channel::target_is_this_host(target) {
+        let home = std::env::var("HOME")
+            .map_err(|_| CmdError::click("HOME is not set, so the staging path is unknown"))?;
+        let destination = std::path::Path::new(&home).join(&staged);
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::copy(path, destination)?;
+    } else {
+        let ssh_target = target.ssh.clone().unwrap_or_default();
+        if ssh_target.is_empty() {
+            return Err(CmdError::click(format!(
+                "{} declares no ssh destination",
+                target.name
+            )));
+        }
+        let prepare = host_channel::run_script(
+            target,
+            "set -euo pipefail\n/bin/mkdir -p \"$HOME/.stado\"\n/bin/chmod 700 \"$HOME/.stado\"\n",
+            runner,
+        )
+        .await
+        .map_err(click)?;
+        if !prepare.ok() {
+            return Err(CmdError::click(format!(
+                "{}: cannot prepare the staging directory",
+                target.name
+            )));
+        }
+        let mut options = host_channel::ssh_options(&ssh_target);
+        options.pop();
+        let mut argv = vec!["scp".to_string(), "-q".to_string()];
+        argv.extend(options.into_iter().skip(usize::from(true)));
+        argv.push(path.to_string());
+        argv.push(format!("{ssh_target}:{staged}"));
+        let copy = runner(crate::deploy::CommandSpec::new(argv))
+            .await
+            .map_err(CmdError::click)?;
+        if !copy.ok() {
+            return Err(CmdError::click(format!(
+                "{}: cannot deliver the archive: {}",
+                target.name,
+                copy.detail()
+            )));
+        }
+    }
+
+    let script = format!(
+        "set -euo pipefail\nname={}\nversion={}\nexpected={}\nstaged={}\n{ARCHIVE_INSTALL_BODY}",
+        crate::deploy::shlex_quote(directory),
+        crate::deploy::shlex_quote(&version),
+        crate::deploy::shlex_quote(&digest),
+        crate::deploy::shlex_quote(&staged),
+    );
+    let output = host_channel::run_script(target, &script, runner)
+        .await
+        .map_err(click)?;
+    if !output.ok() {
+        return Err(CmdError::click(format!(
+            "{}: {}",
+            target.name,
+            host_channel::last_error_line(&output, "the archive did not install")
+        )));
+    }
+    Ok(crate::deploy::artifact_install::InstalledArtifact {
+        program_path: format!("$HOME/.stado/services/{directory}/current"),
+        version,
+        sha256: digest,
+    })
+}
+
+const ARCHIVE_INSTALL_BODY: &str = r#"
+root="$HOME/.stado/services/$name"
+version_dir="$root/$version"
+archive="$HOME/$staged"
+trap 'rm -f "$archive"' EXIT
+
+[ -s "$archive" ] || { printf '%s\n' 'delivered archive is missing or empty' >&2; exit 1; }
+actual="$(/usr/bin/shasum -a 256 "$archive" | /usr/bin/awk '{print $1}')"
+if [ "$actual" != "$expected" ]; then
+  printf '%s\n' "digest mismatch: expected $expected, delivered $actual" >&2
+  exit 1
+fi
+
+rm -rf "$version_dir"
+/bin/mkdir -p "$version_dir/darwin-arm"
+/usr/bin/tar -xzf "$archive" -C "$version_dir/darwin-arm"
+
+# `current` is a directory here on some hosts and a symlink on others; either
+# way the previous one is kept beside the new version rather than deleted, so a
+# rollback is a rename.
+if [ -e "$root/current" ] && [ ! -L "$root/current" ]; then
+  /bin/mv "$root/current" "$root/current.before-$version"
+else
+  rm -f "$root/current"
+fi
+/bin/ln -sfn "$version_dir" "$root/.current.new"
+/bin/mv -f "$root/.current.new" "$root/current"
+trap - EXIT
+rm -f "$archive"
+printf '%s\n' "$version_dir"
+"#;
+
+const ROLLBACK_BODY: &str = r#"
+root="$HOME/.stado/services/$name"
+target="$root/$version"
+[ -d "$target" ] || { printf '%s\n' "no version directory $version on this host" >&2; exit 1; }
+if [ -e "$root/current" ] && [ ! -L "$root/current" ]; then
+  /bin/mv "$root/current" "$root/current.replaced-$(/bin/date -u +%Y%m%dT%H%M%SZ)"
+else
+  rm -f "$root/current"
+fi
+/bin/ln -sfn "$target" "$root/.current.new"
+/bin/mv -f "$root/.current.new" "$root/current"
+printf '%s\n' "$target"
+"#;

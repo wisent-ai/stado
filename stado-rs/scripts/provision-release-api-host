@@ -1,0 +1,107 @@
+#!/bin/sh
+set -eu
+umask u=rwx,g=,o=
+: "${STADO_BIN:?STADO_BIN is required}"
+: "${STADO_RELEASE_HOST:?STADO_RELEASE_HOST is required}"
+: "${STADO_RELEASE_REMOTE_HOME:?STADO_RELEASE_REMOTE_HOME is required}"
+: "${STADO_RELEASE_STORE_ARCHIVE:?STADO_RELEASE_STORE_ARCHIVE is required}"
+: "${STADO_RUNTIME_ARCHIVE:?STADO_RUNTIME_ARCHIVE is required}"
+: "${STADO_RELEASE_VERSION:?STADO_RELEASE_VERSION is required}"
+: "${STADO_RELEASE_PLATFORM:?STADO_RELEASE_PLATFORM is required}"
+: "${STADO_RELEASE_LAUNCHER:?STADO_RELEASE_LAUNCHER is required}"
+: "${STADO_STORE_MATERIALIZER:?STADO_STORE_MATERIALIZER is required}"
+: "${STADO_RUNTIME_MATERIALIZER:?STADO_RUNTIME_MATERIALIZER is required}"
+retire_managed() {
+    for service do
+        unit="$($STADO_BIN service status "$service" --json \
+            | jq -r --arg host "$STADO_RELEASE_HOST" '.[] | select(.host == $host) | (.unit_id // .unit)' \
+            || true)"
+        if [ -n "$unit" ] && [ "$unit" != null ]; then
+            $STADO_BIN service retire "$unit" \
+                --host "$STADO_RELEASE_HOST" \
+                --json
+        fi
+    done
+}
+
+store_result="$($STADO_BIN host install-release \
+    "$STADO_RELEASE_HOST" \
+    "$STADO_RELEASE_STORE_ARCHIVE" \
+    stado-public-store \
+    "$STADO_RELEASE_VERSION" \
+    --platform "$STADO_RELEASE_PLATFORM" \
+    --json)"
+store_root="$(printf '%s' "$store_result" | jq -r '.path // (map(.path) | first)')"
+runtime_result="$($STADO_BIN host install-release \
+    "$STADO_RELEASE_HOST" \
+    "$STADO_RUNTIME_ARCHIVE" \
+    stado-runtime-amd64 \
+    "$STADO_RELEASE_VERSION" \
+    --platform "$STADO_RELEASE_PLATFORM" \
+    --json)"
+runtime_archive="$(printf '%s' "$runtime_result" | jq -r '.path // (map(.path) | first)')"
+if [ -z "$store_root" ] || [ "$store_root" = null ] || [ -z "$runtime_archive" ] || [ "$runtime_archive" = null ]; then
+    echo "Stado did not return installed immutable release paths"
+    false
+fi
+version_file="$(mktemp)"
+home_file="$(mktemp)"
+trap 'rm -f "$home_file" "$version_file"' EXIT HUP INT TERM
+printf '%s\n' "$STADO_RELEASE_VERSION" > "$version_file"
+printf '%s\n' "$STADO_RELEASE_REMOTE_HOME" > "$home_file"
+$STADO_BIN host install-secret \
+    "$STADO_RELEASE_HOST" \
+    "$version_file" \
+    stado-release-version \
+    --json
+$STADO_BIN host install-secret \
+    "$STADO_RELEASE_HOST" \
+    "$home_file" \
+    stado-release-home \
+    --json
+$STADO_BIN host install-helper \
+    "$STADO_RELEASE_HOST" \
+    "$STADO_STORE_MATERIALIZER" \
+    materialize-stado-release-store \
+    --json
+$STADO_BIN host install-helper \
+    "$STADO_RELEASE_HOST" \
+    "$STADO_RUNTIME_MATERIALIZER" \
+    materialize-stado-agent-runtime \
+    --json
+$STADO_BIN host run-helper \
+    "$STADO_RELEASE_HOST" \
+    materialize-stado-release-store \
+    --json
+$STADO_BIN host run-helper \
+    "$STADO_RELEASE_HOST" \
+    materialize-stado-agent-runtime \
+    --json
+
+env_file="$(mktemp)"
+trap 'rm -f "$env_file" "$home_file" "$version_file"' EXIT HUP INT TERM
+printf 'STADO_RELEASE_ROOT=%s/.stado/local-storage\nSTADO_RUNTIME_BIN=%s/.stado/bin/stado-linux\n' \
+    "$STADO_RELEASE_REMOTE_HOME" "$STADO_RELEASE_REMOTE_HOME" > "$env_file"
+$STADO_BIN host install-secret \
+    "$STADO_RELEASE_HOST" \
+    "$env_file" \
+    stado-release-api.env \
+    --json
+launcher_result="$($STADO_BIN host install-helper \
+    "$STADO_RELEASE_HOST" \
+    "$STADO_RELEASE_LAUNCHER" \
+    stado-release-api-service \
+    --json)"
+launcher_path="$(printf '%s' "$launcher_result" | jq -r '.path // (map(.path) | first)')"
+case "$launcher_path" in
+    '$HOME/'*) launcher_path="$STADO_RELEASE_REMOTE_HOME/${launcher_path#\$HOME/}" ;;
+esac
+if [ -z "$launcher_path" ] || [ "$launcher_path" = null ]; then
+    echo "Stado did not return the installed release API launcher path"
+    false
+fi
+retire_managed stado-release-api
+$STADO_BIN service deploy stado-release-api \
+    --host "$STADO_RELEASE_HOST" \
+    --from "$launcher_path" \
+    --json

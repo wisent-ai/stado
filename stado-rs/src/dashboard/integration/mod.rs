@@ -16,6 +16,7 @@
 
 mod enterprise;
 
+
 use serde_json::{json, Value};
 
 use super::{constant_time_eq, http_status, Request, Response};
@@ -54,6 +55,7 @@ pub(super) type HandlerResult = Result<Value, HandlerError>;
 fn supports(domain: &str, action: &str) -> bool {
     match domain {
         "enterprise" => enterprise::supports(action),
+
         _ => false,
     }
 }
@@ -83,6 +85,7 @@ async fn dispatch(
 ) -> HandlerResult {
     match domain {
         "enterprise" => enterprise::handle(action, body, store, state).await,
+
         _ => Err(HandlerError::BadRequest),
     }
 }

@@ -58,6 +58,16 @@ for unit in ${UNITS_TO_WATCH//,/ }; do
     units_json="$units_json\"$unit\":{\"state\":\"$state\",\"n_restarts\":\"$n_restarts\",\"active_since\":\"$since\"}"
 done
 
+if inference_json=$("$STADO_BIN" inference beacon); then
+    :
+else
+    inference_json='{}'
+fi
+case "$inference_json" in
+    \{*\}) ;;
+    *) inference_json='{}' ;;
+esac
+
 
 tmpfile=$(/usr/bin/mktemp)
 trap 'rm -f "$tmpfile"' EXIT
@@ -67,7 +77,8 @@ cat > "$tmpfile" <<EOF
   "reported_at": "${reported_at}",
   "disk_pct": ${disk_pct:-0},
   "disk_avail_gb": ${disk_avail_gb:-0},
-  "units": {${units_json}}
+  "units": {${units_json}},
+  "inference": ${inference_json}
 }
 EOF
 
