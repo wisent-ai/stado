@@ -63,6 +63,7 @@ define_providers! {
     Slack => ("slack", []),
     Telegram => ("telegram", []),
     Sendgrid => ("sendgrid", []),
+    Most => ("most", []),
     Macos => ("macos", []),
     Linux => ("linux", []),
     MultiCloud => ("multi-cloud", []),
@@ -308,6 +309,7 @@ define_capabilities! {
         id: "object-storage",
         summary: "Persist queue state, results, artifacts, and control objects.",
         providers: [
+            ProviderId::Stado => (Implemented, "queue::stado_object::StadoObjectBackend + dashboard object API", "Authenticated provider-neutral shared queue over HTTPS"),
             ProviderId::Gcp => (Implemented, "queue::gcs::GcsBackend", "Preview Google Cloud Storage; not stable without release-scoped live acceptance"),
             ProviderId::Azure => (Implemented, "queue::azure_blob::AzureBlobBackend", "Preview Azure Blob Storage; not stable without release-scoped live acceptance"),
             ProviderId::Aws => (Implemented, "queue::s3::S3Backend", "Preview Amazon S3; not stable without release-scoped live acceptance"),
@@ -661,15 +663,41 @@ pub enum StorageAdapter {
     Gcs,
     AzureBlob,
     S3,
+    StadoObject,
     Local,
 }
 
+/// Whether a store answers for the whole fleet or only for the machine it sits
+/// on.
+///
+/// Written as data rather than inferred from a name so that adding a backend is
+/// a decision the compiler asks for. It decides one thing: whether a coordinate
+/// published here means the same object on every other host. A release is a
+/// claim about the fleet, and a claim resting on a device store does not fail
+/// -- it succeeds, and every other host reports the object absent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StorageReach {
+    /// Every host resolves the same coordinate to the same object.
+    Fleet,
+    /// The coordinate is meaningful only on the machine that wrote it.
+    Device,
+}
+
 impl StorageAdapter {
+    /// How far a coordinate written to this store carries.
+    pub const fn reach(self) -> StorageReach {
+        match self {
+            Self::Gcs | Self::AzureBlob | Self::S3 | Self::StadoObject => StorageReach::Fleet,
+            Self::Local => StorageReach::Device,
+        }
+    }
+
     pub const fn id(self) -> &'static str {
         match self {
             Self::Gcs => "gcs",
             Self::AzureBlob => ProviderId::Azure.as_str(),
             Self::S3 => "s3",
+            Self::StadoObject => ProviderId::Stado.as_str(),
             Self::Local => ProviderId::Local.as_str(),
         }
     }
@@ -686,6 +714,7 @@ impl StorageAdapter {
             Self::Gcs => ProviderId::Gcp,
             Self::AzureBlob => ProviderId::Azure,
             Self::S3 => ProviderId::Aws,
+            Self::StadoObject => ProviderId::Stado,
             Self::Local => ProviderId::Local,
         }
     }
@@ -992,6 +1021,22 @@ const S3_CONFIG: &[ConfigField] = &[
         .with_backup("WC_BACKUP_S3_REGION", "storage.backup.s3.region", true),
 ];
 
+const STADO_OBJECT_STORAGE_CONFIG: &[ConfigField] = &[
+    ConfigField::scalar("url", "WC_STADO_STORAGE_URL", "storage.stado.url").required(),
+    ConfigField::scalar(
+        "token-file",
+        "WC_STADO_STORAGE_TOKEN_FILE",
+        "storage.stado.token_file",
+    )
+    .required(),
+    ConfigField::scalar(
+        "namespace",
+        "WC_STADO_STORAGE_NAMESPACE",
+        "storage.stado.namespace",
+    )
+    .required(),
+];
+
 const LOCAL_STORAGE_CONFIG: &[ConfigField] =
     &[
         ConfigField::scalar("path", "WC_LOCAL_STORAGE_PATH", "storage.local.path").with_backup(
@@ -1137,6 +1182,17 @@ const STORAGE: &[CapabilityVariant] = &[
         constructible: true,
         adapter: RuntimeAdapter::Storage(StorageAdapter::Local),
         config: LOCAL_STORAGE_CONFIG,
+    },
+    CapabilityVariant {
+        id: StorageAdapter::StadoObject.id(),
+        aliases: &["stado-object"],
+        provider: Some(ProviderId::Stado),
+        implementation: "queue::stado_object::StadoObjectBackend",
+        summary: "Shared provider-neutral queue through the authenticated Stado object API.",
+        configurable: true,
+        constructible: true,
+        adapter: RuntimeAdapter::Storage(StorageAdapter::StadoObject),
+        config: STADO_OBJECT_STORAGE_CONFIG,
     },
 ];
 
@@ -1490,6 +1546,17 @@ const ALERTS: &[CapabilityVariant] = &[
         provider: Some(ProviderId::Sendgrid),
         implementation: "monitor::alerts",
         summary: "SendGrid email delivery.",
+        configurable: true,
+        constructible: false,
+        adapter: RuntimeAdapter::None,
+        config: &[],
+    },
+    CapabilityVariant {
+        id: ProviderId::Most.as_str(),
+        aliases: ProviderId::Most.aliases(),
+        provider: Some(ProviderId::Most),
+        implementation: "monitor::alerts",
+        summary: "Twilio SMS delivery through the Most integration provider.",
         configurable: true,
         constructible: false,
         adapter: RuntimeAdapter::None,

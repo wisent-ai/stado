@@ -74,7 +74,15 @@ impl JobStorage {
     /// bucket for routing — it is rooted at `config::wc_local_storage_path()`
     /// — but keeps it as `bucket_name` like Python `JobStorage(bucket)`.
     pub async fn with_bucket(bucket: &str) -> Result<Self, StorageError> {
-        let configured_backend = config::wc_storage_backend();
+        // An unset backend with a configured local path is not a
+        // misconfiguration to refuse; it is the local-only profile this machine
+        // already runs. Erroring here turned every registry read into "the
+        // service directory says nothing", which reads as an empty fleet rather
+        // than as a client that never asked.
+        let configured_backend = match config::wc_storage_backend() {
+            "" if !config::wc_local_storage_path().is_empty() => "local",
+            other => other,
+        };
         let variant =
             crate::capabilities::constructible_variant(RuntimeFacet::Storage, configured_backend)
                 .ok_or_else(|| {

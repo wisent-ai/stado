@@ -180,6 +180,44 @@ pub async fn push_document(document: &Value) -> Result<String, CmdError> {
     let (generation, _) = upload_payload(&payload, false).await?;
     Ok(generation)
 }
+pub async fn push_document_if(
+    document: &Value,
+    expected_generation: &str,
+) -> Result<String, CmdError> {
+    validate_registry(document).map_err(|exc| CmdError::click(exc.to_string()))?;
+    let payload = format!("{}\n", serde_json::to_string_pretty(document)?);
+    let store = RegistryStore::open().await?;
+    let generation = store
+        .compare_and_swap(expected_generation, &payload)
+        .await
+        .map_err(|error| CmdError::click(format!("registry compare-and-swap failed: {error}")))?;
+    let confirmed = store
+        .read_versioned()
+        .await?
+        .ok_or_else(|| CmdError::click("registry compare-and-swap verification found no object"))?;
+    if confirmed.version != generation || confirmed.content != payload {
+        return Err(CmdError::click(
+            "registry compare-and-swap verification returned different bytes",
+        ));
+    }
+    Ok(generation)
+}
+
+pub async fn fetch_versioned_document() -> Result<(Value, String), CmdError> {
+    let store = RegistryStore::open().await?;
+    let blob = store
+        .read_versioned()
+        .await?
+        .ok_or_else(|| CmdError::click(format!("no registry document at {}", store.location())))?;
+    let document: Value = serde_json::from_str(&blob.content)?;
+    if !document.is_object() {
+        return Err(CmdError::click(format!(
+            "registry at {} is not an object",
+            store.location()
+        )));
+    }
+    Ok((document, blob.version))
+}
 
 /// The canonical registry as its raw document, off the same object
 /// [`push_document`] compare-and-swaps.

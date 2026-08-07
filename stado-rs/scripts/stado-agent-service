@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+service_env="${STADO_AGENT_SERVICE_ENV:-$HOME/.stado/stado-agent.env}"
+if [ ! -f "$service_env" ]; then
+    echo "The owner-controlled Stado agent environment is required"
+    false
+fi
+set -a
+. "$service_env"
+set +a
+: "${STADO_TARGET:?STADO_TARGET is required}"
+: "${WC_LOCAL_SLOTS:?WC_LOCAL_SLOTS is required}"
+exec "$HOME/.stado/bin/stado-linux" agent --target "$STADO_TARGET"
