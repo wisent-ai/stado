@@ -12,6 +12,7 @@
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 
 pub mod agent;
+pub mod alerts;
 pub mod artifact;
 pub mod autonomy_cmd;
 pub mod azure;
@@ -422,10 +423,14 @@ enum Commands {
     /// List available submit profiles, or show one profile's JSON.
     Profiles { name: Option<String> },
 
-    /// Inspect stado configuration: show | validate | init.
+    /// Inspect or change stado configuration: show | validate | init | set.
     Config {
         #[arg(default_value = "show")]
         sub: String,
+        /// `set`: dotted key, e.g. `alerts.channels`.
+        key: Option<String>,
+        /// `set`: JSON value; a bare word is stored as a string.
+        value: Option<String>,
     },
 
     /// Publish and consume immutable, versioned artifacts.
@@ -490,6 +495,9 @@ enum Commands {
     /// Maintenance mode: pause/resume dispatching, and drain the fleet.
     #[command(subcommand)]
     Queue(queue::QueueCommands),
+    /// Show which alert channels resolve, and page them on purpose.
+    #[command(subcommand)]
+    Alerts(alerts::AlertsCommands),
     /// Manage the services registry hosts run: list, status, restart,
     /// adopt, retire, deploy, logs, env.
     #[command(subcommand)]
@@ -1151,6 +1159,16 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Remove one previously installed owner-only helper from TARGET.
+    #[command(name = "remove-helper")]
+    RemoveHelper {
+        target: String,
+        /// Safe basename under $HOME/.stado/bin on the target.
+        name: String,
+        /// Emit the removal report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Open an encrypted reverse SSH forwarding channel to TARGET.
     #[command(name = "forward-local")]
     ForwardLocal {
@@ -1491,7 +1509,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Job(sub) => job::dispatch(sub).await,
         Commands::Results { job_id, output_dir } => results::run(&job_id, &output_dir).await,
         Commands::Profiles { name } => profiles_cmd::run(name.as_deref()),
-        Commands::Config { sub } => config_cmd::run(&sub),
+        Commands::Config { sub, key, value } => {
+            config_cmd::run(&sub, key.as_deref(), value.as_deref())
+        }
         Commands::Machine(sub) => match sub {
             MachineCommands::Submit { request_file } => machine::submit(&request_file).await,
             MachineCommands::Status { job_id } => machine::status(&job_id).await,
@@ -1678,6 +1698,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::RunHelper { target, name, json } => {
                 host::run_helper(&target, &name, json).await
             }
+            HostCommands::RemoveHelper { target, name, json } => {
+                host::remove_helper(&target, &name, json).await
+            }
             HostCommands::ForwardLocal {
                 target,
                 name,
@@ -1710,6 +1733,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Instances(sub) => instances::dispatch(sub).await,
         Commands::Secrets(sub) => secrets::dispatch(sub).await,
         Commands::Queue(sub) => queue::dispatch(sub).await,
+        Commands::Alerts(sub) => alerts::dispatch(sub).await,
         Commands::Service(sub) => service::dispatch(sub).await,
         Commands::Placement(sub) => placement::dispatch(sub).await,
         Commands::Resolver(sub) => resolver::dispatch(sub).await,
