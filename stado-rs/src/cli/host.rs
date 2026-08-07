@@ -1266,6 +1266,63 @@ exec "$helper"
     Ok(())
 }
 
+/// Remove one previously installed helper. Installing a helper is how Stado
+/// runs what the exec allowlist refuses, which makes every diagnostic a file
+/// left behind on someone else's machine; without this the fleet accumulates
+/// them and nothing but the operator's memory says what they were for.
+pub async fn remove_helper(target: &str, name: &str, json: bool) -> Result<(), CmdError> {
+    release_component("helper name", name)?;
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let remote_name = crate::deploy::shlex_quote(name);
+    // Regular file only: a symlink under that name is not something this
+    // command put there, and following it would delete an unrelated path.
+    let script = format!(
+        r#"set -euo pipefail
+helper="$HOME/.stado/bin/"{remote_name}
+if [ -L "$helper" ]; then
+  printf '%s\n' "refusing to remove symlink: $helper" > /dev/stderr
+  false
+elif [ -f "$helper" ]; then
+  rm -f -- "$helper"
+  printf '%s\n' removed
+else
+  printf '%s\n' absent
+fi
+"#
+    );
+    let runner = crate::deploy::production_runner();
+    let output = crate::deploy::host_channel::run_script_with_timeout(
+        &resolved,
+        &script,
+        std::time::Duration::from_secs(crate::monitor::billing::SECONDS_PER_HOUR),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !output.ok() {
+        return Err(CmdError::click(format!(
+            "{target}: helper {name} could not be removed: {}",
+            crate::deploy::host_channel::last_error_line(&output, "remote removal failed")
+        )));
+    }
+    let state = output.stdout.trim().to_string();
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": target,
+                "helper": name,
+                "status": state,
+            }))?
+        );
+    } else {
+        println!("{target}: {name} {state}");
+    }
+    Ok(())
+}
+
 /// Open a background reverse SSH forward using the exact registry channel.
 /// Both ends bind loopback; SSH supplies transport encryption and refuses to
 /// report success until the remote listener exists.

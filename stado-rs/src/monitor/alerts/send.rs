@@ -91,6 +91,45 @@ pub(super) async fn send_resend_email(
     ensure_success(response).await
 }
 
+/// Ask Resend which sender domains this key may use. Answers the two ways an
+/// email channel is dead while looking configured: a key the provider has
+/// revoked, and a sender on a domain nobody verified. Reads only; it sends
+/// nothing.
+pub(crate) async fn resend_verified_domains(
+    client: &reqwest::Client,
+    channel: &ResendChannel,
+) -> Result<Vec<String>, String> {
+    let base = channel
+        .url
+        .strip_suffix("/emails")
+        .unwrap_or(&channel.url)
+        .to_string();
+    let response = client
+        .get(format!("{base}/domains"))
+        .bearer_auth(&channel.api_key)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = response.status();
+    let body = response.text().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(format!("HTTP {status}: {body}"));
+    }
+    let document: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+    Ok(document
+        .get("data")
+        .and_then(serde_json::Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter(|entry| entry.get("status").and_then(serde_json::Value::as_str) == Some("verified"))
+                .filter_map(|entry| entry.get("name").and_then(serde_json::Value::as_str))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
 pub(super) async fn send_pubsub(
     client: &reqwest::Client,
     channel: &PubSubChannel,

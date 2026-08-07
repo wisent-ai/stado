@@ -1462,6 +1462,36 @@ async fn check_alerts() -> Check {
         configured.push("most");
     }
 
+    // A resolved channel is not a working one. The provider is the only
+    // authority on whether this key is still valid and whether it may send as
+    // this sender, and asking costs one read: the deployment sat green for
+    // weeks holding a key Resend had already revoked.
+    let resend_problem = match &channels.resend {
+        Some(resend) => {
+            let client = reqwest::Client::new();
+            match crate::monitor::alerts::resend_verified_domains(&client, resend).await {
+                Ok(domains) => {
+                    let sender_domain = resend.from.rsplit('@').next().unwrap_or_default();
+                    if domains.iter().any(|domain| domain == sender_domain) {
+                        None
+                    } else {
+                        configured.retain(|channel| *channel != "resend");
+                        Some(format!(
+                            "resend sender {} is not on a verified domain; verified: [{}]",
+                            resend.from,
+                            domains.join(",")
+                        ))
+                    }
+                }
+                Err(error) => {
+                    configured.retain(|channel| *channel != "resend");
+                    Some(format!("resend key was refused by the provider: {error}"))
+                }
+            }
+        }
+        None => None,
+    };
+
     let topic = config::alerts_topic();
     // "On GCP" means there is still a GCP surface a Pub/Sub publish could
     // plausibly authenticate against: the GCS queue store or the GCP
@@ -1499,6 +1529,15 @@ async fn check_alerts() -> Check {
         findings.note(
             Status::Pass,
             format!("non-GCP channel(s) configured: {}", configured.join(",")),
+        );
+    }
+
+    if let Some(problem) = resend_problem {
+        findings.note(Status::Fail, problem);
+        findings.remedy(
+            "point alerts.resend_item at an item holding a key the provider accepts, and \
+             alerts.email_from at a verified sending domain; `stado alerts channels` shows \
+             what resolved and `stado alerts send` proves delivery",
         );
     }
 
