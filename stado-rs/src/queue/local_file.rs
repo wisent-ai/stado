@@ -307,8 +307,22 @@ impl BlobBackend for LocalBackend {
         prefix: &str,
         oldest_first: usize,
     ) -> Result<Vec<String>, StorageError> {
+        // Walk only the subtree the prefix names. Walking the whole root and
+        // filtering afterwards made every prefix listing cost the size of the
+        // store: `stado doctor` spent fifty seconds stat-ing 27k queue blobs
+        // to look at one diagnostics directory. Any relative path that starts
+        // with the prefix lives under its directory part, so the result set is
+        // unchanged.
+        let (directory, _) = prefix.rsplit_once('/').unwrap_or(("", prefix));
+        let scan_root = if directory.is_empty() {
+            self.root.clone()
+        } else {
+            self.root.join(directory)
+        };
         let mut files = Vec::new();
-        walk(&self.root, &mut files)?;
+        if scan_root.is_dir() {
+            walk(&scan_root, &mut files)?;
+        }
         let mut paths: Vec<String> = files
             .into_iter()
             .filter(|item| !self.is_internal(item))

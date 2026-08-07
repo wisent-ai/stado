@@ -348,15 +348,50 @@ async fn bounded(
     remedy: &str,
     probe: impl Future<Output = Check>,
 ) -> Check {
-    match tokio::time::timeout(PROBE_TIMEOUT, probe).await {
+    bounded_within(PROBE_TIMEOUT, id, title, remedy, probe).await
+}
+
+/// Run a probe under an explicit deadline. A row whose work grows with the
+/// deployment cannot share one flat budget with a row that makes a single
+/// call: the gateway sweep reads every mapped item through one listener, and
+/// under the flat bound it failed intermittently with "probe did not answer"
+/// while the same sweep measured under a second.
+async fn bounded_within(
+    deadline: Duration,
+    id: &'static str,
+    title: &'static str,
+    remedy: &str,
+    probe: impl Future<Output = Check>,
+) -> Check {
+    match tokio::time::timeout(deadline, probe).await {
         Ok(check) => check,
         Err(_) => Check::fail(
             id,
             title,
-            format!("probe did not answer within {PROBE_TIMEOUT:?}"),
+            format!("probe did not answer within {deadline:?}"),
             remedy,
         ),
     }
+}
+
+/// Per-item allowance for the gateway-auth sweep, multiplied by the number of
+/// items the four verifier mappings actually declare.
+fn object_auth_deadline() -> Duration {
+    // Each mapping resolves independently; one that cannot be read contributes
+    // nothing to the sweep, so it contributes nothing to the budget either.
+    let mapped = crate::config::object_api_namespaces().map_or(usize::MIN, |items| items.len())
+        + crate::config::release_api_publishers().map_or(usize::MIN, |items| items.len())
+        + crate::config::machine_api_clients().map_or(usize::MIN, |items| items.len())
+        + crate::config::service_api_deployers().map_or(usize::MIN, |items| items.len());
+    PROBE_TIMEOUT + PROBE_TIMEOUT * u32::try_from(mapped).unwrap_or_default()
+}
+
+/// Allowance for resolving alert channels. Each enabled channel reads its own
+/// destination and provider material out of the vault, through the same
+/// single-threaded listener the gateway sweep is using at the same moment.
+fn alerts_deadline() -> Duration {
+    let channels = crate::config::alert_channels().len();
+    PROBE_TIMEOUT + PROBE_TIMEOUT * u32::try_from(channels).unwrap_or_default()
 }
 
 /// Run the whole preflight. Never returns an error: an unreachable
@@ -408,7 +443,8 @@ pub async fn run() -> Report {
             BACKUP_REMEDY,
             check_backup(&store_error)
         ),
-        bounded(
+        bounded_within(
+            object_auth_deadline(),
             OBJECT_AUTH_ID,
             OBJECT_AUTH_TITLE,
             OBJECT_AUTH_REMEDY,
@@ -450,7 +486,13 @@ pub async fn run() -> Report {
             CONTROL_REMEDY,
             check_queue_control(store, &store_error)
         ),
-        bounded(ALERTS_ID, ALERTS_TITLE, ALERTS_REMEDY, check_alerts()),
+        bounded_within(
+            alerts_deadline(),
+            ALERTS_ID,
+            ALERTS_TITLE,
+            ALERTS_REMEDY,
+            check_alerts()
+        ),
         bounded(
             CONTRACT_ID,
             CONTRACT_TITLE,
@@ -1465,9 +1507,10 @@ async fn check_queue_control(store: Option<&JobStorage>, store_error: &str) -> C
 const ALERTS_ID: &str = "alerts";
 const ALERTS_TITLE: &str = "Alerts";
 const ALERTS_REMEDY: &str =
-    "configure at least one non-GCP channel in the stado-alerts Skarbiec item: \
-     slack_webhook, telegram_bot_token + telegram_chat_id, or sendgrid_api_key + \
-     WC_EMAIL_TO; clear WC_ALERTS_TOPIC on a deployment that has left GCP";
+    "configure at least one non-GCP channel: enable it in alerts.channels and give it its \
+     material - slack_webhook, telegram_bot_token + telegram_chat_id, or sendgrid_api_key in \
+     the stado-alerts Skarbiec item, or resend with email_to there and the RESEND_API_KEY \
+     item; clear WC_ALERTS_TOPIC on a deployment that has left GCP";
 
 /// At least one alert channel that survives the cloud going away.
 ///
@@ -1489,6 +1532,42 @@ async fn check_alerts() -> Check {
     if channels.sendgrid.is_some() {
         configured.push("sendgrid");
     }
+    if channels.resend.is_some() {
+        configured.push("resend");
+    }
+    if channels.most.is_some() {
+        configured.push("most");
+    }
+
+    // A resolved channel is not a working one. The provider is the only
+    // authority on whether this key is still valid and whether it may send as
+    // this sender, and asking costs one read: the deployment sat green for
+    // weeks holding a key Resend had already revoked.
+    let resend_problem = match &channels.resend {
+        Some(resend) => {
+            let client = reqwest::Client::new();
+            match crate::monitor::alerts::resend_verified_domains(&client, resend).await {
+                Ok(domains) => {
+                    let sender_domain = resend.from.rsplit('@').next().unwrap_or_default();
+                    if domains.iter().any(|domain| domain == sender_domain) {
+                        None
+                    } else {
+                        configured.retain(|channel| *channel != "resend");
+                        Some(format!(
+                            "resend sender {} is not on a verified domain; verified: [{}]",
+                            resend.from,
+                            domains.join(",")
+                        ))
+                    }
+                }
+                Err(error) => {
+                    configured.retain(|channel| *channel != "resend");
+                    Some(format!("resend key was refused by the provider: {error}"))
+                }
+            }
+        }
+        None => None,
+    };
 
     let topic = config::alerts_topic();
     // "On GCP" means there is still a GCP surface a Pub/Sub publish could
@@ -1530,6 +1609,15 @@ async fn check_alerts() -> Check {
         );
     }
 
+    if let Some(problem) = resend_problem {
+        findings.note(Status::Fail, problem);
+        findings.remedy(
+            "point alerts.resend_item at an item holding a key the provider accepts, and \
+             alerts.email_from at a verified sending domain; `stado alerts channels` shows \
+             what resolved and `stado alerts send` proves delivery",
+        );
+    }
+
     if !topic.is_empty() && !on_gcp {
         findings.note(
             Status::Warn,
@@ -1547,18 +1635,24 @@ async fn check_alerts() -> Check {
 const CONTRACT_ID: &str = "skarbiec-contract";
 const CONTRACT_TITLE: &str = "Skarbiec read contract";
 const CONTRACT_REMEDY: &str =
-    "move whole-item reads to Client::read_field, or pin the broker to the build these callers expect";
+    "read one field at a time with Client::read_field; a broker that answers without a named field is the thing to fix, not the one that asks for it";
 
-/// Does the configured broker still answer a whole-item read?
+/// Which read contract is the broker enforcing?
 ///
-/// Skarbiec 9aa7dd4 made `field` mandatory on `/v1/items/read`. Callers that
-/// ask for an item and pick fields out of it get `400 {"error":"field
-/// required"}` from a broker built after that change, and the failure carries
-/// no hint that the contract moved underneath them. On 2026-08-04 that took
-/// out this machine's host-health beacon for twenty-one hours, during which
-/// `stado service list` went on reporting a stale `active` for services that
-/// were not running — the fleet's own view of the host was fiction and nothing
-/// said so.
+/// Skarbiec makes `field` mandatory on `/v1/items/read`, and that is correct:
+/// a read grant is per field, so answering an item-wide read would hand back
+/// fields the caller was never granted. This check used to report that as the
+/// fault and a broker answering without a field as healthy, which is exactly
+/// backwards -- and a check that calls the secure behaviour a failure teaches
+/// operators to skim past `doctor`, which is how a real FAIL sat unread here
+/// for hours.
+///
+/// The drift it exists for is real. On 2026-08-04 callers that asked for a
+/// whole item and picked fields out of it got `400 {"error":"field required"}`
+/// with no hint the contract had moved, and this machine's host-health beacon
+/// stayed down for twenty-one hours while `stado service list` reported a
+/// stale `active` for services that were not running. The repair is to move
+/// those callers to per-field reads, which the remedy now says.
 ///
 /// The probe is unauthenticated on purpose: the handler validates `id` and
 /// `field` before it looks at any identity, so a request carrying neither a
@@ -1612,22 +1706,26 @@ async fn skarbiec_contract_check() -> Check {
             let status = response.status().as_u16();
             let body = response.text().await.unwrap_or_default();
             if body.contains("field required") {
+                Check::pass(
+                    CONTRACT_ID,
+                    CONTRACT_TITLE,
+                    format!(
+                        "{endpoint} requires a named field (HTTP {status}), which is the \
+                         contract in force: the authority grants read per field, so an \
+                         item-wide read would hand back fields nobody was granted"
+                    ),
+                    CONTRACT_REMEDY,
+                )
+            } else {
                 Check::new(
                     CONTRACT_ID,
                     CONTRACT_TITLE,
                     Status::Warn,
                     format!(
-                        "{endpoint} requires a named field (HTTP {status}); every whole-item \
-                         read in this build fails against it, which is what silences a health \
-                         beacon without saying why"
+                        "{endpoint} answered a read that named no field (HTTP {status}); read \
+                         grants are per field, so something here can return fields the caller \
+                         was never granted"
                     ),
-                    CONTRACT_REMEDY,
-                )
-            } else {
-                Check::pass(
-                    CONTRACT_ID,
-                    CONTRACT_TITLE,
-                    format!("{endpoint} accepts a read without a named field (HTTP {status})"),
                     CONTRACT_REMEDY,
                 )
             }
