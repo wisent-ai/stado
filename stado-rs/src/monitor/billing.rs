@@ -389,18 +389,26 @@ async fn azure_section(_store: &JobStorage) -> Value {
         Ok(vault) => vault,
         Err(err) => return azure_error("skarbiec_error", err.to_string()),
     };
-    let sp = match vault.read_item(secret_name).await {
-        Ok(sp) => sp,
-        Err(crate::skarbiec::SkarbiecError::Response { status, .. })
-            if status == reqwest::StatusCode::NOT_FOUND.as_u16() =>
-        {
-            return json!({
-                "status": "no_credentials",
-                "detail": format!("Skarbiec item {secret_name:?} does not exist"),
-            })
+    // Field by field: a broker that requires a named field refuses the
+    // whole-item form outright, which turned a configured Azure credential
+    // into a "skarbiec_error" row on every billing tick.
+    let mut sp = serde_json::Map::new();
+    for field in ["tenant_id", "client_id", "client_secret"] {
+        match vault.read_string(secret_name, field).await {
+            Ok(Some(value)) => {
+                sp.insert(field.to_string(), Value::from(value));
+            }
+            Ok(None) => {}
+            Err(err) => return azure_error("skarbiec_error", err.to_string()),
         }
-        Err(err) => return azure_error("skarbiec_error", err.to_string()),
-    };
+    }
+    if sp.is_empty() {
+        return json!({
+            "status": "no_credentials",
+            "detail": format!("Skarbiec item {secret_name:?} does not exist"),
+        });
+    }
+    let sp = Value::Object(sp);
     let client = reqwest::Client::new();
     azure_section_with(&client, &sp, AZURE_LOGIN_BASE, ARM_BASE).await
 }

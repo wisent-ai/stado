@@ -62,9 +62,9 @@ fn messaging_vault() -> Result<crate::skarbiec::Client, OperatorAuthError> {
         .map_err(|_| OperatorAuthError::Configuration)
 }
 
-fn required<'a>(item: &'a Value, field: &str) -> Result<&'a str, OperatorAuthError> {
-    item.get(field)
-        .and_then(Value::as_str)
+fn required(value: &Value) -> Result<&str, OperatorAuthError> {
+    value
+        .as_str()
         .filter(|value| !value.is_empty() && value.trim() == *value)
         .ok_or(OperatorAuthError::Credential)
 }
@@ -87,11 +87,19 @@ fn supabase_base(raw: &str) -> Result<Url, OperatorAuthError> {
 }
 
 pub(super) async fn operator_auth_metadata() -> Result<(Url, String), OperatorAuthError> {
-    let item = messaging_vault()?
-        .read_item(DEVICE_REGISTRY_ITEM)
+    // Field by field: the broker refuses a read that names none, and this
+    // caller has always wanted exactly these two. A whole-item read here left
+    // the dashboard unable to authenticate an operator at all.
+    let vault = messaging_vault()?;
+    let raw_url = vault
+        .read_field(DEVICE_REGISTRY_ITEM, "url")
         .await
         .map_err(|_| OperatorAuthError::Credential)?;
-    let url = supabase_base(required(&item, "url")?)?;
-    let anon_key = required(&item, "anon_key")?.to_string();
+    let raw_key = vault
+        .read_field(DEVICE_REGISTRY_ITEM, "anon_key")
+        .await
+        .map_err(|_| OperatorAuthError::Credential)?;
+    let url = supabase_base(required(&raw_url)?)?;
+    let anon_key = required(&raw_key)?.to_string();
     Ok((url, anon_key))
 }
