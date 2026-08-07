@@ -26,7 +26,6 @@ pub mod control_plane;
 pub mod coordinator;
 pub mod cost;
 pub mod dashboard;
-pub mod directory;
 pub mod disk_cleanup;
 pub mod doctor;
 pub mod host;
@@ -41,10 +40,8 @@ pub mod profiles_cmd;
 pub mod queue;
 pub mod quota;
 pub mod recovery;
+pub mod identity;
 pub mod registry;
-pub mod release_build;
-pub mod release_cmd;
-pub mod resolver;
 pub mod resources;
 pub mod results;
 pub mod schedule;
@@ -432,10 +429,6 @@ enum Commands {
     #[command(subcommand)]
     Artifact(ArtifactCommands),
 
-    /// Build once, sign, promote, roll out, and roll back product releases.
-    #[command(subcommand)]
-    Release(release_cmd::ReleaseCommands),
-
     /// Manage recurring (cron) jobs — submit a command on a cron schedule.
     ///
     /// A schedule is evaluated every coordinator tick; when due, the
@@ -451,6 +444,10 @@ enum Commands {
     /// Manage the canonical compute-target registry in configured Stado storage.
     #[command(subcommand)]
     Registry(RegistryCommands),
+
+    /// Which host holds which identity, and whether that is still true.
+    #[command(subcommand)]
+    Identity(IdentityCommands),
 
     /// Manage operating-system resources on registry hosts.
     #[command(subcommand)]
@@ -497,9 +494,6 @@ enum Commands {
     /// Atomically relocate a declared service group between registered hosts.
     #[command(subcommand)]
     Placement(placement::PlacementCommands),
-    /// Resolve logical services and run the local Stado data plane.
-    #[command(subcommand)]
-    Resolver(resolver::ResolverCommands),
     /// Plan, deploy, route and operate local OpenAI-compatible inference.
     #[command(subcommand)]
     Inference(inference::InferenceCommands),
@@ -943,13 +937,7 @@ enum RegistryCommands {
     /// Validate a local registry-v2 JSON document.
     Validate { path: Option<String> },
     /// Upload local registry.json to the canonical registry object.
-    Push {
-        path: Option<String>,
-        /// Allow a write that deletes a top-level key the canonical document
-        /// still carries. Without this the upload is refused and names them.
-        #[arg(long)]
-        force: bool,
-    },
+    Push { path: Option<String> },
     /// Print the canonical registry to stdout.
     Pull,
     /// Print which registry target is this machine.
@@ -1066,23 +1054,6 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Replace an owner-only Stado program on TARGET with a build proven to run there.
-    #[command(name = "install-binary")]
-    InstallBinary {
-        target: String,
-        /// Local executable to install.
-        #[arg(long)]
-        from: Option<String>,
-        /// Put the previous build back instead of installing a new one.
-        #[arg(long)]
-        rollback: bool,
-        /// Basename under $HOME/.stado/bin on the target.
-        #[arg(long, default_value = "stado")]
-        name: String,
-        /// Emit the installation report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
     /// Install one small operator helper in TARGET's owner-only Stado bin directory.
     #[command(name = "install-helper")]
     InstallHelper {
@@ -1177,38 +1148,6 @@ enum HostCommands {
         /// see the allowlist.
         #[arg(last = true)]
         command: Vec<String>,
-    },
-    /// Report TARGET's stado-managed binaries, forward markers and loopback
-    /// listeners, and whether each marker still matches a live listener.
-    Inventory {
-        target: String,
-        /// Emit the inventory and its reconciliation as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Deliver one registry-declared managed binary to TARGET: fetch the
-    /// exact coordinate, verify its configured SHA-256, stage it, and only
-    /// then repoint the active binary and restart its unit.
-    Release {
-        target: String,
-        /// Managed binary to deliver. Run with an unmanaged one to see the
-        /// list; the name selects a fixed entry and never becomes a path.
-        #[arg(long)]
-        binary: String,
-        /// Exact immutable version, and it must match what the registry
-        /// declares for this host. Not a channel and not an alias.
-        #[arg(long)]
-        version: String,
-        /// Published release platform.
-        #[arg(long, default_value = crate::deploy::host_release::DEFAULT_PLATFORM)]
-        platform: String,
-        /// Probe the host read-only and report the plan without fetching,
-        /// staging, activating or restarting anything.
-        #[arg(long)]
-        dry_run: bool,
-        /// Emit the delivery report as JSON.
-        #[arg(long)]
-        json: bool,
     },
 }
 
@@ -1427,8 +1366,6 @@ fn failure_service(matches: &clap::ArgMatches) -> &'static str {
         "mail" => "mail",
         "azure" | "cloudflare" | "vast" | "blast-radius" => "provider",
         "coordinator"
-        | "resolver"
-        | "release"
         | "dashboard"
         | "schedule"
         | "agent"
@@ -1527,7 +1464,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         } => disk_cleanup::run(once, watch, dry_run).await,
         Commands::InstallDiskCleanup => disk_cleanup::install().await,
         Commands::Artifact(sub) => artifact::dispatch(sub).await,
-        Commands::Release(sub) => release_cmd::dispatch(sub).await,
         Commands::Cost(sub) => cost::dispatch(&sub).await,
         Commands::Vast(sub) => vast::dispatch(&sub).await,
         Commands::Quota { json, sub } => quota::dispatch(json, &sub).await,
@@ -1545,7 +1481,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         } => control_plane::cloud(bind, port, interval).await,
         Commands::Registry(sub) => match sub {
             RegistryCommands::Validate { path } => registry::validate(path),
-            RegistryCommands::Push { path, force } => registry::push(path, force).await,
+            RegistryCommands::Push { path } => registry::push(path).await,
             RegistryCommands::Pull => registry::pull().await,
             RegistryCommands::SelfTarget { name_only } => registry::self_target(name_only).await,
             RegistryCommands::Doctor { json } => registry::doctor(json).await,
@@ -1553,6 +1489,12 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 registry::host_add(&host, &ssh, &kind).await
             }
             RegistryCommands::BeaconAge { json } => registry::beacon_age(json).await,
+        },
+        Commands::Identity(sub) => match sub {
+            IdentityCommands::List { json } => identity::list(json).await,
+            IdentityCommands::Verify { kind, identity, json } => {
+                identity::verify(kind, identity, json).await
+            }
         },
         Commands::Host(sub) => match sub {
             HostCommands::Health { target, json } => host::health(&target, json).await,
@@ -1615,13 +1557,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 dry_run,
                 json,
             } => host::cleanup(&target, dry_run, json).await,
-            HostCommands::InstallBinary {
-                target,
-                from,
-                name,
-                rollback,
-                json,
-            } => host::install_binary(&target, from.as_deref(), &name, rollback, json).await,
             HostCommands::InstallHelper {
                 target,
                 source,
@@ -1667,15 +1602,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 json,
                 command,
             } => host::exec(&target, command, json).await,
-            HostCommands::Inventory { target, json } => host::inventory(&target, json).await,
-            HostCommands::Release {
-                target,
-                binary,
-                version,
-                platform,
-                dry_run,
-                json,
-            } => host::release(&target, &binary, &version, &platform, dry_run, json).await,
         },
         Commands::Bootstrap {
             target,
@@ -1689,8 +1615,26 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Queue(sub) => queue::dispatch(sub).await,
         Commands::Service(sub) => service::dispatch(sub).await,
         Commands::Placement(sub) => placement::dispatch(sub).await,
-        Commands::Resolver(sub) => resolver::dispatch(sub).await,
         Commands::Inference(sub) => inference::dispatch(sub).await,
         Commands::Doctor(args) => doctor::dispatch(args).await,
     }
+}
+
+/// Identity bindings: which host holds what, and whether it still does.
+#[derive(Subcommand)]
+enum IdentityCommands {
+    /// Every declared identity binding across the fleet.
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Check a binding against the hosts themselves, not the declaration.
+    Verify {
+        #[arg(long)]
+        kind: String,
+        #[arg(long)]
+        identity: String,
+        #[arg(long)]
+        json: bool,
+    },
 }
