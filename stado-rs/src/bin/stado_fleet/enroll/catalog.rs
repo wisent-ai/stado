@@ -17,6 +17,7 @@ pub struct EnrollmentCatalog {
     pub allow_join: bool,
     pub allow_enroll: bool,
     pub require_verified_hostname: bool,
+    pub require_agent_attestation: bool,
     pub key_custody: String,
 }
 
@@ -52,6 +53,7 @@ pub fn parse_enrollment(document: &Value) -> Result<EnrollmentCatalog, String> {
             allow_join: true,
             allow_enroll: true,
             require_verified_hostname: false,
+            require_agent_attestation: false,
             key_custody: CUSTODY_SKARBIEC.to_string(),
         });
     };
@@ -86,6 +88,7 @@ pub fn parse_enrollment(document: &Value) -> Result<EnrollmentCatalog, String> {
         allow_join,
         allow_enroll,
         require_verified_hostname: bool_field(section, "require_verified_hostname", location)?,
+        require_agent_attestation: bool_field(section, "require_agent_attestation", location)?,
         key_custody,
     })
 }
@@ -164,6 +167,7 @@ pub async fn catalog(as_json: bool) -> Result<bool, String> {
                 "allow_join": enrollment.allow_join,
                 "allow_enroll": enrollment.allow_enroll,
                 "require_verified_hostname": enrollment.require_verified_hostname,
+                "require_agent_attestation": enrollment.require_agent_attestation,
             },
             "channels": {
                 "declared": channels.declared,
@@ -183,8 +187,11 @@ pub async fn catalog(as_json: bool) -> Result<bool, String> {
     }
     println!("enrollment:");
     println!(
-        "  allow_join={} allow_enroll={} require_verified_hostname={}",
-        enrollment.allow_join, enrollment.allow_enroll, enrollment.require_verified_hostname
+        "  allow_join={} allow_enroll={} require_verified_hostname={} require_agent_attestation={}",
+        enrollment.allow_join,
+        enrollment.allow_enroll,
+        enrollment.require_verified_hostname,
+        enrollment.require_agent_attestation
     );
     if channels.declared {
         println!("channels:");

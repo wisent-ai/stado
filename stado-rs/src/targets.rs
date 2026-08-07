@@ -161,6 +161,7 @@ fn require_int(
     Ok(int)
 }
 
+
 fn validate_disk_cleanup(value: &Value, location: &str) -> Result<(), RegistryValidationError> {
     let map = value
         .as_object()
@@ -363,12 +364,144 @@ fn target_identities(
     Ok(identities)
 }
 
+fn validate_agent_enrollment(
+    target: &Map<String, Value>,
+    location: &str,
+    required: bool,
+) -> Result<(), RegistryValidationError> {
+    let Some(receipt) = target.get("agent_enrollment") else {
+        if required
+            && target
+                .get("kind")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| crate::capabilities::ProviderId::Local.matches(kind))
+        {
+            return Err(verr(
+                &format!("{location}.agent_enrollment"),
+                "is required for every registered local target",
+            ));
+        }
+        return Ok(());
+    };
+    let receipt_location = format!("{location}.agent_enrollment");
+    let receipt = receipt
+        .as_object()
+        .ok_or_else(|| verr(&receipt_location, "must be an object"))?;
+    if receipt.get("status").and_then(Value::as_str) != Some("enrolled") {
+        return Err(verr(
+            &format!("{receipt_location}.status"),
+            "must be 'enrolled'",
+        ));
+    }
+    for field in [
+        "consumer_id",
+        "hostname",
+        "kind",
+        "stado_version",
+        "attested_at",
+        "capacity_published_at",
+    ] {
+        if !receipt
+            .get(field)
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            return Err(verr(
+                &format!("{receipt_location}.{field}"),
+                "must be a non-empty string",
+            ));
+        }
+    }
+    if receipt.get("kind").and_then(Value::as_str) != target.get("kind").and_then(Value::as_str) {
+        return Err(verr(
+            &format!("{receipt_location}.kind"),
+            "must match the target kind",
+        ));
+    }
+    for field in ["attested_at", "capacity_published_at"] {
+        let value = receipt[field]
+            .as_str()
+            .expect("non-empty string checked above");
+        if chrono::DateTime::parse_from_rfc3339(value).is_err() {
+            return Err(verr(
+                &format!("{receipt_location}.{field}"),
+                "must be an RFC 3339 timestamp",
+            ));
+        }
+    }
+    let attested_hostname = normalize_hostname(
+        receipt["hostname"]
+            .as_str()
+            .expect("non-empty string checked above"),
+    );
+    let hostname_matches = target
+        .get("hostnames")
+        .and_then(Value::as_array)
+        .is_some_and(|hostnames| {
+            hostnames.iter().any(|hostname| {
+                hostname
+                    .as_str()
+                    .is_some_and(|hostname| normalize_hostname(hostname) == attested_hostname)
+            })
+        });
+    if !hostname_matches {
+        return Err(verr(
+            &format!("{receipt_location}.hostname"),
+            "must match one of the target hostnames",
+        ));
+    }
+    Ok(())
+}
+
 /// Validate a registry-v2 document without modifying it. Python returns the
 /// input dict; here the borrowed input simply remains valid on `Ok(())`.
 pub fn validate_registry(data: &Value) -> Result<(), RegistryValidationError> {
+    validate_registry_inner(data, &HashSet::new())
+}
+
+fn validate_registry_inner(
+    data: &Value,
+    provisioning_names: &HashSet<String>,
+) -> Result<(), RegistryValidationError> {
     let root = data
         .as_object()
         .ok_or_else(|| verr("registry", "must be an object"))?;
+    if let Some(provisioning) = root.get("provisioning_targets") {
+        let provisioning = provisioning
+            .as_array()
+            .ok_or_else(|| verr("registry.provisioning_targets", "must be an array"))?;
+        for (index, target) in provisioning.iter().enumerate() {
+            if target.get("fleet").is_some() {
+                return Err(verr(
+                    &format!("registry.provisioning_targets[{index}].fleet"),
+                    "is forbidden until the agent has attested enrollment",
+                ));
+            }
+        }
+        let provisioning_names = provisioning
+            .iter()
+            .filter_map(|target| target.get("name").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect::<HashSet<_>>();
+        let mut combined = data.clone();
+        let root = combined
+            .as_object_mut()
+            .expect("registry object checked above");
+        let staged = root
+            .remove("provisioning_targets")
+            .expect("provisioning section checked above");
+        root.get_mut("targets")
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| verr("registry.targets", "must be an array"))?
+            .extend(
+                staged
+                    .as_array()
+                    .expect("array checked above")
+                    .iter()
+                    .cloned(),
+            );
+        return validate_registry_inner(&combined, &provisioning_names);
+    }
     let version_ok = root
         .get("schema_version")
         .is_some_and(|v| !v.is_boolean() && v.as_i64() == Some(REGISTRY_SCHEMA_VERSION));
@@ -383,6 +516,20 @@ pub fn validate_registry(data: &Value) -> Result<(), RegistryValidationError> {
         .get("targets")
         .and_then(Value::as_array)
         .ok_or_else(|| verr("registry.targets", "must be an array"))?;
+    let require_agent_attestation = match root
+        .get("enrollment")
+        .and_then(Value::as_object)
+        .and_then(|enrollment| enrollment.get("require_agent_attestation"))
+    {
+        None => false,
+        Some(Value::Bool(required)) => *required,
+        Some(_) => {
+            return Err(verr(
+                "registry.enrollment.require_agent_attestation",
+                "must be a boolean",
+            ))
+        }
+    };
 
     let mut names: HashSet<&str> = HashSet::new();
     let mut identities: HashMap<String, String> = HashMap::new();
@@ -419,6 +566,11 @@ pub fn validate_registry(data: &Value) -> Result<(), RegistryValidationError> {
                 &format!("must be one of {}", py_list_repr(&valid_kinds)),
             ));
         }
+        validate_agent_enrollment(
+            target,
+            &location,
+            require_agent_attestation && !provisioning_names.contains(name),
+        )?;
 
         if let Some(weles) = target.get("weles") {
             let weles_location = format!("{location}.weles");
@@ -848,10 +1000,14 @@ pub enum RegistryError {
     AmbiguousIdentity { identity: String, names: String },
 }
 
-/// A parsed registry document: targets plus coordinator entries.
+/// A parsed registry document. Provisioning targets are deliberately kept
+/// outside `targets`: agents may resolve them during enrollment, while
+/// schedulers, fleets, and ordinary host lookups cannot mistake them for
+/// registered machines.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Registry {
     pub targets: Vec<ComputeTarget>,
+    pub provisioning_targets: Vec<ComputeTarget>,
     pub coordinators: Vec<Coordinator>,
 }
 
@@ -865,11 +1021,13 @@ fn name_is_truthy(value: &Value) -> bool {
         .is_some_and(|name| !name.is_empty())
 }
 
-fn parse_targets(data: &Value) -> Result<Vec<ComputeTarget>, RegistryError> {
-    // Python: raw = data.get("targets") if isinstance(data, dict) else data
+fn parse_target_section(data: &Value, key: &str) -> Result<Vec<ComputeTarget>, RegistryError> {
+    // Bare arrays retain the legacy `targets` parser behavior. Named
+    // auxiliary sections exist only in object-shaped registry documents.
     let raw = match data {
-        Value::Object(map) => map.get("targets").unwrap_or(&Value::Null),
-        other => other,
+        Value::Object(map) => map.get(key).unwrap_or(&Value::Null),
+        other if key == "targets" => other,
+        _ => &Value::Null,
     };
     let mut targets = Vec::new();
     if let Value::Array(items) = raw {
@@ -884,6 +1042,10 @@ fn parse_targets(data: &Value) -> Result<Vec<ComputeTarget>, RegistryError> {
         }
     }
     Ok(targets)
+}
+
+fn parse_targets(data: &Value) -> Result<Vec<ComputeTarget>, RegistryError> {
+    parse_target_section(data, "targets")
 }
 
 fn parse_coordinators(data: &Value) -> Result<Vec<Coordinator>, RegistryError> {
@@ -910,6 +1072,7 @@ pub fn load_registry_from_str(text: &str) -> Result<Registry, RegistryError> {
         serde_json::from_str(text).map_err(|exc| RegistryError::Json(exc.to_string()))?;
     Ok(Registry {
         targets: parse_targets(&data)?,
+        provisioning_targets: parse_target_section(&data, "provisioning_targets")?,
         coordinators: parse_coordinators(&data)?,
     })
 }
@@ -1210,6 +1373,17 @@ impl Registry {
         self.targets.iter().find(|t| t.name == name)
     }
 
+    /// Resolve a target for the agent bootstrap handshake. Provisioning
+    /// entries are invisible to every normal lookup but visible here so the
+    /// agent can attest before the machine becomes registered.
+    pub fn lookup_for_agent(&self, name: &str) -> Option<&ComputeTarget> {
+        self.lookup(name).or_else(|| {
+            self.provisioning_targets
+                .iter()
+                .find(|target| target.name == name)
+        })
+    }
+
     /// Subset of targets with kind='local'. Used by wc bootstrap.
     pub fn local_targets(&self) -> Vec<&ComputeTarget> {
         self.targets
@@ -1253,6 +1427,47 @@ impl Registry {
         }
         if matches.len() > 1 {
             let mut names: Vec<&str> = matches.iter().map(|t| t.name.as_str()).collect();
+            names.sort_unstable();
+            return Err(RegistryError::AmbiguousIdentity {
+                identity,
+                names: names.join(", "),
+            });
+        }
+        Ok(matches.into_iter().next())
+    }
+
+    /// Agent-only self lookup across registered and provisioning identities.
+    /// Ambiguity is refused exactly like [`Registry::lookup_self`].
+    pub fn lookup_self_for_agent(
+        &self,
+        hostname: &str,
+    ) -> Result<Option<&ComputeTarget>, RegistryError> {
+        if let Some(target) = self.lookup_self(hostname)? {
+            return Ok(Some(target));
+        }
+        let identity = normalize_hostname(hostname);
+        if identity.is_empty() {
+            return Ok(None);
+        }
+        let mut matches = Vec::new();
+        for target in &self.provisioning_targets {
+            let mut identities = HashSet::new();
+            identities.insert(normalize_hostname(&target.name));
+            identities.extend(
+                target
+                    .hostnames
+                    .iter()
+                    .map(|alias| normalize_hostname(alias)),
+            );
+            if let Some(ssh) = &target.ssh {
+                identities.insert(ssh_hostname(ssh));
+            }
+            if identities.contains(&identity) {
+                matches.push(target);
+            }
+        }
+        if matches.len() > 1 {
+            let mut names: Vec<&str> = matches.iter().map(|target| target.name.as_str()).collect();
             names.sort_unstable();
             return Err(RegistryError::AmbiguousIdentity {
                 identity,

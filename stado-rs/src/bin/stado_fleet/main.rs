@@ -62,8 +62,8 @@ enum Commands {
         /// Declared fleet name.
         fleet: String,
     },
-    /// One-command onboarding: register a machine, optionally fleet it,
-    /// optionally install the agent.
+    /// Transactionally install and attest an agent, then register the machine
+    /// and optionally place it in a fleet.
     Enroll {
         /// Machine name (a lowercase target identifier).
         name: String,
@@ -77,18 +77,25 @@ enum Commands {
         /// Fleet to place the machine in right away.
         #[arg(long)]
         fleet: Option<String>,
-        /// Install the agent on the machine after registering it.
-        #[arg(long)]
-        bootstrap: bool,
     },
+    /// Repair a legacy target by requiring the same live agent attestation.
+    Reconcile {
+        /// Existing registry target with a usable SSH channel.
+        target: String,
+    },
+    /// Require valid agent receipts for all current and future local targets.
+    EnforceAttestation,
     /// Announce this machine to the fleet (run on the machine being added).
     Join,
     /// List unanswered join requests.
     Pending,
-    /// Turn a pending join request into a registered target.
+    /// Install and attest the agent, then approve a pending join request.
     Approve {
         /// Hostname from the join request.
         hostname: String,
+        /// SSH destination used to install and attest the agent.
+        #[arg(long)]
+        ssh: String,
         /// Fleet to place the machine in right away.
         #[arg(long)]
         fleet: Option<String>,
@@ -162,11 +169,16 @@ async fn main() -> ExitCode {
             ssh,
             kind,
             fleet,
-            bootstrap,
-        } => ops::enroll(&name, Some(&ssh), &kind, fleet.as_deref(), bootstrap).await,
+        } => ops::enroll(&name, Some(&ssh), &kind, fleet.as_deref(), None).await,
+        Commands::Reconcile { target } => ops::reconcile(&target).await,
+        Commands::EnforceAttestation => ops::enforce_attestation().await,
         Commands::Join => enroll::join().await,
         Commands::Pending => enroll::pending().await,
-        Commands::Approve { hostname, fleet } => enroll::approve(&hostname, fleet.as_deref()).await,
+        Commands::Approve {
+            hostname,
+            ssh,
+            fleet,
+        } => enroll::approve(&hostname, &ssh, fleet.as_deref()).await,
         Commands::Reject { hostname } => enroll::reject(&hostname).await,
         Commands::Catalog { json } => enroll::catalog::catalog(json).await,
         Commands::Key(sub) => {
