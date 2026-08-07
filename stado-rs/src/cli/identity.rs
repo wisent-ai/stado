@@ -65,6 +65,45 @@ fn observe_apple_accounts(ssh: &str, user: &str) -> Option<Vec<String>> {
     )
 }
 
+/// Is this registry target the machine we are running on?
+///
+/// Matched on the short hostname and the declared hostnames, because a registry name
+/// is an operator label ("operator-host") and need not equal what the OS reports.
+fn is_local_target(target: &ComputeTarget) -> bool {
+    let Ok(output) = std::process::Command::new("hostname").arg("-s").output() else {
+        return false;
+    };
+    let host = String::from_utf8_lossy(&output.stdout).trim().to_lowercase();
+    if host.is_empty() {
+        return false;
+    }
+    // Compare the leading label only. `hostname -s` gives "Lukaszs-MacBook-Pro-5485"
+    // while the registry records the mDNS form "operator-host.local", and
+    // an exact match silently fails on that suffix -- reporting the local machine as
+    // unverifiable while standing on it.
+    let label = |value: &str| value.to_lowercase().split('.').next().unwrap_or("").to_string();
+    let host = label(&host);
+    label(&target.name) == host || target.hostnames.iter().any(|name| label(name) == host)
+}
+
+/// The Apple accounts the current user is signed into on this machine.
+fn local_apple_accounts() -> Option<Vec<String>> {
+    let output = std::process::Command::new("defaults")
+        .args(["read", "MobileMeAccounts"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let found: Vec<String> = text
+        .lines()
+        .filter(|line| line.contains("AccountID"))
+        .filter_map(|line| line.split('"').nth(1).map(str::to_string))
+        .collect();
+    if found.is_empty() { None } else { Some(found) }
+}
+
 fn binding_row(target: &ComputeTarget, binding: &IdentityBinding, observed: Option<bool>) -> Value {
     json!({
         "host": target.name,
@@ -125,12 +164,20 @@ pub async fn verify(kind: String, identity: String, json_output: bool) -> Result
             if binding.kind != kind || binding.identity != identity {
                 continue;
             }
-            let observed = match (binding.kind.as_str(), target.ssh.as_deref()) {
-                (APPLE_ACCOUNT, Some(ssh)) => {
+            let observed = match binding.kind.as_str() {
+                // Reading the machine we are already running on needs neither SSH nor
+                // sudo: a user's own MobileMeAccounts is readable by that user. Going
+                // out over the network to ask a question we can answer in-process was
+                // what made this host report `unknown` while it was in fact signed in
+                // -- a false negative that points the operator at the wrong machine.
+                APPLE_ACCOUNT if is_local_target(target) => {
+                    local_apple_accounts().map(|found| found.iter().any(|e| e == &identity))
+                }
+                APPLE_ACCOUNT => target.ssh.as_deref().and_then(|ssh| {
                     let user = binding.user.clone().unwrap_or_else(|| "root".to_string());
                     observe_apple_accounts(ssh, &user)
                         .map(|found| found.iter().any(|entry| entry == &identity))
-                }
+                }),
                 // An identity family we cannot probe stays unknown rather than being
                 // reported as present: claiming verification we did not perform is
                 // worse than admitting the gap.
