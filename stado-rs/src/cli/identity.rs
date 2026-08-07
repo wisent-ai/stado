@@ -68,6 +68,23 @@ async fn observe_apple_accounts(target_name: &str) -> Option<Vec<String>> {
     if found.is_empty() { None } else { Some(found) }
 }
 
+/// Does the approved channel land on the very user this binding names?
+///
+/// The channel logs in as the `user` half of the target's ssh destination and reads
+/// that account's own preferences. When the binding names somebody else, the probe is
+/// looking at the wrong desk, and a binding that names nobody is taken at the login
+/// user, which is who the channel is.
+fn probes_own_user(target: &ComputeTarget, binding: &IdentityBinding) -> bool {
+    let Some(declared) = binding.user.as_deref() else {
+        return true;
+    };
+    target
+        .ssh
+        .as_deref()
+        .and_then(|destination| destination.split('@').next())
+        .is_some_and(|login| login == declared)
+}
+
 /// Is this registry target the machine we are running on?
 ///
 /// Matched on the short hostname and the declared hostnames, because a registry name
@@ -98,12 +115,7 @@ fn local_apple_accounts() -> Option<Vec<String>> {
     if !output.status.success() {
         return None;
     }
-    let text = String::from_utf8_lossy(&output.stdout);
-    let found: Vec<String> = text
-        .lines()
-        .filter(|line| line.contains("AccountID"))
-        .filter_map(|line| line.split('"').nth(1).map(str::to_string))
-        .collect();
+    let found = account_ids(&String::from_utf8_lossy(&output.stdout));
     if found.is_empty() { None } else { Some(found) }
 }
 
@@ -181,10 +193,16 @@ pub async fn verify(kind: String, identity: String, json_output: bool) -> Result
                 APPLE_ACCOUNT if is_local_target(target) => {
                     local_apple_accounts().map(|found| found.iter().any(|e| e == &identity))
                 }
-                APPLE_ACCOUNT => match observe_apple_accounts(&target.name).await {
-                    Some(found) => Some(found.iter().any(|entry| entry == &identity)),
-                    None => None,
-                },
+                // The remote reading is the channel login user's own, because
+                // `defaults read` carries no path and the channel carries no sudo. A
+                // binding naming a different user on that machine is therefore
+                // unanswerable here, and saying `false` would be a false negative
+                // dressed as a measurement: an account signed into `charles` is no
+                // evidence about what `controlyourai-relay` can display.
+                APPLE_ACCOUNT if !probes_own_user(target, binding) => None,
+                APPLE_ACCOUNT => observe_apple_accounts(&target.name)
+                    .await
+                    .map(|found| found.iter().any(|entry| entry == &identity)),
                 // An identity family we cannot probe stays unknown rather than being
                 // reported as present: claiming verification we did not perform is
                 // worse than admitting the gap.
