@@ -351,9 +351,12 @@ fn credential_client() -> Result<crate::skarbiec::Client, CmdError> {
     .map_err(|error| CmdError::click(error.to_string()))
 }
 
-async fn credential_item(id: &str) -> Result<Value, CmdError> {
+/// One named field of a credential item. The whole-item form is refused by a
+/// broker that requires a named field, and every caller here knows the field
+/// it wants.
+async fn credential_field(id: &str, field: &str) -> Result<Option<String>, CmdError> {
     credential_client()?
-        .read_item(id)
+        .read_string(id, field)
         .await
         .map_err(|error| CmdError::click(format!("cannot read credential item {id}: {error}")))
 }
@@ -454,23 +457,20 @@ struct OperatorToken {
 }
 
 async fn refresh_operator_token(item_id: &str) -> Result<OperatorToken, CmdError> {
-    let item = credential_item(item_id).await?;
-    let required = |name: &str| {
-        item.get(name)
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                CmdError::click(format!("Skarbiec item {item_id} field {name} is required"))
-            })
+    let required = |value: Option<String>, name: &str| {
+        value.filter(|value| !value.is_empty()).ok_or_else(|| {
+            CmdError::click(format!("Skarbiec item {item_id} field {name} is required"))
+        })
     };
-    let tenant_id = required("tenant_id")?.to_string();
-    let client_id = required("client_id")?.to_string();
-    let refresh_token = required("refresh_token")?.to_string();
-    let account = item
-        .get("login_email")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
+    let tenant_id = required(credential_field(item_id, "tenant_id").await?, "tenant_id")?;
+    let client_id = required(credential_field(item_id, "client_id").await?, "client_id")?;
+    let refresh_token = required(
+        credential_field(item_id, "refresh_token").await?,
+        "refresh_token",
+    )?;
+    let account = credential_field(item_id, "login_email")
+        .await?
+        .unwrap_or_default();
     let response = reqwest::Client::new()
         .post(format!(
             "https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
