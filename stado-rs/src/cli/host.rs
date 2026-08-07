@@ -1481,6 +1481,52 @@ printf '%s\n' "$dir/$name"
     }
     Ok(())
 }
+
+/// Where a delivered file lands, relative to the target account's home.
+///
+/// Separate from `.stado` itself so a delivery can never take the name of a
+/// credential, a helper, or anything else Stado keeps there.
+const DELIVERED_FILES_DIR: &str = ".stado/files";
+
+/// `stado host install-file TARGET SOURCE NAME [--executable]` — deliver one
+/// file of any size to a registry host through the approved channel.
+///
+/// The gap this closes: `install-helper` caps a delivery at what fits inside a
+/// script, and `install-secret` is for credentials and lands them unreadable
+/// and unexecutable by design. Anything else — a built binary, a bundle, a
+/// configuration file an operator produced elsewhere — had no channel at all,
+/// which is how a private `scp` ends up standing in for the audited one.
+pub async fn install_file(
+    target: &str,
+    source: &str,
+    name: &str,
+    executable: bool,
+    json: bool,
+) -> Result<(), CmdError> {
+    let metadata = std::fs::symlink_metadata(source)?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(CmdError::usage("file source must be a regular file"));
+    }
+    let mode = if executable { "u=rwx,go=" } else { "u=rw,go=" };
+    let (path, byte_count) = stream_file(target, source, name, DELIVERED_FILES_DIR, mode).await?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": target,
+                "source": source,
+                "path": path,
+                "bytes": byte_count,
+                "mode": mode,
+                "integrity": "sha256",
+                "status": "installed",
+            }))?
+        );
+    } else {
+        println!("{target}: installed {path} ({byte_count} bytes, {mode})");
+    }
+    Ok(())
+}
 /// Transfer one opaque owner credential without exposing it in argv, stdout,
 /// logs, a remote environment variable, or a general-purpose remote shell.
 pub async fn install_secret(
@@ -1504,7 +1550,7 @@ pub async fn install_secret(
     // instead of refused. Both paths land owner-only and are checksummed on the
     // far side before they take the name.
     let (path, byte_count) = if metadata.len() > u64::from(u16::MAX) {
-        stream_secret(target, source, name).await?
+        stream_file(target, source, name, ".stado", "u=rw,go=").await?
     } else {
         let bytes = std::fs::read(source)?;
         transfer_secret(target, name, &bytes, None).await?
@@ -2263,15 +2309,21 @@ async fn rollback_binary(target: &str, name: &str, json: bool) -> Result<(), Cmd
     Ok(())
 }
 
-const STREAM_SECRET_BODY: &str = r#"dir="$HOME/.stado"
-staged="$dir/.$name.stado-secret.stream"
+/// The far side of a streamed delivery: verify, then let the file take its
+/// name.
+///
+/// `@SUBDIR@` and `@MODE@` are the only things that vary between a credential
+/// and any other delivered file, and the mode is written symbolically so the
+/// contract reads as what it grants rather than as a number to decode.
+const STREAM_FILE_BODY: &str = r#"dir="$HOME/@SUBDIR@"
+staged="$dir/.$name.stado-stream"
 trap 'rm -f "$staged"' EXIT
-[ -s "$staged" ] || { printf '%s\n' 'delivered secret is missing or empty' >&2; exit 1; }
-/bin/chmod 600 "$staged"
+[ -s "$staged" ] || { printf '%s\n' 'delivered file is missing or empty' >&2; exit 1; }
+/bin/chmod @MODE@ "$staged"
 line=$(/usr/bin/openssl dgst -sha256 -r "$staged")
 actual="${line%% *}"
 if [ "$actual" != "$expected" ]; then
-  printf '%s\n' 'secret transfer checksum mismatch' >&2
+  printf '%s\n' 'transfer checksum mismatch' > /dev/stderr
   exit 1
 fi
 /bin/mv "$staged" "$dir/$name"
@@ -2279,17 +2331,21 @@ trap - EXIT
 printf '%s\n' "$dir/$name"
 "#;
 
-/// Deliver an owner-only file too large to embed in a script.
+/// Deliver one file too large to embed in a script, and verify it landed.
 ///
-/// Same contract as the inline path -- 0600, checksummed on the far side before
-/// it takes the name -- with the bytes carried by the transport instead of the
-/// command line.
-async fn stream_secret(
+/// Same contract as the inline path -- owner-only, checksummed on the far side
+/// before it takes the name -- with the bytes carried by the transport instead
+/// of the command line. `subdir` and `mode` are what separate a credential
+/// from any other delivered file; everything else about the delivery is
+/// identical, which is why there is one of these rather than two.
+async fn stream_file(
     target: &str,
     source: &str,
     name: &str,
+    subdir: &str,
+    mode: &str,
 ) -> Result<(String, usize), CmdError> {
-    release_component("secret file name", name)?;
+    release_component("delivered file name", name)?;
     let bytes = std::fs::metadata(source)?.len();
     let mut digest = Sha256::new();
     digest.update(std::fs::read(source)?);
@@ -2299,18 +2355,22 @@ async fn stream_secret(
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let runner = crate::deploy::production_runner();
-    let staged = format!(".stado/.{name}.stado-secret.stream");
+    let staged = format!("{subdir}/.{name}.stado-stream");
 
+    let quoted_subdir = crate::deploy::shlex_quote(subdir);
     let prepare = crate::deploy::host_channel::run_script(
         &resolved,
-        "set -euo pipefail\n/bin/mkdir -p \"$HOME/.stado\"\n/bin/chmod 700 \"$HOME/.stado\"\n",
+        &format!(
+            "set -euo pipefail\n/bin/mkdir -p \"$HOME\"/{quoted_subdir}\n\
+             /bin/chmod u=rwx,go= \"$HOME\"/{quoted_subdir}\n"
+        ),
         &runner,
     )
     .await
     .map_err(|error| CmdError::click(error.to_string()))?;
     if !prepare.ok() {
         return Err(CmdError::click(format!(
-            "{target}: cannot prepare the secret directory: {}",
+            "{target}: cannot prepare the delivery directory: {}",
             crate::deploy::host_channel::last_error_line(&prepare, "remote mkdir failed")
         )));
     }
@@ -2323,7 +2383,7 @@ async fn stream_secret(
         let ssh_target = resolved.ssh.clone().unwrap_or_default();
         if ssh_target.is_empty() {
             return Err(CmdError::click(format!(
-                "{target} declares no ssh destination, so the secret cannot be delivered"
+                "{target} declares no ssh destination, so the file cannot be delivered"
             )));
         }
         let mut options = crate::deploy::host_channel::ssh_options(&ssh_target);
@@ -2337,7 +2397,7 @@ async fn stream_secret(
             .map_err(|error| CmdError::click(error.to_string()))?;
         if !copy.ok() {
             return Err(CmdError::click(format!(
-                "{target}: cannot deliver the secret: {}",
+                "{target}: cannot deliver the file: {}",
                 copy.detail()
             )));
         }
@@ -2346,19 +2406,22 @@ async fn stream_secret(
     let quoted_name = crate::deploy::shlex_quote(name);
     let quoted_sha = crate::deploy::shlex_quote(&expected_sha256);
     let script = format!(
-        "set -euo pipefail\nname={quoted_name}\nexpected={quoted_sha}\n{STREAM_SECRET_BODY}"
+        "set -euo pipefail\nname={quoted_name}\nexpected={quoted_sha}\n{}",
+        STREAM_FILE_BODY
+            .replace("@SUBDIR@", subdir)
+            .replace("@MODE@", mode)
     );
     let output = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     if !output.ok() {
         return Err(CmdError::click(format!(
-            "{target}: secret installation failed: {}",
+            "{target}: delivery failed: {}",
             crate::deploy::host_channel::last_error_line(&output, "remote secret write failed")
         )));
     }
     Ok((
-        format!("$HOME/.stado/{name}"),
+        format!("$HOME/{subdir}/{name}"),
         usize::try_from(bytes).unwrap_or(usize::MAX),
     ))
 }
