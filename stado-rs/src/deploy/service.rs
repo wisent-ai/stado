@@ -879,23 +879,31 @@ printf 'STADO_HOST\\t%s\\t%s\\t%s\\t%s\\n' \"$os\" \"$domain\" \"$unit\" \"$unit
 /// Deliberately narrower than a recovery pass — no disk cleanup, no
 /// coordinator teardown, no other agents touched.
 const RESTART_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
+  unit_loaded() {
+    probe_unit=${1:-$unit}
+    if [ \"$domain\" = system ] && [ -x /usr/bin/sudo ]; then
+      /usr/bin/sudo -n /bin/launchctl print \"$domain/$probe_unit\" >/dev/null 2>&1
+    else
+      /bin/launchctl print \"$domain/$probe_unit\" >/dev/null 2>&1
+    fi
+  }
   if [ -f \"$unit_path\" ]; then
     program=''
     /bin/launchctl bootout \"$domain/$unit\" >/dev/null 2>&1 || true
     /bin/launchctl enable \"$domain/$unit\" >/dev/null || true
     detail=$(/bin/launchctl bootstrap \"$domain\" \"$unit_path\" 2>&1)
     rc=$?
-    if ! /bin/launchctl print \"$domain/$unit\" >/dev/null; then
+    if ! unit_loaded; then
       detail=$(/bin/launchctl asuser \"$uid\" /bin/launchctl bootstrap \"$domain\" \"$unit_path\")
       rc=$?
     fi
-    if ! /bin/launchctl print \"$domain/$unit\" >/dev/null && [ \"$domain\" = system ] && [ -x /usr/bin/sudo ]; then
+    if ! unit_loaded && [ \"$domain\" = system ] && [ -x /usr/bin/sudo ]; then
       /usr/bin/sudo -n /bin/launchctl bootout \"$domain/$unit\" >/dev/null 2>&1 || true
       /usr/bin/sudo -n /bin/launchctl enable \"$domain/$unit\" >/dev/null 2>&1 || true
       detail=$(/usr/bin/sudo -n /bin/launchctl bootstrap \"$domain\" \"$unit_path\" 2>&1)
       rc=$?
     fi
-    if ! /bin/launchctl print \"$domain/$unit\" >/dev/null; then
+    if ! unit_loaded; then
       program=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' \"$unit_path\" 2>/dev/null || /usr/libexec/PlistBuddy -c 'Print :Program' \"$unit_path\" 2>/dev/null || true)
       if [ -n \"$program\" ]; then
         resolved_program=$(/usr/bin/python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' \"$program\" 2>/dev/null || true)
@@ -908,10 +916,10 @@ const RESTART_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
         recovery_unit=\"${unit}-recovery\"
         detail=$(/bin/launchctl submit -l \"$recovery_unit\" -- \"$program\")
         rc=$?
-        if /bin/launchctl print \"$domain/$recovery_unit\" >/dev/null; then unit=\"$recovery_unit\"; fi
+        if unit_loaded \"$recovery_unit\"; then unit=\"$recovery_unit\"; fi
       fi
     fi
-    if ! /bin/launchctl print \"$domain/$unit\" >/dev/null && [ -n \"$program\" ]; then
+    if ! unit_loaded && [ -n \"$program\" ]; then
       log=$(/usr/bin/plutil -extract StandardOutPath raw -o - \"$unit_path\")
       if [ -z \"$log\" ]; then log=\"$HOME/.stado/logs/$unit.log\"; fi
       /bin/mkdir -p \"$(/usr/bin/dirname \"$log\")\"
@@ -930,7 +938,7 @@ const RESTART_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
       fi
       exit
     fi
-    if /bin/launchctl print \"$domain/$unit\" >/dev/null; then rc=0; fi
+    if unit_loaded; then rc=0; fi
     if [ \"$rc\" -ne 0 ]; then
       say 'bootstrap_failed' \"$rc $detail\"
       exit 0
