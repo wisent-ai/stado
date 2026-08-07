@@ -12,42 +12,64 @@ before it lands.
 
 ## Onboard a new machine
 
-Enrollment is verified: a machine lands in the registry only after Stado
-proves it exists. Two channels, both verified:
+Enrollment is agent-attested: SSH reachability and hostname discovery create
+only a non-routable `provisioning_targets` entry. The machine enters
+`targets` and a fleet only after the installed agent publishes fresh capacity
+with its Stado version.
 
-**Machine-initiated (no address needed):**
+**Machine-initiated request:**
 
 ```sh
-# on the new machine (no arguments, no hostname needed):
+# on the new machine:
 stado_fleet join
 # on the control plane:
 stado_fleet pending
-stado_fleet approve <hostname-from-the-request> --fleet render-burst
+stado_fleet approve <hostname-from-the-request> \
+  --ssh operator@render-node-a.local \
+  --fleet render-burst
 ```
 
 `join` records the machine's real hostname, OS and architecture in the
-store and prints the request (for setups where the store is not shared,
-the printed JSON travels by any channel). `approve` turns it into a
-registered target through the validated registry write — a host identity
-already declared is refused, never duplicated. `reject` drops a request.
+store. Approval still requires an installation channel: it probes that
+machine, installs the canonical Stado agent, requires a fresh capacity
+attestation matching the request hostname, and only then promotes the
+request. `reject` drops a request without touching the registry.
 
-**Control-plane-initiated (verified over the remote channel):**
+**Control-plane-initiated:**
 
 ```sh
-stado_fleet enroll render-node-a --ssh operator@render-node-a.local --fleet render-burst --bootstrap
+stado_fleet enroll render-node-a \
+  --ssh operator@render-node-a.local \
+  --fleet render-burst
 ```
 
-`enroll` first probes the machine through Stado's own remote channel and
-puts the machine's REAL hostname into the entry — the registration is a
-verified fact, not a declaration. An unreachable machine is refused
-before any write; a failed bootstrap rolls the entry back. The channel
-is anything the destination resolves over — LAN, mDNS, or an overlay
-address such as a tailnet IP; Stado does not care which.
+`enroll` performs the same transaction without a preceding join request.
+The agent installation is mandatory, not a flag. An unreachable host,
+failed installation, missing attestation, or registry conflict removes the
+provisioning entry and leaves no registered target. The SSH destination may
+resolve over LAN, mDNS, or an overlay address such as a tailnet IP.
 
-Without a control-plane SSH channel, use the machine-initiated `join` /
-`pending` / `approve` path above. There is no declaration-only enrollment:
-every registered target is backed by either a verified remote probe or a
-machine-authored join request.
+Legacy declarations are repaired through the same contract:
+
+```sh
+stado_fleet reconcile render-node-a
+```
+
+`reconcile` uses the target's declared SSH channel, withdraws the unverified
+entry while provisioning, and restores fleet membership only after a live
+agent attestation.
+When the entry represents the current machine and has no SSH field,
+`reconcile` uses the local installer after matching the machine's real
+hostname. It never treats an arbitrary SSH-less entry as local.
+
+After every legacy local target has a receipt, make the invariant global:
+
+```sh
+stado_fleet enforce-attestation
+```
+
+The command is atomic and fails with the first unreconciled target; it never
+enables a policy that would invalidate the current registry.
 
 ## Declare a fleet
 
@@ -68,9 +90,9 @@ stado_fleet assign render-node-a render-burst
 stado_fleet assign render-node-b render-burst
 ```
 
-The machine must already be a registered target (`stado registry pull`
-lists them, `stado registry host add` onboards a new one), and the fleet
-must be declared first — both are checked before anything is written.
+The target must carry a successful `agent_enrollment` attestation and the
+fleet must already be declared. A target name, SSH probe, or join request
+alone is insufficient.
 
 ## Inspect
 
@@ -135,7 +157,8 @@ every machine:
   "enrollment": {
     "allow_join": true,
     "allow_enroll": true,
-    "require_verified_hostname": true
+    "require_verified_hostname": true,
+    "require_agent_attestation": true
   },
   "channels": {
     "control_plane": ["loopback"],
@@ -145,10 +168,10 @@ every machine:
 ```
 
 `stado_fleet catalog` prints it. `join`, `approve` and `enroll` consult
-`enrollment` in their preflights: a path the catalog disables is refused
-with the policy's own message, before anything is written. A document
-without the sections is unrestricted — and `catalog` says so out loud,
-so an absent policy is never mistaken for a declared one.
+the path policy before any write. Once `require_agent_attestation` is true,
+the registry validator also rejects every local target without a valid
+receipt. A document without the sections remains unrestricted for migration,
+and `catalog` says so explicitly.
 
 ## Schema reference
 
