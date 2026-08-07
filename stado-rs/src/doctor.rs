@@ -1637,16 +1637,20 @@ const CONTRACT_TITLE: &str = "Skarbiec read contract";
 const CONTRACT_REMEDY: &str =
     "move whole-item reads to Client::read_field, or pin the broker to the build these callers expect";
 
-/// Does the configured broker still answer a whole-item read?
+/// Which read contract is the configured broker enforcing?
 ///
 /// Skarbiec 9aa7dd4 made `field` mandatory on `/v1/items/read`. Callers that
-/// ask for an item and pick fields out of it get `400 {"error":"field
-/// required"}` from a broker built after that change, and the failure carries
-/// no hint that the contract moved underneath them. On 2026-08-04 that took
-/// out this machine's host-health beacon for twenty-one hours, during which
-/// `stado service list` went on reporting a stale `active` for services that
-/// were not running — the fleet's own view of the host was fiction and nothing
-/// said so.
+/// asked for an item and picked fields out of it got `400 {"error":"field
+/// required"}` with no hint that the contract had moved underneath them. On
+/// 2026-08-04 that took out this machine's host-health beacon for twenty-one
+/// hours, during which `stado service list` went on reporting a stale
+/// `active` for services that were not running.
+///
+/// Every credential caller in this build now names its field - alerts, the
+/// gateway verifiers, azure, cloudflare, billing, the dashboard's operator
+/// auth and the fleet key store - so a broker demanding one is the contract
+/// this build speaks, and the row says which contract is in force rather than
+/// warning about a mismatch that no longer exists.
 ///
 /// The probe is unauthenticated on purpose: the handler validates `id` and
 /// `field` before it looks at any identity, so a request carrying neither a
@@ -1700,22 +1704,25 @@ async fn skarbiec_contract_check() -> Check {
             let status = response.status().as_u16();
             let body = response.text().await.unwrap_or_default();
             if body.contains("field required") {
+                Check::pass(
+                    CONTRACT_ID,
+                    CONTRACT_TITLE,
+                    format!(
+                        "{endpoint} requires a named field (HTTP {status}), which is what this \
+                         build sends: every credential read names its field"
+                    ),
+                    CONTRACT_REMEDY,
+                )
+            } else {
                 Check::new(
                     CONTRACT_ID,
                     CONTRACT_TITLE,
                     Status::Warn,
                     format!(
-                        "{endpoint} requires a named field (HTTP {status}); every whole-item \
-                         read in this build fails against it, which is what silences a health \
-                         beacon without saying why"
+                        "{endpoint} accepts a read without a named field (HTTP {status}); this \
+                         broker predates the field requirement, so an item read here returns \
+                         whatever the grant allows rather than the one field asked for"
                     ),
-                    CONTRACT_REMEDY,
-                )
-            } else {
-                Check::pass(
-                    CONTRACT_ID,
-                    CONTRACT_TITLE,
-                    format!("{endpoint} accepts a read without a named field (HTTP {status})"),
                     CONTRACT_REMEDY,
                 )
             }

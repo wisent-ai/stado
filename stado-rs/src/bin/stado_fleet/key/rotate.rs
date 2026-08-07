@@ -119,10 +119,27 @@ pub async fn generate(runner: &Runner, target: &str) -> Result<bool, String> {
 /// credential-store item if the new key cannot open the channel.
 pub async fn rotate(runner: &Runner, target: &str) -> Result<bool, String> {
     let client = configured_client()?;
-    let old_item = client
-        .read_item(&item_id(target))
-        .await
-        .map_err(|exc| exc.to_string())?;
+    // The rollback below writes this item back verbatim, so every field this
+    // module stores is read by name: a broker that requires a named field
+    // refuses the whole-item form, and losing the private key here would make
+    // the rollback restore an unusable credential.
+    let mut old_item = serde_json::Map::new();
+    for field in [
+        "private_key",
+        "public_key",
+        "key_type",
+        "fingerprint",
+        "added_at",
+    ] {
+        if let Some(value) = client
+            .read_string(&item_id(target), field)
+            .await
+            .map_err(|exc| exc.to_string())?
+        {
+            old_item.insert(field.to_string(), Value::from(value));
+        }
+    }
+    let old_item = Value::Object(old_item);
     let old_fingerprint = old_item
         .get("fingerprint")
         .and_then(Value::as_str)

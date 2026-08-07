@@ -168,22 +168,18 @@ async fn route_tunnel(
     }
     validate_origin(origin)?;
 
-    let api_credential = crate::credential_store::read_item(api_credential_name)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let tunnel_credential = crate::credential_store::read_item(tunnel_credential_name)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let account_id = required_string(&api_credential, "account_id")?;
-    let tunnel_account_id = required_string(&tunnel_credential, "account_id")?;
+    // Named fields, not whole items: this broker refuses a read that names
+    // none, so the whole-item form failed before any Cloudflare call was made.
+    let account_id = required_field(api_credential_name, "account_id").await?;
+    let tunnel_account_id = required_field(tunnel_credential_name, "account_id").await?;
     if account_id != tunnel_account_id {
         return Err(CmdError::click(
             "Cloudflare API and tunnel credentials belong to different accounts",
         ));
     }
-    let tunnel_id = required_string(&tunnel_credential, "tunnel_id")?;
-    let api_token = required_string(&api_credential, "api_token")?;
-    let connector_token = required_string(&tunnel_credential, connector_token_field)?;
+    let tunnel_id = required_field(tunnel_credential_name, "tunnel_id").await?;
+    let api_token = required_field(api_credential_name, "api_token").await?;
+    let connector_token = required_field(tunnel_credential_name, connector_token_field).await?;
     validate_api_component("account_id", &account_id)?;
     validate_api_component("tunnel_id", &tunnel_id)?;
     let client = CloudflareClient::new(api_token)?;
@@ -424,6 +420,17 @@ fn required_string(value: &Value, field: &str) -> Result<String, CmdError> {
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .ok_or_else(|| CmdError::click(format!("credential field {field:?} is required")))
+}
+
+/// One required credential field, read by name through the selected store.
+async fn required_field(item: &str, field: &str) -> Result<String, CmdError> {
+    crate::credential_store::read_string(item, field)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            CmdError::click(format!("credential field {field:?} of {item:?} is required"))
+        })
 }
 
 fn validate_api_component(label: &str, value: &str) -> Result<(), CmdError> {
