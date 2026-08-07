@@ -1722,11 +1722,54 @@ printf '%s\n' "$dir/$name"
     ))
 }
 
+/// The shape of a UUID, written out rather than counted: every `x` is one hex digit
+/// and the dashes fall where they fall. A template compares as exactly as a length
+/// arithmetic would and stays legible at the callsite.
+const UUID_SHAPE: &str = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx";
+
+/// Is this string a UUID, and therefore free of anything a shell could act on?
+fn is_uuid(value: &str) -> bool {
+    value.len() == UUID_SHAPE.len()
+        && value
+            .bytes()
+            .zip(UUID_SHAPE.bytes())
+            .all(|(byte, shape)| match shape {
+                b'-' => byte == b'-',
+                _ => byte.is_ascii_hexdigit(),
+            })
+}
+
 /// Run one helper previously placed in the remote owner-only Stado directory.
-/// No arguments are accepted: the helper is the reviewed deployment program,
-/// not an arbitrary shell escape.
-pub async fn run_helper(target: &str, name: &str, json: bool) -> Result<(), CmdError> {
+///
+/// Arguments are accepted only as UUIDs. That is not a stylistic limit: the reason
+/// this refused every argument was that operator words become a shell escape, and a
+/// UUID cannot be a path, a flag, a glob, a redirection or a metacharacter -- there is
+/// nothing in the grammar to escape with. The helper stays the reviewed program; the
+/// UUID only tells it which of the operator's own records to act on.
+///
+/// Refusing outright is what pushed callers into private ssh invocations with their
+/// own key files and their own known_hosts, which is the same action with the audit
+/// trail removed. A correlation id is the smallest thing that lets those callers come
+/// back through the registry channel.
+pub async fn run_helper(
+    target: &str,
+    name: &str,
+    uuids: &[String],
+    json: bool,
+) -> Result<(), CmdError> {
     release_component("helper name", name)?;
+    let mut arguments = String::new();
+    for uuid in uuids {
+        if !is_uuid(uuid) {
+            return Err(CmdError::click(format!(
+                "{uuid:?} is not a UUID; `host run-helper` carries correlation \
+                 identifiers and nothing else, because anything with shell grammar in \
+                 it would make the helper a remote shell"
+            )));
+        }
+        arguments.push(' ');
+        arguments.push_str(uuid);
+    }
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
@@ -1738,7 +1781,7 @@ if [ ! -f "$helper" ] || [ -L "$helper" ] || [ ! -x "$helper" ]; then
   printf '%s\n' "missing executable regular Stado helper: $helper" > /dev/stderr
   false
 fi
-exec "$helper"
+exec "$helper"{arguments}
 "#
     );
     let runner = crate::deploy::production_runner();
