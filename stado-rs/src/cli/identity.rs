@@ -68,6 +68,48 @@ async fn observe_apple_accounts(target_name: &str) -> Option<Vec<String>> {
     if found.is_empty() { None } else { Some(found) }
 }
 
+/// Ask the host which of its users hold Apple accounts, via the installed probe.
+///
+/// `defaults read` answers only for the user the channel logs in as, so a binding
+/// naming anyone else could never be anything but `unknown`. That word covered two
+/// opposite situations -- the user is not signed in, and this probe was not allowed
+/// to look -- and an operator acts differently on each. The probe reports them
+/// apart: an account list, `none`, or `unreadable`.
+///
+/// It is optional on purpose. A host without it falls back to the login-user read
+/// and still says `unknown` for anyone else, which is the honest answer when nothing
+/// on that host can produce a better one. Install it with
+/// `stado host install-helper <target> stado-rs/scripts/probe-apple-account-holders.sh
+/// probe-apple-account-holders`.
+async fn observe_user_apple_accounts(target_name: &str, user: &str) -> Option<Vec<String>> {
+    let runner = crate::deploy::production_runner();
+    let report = crate::deploy::host_channel::run_installed_helper(
+        target_name,
+        "probe-apple-account-holders",
+        &runner,
+    )
+    .await
+    .ok()?;
+    for line in report.lines() {
+        let mut columns = line.split('\t');
+        let named = columns.next()?;
+        let accounts = columns.next().unwrap_or_default().trim();
+        if named != user {
+            continue;
+        }
+        // `unreadable` is the probe declining to answer, which must stay unknown
+        // rather than becoming "not signed in".
+        if accounts == "unreadable" {
+            return None;
+        }
+        if accounts == "none" {
+            return Some(Vec::new());
+        }
+        return Some(accounts.split_whitespace().map(str::to_string).collect());
+    }
+    None
+}
+
 /// Does the approved channel land on the very user this binding names?
 ///
 /// The channel logs in as the `user` half of the target's ssh destination and reads
@@ -193,13 +235,19 @@ pub async fn verify(kind: String, identity: String, json_output: bool) -> Result
                 APPLE_ACCOUNT if is_local_target(target) => {
                     local_apple_accounts().map(|found| found.iter().any(|e| e == &identity))
                 }
-                // The remote reading is the channel login user's own, because
-                // `defaults read` carries no path and the channel carries no sudo. A
-                // binding naming a different user on that machine is therefore
-                // unanswerable here, and saying `false` would be a false negative
-                // dressed as a measurement: an account signed into `charles` is no
-                // evidence about what `controlyourai-relay` can display.
-                APPLE_ACCOUNT if !probes_own_user(target, binding) => None,
+                // A binding naming someone other than the channel's login user is
+                // beyond `defaults read`, which carries no path and no sudo. The
+                // installed probe reads each user's own preference file and reports
+                // an answer apart from a refusal, so this is unknown only when that
+                // probe is absent or declined -- not merely because the binding names
+                // a second user. Saying `false` without one of those readings would
+                // be a false negative dressed as a measurement.
+                APPLE_ACCOUNT if !probes_own_user(target, binding) => {
+                    let user = binding.user.as_deref().unwrap_or_default();
+                    observe_user_apple_accounts(&target.name, user)
+                        .await
+                        .map(|found| found.iter().any(|entry| entry == &identity))
+                }
                 APPLE_ACCOUNT => observe_apple_accounts(&target.name)
                     .await
                     .map(|found| found.iter().any(|entry| entry == &identity)),
