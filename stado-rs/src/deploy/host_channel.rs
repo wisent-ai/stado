@@ -216,6 +216,47 @@ pub async fn run_script_with_timeout(
     .map_err(DeployError)
 }
 
+/// The script that runs one installed owner-only helper, with its fixed UUID
+/// arguments already appended.
+///
+/// One place builds this, because `host run-helper` and any in-process caller that
+/// wants a helper's output must agree exactly on where helpers live and what makes
+/// one acceptable to run. Two copies of those three checks would be two policies.
+pub fn installed_helper_script(remote_name: &str, arguments: &str) -> String {
+    format!(
+        r#"set -euo pipefail
+helper="$HOME/.stado/bin/"{remote_name}
+if [ ! -f "$helper" ] || [ -L "$helper" ] || [ ! -x "$helper" ]; then
+  printf '%s\n' "missing executable regular Stado helper: $helper" > /dev/stderr
+  false
+fi
+exec "$helper"{arguments}
+"#
+    )
+}
+
+/// Run an installed helper and hand back what it printed.
+///
+/// For a caller that wants the helper's answer rather than a report to display:
+/// `stado identity verify` asks a host which of its users hold Apple accounts, and
+/// needs the lines, not a rendering of them.
+pub async fn run_installed_helper(
+    target_name: &str,
+    helper: &str,
+    runner: &Runner,
+) -> Result<String, DeployError> {
+    let target = canonical_target(target_name).await?;
+    let script = installed_helper_script(&crate::deploy::shlex_quote(helper), "");
+    let output = run_script(&target, &script, runner).await?;
+    if !output.ok() {
+        return Err(DeployError(last_error_line(
+            &output,
+            "the installed helper did not complete",
+        )));
+    }
+    Ok(output.stdout)
+}
+
 /// The `target` / `ssh` head every report in this family opens with,
 /// identical to the one `host reboot` emits.
 pub fn base_report(target: &ComputeTarget) -> Map<String, Value> {
