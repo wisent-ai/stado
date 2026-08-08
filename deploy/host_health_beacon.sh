@@ -14,9 +14,21 @@ UNITS_TO_WATCH="${WC_HEALTH_UNITS:-wisent-agent.service}"
 HOST_SLUG=$(/bin/hostname -s 2>/dev/null | /usr/bin/tr '[:upper:]' '[:lower:]')
 
 STADO_BIN="${STADO_BIN:-${HOME:-/home/ubuntu}/.stado/bin/stado}"
+# Collecting and publishing are separable, and on one host they have to be.
+# Only the disk-cleanup pass, the inference summary and the publish call need
+# the Rust binary; the rest is hostname, df and systemctl. The fleet's single
+# Linux machine has neither the binary nor a toolchain to build one, so it
+# reported nothing at all -- while `stado host publish-beacon` exists precisely
+# to hand in a beacon collected somewhere else. With WC_BEACON_COLLECT_ONLY
+# set, this prints the beacon and publishes nothing.
+collect_only="${WC_BEACON_COLLECT_ONLY:-}"
 if [ ! -x "$STADO_BIN" ]; then
-    echo "host_health_beacon: Rust stado binary unavailable at $STADO_BIN" > /dev/stderr
-    false
+    # No binary means publishing is impossible, so collecting is the only
+    # useful thing left to do -- and it is genuinely useful, because an
+    # operator's stado can hand the result in on this host's behalf. Failing
+    # here instead is why the fleet's one Linux machine reported nothing.
+    collect_only=yes
+    STADO_BIN=""
 fi
 
 # Use the existing health schedule for a bounded, registry-authorized pass.
@@ -58,7 +70,7 @@ for unit in ${UNITS_TO_WATCH//,/ }; do
     units_json="$units_json\"$unit\":{\"state\":\"$state\",\"n_restarts\":\"$n_restarts\",\"active_since\":\"$since\"}"
 done
 
-if inference_json=$("$STADO_BIN" inference beacon); then
+if [ -n "$STADO_BIN" ] && inference_json=$("$STADO_BIN" inference beacon); then
     :
 else
     inference_json='{}'
@@ -82,4 +94,8 @@ cat > "$tmpfile" <<EOF
 }
 EOF
 
-"$STADO_BIN" host publish-beacon "$tmpfile" >/dev/null
+if [ -n "$collect_only" ]; then
+    /bin/cat "$tmpfile"
+else
+    "$STADO_BIN" host publish-beacon "$tmpfile" >/dev/null
+fi
