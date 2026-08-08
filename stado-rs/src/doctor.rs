@@ -306,16 +306,30 @@ async fn check_placement() -> Check {
         );
     };
     let mut squatting: Vec<String> = Vec::new();
+    let mut absent: Vec<String> = Vec::new();
     for (name, entry) in services {
         let Some(active) = entry.get("active_host").and_then(serde_json::Value::as_str) else {
             continue;
         };
-        if active.starts_with(&here) || here.starts_with(active) {
-            continue;
-        }
         let Some(port) = crate::cli::directory::service_port(entry, active) else {
             continue;
         };
+        if active.starts_with(&here) || here.starts_with(active) {
+            // The placed host itself: the question is the opposite one. A
+            // directory entry naming this host while nothing answers its port
+            // is a service the fleet believes in and cannot reach, which is
+            // how a gateway sat restarting for hours with every row here
+            // green.
+            if tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .is_err()
+            {
+                absent.push(format!(
+                    "{name} is placed here and nothing answers port {port}"
+                ));
+            }
+            continue;
+        }
         if tokio::net::TcpStream::connect(("127.0.0.1", port))
             .await
             .is_ok()
@@ -325,18 +339,21 @@ async fn check_placement() -> Check {
             ));
         }
     }
-    if squatting.is_empty() {
+    let problems: Vec<String> = squatting.into_iter().chain(absent).collect();
+    if problems.is_empty() {
         Check::pass(
             PLACEMENT_ID,
             PLACEMENT_TITLE,
-            "this host holds no port belonging to a service placed elsewhere".to_string(),
+            "this host holds no port belonging to a service placed elsewhere, and every \
+             service placed here answers"
+                .to_string(),
             PLACEMENT_REMEDY,
         )
     } else {
         Check::fail(
             PLACEMENT_ID,
             PLACEMENT_TITLE,
-            squatting.join("; "),
+            problems.join("; "),
             PLACEMENT_REMEDY,
         )
     }
