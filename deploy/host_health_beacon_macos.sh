@@ -49,3 +49,28 @@ HOST_SLUG=$(/bin/hostname -s | /usr/bin/tr '[:upper:]' '[:lower:]')
 payload="{\"host\":\"$HOST_SLUG\",\"reported_at\":\"$reported_at\",\"disk\":\"$disk_line\",\"units\":{$units_json}}"
 
 "$STADO_BIN" host publish-beacon <(printf '%s' "$payload")
+
+# Relay for hosts that cannot publish for themselves.
+#
+# A machine with no stado binary can still collect its own beacon -- that part
+# is hostname, df and systemctl -- but it cannot hand it in, and one published
+# by hand goes stale within the hour, which is worse than none because it
+# still looks like reporting. This host has the binary and the grant, so it
+# relays on every tick it already runs: collect over the approved channel,
+# publish on that host's behalf.
+#
+# The list comes from the registry rather than from a name written here, and a
+# target that publishes for itself simply has no collector helper installed,
+# so its relay attempt fails, says so, and changes nothing. A failed relay
+# never takes this host's own beacon down with it.
+this_target=$("$STADO_BIN" registry self | { IFS="$(printf '\t')" read -r name _rest || true; printf '%s' "$name"; })
+relay_targets=${WC_BEACON_RELAY_TARGETS:-$("$STADO_BIN" registry pull | /opt/homebrew/bin/jq -r '.targets[].name')}
+for relay in $relay_targets; do
+    [ "$relay" != "$this_target" ] || continue
+    if collected=$("$STADO_BIN" host run-helper "$relay" collect-host-health-beacon); then
+        printf '%s' "$collected" | /usr/bin/sed -n '/^{/,/^}/p' | "$STADO_BIN" host publish-beacon - >/dev/null \
+            || printf '%s\n' "host_health_beacon: publishing on behalf of $relay failed" >/dev/stderr
+    else
+        printf '%s\n' "host_health_beacon: collecting from $relay failed" >/dev/stderr
+    fi
+done
