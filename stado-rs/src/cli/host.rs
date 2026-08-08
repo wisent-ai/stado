@@ -1774,16 +1774,8 @@ pub async fn run_helper(
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let remote_name = crate::deploy::shlex_quote(name);
-    let script = format!(
-        r#"set -euo pipefail
-helper="$HOME/.stado/bin/"{remote_name}
-if [ ! -f "$helper" ] || [ -L "$helper" ] || [ ! -x "$helper" ]; then
-  printf '%s\n' "missing executable regular Stado helper: $helper" > /dev/stderr
-  false
-fi
-exec "$helper"{arguments}
-"#
-    );
+    let script =
+        crate::deploy::host_channel::installed_helper_script(&remote_name, &arguments);
     let runner = crate::deploy::production_runner();
     let output = crate::deploy::host_channel::run_script_with_timeout(
         &resolved,
