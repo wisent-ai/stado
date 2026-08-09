@@ -355,12 +355,12 @@ async fn signing(product: &str) -> Result<(String, Vec<u8>), CmdError> {
         .map(|value| value.signing_key_id.clone())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(crate::config::release_signing_key_id);
-    let encoded = crate::credential_store::read_string(&item, "private_key_pkcs8_base64")
+    let encoded = crate::credential_store::read_string(&item, "private_key")
         .await
         .map_err(|error| CmdError::click(error.to_string()))?
         .ok_or_else(|| {
             CmdError::click(format!(
-                "Skarbiec item {item:?} field private_key_pkcs8_base64 is required"
+                "Skarbiec item {item:?} field private_key is required"
             ))
         })?;
     let private = BASE64
