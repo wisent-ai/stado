@@ -175,11 +175,55 @@ async fn immutable(
     .await?;
     Ok(())
 }
-fn run_uri(id: &str, leaf: &str) -> String {
-    format!("stado://release-runs/{id}/{leaf}")
+fn run_path(product: &str, id: &str, leaf: &str) -> String {
+    format!("runs/release-pipeline/{product}/{id}/{leaf}")
+}
+fn run_uri(product: &str, id: &str, leaf: &str) -> String {
+    format!(
+        "stado://{}/{}",
+        crate::config::wc_stado_storage_namespace(),
+        run_path(product, id, leaf)
+    )
 }
 fn run_state_path(id: &str) -> String {
-    format!("runs/release-pipeline/{id}.json")
+    format!("release-pipeline/{id}.json")
+}
+async fn queue_immutable(path: &str, bytes: &[u8]) -> Result<(), CmdError> {
+    let store = JobStorage::new()
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if let Some(existing) = store
+        .read_bytes(path)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?
+    {
+        return if existing == bytes {
+            Ok(())
+        } else {
+            Err(CmdError::click(format!(
+                "immutable queue object differs: {path}"
+            )))
+        };
+    }
+    let file = tempfile::NamedTempFile::new()?;
+    std::fs::write(file.path(), bytes)?;
+    if store
+        .upload_file_if_absent(path, file.path())
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?
+    {
+        return Ok(());
+    }
+    match store
+        .read_bytes(path)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?
+    {
+        Some(existing) if existing == bytes => Ok(()),
+        _ => Err(CmdError::click(format!(
+            "immutable queue object raced with different bytes: {path}"
+        ))),
+    }
 }
 async fn save(run: &mut ReleaseRun) -> Result<(), CmdError> {
     run.updated_at = Utc::now().to_rfc3339();
@@ -341,13 +385,14 @@ async fn enqueue(
     };
     let bytes = serde_json::to_vec(&request)?;
     let sha = release_control::sha256_bytes(&bytes);
-    let uri = run_uri(id, &format!("requests/{platform}.json"));
-    immutable(&uri, &bytes, "application/json", &BTreeMap::new()).await?;
+    let request_path = run_path(&m.product, id, &format!("requests/{platform}.json"));
+    let uri = run_uri(&m.product, id, &format!("requests/{platform}.json"));
+    queue_immutable(&request_path, &bytes).await?;
     resolved.insert("request".into(), input(&uri, "release-request.json", &sha));
     let options = SubmitOptions {
         pinned_host: host.name.clone(),
         run_id: id.into(),
-        output_uri: run_uri(id, &format!("platforms/{platform}/output")),
+        output_uri: run_uri(&m.product, id, &format!("platforms/{platform}/output")),
         input_artifacts: resolved.clone(),
         resolved_input_artifacts: resolved,
         secret_env: secret_refs(&recipe.secret_env),
@@ -553,14 +598,12 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
         &source_sha,
         &manifest_sha,
     );
-    let manifest_uri = run_uri(&id, "manifest.json");
-    immutable(
-        &manifest_uri,
-        &manifest_bytes,
-        "application/json",
-        &BTreeMap::new(),
-    )
-    .await?;
+    let source_input_path = run_path(&m.product, &id, "inputs/source.tar.gz");
+    let source_input_uri = run_uri(&m.product, &id, "inputs/source.tar.gz");
+    queue_immutable(&source_input_path, &archive).await?;
+    let manifest_path = run_path(&m.product, &id, "manifest.json");
+    let manifest_uri = run_uri(&m.product, &id, "manifest.json");
+    queue_immutable(&manifest_path, &manifest_bytes).await?;
     let now = Utc::now().to_rfc3339();
     let mut run = load(&id).await?.unwrap_or(ReleaseRun {
         schema_version: 1,
@@ -596,7 +639,7 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
                 p,
                 &commit,
                 &source_sha,
-                &source_uri,
+                &source_input_uri,
                 &manifest_sha,
                 &manifest_uri,
             )
@@ -674,8 +717,20 @@ async fn run_deliveries(
             };
             let bytes = serde_json::to_vec(&request)?;
             let sha = release_control::sha256_bytes(&bytes);
-            let uri = run_uri(&run.run_id, &format!("deliveries/{}/request.json", d.name));
-            immutable(&uri, &bytes, "application/json", &BTreeMap::new()).await?;
+            let uri = run_uri(
+                &run.product,
+                &run.run_id,
+                &format!("deliveries/{}/request.json", d.name),
+            );
+            queue_immutable(
+                &run_path(
+                    &run.product,
+                    &run.run_id,
+                    &format!("deliveries/{}/request.json", d.name),
+                ),
+                &bytes,
+            )
+            .await?;
             let mut resolved = Map::new();
             resolved.insert("request".into(), input(&uri, "delivery-request.json", &sha));
             resolved.insert(
@@ -684,13 +739,21 @@ async fn run_deliveries(
             );
             resolved.insert(
                 "source".into(),
-                input(&run.source_uri, "source.tar.gz", &run.source_sha256),
+                input(
+                    &run_uri(&run.product, &run.run_id, "inputs/source.tar.gz"),
+                    "source.tar.gz",
+                    &run.source_sha256,
+                ),
             );
             let host = builder(&m.platforms[&d.platform].runner_platform).await?;
             let options = SubmitOptions {
                 pinned_host: host.name,
                 run_id: run.run_id.clone(),
-                output_uri: run_uri(&run.run_id, &format!("deliveries/{}/output", d.name)),
+                output_uri: run_uri(
+                    &run.product,
+                    &run.run_id,
+                    &format!("deliveries/{}/output", d.name),
+                ),
                 input_artifacts: resolved.clone(),
                 resolved_input_artifacts: resolved,
                 secret_env: secret_refs(&d.secret_env),
@@ -811,11 +874,9 @@ async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
     let receipt = serde_json::to_vec(
         &json!({"schema_version":1,"run_id":run.run_id,"product":run.product,"version":run.version,"targets":observed,"completed_at":Utc::now().to_rfc3339()}),
     )?;
-    immutable(
-        &run_uri(&run.run_id, "deployment.json"),
+    queue_immutable(
+        &run_path(&run.product, &run.run_id, "deployment.json"),
         &receipt,
-        "application/json",
-        &BTreeMap::new(),
     )
     .await
 }
