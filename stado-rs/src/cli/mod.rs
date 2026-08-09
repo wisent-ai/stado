@@ -1042,6 +1042,14 @@ enum HostCommands {
     /// Point TARGET's Weles recordings store at PATH.
     #[command(name = "weles-recordings-dir")]
     WelesRecordingsDir { target: String, path: String },
+    /// Reconcile TARGET's canonical Weles action policy onto the host.
+    #[command(name = "weles-policy-sync")]
+    WelesPolicySync {
+        target: String,
+        /// Emit the installed policy provenance as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Report or revert the GUI-automation enablement of TARGET.
     #[command(name = "gui-automation", subcommand)]
     GuiAutomation(HostGuiAutomationCommands),
@@ -1677,6 +1685,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             }) => host::user_delete(&username, &target, keep_home).await,
             HostCommands::WelesRecordingsDir { target, path } => {
                 host::weles_recordings_dir(&target, &path).await
+            }
+            HostCommands::WelesPolicySync { target, json } => {
+                host::weles_policy_sync(&target, json).await
             }
             HostCommands::GuiAutomation(HostGuiAutomationCommands::Status { target }) => {
                 host::gui_automation_status(&target).await

@@ -269,6 +269,119 @@ async fn registry_target(target: &str) -> Result<ComputeTarget, CmdError> {
         .ok_or_else(|| CmdError::click(format!("unknown registry target: {target}")))
 }
 
+/// `stado host weles-policy-sync TARGET [--json]` — render one target's
+/// canonical Weles action policy and atomically install it through Stado's
+/// registry-authorized host channel.
+///
+/// The registry generation and the installed digest are returned together so
+/// the file on the host has a durable provenance rather than being an
+/// operator-authored second policy.
+pub async fn weles_policy_sync(target: &str, json_output: bool) -> Result<(), CmdError> {
+    let (document, generation) = super::registry::fetch_versioned_document().await?;
+    crate::targets::validate_registry(&document)
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let registry_text = serde_json::to_string(&document)?;
+    let registry = crate::targets::load_registry_from_str(&registry_text)
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let resolved = registry
+        .targets
+        .iter()
+        .find(|candidate| candidate.name == target)
+        .cloned()
+        .ok_or_else(|| CmdError::click(format!("unknown registry target: {target}")))?;
+    let weles = resolved
+        .weles
+        .as_ref()
+        .ok_or_else(|| CmdError::click(format!("registry target {target} has no Weles policy")))?;
+    let hostname = resolved.hostnames.first().ok_or_else(|| {
+        CmdError::click(format!(
+            "registry target {target} requires at least one hostname before its Weles policy can be installed"
+        ))
+    })?;
+    let mut aliases = resolved.hostnames.iter().skip(1).cloned().collect::<Vec<_>>();
+    if resolved.name != *hostname && !aliases.contains(&resolved.name) {
+        aliases.push(resolved.name.clone());
+    }
+    let policy = json!({
+        "schema_version": 1,
+        "hosts": [{
+            "hostname": hostname,
+            "aliases": aliases,
+            "enabled": weles.enabled,
+            "actions": weles.actions,
+        }],
+    });
+    let mut bytes = serde_json::to_vec_pretty(&policy)?;
+    bytes.push(b'\n');
+    let digest = hex::encode(Sha256::digest(&bytes));
+    let payload = STANDARD.encode(&bytes);
+    let script = format!(
+        r#"set -euo pipefail
+directory="$HOME/.config/weles"
+destination="$directory/placement-policy.json"
+temporary="$directory/.placement-policy.json.stado-sync.$$"
+trap '/bin/rm -f "$temporary"' EXIT
+/bin/mkdir -p "$directory"
+/bin/chmod 700 "$directory"
+if [ "$(/usr/bin/uname -s)" = "Darwin" ]; then decode=-D; else decode=--decode; fi
+printf '%s' '{payload}' | /usr/bin/base64 "$decode" > "$temporary"
+actual=$(/usr/bin/openssl dgst -sha256 -r "$temporary")
+actual="${{actual%% *}}"
+if [ "$actual" != "{digest}" ]; then
+  printf '%s\n' "Weles placement policy transfer checksum mismatch" >&2
+  false
+fi
+/bin/chmod 644 "$temporary"
+/bin/mv "$temporary" "$destination"
+actual=$(/usr/bin/openssl dgst -sha256 -r "$destination")
+actual="${{actual%% *}}"
+if [ "$actual" != "{digest}" ]; then
+  printf '%s\n' "Weles placement policy installed checksum mismatch" >&2
+  false
+fi
+trap - EXIT
+printf '%s\n' "$destination"
+"#
+    );
+    let runner = crate::deploy::production_runner();
+    let output = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if !output.ok() {
+        return Err(CmdError::click(format!(
+            "{target}: Weles placement policy sync failed: {}",
+            crate::deploy::host_channel::last_error_line(
+                &output,
+                "remote Weles placement policy write failed"
+            )
+        )));
+    }
+    let path = output.stdout.trim();
+    if !path.starts_with('/') || path.lines().count() != 1 {
+        return Err(CmdError::click(
+            "Weles placement policy sync returned an invalid installed path",
+        ));
+    }
+    let report = json!({
+        "target": target,
+        "path": path,
+        "registry_generation": generation,
+        "sha256": digest,
+        "enabled": weles.enabled,
+        "actions": weles.actions,
+        "status": "installed",
+    });
+    if json_output {
+        print_json(&report);
+    } else {
+        println!(
+            "{target}: installed {path} from registry generation {} sha256={digest}",
+            report["registry_generation"].as_str().unwrap_or_default()
+        );
+    }
+    Ok(())
+}
+
 /// `stado host user delete USERNAME --target T [--keep-home]` — remove the
 /// account through the channel that created it.
 pub async fn user_delete(username: &str, target: &str, keep_home: bool) -> Result<(), CmdError> {
