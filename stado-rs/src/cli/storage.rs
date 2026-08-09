@@ -1110,9 +1110,53 @@ impl RemoteObjectApi {
         let token = match std::env::var("STADO_API_TOKEN") {
             Ok(value) if !value.trim().is_empty() => value.trim().to_string(),
             Ok(_) | Err(std::env::VarError::NotPresent) => {
-                return Err(CmdError::click(
-                    "STADO_API_TOKEN is required when STADO_API_URL is configured",
-                ));
+                let token_file = std::env::var("STADO_API_TOKEN_FILE")
+                    .map_err(|_| {
+                        CmdError::click(
+                            "STADO_API_TOKEN or STADO_API_TOKEN_FILE is required when \
+                             STADO_API_URL is configured",
+                        )
+                    })?;
+                let path = crate::config_file::expand_tilde(token_file.trim());
+                let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
+                    CmdError::click(format!(
+                        "cannot inspect STADO_API_TOKEN_FILE {}: {error}",
+                        path.display()
+                    ))
+                })?;
+                if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+                    return Err(CmdError::click(format!(
+                        "STADO_API_TOKEN_FILE must be a regular file: {}",
+                        path.display()
+                    )));
+                }
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if metadata.permissions().mode() & 0o077 != 0 {
+                        return Err(CmdError::click(format!(
+                            "STADO_API_TOKEN_FILE must be owner-only (chmod 600): {}",
+                            path.display()
+                        )));
+                    }
+                }
+                let value = std::fs::read_to_string(&path).map_err(|error| {
+                    CmdError::click(format!(
+                        "cannot read STADO_API_TOKEN_FILE {}: {error}",
+                        path.display()
+                    ))
+                })?;
+                let token = value.trim();
+                if token.is_empty()
+                    || token
+                        .chars()
+                        .any(|character| matches!(character, '\r' | '\n'))
+                {
+                    return Err(CmdError::click(
+                        "STADO_API_TOKEN_FILE is empty or malformed",
+                    ));
+                }
+                token.to_string()
             }
             Err(std::env::VarError::NotUnicode(_)) => {
                 return Err(CmdError::click(
