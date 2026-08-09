@@ -140,6 +140,7 @@ jobs:
             git config user.email 41898282+github-actions[bot]@users.noreply.github.com
             git tag -a "$STADO_TAG" "$GITHUB_SHA" -m "Stado $STADO_VERSION"
             git push origin "refs/tags/$STADO_TAG"
+          fi
 
       - name: Publish or safely resume the canonical Stado release objects
         run: |
