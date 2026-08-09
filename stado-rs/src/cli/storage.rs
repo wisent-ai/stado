@@ -1241,6 +1241,9 @@ impl RemoteObjectApi {
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
+        if !response.status().is_success() {
+            return Err(self.response_error(response).await);
+        }
         let version = response
             .headers()
             .get("x-stado-version")
