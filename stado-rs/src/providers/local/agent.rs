@@ -839,12 +839,18 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             tokio::time::sleep(Duration::from_secs(10)).await;
             continue;
         }
-        // RAM gate: refuse new slots when MemAvailable drops below the
-        // measured non-wisent baseline (ComfyUI, system daemons) plus a
-        // dynamic safety buffer. This replaces the previous 30%-of-total
-        // guess with a live reserve computed from /proc/*/status.
+        // RAM gate: ordinary compute retains the measured non-wisent reserve.
+        // An exclusive inference reservation already reduces the scan to
+        // zero-VRAM jobs; for those, MemAvailable is the usable headroom and
+        // only the dynamic safety buffer is reserved. Counting the inference
+        // process RSS again would double-count memory already excluded from
+        // MemAvailable and make every CPU-only maintenance job impossible.
         let fr = helpers::free_ram_gb();
-        let ram_reserve = helpers::static_ram_reserve_gb() + helpers::ram_safety_buffer_gb();
+        let ram_reserve = if inference_reservation.is_some() {
+            helpers::ram_safety_buffer_gb()
+        } else {
+            helpers::static_ram_reserve_gb() + helpers::ram_safety_buffer_gb()
+        };
         if (0.0..ram_reserve).contains(&fr) {
             log_fn(&format!(
                 "RAM gate: {} GB free < {} GB reserve; skipping claims",
