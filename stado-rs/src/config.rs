@@ -1940,8 +1940,9 @@ static MACHINE_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
 });
 
 pub const SERVICE_API_VERIFIER_CONSUMER: &str = "stado-service-api-verifier";
-pub const SERVICE_API_ACTIONS: &[&str] = &["status", "restart"];
-pub const ACTIVE_DEPLOYED_SERVICES: &[&str] = &["com.wisent.weles-api"];
+pub const SERVICE_API_ACTIONS: &[&str] = &["status", "restart", "promote", "reconcile"];
+pub const ACTIVE_DEPLOYED_SERVICES: &[&str] =
+    &["com.wisent.weles-api", "image-video-router"];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ServiceDeployer {
