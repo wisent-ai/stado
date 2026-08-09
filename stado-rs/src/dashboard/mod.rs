@@ -532,7 +532,9 @@ impl Dashboard {
                 .boundaries
                 .read()
                 .expect("dashboard boundary state lock");
-            if release_object_namespace(object.namespace()) {
+            if release_object_namespace(object.namespace())
+                || release_catalog_product(object.namespace(), object.key()).is_some()
+            {
                 boundaries.release
             } else {
                 boundaries.object
@@ -544,13 +546,19 @@ impl Dashboard {
                 &json!({"error": "object authorization unavailable"}),
             ));
         }
-        let authorized = if release_object_namespace(object.namespace()) {
+        let authorized = if object.namespace() == "releases" {
             let immutable = query_value(&parse_qs(query), "if_absent").as_deref() == Some("true");
             if immutable {
                 authorize_release(request, object.key(), false).await
             } else {
                 Ok(false)
             }
+        } else if object.namespace() == "sources" {
+            authorize_release(request, object.key(), false).await
+        } else if let Some(product) =
+            release_catalog_product(object.namespace(), object.key())
+        {
+            authorize_release(request, product, false).await
         } else {
             authorize_object(request, object.namespace(), object.key(), false, "put").await
         };
@@ -630,7 +638,9 @@ impl Dashboard {
                     .boundaries
                     .read()
                     .expect("dashboard boundary state lock");
-                if release_object_namespace(&namespace) {
+                if release_object_namespace(&namespace)
+                    || release_catalog_product(&namespace, &key_or_prefix).is_some()
+                {
                     boundaries.release
                 } else {
                     boundaries.object
@@ -651,6 +661,10 @@ impl Dashboard {
             };
             let authorized = if release_object_namespace(&namespace) {
                 authorize_release(request, &key_or_prefix, list).await
+            } else if let Some(product) =
+                release_catalog_product(&namespace, &key_or_prefix)
+            {
+                authorize_release(request, product, false).await
             } else {
                 authorize_object(request, &namespace, &key_or_prefix, list, action).await
             };
@@ -1525,7 +1539,9 @@ impl Dashboard {
                 .boundaries
                 .read()
                 .expect("dashboard boundary state lock");
-            if release_object_namespace(object.namespace()) {
+            if release_object_namespace(object.namespace())
+                || release_catalog_product(object.namespace(), object.key()).is_some()
+            {
                 boundaries.release
             } else {
                 boundaries.object
@@ -1537,13 +1553,19 @@ impl Dashboard {
                 &json!({"error": "object authorization unavailable"}),
             );
         }
-        let authorized = if release_object_namespace(object.namespace()) {
+        let authorized = if object.namespace() == "releases" {
             let immutable = query_value(&parse_qs(query), "if_absent").as_deref() == Some("true");
             if immutable {
                 authorize_release(request, object.key(), false).await
             } else {
                 Ok(false)
             }
+        } else if object.namespace() == "sources" {
+            authorize_release(request, object.key(), false).await
+        } else if let Some(product) =
+            release_catalog_product(object.namespace(), object.key())
+        {
+            authorize_release(request, product, false).await
         } else {
             authorize_object(request, object.namespace(), object.key(), false, "put").await
         };
@@ -2463,6 +2485,20 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 /// reported separately so the route can return a redacted 503.
 fn release_object_namespace(namespace: &str) -> bool {
     matches!(namespace, "releases" | "sources")
+}
+
+fn release_catalog_product<'a>(namespace: &str, key: &'a str) -> Option<&'a str> {
+    if namespace != "system" {
+        return None;
+    }
+    let product = key
+        .strip_prefix("release-catalog/")?
+        .strip_suffix(".json")?;
+    if product.is_empty() || product.contains('/') {
+        None
+    } else {
+        Some(product)
+    }
 }
 async fn authorize_object(
     request: &Request,
