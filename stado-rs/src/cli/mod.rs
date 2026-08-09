@@ -22,6 +22,7 @@ pub mod bootstrap;
 pub mod cancel;
 pub mod capabilities;
 pub mod cloudflare;
+pub mod coding;
 pub mod config_cmd;
 pub mod control_plane;
 pub mod coordinator;
@@ -1241,6 +1242,19 @@ enum HostCommands {
         #[arg(last = true)]
         command: Vec<String>,
     },
+    /// Place an interactive Jeden RPC session on a live registry host and
+    /// attach it to this process's stdin/stdout.
+    #[command(name = "jeden-connect")]
+    JedenConnect {
+        /// Repository name under ~/Documents/CodingProjects/Wisent.
+        workspace: String,
+        /// Reconnect to the host that owns an existing durable session.
+        #[arg(long)]
+        target: Option<String>,
+        /// Require the selected host to own this ~/.jeden/sessions ledger.
+        #[arg(long)]
+        resume: Option<String>,
+    },
     /// Deliver one file of any size to TARGET's owner-only Stado files
     /// directory, checksummed on arrival.
     #[command(name = "install-file")]
@@ -1767,6 +1781,11 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 json,
                 command,
             } => host::exec(&target, command, json).await,
+            HostCommands::JedenConnect {
+                workspace,
+                target,
+                resume,
+            } => coding::connect_jeden(&workspace, target.as_deref(), resume.as_deref()).await,
             HostCommands::DeclareVersion {
                 target,
                 binary,
