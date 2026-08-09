@@ -532,7 +532,7 @@ impl Dashboard {
                 .boundaries
                 .read()
                 .expect("dashboard boundary state lock");
-            if object.namespace() == "releases" {
+            if release_object_namespace(object.namespace()) {
                 boundaries.release
             } else {
                 boundaries.object
@@ -544,7 +544,7 @@ impl Dashboard {
                 &json!({"error": "object authorization unavailable"}),
             ));
         }
-        let authorized = if object.namespace() == "releases" {
+        let authorized = if release_object_namespace(object.namespace()) {
             let immutable = query_value(&parse_qs(query), "if_absent").as_deref() == Some("true");
             if immutable {
                 authorize_release(request, object.key(), false).await
@@ -630,7 +630,7 @@ impl Dashboard {
                     .boundaries
                     .read()
                     .expect("dashboard boundary state lock");
-                if namespace == "releases" {
+                if release_object_namespace(&namespace) {
                     boundaries.release
                 } else {
                     boundaries.object
@@ -649,7 +649,7 @@ impl Dashboard {
             } else {
                 "get"
             };
-            let authorized = if namespace == "releases" {
+            let authorized = if release_object_namespace(&namespace) {
                 authorize_release(request, &key_or_prefix, list).await
             } else {
                 authorize_object(request, &namespace, &key_or_prefix, list, action).await
@@ -900,7 +900,7 @@ impl Dashboard {
             Ok(scope) => scope,
             Err(response) => return Ok(response),
         };
-        let prefix = if namespace == "releases" {
+        let prefix = if release_object_namespace(&namespace) {
             config::release_publisher_for_list(&requested_prefix).map(|(_, authorized)| authorized)
         } else {
             config::object_api_namespace(&namespace)
@@ -1525,7 +1525,7 @@ impl Dashboard {
                 .boundaries
                 .read()
                 .expect("dashboard boundary state lock");
-            if object.namespace() == "releases" {
+            if release_object_namespace(object.namespace()) {
                 boundaries.release
             } else {
                 boundaries.object
@@ -1537,7 +1537,7 @@ impl Dashboard {
                 &json!({"error": "object authorization unavailable"}),
             );
         }
-        let authorized = if object.namespace() == "releases" {
+        let authorized = if release_object_namespace(object.namespace()) {
             let immutable = query_value(&parse_qs(query), "if_absent").as_deref() == Some("true");
             if immutable {
                 authorize_release(request, object.key(), false).await
@@ -1583,7 +1583,7 @@ impl Dashboard {
             Ok(object) => object,
             Err(response) => return response,
         };
-        if object.namespace() == "releases" {
+        if release_object_namespace(object.namespace()) {
             return send_json(
                 http_status("403"),
                 &json!({"error": "release objects are immutable and cannot be deleted"}),
@@ -2461,6 +2461,9 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 /// namespace and key boundary. Out-of-scope requests and bearer mismatches are
 /// unauthorized; invalid configuration or an unavailable exact item is
 /// reported separately so the route can return a redacted 503.
+fn release_object_namespace(namespace: &str) -> bool {
+    matches!(namespace, "releases" | "sources")
+}
 async fn authorize_object(
     request: &Request,
     namespace: &str,
