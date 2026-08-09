@@ -667,7 +667,7 @@ async fn endpoint(name: &str, target: Option<String>, as_json: bool) -> Result<(
 /// The closure sees the service's own object, so nothing outside it can be
 /// touched, and the write goes through `push_document`, which validates the
 /// document and refuses one that would delete a top-level key.
-async fn edit_service<F>(name: &str, edit: F) -> Result<String, CmdError>
+async fn edit_service<F>(name: &str, edit: F) -> Result<u64, CmdError>
 where
     F: FnOnce(&mut Map<String, Value>) -> Result<(), CmdError>,
 {
@@ -676,16 +676,35 @@ where
         let block = directory(&document)?;
         service(block, name)?;
     }
-    let entry = document
+    {
+        let entry = document
+            .get_mut(DIRECTORY_KEY)
+            .and_then(Value::as_object_mut)
+            .and_then(|block| block.get_mut("services"))
+            .and_then(Value::as_object_mut)
+            .and_then(|all| all.get_mut(name))
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| click(format!("service {name:?} is not an object")))?;
+        edit(entry)?;
+    }
+    let block = document
         .get_mut(DIRECTORY_KEY)
         .and_then(Value::as_object_mut)
-        .and_then(|block| block.get_mut("services"))
-        .and_then(Value::as_object_mut)
-        .and_then(|all| all.get_mut(name))
-        .and_then(Value::as_object_mut)
-        .ok_or_else(|| click(format!("service {name:?} is not an object")))?;
-    edit(entry)?;
-    registry::push_document(&document).await
+        .ok_or_else(|| click(format!("{DIRECTORY_KEY} is not an object")))?;
+    let generation = block
+        .get("generation")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            click(format!(
+                "{DIRECTORY_KEY}.generation is not an unsigned integer"
+            ))
+        })?;
+    let next_generation = generation
+        .checked_add(1)
+        .ok_or_else(|| click(format!("{DIRECTORY_KEY}.generation overflow")))?;
+    block.insert("generation".to_string(), json!(next_generation));
+    registry::push_document(&document).await?;
+    Ok(next_generation)
 }
 
 async fn consumer_add(
