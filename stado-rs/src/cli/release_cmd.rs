@@ -322,12 +322,12 @@ pub(crate) async fn publish_pipeline_release(
 }
 
 async fn signing_key(item: &str) -> Result<Vec<u8>, CmdError> {
-    let encoded = crate::credential_store::read_string(item, "private_key_pkcs8_base64")
+    let encoded = crate::credential_store::read_string(item, "private_key")
         .await
         .map_err(|error| CmdError::click(error.to_string()))?
         .ok_or_else(|| {
             CmdError::click(format!(
-                "Skarbiec item {item:?} field private_key_pkcs8_base64 is required"
+                "Skarbiec item {item:?} field private_key is required"
             ))
         })?;
     BASE64
