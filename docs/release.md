@@ -22,80 +22,88 @@ Stado follows Semantic Versioning:
 
 Before 1.0, an incompatible preview-integration change may occur in a minor release only when the release notes identify the affected adapter, migration, and rollback boundary.
 
-## Channels
+## Stado-native release pipeline
 
-| Channel | Source | Purpose | Production deployment |
-|---|---|---|---|
-| `nightly` | scheduled build from the default branch | development evidence; never an upgrade target | prohibited |
-| `candidate` | prerelease such as `v0.5.0-rc.1` | canary, compatibility, and rollback acceptance | canary only |
-| `stable` | final version such as `v0.5.0` | operator-approved fleet release | explicit promotion only |
+Every product carries one strict `.wisent-release.json` v1 contract. A product
+that is not released declares only `schema_version`, `product`,
+`releases:false`, and a reason. A releasing product declares its version source,
+platform recipes, argv-array quality and build commands, stage mapping,
+optional runtime contract, promotion policy, immutable inputs, deliveries, and
+provider-neutral mirrors. Repository URLs, branches, hosts, buckets, tokens,
+signing-key bytes, and provider credentials are forbidden from that file.
 
-Channels are discovery metadata. Runtime installation always resolves to and pins an exact immutable version and platform; no host executes a mutable `latest` object.
-
-## Supported release matrix
-
-The release manifest is authoritative. The initial product matrix is:
-
-| Platform coordinate | Role | Channel eligibility |
-|---|---|---|
-| `macos-arm64` | control plane and local agent | candidate and stable |
-| `linux-amd64` | control plane and local/cloud agent | candidate and stable |
-| `linux-arm64` | none | nightly experimentation only; unsupported until promoted |
-
-A platform is promoted only after its clean-install, first-workload, upgrade, and rollback evidence is attached to the candidate release.
-
-### Frozen Stado 0.5 support scope
-
-The stable 0.5 integration set is local compute on an attached host, local
-filesystem storage, and the provider-neutral queue, lifecycle, recovery,
-artifact, machine API, dashboard, MCP, and scoped-Skarbiec contracts exercised
-by that path. GCS, S3, Azure Blob, GCE, EC2, Azure VM, Box, and Vast adapters
-ship as preview integrations. A failed or unavailable preview-provider live
-suite blocks only promotion of that integration, not the local 0.5 release,
-unless it exposes a shared queue, security, or recovery defect.
-
-Promotion reads the canonical archive manifests and never infers platform
-support from an implemented capability.
-
-## Immutable artifact layout
+The product version is selected by AutoVersion and passed explicitly:
 
 ```text
-stado://releases/stado/<version>/<platform>/stado-v<version>-<platform>.tar.gz
-stado://releases/stado/<version>/<platform>/release-manifest-<platform>.json
+stado release submit --source DIR --version V --channel candidate
 ```
 
-Publication is create-if-absent. Republishing identical bytes is idempotent. A different body at an existing coordinate is an immutable-release collision and fails.
+Stado verifies `V` against the manifest's checked-in `json`, `regex`, or `text`
+version source. It requires a clean committed tree and never contacts a Git
+remote.
 
-## Release manifest
+The ownership chain is:
 
-Each platform manifest contains exactly:
+```text
+committed tree
+  -> deterministic source.tar.gz
+  -> stado://sources/<product>/<sha256>/source.tar.gz
+  -> fleet queue quality/build job per platform
+  -> status/<job>/output/{receipt.json,release.tar.gz}
+  -> signed stado://releases/<product>/<version>/<platform>/
+  -> registry.release_control desired CAS
+  -> release_agent reconciliation
+  -> exact-digest deployment receipt
+```
 
-- `product`;
-- `version`;
-- `platform`;
-- `source_commit`;
-- `sha256`, the digest of the adjacent release archive.
+The source object is create-only and carries metadata for its exact Git commit,
+source digest, and pipeline-manifest digest. A durable
+`stado://release-runs/<id>/run.json` joins those identities to platform job IDs,
+canonical output prefixes, delivery jobs, state, and failure. Repeating submit
+with the same inputs resumes that run and does not rebuild a platform whose
+published output is already recorded.
 
-The Stado and Skarbiec publishers use the same archive/manifest shape. Delivery
-verifies the archive digest, extracts the fixed managed-binary member, verifies
-its reported version, and only then atomically activates it.
+Platform output coordinates are canonical lowercase identifiers. Each recipe
+names the verified fleet `runner_platform` (`darwin-arm64` or `linux-amd64`),
+quality argv in order, one build argv, staged source-to-archive paths, and
+optional `secret_env` references of the form `ENV=item#field`. Builders receive
+no repository coordinate or repository token. They materialize only the exact
+source URI and declared immutable inputs, extract inputs under
+`WISENT_INPUTS_DIR`, and write output through the queue's existing canonical
+job-output collection.
 
-## Build and publication identity
+Publication writes the archive, immutable qualification receipt, signature,
+and signed manifest last. The signing key is read from the configured Skarbiec
+item field `private_key_pkcs8_base64`; only the item name and trusted key ID are
+configuration. For the default configuration the item is
+`stado-release-signing`, never a secret value in a manifest or command line.
 
-A release build must:
+Post-publication deliveries are queue jobs consuming the canonical archive URI
+and digest. Required package or product channels gate completion. Optional
+mirrors are recorded but do not determine canonical release success. No
+GitHub-hosted step is part of the source, qualification, publication,
+promotion, or reconciliation contract.
 
-1. check out the committed source revision;
-2. build each supported platform once with the locked dependency graph;
-3. record the exact source commit and archive digest;
-4. perform the CLI-surface version check against the committed Cargo version;
-5. create or safely resume `v<version>` at that same commit;
-6. publish the same immutable archive and manifest bytes to GitHub Release and
-   the canonical Stado release channel;
-7. bootstrap the control plane from those built bytes;
-8. verify or migrate every target's `release_platform`, promote desired state
-   through one fenced registry write, and reconcile.
+`promotion.reconcile:true` is reserved for registry-hosted runtime products and
+requires a runtime contract. Package, web, mobile, source, and archive products
+use `reconcile:false`; they may omit runtime fields and complete through their
+required delivery receipts.
 
-Build, release-publisher, runtime, dashboard, object-client, and workload credentials remain separate.
+## Product catalog
+
+Stado owns product release policy independently of repository hosting:
+
+```text
+stado release catalog sync --root ROOT
+stado release catalog audit
+```
+
+Sync reads local registered checkouts, including explicit `releases:false`
+manifests, refuses duplicate product names, and CAS-updates
+`stado://system/release-catalog/<product>.json`. Submit records the strict
+manifest together with its immutable source identity before queueing work.
+Audit reads only Stado catalog objects and refuses malformed, duplicate, or
+silent catalogs; it does not enumerate a Git forge or require forge tokens.
 
 ## Compatibility matrix
 
