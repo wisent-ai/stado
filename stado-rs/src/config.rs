@@ -920,6 +920,31 @@ pub fn stado_release_platform() -> String {
         .to_string()
 }
 
+/// Skarbiec item containing the Ed25519 PKCS#8 release authority key in
+/// `private_key_pkcs8_base64`. The item name is configuration; key bytes never
+/// enter a product manifest or registry document.
+pub fn release_signing_key_item() -> String {
+    cfg(
+        "STADO_RELEASE_SIGNING_KEY_ITEM",
+        "release.signing_key_item",
+        "stado-release-signing",
+    )
+    .trim()
+    .to_string()
+}
+
+/// Trusted release-control key identifier paired with
+/// [`release_signing_key_item`].
+pub fn release_signing_key_id() -> String {
+    cfg(
+        "STADO_RELEASE_SIGNING_KEY_ID",
+        "release.signing_key_id",
+        "stado-release-2026-08",
+    )
+    .trim()
+    .to_string()
+}
+
 /// Exact immutable release object containing the cloud-agent Python
 /// environment and model cache. There is deliberately no default: dispatch
 /// refuses to create a machine until the operator publishes and selects one.
@@ -1941,8 +1966,7 @@ static MACHINE_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
 
 pub const SERVICE_API_VERIFIER_CONSUMER: &str = "stado-service-api-verifier";
 pub const SERVICE_API_ACTIONS: &[&str] = &["status", "restart", "promote", "reconcile"];
-pub const ACTIVE_DEPLOYED_SERVICES: &[&str] =
-    &["com.wisent.weles-api", "image-video-router"];
+pub const ACTIVE_DEPLOYED_SERVICES: &[&str] = &["com.wisent.weles-api", "image-video-router"];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ServiceDeployer {

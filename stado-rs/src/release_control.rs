@@ -24,6 +24,7 @@ pub const RELEASE_CONTROL_KEY: &str = "release_control";
 pub const RELEASE_MANIFEST_NAME: &str = "release.json";
 pub const RELEASE_SIGNATURE_NAME: &str = "release.sig";
 pub const RELEASE_ARCHIVE_NAME: &str = "release.tar.gz";
+pub const RELEASE_QUALIFICATION_NAME: &str = "qualification.json";
 const MAX_RELEASE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_EXTRACTED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES: usize = 4096;
@@ -36,6 +37,9 @@ pub struct ReleaseManifest {
     pub version: String,
     pub platform: String,
     pub source_revision: String,
+    pub source_sha256: String,
+    pub pipeline_manifest_sha256: String,
+    pub qualification_receipt_sha256: String,
     pub artifact_sha256: String,
     pub artifact_bytes: u64,
     pub binary: String,
@@ -92,6 +96,10 @@ pub struct ProductReleasePolicy {
     pub runtime_env: String,
     #[serde(default)]
     pub environment: BTreeMap<String, String>,
+    #[serde(default)]
+    pub signing_key_item: String,
+    #[serde(default)]
+    pub signing_key_id: String,
     pub strategy: RolloutStrategy,
     pub targets: BTreeMap<String, ReleaseTargetPolicy>,
     #[serde(default)]
@@ -297,27 +305,51 @@ pub fn validate_manifest(manifest: &ReleaseManifest) -> Result<(), String> {
             ));
         }
     }
-    if manifest.source_revision.is_empty()
+    if manifest.source_revision.len() != 40
         || !manifest
             .source_revision
             .bytes()
-            .all(|byte| byte.is_ascii_hexdigit())
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
-        return Err("release manifest source_revision must be hexadecimal".to_string());
-    }
-    if !sha256(&manifest.artifact_sha256) {
         return Err(
-            "release manifest artifact_sha256 must be 64 hexadecimal characters".to_string(),
+            "release manifest source_revision must be a full lowercase Git commit".to_string(),
         );
+    }
+    for (name, value) in [
+        ("artifact_sha256", manifest.artifact_sha256.as_str()),
+        ("source_sha256", manifest.source_sha256.as_str()),
+        (
+            "pipeline_manifest_sha256",
+            manifest.pipeline_manifest_sha256.as_str(),
+        ),
+        (
+            "qualification_receipt_sha256",
+            manifest.qualification_receipt_sha256.as_str(),
+        ),
+    ] {
+        if !sha256(value) {
+            return Err(format!(
+                "release manifest {name} must be 64 lowercase hexadecimal characters"
+            ));
+        }
     }
     if manifest.artifact_bytes == 0 || manifest.artifact_bytes > MAX_RELEASE_BYTES {
         return Err("release manifest artifact_bytes is outside the supported range".to_string());
     }
-    if !safe_relative(&manifest.binary) || !safe_relative(&manifest.launcher) {
-        return Err("release manifest binary and launcher must be safe relative paths".to_string());
-    }
-    if !canonical_coordinate(&manifest.minimum_stado_version) {
-        return Err("release manifest minimum_stado_version is invalid".to_string());
+    let runtime_present = !manifest.binary.is_empty()
+        || !manifest.launcher.is_empty()
+        || manifest.config_schema != 0
+        || manifest.state_schema != 0
+        || !manifest.minimum_stado_version.is_empty()
+        || !manifest.rollback_compatible_with.is_empty();
+    if runtime_present
+        && (!safe_relative(&manifest.binary)
+            || !safe_relative(&manifest.launcher)
+            || manifest.config_schema == 0
+            || manifest.state_schema == 0
+            || !canonical_coordinate(&manifest.minimum_stado_version))
+    {
+        return Err("release manifest runtime fields are incomplete or invalid".to_string());
     }
     let mut rollback = BTreeSet::new();
     for version in &manifest.rollback_compatible_with {
@@ -658,7 +690,6 @@ pub fn install_directory(
         .join(&manifest.platform)
 }
 
-
 #[cfg(test)]
 mod tests {
     use flate2::write::GzEncoder;
@@ -673,9 +704,8 @@ mod tests {
             version: "0.2.2".to_string(),
             platform: "darwin-arm64".to_string(),
             source_revision: "151ce0f907cc1e7b22a2c4e7356a4251444f4d42".to_string(),
-            artifact_sha256:
-                "119f93dd06634e9249eef8ae633d2bc02139c588f19fe05f1c7864224182c9ef"
-                    .to_string(),
+            artifact_sha256: "119f93dd06634e9249eef8ae633d2bc02139c588f19fe05f1c7864224182c9ef"
+                .to_string(),
             artifact_bytes: 5_000_115,
             binary: "bin/brama".to_string(),
             launcher: "bin/start-with-skarbiec".to_string(),
@@ -686,8 +716,7 @@ mod tests {
             qualification: ReleaseQualification {
                 status: QualificationStatus::Passed,
                 evidence_sha256: Some(
-                    "d50861c5b162c1d55c0479a47db34e56019211d9580ca621adf22919631f9b01"
-                        .to_string(),
+                    "d50861c5b162c1d55c0479a47db34e56019211d9580ca621adf22919631f9b01".to_string(),
                 ),
                 completed_at: Some("2026-08-05T04:00:00Z".to_string()),
             },
@@ -729,7 +758,12 @@ mod tests {
 
         let mut tampered = manifest;
         tampered.version = "0.2.3".to_string();
-        assert!(verify_manifest(&BASE64.encode(signing_public_key(&private).unwrap()), &tampered, &signature).is_err());
+        assert!(verify_manifest(
+            &BASE64.encode(signing_public_key(&private).unwrap()),
+            &tampered,
+            &signature
+        )
+        .is_err());
     }
 
     #[test]

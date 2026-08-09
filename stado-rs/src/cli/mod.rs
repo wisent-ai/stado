@@ -31,6 +31,7 @@ pub mod directory;
 pub mod disk_cleanup;
 pub mod doctor;
 pub mod host;
+pub mod identity;
 pub mod inference;
 pub mod instances;
 pub mod job;
@@ -41,11 +42,11 @@ pub mod placement;
 pub mod profiles_cmd;
 pub mod queue;
 pub mod quota;
-pub mod identity;
 pub mod recovery;
 pub mod registry;
-pub mod release_build;
+pub mod release_catalog;
 pub mod release_cmd;
+pub mod release_submit;
 pub mod resolver;
 pub mod resources;
 pub mod results;
@@ -1641,9 +1642,11 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         },
         Commands::Identity(sub) => match sub {
             IdentityCommands::List { json } => identity::list(json).await,
-            IdentityCommands::Verify { kind, identity, json } => {
-                identity::verify(kind, identity, json).await
-            }
+            IdentityCommands::Verify {
+                kind,
+                identity,
+                json,
+            } => identity::verify(kind, identity, json).await,
         },
         Commands::Host(sub) => match sub {
             HostCommands::Health { target, json } => host::health(&target, json).await,
