@@ -9,10 +9,10 @@ This document defines how a Stado source revision becomes an identifiable, immut
 A release tag has the form:
 
 ```text
-stado-v<semver>
+v<semver>
 ```
 
-The tag version must equal the Cargo package version exactly after removing the `stado-v` prefix. A mismatch stops publication before the first object is written.
+The tag version must equal the Cargo package version exactly after removing the `v` prefix.
 
 Stado follows Semantic Versioning:
 
@@ -27,8 +27,8 @@ Before 1.0, an incompatible preview-integration change may occur in a minor rele
 | Channel | Source | Purpose | Production deployment |
 |---|---|---|---|
 | `nightly` | scheduled build from the default branch | development evidence; never an upgrade target | prohibited |
-| `candidate` | prerelease tag such as `stado-v0.5.0-rc.1` | canary, compatibility, and rollback acceptance | canary only |
-| `stable` | final tag such as `stado-v0.5.0` | operator-approved fleet release | explicit promotion only |
+| `candidate` | prerelease such as `v0.5.0-rc.1` | canary, compatibility, and rollback acceptance | canary only |
+| `stable` | final version such as `v0.5.0` | operator-approved fleet release | explicit promotion only |
 
 Channels are discovery metadata. Runtime installation always resolves to and pins an exact immutable version and platform; no host executes a mutable `latest` object.
 
@@ -54,56 +54,44 @@ ship as preview integrations. A failed or unavailable preview-provider live
 suite blocks only promotion of that integration, not the local 0.5 release,
 unless it exposes a shared queue, security, or recovery defect.
 
-The release manifest records the stable and preview integration sets. Promotion
-must not infer stable provider support from an `implemented` capability status.
+Promotion reads the canonical archive manifests and never infers platform
+support from an implemented capability.
 
 ## Immutable artifact layout
 
 ```text
-stado://releases/stado/<version>/<platform>/stado
-stado://releases/stado/<version>/<platform>/wc
-stado://releases/stado/<version>/<platform>/stado-coverage
-stado://releases/stado/<version>/<platform>/stado-fix
-stado://releases/stado/<version>/<platform>/stado-watchdog
-stado://releases/stado/<version>/<platform>/stado-mcp
-stado://releases/stado/<version>/<platform>/SHA256SUMS
-stado://releases/stado/<version>/<platform>/release-manifest.json
+stado://releases/stado/<version>/<platform>/stado-v<version>-<platform>.tar.gz
+stado://releases/stado/<version>/<platform>/release-manifest-<platform>.json
 ```
 
 Publication is create-if-absent. Republishing identical bytes is idempotent. A different body at an existing coordinate is an immutable-release collision and fails.
 
 ## Release manifest
 
-Every platform directory contains canonical JSON with:
+Each platform manifest contains exactly:
 
-- manifest contract name;
-- Stado version and channel;
-- exact Git commit;
-- platform coordinate;
-- UTC build timestamp;
-- binary name, byte size, and SHA-256;
-- machine API schema version;
-- configuration schema version;
-- storage layout schema version;
-- minimum compatible agent version;
-- source repository;
-- license identity;
-- the exact stable and preview integration sets.
+- `product`;
+- `version`;
+- `platform`;
+- `source_commit`;
+- `sha256`, the digest of the adjacent release archive.
 
-The manifest and `SHA256SUMS` are published through the same immutable release boundary as the binaries. Installers verify the selected binary against both before replacing an installed version.
+The Stado and Skarbiec publishers use the same archive/manifest shape. Delivery
+verifies the archive digest, extracts the fixed managed-binary member, verifies
+its reported version, and only then atomically activates it.
 
 ## Build and publication identity
 
 A release build must:
 
-1. check out the tagged commit detached;
-2. confirm tag version equals the Cargo version;
-3. build with `Cargo.lock` through the declared release environment;
-4. record the exact source commit;
-5. generate checksums and the release manifest from built bytes;
-6. perform the CLI-surface version check before publication;
-7. publish through the dedicated release-publisher grant;
-8. refuse overwrite and cross-product paths.
+1. check out the committed source revision;
+2. build each supported platform once with the locked dependency graph;
+3. record the exact source commit and archive digest;
+4. perform the CLI-surface version check against the committed Cargo version;
+5. create or safely resume `v<version>` at that same commit;
+6. publish immutable archive and manifest assets;
+7. bootstrap the control plane from those built bytes;
+8. promote desired state through the fenced registry writer and reconcile.
 
 Build, release-publisher, runtime, dashboard, object-client, and workload credentials remain separate.
 

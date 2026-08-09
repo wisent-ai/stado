@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import hashlib
 import os
 import pathlib
 import platform
@@ -40,6 +41,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 
 from surface import INDENT, OK, ONE, advertised, help_text
@@ -196,9 +198,11 @@ def assert_channel_readable(stado: str) -> None:
     Only a stated present or absent counts. Unreachable, a missing field, or a state
     this script does not know is an answer nobody gave.
     """
+    platform_name = PROBE_PLATFORM
+    version = declared_version(REPOSITORY)
     probe = (
-        f"stado://{NAMESPACE}/{PRODUCT}/{declared_version(REPOSITORY)}"
-        f"/{PROBE_PLATFORM}/{BINARY}"
+        f"stado://{NAMESPACE}/{PRODUCT}/{version}/{platform_name}/"
+        f"release-manifest-{platform_name}.json"
     )
     state = channel_state(stado, probe)
     if state not in STATED:
@@ -238,7 +242,8 @@ def published(stado: str) -> dict:
     versions: dict = {}
     for version in tags_by_version():
         for platform_name in sorted(set(PLATFORMS.values())):
-            key = f"{PRODUCT}/{version}/{platform_name}/{BINARY}"
+            object_name = f"release-manifest-{platform_name}.json"
+            key = f"{PRODUCT}/{version}/{platform_name}/{object_name}"
             state = channel_state(stado, f"stado://{NAMESPACE}/{key}")
             if state not in STATED:
                 raise Unreachable(
@@ -312,11 +317,36 @@ def container_help(binary: pathlib.Path, platform_name: str) -> str:
 
 
 def channel_surface(stado: str, version: str, platform_name: str) -> list:
-    """The surface of a published release, read from the published bytes."""
-    uri = f"stado://{NAMESPACE}/{PRODUCT}/{version}/{platform_name}/{BINARY}"
+    """The surface of a published release, read from its verified archive."""
+    prefix = f"stado://{NAMESPACE}/{PRODUCT}/{version}/{platform_name}"
+    manifest_name = f"release-manifest-{platform_name}.json"
+    archive_name = f"stado-v{version}-{platform_name}.tar.gz"
     with tempfile.TemporaryDirectory() as scratch:
-        local = pathlib.Path(scratch) / BINARY
-        run([stado, "storage", "get", uri, str(local)])
+        root = pathlib.Path(scratch)
+        manifest_path = root / manifest_name
+        archive_path = root / archive_name
+        run([stado, "storage", "get", f"{prefix}/{manifest_name}", str(manifest_path)])
+        manifest = json.loads(manifest_path.read_text())
+        identity = {key: manifest.get(key) for key in ("product", "version", "platform")}
+        wanted = {"product": PRODUCT, "version": version, "platform": platform_name}
+        digest = manifest.get("sha256")
+        if identity != wanted or not isinstance(digest, str) or len(digest) != 64:
+            raise Unreachable(f"{manifest_name} has invalid identity or archive digest")
+        run([stado, "storage", "get", f"{prefix}/{archive_name}", str(archive_path)])
+        if hashlib.sha256(archive_path.read_bytes()).hexdigest() != digest:
+            raise Unreachable(f"{archive_name} disagrees with its canonical manifest")
+        local = root / BINARY
+        with tarfile.open(archive_path, "r:gz") as archive:
+            try:
+                member = archive.getmember(BINARY)
+            except KeyError as error:
+                raise Unreachable(f"{archive_name} has no root {BINARY} member") from error
+            if not member.isfile():
+                raise Unreachable(f"{archive_name} root {BINARY} member is not regular")
+            source = archive.extractfile(member)
+            if source is None:
+                raise Unreachable(f"{archive_name} root {BINARY} member is unreadable")
+            local.write_bytes(source.read())
         executable = stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
         local.chmod(local.stat().st_mode | executable)
         if platform_name == native_platform():
@@ -369,6 +399,8 @@ def tags_by_version() -> dict:
     """
     found: dict = {}
     for tag in run(["git", "tag", "--list"], cwd=REPOSITORY).split():
+        if not tag.startswith("v") or as_triple(tag[ONE:]) == ():
+            continue
         try:
             manifest = run(["git", "show", f"{tag}:{MANIFEST}"], cwd=REPOSITORY)
         except Unreachable:
@@ -378,7 +410,7 @@ def tags_by_version() -> dict:
                 version = line.split('"')[ONE]
                 if not as_triple(version):
                     break
-                if tag.lstrip("v") != version:
+                if tag[ONE:] != version:
                     print(
                         f"tag {tag} declares {version}; filing it under {version}",
                         file=sys.stderr,

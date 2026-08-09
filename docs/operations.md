@@ -76,10 +76,10 @@ these substrings to classify failures fast:
 
 ## Release / publishing
 
-`.github/workflows/deploy.yml` publishes only an explicit `stado-v*` tag or a
-manual immutable-channel request. Candidate tags publish artifacts without
-deploying the production control plane. A final stable tag may pass the
-separate production deployment job.
+`.github/workflows/deploy.yml` is dispatched for the committed default-branch
+revision. The one run gates the committed Cargo version, creates or
+safely resumes `v<version>`, publishes both platform archives, bootstraps the
+control plane, promotes stable desired state, and invokes fleet reconciliation.
 
 Every `stado://releases/stado/<version>/<platform>/<file>` write goes through
 the authenticated Stado release API. The workflow expands only
@@ -96,7 +96,7 @@ upgrade, and rollback.
 Install an exact release before service bootstrap:
 
 ```bash
-export STADO_RELEASE_API_URL=https://stado.wisent.com
+export STADO_API_URL=https://stado.wisent.com
 export STADO_RELEASE_VERSION=<exact-immutable-version>
 export STADO_RELEASE_PLATFORM=<exact-release-platform>
 ./install-stado.sh

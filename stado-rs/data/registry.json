@@ -315,6 +315,7 @@
       ],
       "kind": "local",
       "name": "charless-mac-mini",
+      "release_platform": "darwin-arm64",
       "notes": "Always-on Mac mini for Weles, Skarbiec, Brama, and the Stado control plane.",
       "ssh": "charles@100.120.25.24",
       "host_heuristic": "always-on",
@@ -421,6 +422,7 @@
       ],
       "kind": "local",
       "name": "ubuntu-server-rtx-pro-6000",
+      "release_platform": "linux-amd64",
       "notes": "Operator RTX PRO 6000 workstation. External workloads, including ComfyUI, remain protected by default; local jobs use admission v2 accounting.",
       "slots": 2,
       "ssh": "root@100.126.122.108",
@@ -447,6 +449,7 @@
     {
       "name": "lukasz-macbook",
       "kind": "local",
+      "release_platform": "darwin-arm64",
       "ssh": "lukaszbartoszcze@100.81.156.67",
       "hostnames": [
         "lukaszs-macbook-pro-5485.local"
