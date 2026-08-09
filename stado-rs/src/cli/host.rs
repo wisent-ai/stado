@@ -1094,44 +1094,123 @@ pub async fn promote_version(binary: &str, version: &str, json_output: bool) -> 
     crate::cli::storage::release_api_origin()?;
     let (mut document, expected_generation) =
         super::registry::fetch_versioned_document().await?;
-    let targets = document
-        .get_mut("targets")
-        .and_then(Value::as_array_mut)
-        .ok_or_else(|| CmdError::click("registry.targets: must be an array"))?;
-    if targets.is_empty() {
+    let target_specs: Vec<(String, String)> = document
+        .get("targets")
+        .and_then(Value::as_array)
+        .ok_or_else(|| CmdError::click("registry.targets: must be an array"))?
+        .iter()
+        .map(|target| {
+            let object = target
+                .as_object()
+                .ok_or_else(|| CmdError::click("registry target must be an object"))?;
+            let name = object
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+                .ok_or_else(|| CmdError::click("registry target has no name"))?;
+            let platform = match object.get("release_platform") {
+                None | Some(Value::Null) => "",
+                Some(Value::String(platform)) => platform.as_str(),
+                Some(_) => {
+                    return Err(CmdError::click(format!(
+                        "registry target {name:?} has a non-string release_platform"
+                    )));
+                }
+            };
+            Ok((name.to_string(), platform.to_string()))
+        })
+        .collect::<Result<_, CmdError>>()?;
+    if target_specs.is_empty() {
         return Err(CmdError::click(
             "registry has no targets; refusing an empty desired-state promotion",
         ));
     }
+
+    // Resolve every legacy omission before mutating the in-memory document.
+    // A failed channel, malformed inventory, unsupported observation, or
+    // disagreement with an existing declaration aborts the one fenced write.
+    let runner = crate::deploy::production_runner();
+    let mut observed_platforms = std::collections::BTreeMap::new();
     let mut platforms = std::collections::BTreeSet::new();
-    let mut promoted = Vec::with_capacity(targets.len());
-    for target in targets.iter() {
-        let name = target
-            .get("name")
-            .and_then(Value::as_str)
-            .ok_or_else(|| CmdError::click("registry target has no name"))?;
-        let platform = target
+    let mut migrated = Vec::new();
+    for (name, declared) in &target_specs {
+        let report = crate::deploy::host_inventory::inventory_host(name, &runner)
+            .await
+            .map_err(|error| {
+                CmdError::click(format!(
+                    "cannot verify release_platform for {name:?}: {error}"
+                ))
+            })?;
+        if report.get("status").and_then(Value::as_str)
+            != Some(crate::deploy::host_inventory::OK_STATUS)
+        {
+            let detail = report
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("host inventory did not complete");
+            return Err(CmdError::click(format!(
+                "cannot verify release_platform for {name:?}: {detail}"
+            )));
+        }
+        if report.get("sanitizer_state").and_then(Value::as_str)
+            != Some(crate::deploy::host_inventory::SANITIZER_OK)
+        {
+            return Err(CmdError::click(format!(
+                "cannot verify release_platform for {name:?}: host inventory sanitizer failed"
+            )));
+        }
+        let observed = report
             .get("release_platform")
             .and_then(Value::as_str)
             .ok_or_else(|| {
                 CmdError::click(format!(
-                    "registry target {name:?} has no verified release_platform"
+                    "cannot verify release_platform for {name:?}: inventory omitted it"
                 ))
             })?;
-        crate::deploy::host_release::managed_platform(platform)
-            .map_err(|error| CmdError::click(error.to_string()))?;
-        platforms.insert(platform.to_string());
-        promoted.push(name.to_string());
+        let observed = crate::deploy::host_release::managed_platform(observed)
+            .map_err(|error| CmdError::click(format!("{name}: {error}")))?;
+        if !declared.is_empty() && declared != observed {
+            return Err(CmdError::click(format!(
+                "registry target {name:?} declares release_platform {declared}, \
+                 but verified inventory observed {observed}"
+            )));
+        }
+        if declared.is_empty() {
+            migrated.push(name.clone());
+        }
+        observed_platforms.insert(name.clone(), observed.to_string());
+        platforms.insert(observed.to_string());
     }
     for platform in &platforms {
         crate::deploy::host_release::catalog_identity(managed, version, platform)
             .await
             .map_err(|error| CmdError::click(error.to_string()))?;
     }
+
+    let targets = document
+        .get_mut("targets")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| CmdError::click("registry.targets: must be an array"))?;
     for target in targets {
         let object = target
             .as_object_mut()
             .ok_or_else(|| CmdError::click("registry target must be an object"))?;
+        let name = object
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or_else(|| CmdError::click("registry target has no name"))?
+            .to_string();
+        let observed = observed_platforms.get(&name).ok_or_else(|| {
+            CmdError::click(format!("target {name:?} was not inventoried before promotion"))
+        })?;
+        if object
+            .get("release_platform")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .is_empty()
+        {
+            object.insert("release_platform".to_string(), json!(observed));
+        }
         let versions = object
             .entry("managed_versions".to_string())
             .or_insert_with(|| Value::Object(serde_json::Map::new()))
@@ -1145,15 +1224,18 @@ pub async fn promote_version(binary: &str, version: &str, json_output: bool) -> 
         print_json(&json!({
             "binary": managed.name,
             "version": version,
-            "targets": promoted,
+            "targets": target_specs.iter().map(|(name, _)| name).collect::<Vec<_>>(),
             "platforms": platforms,
+            "migrated_release_platforms": migrated,
             "generation": generation,
         }));
     } else {
         println!(
-            "{} {version} promoted to {} target(s), generation {generation}",
+            "{} {version} promoted to {} target(s), migrated {} release platform(s), \
+             generation {generation}",
             managed.name,
-            promoted.len()
+            target_specs.len(),
+            migrated.len(),
         );
     }
     Ok(())

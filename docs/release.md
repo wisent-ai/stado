@@ -89,9 +89,11 @@ A release build must:
 3. record the exact source commit and archive digest;
 4. perform the CLI-surface version check against the committed Cargo version;
 5. create or safely resume `v<version>` at that same commit;
-6. publish immutable archive and manifest assets;
+6. publish the same immutable archive and manifest bytes to GitHub Release and
+   the canonical Stado release channel;
 7. bootstrap the control plane from those built bytes;
-8. promote desired state through the fenced registry writer and reconcile.
+8. verify or migrate every target's `release_platform`, promote desired state
+   through one fenced registry write, and reconcile.
 
 Build, release-publisher, runtime, dashboard, object-client, and workload credentials remain separate.
 

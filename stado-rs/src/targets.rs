@@ -1009,6 +1009,7 @@ pub struct ComputeTarget {
     pub kind: String,
     /// Verified immutable-release coordinate for this host. Enrollment records
     /// it and every inventory compares it with the remote kernel/architecture.
+    #[serde(default)]
     pub release_platform: String,
     #[serde(default)]
     pub gpu_type: Option<String>,
