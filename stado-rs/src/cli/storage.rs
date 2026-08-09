@@ -1157,16 +1157,6 @@ impl RemoteObjectApi {
         }
     }
 
-    async fn put(
-        &self,
-        uri: &str,
-        content_type: &str,
-        if_absent: bool,
-        bytes: Vec<u8>,
-    ) -> Result<(), CmdError> {
-        self.put_with_metadata(uri, content_type, if_absent, bytes, &BTreeMap::new())
-            .await
-    }
 
     async fn put_with_metadata(
         &self,
