@@ -76,6 +76,8 @@ pub struct ResolverAdapter {
     pub service: String,
     pub bind: String,
     pub consumer: String,
+    #[serde(default = "default_adapter_idle_seconds")]
+    pub idle_seconds: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,6 +96,10 @@ fn default_refresh_seconds() -> u64 {
 
 fn default_max_stale_seconds() -> u64 {
     60
+}
+
+fn default_adapter_idle_seconds() -> u64 {
+    120
 }
 
 fn identifier(value: &str) -> bool {
@@ -251,6 +257,9 @@ fn validate_resolver_config(
         let adapter_location = format!("{location}.adapters[{index}]");
         validate_identifier(&adapter.service, &format!("{adapter_location}.service"))?;
         validate_identifier(&adapter.consumer, &format!("{adapter_location}.consumer"))?;
+        if adapter.idle_seconds == 0 {
+            return Err(format!("{adapter_location}.idle_seconds: must be positive"));
+        }
         let bind: std::net::SocketAddr = adapter
             .bind
             .parse()
