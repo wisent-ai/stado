@@ -1626,7 +1626,7 @@ pub(crate) async fn store_object_with_metadata(
     if let Some(remote) = RemoteObjectApi::configured()? {
         let bytes = read_object_source(source)?;
         remote
-            .put_with_metadata(&uri, content_type, create_only, bytes, &metadata)
+            .put_with_metadata(&uri, content_type, create_only, bytes, extra_metadata)
             .await?;
         return Ok(uri);
     }
