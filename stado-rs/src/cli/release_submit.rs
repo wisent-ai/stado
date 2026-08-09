@@ -186,7 +186,7 @@ fn run_uri(product: &str, id: &str, leaf: &str) -> String {
     )
 }
 fn run_state_path(id: &str) -> String {
-    format!("release-pipeline/{id}.json")
+    format!("runs/release-pipeline/{id}/run.json")
 }
 async fn queue_immutable(path: &str, bytes: &[u8]) -> Result<(), CmdError> {
     let store = JobStorage::new()
