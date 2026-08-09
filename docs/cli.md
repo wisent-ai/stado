@@ -1126,8 +1126,10 @@ adapters only on loopback, then watches that authority. `GET
 /v1/resolve/service/<name>` requires `X-Stado-Consumer`; the response includes
 the matching local adapter URL when one is configured. Each adapter resolves
 again for every connection, connects directly when the service is local, and
-otherwise uses the target's registry-owned SSH transport. New connections fail
-closed during placement transactions and after the cache freshness deadline.
+otherwise uses the target's registry-owned SSH transport. Adapter streams close
+after `idle_seconds` without traffic (120 seconds by default), bounding retained
+client keep-alive sockets and their SSH transports. New connections fail closed
+during placement transactions and after the cache freshness deadline.
 If authority changes, resolvers adopt the new source only after the old
 authority has delivered a valid snapshot naming it.
 

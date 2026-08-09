@@ -2472,7 +2472,7 @@ pub async fn install_binary(
     let bytes = std::fs::metadata(source)
         .map_err(|error| CmdError::click(format!("cannot read {source}: {error}")))?
         .len();
-    if bytes == u64::MIN {
+    if bytes == 0 {
         return Err(CmdError::click(format!("{source} is empty")));
     }
     let resolved = crate::deploy::host_channel::canonical_target(target)
