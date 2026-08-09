@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use clap::Subcommand;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process::Command;
 use tokio::sync::RwLock;
@@ -472,6 +472,38 @@ async fn serve_adapter(
     }
 }
 
+async fn copy_until_idle<R, W>(
+    reader: &mut R,
+    writer: &mut W,
+    idle: Duration,
+) -> Result<bool, std::io::Error>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let mut buffer = [0_u8; 16 * 1024];
+    loop {
+        let read = match tokio::time::timeout(idle, reader.read(&mut buffer)).await {
+            Ok(result) => result?,
+            Err(_) => {
+                writer.shutdown().await?;
+                return Ok(true);
+            }
+        };
+        if read == 0 {
+            writer.shutdown().await?;
+            return Ok(false);
+        }
+        match tokio::time::timeout(idle, writer.write_all(&buffer[..read])).await {
+            Ok(result) => result?,
+            Err(_) => {
+                writer.shutdown().await?;
+                return Ok(true);
+            }
+        }
+    }
+}
+
 async fn proxy_connection(
     client: TcpStream,
     adapter: &ResolverAdapter,
@@ -490,14 +522,16 @@ async fn proxy_connection(
     let port = endpoint
         .port_or_known_default()
         .ok_or_else(|| "resolved endpoint has no port".to_string())?;
-
+    let idle = Duration::from_secs(adapter.idle_seconds);
     if resolved.active_host == state.local_target {
-        let mut upstream = TcpStream::connect((host, port))
+        let upstream = TcpStream::connect((host, port))
             .await
             .map_err(|error| format!("local upstream connect failed: {error}"))?;
-        let mut client = client;
-        tokio::io::copy_bidirectional(&mut client, &mut upstream)
-            .await
+        let (mut client_read, mut client_write) = client.into_split();
+        let (mut upstream_read, mut upstream_write) = upstream.into_split();
+        let upload = copy_until_idle(&mut client_read, &mut upstream_write, idle);
+        let download = copy_until_idle(&mut upstream_read, &mut client_write, idle);
+        tokio::try_join!(upload, download)
             .map_err(|error| format!("local proxy failed: {error}"))?;
         return Ok(());
     }
@@ -526,10 +560,15 @@ async fn proxy_connection(
         .take()
         .ok_or_else(|| "SSH transport has no stdout".to_string())?;
     let (mut client_read, mut client_write) = client.into_split();
-    let upload = tokio::io::copy(&mut client_read, &mut ssh_stdin);
-    let download = tokio::io::copy(&mut ssh_stdout, &mut client_write);
-    tokio::try_join!(upload, download).map_err(|error| format!("SSH proxy failed: {error}"))?;
-    drop(ssh_stdin);
+    let upload = copy_until_idle(&mut client_read, &mut ssh_stdin, idle);
+    let download = copy_until_idle(&mut ssh_stdout, &mut client_write, idle);
+    let (upload_idle, download_idle) =
+        tokio::try_join!(upload, download).map_err(|error| format!("SSH proxy failed: {error}"))?;
+    if upload_idle || download_idle {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+        return Ok(());
+    }
     let status = child
         .wait()
         .await
