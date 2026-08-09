@@ -358,32 +358,36 @@ impl Dashboard {
             "15".parse::<u64>()
                 .expect("static boundary startup timeout"),
         );
-        let (
-            object,
-            release,
-            machine,
-            service,
-            rate_verifier,
-            rate_state,
-            integration,
-        ) = tokio::join!(
-            tokio::time::timeout(startup_timeout, crate::skarbiec::validate_object_verifier()),
-            tokio::time::timeout(
-                startup_timeout,
-                crate::skarbiec::validate_release_verifier()
-            ),
-            tokio::time::timeout(
-                startup_timeout,
-                crate::skarbiec::validate_machine_verifier()
-            ),
-            tokio::time::timeout(
-                startup_timeout,
-                crate::skarbiec::validate_service_verifier()
-            ),
-            tokio::time::timeout(startup_timeout, rate_limit::validate_verifier()),
-            tokio::time::timeout(startup_timeout, self.rate_limiter.restore()),
-            tokio::time::timeout(startup_timeout, integration::validate_startup()),
-        );
+        // Every verifier reads shared Skarbiec vault/audit state. Starting all
+        // boundaries together can overwhelm the listener and fail the whole
+        // control plane on a transient connection reset, so validate them in
+        // deterministic order with an independent timeout per boundary.
+        let object = tokio::time::timeout(
+            startup_timeout,
+            crate::skarbiec::validate_object_verifier(),
+        )
+        .await;
+        let release = tokio::time::timeout(
+            startup_timeout,
+            crate::skarbiec::validate_release_verifier(),
+        )
+        .await;
+        let machine = tokio::time::timeout(
+            startup_timeout,
+            crate::skarbiec::validate_machine_verifier(),
+        )
+        .await;
+        let service = tokio::time::timeout(
+            startup_timeout,
+            crate::skarbiec::validate_service_verifier(),
+        )
+        .await;
+        let rate_verifier =
+            tokio::time::timeout(startup_timeout, rate_limit::validate_verifier()).await;
+        let rate_state =
+            tokio::time::timeout(startup_timeout, self.rate_limiter.restore()).await;
+        let integration =
+            tokio::time::timeout(startup_timeout, integration::validate_startup()).await;
         match &object {
             Ok(Err(error)) => {
                 eprintln!("[dashboard] object authorization boundary error: {error}")
