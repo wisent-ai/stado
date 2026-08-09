@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -216,18 +216,36 @@ fn identity(
         .into()
 }
 async fn builder(platform: &str) -> Result<crate::targets::ComputeTarget, CmdError> {
-    let r = crate::targets::fetch_registry_remote()
+    let registry = crate::targets::fetch_registry_remote()
         .await
-        .map_err(|e| CmdError::click(e.to_string()))?;
-    let mut c: Vec<_> = r
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let store = JobStorage::new()
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let capacity = crate::queue::capacity::read_consumer_capacity(&store)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let mut live_targets = BTreeSet::new();
+    for consumer in capacity.keys() {
+        let identity = consumer.strip_prefix("local-").unwrap_or(consumer);
+        if let Some(target) = registry
+            .lookup_self(identity)
+            .map_err(|error| CmdError::click(error.to_string()))?
+        {
+            live_targets.insert(target.name.clone());
+        }
+    }
+    let mut candidates: Vec<_> = registry
         .targets
         .into_iter()
-        .filter(|t| t.release_platform == platform)
+        .filter(|target| {
+            target.release_platform == platform && live_targets.contains(&target.name)
+        })
         .collect();
-    c.sort_by(|a, b| a.name.cmp(&b.name));
-    c.into_iter().next().ok_or_else(|| {
+    candidates.sort_by(|left, right| left.name.cmp(&right.name));
+    candidates.into_iter().next().ok_or_else(|| {
         CmdError::click(format!(
-            "no registry builder has verified release_platform {platform}"
+            "no live fleet builder is broadcasting verified release_platform {platform}"
         ))
     })
 }
