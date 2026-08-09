@@ -21,7 +21,7 @@ use crate::release_pipeline::{
     self, ArtifactReceipt, BuildReceipt, CatalogSourceIdentity, DeliveryRun, DeliveryRunState,
     PipelineChannel, PlatformRun, PlatformRunState, ProductManifest, ReceiptInput,
     ReleasePipelineManifest, ReleaseRun, ReleaseRunState, StepReceipt, StepStatus, WorkerInput,
-    WorkerRequest, PRODUCT_MANIFEST, SCHEMA_VERSION,
+    WorkerRequest, PRODUCT_MANIFEST,
 };
 
 #[derive(Args)]
