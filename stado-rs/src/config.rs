@@ -895,12 +895,10 @@ pub fn wc_backup_local_storage_path() -> &'static str {
     WC_BACKUP_LOCAL_STORAGE_PATH.as_str()
 }
 
-/// Public Stado control origin serving immutable software releases (env
-/// `STADO_RELEASE_API_URL`, config key `release.api_url`, trailing slash
-/// stripped). There is deliberately no storage-provider or public-host
-/// fallback: dispatch and bootstrap fail closed when it is absent.
-pub fn stado_release_api_url() -> String {
-    cfg("STADO_RELEASE_API_URL", "release.api_url", "")
+/// Canonical Stado API origin used by object and immutable-release clients.
+/// `api.url` is the deployment endpoint; releases do not own a second origin.
+pub fn stado_api_url() -> String {
+    cfg("STADO_API_URL", "api.url", "")
         .trim_end_matches('/')
         .to_string()
 }

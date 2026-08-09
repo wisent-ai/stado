@@ -12,12 +12,12 @@ STADO_BIN="${STADO_BIN:-$BIN_DIR/stado}"
 # Bootstrap reads a caller-pinned immutable version through Stado's public,
 # release-only GET route. Direct provider URLs and mutable latest pointers are
 # intentionally unsupported.
-RELEASE_API="${STADO_RELEASE_API_URL:?set the HTTPS Stado control origin}"
+RELEASE_API="${STADO_API_URL:?set the canonical HTTPS Stado API origin}"
 VERSION="${STADO_RELEASE_VERSION:?pin the exact immutable Stado version}"
 PLATFORM="${STADO_RELEASE_PLATFORM:?pin the exact Stado release platform}"
 case "$RELEASE_API" in
     https://*) ;;
-    *) echo "FATAL: STADO_RELEASE_API_URL must use HTTPS"; false ;;
+    *) echo "FATAL: STADO_API_URL must use HTTPS"; false ;;
 esac
 case "$VERSION" in
     *[![:alnum:]._-]*|"") echo "FATAL: invalid STADO_RELEASE_VERSION"; false ;;

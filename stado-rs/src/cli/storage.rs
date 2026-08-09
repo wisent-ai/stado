@@ -1425,6 +1425,20 @@ fn configured_object_base_url(variable: &str) -> Result<Option<url::Url>, CmdErr
     Ok(Some(url))
 }
 
+/// Canonical public origin for immutable release reads. Release consumers use
+/// the same `STADO_API_URL` contract as `storage get|stat|url`; there is no
+/// release-specific origin that can drift from it.
+pub(crate) fn release_api_origin() -> Result<String, CmdError> {
+    let url = configured_object_base_url("STADO_API_URL")?
+        .ok_or_else(|| CmdError::click("STADO_API_URL is required for canonical release reads"))?;
+    if url.scheme() != "https" {
+        return Err(CmdError::click(
+            "STADO_API_URL must use HTTPS for delivery to fleet hosts",
+        ));
+    }
+    Ok(url.as_str().trim_end_matches('/').to_string())
+}
+
 fn object_api_endpoint(
     base_url: &url::Url,
     route: &str,

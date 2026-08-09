@@ -1,373 +1,178 @@
-name: deploy
+name: Stado release and delivery
 
 on:
-  push:
-    tags:
-      - "stado-v*"
   workflow_dispatch:
     inputs:
       channel:
-        description: "Immutable release channel"
+        description: Immutable release channel
         required: true
         type: choice
-        options:
-          - nightly
-          - candidate
-          - stable
-        default: nightly
+        options: [candidate, stable]
+        default: candidate
+
+permissions:
+  contents: write
 
 concurrency:
-  group: wisent-compute-deploy
+  group: stado-release-delivery
   cancel-in-progress: false
 
 jobs:
-  release:
-    outputs:
-      channel: ${{ steps.release_identity.outputs.channel }}
-      version: ${{ steps.release_identity.outputs.version }}
+  release-delivery:
     runs-on: [self-hosted, stado-control-plane]
-    permissions:
-      contents: read
+    env:
+      STADO_API_URL: https://stado.wisent.com
+      STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
+      STADO_ENABLE_AZURE_DEPLOY: ${{ vars.STADO_ENABLE_AZURE_DEPLOY }}
     steps:
-      # v4 runs on Node 20, which GitHub has deprecated and already forces onto Node
-      # 24; v5 is the first major that targets Node 24 itself. It needs a runner of at
-      # least 2.327.1 and this control plane runs 2.336.0. Held at the oldest major
-      # that resolves the deprecation rather than the newest one published, because
-      # this job publishes create-only release objects and a checkout that changes
-      # behaviour under it cannot be corrected after the fact.
       - uses: actions/checkout@v5
-      - name: Resolve exact release identity
-        id: release_identity
+        with:
+          fetch-depth: 0
+
+      - name: Require the selected revision to be committed on main
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$GITHUB_SHA" || {
+            echo "release revision $GITHUB_SHA is not the tip of origin/main" >&2
+            false
+          }
+
+      - name: Resolve committed release identity
         env:
           REQUESTED_CHANNEL: ${{ inputs.channel }}
         run: |
-          die() {
-            printf 'FATAL: %s\n' "$*" > /dev/stderr
-            false
-          }
+          set -euo pipefail
           version_line="$(sed -n '/^version = /p' stado-rs/Cargo.toml)"
           version="${version_line#*\"}"
           version="${version%%\"*}"
-          test -n "$version" || die "Cargo release version is unresolved"
-          if [ "$GITHUB_EVENT_NAME" = push ]; then
-            test "$GITHUB_REF_NAME" = "stado-v$version" ||
-              die "tag $GITHUB_REF_NAME must equal stado-v$version"
-            case "$version" in
-              *-*) channel=candidate ;;
-              *) channel=stable ;;
-            esac
-          else
-            channel="$REQUESTED_CHANNEL"
-          fi
-          case "$channel" in
-            nightly|candidate|stable) ;;
-            *) die "unsupported release channel: $channel" ;;
+          case "$version" in
+            ''|*[!0-9A-Za-z._-]*) echo "invalid Cargo package version: $version" >&2; false ;;
           esac
+          channel="${REQUESTED_CHANNEL:-}"
+          if [ -z "$channel" ]; then
+            case "$version" in *-*) channel=candidate ;; *) channel=stable ;; esac
+          fi
+          case "$channel" in candidate|stable) ;; *) echo "invalid channel: $channel" >&2; false ;; esac
           echo "STADO_VERSION=$version" >> "$GITHUB_ENV"
           echo "STADO_RELEASE_CHANNEL=$channel" >> "$GITHUB_ENV"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "STADO_TAG=v$version" >> "$GITHUB_ENV"
 
-      - name: Make tags and history visible to the version check
-        # actions/checkout fetches one commit and no tags, so `git tag --list` is
-        # empty on a runner however many tags the remote holds. The version check
-        # asks whether a better baseline than the committed one has become reachable,
-        # and a tag it cannot see is a tag it cannot notice: the check would pass
-        # while asleep, which is worse than not having it. Unshallowing matters
-        # separately, because recovering a tag's surface needs that tag's tree; the
-        # fallback is there because --unshallow refuses on a complete repository.
-        run: git fetch --force --tags --unshallow || git fetch --force --tags
-
-      - name: Build provider-neutral Rust release
-        # Pinned to linux/amd64 because that is the name these bytes are published
-        # under, and the name is load-bearing: self_update.rs, bootstrap.rs and
-        # local_install.rs all resolve Linux x86_64 to `linux-amd64` and fetch that
-        # key. Left unpinned, the build follows whatever the runner happens to be --
-        # this control plane is an arm64 Mac -- and the channel serves an aarch64
-        # binary under an x86_64 name, which no consumer of that key can execute.
-        run: |
-          docker build --platform linux/amd64 --tag stado-rust-release stado-rs
-          container="$(docker create --platform linux/amd64 stado-rust-release)"
-          mkdir -p "$RUNNER_TEMP/stado-release"
-          docker cp "$container:/out/." "$RUNNER_TEMP/stado-release/"
-          docker rm "$container" >/dev/null
-
-      - name: Build native release publisher CLI
-        run: cargo build --manifest-path stado-rs/Cargo.toml --locked --bin stado
-
-      - name: Create Linux release manifest
-        run: |
-          machine_schema="$(
-            sed -n '/pub const SCHEMA_VERSION:/{s/.*= //;s/;//;p;q;}' \
-              stado-rs/src/machine.rs
-          )"
-          schema_unit="$(printf x | /usr/bin/wc -c | tr -d '[:space:]')"
-          config_schema="$(
-            sed -n '/pub const SCHEMA_VERSION:/{s/.*= //;s/;//;p;q;}' \
-              stado-rs/src/config_file.rs
-          )"
-          storage_schema="$(
-            sed -n '/pub const STORAGE_LAYOUT_VERSION:/{s/.*= //;s/;//;p;q;}' \
-              stado-rs/src/queue/mod.rs
-          )"
-          test "$config_schema" != "true as u16" || config_schema="$schema_unit"
-          test "$storage_schema" != "true as u16" || storage_schema="$schema_unit"
-          test -n "$config_schema"
-          test -n "$storage_schema"
-          test -n "$machine_schema"
-          STADO_RELEASE_DIR="$RUNNER_TEMP/stado-release" \
-          STADO_RELEASE_VERSION="$STADO_VERSION" \
-          STADO_RELEASE_CHANNEL="$STADO_RELEASE_CHANNEL" \
-          STADO_RELEASE_PLATFORM="linux-amd64" \
-          STADO_RELEASE_SOURCE_COMMIT="$GITHUB_SHA" \
-          STADO_RELEASE_SOURCE_REPOSITORY="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
-          STADO_RELEASE_BUILT_AT="$(git show -s --format=%cI "$GITHUB_SHA")" \
-          STADO_MACHINE_SCHEMA_VERSION="$machine_schema" \
-          STADO_CONFIG_SCHEMA_VERSION="$config_schema" \
-          STADO_STORAGE_SCHEMA_VERSION="$storage_schema" \
-          STADO_LICENSE_FILE="$GITHUB_WORKSPACE/LICENSE" \
-          STADO_RELEASE_STABLE_INTEGRATIONS="local-compute,local-filesystem-storage,skarbiec,stado-object-storage" \
-          STADO_RELEASE_PREVIEW_INTEGRATIONS="gcs-storage,s3-storage,azure-blob-storage,gcp-compute,aws-ec2,azure-vm,cloudflare,box,vast" \
-            scripts/release_manifest.sh
-
-      - name: Refuse a release whose version disagrees with its contract
-        # The public contract of this product is the command list `stado help`
-        # advertises. The rule that turns a surface change into a version lives in one
-        # place for the whole fleet and is not copied here:
-        # https://github.com/lbartoszcze/AutoVersion. This step supplies only what
-        # this repository knows — the surface of the artifact built above, and the
-        # version that artifact declares.
-        #
-        # It sits in front of the first `storage put` on purpose. Release objects are
-        # create-only, so a version published wrongly cannot be corrected afterwards;
-        # a check behind the publish would only describe the damage. Everything
-        # downstream, including the native release in deploy-control-plane, is gated
-        # through this job's `needs`.
+      - name: Build the Darwin release bytes once
         run: |
           set -euo pipefail
+          test "$(uname -s)-$(uname -m)" = Darwin-arm64
+          cargo build --manifest-path stado-rs/Cargo.toml --release --locked --bins
+          payload="$RUNNER_TEMP/stado-release/darwin-arm64/payload"
+          mkdir -p "$payload"
+          for name in stado stado-coverage stado-fix stado-watchdog stado-mcp; do
+            cp "stado-rs/target/release/$name" "$payload/$name"
+          done
+          cp "$payload/stado" "$payload/wc"
+          cp LICENSE "$payload/LICENSE"
+          archive="$RUNNER_TEMP/stado-release/darwin-arm64/stado-v$STADO_VERSION-darwin-arm64.tar.gz"
+          python3 scripts/release_archive.py --root "$payload" --output "$archive" \
+            stado wc stado-coverage stado-fix stado-watchdog stado-mcp LICENSE
+          STADO_RELEASE_DIR="${archive%/*}" \
+          STADO_RELEASE_ARCHIVE="$archive" \
+          STADO_RELEASE_VERSION="$STADO_VERSION" \
+          STADO_RELEASE_PLATFORM=darwin-arm64 \
+          STADO_RELEASE_SOURCE_COMMIT="$GITHUB_SHA" \
+            scripts/release_manifest.sh
 
-          # Into a virtual environment under RUNNER_TEMP, because this control-plane
-          # runner carries no global pip, and invoked by ABSOLUTE path below rather
-          # than through PATH -- so there is no name for a stranger to answer to.
+      - name: Build the Linux release bytes once
+        run: |
+          set -euo pipefail
+          docker build --platform linux/amd64 --tag stado-rust-release stado-rs
+          container="$(docker create --platform linux/amd64 stado-rust-release)"
+          trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
+          payload="$RUNNER_TEMP/stado-release/linux-amd64/payload"
+          mkdir -p "$payload"
+          docker cp "$container:/out/." "$payload/"
+          for name in stado stado-coverage stado-fix stado-watchdog stado-mcp; do
+            test -f "$payload/$name"
+          done
+          cp "$payload/stado" "$payload/wc"
+          cp LICENSE "$payload/LICENSE"
+          archive="$RUNNER_TEMP/stado-release/linux-amd64/stado-v$STADO_VERSION-linux-amd64.tar.gz"
+          python3 scripts/release_archive.py --root "$payload" --output "$archive" \
+            stado wc stado-coverage stado-fix stado-watchdog stado-mcp LICENSE
+          STADO_RELEASE_DIR="${archive%/*}" \
+          STADO_RELEASE_ARCHIVE="$archive" \
+          STADO_RELEASE_VERSION="$STADO_VERSION" \
+          STADO_RELEASE_PLATFORM=linux-amd64 \
+          STADO_RELEASE_SOURCE_COMMIT="$GITHUB_SHA" \
+            scripts/release_manifest.sh
+
+      - name: Require the committed manifest version to match the surface change
+        run: |
+          set -euo pipefail
           python3 -m venv "$RUNNER_TEMP/autoversion"
           "$RUNNER_TEMP/autoversion/bin/python" -m pip install --quiet \
             "git+https://github.com/lbartoszcze/AutoVersion@v0.1.0"
-          rule="$RUNNER_TEMP/autoversion/bin/autoversion"
-
-          # Nothing so far has asked whether what was installed can still answer, and
-          # a liveness probe would not settle it: a rule that replied a constant
-          # `internal` satisfies every branch below, because with the declared version
-          # equal to the baseline's, `internal` IS the passing branch. This gate stands
-          # in front of create-only release objects, so a fabricated verdict here is
-          # not correctable afterwards. Demand two answers no constant can give, built
-          # from the COMMITTED baseline rather than from a synthetic pair, so the same
-          # step also proves the frozen file is readable and is the one reaching the
-          # decision. It consults only that file and writes only to RUNNER_TEMP, so it
-          # cannot touch the release channel.
-          jq '{surface: (.surface - [(.surface | sort | first)])}' released-surface.json \
-            > "$RUNNER_TEMP/arm-removed.json"
-          jq '{surface: .surface}' released-surface.json > "$RUNNER_TEMP/arm-identical.json"
-          if [ "$(jq -r '.surface | length' "$RUNNER_TEMP/arm-removed.json")" = \
-               "$(jq -r '.surface | length' released-surface.json)" ]; then
-            echo "::error::the removal arm removed nothing, so it would prove nothing"
-            false
-          fi
-          baseline_version="$(jq -r .version released-surface.json)"
-          for arm in removed:breaking identical:internal; do
-            name="${arm%%:*}"
-            want="${arm##*:}"
-            # Into a file, with the status tested on its own line: inside a command
-            # substitution containing a pipeline the rule's status is discarded and
-            # `set -e` does not reach, so a dead rule would read as an empty answer.
-            if ! "$rule" decide --current "$baseline_version" \
-                 --published-surface released-surface.json \
-                 --candidate-surface "$RUNNER_TEMP/arm-$name.json" --json \
-                 > "$RUNNER_TEMP/verdict-$name.json"; then
-              echo "::error::the rule just installed failed outright on the $name arm," \
-                   "so whether this gate can refuse is unknown"
-              false
-            fi
-            got="$(jq -r .change "$RUNNER_TEMP/verdict-$name.json")"
-            echo "self-test: $name -> $got (wanted $want)"
-            if [ "$got" != "$want" ]; then
-              echo "::error::the rule at $rule called the $name arm '$got' and not '$want'," \
-                   "so no verdict of its about this release can be trusted"
-              false
-            fi
-          done
-
-          # Ask the exact bytes about to be published what they offer. Reading
-          # src/cli/mod.rs instead would count the variants marked `hide = true`,
-          # which dispatch but are not offered, and inflate the contract. The image
-          # is used rather than the copied-out binary so this works whatever the
-          # runner's own platform is.
-          docker run --rm --platform linux/amd64 \
-            --entrypoint /out/stado stado-rust-release help \
-            > "$RUNNER_TEMP/stado-help.txt"
-          python3 scripts/surface.py --help-text "$RUNNER_TEMP/stado-help.txt" \
+          python3 scripts/surface.py \
+            --binary "$RUNNER_TEMP/stado-release/darwin-arm64/payload/stado" \
             > "$RUNNER_TEMP/candidate-surface.json"
-
-          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/debug/stado"
-          # The publisher is on the owner control-plane host. Its configured
-          # Stado store is the source of truth; public ingress is deployment
-          # output and therefore cannot be a release prerequisite.
-          unset STADO_API_URL STADO_API_TOKEN
           AUTOVERSION="$RUNNER_TEMP/autoversion/bin/autoversion" \
-            STADO_BIN="$stado_bin" \
+          STADO_BIN="$RUNNER_TEMP/stado-release/darwin-arm64/payload/stado" \
             scripts/version_check.sh "$RUNNER_TEMP/candidate-surface.json"
 
-      - name: Create immutable Linux release through Stado
+      - name: Create or safely resume the standard version tag
         run: |
-          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/debug/stado"
-          test -x "$stado_bin"
-          unset STADO_API_URL STADO_API_TOKEN
-          for source in "$RUNNER_TEMP"/stado-release/*; do
-            name="${source##*/}"
-            uri="stado://releases/stado/$STADO_VERSION/linux-amd64/$name"
-            if "$stado_bin" storage put "$uri" "$source" --if-absent; then
-              continue
-            fi
-            existing="$RUNNER_TEMP/existing-$name"
-            "$stado_bin" storage get "$uri" "$existing"
-            if ! cmp --silent "$source" "$existing"; then
-              echo "::error::Immutable release collision at $uri"
+          set -euo pipefail
+          git fetch --force --tags origin
+          if git rev-parse --verify --quiet "refs/tags/$STADO_TAG" >/dev/null; then
+            tagged="$(git rev-list -n 1 "$STADO_TAG")"
+            test "$tagged" = "$GITHUB_SHA" || {
+              echo "$STADO_TAG already identifies $tagged, not $GITHUB_SHA" >&2
               false
-            fi
-          done
-
-  deploy-control-plane:
-    needs: release
-    if: needs.release.outputs.channel == 'stable'
-    runs-on: [self-hosted, stado-control-plane]
-    permissions:
-      contents: read
-    env:
-      STADO_ENABLE_AZURE_DEPLOY: ${{ vars.STADO_ENABLE_AZURE_DEPLOY }}
-      STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
-      COORD_TARGET: ${{ vars.STADO_COORDINATOR_TARGET }}
-      STADO_API_URL: ${{ vars.STADO_API_URL }}
-      WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
-      WC_SKARBIEC_CONSUMER: stado-release-publisher
-      WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
-      STADO_CONTROL_PLATFORM: ${{ vars.STADO_CONTROL_PLATFORM }}
-      STADO_API_HOST: stado.wisent.com
-      STADO_DASHBOARD_UPSTREAM: ${{ vars.STADO_DASHBOARD_UPSTREAM }}
-    steps:
-      - name: Check out exact source revision
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          source_dir="$(mktemp -d "$RUNNER_TEMP/stado-source.XXXXXX")"
-          git clone --no-checkout \
-            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
-            "$source_dir"
-          git -C "$source_dir" remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          git -C "$source_dir" checkout --detach "$GITHUB_SHA"
-          test "$(git -C "$source_dir" rev-parse HEAD)" = "$GITHUB_SHA"
-          echo "STADO_SOURCE_DIR=$source_dir" >> "$GITHUB_ENV"
-
-      - name: Build native Rust control plane
-        run: |
-          cd "$STADO_SOURCE_DIR/stado-rs"
-          cargo build --release --locked --bins
-
-      - name: Validate selected deployment profile
-        run: |
-          if [ -z "$STADO_CONFIG" ] || [ ! -r "$STADO_CONFIG" ]; then
-            echo "::error::STADO_CONFIG must name the persistent profile installed by SecretStateRepair."
-            false
-          fi
-          if [ "$STADO_ENABLE_AZURE_DEPLOY" = true ]; then
-            backend="$(jq -er '.storage.backend' "$STADO_CONFIG")"
-            test "$backend" = azure
-            ! jq -e '.providers_disabled // [] | index("azure") != null' "$STADO_CONFIG" >/dev/null
-            jq -e '.providers // [] | index("azure") != null' "$STADO_CONFIG" >/dev/null
+            }
+          else
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git tag -a "$STADO_TAG" "$GITHUB_SHA" -m "Stado $STADO_VERSION"
+            git push origin "refs/tags/$STADO_TAG"
           fi
 
-      - name: Create immutable native release through Stado
+      - name: Publish or safely resume the canonical Stado release objects
         run: |
-          release_dir="$RUNNER_TEMP/stado-native-release"
-          mkdir -p "$release_dir"
-          for name in stado stado-coverage stado-fix stado-watchdog stado-mcp; do
-            cp "$STADO_SOURCE_DIR/stado-rs/target/release/$name" "$release_dir/$name"
-          done
-          cp "$release_dir/stado" "$release_dir/wc"
-          (
-            cd "$release_dir"
-            for name in stado wc stado-coverage stado-fix stado-watchdog stado-mcp; do
-              digest="$(openssl dgst -sha256 "$name")"
-              printf '%s  %s\n' "${digest##* }" "$name"
-            done > SHA256SUMS
-          )
-          version_line="$(sed -n '/^version = /p' "$STADO_SOURCE_DIR/stado-rs/Cargo.toml")"
-          version="${version_line#*\"}"
-          version="${version%%\"*}"
-          platform="${STADO_CONTROL_PLATFORM:?set the native release platform}"
-          machine_schema="$(
-            sed -n '/pub const SCHEMA_VERSION:/{s/.*= //;s/;//;p;q;}' \
-              "$STADO_SOURCE_DIR/stado-rs/src/machine.rs"
-          )"
-          schema_unit="$(printf x | /usr/bin/wc -c | tr -d '[:space:]')"
-          config_schema="$(
-            sed -n '/pub const SCHEMA_VERSION:/{s/.*= //;s/;//;p;q;}' \
-              "$STADO_SOURCE_DIR/stado-rs/src/config_file.rs"
-          )"
-          storage_schema="$(
-            sed -n '/pub const STORAGE_LAYOUT_VERSION:/{s/.*= //;s/;//;p;q;}' \
-              "$STADO_SOURCE_DIR/stado-rs/src/queue/mod.rs"
-          )"
-          test "$config_schema" != "true as u16" || config_schema="$schema_unit"
-          test "$storage_schema" != "true as u16" || storage_schema="$schema_unit"
-          test -n "$machine_schema"
-          test -n "$config_schema"
-          test -n "$storage_schema"
-          STADO_RELEASE_DIR="$release_dir" \
-          STADO_RELEASE_VERSION="$version" \
-          STADO_RELEASE_CHANNEL="${{ needs.release.outputs.channel }}" \
-          STADO_RELEASE_PLATFORM="$platform" \
-          STADO_RELEASE_SOURCE_COMMIT="$GITHUB_SHA" \
-          STADO_RELEASE_SOURCE_REPOSITORY="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
-          STADO_RELEASE_BUILT_AT="$(git -C "$STADO_SOURCE_DIR" show -s --format=%cI "$GITHUB_SHA")" \
-          STADO_MACHINE_SCHEMA_VERSION="$machine_schema" \
-          STADO_CONFIG_SCHEMA_VERSION="$config_schema" \
-          STADO_STORAGE_SCHEMA_VERSION="$storage_schema" \
-          STADO_LICENSE_FILE="$STADO_SOURCE_DIR/LICENSE" \
-          STADO_RELEASE_STABLE_INTEGRATIONS="local-compute,local-filesystem-storage,skarbiec,stado-object-storage" \
-          STADO_RELEASE_PREVIEW_INTEGRATIONS="gcs-storage,s3-storage,azure-blob-storage,gcp-compute,aws-ec2,azure-vm,box,vast" \
-            "$STADO_SOURCE_DIR/scripts/release_manifest.sh"
-          stado_bin="$STADO_SOURCE_DIR/stado-rs/target/release/stado"
-          # Publish through the host's configured Stado store before replacing
-          # the host runtime or reloading its public ingress.
+          set -euo pipefail
+          publisher="$RUNNER_TEMP/stado-release/darwin-arm64/payload/stado"
           unset STADO_API_URL STADO_API_TOKEN
-          for source in "$release_dir"/*; do
+          publish_object() {
+            platform="$1"
+            source="$2"
             name="${source##*/}"
-            uri="stado://releases/stado/$version/$platform/$name"
-            if "$stado_bin" storage put "$uri" "$source" --if-absent; then
-              continue
+            uri="stado://releases/stado/$STADO_VERSION/$platform/$name"
+            if "$publisher" storage put "$uri" "$source" --if-absent; then
+              return
             fi
-            existing="$RUNNER_TEMP/existing-native-$name"
-            "$stado_bin" storage get "$uri" "$existing"
-            if ! cmp --silent "$source" "$existing"; then
-              echo "::error::Immutable release collision at $uri"
+            existing="$RUNNER_TEMP/existing-$platform-$name"
+            "$publisher" storage get "$uri" "$existing"
+            cmp --silent "$source" "$existing" || {
+              echo "immutable release collision at $uri" >&2
               false
-            fi
+            }
+          }
+          for platform in darwin-arm64 linux-amd64; do
+            publish_object "$platform" \
+              "$RUNNER_TEMP/stado-release/$platform/stado-v$STADO_VERSION-$platform.tar.gz"
+            publish_object "$platform" \
+              "$RUNNER_TEMP/stado-release/$platform/release-manifest-$platform.json"
           done
-          STADO_RELEASE_DIR="$release_dir" bash "$STADO_SOURCE_DIR/deploy/deploy_stado_rust.sh"
 
-      - name: Reload TLS reverse proxy
-        if: ${{ vars.STADO_ENABLE_AZURE_DEPLOY == 'true' }}
+      - name: Bootstrap the control plane from the published build bytes
         run: |
-          if [ -z "$STADO_DASHBOARD_UPSTREAM" ]; then
-            STADO_DASHBOARD_UPSTREAM="$(
-              "$HOME/.stado/bin/stado" config show |
-                jq -er '.resolved.dashboard_bind + ":" + (.resolved.dashboard_port | tostring)'
-            )"
-            export STADO_DASHBOARD_UPSTREAM
-          fi
-          if ! command -v caddy >/dev/null; then
-            echo "::error::Caddy is not installed on the control-plane runner."
-            false
-          fi
-          caddy reload \
-            --config "$STADO_SOURCE_DIR/deploy/azure/Caddyfile.example" \
-            --adapter caddyfile
+          set -euo pipefail
+          STADO_RELEASE_DIR="$RUNNER_TEMP/stado-release/darwin-arm64/payload" \
+            bash deploy/deploy_stado_rust.sh
+
+      - name: Promote desired state through the fenced registry writer
+        if: env.STADO_RELEASE_CHANNEL == 'stable'
+        run: |
+          "$HOME/.stado/bin/stado" host promote-version \
+            --binary stado --version "$STADO_VERSION" --json
+
+      - name: Reconcile the fleet through Stado
+        if: env.STADO_RELEASE_CHANNEL == 'stable'
+        run: "$HOME/.stado/bin/stado host reconcile --apply --json"
