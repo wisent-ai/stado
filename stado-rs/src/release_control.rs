@@ -592,6 +592,9 @@ pub fn safe_extract_archive(bytes: &[u8], destination: &Path) -> Result<(), Stri
                 }
             }
             let kind = entry.header().entry_type();
+            if kind.is_pax_global_extensions() || kind.is_pax_local_extensions() {
+                continue;
+            }
             if path.as_os_str().is_empty() {
                 if kind.is_dir() {
                     continue;
