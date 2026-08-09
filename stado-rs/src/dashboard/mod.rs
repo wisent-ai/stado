@@ -558,7 +558,7 @@ impl Dashboard {
         } else if let Some(product) =
             release_catalog_product(object.namespace(), object.key())
         {
-            authorize_release(request, product, false).await
+            authorize_release(request, &format!("{product}/catalog.json"), false).await
         } else {
             authorize_object(request, object.namespace(), object.key(), false, "put").await
         };
@@ -664,7 +664,7 @@ impl Dashboard {
             } else if let Some(product) =
                 release_catalog_product(&namespace, &key_or_prefix)
             {
-                authorize_release(request, product, false).await
+                authorize_release(request, &format!("{product}/catalog.json"), false).await
             } else {
                 authorize_object(request, &namespace, &key_or_prefix, list, action).await
             };
@@ -1565,7 +1565,7 @@ impl Dashboard {
         } else if let Some(product) =
             release_catalog_product(object.namespace(), object.key())
         {
-            authorize_release(request, product, false).await
+            authorize_release(request, &format!("{product}/catalog.json"), false).await
         } else {
             authorize_object(request, object.namespace(), object.key(), false, "put").await
         };
