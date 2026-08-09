@@ -74,7 +74,7 @@ job-output collection.
 
 Publication writes the archive, immutable qualification receipt, signature,
 and signed manifest last. The signing key is read from the configured Skarbiec
-item field `private_key_pkcs8_base64`; only the item name and trusted key ID are
+item field `private_key`; only the item name and trusted key ID are
 configuration. For the default configuration the item is
 `stado-release-signing`, never a secret value in a manifest or command line.
 

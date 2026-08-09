@@ -105,7 +105,7 @@ release.signing_key_item = stado-release-signing
 release.signing_key_id   = stado-release-2026-08
 ```
 
-The Skarbiec item contains `private_key_pkcs8_base64`. Key bytes stay in
+The Skarbiec key-pair item contains the base64 PKCS#8 value in `private_key`. Key bytes stay in
 Skarbiec. Build and delivery secrets are only checked-in `item#field`
 references and must also be permitted by `agent.skarbiec.secret_fields`.
 
