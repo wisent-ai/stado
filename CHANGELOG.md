@@ -13,6 +13,12 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
 - Replaced the Oko-specific onboarding relay with the same closed,
   least-privilege operation contract used by every registered product client.
 
+### Coding clients
+
+- Added `stado host jeden-connect` to place interactive Jeden RPC sessions on
+  live registry hosts, require existing ledgers for resume placement, and carry
+  the canonical bidirectional stream to native desktop clients.
+
 ## 0.5.0-rc.1 - 2026-07-29
 
 ### Product contract
