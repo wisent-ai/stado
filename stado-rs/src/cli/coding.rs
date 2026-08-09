@@ -1,9 +1,9 @@
 //! Stado-placed interactive Jeden sessions for native clients.
 //!
 //! This is deliberately narrower than `host exec`: the remote program is
-//! always `jeden rpc`, the working directory is one validated repository name
-//! under the Wisent checkout root, and stdin/stdout remain attached so the
-//! canonical Jeden RPC stream reaches the desktop without a second protocol.
+//! always Stado's owner-only `~/.stado/bin/jeden rpc`, the working directory
+//! is one validated repository name under the Wisent checkout root, and
+//! the canonical Jeden RPC stream reaches the desktop without a second protocol.
 
 use std::process::Stdio;
 
@@ -14,6 +14,7 @@ use crate::deploy::{host_channel, ssh_key};
 use crate::targets::ComputeTarget;
 
 const CHECKOUT_ROOT: &str = "Documents/CodingProjects/Wisent";
+const MANAGED_JEDEN: &str = ".stado/bin/jeden";
 const PLACEMENT_PREFIX: &str = "STADO_JEDEN_PLACEMENT ";
 
 /// Select a live registry host that owns WORKSPACE, then attach this process's
@@ -28,14 +29,25 @@ pub async fn connect_jeden(
     if let Some(session) = resume {
         validate_component("resume session", session)?;
     }
-    let registry = crate::targets::fetch_registry_remote()
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let (registry, canonical) = match crate::targets::fetch_registry_remote().await {
+        Ok(registry) => (registry, true),
+        Err(_) => (
+            crate::targets::load_bundled_registry()
+                .map_err(|error| CmdError::click(error.to_string()))?,
+            false,
+        ),
+    };
 
     let mut candidates = if let Some(name) = requested_target {
-        vec![host_channel::resolve_target(&registry, name)
+        let target = host_channel::resolve_target(&registry, name)
             .map_err(|error| CmdError::click(error.to_string()))?
-            .clone()]
+            .clone();
+        if !canonical && !host_channel::target_is_this_host(&target) {
+            return Err(CmdError::click(
+                "canonical registry unavailable; stale fallback cannot authorize a remote reconnect",
+            ));
+        }
+        vec![target]
     } else {
         let capacity = live_capacity().await;
         let mut targets = registry
@@ -44,7 +56,8 @@ pub async fn connect_jeden(
             .filter(|target| {
                 target.is_provider(crate::capabilities::ProviderId::Local)
                     && (host_channel::target_is_this_host(target)
-                        || target.ssh.as_deref().is_some_and(|value| !value.is_empty()))
+                        || (canonical
+                            && target.ssh.as_deref().is_some_and(|value| !value.is_empty())))
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -58,7 +71,7 @@ pub async fn connect_jeden(
 
     if candidates.is_empty() {
         return Err(CmdError::click(
-            "the canonical registry has no reachable local host for interactive Jeden work",
+            "the registry has no reachable local host for interactive Jeden work",
         ));
     }
 
@@ -70,7 +83,7 @@ pub async fn connect_jeden(
             .map(|session| format!("test -d \"$HOME\"/.jeden/sessions/{session}\n"))
             .unwrap_or_default();
         let probe = format!(
-            "set -e\ntest -d \"$HOME\"/{checkout}\n{resume_probe}command -v jeden >/dev/null\nprintf ready\n",
+            "set -e\ntest -d \"$HOME\"/{checkout}\n{resume_probe}test -x \"$HOME\"/{MANAGED_JEDEN}\nprintf ready\n",
         );
         match host_channel::run_script(&target, &probe, &runner).await {
             Ok(output) if output.ok() && output.stdout.trim() == "ready" => {
@@ -79,7 +92,10 @@ pub async fn connect_jeden(
             Ok(output) => refusals.push(format!(
                 "{}: {}",
                 target.name,
-                host_channel::last_error_line(&output, "workspace or jeden executable unavailable")
+                host_channel::last_error_line(
+                    &output,
+                    "workspace or managed Jeden executable unavailable"
+                )
             )),
             Err(error) => refusals.push(format!("{}: {error}", target.name)),
         }
@@ -171,7 +187,7 @@ async fn attach(target: ComputeTarget, workspace: &str, checkout: &str) -> Resul
     );
 
     let status = if host_channel::target_is_this_host(&target) {
-        tokio::process::Command::new("jeden")
+        tokio::process::Command::new(expand_home(MANAGED_JEDEN)?)
             .arg("rpc")
             .current_dir(expand_home(checkout)?)
             .stdin(Stdio::inherit())
@@ -186,7 +202,9 @@ async fn attach(target: ComputeTarget, workspace: &str, checkout: &str) -> Resul
             .map_err(|error| CmdError::click(error.to_string()))?;
         let mut argv = host_channel::ssh_options(target.ssh.as_deref().unwrap_or_default());
         argv.insert(1, "-T".to_string());
-        argv.push(format!("cd \"$HOME\"/{checkout}; exec jeden rpc"));
+        argv.push(format!(
+            "cd \"$HOME\"/{checkout}; exec \"$HOME\"/{MANAGED_JEDEN} rpc"
+        ));
         let argv = ssh_key::add_identity(argv, &key)
             .map_err(|error| CmdError::click(error.to_string()))?;
         let (program, arguments) = argv
