@@ -1194,6 +1194,42 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Declare the exact version TARGET must run for one managed binary.
+    #[command(name = "declare-version")]
+    DeclareVersion {
+        target: String,
+        /// Managed binary the declaration is about.
+        #[arg(long)]
+        binary: String,
+        /// Exact immutable version. Not a channel and not an alias.
+        #[arg(long)]
+        version: String,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Compare what each host runs with what the registry declares; omit
+    /// TARGET for the whole fleet. Reports only, unless `--apply`.
+    Reconcile {
+        target: Option<String>,
+        /// Deliver every binary that is behind its declaration.
+        #[arg(long)]
+        apply: bool,
+        /// Published release platform.
+        #[arg(long, default_value = "darwin-arm64")]
+        platform: String,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Which Skarbiec vaults the fleet holds; omit TARGET to ask every host.
+    Vaults {
+        /// Ask one host instead of the whole registry.
+        target: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Run one approved read-only command on TARGET (allowlist, not a shell).
     Exec {
         target: String,
@@ -1731,6 +1767,19 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 json,
                 command,
             } => host::exec(&target, command, json).await,
+            HostCommands::DeclareVersion {
+                target,
+                binary,
+                version,
+                json,
+            } => host::declare_version(&target, &binary, &version, json).await,
+            HostCommands::Reconcile {
+                target,
+                apply,
+                platform,
+                json,
+            } => host::reconcile(target, apply, &platform, json).await,
+            HostCommands::Vaults { target, json } => host::vaults(target, json).await,
             HostCommands::Inventory { target, json } => host::inventory(&target, json).await,
             HostCommands::Release {
                 target,
