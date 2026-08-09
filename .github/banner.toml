@@ -1,0 +1,15 @@
+[automation]
+managed = true
+source_fingerprint = "049a6a46935e53c4"
+category = "data"
+
+[banner]
+title = "Run governed workloads on any compute."
+description = "Durable orchestration for policy-controlled AI jobs across local, cloud, and owned machines."
+product = "Wisent"
+url = "wisent.ai"
+theme = "dark"
+layout = "layers-left"
+art_seed = "stado"
+width = 1584
+height = 396
