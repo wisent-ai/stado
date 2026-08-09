@@ -1,10 +1,14 @@
 name: Stado release and delivery
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - stado-rs/Cargo.toml
   workflow_dispatch:
     inputs:
       channel:
-        description: Immutable release channel
+        description: Immutable release channel used while resuming this revision
         required: true
         type: choice
         options: [candidate, stable]
@@ -128,11 +132,14 @@ jobs:
               false
             }
           else
+            test "$GITHUB_EVENT_NAME" = push || {
+              echo "workflow_dispatch only resumes an existing $STADO_TAG" >&2
+              false
+            }
             git config user.name github-actions[bot]
             git config user.email 41898282+github-actions[bot]@users.noreply.github.com
             git tag -a "$STADO_TAG" "$GITHUB_SHA" -m "Stado $STADO_VERSION"
             git push origin "refs/tags/$STADO_TAG"
-          fi
 
       - name: Publish or safely resume the canonical Stado release objects
         run: |
@@ -158,6 +165,53 @@ jobs:
             publish_object "$platform" \
               "$RUNNER_TEMP/stado-release/$platform/stado-v$STADO_VERSION-$platform.tar.gz"
             publish_object "$platform" \
+              "$RUNNER_TEMP/stado-release/$platform/release-manifest-$platform.json"
+          done
+
+      - name: Publish or safely resume the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: wisent-ai/stado
+        run: |
+          set -euo pipefail
+          if ! gh release view "$STADO_TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+            gh release create "$STADO_TAG" --repo "$GH_REPO" --verify-tag \
+              --title "Stado $STADO_VERSION" \
+              --notes "Immutable Stado $STADO_RELEASE_CHANNEL release from $GITHUB_SHA."
+          fi
+          publish_asset() {
+            source="$1"
+            name="${source##*/}"
+            count="$(
+              gh release view "$STADO_TAG" --repo "$GH_REPO" --json assets |
+                jq -er --arg name "$name" \
+                  '[.assets[] | select(.name == $name)] | length'
+            )"
+            case "$count" in
+              0)
+                gh release upload "$STADO_TAG" --repo "$GH_REPO" "$source#$name"
+                ;;
+              1)
+                existing="$RUNNER_TEMP/github-existing-$name"
+                rm -rf "$existing"
+                mkdir -p "$existing"
+                gh release download "$STADO_TAG" --repo "$GH_REPO" \
+                  --pattern "$name" --dir "$existing"
+                cmp --silent "$source" "$existing/$name" || {
+                  echo "immutable GitHub Release collision for $name" >&2
+                  false
+                }
+                ;;
+              *)
+                echo "GitHub Release contains duplicate asset $name" >&2
+                false
+                ;;
+            esac
+          }
+          for platform in darwin-arm64 linux-amd64; do
+            publish_asset \
+              "$RUNNER_TEMP/stado-release/$platform/stado-v$STADO_VERSION-$platform.tar.gz"
+            publish_asset \
               "$RUNNER_TEMP/stado-release/$platform/release-manifest-$platform.json"
           done
 
