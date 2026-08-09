@@ -407,7 +407,7 @@ async fn enqueue(
         ..Default::default()
     };
     let job = submit_job(
-        "stado release worker --request release-request.json",
+        "$HOME/.stado/bin/stado release worker --request release-request.json",
         &options,
     )
     .await?;
