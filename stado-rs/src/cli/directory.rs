@@ -126,6 +126,30 @@ pub enum DirectoryCommands {
         json: bool,
     },
 
+    /// Write this machine's forward markers from the directory.
+    ///
+    /// Several products resolve a service's address from an owner-only file
+    /// under `~/.stado/forwards/<service>.local` rather than an environment
+    /// variable - Skarbiec's credential bridge reads `skarbiec.local`, and
+    /// `weles-admission.local` the same way. Nothing wrote those files. They
+    /// were produced by hand, which is why one on this fleet named a port no
+    /// service has ever bound while the directory held the right answer for
+    /// the same host all along.
+    ///
+    /// The address is per-caller, so this resolves for the asking target and
+    /// writes only what the directory declares. A service with no endpoint
+    /// for this machine is reported and skipped, never guessed.
+    Publish {
+        /// Publish one service instead of every declared endpoint.
+        #[arg(long)]
+        service: Option<String>,
+        /// Resolve as this target instead of this machine.
+        #[arg(long)]
+        target: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Declare that a consumer may use a service.
     ConsumerAdd {
         /// Service name as the directory keys it.
@@ -210,6 +234,11 @@ async fn this_target() -> Result<String, CmdError> {
 pub async fn dispatch(command: DirectoryCommands) -> Result<(), CmdError> {
     match command {
         DirectoryCommands::Show { json } => show(json).await,
+        DirectoryCommands::Publish {
+            service,
+            target,
+            json,
+        } => publish(service, target, json).await,
         DirectoryCommands::Profiles { json } => profiles(json).await,
         DirectoryCommands::Bind { name, target, json } => bind(&name, target, json).await,
         DirectoryCommands::Connect {
@@ -488,6 +517,106 @@ async fn connect(
             None => println!("{url}  ({name} on {active}, unverified)"),
         }
     }
+    Ok(())
+}
+
+/// Write `~/.stado/forwards/<service>.local` for every service the directory
+/// gives this machine an address for.
+///
+/// Owner-only, and written through a temporary file and a rename so a reader
+/// never sees half an address. Skarbiec's reader refuses anything else - it
+/// requires an owner-owned regular file, no group or world write, and exactly
+/// one bounded URL - so writing it any other way produces a file the consumer
+/// rejects.
+async fn publish(
+    service: Option<String>,
+    target: Option<String>,
+    as_json: bool,
+) -> Result<(), CmdError> {
+    let document = registry::fetch_document().await?;
+    let block = directory(&document)?;
+    let target = match target {
+        Some(value) => value,
+        None => this_target().await?,
+    };
+    let services = block
+        .get("services")
+        .and_then(Value::as_object)
+        .ok_or_else(|| CmdError::click(format!("{DIRECTORY_KEY}.services: must be an object")))?;
+    let home = std::env::var("HOME").map_err(|_| CmdError::click("HOME is not set"))?;
+    let forwards = std::path::Path::new(&home).join(".stado").join("forwards");
+    std::fs::create_dir_all(&forwards)?;
+    let mut published: Vec<Value> = Vec::new();
+    let mut skipped: Vec<Value> = Vec::new();
+    for (name, entry) in services {
+        if service.as_deref().is_some_and(|wanted| wanted != name) {
+            continue;
+        }
+        let url = entry
+            .get("endpoints")
+            .and_then(Value::as_object)
+            .and_then(|endpoints| endpoints.get(&target))
+            .and_then(|endpoint| endpoint.get("url"))
+            .and_then(Value::as_str);
+        let Some(url) = url else {
+            skipped.push(json!({
+                "service": name,
+                "reason": format!("{DIRECTORY_KEY} declares no endpoint for {target}"),
+            }));
+            continue;
+        };
+        let marker = forwards.join(format!("{name}.local"));
+        write_forward_marker(&marker, url)?;
+        published.push(json!({
+            "service": name,
+            "url": url,
+            "marker": marker.display().to_string(),
+        }));
+    }
+    if service.is_some() && published.is_empty() && skipped.is_empty() {
+        return Err(CmdError::click(format!(
+            "{DIRECTORY_KEY} declares no service named {}",
+            service.unwrap_or_default()
+        )));
+    }
+    if as_json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": target,
+                "published": published,
+                "skipped": skipped,
+            }))?
+        );
+        return Ok(());
+    }
+    for entry in &published {
+        println!(
+            "{} -> {} ({})",
+            entry.get("service").and_then(Value::as_str).unwrap_or(""),
+            entry.get("url").and_then(Value::as_str).unwrap_or(""),
+            entry.get("marker").and_then(Value::as_str).unwrap_or("")
+        );
+    }
+    for entry in &skipped {
+        println!(
+            "{}: {}",
+            entry.get("service").and_then(Value::as_str).unwrap_or(""),
+            entry.get("reason").and_then(Value::as_str).unwrap_or("")
+        );
+    }
+    Ok(())
+}
+
+fn write_forward_marker(marker: &std::path::Path, url: &str) -> Result<(), CmdError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let owner_only = u32::from_str_radix("600", "8".parse().unwrap_or_default())
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let staging = marker.with_extension("local.staging");
+    std::fs::write(&staging, format!("{url}\n"))?;
+    std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(owner_only))?;
+    std::fs::rename(&staging, marker)?;
     Ok(())
 }
 

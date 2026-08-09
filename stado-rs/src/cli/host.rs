@@ -958,6 +958,241 @@ pub async fn exec(target: &str, words: Vec<String>, json: bool) -> Result<(), Cm
 /// The only thing it takes is the registry target name. There is no path,
 /// file name, port or pattern to pass, because a command that took one
 /// would be a command that could be pointed at `~/.ssh/id_ed25519`.
+/// `stado host vaults [TARGET]` — which Skarbiec vaults the fleet holds.
+///
+/// Without a target this asks every registry host, because "how many vaults
+/// does this fleet have" is the question a machine cannot answer about
+/// itself: a vault is a file, and the desktop client that lists them is
+/// honest that it only sees the machine it runs on.
+///
+/// Only an owner, three counts and a path cross the wire. Skarbiec's own
+/// documentation calls item, consumer and scope names "the map" and holds
+/// them above the encrypted values in confidentiality, so a fleet sweep
+/// reports how much is held and never what.
+pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> {
+    let runner = crate::deploy::production_runner();
+    let names: Vec<String> = match target {
+        Some(name) => vec![name],
+        None => {
+            let registry = crate::targets::fetch_registry_remote()
+                .await
+                .map_err(|error| CmdError::click(error.to_string()))?;
+            registry.targets.iter().map(|entry| entry.name.clone()).collect()
+        }
+    };
+    let mut hosts: Vec<serde_json::Value> = Vec::new();
+    for name in &names {
+        let resolved = crate::deploy::host_channel::canonical_target(name)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        let answer = crate::deploy::fleet_vaults::collect_from(&resolved, &runner).await;
+        hosts.push(crate::deploy::fleet_vaults::attribute(name, answer));
+    }
+    let summary = crate::deploy::fleet_vaults::summarize(&hosts);
+    if json {
+        print_json(&json!({"summary": summary, "hosts": hosts}));
+        return Ok(());
+    }
+    for host in &hosts {
+        let name = host.get("target").and_then(Value::as_str).unwrap_or("?");
+        if let Some(error) = host.get("error").and_then(Value::as_str) {
+            println!("{name}: {error}");
+            continue;
+        }
+        if let Some(absent) = host.get("absent").and_then(Value::as_str) {
+            println!("{name}: {absent}");
+            continue;
+        }
+        let list = host.get("vaults").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+        println!("{name}: {} vault(s)", list.len());
+        for vault in list {
+            println!(
+                "  {:>5} items  {} recipients  {}",
+                vault.get("items").and_then(Value::as_u64).unwrap_or_default(),
+                vault.get("recipients").and_then(Value::as_u64).unwrap_or_default(),
+                vault.get("path").and_then(Value::as_str).unwrap_or("")
+            );
+        }
+    }
+    println!(
+        "{} host(s), {} unreachable, {} vault(s), {} item(s)",
+        summary.get("hosts").and_then(Value::as_u64).unwrap_or_default(),
+        summary.get("unreachable").and_then(Value::as_u64).unwrap_or_default(),
+        summary.get("vaults").and_then(Value::as_u64).unwrap_or_default(),
+        summary.get("items").and_then(Value::as_u64).unwrap_or_default()
+    );
+    Ok(())
+}
+
+/// `stado host declare-version TARGET --binary B --version V` — say what a
+/// host must run.
+///
+/// `managed_versions` is the declaration every version verdict is measured
+/// against, and nothing wrote it: `host inventory` compared each host's
+/// binaries to a field that was empty on all three, so every answer was
+/// "undeclared" and the fleet looked fine while running whatever it happened
+/// to have. Delivery refuses a version the registry has not declared, so
+/// without this command the delivery path could not be reached at all.
+pub async fn declare_version(
+    target: &str,
+    binary: &str,
+    version: &str,
+    json: bool,
+) -> Result<(), CmdError> {
+    let binary = crate::deploy::host_release::managed_binary(binary)
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let version = version.trim();
+    if version.is_empty() {
+        return Err(CmdError::usage("--version must name an exact version"));
+    }
+    let mut document = super::registry::fetch_document().await?;
+    let targets = document
+        .get_mut("targets")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| CmdError::click("registry.targets: must be an array"))?;
+    let entry = targets
+        .iter_mut()
+        .find_map(|candidate| {
+            let object = candidate.as_object_mut()?;
+            (object.get("name").and_then(Value::as_str) == Some(target)).then_some(object)
+        })
+        .ok_or_else(|| CmdError::click(format!("registry declares no target {target:?}")))?;
+    let versions = entry
+        .entry("managed_versions".to_string())
+        .or_insert_with(|| Value::Object(serde_json::Map::new()))
+        .as_object_mut()
+        .ok_or_else(|| CmdError::click("managed_versions is not an object"))?;
+    versions.insert(binary.name.to_string(), json!(version));
+    let generation = super::registry::push_document(&document).await?;
+    if json {
+        print_json(&json!({
+            "target": target,
+            "binary": binary.name,
+            "version": version,
+            "generation": generation,
+        }));
+        return Ok(());
+    }
+    println!("{target}: {} declared at {version}", binary.name);
+    Ok(())
+}
+
+/// `stado host reconcile [TARGET] [--apply]` — what the fleet runs against
+/// what it was told to run.
+///
+/// Without `--apply` nothing changes: an operator must be able to see drift
+/// without a machine moving under them. With it, every host that is BEHIND
+/// its declaration is delivered through the ordinary `host release` path,
+/// which verifies the digest before it repoints anything.
+///
+/// Only `behind` is delivered. A host running something NEWER than the
+/// declaration is a stale declaration, not a stale host, and quietly
+/// downgrading it would be this command destroying work rather than
+/// reconciling it.
+pub async fn reconcile(
+    target: Option<String>,
+    apply: bool,
+    platform: &str,
+    json: bool,
+) -> Result<(), CmdError> {
+    let runner = crate::deploy::production_runner();
+    let registry = crate::targets::fetch_registry_remote()
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let names: Vec<String> = match target {
+        Some(name) => vec![name],
+        None => registry.targets.iter().map(|entry| entry.name.clone()).collect(),
+    };
+    let mut standings = Vec::new();
+    for name in &names {
+        standings.push(crate::deploy::reconcile::examine(name, &runner).await);
+    }
+    let mut delivered: Vec<Value> = Vec::new();
+    if apply {
+        for standing in &standings {
+            if !standing.needs_delivery() {
+                continue;
+            }
+            let Some(entry) = registry.targets.iter().find(|entry| entry.name == standing.target)
+            else {
+                continue;
+            };
+            for drifted in &standing.drift {
+                if drifted.verdict != "behind" && drifted.verdict != "absent" {
+                    continue;
+                }
+                let binary = &drifted.binary;
+                let Some(version) = entry.declared_version(binary) else {
+                    continue;
+                };
+                let outcome = crate::deploy::host_release::release_host(
+                    &standing.target,
+                    binary,
+                    version,
+                    platform,
+                    false,
+                    &runner,
+                )
+                .await;
+                delivered.push(match outcome {
+                    Ok(report) => json!({
+                        "target": standing.target,
+                        "binary": binary,
+                        "version": version,
+                        "status": "delivered",
+                        "report": report,
+                    }),
+                    Err(error) => json!({
+                        "target": standing.target,
+                        "binary": binary,
+                        "version": version,
+                        "status": "failed",
+                        "detail": error.to_string(),
+                    }),
+                });
+            }
+        }
+    }
+    let report = crate::deploy::reconcile::report(&standings, &delivered);
+    if json {
+        print_json(&report);
+        return Ok(());
+    }
+    for standing in &standings {
+        if let Some(detail) = &standing.unreachable {
+            println!("{}: unreachable — {detail}", standing.target);
+            continue;
+        }
+        if standing.drift.is_empty() && standing.undeclared.is_empty() {
+            println!("{}: matches its declaration", standing.target);
+            continue;
+        }
+        for entry in &standing.drift {
+            println!(
+                "{}: {} is {} — declared {}, installed {}",
+                standing.target, entry.binary, entry.verdict, entry.declared, entry.installed
+            );
+        }
+        if !standing.undeclared.is_empty() {
+            println!(
+                "{}: undeclared — {} (nobody has said what this host must run)",
+                standing.target,
+                standing.undeclared.join(", ")
+            );
+        }
+    }
+    for entry in &delivered {
+        println!(
+            "delivered {} {} to {}: {}",
+            entry.get("binary").and_then(Value::as_str).unwrap_or(""),
+            entry.get("version").and_then(Value::as_str).unwrap_or(""),
+            entry.get("target").and_then(Value::as_str).unwrap_or(""),
+            entry.get("status").and_then(Value::as_str).unwrap_or("")
+        );
+    }
+    Ok(())
+}
+
 pub async fn inventory(target: &str, json: bool) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
     let report = crate::deploy::host_inventory::inventory_host(target, &runner)
