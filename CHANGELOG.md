@@ -19,6 +19,11 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   live registry hosts, require existing ledgers for resume placement, and carry
   the canonical bidirectional stream to native desktop clients.
 
+### Service routing
+
+- Directory consumer mutations now advance the routing generation atomically,
+  preventing resolvers from rejecting changed directories as stale.
+
 ## 0.5.0-rc.1 - 2026-07-29
 
 ### Product contract
