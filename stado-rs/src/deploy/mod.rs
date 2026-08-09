@@ -63,6 +63,7 @@ use futures::future::BoxFuture;
 pub mod artifact_install;
 pub mod bootstrap;
 pub mod host_build_caches;
+pub mod fleet_vaults;
 pub mod host_channel;
 pub mod host_cleanup;
 pub mod host_disk;
