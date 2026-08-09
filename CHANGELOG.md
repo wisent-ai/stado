@@ -23,6 +23,9 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
 
 - Directory consumer mutations now advance the routing generation atomically,
   preventing resolvers from rejecting changed directories as stale.
+- Resolver adapters now close idle client streams after a bounded interval,
+  preventing retained HTTP keep-alives from exhausting file descriptors and
+  blocking every routed service.
 
 ## 0.5.0-rc.1 - 2026-07-29
 
