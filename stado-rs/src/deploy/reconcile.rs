@@ -52,6 +52,9 @@ pub struct Standing {
 #[derive(Debug, Clone)]
 pub struct HostStanding {
     pub target: String,
+    pub release_platform: String,
+    pub declared_release_platform: String,
+    pub platform_verdict: String,
     pub drift: Vec<Standing>,
     pub undeclared: Vec<String>,
     pub unreachable: Option<String>,
@@ -59,9 +62,19 @@ pub struct HostStanding {
 
 impl HostStanding {
     pub fn needs_delivery(&self) -> bool {
-        self.drift
-            .iter()
-            .any(|entry| entry.verdict == "behind" || entry.verdict == ABSENT)
+        self.unreachable.is_none()
+            && self.platform_verdict == host_inventory::MATCHED
+            && self
+                .drift
+                .iter()
+                .any(|entry| entry.verdict == "behind" || entry.verdict == ABSENT)
+    }
+
+    pub fn settled(&self) -> bool {
+        self.unreachable.is_none()
+            && self.platform_verdict == host_inventory::MATCHED
+            && self.drift.is_empty()
+            && self.undeclared.is_empty()
     }
 }
 
@@ -81,7 +94,10 @@ fn text(entry: &Value, field: &str) -> String {
 /// matters.
 pub async fn examine(target_name: &str, runner: &Runner) -> HostStanding {
     match host_inventory::inventory_host(target_name, runner).await {
-        Ok(report) => {
+        Ok(report)
+            if report.get("status").and_then(Value::as_str)
+                == Some(host_inventory::OK_STATUS) =>
+        {
             let mut drift = Vec::new();
             let mut undeclared = Vec::new();
             let binaries = report
@@ -100,7 +116,11 @@ pub async fn examine(target_name: &str, runner: &Runner) -> HostStanding {
                     continue;
                 }
                 let state = text(entry, "state");
-                let verdict = if state == "present" { verdict } else { ABSENT.to_string() };
+                let verdict = if state == "present" {
+                    verdict
+                } else {
+                    ABSENT.to_string()
+                };
                 drift.push(Standing {
                     binary: name,
                     verdict,
@@ -110,13 +130,34 @@ pub async fn examine(target_name: &str, runner: &Runner) -> HostStanding {
             }
             HostStanding {
                 target: target_name.to_string(),
+                release_platform: text(&report, "release_platform"),
+                declared_release_platform: text(&report, "declared_release_platform"),
+                platform_verdict: text(&report, "release_platform_verdict"),
                 drift,
                 undeclared,
                 unreachable: None,
             }
         }
+        Ok(report) => HostStanding {
+            target: target_name.to_string(),
+            release_platform: String::new(),
+            declared_release_platform: String::new(),
+            platform_verdict: String::new(),
+            drift: Vec::new(),
+            undeclared: Vec::new(),
+            unreachable: Some(
+                report
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .unwrap_or("host inventory failed without a detail")
+                    .to_string(),
+            ),
+        },
         Err(DeployError(detail)) => HostStanding {
             target: target_name.to_string(),
+            release_platform: String::new(),
+            declared_release_platform: String::new(),
+            platform_verdict: String::new(),
             drift: Vec::new(),
             undeclared: Vec::new(),
             unreachable: Some(detail),
@@ -125,23 +166,26 @@ pub async fn examine(target_name: &str, runner: &Runner) -> HostStanding {
 }
 
 /// The fleet's standing, as JSON an operator or another tool can read.
-pub fn report(standings: &[HostStanding], applied: &[Value]) -> Value {
-    let one = usize::from(u8::from(true));
-    let mut drifting = usize::MIN;
-    let mut unreachable = usize::MIN;
-    let mut undeclared = usize::MIN;
+pub fn report(standings: &[HostStanding], deliveries: &[Value]) -> Value {
+    let mut drifting = 0_usize;
+    let mut unreachable = 0_usize;
+    let mut undeclared = 0_usize;
+    let mut platform_mismatches = 0_usize;
     let hosts: Vec<Value> = standings
         .iter()
         .map(|standing| {
-            if standing.unreachable.is_some() {
-                unreachable = unreachable.saturating_add(one);
-            }
-            if !standing.drift.is_empty() {
-                drifting = drifting.saturating_add(one);
-            }
-            undeclared = undeclared.saturating_add(standing.undeclared.len());
+            unreachable += usize::from(standing.unreachable.is_some());
+            drifting += usize::from(!standing.drift.is_empty());
+            undeclared += standing.undeclared.len();
+            platform_mismatches += usize::from(
+                standing.unreachable.is_none()
+                    && standing.platform_verdict != host_inventory::MATCHED,
+            );
             json!({
                 "target": standing.target,
+                "release_platform": standing.release_platform,
+                "declared_release_platform": standing.declared_release_platform,
+                "platform_verdict": standing.platform_verdict,
                 "unreachable": standing.unreachable,
                 "undeclared": standing.undeclared,
                 "drift": standing
@@ -157,15 +201,22 @@ pub fn report(standings: &[HostStanding], applied: &[Value]) -> Value {
             })
         })
         .collect();
+    let failed_deliveries = deliveries
+        .iter()
+        .filter(|entry| entry.get("status").and_then(Value::as_str) != Some("delivered"))
+        .count();
     json!({
         "summary": {
             "hosts": standings.len(),
+            "settled": standings.iter().filter(|standing| standing.settled()).count(),
             "drifting": drifting,
             "unreachable": unreachable,
+            "platform_mismatches": platform_mismatches,
             "undeclared_binaries": undeclared,
-            "delivered": applied.len(),
+            "deliveries": deliveries.len(),
+            "failed_deliveries": failed_deliveries,
         },
         "hosts": hosts,
-        "delivered": applied,
+        "deliveries": deliveries,
     })
 }

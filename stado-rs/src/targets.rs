@@ -553,6 +553,20 @@ pub fn validate_registry(data: &Value) -> Result<(), RegistryValidationError> {
                 &format!("must be one of {}", py_list_repr(&valid_kinds)),
             ));
         }
+        let platform_location = format!("{location}.release_platform");
+        let platform = target
+            .get("release_platform")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !crate::deploy::host_release::PLATFORMS.contains(&platform) {
+            return Err(verr(
+                &platform_location,
+                &format!(
+                    "must be one of {} and must be confirmed by host inventory",
+                    py_list_repr(crate::deploy::host_release::PLATFORMS)
+                ),
+            ));
+        }
         if let Some(role) = target.get("role") {
             if !role.as_str().is_some_and(is_target_name) {
                 return Err(verr(
@@ -993,6 +1007,9 @@ pub struct ComputeTarget {
     pub name: String,
     /// "local" | "gcp" | "vast"
     pub kind: String,
+    /// Verified immutable-release coordinate for this host. Enrollment records
+    /// it and every inventory compares it with the remote kernel/architecture.
+    pub release_platform: String,
     #[serde(default)]
     pub gpu_type: Option<String>,
     #[serde(default = "default_slots")]

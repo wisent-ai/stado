@@ -506,16 +506,15 @@ pub fn validate(data: &Value) -> Vec<String> {
     .iter()
     .any(|provider| active_providers.contains(provider));
     if cloud_agent_provider {
-        let release_api = get_in(root, "release.api_url")
+        let api = get_in(root, "api.url")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if release_api.is_empty() {
+        if api.is_empty() {
             problems.push(
-                "cloud agents need explicit release.api_url for the public Stado release endpoint"
-                    .to_string(),
+                "cloud agents need explicit api.url for the canonical Stado endpoint".to_string(),
             );
-        } else if !release_api.starts_with("https://") {
-            problems.push("release.api_url must use HTTPS".to_string());
+        } else if !api.starts_with("https://") {
+            problems.push("api.url must use HTTPS".to_string());
         }
         for key in ["release.version", "release.platform"] {
             let value = get_in(root, key)
