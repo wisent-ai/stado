@@ -249,8 +249,13 @@ pub async fn enroll(
     if bootstrap {
         if let Err(exc) = stado::cli::bootstrap::run(Some(name.to_string()), false, false).await {
             let current = fetch_document().await.map_err(|err| err.to_string())?;
-            let rolled_back =
-                crate::enroll::legacy::rollback_registration(&current, &document, name, takeover)?;
+            let rolled_back = if takeover {
+                crate::enroll::legacy::rollback_registration(
+                    &current, &document, name, true,
+                )?
+            } else {
+                remove_target(&current, name)?
+            };
             push_document(&rolled_back)
                 .await
                 .map_err(|err| err.to_string())?;
