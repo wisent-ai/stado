@@ -279,7 +279,9 @@ fn identity(
     )[..32]
         .into()
 }
-async fn builder(platform: &str) -> Result<crate::targets::ComputeTarget, CmdError> {
+async fn builder(
+    platform: &str,
+) -> Result<(crate::targets::ComputeTarget, String), CmdError> {
     let registry = crate::targets::fetch_registry_remote()
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
@@ -289,24 +291,30 @@ async fn builder(platform: &str) -> Result<crate::targets::ComputeTarget, CmdErr
     let capacity = crate::queue::capacity::read_consumer_capacity(&store)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
-    let mut live_targets = BTreeSet::new();
+    let mut live_consumers = BTreeMap::new();
     for consumer in capacity.keys() {
         let identity = consumer.strip_prefix("local-").unwrap_or(consumer);
         if let Some(target) = registry
             .lookup_self(identity)
             .map_err(|error| CmdError::click(error.to_string()))?
         {
-            live_targets.insert(target.name.clone());
+            live_consumers
+                .entry(target.name.clone())
+                .or_insert_with(|| consumer.clone());
         }
     }
     let mut candidates: Vec<_> = registry
         .targets
         .into_iter()
-        .filter(|target| {
-            target.release_platform == platform && live_targets.contains(&target.name)
+        .filter_map(|target| {
+            if target.release_platform != platform {
+                return None;
+            }
+            let consumer = live_consumers.get(&target.name)?.clone();
+            Some((target, consumer))
         })
         .collect();
-    candidates.sort_by(|left, right| left.name.cmp(&right.name));
+    candidates.sort_by(|left, right| left.0.name.cmp(&right.0.name));
     candidates.into_iter().next().ok_or_else(|| {
         CmdError::click(format!(
             "no live fleet builder is broadcasting verified release_platform {platform}"
@@ -344,7 +352,7 @@ async fn enqueue(
     manifest_uri: &str,
 ) -> Result<PlatformRun, CmdError> {
     let recipe = &m.platforms[platform];
-    let host = builder(&recipe.runner_platform).await?;
+    let (host, consumer) = builder(&recipe.runner_platform).await?;
     let mut resolved = Map::new();
     resolved.insert(
         "source".into(),
@@ -390,7 +398,7 @@ async fn enqueue(
     queue_immutable(&request_path, &bytes).await?;
     resolved.insert("request".into(), input(&uri, "release-request.json", &sha));
     let options = SubmitOptions {
-        pinned_host: host.name.clone(),
+        pinned_host: consumer,
         run_id: id.into(),
         output_uri: run_uri(&m.product, id, &format!("platforms/{platform}/output")),
         input_artifacts: resolved.clone(),
@@ -745,9 +753,9 @@ async fn run_deliveries(
                     &run.source_sha256,
                 ),
             );
-            let host = builder(&m.platforms[&d.platform].runner_platform).await?;
+            let (_, consumer) = builder(&m.platforms[&d.platform].runner_platform).await?;
             let options = SubmitOptions {
-                pinned_host: host.name,
+                pinned_host: consumer,
                 run_id: run.run_id.clone(),
                 output_uri: run_uri(
                     &run.product,
