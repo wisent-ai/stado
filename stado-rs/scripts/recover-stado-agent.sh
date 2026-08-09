@@ -18,9 +18,14 @@ case "$(uname -s)" in
     ;;
   Darwin)
     uid="$(/usr/bin/id -u)"
-    label="$(/bin/launchctl list | /usr/bin/awk '$3 ~ /^com[.]wisent[.]compute[.]agent[.]/ {print $3}')"
-    [ -n "$label" ]
-    /bin/launchctl kickstart -k "gui/$uid/$label"
+    set -- "$HOME"/Library/LaunchAgents/com.wisent.compute.agent.*.plist
+    [ "$#" -eq 1 ] && [ -f "$1" ]
+    plist="$1"
+    label="${plist##*/}"
+    label="${label%.plist}"
+    /bin/launchctl bootout "gui/$uid/$label" 2>/dev/null || true
+    /bin/sleep 1
+    /bin/launchctl bootstrap "gui/$uid" "$plist"
     /bin/launchctl print "gui/$uid/$label" >/dev/null
     printf '%s\n' active
     ;;
