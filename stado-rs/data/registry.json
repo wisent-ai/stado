@@ -182,6 +182,7 @@
       },
       "image-video-router": {
         "active_host": "ubuntu-server-rtx-pro-6000",
+        "managed_service": "image-video-router",
         "endpoints": {
           "ubuntu-server-rtx-pro-6000": {
             "url": "http://127.0.0.1:8081"
@@ -486,6 +487,16 @@
       "ssh": "root@100.126.122.108",
       "vram_gb": 95,
       "role": "burst",
+      "services": [
+        {
+          "name": "image-video-router",
+          "unit": "image-video-router-release.service",
+          "label": "",
+          "path": "/etc/systemd/system/image-video-router-release.service",
+          "kind": "systemd",
+          "managed_since": "2026-08-09T18:47:00Z"
+        }
+      ],
       "service_resolver": {
         "api_bind": "127.0.0.1:17600",
         "refresh_seconds": 5,
