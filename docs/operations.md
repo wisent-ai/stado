@@ -76,10 +76,18 @@ these substrings to classify failures fast:
 
 ## Release / publishing
 
-`.github/workflows/deploy.yml` is dispatched for the committed default-branch
-revision. The one run gates the committed Cargo version, creates or
-safely resumes `v<version>`, publishes both platform archives, bootstraps the
-control plane, promotes stable desired state, and invokes fleet reconciliation.
+Changing `stado-rs/Cargo.toml` on `main` starts the one release/delivery run.
+Manual dispatch only resumes that same revision after an interrupted publish.
+The run gates the committed Cargo version, creates or safely resumes
+`v<version>`, byte-compares publication to both the canonical Stado channel and
+GitHub Release, bootstraps the control plane, promotes stable desired state,
+and invokes fleet reconciliation.
+
+Managed product repositories call
+`.github/workflows/promote-managed-release.yml` at an immutable Stado commit.
+The reusable workflow accepts only `stado` or `skarbiec`, validates the exact
+version, and runs the installed control-plane Stado for promotion and
+reconciliation; caller code is never checked out or executed on that runner.
 
 Every `stado://releases/stado/<version>/<platform>/<file>` write goes through
 the authenticated Stado release API. The workflow expands only
