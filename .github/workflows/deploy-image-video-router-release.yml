@@ -33,10 +33,10 @@ jobs:
       SOURCE_COMMIT: ${{ inputs.source_commit }}
       RELEASE_TARGET: ubuntu-server-rtx-pro-6000
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           repository: wisent-ai/stado
-          ref: feat/stado-release-delivery-chain
+          ref: 159f43308449ab65df2cdd371b5579d5ddd3f0c9
       - name: Build the pinned Stado control client
         working-directory: stado-rs
         run: cargo build --locked --release --bin stado
