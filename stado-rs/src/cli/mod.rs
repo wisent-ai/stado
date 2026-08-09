@@ -1194,6 +1194,14 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Which Skarbiec vaults the fleet holds; omit TARGET to ask every host.
+    Vaults {
+        /// Ask one host instead of the whole registry.
+        target: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Run one approved read-only command on TARGET (allowlist, not a shell).
     Exec {
         target: String,
@@ -1731,6 +1739,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 json,
                 command,
             } => host::exec(&target, command, json).await,
+            HostCommands::Vaults { target, json } => host::vaults(target, json).await,
             HostCommands::Inventory { target, json } => host::inventory(&target, json).await,
             HostCommands::Release {
                 target,
