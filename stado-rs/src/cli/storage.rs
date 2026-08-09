@@ -1164,11 +1164,24 @@ impl RemoteObjectApi {
         if_absent: bool,
         bytes: Vec<u8>,
     ) -> Result<(), CmdError> {
+        self.put_with_metadata(uri, content_type, if_absent, bytes, &BTreeMap::new())
+            .await
+    }
+
+    async fn put_with_metadata(
+        &self,
+        uri: &str,
+        content_type: &str,
+        if_absent: bool,
+        bytes: Vec<u8>,
+        metadata: &BTreeMap<String, String>,
+    ) -> Result<(), CmdError> {
         let if_absent = if if_absent { "true" } else { "false" };
         let endpoint = self.endpoint("/api/object", &[("uri", uri), ("if_absent", if_absent)])?;
         let response = self
             .request(reqwest::Method::PUT, endpoint)
             .header(reqwest::header::CONTENT_TYPE, content_type)
+            .header("x-stado-object-metadata", serde_json::to_string(metadata)?)
             .body(bytes)
             .send()
             .await?;
@@ -1186,6 +1199,59 @@ impl RemoteObjectApi {
         let response = self.request(reqwest::Method::GET, endpoint).send().await?;
         self.success_body(response, max_object_api_download_body(), "object GET")
             .await
+    }
+
+    async fn get_versioned(&self, uri: &str) -> Result<Option<(Vec<u8>, String)>, CmdError> {
+        let endpoint = self.endpoint("/api/object", &[("uri", uri), ("versioned", "true")])?;
+        let response = self.request(reqwest::Method::GET, endpoint).send().await?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let version = response
+            .headers()
+            .get("x-stado-version")
+            .and_then(|value| value.to_str().ok())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| CmdError::click("Stado object API omitted the CAS version"))?
+            .to_string();
+        let bytes = self
+            .success_body(
+                response,
+                max_object_api_download_body(),
+                "versioned object GET",
+            )
+            .await?;
+        Ok(Some((bytes, version)))
+    }
+
+    async fn put_if_version(
+        &self,
+        uri: &str,
+        content_type: &str,
+        expected_version: &str,
+        bytes: Vec<u8>,
+    ) -> Result<(), CmdError> {
+        let endpoint = self.endpoint(
+            "/api/object",
+            &[("uri", uri), ("if_version", expected_version)],
+        )?;
+        let response = self
+            .request(reqwest::Method::PUT, endpoint)
+            .header(reqwest::header::CONTENT_TYPE, content_type)
+            .body(bytes)
+            .send()
+            .await?;
+        let payload: Value = self
+            .response_json(response, "conditional object PUT")
+            .await?;
+        if payload.get("state").and_then(Value::as_str) != Some("stored")
+            || payload.get("uri").and_then(Value::as_str) != Some(uri)
+        {
+            return Err(CmdError::click(
+                "Stado object API returned an inconsistent conditional PUT response",
+            ));
+        }
+        Ok(())
     }
 
     async fn get_release(&self, uri: &str) -> Result<Vec<u8>, CmdError> {
@@ -1496,12 +1562,38 @@ pub(crate) async fn store_object(
     content_type: &str,
     if_absent: bool,
 ) -> Result<String, CmdError> {
+    store_object_with_metadata(uri, source, content_type, if_absent, &BTreeMap::new()).await
+}
+
+pub(crate) async fn store_object_with_metadata(
+    uri: &str,
+    source: &str,
+    content_type: &str,
+    if_absent: bool,
+    extra_metadata: &BTreeMap<String, String>,
+) -> Result<String, CmdError> {
     let object = crate::object_store::ObjectRef::parse(uri)?;
     let uri = object.to_string();
     let create_only = if_absent || object.namespace() == "releases";
+    let mut metadata = crate::object_store::metadata(&object, content_type);
+    for (name, value) in extra_metadata {
+        if !name.starts_with("stado-")
+            || metadata.contains_key(name)
+            || value.is_empty()
+            || name.chars().any(char::is_control)
+            || value.chars().any(char::is_control)
+        {
+            return Err(CmdError::click(
+                "custom object metadata must use unique non-empty stado-* fields",
+            ));
+        }
+        metadata.insert(name.clone(), value.clone());
+    }
     if let Some(remote) = RemoteObjectApi::configured()? {
         let bytes = read_object_source(source)?;
-        remote.put(&uri, content_type, create_only, bytes).await?;
+        remote
+            .put_with_metadata(&uri, content_type, create_only, bytes, &metadata)
+            .await?;
         return Ok(uri);
     }
     let path = object.storage_path();
@@ -1522,7 +1614,6 @@ pub(crate) async fn store_object(
         store.upload_bytes(&path, &bytes).await?;
         true
     };
-
     if !uploaded {
         let policy = if object.namespace() == "releases" {
             "release objects are immutable"
@@ -1533,8 +1624,6 @@ pub(crate) async fn store_object(
             "{object} already exists; {policy}"
         )));
     }
-
-    let metadata = crate::object_store::metadata(&object, content_type);
     store.backend().set_metadata(&path, &metadata).await?;
     Ok(uri)
 }
@@ -1570,6 +1659,91 @@ pub(crate) async fn fetch_object(uri: &str) -> Result<Vec<u8>, CmdError> {
         return Err(CmdError::click(format!("{object}: absent")));
     };
     Ok(bytes)
+}
+
+pub(crate) async fn fetch_object_versioned(
+    uri: &str,
+) -> Result<Option<(Vec<u8>, String)>, CmdError> {
+    let object = crate::object_store::ObjectRef::parse(uri)?;
+    if object.namespace() == "releases" {
+        return Err(CmdError::click(
+            "release objects are immutable and have no catalog CAS path",
+        ));
+    }
+    if let Some(remote) = RemoteObjectApi::configured()? {
+        return remote.get_versioned(&object.to_string()).await;
+    }
+    let store = JobStorage::new().await?;
+    Ok(store
+        .read_text_versioned(&object.storage_path())
+        .await?
+        .map(|value| (value.content.into_bytes(), value.version)))
+}
+
+pub(crate) async fn compare_and_swap_object(
+    uri: &str,
+    content: &[u8],
+    content_type: &str,
+    expected_version: &str,
+) -> Result<(), CmdError> {
+    let object = crate::object_store::ObjectRef::parse(uri)?;
+    if object.namespace() == "releases" {
+        return Err(CmdError::click("release objects cannot be replaced"));
+    }
+    if let Some(remote) = RemoteObjectApi::configured()? {
+        return remote
+            .put_if_version(
+                &object.to_string(),
+                content_type,
+                expected_version,
+                content.to_vec(),
+            )
+            .await;
+    }
+    let text = std::str::from_utf8(content)
+        .map_err(|_| CmdError::click("conditional object content must be UTF-8"))?;
+    let store = JobStorage::new().await?;
+    store
+        .compare_and_swap_text(&object.storage_path(), expected_version, text)
+        .await?;
+    let metadata = crate::object_store::metadata(&object, content_type);
+    store
+        .backend()
+        .set_metadata(&object.storage_path(), &metadata)
+        .await?;
+    Ok(())
+}
+
+pub(crate) async fn list_object_uris(
+    namespace: &str,
+    prefix: &str,
+) -> Result<Vec<String>, CmdError> {
+    let storage_prefix = crate::object_store::ObjectRef::namespace_prefix(namespace, prefix)?;
+    if let Some(remote) = RemoteObjectApi::configured()? {
+        return remote
+            .list(namespace, prefix)
+            .await?
+            .into_iter()
+            .map(|value| {
+                value
+                    .get("uri")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .ok_or_else(|| CmdError::click("object list entry omitted uri"))
+            })
+            .collect();
+    }
+    let store = JobStorage::new().await?;
+    let mut uris = Vec::new();
+    for blob in store
+        .backend()
+        .list_blobs_with_meta(&storage_prefix)
+        .await?
+    {
+        uris.push(crate::object_store::ObjectRef::from_storage_path(&blob.name)?.to_string());
+    }
+    uris.sort();
+    Ok(uris)
 }
 
 async fn get(args: &StorageGetArgs) -> Result<(), CmdError> {

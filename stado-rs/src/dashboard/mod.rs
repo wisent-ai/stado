@@ -358,15 +358,7 @@ impl Dashboard {
             "15".parse::<u64>()
                 .expect("static boundary startup timeout"),
         );
-        let (
-            object,
-            release,
-            machine,
-            service,
-            rate_verifier,
-            rate_state,
-            integration,
-        ) = tokio::join!(
+        let (object, release, machine, service, rate_verifier, rate_state, integration) = tokio::join!(
             tokio::time::timeout(startup_timeout, crate::skarbiec::validate_object_verifier()),
             tokio::time::timeout(
                 startup_timeout,
@@ -1315,7 +1307,33 @@ impl Dashboard {
             .header("content-type")
             .unwrap_or("application/octet-stream")
             .to_string();
-        let metadata = crate::object_store::metadata(object, &content_type);
+        let mut metadata = crate::object_store::metadata(object, &content_type);
+        if let Some(raw) = request.header("x-stado-object-metadata") {
+            let extra: std::collections::BTreeMap<String, String> = match serde_json::from_str(raw)
+            {
+                Ok(value) => value,
+                Err(error) => {
+                    return Ok(send_json(
+                        http_status("400"),
+                        &json!({"error": format!("invalid object metadata: {error}")}),
+                    ))
+                }
+            };
+            for (name, value) in extra {
+                if !name.starts_with("stado-")
+                    || metadata.contains_key(&name)
+                    || value.is_empty()
+                    || name.chars().any(char::is_control)
+                    || value.chars().any(char::is_control)
+                {
+                    return Ok(send_json(
+                        http_status("400"),
+                        &json!({"error": "custom object metadata must use unique non-empty stado-* fields"}),
+                    ));
+                }
+                metadata.insert(name, value);
+            }
+        }
         self.store.backend().set_metadata(&path, &metadata).await?;
         let landed = self.store.backend().list_blobs_with_meta(&path).await?;
         let Some(blob) = landed.into_iter().find(|blob| blob.name == path) else {
@@ -1732,7 +1750,9 @@ impl Dashboard {
         if let Some(metadata) = &self.operator_auth_override {
             return Ok((metadata.supabase_url.clone(), metadata.anon_key.clone()));
         }
-        operator_auth::operator_auth_metadata().await.map_err(|_| ())
+        operator_auth::operator_auth_metadata()
+            .await
+            .map_err(|_| ())
     }
 
     /// Validate host-health publication or a Wisent session/deployment grant.
@@ -2457,15 +2477,11 @@ async fn authorize_object(
     let expected = match crate::skarbiec::read_object_token(policy.item(), "token").await {
         Ok(Some(value)) if !value.is_empty() => value,
         Ok(_) => {
-            eprintln!(
-                "[dashboard] object verifier item unavailable for namespace {namespace}"
-            );
+            eprintln!("[dashboard] object verifier item unavailable for namespace {namespace}");
             return Err(());
         }
         Err(error) => {
-            eprintln!(
-                "[dashboard] object verifier failed for namespace {namespace}: {error}"
-            );
+            eprintln!("[dashboard] object verifier failed for namespace {namespace}: {error}");
             return Err(());
         }
     };
