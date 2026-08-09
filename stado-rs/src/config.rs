@@ -920,9 +920,9 @@ pub fn stado_release_platform() -> String {
         .to_string()
 }
 
-/// Skarbiec item containing the Ed25519 PKCS#8 release authority key in
-/// `private_key_pkcs8_base64`. The item name is configuration; key bytes never
-/// enter a product manifest or registry document.
+/// Skarbiec key-pair item containing the base64 Ed25519 PKCS#8 release
+/// authority key in `private_key`. The item name is configuration; key bytes
+/// never enter a product manifest or registry document.
 pub fn release_signing_key_item() -> String {
     cfg(
         "STADO_RELEASE_SIGNING_KEY_ITEM",
