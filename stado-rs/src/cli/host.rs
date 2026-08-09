@@ -1045,7 +1045,8 @@ pub async fn declare_version(
     if version.is_empty() {
         return Err(CmdError::usage("--version must name an exact version"));
     }
-    let mut document = super::registry::fetch_document().await?;
+    let (mut document, expected_generation) =
+        super::registry::fetch_versioned_document().await?;
     let targets = document
         .get_mut("targets")
         .and_then(Value::as_array_mut)
@@ -1063,7 +1064,8 @@ pub async fn declare_version(
         .as_object_mut()
         .ok_or_else(|| CmdError::click("managed_versions is not an object"))?;
     versions.insert(binary.name.to_string(), json!(version));
-    let generation = super::registry::push_document(&document).await?;
+    let generation =
+        super::registry::push_document_if(&document, &expected_generation).await?;
     if json {
         print_json(&json!({
             "target": target,
@@ -1074,6 +1076,86 @@ pub async fn declare_version(
         return Ok(());
     }
     println!("{target}: {} declared at {version}", binary.name);
+    Ok(())
+}
+
+/// Promote one published version into fleet desired state in one fenced
+/// registry write. Every platform manifest must already exist and identify
+/// the canonical coordinate before `managed_versions` moves.
+pub async fn promote_version(binary: &str, version: &str, json_output: bool) -> Result<(), CmdError> {
+    let managed = crate::deploy::host_release::managed_binary(binary)
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let version = version.trim();
+    if !crate::deploy::host_release::is_exact_semver(version) {
+        return Err(CmdError::usage(
+            "--version must name an exact immutable semantic version",
+        ));
+    }
+    crate::cli::storage::release_api_origin()?;
+    let (mut document, expected_generation) =
+        super::registry::fetch_versioned_document().await?;
+    let targets = document
+        .get_mut("targets")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| CmdError::click("registry.targets: must be an array"))?;
+    if targets.is_empty() {
+        return Err(CmdError::click(
+            "registry has no targets; refusing an empty desired-state promotion",
+        ));
+    }
+    let mut platforms = std::collections::BTreeSet::new();
+    let mut promoted = Vec::with_capacity(targets.len());
+    for target in targets.iter() {
+        let name = target
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or_else(|| CmdError::click("registry target has no name"))?;
+        let platform = target
+            .get("release_platform")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "registry target {name:?} has no verified release_platform"
+                ))
+            })?;
+        crate::deploy::host_release::managed_platform(platform)
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        platforms.insert(platform.to_string());
+        promoted.push(name.to_string());
+    }
+    for platform in &platforms {
+        crate::deploy::host_release::catalog_identity(managed, version, platform)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+    }
+    for target in targets {
+        let object = target
+            .as_object_mut()
+            .ok_or_else(|| CmdError::click("registry target must be an object"))?;
+        let versions = object
+            .entry("managed_versions".to_string())
+            .or_insert_with(|| Value::Object(serde_json::Map::new()))
+            .as_object_mut()
+            .ok_or_else(|| CmdError::click("managed_versions is not an object"))?;
+        versions.insert(managed.name.to_string(), json!(version));
+    }
+    let generation =
+        super::registry::push_document_if(&document, &expected_generation).await?;
+    if json_output {
+        print_json(&json!({
+            "binary": managed.name,
+            "version": version,
+            "targets": promoted,
+            "platforms": platforms,
+            "generation": generation,
+        }));
+    } else {
+        println!(
+            "{} {version} promoted to {} target(s), generation {generation}",
+            managed.name,
+            promoted.len()
+        );
+    }
     Ok(())
 }
 
@@ -1092,54 +1174,91 @@ pub async fn declare_version(
 pub async fn reconcile(
     target: Option<String>,
     apply: bool,
-    platform: &str,
-    json: bool,
+    json_output: bool,
 ) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
     let registry = crate::targets::fetch_registry_remote()
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let names: Vec<String> = match target {
-        Some(name) => vec![name],
+        Some(name) => {
+            if registry.targets.iter().all(|entry| entry.name != name) {
+                return Err(CmdError::click(format!(
+                    "registry declares no target {name:?}"
+                )));
+            }
+            vec![name]
+        }
         None => registry.targets.iter().map(|entry| entry.name.clone()).collect(),
     };
-    let mut standings = Vec::new();
+    if names.is_empty() {
+        return Err(CmdError::click("registry has no targets to reconcile"));
+    }
+
+    let mut standings = Vec::with_capacity(names.len());
     for name in &names {
         standings.push(crate::deploy::reconcile::examine(name, &runner).await);
     }
-    let mut delivered: Vec<Value> = Vec::new();
+
+    let mut deliveries: Vec<Value> = Vec::new();
     if apply {
         for standing in &standings {
             if !standing.needs_delivery() {
                 continue;
             }
-            let Some(entry) = registry.targets.iter().find(|entry| entry.name == standing.target)
-            else {
-                continue;
-            };
+            let entry = registry
+                .targets
+                .iter()
+                .find(|entry| entry.name == standing.target)
+                .ok_or_else(|| {
+                    CmdError::click(format!("registry target {:?} disappeared", standing.target))
+                })?;
             for drifted in &standing.drift {
                 if drifted.verdict != "behind" && drifted.verdict != "absent" {
                     continue;
                 }
                 let binary = &drifted.binary;
-                let Some(version) = entry.declared_version(binary) else {
-                    continue;
-                };
+                let version = entry.declared_version(binary).ok_or_else(|| {
+                    CmdError::click(format!(
+                        "{} has no desired {binary} version",
+                        standing.target
+                    ))
+                })?;
                 let outcome = crate::deploy::host_release::release_host(
                     &standing.target,
                     binary,
                     version,
-                    platform,
                     false,
                     &runner,
                 )
                 .await;
-                delivered.push(match outcome {
+                deliveries.push(match outcome {
+                    Ok(report)
+                        if matches!(
+                            report.get("status").and_then(Value::as_str),
+                            Some(
+                                crate::deploy::host_release::RELEASED_STATUS
+                                    | crate::deploy::host_release::ALREADY_ACTIVE_STATUS
+                            )
+                        ) =>
+                    {
+                        json!({
+                            "target": standing.target,
+                            "binary": binary,
+                            "version": version,
+                            "status": "delivered",
+                            "report": report,
+                        })
+                    }
                     Ok(report) => json!({
                         "target": standing.target,
                         "binary": binary,
                         "version": version,
-                        "status": "delivered",
+                        "status": "failed",
+                        "detail": report
+                            .get("error")
+                            .and_then(Value::as_str)
+                            .unwrap_or("delivery returned a non-success report"),
                         "report": report,
                     }),
                     Err(error) => json!({
@@ -1152,47 +1271,72 @@ pub async fn reconcile(
                 });
             }
         }
+        standings.clear();
+        for name in &names {
+            standings.push(crate::deploy::reconcile::examine(name, &runner).await);
+        }
     }
-    let report = crate::deploy::reconcile::report(&standings, &delivered);
-    if json {
+
+    let healthy = standings.iter().all(crate::deploy::reconcile::HostStanding::settled)
+        && deliveries
+            .iter()
+            .all(|entry| entry.get("status").and_then(Value::as_str) == Some("delivered"));
+    let report = crate::deploy::reconcile::report(&standings, &deliveries);
+    if json_output {
         print_json(&report);
-        return Ok(());
-    }
-    for standing in &standings {
-        if let Some(detail) = &standing.unreachable {
-            println!("{}: unreachable — {detail}", standing.target);
-            continue;
+    } else {
+        for standing in &standings {
+            if let Some(detail) = &standing.unreachable {
+                println!("{}: unreachable — {detail}", standing.target);
+                continue;
+            }
+            if standing.platform_verdict != crate::deploy::host_inventory::MATCHED {
+                println!(
+                    "{}: platform mismatch — declared {}, observed {}",
+                    standing.target,
+                    standing.declared_release_platform,
+                    standing.release_platform
+                );
+            }
+            if standing.settled() {
+                println!("{}: active versions match desired state", standing.target);
+            }
+            for drift in &standing.drift {
+                println!(
+                    "{}: {} is {} — desired {}, active {}",
+                    standing.target,
+                    drift.binary,
+                    drift.verdict,
+                    drift.declared,
+                    drift.installed
+                );
+            }
+            if !standing.undeclared.is_empty() {
+                println!(
+                    "{}: missing desired versions — {}",
+                    standing.target,
+                    standing.undeclared.join(", ")
+                );
+            }
         }
-        if standing.drift.is_empty() && standing.undeclared.is_empty() {
-            println!("{}: matches its declaration", standing.target);
-            continue;
-        }
-        for entry in &standing.drift {
+        for delivery in &deliveries {
             println!(
-                "{}: {} is {} — declared {}, installed {}",
-                standing.target, entry.binary, entry.verdict, entry.declared, entry.installed
+                "{} {} on {}: {}",
+                delivery.get("binary").and_then(Value::as_str).unwrap_or(""),
+                delivery.get("version").and_then(Value::as_str).unwrap_or(""),
+                delivery.get("target").and_then(Value::as_str).unwrap_or(""),
+                delivery.get("status").and_then(Value::as_str).unwrap_or("")
             );
         }
-        if !standing.undeclared.is_empty() {
-            println!(
-                "{}: undeclared — {} (nobody has said what this host must run)",
-                standing.target,
-                standing.undeclared.join(", ")
-            );
-        }
     }
-    for entry in &delivered {
-        println!(
-            "delivered {} {} to {}: {}",
-            entry.get("binary").and_then(Value::as_str).unwrap_or(""),
-            entry.get("version").and_then(Value::as_str).unwrap_or(""),
-            entry.get("target").and_then(Value::as_str).unwrap_or(""),
-            entry.get("status").and_then(Value::as_str).unwrap_or("")
-        );
+    if !healthy {
+        return Err(CmdError::click(
+            "reconcile incomplete: every target must be reachable, platform-matched, declared, \
+             and active at its desired versions",
+        ));
     }
     Ok(())
 }
-
 pub async fn inventory(target: &str, json: bool) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
     let report = crate::deploy::host_inventory::inventory_host(target, &runner)
@@ -1544,14 +1688,13 @@ pub async fn release(
     target: &str,
     binary: &str,
     version: &str,
-    platform: &str,
     dry_run: bool,
     json: bool,
 ) -> Result<(), CmdError> {
     use crate::deploy::host_release;
 
     let runner = crate::deploy::production_runner();
-    let report = host_release::release_host(target, binary, version, platform, dry_run, &runner)
+    let report = host_release::release_host(target, binary, version, dry_run, &runner)
         .await
         .map_err(|exc| CmdError::click(exc.to_string()))?;
     // Three outcomes are success, and conflating them would be the lie this
@@ -1576,7 +1719,7 @@ pub async fn release(
     );
     println!("declared: {}", cell(report.get("declared_version")));
     println!("artifact: {}", cell(report.get("release_uri")));
-    println!("sha256:   {} (configured)", cell(report.get("sha256")));
+    println!("sha256:   {} (release manifest)", cell(report.get("sha256")));
     println!(
         "installed: {} ({})",
         cell(report.get("active_version")),
