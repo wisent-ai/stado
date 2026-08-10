@@ -9,6 +9,7 @@ pub const STATE_RUNNING: &str = "running";
 pub const STATE_RETIRED: &str = "retired";
 pub const ENGINE_VLLM: &str = "vllm";
 pub const GPU_EXCLUSIVE: &str = "exclusive";
+pub const GPU_YIELDABLE: &str = "yieldable";
 pub const VISIBILITY_TAILSCALE: &str = "tailscale";
 pub const PROTOCOL_OPENAI_CHAT: &str = "openai-chat";
 pub const LOCAL_PROVIDER_CREDENTIAL: &str = "provider:local-openai";
@@ -278,9 +279,13 @@ pub fn validate(document: &Value) -> Result<(), String> {
                 "{location}.model: safe repository and immutable revision are required"
             ));
         }
-        if deployment.resources.gpu_mode != GPU_EXCLUSIVE || deployment.resources.gpus != one {
+        if !matches!(
+            deployment.resources.gpu_mode.as_str(),
+            GPU_EXCLUSIVE | GPU_YIELDABLE
+        ) || deployment.resources.gpus != one
+        {
             return Err(format!(
-                "{location}.resources: only one exclusive GPU is supported"
+                "{location}.resources: only one exclusive or yieldable GPU is supported"
             ));
         }
         if deployment.resources.max_model_len == u64::MIN {

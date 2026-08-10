@@ -123,9 +123,13 @@ stado resources adopt RESOURCE_ID --owner OWNER --policy-ref POLICY_VERSION --ex
 ```
 
 The dashboard exposes the combined queue, inventory, forecast, anomaly,
-savings, and latest-decision state through `/api/state.json`; the HTML
-overview renders the same control-plane summary.
-Canonical state lives below `autonomy/` in the configured queue backend.
+savings, and latest-decision state through `/api/state.json`. Its operator
+workspace obtains a versioned workflow catalog from `/api/operator/catalog`
+and submits bounded argv arrays to `/api/operator/run`; the server allowlists
+finite Stado command families, never invokes a shell, caps input and output,
+and requires explicit confirmation for state-changing operations. Registry
+policy retains its generation-checked dedicated API. Canonical state lives
+below `autonomy/` in the configured queue backend.
 Cloud credentials are obtained only from workload identity or scoped
 Skarbiec grants; process-environment credential chains are deliberately
 disabled.
@@ -158,23 +162,8 @@ live; the notable ones:
   notes), e.g. `src/queue/gcs.rs`, `src/coordinator.rs`,
   `src/providers/local/version_check.rs`.
 
-## Known gaps
+## Known gap
 
-Conscious, verified remaining gaps (stubs print a note and exit 2, or are
-documented in the module cited):
-
-- `stado registry validate|push|pull` — CLI stub (`src/cli/mod.rs`).
-- `stado host weles-recordings-dir` — CLI stub (phase-5 deploy, not part of
-  this port; `src/cli/mod.rs`).
-- Dashboard registry-policy endpoints `GET /api/registry.json` and
-  `POST /api/registry/policy` (Python `dashboard_policy.py`) are not
-  served — they fall through to 404 and the HTML policy card shows its
-  safe-failure message (`src/dashboard/mod.rs`).
-- Binary self-update: the version check reports a newer release but never
-  downloads it (TODO(phase-4); `src/providers/local/version_check.rs`,
-  `src/coordinator.rs`).
-- Model policy fetch: `config/model_overrides.json` is never fetched from
-  GCS; `model_policy()` always returns the empty default policy
-  (`src/config.rs`).
-- Capacity broadcasts omit the `vast_bridge_active` / `vast_api_key_present`
-  keys (rather than reporting them as false; `src/queue/capacity.rs`).
+Capacity broadcasts still omit the `vast_bridge_active` and
+`vast_api_key_present` compatibility keys rather than reporting them as false
+(`src/queue/capacity.rs`).

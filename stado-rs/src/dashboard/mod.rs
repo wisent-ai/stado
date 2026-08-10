@@ -20,6 +20,8 @@
 //! POST /api/service/restart?name=... - restart one managed service on every declared host
 //! POST /api/rate-limit/consume - authenticated shared atomic rate-limit consume
 //! POST /api/integration/enterprise/<action> - authenticated read-only fleet projection
+//! GET /api/operator/catalog - structured operator workflow and command catalog
+//! POST /api/operator/run - authenticated bounded execution of one catalog command
 //! GET /healthz           - liveness (before auth, after the Host guard)
 //! GET /livez             - Cloud Run liveness alias
 //!
@@ -44,6 +46,7 @@
 
 mod integration;
 mod operator_auth;
+mod operator_console;
 pub mod policy;
 pub mod summary;
 pub mod web_view;
@@ -840,6 +843,9 @@ impl Dashboard {
                 },
             );
         }
+        if request.path == "/api/operator/catalog" {
+            return Ok(send_json(http_status("200"), &operator_console::catalog()));
+        }
         if request.path == "/api/cleanup.json" {
             let report =
                 read_cleanup_state().map_err(|exc| DashboardError::Other(exc.to_string()))?;
@@ -1529,6 +1535,9 @@ impl Dashboard {
         if path == "/api/registry/policy" {
             return self.post_registry_policy(request).await;
         }
+        if path == "/api/operator/run" {
+            return self.post_operator_run(request).await;
+        }
         if request.path != "/api/cleanup/run" {
             return if path == "/api/cleanup/run" {
                 cleanup_failure(http_status("400"))
@@ -1741,6 +1750,43 @@ impl Dashboard {
                 &json!({"state": "stored", "host": host, "path": path}),
             ),
             Err(error) => send_json(http_status("500"), &json!({"error": error.to_string()})),
+        }
+    }
+
+    async fn post_operator_run(&self, request: &Request) -> Response {
+        if request.path != "/api/operator/run"
+            || request.header("x-stado-action") != Some("operator-command")
+        {
+            return send_json(
+                http_status("403"),
+                &json!({"ok": false, "error": "forbidden"}),
+            );
+        }
+        let content_type = request
+            .header("content-type")
+            .unwrap_or("")
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim();
+        let content_length = request
+            .header("content-length")
+            .and_then(|value| value.parse::<usize>().ok());
+        if content_type != "application/json"
+            || request.header("transfer-encoding").is_some()
+            || content_length != Some(request.body.len())
+        {
+            return send_json(
+                http_status("400"),
+                &json!({"ok": false, "error": "invalid JSON request framing"}),
+            );
+        }
+        match operator_console::run(&request.body).await {
+            Ok(result) => send_json(http_status("200"), &result),
+            Err(error) => send_json(
+                error.status,
+                &json!({"ok": false, "error": error.message}),
+            ),
         }
     }
 
@@ -2044,6 +2090,8 @@ async fn read_request(stream: &mut TcpStream) -> std::io::Result<Option<Request>
     };
     let max_body_bytes = if object_put {
         crate::object_store::max_object_bytes()
+    } else if method == "POST" && path == "/api/operator/run" {
+        operator_console::MAX_REQUEST_BYTES
     } else {
         MAX_HEAD_BYTES
     };
