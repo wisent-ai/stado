@@ -13,6 +13,7 @@ pub struct PlanOptions {
     pub gpu_mode: String,
     pub port: u16,
     pub max_model_len: u64,
+    pub kv_cache_memory_gb: Option<u64>,
     pub cache_dir: Option<String>,
     pub json: bool,
 }
@@ -183,6 +184,7 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
             gpu_mode: options.gpu_mode,
             gpus: u16::from(true),
             max_model_len: options.max_model_len,
+            kv_cache_memory_gb: options.kv_cache_memory_gb,
             cache_dir: options.cache_dir,
         },
         endpoint: schema::Endpoint {

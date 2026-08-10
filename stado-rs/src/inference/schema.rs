@@ -32,6 +32,8 @@ pub struct Resources {
     pub gpus: u16,
     pub max_model_len: u64,
     #[serde(default)]
+    pub kv_cache_memory_gb: Option<u64>,
+    #[serde(default)]
     pub cache_dir: Option<String>,
 }
 
@@ -251,14 +253,13 @@ pub fn validate(document: &Value) -> Result<(), String> {
                 "{location}.target: inference requires kind='local'"
             ));
         }
-        if target
+        let Some(target_vram_gb) = target
             .get("vram_gb")
             .and_then(Value::as_u64)
-            .unwrap_or(u64::MIN)
-            == u64::MIN
-        {
+            .filter(|value| *value > u64::MIN)
+        else {
             return Err(format!("{location}.target: target declares no GPU VRAM"));
-        }
+        };
         if deployment.desired_state != STATE_RUNNING && deployment.desired_state != STATE_RETIRED {
             return Err(format!(
                 "{location}.desired_state: must be running or retired"
@@ -291,6 +292,15 @@ pub fn validate(document: &Value) -> Result<(), String> {
         if deployment.resources.max_model_len == u64::MIN {
             return Err(format!(
                 "{location}.resources.max_model_len: must be positive"
+            ));
+        }
+        if deployment
+            .resources
+            .kv_cache_memory_gb
+            .is_some_and(|value| value == u64::MIN || value > target_vram_gb)
+        {
+            return Err(format!(
+                "{location}.resources.kv_cache_memory_gb: must be between 1 and the target's {target_vram_gb} GiB VRAM"
             ));
         }
         if deployment
