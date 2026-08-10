@@ -129,14 +129,18 @@ pub async fn publish_beacon(source: &str) -> Result<(), CmdError> {
             "Stado host-health API returned invalid JSON: {error}"
         ))
     })?;
-    let expected_path = crate::monitor::host_health::beacon_object_path(&host);
-    if payload
-        != json!({
-            "state": "stored",
-            "host": host,
-            "path": expected_path,
-        })
-    {
+    // The publisher checks that the server stored THIS host's beacon, and
+    // nothing about where. Reconstructing the server's storage layout here
+    // made a correct publication fail on any host whose namespace differs
+    // from the control plane's -- the client was asserting an internal detail
+    // it has no way to know.
+    let stored = payload.get("state").and_then(Value::as_str) == Some("stored")
+        && payload.get("host").and_then(Value::as_str) == Some(host.as_str())
+        && payload
+            .get("path")
+            .and_then(Value::as_str)
+            .is_some_and(|path| path.ends_with(&format!("{host}.json")));
+    if !stored {
         return Err(CmdError::click(
             "Stado host-health API returned an inconsistent publish response",
         ));
