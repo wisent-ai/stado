@@ -670,7 +670,7 @@ pub async fn run(target: Option<&str>, once: bool) -> Result<i32, String> {
         .await
         .map_err(|err| err.to_string())?;
     loop {
-        if !config::stado_release_api_url().is_empty()
+        if !config::stado_api_url().is_empty()
             && !config::stado_release_version().is_empty()
             && !config::stado_release_platform().is_empty()
         {

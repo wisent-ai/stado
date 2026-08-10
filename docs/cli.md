@@ -549,7 +549,7 @@ this closes the gap by carrying out exactly what the registry already
 declares.
 
 ```
-stado host release TARGET --binary NAME --version X.Y.Z [--platform P] [--dry-run] [--json]
+stado host release TARGET --binary NAME --version X.Y.Z [--dry-run] [--json]
 ```
 
 The order of operations is the design, and it is Weles's shipped auto-deploy
@@ -557,11 +557,11 @@ order (`weles/scripts/worker/deploy/README.md`) applied to one binary:
 
 1. **probe** — read the host: its platform, the version the installed binary
    declares, whether the coordinate is already staged. Writes nothing.
-2. **stage** — fetch the exact coordinate through `/api/release/object`,
-   verify the configured SHA-256, check the layout, confirm the artifact
-   itself declares the requested version, and publish it into
-   `$HOME/.stado/releases/<binary>/<version>/<platform>/`.
-3. **activate** — re-verify the staged digest, hard-link it beside the live
+2. **stage** — read `release-manifest-<platform>.json` through the canonical
+   Stado API, fetch the adjacent product archive, verify its SHA-256, extract
+   the fixed root member, confirm that binary declares the requested version,
+   and publish it into `$HOME/.stado/releases/<binary>/<version>/<platform>/`.
+3. **activate** — re-check the staged version, hard-link it beside the live
    binary and `rename(2)` it over `$HOME/.stado/bin/<binary>`.
 4. **restart** — restart the unit the registry declares runs it, through the
    same program `stado service restart` uses.
@@ -577,22 +577,16 @@ version untouched. `active_version_unchanged: true` says so in the report.
 |---|---|
 | `--binary` not in the compile-time table (`stado`, `skarbiec`) | The operator's word selects a fixed entry and never becomes a path or a URI segment — `host exec`'s rule. A refusal prints the list. |
 | `--version` is not an exact semantic version | A coordinate is immutable. `latest` is a legal path segment, which is exactly why nothing here resolves an alias, a channel or a range. `+build` is refused too: it is not a canonical coordinate segment. |
-| `--platform` not in the published set | Same closed-table rule. The host's own `uname` is checked against it as well, so a plan built for one platform cannot be applied on another. |
-| No configured SHA-256 for the coordinate | The digest is the operator's independent record of what the coordinate contains. A checksum computed from whatever the host downloaded would only prove the transfer was not corrupted, which TLS already covers. |
+| Missing or mismatched `release_platform` | Enrollment records the platform and inventory confirms it from the remote kernel before delivery. |
+| Missing, malformed, or mismatched release manifest | The canonical catalog is the only digest source; delivery fails closed. |
 | The registry declares no version for this host and binary | Delivery carries out a declaration; it does not stand in for one. |
 | `--version` disagrees with the declaration | Change the declaration if that is the intent. Delivering past it would make the registry describe a host it no longer describes. |
-| The release origin is not HTTPS | Checked here and again on the host. |
+| The canonical Stado API origin is not HTTPS | Checked here and again on the host. |
 | The host's field sanitizer failed its own probe | Every string the host reported is then suspect, including the version this command would compare against. |
 
-The digest lives in the operator-owned config under `release.managed_digests`
-(or the `STADO_MANAGED_RELEASE_DIGESTS` environment override), keyed by the
-exact coordinate:
-
-```yaml
-release:
-  managed_digests:
-    stado/0.5.1/darwin-arm64: 3f6c...  # 64 lowercase hex characters
-```
+The digest is the archive `sha256` in the immutable canonical manifest. There
+is no operator-local digest table and no release-specific API origin that can
+drift from the Stado release catalog.
 
 Running it twice is not running it twice: when the host already declares the
 requested version the command reports `already_active` and sends no further
