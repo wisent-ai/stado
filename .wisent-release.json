@@ -52,7 +52,7 @@
     "launcher": "bin/stado",
     "config_schema": 1,
     "state_schema": 1,
-    "minimum_stado_version": "0.6.1",
+    "minimum_stado_version": "0.7.0",
     "rollback_compatible_with": ["0.6.1"]
   },
   "promotion": {
