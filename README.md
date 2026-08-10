@@ -10,13 +10,17 @@
 
 # Stado: The Easiest Harness for Managing Compute and Storage Across Local, GCP, AWS, and Azure Infrastructure
 
-**Stado is a self-hosted compute fleet control plane for teams that need to run
-policy-controlled AI workloads across machines they own or explicitly
-authorize.**
+Stado Is the AI DevOps and Infrastructure Hire You Needed.
 
-Stado accepts the result a workload must produce and the constraints it must
-respect, assigns eligible capacity through one durable queue, preserves result
-evidence, and enforces explicit cost, ownership, and safety boundaries.
+Your AI is super smart but confined to your computer. Stado is the missing
+harness it needs to set up and manage civilisation-level infrastructure.
+
+Spin up experiments in seconds on a dedicated GPU. Manage GCP, Azure and AWS
+services from one intuitive client. Rent your local devices. Optimise storage and
+migrate services across locations. Dozens of providers. Millions in available
+hardware. All accessible through one simple client.
+
+Give your AI the muscle it needs.
 
 [Quick start](#quick-start) · [CLI reference](docs/cli.md) ·
 [Architecture](docs/architecture.md) · [Operations](docs/operations.md)
