@@ -13,7 +13,16 @@ do
     break
   fi
 done
-[ -n "$cargo_bin" ] || { printf '%s\n' "no installed Rust toolchain found" >&2; exit 1; }
+if [ -z "$cargo_bin" ]; then
+  installer=/tmp/stado-rustup-init.sh
+  curl --fail --silent --show-error --proto '=https' --tlsv1.2 \
+    https://sh.rustup.rs -o "$installer"
+  sh "$installer" -y --profile minimal --default-toolchain 1.97.1
+  rm -f "$installer"
+  cargo_bin="$HOME/.cargo/bin/cargo"
+fi
+PATH="$(dirname "$cargo_bin"):/usr/local/bin:/usr/bin:/bin"
+export PATH
 
 archive="$HOME/.stado/stado-native-source.tar.gz"
 work="$HOME/.stado/build-native-stado"
