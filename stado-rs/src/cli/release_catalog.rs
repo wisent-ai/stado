@@ -53,7 +53,7 @@ pub(crate) async fn publish_entry(
     source: Option<CatalogSourceIdentity>,
 ) -> Result<ReleaseCatalogEntry, CmdError> {
     let product = product(&manifest).to_string();
-    let entry = ReleaseCatalogEntry {
+    let mut entry = ReleaseCatalogEntry {
         schema_version: SCHEMA_VERSION,
         product: product.clone(),
         manifest_sha256,
@@ -62,16 +62,23 @@ pub(crate) async fn publish_entry(
         recorded_at: Utc::now().to_rfc3339(),
     };
     release_pipeline::validate_catalog_entry(&entry).map_err(CmdError::click)?;
-    let bytes = serde_json::to_vec(&entry)?;
     let uri = catalog_uri(&product);
     if let Some((existing, version)) = super::storage::fetch_object_versioned(&uri).await? {
         let old: ReleaseCatalogEntry = serde_json::from_slice(&existing)?;
         release_pipeline::validate_catalog_entry(&old).map_err(CmdError::click)?;
-        if old == entry {
-            return Ok(entry);
+        if old.manifest_sha256 == entry.manifest_sha256
+            && old.manifest == entry.manifest
+            && (entry.source.is_none() || old.source == entry.source)
+        {
+            return Ok(old);
         }
+        if entry.source.is_none() && old.manifest_sha256 == entry.manifest_sha256 {
+            entry.source = old.source;
+        }
+        let bytes = serde_json::to_vec(&entry)?;
         super::storage::compare_and_swap_object(&uri, &bytes, "application/json", &version).await?;
     } else {
+        let bytes = serde_json::to_vec(&entry)?;
         let temporary = tempfile::NamedTempFile::new()?;
         std::fs::write(temporary.path(), &bytes)?;
         super::storage::store_object(
