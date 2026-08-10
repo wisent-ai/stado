@@ -4,8 +4,9 @@ case "$(uname -s)" in
   Linux)
     /bin/systemctl is-active wisent-agent.service
     /bin/systemctl show wisent-agent.service --property=EnvironmentFiles --value
+    "$HOME/.stado/bin/stado" --version
     /bin/journalctl -u wisent-agent.service --no-pager -n 300 \
-      --grep 'RAM gate|disk|claim|queue|reject|error|failed|cleanup|release'
+      --grep 'RAM gate|disk|claim|queue|reject|error|failed|cleanup|release|manifest'
     ;;
   Darwin)
     printf '%s\n' "no loaded Stado agent service"

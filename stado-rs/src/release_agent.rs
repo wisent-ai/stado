@@ -436,6 +436,25 @@ fn start_proxy(
     Ok(child.id() as i32)
 }
 
+async fn fetch_release_bytes(uri: &str) -> Result<Vec<u8>, String> {
+    let object = crate::object_store::ObjectRef::parse(uri).map_err(|e| e.to_string())?;
+    let bytes = crate::cli::storage::fetch_object(uri).await;
+    match bytes {
+        Ok(value) => Ok(value),
+        Err(remote_error) => {
+            // The release channel is served publicly over the object API;
+            // without STADO_API_URL the JobStorage root stores a stale copy.
+            let store = crate::queue::JobStorage::new().await.map_err(|e| e.to_string())?;
+            let path = object.storage_path();
+            let local = store.read_bytes(&path).await.map_err(|e| e.to_string())?;
+            match local {
+                Some(value) => Ok(value),
+                None => Err(remote_error.to_string()),
+            }
+        }
+    }
+}
+
 async fn fetch_candidate(
     control: &ReleaseControl,
     product: &str,
@@ -444,9 +463,7 @@ async fn fetch_candidate(
     policy: &ProductReleasePolicy,
     target: &ReleaseTargetPolicy,
 ) -> Result<(ReleaseManifest, Vec<u8>, PathBuf), String> {
-    let manifest_bytes = crate::cli::storage::fetch_object(&artifact.manifest_uri)
-        .await
-        .map_err(|error| error.to_string())?;
+    let manifest_bytes = fetch_release_bytes(&artifact.manifest_uri).await?;
     if release_control::sha256_bytes(&manifest_bytes) != artifact.manifest_sha256 {
         return Err("release manifest digest does not match desired state".to_string());
     }
@@ -476,9 +493,7 @@ async fn fetch_candidate(
             env!("CARGO_PKG_VERSION")
         ));
     }
-    let signature = crate::cli::storage::fetch_object(&artifact.signature_uri)
-        .await
-        .map_err(|error| error.to_string())?;
+    let signature = fetch_release_bytes(&artifact.signature_uri).await?;
     let signature = std::str::from_utf8(&signature)
         .map_err(|_| "release signature is not UTF-8".to_string())?;
     let public_key = control
@@ -486,9 +501,7 @@ async fn fetch_candidate(
         .get(&artifact.key_id)
         .ok_or_else(|| "release signing key is not trusted by registry".to_string())?;
     release_control::verify_manifest(public_key, &manifest, signature)?;
-    let archive = crate::cli::storage::fetch_object(&artifact.archive_uri)
-        .await
-        .map_err(|error| error.to_string())?;
+    let archive = fetch_release_bytes(&artifact.archive_uri).await?;
     if archive.len() as u64 != manifest.artifact_bytes
         || release_control::sha256_bytes(&archive) != manifest.artifact_sha256
     {
