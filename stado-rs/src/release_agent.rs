@@ -544,10 +544,16 @@ fn next_port(target: &ReleaseTargetPolicy, state: &HostReleaseState) -> u16 {
     }
 }
 
-/// Queue-store path of one host's rollout status. Shared with
-/// `stado release status`, so writer and reader can never drift apart.
-pub fn release_status_path(product: &str, target: &str) -> String {
-    format!("system/release-status/{product}/{target}.json")
+/// Canonical object URI of one host's rollout status, inside this
+/// deployment's own namespace and its declared `system/` prefix.
+///
+/// The literal `stado://system/...` this replaced named a namespace no grant
+/// declares, so every publish answered 401. Resolving through `ObjectRef`
+/// keeps writer and reader on one path whether they reach the store through
+/// the object API or read the co-located disk directly.
+pub fn release_status_uri(product: &str, target: &str) -> String {
+    let namespace = crate::config::wc_stado_storage_namespace();
+    format!("stado://{namespace}/system/release-status/{product}/{target}.json")
 }
 
 async fn publish_status(state: &HostReleaseState) -> Result<(), String> {
@@ -569,18 +575,22 @@ async fn publish_status(state: &HostReleaseState) -> Result<(), String> {
         detail: &state.detail,
         updated_at: state.updated_at,
     };
-    // Rollout status is fleet-internal state, not a product object: it belongs
-    // in the same queue store that already carries capacity heartbeats. A
-    // `stado://system/...` product URI named a namespace no grant declares, so
-    // every publish answered 401 and `release status` reported "unreported".
-    let store = crate::queue::JobStorage::new()
-        .await
-        .map_err(|error| error.to_string())?;
-    let body = serde_json::to_string(&status).map_err(|error| error.to_string())?;
-    store
-        .upload_text(&release_status_path(&state.product, &state.target), &body)
-        .await
-        .map_err(|error| error.to_string())
+    let temporary = tempfile::NamedTempFile::new()
+        .map_err(|error| format!("cannot create release status staging: {error}"))?;
+    std::fs::write(
+        temporary.path(),
+        serde_json::to_vec(&status).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| format!("cannot write release status staging: {error}"))?;
+    crate::cli::storage::store_object(
+        &release_status_uri(&state.product, &state.target),
+        &temporary.path().display().to_string(),
+        "application/json",
+        false,
+    )
+    .await
+    .map(|_| ())
+    .map_err(|error| error.to_string())
 }
 
 async fn rollback(
