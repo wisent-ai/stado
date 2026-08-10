@@ -11,7 +11,6 @@ if [ -n "${SKARBIEC_BIN:-}" ]; then
 else
   skarbiec_bin=
   for candidate in \
-    "$HOME/.stado/bin/skarbiec-new" \
     "$HOME/.stado/bin/skarbiec" \
     "$HOME/.local/bin/skarbiec" \
     "$HOME/.stado/services/skarbiec/current/darwin-arm64/bin/skarbiec" \
