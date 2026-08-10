@@ -94,6 +94,8 @@ pub struct ReleaseInput {
     pub uri: String,
     pub sha256: String,
     pub mount: String,
+    #[serde(default = "default_extract")]
+    pub extract: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -267,6 +269,8 @@ pub struct WorkerInput {
     pub sha256: String,
     pub archive_path: String,
     pub mount: String,
+    #[serde(default = "default_extract")]
+    pub extract: bool,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -325,6 +329,8 @@ pub struct ReceiptInput {
     pub uri: String,
     pub sha256: String,
     pub mount: String,
+    #[serde(default = "default_extract")]
+    pub extract: bool,
 }
 
 fn identifier(value: &str) -> bool {
@@ -333,6 +339,10 @@ fn identifier(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+fn default_extract() -> bool {
+    true
 }
 
 fn platform_identifier(value: &str) -> bool {

@@ -387,6 +387,7 @@ async fn enqueue(
                 sha256: v.sha256.clone(),
                 archive_path: path,
                 mount: v.mount.clone(),
+                extract: v.extract,
             },
         );
     }
@@ -1055,14 +1056,23 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
         if release_control::sha256_bytes(&bytes) != input.sha256 {
             return Err(CmdError::click(format!("input {name} digest mismatch")));
         }
-        release_control::safe_extract_archive(&bytes, &inputs_root.join(&input.mount))
-            .map_err(CmdError::click)?;
+        if input.extract {
+            release_control::safe_extract_archive(&bytes, &inputs_root.join(&input.mount))
+                .map_err(CmdError::click)?;
+        } else {
+            let destination = inputs_root.join(&input.mount);
+            if let Some(parent) = destination.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(destination, &bytes)?;
+        }
         receipt_inputs.insert(
             name.clone(),
             ReceiptInput {
                 uri: input.uri.clone(),
                 sha256: input.sha256.clone(),
                 mount: input.mount.clone(),
+                extract: input.extract,
             },
         );
     }
