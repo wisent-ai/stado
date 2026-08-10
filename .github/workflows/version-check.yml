@@ -16,9 +16,11 @@ name: Version check
 #                                 two surface mutations, two dishonest baselines
 #   scripts/baseline.py           regenerates the baseline from the best tier
 #
-# deploy.yml runs the same gate before it creates `v<version>` and publishes
-# immutable archives. This workflow asks the question on the change that causes
-# it, before the release run.
+# Why this workflow exists at all. deploy.yml already runs scripts/version_check.sh,
+# but only in front of the first `storage put`, and only on a `stado-v*` tag push. So
+# until somebody cut a release nothing measured the contract, and the answer arrived
+# at the one moment it is most expensive to act on: release objects are create-only.
+# This workflow asks the same question on the change that causes it.
 #
 # Why it runs on the control plane and not on ubuntu-latest. scripts/version_check.sh
 # refuses without an executable `stado` that can read the release channel, and it is
