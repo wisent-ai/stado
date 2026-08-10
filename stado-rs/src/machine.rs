@@ -48,6 +48,7 @@ const REQUEST_FIELDS: &[&str] = &[
     "command",
     "provider",
     "gpu_type",
+    "pinned_host",
     "vram_gb",
     "max_cost_per_hour_usd",
     "pin_to_provider",
@@ -68,6 +69,9 @@ const REQUEST_FIELDS: &[&str] = &[
 
 static REQUEST_ID_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$").expect("static regex compiles")
+});
+static HOSTNAME_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"^[a-z0-9][a-z0-9.-]{0,127}$").expect("static hostname regex compiles")
 });
 static APT_PACKAGE_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(r"^[A-Za-z0-9][A-Za-z0-9+._:-]*$").expect("static regex compiles")
@@ -481,6 +485,7 @@ pub fn validate_request(request: &Value) -> Result<Map<String, Value>, MachineEr
     // Stado owns provider selection unless the caller supplies a constraint.
     normalized.insert("provider".into(), Value::from(""));
     normalized.insert("gpu_type".into(), Value::from(""));
+    normalized.insert("pinned_host".into(), Value::from(""));
     normalized.insert("vram_gb".into(), Value::from(0));
     normalized.insert("max_cost_per_hour_usd".into(), Value::from(0.0));
     normalized.insert("pin_to_provider".into(), Value::from(false));
@@ -504,6 +509,7 @@ pub fn validate_request(request: &Value) -> Result<Map<String, Value>, MachineEr
     for name in [
         "provider",
         "gpu_type",
+        "pinned_host",
         "repo",
         "repo_ref",
         "repo_workdir",
@@ -516,6 +522,12 @@ pub fn validate_request(request: &Value) -> Result<Map<String, Value>, MachineEr
         if !normalized[name].is_string() {
             return Err(invalid(format!("{name} must be a string")));
         }
+    }
+    let pinned_host = normalized["pinned_host"].as_str().unwrap_or_default();
+    if !pinned_host.is_empty() && !HOSTNAME_RE.is_match(pinned_host) {
+        return Err(invalid(
+            "pinned_host must be a lowercase consumer host name (letters, digits, dot, dash)",
+        ));
     }
     let repo = normalized["repo"].as_str().unwrap_or_default();
     let repo_ref = normalized["repo_ref"].as_str().unwrap_or_default();
@@ -791,6 +803,7 @@ impl MachineFacade {
             bucket: self.bucket.clone(),
             provider: str_field("provider"),
             gpu_type: str_field("gpu_type"),
+            pinned_host: str_field("pinned_host"),
             vram_gb: request["vram_gb"].as_i64().unwrap_or_default(),
             max_cost_per_hour_usd: request["max_cost_per_hour_usd"]
                 .as_f64()
