@@ -47,6 +47,9 @@ pub enum InferenceCommands {
         port: u16,
         #[arg(long, default_value_t = default_context())]
         max_model_len: u64,
+        /// Fixed vLLM KV-cache allocation in GiB; omit to use the image policy.
+        #[arg(long)]
+        kv_cache_memory_gb: Option<u64>,
         /// Persistent host directory for the Hugging Face model cache.
         #[arg(long)]
         cache_dir: Option<String>,
@@ -185,6 +188,7 @@ pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
             gpu_mode,
             port,
             max_model_len,
+            kv_cache_memory_gb,
             cache_dir,
             json,
         } => {
@@ -197,6 +201,7 @@ pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
                 gpu_mode,
                 port,
                 max_model_len,
+                kv_cache_memory_gb,
                 cache_dir,
                 json,
             })
