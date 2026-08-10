@@ -773,6 +773,14 @@ static WC_STADO_STORAGE_NAMESPACE: LazyLock<String> = LazyLock::new(|| {
         "",
     )
 });
+static WC_STADO_STORAGE_CA_FILE: LazyLock<String> = LazyLock::new(|| {
+    resolve_storage_binding(
+        crate::capabilities::StorageAdapter::StadoObject,
+        "ca-file",
+        false,
+        "",
+    )
+});
 static WC_LOCAL_STORAGE_PATH: LazyLock<String> = LazyLock::new(|| {
     let default = expand_tilde("~/.stado/local-storage");
     resolve_storage_binding(
@@ -852,6 +860,18 @@ pub fn wc_stado_storage_token_file() -> &'static str {
 /// Object namespace containing this deployment's complete queue state.
 pub fn wc_stado_storage_namespace() -> &'static str {
     WC_STADO_STORAGE_NAMESPACE.as_str()
+}
+
+/// PEM root certificate that signs the Stado object API's HTTPS endpoint.
+///
+/// A fleet that publishes its object API on the tailnet is served by a private
+/// certificate authority the operating system has never heard of. Without this the
+/// client has only the system roots, every request to that endpoint dies in the
+/// handshake as "error sending request", and the sole configuration left standing
+/// is a loopback URL -- so each host addresses its own store and the fleet stops
+/// sharing one registry. Empty means a publicly trusted authority, or loopback.
+pub fn wc_stado_storage_ca_file() -> &'static str {
+    WC_STADO_STORAGE_CA_FILE.as_str()
 }
 
 /// Root directory of the device-local storage backend (env
