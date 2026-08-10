@@ -14,6 +14,7 @@ use crate::deploy::{host_channel, ssh_key};
 use crate::targets::ComputeTarget;
 
 const CHECKOUT_ROOT: &str = "Documents/CodingProjects/Wisent";
+const HOME_WORKSPACE: &str = "__home__";
 const MANAGED_JEDEN: &str = ".stado/bin/jeden";
 const PLACEMENT_PREFIX: &str = "STADO_JEDEN_PLACEMENT ";
 
@@ -124,7 +125,11 @@ fn validate_component(label: &str, value: &str) -> Result<(), CmdError> {
 }
 
 fn checkout_path(workspace: &str) -> String {
-    format!("{CHECKOUT_ROOT}/{workspace}")
+    if workspace == HOME_WORKSPACE {
+        String::new()
+    } else {
+        format!("{CHECKOUT_ROOT}/{workspace}")
+    }
 }
 
 async fn live_capacity() -> Vec<Value> {
