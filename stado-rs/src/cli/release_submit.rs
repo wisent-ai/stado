@@ -256,6 +256,20 @@ async fn save(run: &mut ReleaseRun) -> Result<(), CmdError> {
         )))
     }
 }
+async fn persist_failure(run: &mut ReleaseRun, error: CmdError) -> CmdError {
+    run.state = ReleaseRunState::Failed;
+    run.failure = Some(error.to_string());
+    if let Err(save_error) = save(run).await {
+        return CmdError {
+            message: Some(format!(
+                "{}; failed to persist release failure: {}",
+                error, save_error
+            )),
+            code: error.code,
+        };
+    }
+    error
+}
 async fn load(id: &str) -> Result<Option<ReleaseRun>, CmdError> {
     let store = JobStorage::new()
         .await
@@ -637,10 +651,14 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
     {
         return Err(CmdError::click("durable release run identity mismatch"));
     }
+    run.failure = None;
+    save(&mut run).await?;
     let platforms: Vec<_> = m.platforms.keys().cloned().collect();
     for p in &platforms {
-        if !run.platforms.contains_key(p) {
-            let r = enqueue(
+        if !run.platforms.contains_key(p)
+            || run.platforms[p].state == PlatformRunState::Failed
+        {
+            let r = match enqueue(
                 &id,
                 &m,
                 &args.version,
@@ -651,34 +669,64 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
                 &manifest_sha,
                 &manifest_uri,
             )
-            .await?;
+            .await
+            {
+                Ok(run) => run,
+                Err(error) => return Err(persist_failure(&mut run, error).await),
+            };
             run.platforms.insert(p.clone(), r);
             save(&mut run).await?
         }
     }
     run.state = ReleaseRunState::Waiting;
     save(&mut run).await?;
-    let store = JobStorage::new().await?;
-    let (key, private) = signing(&run.product).await?;
+    let store = match JobStorage::new().await {
+        Ok(store) => store,
+        Err(error) => {
+            return Err(
+                persist_failure(&mut run, CmdError::click(error.to_string())).await
+            )
+        }
+    };
+    let (key, private) = match signing(&run.product).await {
+        Ok(signing) => signing,
+        Err(error) => return Err(persist_failure(&mut run, error).await),
+    };
     run.state = ReleaseRunState::Publishing;
     save(&mut run).await?;
     let mut artifacts = BTreeMap::new();
     for p in &platforms {
-        let a = if run.platforms[p].state == PlatformRunState::Published {
-            super::release_cmd::verified_artifact_for_submit(&run.product, &run.version, p).await?
+        let result = if run.platforms[p].state == PlatformRunState::Published {
+            super::release_cmd::verified_artifact_for_submit(&run.product, &run.version, p).await
         } else {
-            let a = publish(&mut run, &m, p, &store, &key, &private).await?;
-            save(&mut run).await?;
-            a
+            publish(&mut run, &m, p, &store, &key, &private).await
         };
+        let a = match result {
+            Ok(artifact) => artifact,
+            Err(error) => {
+                let platform = run.platforms.get_mut(p).unwrap();
+                platform.state = PlatformRunState::Failed;
+                platform.failure = Some(error.to_string());
+                return Err(persist_failure(&mut run, error).await);
+            }
+        };
+        save(&mut run).await?;
         artifacts.insert(p.clone(), a);
     }
     run.state = ReleaseRunState::Delivering;
     save(&mut run).await?;
-    run_deliveries(&mut run, &m, &artifacts).await?;
+    if let Err(error) = run_deliveries(&mut run, &m, &artifacts).await {
+        return Err(persist_failure(&mut run, error).await);
+    }
     if m.promotion.reconcile {
-        super::release_cmd::promote_for_submit(&run.product, &run.version, run.channel).await?;
-        reconcile(&run).await?;
+        if let Err(error) =
+            super::release_cmd::promote_for_submit(&run.product, &run.version, run.channel).await
+        {
+            return Err(persist_failure(&mut run, error).await);
+        }
+        if let Err(error) = reconcile(&run).await {
+            return Err(persist_failure(&mut run, error).await);
+        }
         run.state = ReleaseRunState::Reconciled
     } else {
         run.state = ReleaseRunState::Completed
@@ -768,7 +816,7 @@ async fn run_deliveries(
                 ..Default::default()
             };
             let job = submit_job(
-                "stado release delivery-worker --request delivery-request.json",
+                "$HOME/.stado/bin/stado release delivery-worker --request delivery-request.json",
                 &options,
             )
             .await?;
@@ -844,7 +892,7 @@ async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
             .find(|t| &t.name == name)
             .ok_or_else(|| CmdError::click(format!("rollout target {name} is absent")))?;
         let script = format!(
-            "set -eu\nstado release agent --target {} --once --json\n",
+            "set -eu\n\"$HOME/.stado/bin/stado\" release agent --target {} --once --json\n",
             crate::deploy::shlex_quote(name)
         );
         let output = crate::deploy::host_channel::run_script(target, &script, &runner)
