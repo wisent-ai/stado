@@ -389,6 +389,99 @@ pub async fn maybe_yield_for_priority(
     Ok(n)
 }
 
+async fn queued_gpu_job_for_inference(
+    store: &JobStorage,
+    sizing: &Sizing,
+    gpu_type: &str,
+    total_vram_gb: i64,
+    kind: &str,
+    consumer_id: &str,
+    active_slot_count: usize,
+    pinned_only: bool,
+) -> Result<Option<(String, i64)>, StorageError> {
+    let mut queued = store.list_jobs_fitting("queue", total_vram_gb, 2000).await?;
+    queued.sort_by(|left, right| {
+        right
+            .priority
+            .cmp(&left.priority)
+            .then_with(|| left.created_at.cmp(&right.created_at))
+    });
+    for job in queued {
+        let need = job
+            .gpu_mem_gb
+            .max(estimate_gpu_memory(&job.command, sizing, store).await?);
+        if need <= 0
+            || !helpers::job_eligible(
+                &job,
+                gpu_type,
+                total_vram_gb,
+                kind,
+                consumer_id,
+                active_slot_count,
+                pinned_only,
+            )
+        {
+            continue;
+        }
+        return Ok(Some((job.job_id, need)));
+    }
+    Ok(None)
+}
+
+fn inference_container_name(deployment: &str) -> Result<String, String> {
+    let valid = !deployment.is_empty()
+        && deployment.len() <= 128
+        && deployment
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || b".-_".contains(&byte));
+    valid
+        .then(|| format!("stado-inference-{deployment}"))
+        .ok_or_else(|| "inference reservation contains an invalid deployment name".to_string())
+}
+
+async fn inference_container_running(deployment: &str) -> Result<bool, String> {
+    let container = inference_container_name(deployment)?;
+    let output = tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio::process::Command::new("docker")
+            .args(["inspect", "--format={{.State.Running}}", &container])
+            .output(),
+    )
+    .await
+    .map_err(|_| "docker inspect timed out".to_string())?
+    .map_err(|error| format!("docker inspect failed: {error}"))?;
+    if !output.status.success() {
+        return Ok(false);
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim() == "true")
+}
+
+async fn set_inference_container_running(
+    deployment: &str,
+    running: bool,
+) -> Result<(), String> {
+    let container = inference_container_name(deployment)?;
+    let mut command = tokio::process::Command::new("docker");
+    if running {
+        command.args(["start", &container]);
+    } else {
+        command.args(["stop", "--time", "30", &container]);
+    }
+    let output = tokio::time::timeout(Duration::from_secs(45), command.output())
+        .await
+        .map_err(|_| "docker inference transition timed out".to_string())?
+        .map_err(|error| format!("docker inference transition failed: {error}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let detail = String::from_utf8_lossy(&output.stderr);
+    Err(format!(
+        "docker inference transition exited {}: {}",
+        output.status,
+        detail.trim().chars().take(400).collect::<String>()
+    ))
+}
+
 // ---------------------------------------------------------------------------
 // run_agent
 // ---------------------------------------------------------------------------
@@ -642,16 +735,126 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         if smi_free >= 0 && smi_free < free_vram_gb {
             free_vram_gb = smi_free;
         }
+        let mut inference_serving = false;
         if let Some(reservation) = &inference_reservation {
             agent_diag.insert(
                 "inference_reservation".into(),
                 Value::from(reservation.deployment.clone()),
             );
-            free_vram_gb = 0;
-            log_fn(&format!(
-                "exclusive inference reservation '{}': GPU claims disabled; CPU-only claims remain eligible",
-                reservation.deployment
-            ));
+            agent_diag.insert(
+                "inference_gpu_mode".into(),
+                Value::from(reservation.gpu_mode.clone()),
+            );
+            if reservation.gpu_mode == crate::inference::schema::GPU_EXCLUSIVE {
+                inference_serving = true;
+                free_vram_gb = 0;
+                log_fn(&format!(
+                    "exclusive inference reservation '{}': GPU claims disabled; CPU-only claims remain eligible",
+                    reservation.deployment
+                ));
+            } else {
+                let queued_job = queued_gpu_job_for_inference(
+                    &store,
+                    &sizing,
+                    &gpu_type,
+                    total_vram_gb,
+                    kind,
+                    &consumer_id,
+                    slots.len(),
+                    pinned_only,
+                )
+                .await?;
+                let gpu_work_active = used_vram > 0;
+                let should_yield = gpu_work_active || queued_job.is_some();
+                match inference_container_running(&reservation.deployment).await {
+                    Ok(true) if should_yield => {
+                        let reason = queued_job
+                            .as_ref()
+                            .map(|(job_id, need)| format!("queued job {job_id} needs {need} GiB"))
+                            .unwrap_or_else(|| "an admitted GPU job is active".to_string());
+                        log_fn(&format!(
+                            "yieldable inference '{}': pausing because {reason}",
+                            reservation.deployment
+                        ));
+                        match set_inference_container_running(&reservation.deployment, false).await {
+                            Ok(()) => continue,
+                            Err(error) => {
+                                log_fn(&format!(
+                                    "yieldable inference '{}': pause failed safely: {error}",
+                                    reservation.deployment
+                                ));
+                                inference_serving = true;
+                                free_vram_gb = 0;
+                            }
+                        }
+                    }
+                    Ok(true) => {
+                        inference_serving = true;
+                        free_vram_gb = 0;
+                        agent_diag.insert(
+                            "inference_runtime_state".into(),
+                            Value::from("serving"),
+                        );
+                    }
+                    Ok(false) if !should_yield && slots.is_empty() => {
+                        agent_diag.insert(
+                            "inference_runtime_state".into(),
+                            Value::from("resuming"),
+                        );
+                        publish_capacity(
+                            &store,
+                            &consumer_id,
+                            kind,
+                            &BTreeMap::new(),
+                            Some(0),
+                            Some(total_vram_gb),
+                            Some(agent_diag.clone()),
+                        )
+                        .await?;
+                        log_fn(&format!(
+                            "yieldable inference '{}': GPU queue drained; resuming service",
+                            reservation.deployment
+                        ));
+                        if let Err(error) =
+                            set_inference_container_running(&reservation.deployment, true).await
+                        {
+                            log_fn(&format!(
+                                "yieldable inference '{}': resume failed: {error}",
+                                reservation.deployment
+                            ));
+                        }
+                        continue;
+                    }
+                    Ok(false) => {
+                        agent_diag.insert(
+                            "inference_runtime_state".into(),
+                            Value::from("yielded"),
+                        );
+                        if let Some((job_id, need)) = queued_job {
+                            agent_diag.insert(
+                                "inference_yield_for_job".into(),
+                                Value::from(job_id),
+                            );
+                            agent_diag.insert(
+                                "inference_yield_for_vram_gb".into(),
+                                Value::from(need),
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        inference_serving = true;
+                        free_vram_gb = 0;
+                        agent_diag.insert(
+                            "inference_runtime_state".into(),
+                            Value::from("unknown"),
+                        );
+                        log_fn(&format!(
+                            "yieldable inference '{}': runtime state unavailable; GPU claims disabled: {error}",
+                            reservation.deployment
+                        ));
+                    }
+                }
+            }
         }
         let (refuse_disk, disk_diag) = disk_gate::gate_and_maybe_evict(log_fn);
         agent_diag.extend(diag_map(&disk_diag));
@@ -840,13 +1043,13 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             continue;
         }
         // RAM gate: ordinary compute retains the measured non-wisent reserve.
-        // An exclusive inference reservation already reduces the scan to
+        // A serving inference reservation already reduces the scan to
         // zero-VRAM jobs; for those, MemAvailable is the usable headroom and
         // only the dynamic safety buffer is reserved. Counting the inference
         // process RSS again would double-count memory already excluded from
         // MemAvailable and make every CPU-only maintenance job impossible.
         let fr = helpers::free_ram_gb();
-        let ram_reserve = if inference_reservation.is_some() {
+        let ram_reserve = if inference_serving {
             helpers::ram_safety_buffer_gb()
         } else {
             helpers::static_ram_reserve_gb() + helpers::ram_safety_buffer_gb()

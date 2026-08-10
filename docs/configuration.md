@@ -282,6 +282,7 @@ stado inference plan chat-primary \
   --image 'vllm/vllm-openai@sha256:770fe65b2c73ee74a5c42165cf3433de4048cc2cd9c57a937ca4e35aba5aa87b' \
   --cache-dir /mnt/wd16tb/stado/inference/chat-primary \
   --model 'Qwen/Qwen2.5-72B-Instruct-AWQ' \
+  --gpu-mode yieldable \
   --revision '698703eae6604af048a3d2f509995dc302088217'
 stado inference apply <plan-id>
 stado inference doctor chat-primary
@@ -293,6 +294,15 @@ stado inference route set wisent-backend/chat/primary \
 The pinned AWQ model is the quality-first single-GPU profile for the registered
 RTX Pro 6000 Blackwell with 96 GB VRAM. The immutable Hugging Face revision and
 amd64 vLLM image digest above prevent silent model or runtime replacement.
+
+`gpu_mode` defaults to `exclusive`, which keeps the GPU reserved for inference.
+`yieldable` makes the local Stado agent the lifecycle owner: it pauses the
+inference container when an eligible GPU job is queued, advertises the released
+capacity, and resumes inference only after queued and active GPU work has
+cleared. Eligibility includes provider, accelerator, host pin, centralized
+assignment, and capacity constraints; there is no timeout-based eviction.
+Brama's ordered fallback remains available while the local container is
+yielded.
 
 If `plan` or `apply` reports an unmanaged GPU workload, inspect it through the
 same target-scoped host channel instead of opening an ad hoc SSH session:
