@@ -16,6 +16,8 @@ use crate::targets::ComputeTarget;
 const CHECKOUT_ROOT: &str = "Documents/CodingProjects/Wisent";
 const HOME_WORKSPACE: &str = "__home__";
 const MANAGED_JEDEN: &str = ".stado/bin/jeden";
+const MANAGED_JEDEN_LAUNCHER: &str = ".stado/bin/jeden-run-with-stado";
+const MANAGED_STADO: &str = ".stado/bin/stado";
 const PLACEMENT_PREFIX: &str = "STADO_JEDEN_PLACEMENT ";
 
 /// Select a live registry host that owns WORKSPACE, then attach this process's
@@ -84,7 +86,7 @@ pub async fn connect_jeden(
             .map(|session| format!("test -d \"$HOME\"/.jeden/sessions/{session}\n"))
             .unwrap_or_default();
         let probe = format!(
-            "set -e\ntest -d \"$HOME\"/{checkout}\n{resume_probe}test -x \"$HOME\"/{MANAGED_JEDEN}\nprintf ready\n",
+            "set -e\ntest -d \"$HOME\"/{checkout}\n{resume_probe}test -x \"$HOME\"/{MANAGED_JEDEN}\ntest -x \"$HOME\"/{MANAGED_JEDEN_LAUNCHER}\ntest -x \"$HOME\"/{MANAGED_STADO}\nprintf ready\n",
         );
         match host_channel::run_script(&target, &probe, &runner).await {
             Ok(output) if output.ok() && output.stdout.trim() == "ready" => {
@@ -192,8 +194,10 @@ async fn attach(target: ComputeTarget, workspace: &str, checkout: &str) -> Resul
     );
 
     let status = if host_channel::target_is_this_host(&target) {
-        tokio::process::Command::new(expand_home(MANAGED_JEDEN)?)
+        tokio::process::Command::new(expand_home(MANAGED_JEDEN_LAUNCHER)?)
             .arg("rpc")
+            .env("JEDEN_STADO_BIN", expand_home(MANAGED_STADO)?)
+            .env("JEDEN_BIN", expand_home(MANAGED_JEDEN)?)
             .current_dir(expand_home(checkout)?)
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
@@ -208,7 +212,7 @@ async fn attach(target: ComputeTarget, workspace: &str, checkout: &str) -> Resul
         let mut argv = host_channel::ssh_options(target.ssh.as_deref().unwrap_or_default());
         argv.insert(1, "-T".to_string());
         argv.push(format!(
-            "cd \"$HOME\"/{checkout}; exec \"$HOME\"/{MANAGED_JEDEN} rpc"
+            "cd \"$HOME\"/{checkout}; export JEDEN_STADO_BIN=\"$HOME\"/{MANAGED_STADO} JEDEN_BIN=\"$HOME\"/{MANAGED_JEDEN}; exec \"$HOME\"/{MANAGED_JEDEN_LAUNCHER} rpc"
         ));
         let argv = ssh_key::add_identity(argv, &key)
             .map_err(|error| CmdError::click(error.to_string()))?;
