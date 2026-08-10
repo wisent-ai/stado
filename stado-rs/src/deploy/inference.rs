@@ -78,6 +78,11 @@ pub async fn install(
     let endpoint_host = shlex_quote(&deployment.endpoint.host);
     let port = deployment.endpoint.port;
     let max_model_len = deployment.resources.max_model_len;
+    let kv_cache_argument = deployment
+        .resources
+        .kv_cache_memory_gb
+        .map(|gib| format!(" --kv-cache-memory {}", gib * 1024 * 1024 * 1024))
+        .unwrap_or_default();
     let cache_dir = deployment
         .resources
         .cache_dir
@@ -143,7 +148,7 @@ systemctl --user disable --now "$unit" || true
 rm -f "$HOME/.config/systemd/user/$unit"
 systemctl --user daemon-reload || true
 docker rm -f "stado-inference-$name" || true
-container=$(docker run --detach --restart unless-stopped --name "stado-inference-$name" --gpus all --network host --ipc host --env-file "$root/runtime.env" -v {cache_mount} {raw_image} --model {raw_repository} --revision {raw_revision} --served-model-name {raw_name} --host {raw_endpoint_host} --port {port} --max-model-len {max_model_len} --enable-auto-tool-choice --tool-call-parser hermes)
+container=$(docker run --detach --restart unless-stopped --name "stado-inference-$name" --gpus all --network host --ipc host --env-file "$root/runtime.env" -v {cache_mount} {raw_image} --model {raw_repository} --revision {raw_revision} --served-model-name {raw_name} --host {raw_endpoint_host} --port {port} --max-model-len {max_model_len}{kv_cache_argument} --enable-auto-tool-choice --tool-call-parser hermes)
 printf 'CONTAINER\t%s\n' "$container"
 printf 'STATUS\tstarted\n'
 "#,

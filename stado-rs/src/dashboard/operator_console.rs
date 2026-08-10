@@ -169,7 +169,7 @@ pub(super) fn catalog() -> Value {
             ]),
             section("inference", "Inference", "Plan and operate model deployments, routes, reservations, and rollback.", vec![
                 action("inference-status", "Deployment status", "Inspect deployed inference state.", &["inference", "status", "DEPLOYMENT_NAME", "--json"], None),
-                action("inference-plan", "Plan yieldable deployment", "Persist a plan that serves inference while idle and automatically yields to eligible queued GPU work.", &["inference", "plan", "DEPLOYMENT_NAME", "--host", "TARGET", "--image", "IMAGE", "--model", "MODEL", "--revision", "REVISION", "--gpu-mode", "yieldable"], None),
+                action("inference-plan", "Plan yieldable deployment", "Persist a plan with an explicit KV-cache budget that yields to eligible queued GPU work.", &["inference", "plan", "DEPLOYMENT_NAME", "--host", "TARGET", "--image", "IMAGE", "--model", "MODEL", "--revision", "REVISION", "--gpu-mode", "yieldable", "--kv-cache-memory-gb", "KV_CACHE_MEMORY_GB"], None),
                 action("inference-deploy", "Apply plan", "Apply a saved inference deployment plan.", &["inference", "apply", "PLAN_ID"], None),
                 action("inference-rollback", "Rollback", "Restore the prior deployment generation.", &["inference", "rollback", "DEPLOYMENT_NAME"], None),
                 action("inference-abort", "Abort plan", "Abort a pending deployment plan.", &["inference", "abort", "PLAN_ID"], None),
