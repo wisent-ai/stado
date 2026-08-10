@@ -396,15 +396,29 @@ impl Dashboard {
             tokio::time::timeout(startup_timeout, self.rate_limiter.restore()).await;
         let integration =
             tokio::time::timeout(startup_timeout, integration::validate_startup()).await;
-        match &object {
-            Ok(Err(error)) => {
-                eprintln!("[dashboard] object authorization boundary error: {error}")
-            }
-            Err(error) => {
-                eprintln!("[dashboard] object authorization boundary timed out: {error}")
-            }
-            Ok(Ok(_)) => {}
+        // Only `object` used to report why it failed, so every other boundary
+        // said "unavailable" and left the operator guessing which grant, item
+        // set or endpoint was at fault. The verdict is useless without it.
+        macro_rules! explain {
+            ($outcome:expr, $name:literal) => {
+                match &$outcome {
+                    Ok(Err(error)) => {
+                        eprintln!("[dashboard] {} boundary error: {error:?}", $name)
+                    }
+                    Err(error) => {
+                        eprintln!("[dashboard] {} boundary timed out: {error:?}", $name)
+                    }
+                    Ok(Ok(_)) => {}
+                }
+            };
         }
+        explain!(object, "object authorization");
+        explain!(release, "release publication");
+        explain!(machine, "machine authorization");
+        explain!(service, "service authorization");
+        explain!(rate_verifier, "rate-limit authorization");
+        explain!(rate_state, "rate-limit state");
+        explain!(integration, "integration authorization");
         let boundaries = BoundaryAvailability {
             object: matches!(object, Ok(Ok(_))),
             release: matches!(release, Ok(Ok(_))),
