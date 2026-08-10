@@ -1,5 +1,7 @@
 #!/bin/sh
 set -eu
+PATH="$HOME/.cargo/bin:/usr/local/cargo/bin:/usr/local/bin:/usr/bin:/bin"
+export PATH
 
 archive="$HOME/.stado/stado-native-source.tar.gz"
 work="$HOME/.stado/build-native-stado"
