@@ -437,22 +437,10 @@ fn start_proxy(
 }
 
 async fn fetch_release_bytes(uri: &str) -> Result<Vec<u8>, String> {
-    let object = crate::object_store::ObjectRef::parse(uri).map_err(|e| e.to_string())?;
-    let bytes = crate::cli::storage::fetch_object(uri).await;
-    match bytes {
-        Ok(value) => Ok(value),
-        Err(remote_error) => {
-            // The release channel is served publicly over the object API;
-            // without STADO_API_URL the JobStorage root stores a stale copy.
-            let store = crate::queue::JobStorage::new().await.map_err(|e| e.to_string())?;
-            let path = object.storage_path();
-            let local = store.read_bytes(&path).await.map_err(|e| e.to_string())?;
-            match local {
-                Some(value) => Ok(value),
-                None => Err(remote_error.to_string()),
-            }
-        }
-    }
+    // The release channel is served publicly over the object API.
+    // Without STADO_API_URL, JobStorage::read_bytes on the canonical root
+    // prefix serves a stale copy and the agent quarantines the release.
+    crate::cli::storage::fetch_object(uri).await.map_err(|e| e.to_string())
 }
 
 async fn fetch_candidate(
