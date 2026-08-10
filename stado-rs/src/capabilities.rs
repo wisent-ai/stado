@@ -1037,6 +1037,15 @@ const STADO_OBJECT_STORAGE_CONFIG: &[ConfigField] = &[
         "storage.stado.namespace",
     )
     .required(),
+    // Optional on purpose: a loopback HTTP endpoint performs no handshake, and a
+    // publicly signed origin is already covered by the system trust store. It is
+    // required in exactly one case -- a fleet object API published on the tailnet
+    // under a private authority -- and that case previously had no way to say so.
+    ConfigField::scalar(
+        "ca-file",
+        "WC_STADO_STORAGE_CA_FILE",
+        "storage.stado.ca_file",
+    ),
 ];
 
 const LOCAL_STORAGE_CONFIG: &[ConfigField] =
