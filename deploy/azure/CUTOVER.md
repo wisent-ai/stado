@@ -179,9 +179,8 @@ The load-bearing values are:
   container.
 - `storage.backup.backend` is `s3`, with its bucket and region.
 - `azure.vm_identity_id` names the user-assigned managed identity.
-- `release.api_url`, `release.version`, and `release.platform` identify the
-  exact immutable Stado runtime consumed through `/api/release/object`. There
-  is no built-in, provider-derived, or mutable release origin.
+- `api.url`, `release.version`, and `release.platform` identify the canonical
+  Stado API and exact immutable runtime. There is no release-specific origin.
 - `deployment.id` is stable for dashboard RLS and trusted-proxy binding. The
   local profile also sets one explicitly; an absent id never opens dashboard
   view or operate access.
@@ -215,7 +214,7 @@ release pointer participates.
 
 The control-plane job then installs the already-built local release through
 `deploy/deploy_stado_rust.sh`. It does not provision infrastructure or edit the
-SecretState-owned profile. First installs set `STADO_RELEASE_API_URL`, an exact
+SecretState-owned profile. First installs set `STADO_API_URL`, an exact
 `STADO_RELEASE_VERSION`, and an exact `STADO_RELEASE_PLATFORM`, then run
 `deploy/stado-up.sh <target>`.
 

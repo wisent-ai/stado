@@ -210,6 +210,12 @@
         "item": "wisent-backend-release-deployer",
         "services": ["wisent-backend"],
         "actions": ["status", "restart"]
+      },
+      "image-video-router": {
+        "consumer": "image-video-router-release-deployer",
+        "item": "image-video-router-release-deployer",
+        "services": ["image-video-router"],
+        "actions": ["promote", "reconcile"]
       }
     }
   },

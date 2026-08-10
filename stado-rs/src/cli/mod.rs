@@ -32,6 +32,7 @@ pub mod directory;
 pub mod disk_cleanup;
 pub mod doctor;
 pub mod host;
+pub mod identity;
 pub mod inference;
 pub mod instances;
 pub mod job;
@@ -42,11 +43,11 @@ pub mod placement;
 pub mod profiles_cmd;
 pub mod queue;
 pub mod quota;
-pub mod identity;
 pub mod recovery;
 pub mod registry;
-pub mod release_build;
+pub mod release_catalog;
 pub mod release_cmd;
+pub mod release_submit;
 pub mod resolver;
 pub mod resources;
 pub mod results;
@@ -1004,6 +1005,12 @@ fn parse_target_kind(raw: &str) -> Result<String, String> {
         })
 }
 
+fn parse_release_platform(raw: &str) -> Result<String, String> {
+    crate::deploy::host_release::managed_platform(raw)
+        .map(str::to_string)
+        .map_err(|error| error.to_string())
+}
+
 #[derive(Subcommand)]
 enum RegistryHostCommands {
     /// Onboard HOST into the canonical registry, validated.
@@ -1015,6 +1022,9 @@ enum RegistryHostCommands {
         /// Registry target kind.
         #[arg(long, default_value = "local", value_parser = parse_target_kind)]
         kind: String,
+        /// Release platform confirmed during enrollment.
+        #[arg(long, value_parser = parse_release_platform)]
+        release_platform: String,
     },
 }
 
@@ -1199,30 +1209,33 @@ enum HostCommands {
     #[command(name = "declare-version")]
     DeclareVersion {
         target: String,
-        /// Managed binary the declaration is about.
         #[arg(long)]
         binary: String,
-        /// Exact immutable version. Not a channel and not an alias.
+        #[arg(long)]
+        version: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Promote one exact published version to every registry target.
+    #[command(name = "promote-version")]
+    PromoteVersion {
+        #[arg(long)]
+        binary: String,
         #[arg(long)]
         version: String,
         #[arg(long)]
         json: bool,
     },
 
-    /// Compare what each host runs with what the registry declares; omit
-    /// TARGET for the whole fleet. Reports only, unless `--apply`.
+    /// Compare active versions with desired state; omit TARGET for the fleet.
     Reconcile {
         target: Option<String>,
-        /// Deliver every binary that is behind its declaration.
+        /// Close every deliverable difference.
         #[arg(long)]
         apply: bool,
-        /// Published release platform.
-        #[arg(long, default_value = "darwin-arm64")]
-        platform: String,
         #[arg(long)]
         json: bool,
     },
-
     /// Which Skarbiec vaults the fleet holds; omit TARGET to ask every host.
     Vaults {
         /// Ask one host instead of the whole registry.
@@ -1279,27 +1292,16 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Deliver one registry-declared managed binary to TARGET: fetch the
-    /// exact coordinate, verify its configured SHA-256, stage it, and only
-    /// then repoint the active binary and restart its unit.
+    /// Deliver one registry-declared managed binary to TARGET.
     Release {
         target: String,
-        /// Managed binary to deliver. Run with an unmanaged one to see the
-        /// list; the name selects a fixed entry and never becomes a path.
         #[arg(long)]
         binary: String,
-        /// Exact immutable version, and it must match what the registry
-        /// declares for this host. Not a channel and not an alias.
         #[arg(long)]
         version: String,
-        /// Published release platform.
-        #[arg(long, default_value = crate::deploy::host_release::DEFAULT_PLATFORM)]
-        platform: String,
-        /// Probe the host read-only and report the plan without fetching,
-        /// staging, activating or restarting anything.
+        /// Report the plan without mutation.
         #[arg(long)]
         dry_run: bool,
-        /// Emit the delivery report as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -1644,16 +1646,21 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             RegistryCommands::Pull => registry::pull().await,
             RegistryCommands::SelfTarget { name_only } => registry::self_target(name_only).await,
             RegistryCommands::Doctor { json } => registry::doctor(json).await,
-            RegistryCommands::Host(RegistryHostCommands::Add { host, ssh, kind }) => {
-                registry::host_add(&host, &ssh, &kind).await
-            }
+            RegistryCommands::Host(RegistryHostCommands::Add {
+                host,
+                ssh,
+                kind,
+                release_platform,
+            }) => registry::host_add(&host, &ssh, &kind, &release_platform).await,
             RegistryCommands::BeaconAge { json } => registry::beacon_age(json).await,
         },
         Commands::Identity(sub) => match sub {
             IdentityCommands::List { json } => identity::list(json).await,
-            IdentityCommands::Verify { kind, identity, json } => {
-                identity::verify(kind, identity, json).await
-            }
+            IdentityCommands::Verify {
+                kind,
+                identity,
+                json,
+            } => identity::verify(kind, identity, json).await,
         },
         Commands::Host(sub) => match sub {
             HostCommands::Health { target, json } => host::health(&target, json).await,
@@ -1792,22 +1799,25 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 version,
                 json,
             } => host::declare_version(&target, &binary, &version, json).await,
+            HostCommands::PromoteVersion {
+                binary,
+                version,
+                json,
+            } => host::promote_version(&binary, &version, json).await,
             HostCommands::Reconcile {
                 target,
                 apply,
-                platform,
                 json,
-            } => host::reconcile(target, apply, &platform, json).await,
+            } => host::reconcile(target, apply, json).await,
             HostCommands::Vaults { target, json } => host::vaults(target, json).await,
             HostCommands::Inventory { target, json } => host::inventory(&target, json).await,
             HostCommands::Release {
                 target,
                 binary,
                 version,
-                platform,
                 dry_run,
                 json,
-            } => host::release(&target, &binary, &version, &platform, dry_run, json).await,
+            } => host::release(&target, &binary, &version, dry_run, json).await,
         },
         Commands::Bootstrap {
             target,

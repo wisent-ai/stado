@@ -4,6 +4,16 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
 
 ## Unreleased
 
+### Release control
+
+- Added repository-owned Stado release manifests, immutable source inputs,
+  signed build and delivery receipts, and provider-specific delivery adapters.
+- Added fleet-wide product catalog ownership, retry-safe release submission,
+  canonical promotion, exact-digest host reconciliation, and blue-green
+  rollback state.
+- Release-managed runtimes now receive their immutable product, version,
+  platform, and artifact digest identity in the process environment.
+
 ### Onboarding platform
 
 - Added product-scoped delivery for immutable onboarding bundles, sticky
@@ -41,8 +51,8 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
 
 ### Release engineering
 
-- Changed production publication from default-branch pushes to explicit
-  `stado-v*` tags or manual dispatch.
+- Replaced the split tag-triggered publication path with one default-branch
+  release/delivery run using standard `v<version>` tags.
 - Unified crate licensing with the repository Apache License file.
 - Defined nightly, candidate, and stable channels, immutable release manifests,
   supported platforms, compatibility rules, and upgrade/rollback gates.

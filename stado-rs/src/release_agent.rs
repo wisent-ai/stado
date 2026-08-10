@@ -284,6 +284,13 @@ fn spawn_release(
     command
         .args(["-n", "-u", &target.run_as_user, "-H", "/usr/bin/env"])
         .arg(format!("HOME={}", target.home))
+        .arg(format!("STADO_RELEASE_PRODUCT={product}"))
+        .arg(format!("STADO_RELEASE_VERSION={}", manifest.version))
+        .arg(format!("STADO_RELEASE_PLATFORM={}", manifest.platform))
+        .arg(format!(
+            "STADO_RELEASE_SHA256={}",
+            manifest.artifact_sha256
+        ))
         .arg(format!("{}={}", policy.binary_env, binary.display()))
         .arg(format!("{}={port}", policy.port_env))
         .arg(format!("{}={}", policy.runtime_env, runtime.display()));

@@ -131,7 +131,7 @@ else
   # A bare path would answer about the queue store instead and say absent forever, so
   # the probe names the full URI. The forward branch above needs no separate control:
   # it demands a positive answer, so silence there already refuses.
-  probe="stado://releases/stado/$released/linux-amd64/stado"
+  probe="stado://releases/stado/$released/linux-amd64/release-manifest-linux-amd64.json"
   state="$(channel_state "$probe")"
   case "$state" in
     absent) ;;
