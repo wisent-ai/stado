@@ -129,7 +129,7 @@ pub async fn publish_beacon(source: &str) -> Result<(), CmdError> {
             "Stado host-health API returned invalid JSON: {error}"
         ))
     })?;
-    let expected_path = format!("{}/{host}.json", crate::monitor::host_health::HEALTH_PREFIX);
+    let expected_path = crate::monitor::host_health::beacon_object_path(&host);
     if payload
         != json!({
             "state": "stored",
