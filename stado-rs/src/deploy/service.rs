@@ -1449,13 +1449,23 @@ pub fn plan_deploy(name: &str, program: &str) -> Result<DeployPlan, DeployError>
     validate_service_name(name)?;
     validate_program(program)?;
     let label = local_install::label(DEPLOY_KIND, name);
-    let render = |os: LocalOs| InstallPlan {
-        name: name.to_string(),
-        kind: DEPLOY_KIND.to_string(),
-        os,
-        label: label.clone(),
-        exec_args: vec![program.to_string()],
-        env: Vec::new(),
+    let render = |os: LocalOs| {
+        let path = match os {
+            LocalOs::Darwin => {
+                "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+            }
+            LocalOs::Linux => {
+                "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            }
+        };
+        InstallPlan {
+            name: name.to_string(),
+            kind: DEPLOY_KIND.to_string(),
+            os,
+            label: label.clone(),
+            exec_args: vec![program.to_string()],
+            env: vec![("PATH".to_string(), path.to_string())],
+        }
     };
     let darwin = render(LocalOs::Darwin);
     let linux = render(LocalOs::Linux);
