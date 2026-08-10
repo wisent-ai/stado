@@ -605,6 +605,7 @@ async fn status(args: &ReleaseStatusArgs) -> Result<(), CmdError> {
     let document = super::registry::fetch_document().await?;
     let control = release_control::control(&document)?
         .ok_or_else(|| CmdError::click("registry.release_control is not configured"))?;
+    let status_store = crate::queue::JobStorage::new().await?;
     let mut reports = Vec::new();
     for (product, policy) in &control.products {
         if args
@@ -615,10 +616,10 @@ async fn status(args: &ReleaseStatusArgs) -> Result<(), CmdError> {
             continue;
         }
         for target in policy.targets.keys() {
-            let uri = format!("stado://system/release-status/{product}/{target}.json");
-            let observed: Value = match crate::cli::storage::fetch_object(&uri).await {
-                Ok(bytes) => serde_json::from_slice(&bytes)?,
-                Err(_) => Value::Null,
+            let path = crate::release_agent::release_status_path(product, target);
+            let observed: Value = match status_store.read_bytes(&path).await {
+                Ok(Some(bytes)) => serde_json::from_slice(&bytes)?,
+                Ok(None) | Err(_) => Value::Null,
             };
             reports.push(json!({
                 "product": product,
