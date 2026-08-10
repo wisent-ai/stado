@@ -97,16 +97,18 @@ delivery receipts.
 Stado owns product release policy independently of repository hosting:
 
 ```text
-stado release catalog sync --root ROOT
+stado release catalog sync --catalog /path/to/release-catalog.json
 stado release catalog audit
 ```
 
-Sync reads local registered checkouts, including explicit `releases:false`
-manifests, refuses duplicate product names, and CAS-updates
-`stado://system/release-catalog/<product>.json`. Submit records the strict
-manifest together with its immutable source identity before queueing work.
-Audit reads only Stado catalog objects and refuses malformed, duplicate, or
-silent catalogs; it does not enumerate a Git forge or require forge tokens.
+Sync imports the fleet's reviewed central catalog, including explicit
+`releases:false` manifests, refuses missing or duplicate product names, and
+CAS-updates `stado://system/release-catalog/<product>.json`. `--root ROOT`
+remains available for bootstrapping a catalog from local registered checkouts.
+Submit records the strict manifest together with its immutable source identity
+before queueing work. Audit reads only Stado catalog objects and refuses
+malformed, duplicate, or silent catalogs; it does not enumerate a Git forge or
+require forge tokens.
 
 ## Compatibility matrix
 
