@@ -43,8 +43,6 @@ pub struct ReleasePipelineManifest {
     pub runtime: Option<RuntimeContract>,
     pub promotion: PromotionPolicy,
     #[serde(default)]
-    pub mirrors: Vec<Mirror>,
-    #[serde(default)]
     pub inputs: BTreeMap<String, ReleaseInput>,
     #[serde(default)]
     pub deliveries: Vec<Delivery>,
@@ -124,12 +122,6 @@ pub enum PipelineChannel {
     Stable,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Mirror {
-    pub name: String,
-    pub uri: String,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -507,8 +499,10 @@ pub fn validate_release_manifest(manifest: &ReleasePipelineManifest) -> Result<(
             }
         }
     }
-    if manifest.promotion.reconcile && manifest.runtime.is_none() {
-        return Err("promotion.reconcile=true requires a runtime contract".into());
+    if manifest.promotion.reconcile != manifest.runtime.is_some() {
+        return Err(
+            "runtime must be declared exactly when promotion.reconcile is true".into(),
+        );
     }
     if let Some(runtime) = &manifest.runtime {
         if !safe_relative(&runtime.binary)
@@ -594,15 +588,6 @@ pub fn validate_release_manifest(manifest: &ReleasePipelineManifest) -> Result<(
             {
                 return Err(format!("delivery {} secret_env is invalid", delivery.name));
             }
-        }
-    }
-    let mut mirrors = BTreeSet::new();
-    for mirror in &manifest.mirrors {
-        if !identifier(&mirror.name)
-            || !mirrors.insert(mirror.name.as_str())
-            || crate::object_store::ObjectRef::parse(&mirror.uri).is_err()
-        {
-            return Err("mirrors require unique names and provider-neutral stado:// URIs".into());
         }
     }
     Ok(())
