@@ -173,34 +173,42 @@ pub fn summarize(query: &str, messages: Vec<MailAnalysis>) -> MailAnalysisReport
     }
 }
 
-async fn gmail_token() -> Result<String, MailError> {
-    let item = crate::skarbiec::Client::configured_item("stado-gmail")
+async fn gmail_field(name: &'static str) -> Result<Option<String>, MailError> {
+    crate::skarbiec::read_string("stado-gmail", name)
         .await
-        .map_err(|err| MailError::Auth(err.to_string()))?;
-    if let Some(token) = item
-        .get("access_token")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-    {
-        return Ok(token.trim().to_string());
-    }
-    let field = |name: &str| {
-        item.get(name)
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                MailError::Auth(format!(
-                    "Skarbiec item stado-gmail needs access_token or field {name}"
-                ))
+        .map_err(|error| MailError::Auth(error.to_string()))
+        .map(|value| {
+            value.and_then(|value| {
+                let trimmed = value.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_string())
             })
-    };
+        })
+}
+
+async fn required_gmail_field(name: &'static str) -> Result<String, MailError> {
+    gmail_field(name).await?.ok_or_else(|| {
+        MailError::Auth(format!(
+            "Skarbiec item stado-gmail needs access_token or field {name}"
+        ))
+    })
+}
+
+async fn gmail_token() -> Result<String, MailError> {
+    if let Some(token) = gmail_field("access_token").await? {
+        return Ok(token);
+    }
+    let (client_id, client_secret, refresh_token) = tokio::try_join!(
+        required_gmail_field("client_id"),
+        required_gmail_field("client_secret"),
+        required_gmail_field("refresh_token"),
+    )?;
     let response = reqwest::Client::new()
         .post("https://oauth2.googleapis.com/token")
         .form(&[
             ("grant_type", "refresh_token"),
-            ("client_id", field("client_id")?),
-            ("client_secret", field("client_secret")?),
-            ("refresh_token", field("refresh_token")?),
+            ("client_id", client_id.as_str()),
+            ("client_secret", client_secret.as_str()),
+            ("refresh_token", refresh_token.as_str()),
         ])
         .send()
         .await?;
