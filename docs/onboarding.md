@@ -7,7 +7,7 @@ This path takes a new operator from no Stado state to one completed local job. L
 Set the immutable release identity, run the verified installer, and expose its binary directory:
 
 ```bash
-export STADO_RELEASE_API_URL=https://stado.wisent.com
+export STADO_API_URL=https://stado.wisent.com
 export STADO_RELEASE_VERSION=<exact-version>
 export STADO_RELEASE_PLATFORM=<exact-platform>
 ./install-stado.sh

@@ -76,36 +76,57 @@ these substrings to classify failures fast:
 
 ## Release / publishing
 
-`.github/workflows/deploy.yml` publishes only an explicit `stado-v*` tag or a
-manual immutable-channel request. Candidate tags publish artifacts without
-deploying the production control plane. A final stable tag may pass the
-separate production deployment job.
-
-Every `stado://releases/stado/<version>/<platform>/<file>` write goes through
-the authenticated Stado release API. The workflow expands only
-`stado-release-publisher/token` through its dedicated, sole-item Skarbiec
-grant and always requests create-if-absent.
-
-A retry reads back an existing object and accepts it only when the bytes are
-identical. Different bytes at the same version/platform URI are a hard
-collision; they are never overwritten. There is no PyPI workflow, provider
-CLI upload, ADC path, mutable image tag, or `latest` release pointer. See
-[`release.md`](release.md) for channels, manifests, compatibility, promotion,
-upgrade, and rollback.
-
-Install an exact release before service bootstrap:
+Release operations enter through Stado:
 
 ```bash
-export STADO_RELEASE_API_URL=https://stado.wisent.com
-export STADO_RELEASE_VERSION=<exact-immutable-version>
-export STADO_RELEASE_PLATFORM=<exact-release-platform>
-./install-stado.sh
+stado release catalog sync --root /path/to/registered-checkouts
+stado release catalog audit
+stado release submit --source /path/to/product --version <exact-version> \
+  --channel candidate
 ```
 
-The installer downloads `release-manifest.json`, verifies product, version,
-platform, every artifact SHA-256, and `SHA256SUMS`, preserves prior binaries,
-then replaces the selected release atomically. Service deployment remains a
-separate explicit step.
+Submit requires a clean committed tree but does not contact its remote. It
+archives the exact committed tree, publishes the create-only source object,
+records source and manifest identity in the Stado catalog, and creates one
+provider-neutral queue job pinned to a registry builder whose
+`release_platform` matches the recipe. Queue state and
+`status/<job>/output/` remain the authoritative work and transport records.
+
+Inspect or resume a run by repeating the same submit command. Its identity is
+derived from product, version, channel, source digest, and manifest digest; the
+durable `stado://release-runs/<id>/run.json` shows job IDs, output coordinates,
+delivery state, and failure. A terminal successful platform output is read
+from JobStorage and published, never rebuilt.
+
+The release authority is configured by item name and trusted key ID:
+
+```text
+release.signing_key_item = stado-release-signing
+release.signing_key_id   = stado-release-2026-08
+```
+
+The Skarbiec key-pair item contains the base64 PKCS#8 value in `private_key`. Key bytes stay in
+Skarbiec. Build and delivery secrets are only checked-in `item#field`
+references and must also be permitted by `agent.skarbiec.secret_fields`.
+
+Canonical publication is immutable and ordered:
+
+```text
+release.tar.gz -> qualification.json -> release.sig -> release.json
+```
+
+The signed manifest is the commit marker. Required delivery jobs run only
+after it exists and consume its exact URI and digest. Optional mirrors do not
+gate canonical success. Runtime products then use the existing
+`registry.release_control` generation CAS and release-agent reconciliation.
+`deployment.json` is written only after every declared target reports the
+promoted version, artifact digest, and manifest digest exactly.
+
+No Git forge credential, hosted workflow, provider repository checkout, or
+direct provider API is required by this chain. Existing external adapters may
+mirror completed releases, but their availability cannot change source,
+qualification, signing, desired state, or observed rollout truth. See
+[`release.md`](release.md) for the strict manifest and catalog contract.
 
 ## Bringing up a new local box
 
