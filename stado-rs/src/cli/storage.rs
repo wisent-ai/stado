@@ -1103,20 +1103,51 @@ struct RemoteObjectListItem {
 }
 
 impl RemoteObjectApi {
+    /// The configured object-API endpoint, or `None` when this process reads a
+    /// disk-backed store directly.
+    ///
+    /// `STADO_API_URL` wins, but a deployment whose queue backend already IS
+    /// the object API needs no second declaration: without this fallback,
+    /// `fetch_object` handed an already-namespaced `storage_path()` to a
+    /// backend that namespaces again, so every read resolved to
+    /// `ecosystem/<ns>/ecosystem/<ns>/...` and answered "absent".
+    fn endpoint_from_env_or_config() -> Result<Option<url::Url>, CmdError> {
+        if let Some(url) = configured_object_base_url("STADO_API_URL")? {
+            return Ok(Some(url));
+        }
+        if crate::capabilities::storage_adapter(crate::config::wc_storage_backend())
+            != Some(crate::capabilities::StorageAdapter::StadoObject)
+        {
+            return Ok(None);
+        }
+        let configured = crate::config::wc_stado_storage_url();
+        if configured.trim().is_empty() {
+            return Ok(None);
+        }
+        url::Url::parse(configured.trim())
+            .map(Some)
+            .map_err(|error| CmdError::click(format!("storage.stado.url is not a URL: {error}")))
+    }
+
     fn configured() -> Result<Option<Self>, CmdError> {
-        let Some(base_url) = configured_object_base_url("STADO_API_URL")? else {
+        let Some(base_url) = Self::endpoint_from_env_or_config()? else {
             return Ok(None);
         };
         let token = match std::env::var("STADO_API_TOKEN") {
             Ok(value) if !value.trim().is_empty() => value.trim().to_string(),
             Ok(_) | Err(std::env::VarError::NotPresent) => {
                 let token_file = std::env::var("STADO_API_TOKEN_FILE")
-                    .map_err(|_| {
-                        CmdError::click(
-                            "STADO_API_TOKEN or STADO_API_TOKEN_FILE is required when \
-                             STADO_API_URL is configured",
-                        )
-                    })?;
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or_else(|| {
+                        crate::config::wc_stado_storage_token_file().to_string()
+                    });
+                if token_file.trim().is_empty() {
+                    return Err(CmdError::click(
+                        "STADO_API_TOKEN, STADO_API_TOKEN_FILE or storage.stado.token_file \
+                         is required to reach the object API",
+                    ));
+                }
                 let path = crate::config_file::expand_tilde(token_file.trim());
                 let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
                     CmdError::click(format!(
@@ -1175,7 +1206,7 @@ impl RemoteObjectApi {
     }
 
     fn configured_release_reader() -> Result<Option<Self>, CmdError> {
-        let Some(base_url) = configured_object_base_url("STADO_API_URL")? else {
+        let Some(base_url) = Self::endpoint_from_env_or_config()? else {
             return Ok(None);
         };
         let http = reqwest::Client::builder()
