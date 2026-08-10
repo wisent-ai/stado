@@ -1109,7 +1109,7 @@ fn cloud_run_service_detail(value: &Value) -> (&'static str, Option<usize>, Valu
                         | "WC_ALERTS_TOPIC"
                         | "WC_COORDINATOR_ID"
                         | "STADO_DEPLOYMENT_ID"
-                        | "STADO_RELEASE_API_URL"
+                        | "STADO_API_URL"
                         | "STADO_RELEASE_VERSION"
                         | "STADO_RELEASE_PLATFORM"
                 )

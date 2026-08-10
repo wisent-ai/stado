@@ -41,8 +41,8 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
 
 ### Release engineering
 
-- Changed production publication from default-branch pushes to explicit
-  `stado-v*` tags or manual dispatch.
+- Replaced the split tag-triggered publication path with one default-branch
+  release/delivery run using standard `v<version>` tags.
 - Unified crate licensing with the repository Apache License file.
 - Defined nightly, candidate, and stable channels, immutable release manifests,
   supported platforms, compatibility rules, and upgrade/rollback gates.
