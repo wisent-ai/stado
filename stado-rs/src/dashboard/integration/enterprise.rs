@@ -139,10 +139,7 @@ async fn read_json_objects(store: &JobStorage, prefix: &str) -> Result<Vec<Value
 }
 
 async fn host_health(store: &JobStorage) -> HandlerResult {
-    let beacon_prefix = crate::monitor::host_health::beacon_object_path("")
-        .trim_end_matches(".json")
-        .to_string();
-    let mut hosts = read_json_objects(store, &beacon_prefix).await?;
+    let mut hosts = read_json_objects(store, "host_health/").await?;
     let explicit = hosts
         .iter()
         .filter_map(|value| value.get("host").and_then(Value::as_str))
