@@ -39,6 +39,10 @@ pub enum InferenceCommands {
         /// Immutable Hugging Face commit SHA.
         #[arg(long)]
         revision: String,
+        /// `exclusive` keeps the GPU reserved; `yieldable` pauses inference
+        /// whenever an eligible GPU job is queued and resumes it afterward.
+        #[arg(long, default_value = "exclusive", value_parser = ["exclusive", "yieldable"])]
+        gpu_mode: String,
         #[arg(long, default_value_t = default_port())]
         port: u16,
         #[arg(long, default_value_t = default_context())]
@@ -178,6 +182,7 @@ pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
             image,
             model,
             revision,
+            gpu_mode,
             port,
             max_model_len,
             cache_dir,
@@ -189,6 +194,7 @@ pub async fn dispatch(command: InferenceCommands) -> Result<(), CmdError> {
                 image,
                 model,
                 revision,
+                gpu_mode,
                 port,
                 max_model_len,
                 cache_dir,

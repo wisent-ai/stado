@@ -10,6 +10,7 @@ pub struct PlanOptions {
     pub image: String,
     pub model: String,
     pub revision: String,
+    pub gpu_mode: String,
     pub port: u16,
     pub max_model_len: u64,
     pub cache_dir: Option<String>,
@@ -122,6 +123,14 @@ async fn activate(
 }
 
 pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
+    if !matches!(
+        options.gpu_mode.as_str(),
+        schema::GPU_EXCLUSIVE | schema::GPU_YIELDABLE
+    ) {
+        return Err(CmdError::click(
+            "gpu mode must be 'exclusive' or 'yieldable'",
+        ));
+    }
     let document = crate::cli::registry::fetch_document().await?;
     schema::validate(&document).map_err(click)?;
     let mut registry = schema::parse(&document).map_err(click)?;
@@ -152,10 +161,9 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
         deployment.name != options.name
             && deployment.target == options.host
             && deployment.desired_state == schema::STATE_RUNNING
-            && deployment.resources.gpu_mode == schema::GPU_EXCLUSIVE
     }) {
         return Err(CmdError::click(format!(
-            "target '{}' already has an exclusive inference deployment",
+            "target '{}' already has a running inference deployment",
             options.host
         )));
     }
@@ -172,7 +180,7 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
             revision: options.revision,
         },
         resources: schema::Resources {
-            gpu_mode: schema::GPU_EXCLUSIVE.to_string(),
+            gpu_mode: options.gpu_mode,
             gpus: u16::from(true),
             max_model_len: options.max_model_len,
             cache_dir: options.cache_dir,
