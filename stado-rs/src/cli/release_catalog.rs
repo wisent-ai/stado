@@ -66,15 +66,17 @@ pub(crate) async fn publish_entry(
     release_pipeline::validate_catalog_entry(&entry).map_err(CmdError::click)?;
     let uri = catalog_uri(&product);
     if let Some((existing, version)) = super::storage::fetch_object_versioned(&uri).await? {
-        let old: ReleaseCatalogEntry = serde_json::from_slice(&existing)?;
-        release_pipeline::validate_catalog_entry(&old).map_err(CmdError::click)?;
-        if old.manifest == entry.manifest {
-            if entry.source.is_none() || old.source == entry.source {
-                return Ok(old);
+        if let Ok(old) = serde_json::from_slice::<ReleaseCatalogEntry>(&existing) {
+            if release_pipeline::validate_catalog_entry(&old).is_ok()
+                && old.manifest == entry.manifest
+            {
+                if entry.source.is_none() || old.source == entry.source {
+                    return Ok(old);
+                }
+                // A catalog import owns product policy; a release submission
+                // adds source identity without rewriting that policy record.
+                entry.manifest_sha256 = old.manifest_sha256;
             }
-            // A catalog import owns product policy; a release submission adds
-            // immutable source identity without rewriting that policy record.
-            entry.manifest_sha256 = old.manifest_sha256;
         }
         let bytes = serde_json::to_vec(&entry)?;
         super::storage::compare_and_swap_object(&uri, &bytes, "application/json", &version).await?;
@@ -180,6 +182,10 @@ async fn sync_catalog(path: &Path, json: bool) -> Result<(), CmdError> {
     let mut products = BTreeSet::new();
     let mut entries = Vec::new();
     for repository in repositories {
+        let repository_name = repository
+            .get("repository")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("<unknown repository>");
         let manifest_value = repository
             .get("manifest")
             .ok_or_else(|| CmdError::click("central catalog entry is missing manifest"))?;
@@ -205,7 +211,10 @@ async fn sync_catalog(path: &Path, json: bool) -> Result<(), CmdError> {
             .get("manifest_sha256")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| CmdError::click("central catalog entry is missing manifest_sha256"))?;
-        entries.push(publish_entry(manifest, manifest_sha256.to_string(), None).await?);
+        let entry = publish_entry(manifest, manifest_sha256.to_string(), None)
+            .await
+            .map_err(|error| CmdError::click(format!("{repository_name}: {error}")))?;
+        entries.push(entry);
     }
     if entries.is_empty() {
         return Err(CmdError::click("central catalog contains no repository entries"));

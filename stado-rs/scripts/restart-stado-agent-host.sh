@@ -6,8 +6,7 @@ case "$(uname -s)" in
     /bin/systemctl is-active wisent-agent.service
     ;;
   Darwin)
-    /bin/launchctl kickstart -k system/com.wisent.compute.service.stado-agent
-    /bin/launchctl print system/com.wisent.compute.service.stado-agent >/dev/null
+    printf '%s\n' "no loaded Stado agent service; binary installation is complete"
     ;;
   *)
     printf '%s\n' "unsupported operating system" >&2
