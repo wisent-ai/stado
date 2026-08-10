@@ -27,6 +27,21 @@ use crate::targets::{self, ComputeTarget, RegistryError, RegistryFetchError};
 /// Beacon blob prefix (Python `HEALTH_PREFIX`).
 pub const HEALTH_PREFIX: &str = "host_health";
 
+/// Store path one beacon is written to, inside this deployment's namespace.
+///
+/// The dashboard owns the disk store, so a bare `host_health/<host>.json`
+/// looked right from inside it and was invisible to every client that reaches
+/// the same store through the object API -- which is every remote agent and,
+/// once the operator shares the fleet's channel, the operator too. Writer and
+/// readers resolve one path here so "no beacon" means absent, not misfiled.
+pub fn beacon_object_path(host: &str) -> String {
+    let namespace = crate::config::wc_stado_storage_namespace();
+    if namespace.trim().is_empty() {
+        return format!("{HEALTH_PREFIX}/{host}.json");
+    }
+    format!("ecosystem/{namespace}/{HEALTH_PREFIX}/{host}.json")
+}
+
 /// One local target's beacon plus immutable object metadata (Python's
 /// `load_host_health` dict).
 #[derive(Debug, Clone, PartialEq)]

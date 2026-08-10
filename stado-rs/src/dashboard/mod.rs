@@ -1712,7 +1712,7 @@ impl Dashboard {
                 &json!({"error": "beacon host must match the query and reported_at/units are required"}),
             );
         }
-        let path = format!("{}/{host}.json", crate::monitor::host_health::HEALTH_PREFIX);
+        let path = crate::monitor::host_health::beacon_object_path(&host);
         match self.store.upload_bytes(&path, &request.body).await {
             Ok(()) => send_json(
                 http_status("200"),
