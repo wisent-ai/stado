@@ -59,12 +59,12 @@ export HF_HUB_ETAG_TIMEOUT=1
 # provider-neutral software endpoint. The dispatcher supplies every immutable
 # coordinate; missing or malformed coordinates abort startup. Both objects are
 # downloaded before install, and a missing checksum entry is a hard failure.
-RELEASE_API="${STADO_RELEASE_API_URL}"
+RELEASE_API="${STADO_API_URL}"
 RELEASE_VERSION="${STADO_RELEASE_VERSION}"
 RELEASE_PLATFORM="${STADO_RELEASE_PLATFORM}"
 case "$RELEASE_API" in
     https://*) ;;
-    *) echo "FATAL: STADO_RELEASE_API_URL must use HTTPS"; false ;;
+    *) echo "FATAL: STADO_API_URL must use HTTPS"; false ;;
 esac
 case "$RELEASE_VERSION" in
     *[![:alnum:]._-]*|"") echo "FATAL: invalid STADO_RELEASE_VERSION"; false ;;

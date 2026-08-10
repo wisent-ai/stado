@@ -84,6 +84,7 @@ pub fn register_target(
     name: &str,
     kind: &str,
     hostnames: &[String],
+    release_platform: &str,
 ) -> Result<Value, String> {
     let mut next = document.clone();
     let targets = next
@@ -99,6 +100,7 @@ pub fn register_target(
     targets.push(json!({
         "name": name,
         "kind": kind,
+        "release_platform": release_platform,
         "ssh": Value::Null,
         "hostnames": hostnames,
         "notes": "enrolled by `stado_fleet enroll` (self-install path)",
@@ -122,25 +124,40 @@ pub fn remove_target(document: &Value, name: &str) -> Result<Value, String> {
     Ok(next)
 }
 
-/// Probe the machine's real hostname through Stado's deploy channel using the
-/// target SSH key from the globally selected credential store. Verification
-/// happens before any registry write: an unreachable machine is never
-/// registered.
-async fn probe_hostname(
+/// Probe one fixed identity command through Stado's existing deploy channel.
+async fn probe_identity_field(
     runner: &stado::deploy::Runner,
     target: &str,
     destination: &str,
+    command: &str,
 ) -> Result<String, String> {
-    let (argv, _key) = crate::key::channel_argv(target, destination, "hostname").await?;
+    let (argv, _key) = crate::key::channel_argv(target, destination, command).await?;
     let output = runner(stado::deploy::CommandSpec::new(argv)).await?;
     if !output.ok() {
         return Err(format!("cannot verify {destination}: {}", output.detail()));
     }
-    let hostname = stado::targets::normalize_hostname(output.stdout.trim());
+    let value = output.stdout.trim();
+    if value.is_empty() || value.lines().count() != 1 {
+        return Err(format!("{destination} returned an invalid {command} value"));
+    }
+    Ok(value.to_string())
+}
+
+/// Verify hostname and immutable-release platform before any registry write.
+async fn probe_identity(
+    runner: &stado::deploy::Runner,
+    target: &str,
+    destination: &str,
+) -> Result<(String, &'static str), String> {
+    let raw_hostname = probe_identity_field(runner, target, destination, "hostname").await?;
+    let hostname = stado::targets::normalize_hostname(&raw_hostname);
     if hostname.is_empty() {
         return Err(format!("{destination} returned an empty hostname"));
     }
-    Ok(hostname)
+    let os = probe_identity_field(runner, target, destination, "uname -s").await?;
+    let arch = probe_identity_field(runner, target, destination, "uname -m").await?;
+    let platform = crate::enroll::release_platform(&os, &arch)?;
+    Ok((hostname, platform))
 }
 
 /// `stado_fleet assign TARGET FLEET` — add a registered machine to a fleet.
@@ -214,13 +231,14 @@ pub async fn enroll(
         preflight_enroll(&document, name, fleet_name)?;
     }
     let runner = stado::deploy::production_runner();
-    let hostname = probe_hostname(&runner, name, destination).await?;
+    let (hostname, release_platform) = probe_identity(&runner, name, destination).await?;
     let mut next = crate::enroll::legacy::register_verified(
         &document,
         name,
         destination,
         kind,
         &hostname,
+        release_platform,
         takeover,
     )?;
     if let Some(fleet) = fleet_name {
@@ -231,8 +249,13 @@ pub async fn enroll(
     if bootstrap {
         if let Err(exc) = stado::cli::bootstrap::run(Some(name.to_string()), false, false).await {
             let current = fetch_document().await.map_err(|err| err.to_string())?;
-            let rolled_back =
-                crate::enroll::legacy::rollback_registration(&current, &document, name, takeover)?;
+            let rolled_back = if takeover {
+                crate::enroll::legacy::rollback_registration(
+                    &current, &document, name, true,
+                )?
+            } else {
+                remove_target(&current, name)?
+            };
             push_document(&rolled_back)
                 .await
                 .map_err(|err| err.to_string())?;
