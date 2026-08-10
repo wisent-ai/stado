@@ -48,13 +48,20 @@ fi
 stage_dir=$(mktemp -d "$HOME/.stado/.verifier-grants.XXXXXX")
 trap 'rm -rf "$stage_dir"' EXIT HUP INT TERM
 
+# Runtime env values a managed service syncs with `stado service secret-sync`.
+# The service verifier reads them, so its grant must name each one exactly;
+# a deployer entry cannot carry them, because config refuses unknown keys.
+service_runtime_secrets='read:CRON_SECRET#value,read:COMFYUI_URL#value'
+
 mint_verifier() {
   consumer=$1
   token_name=$2
   policy_filter=$3
+  extra=${4:-}
   capabilities=$(
     jq -er "[$policy_filter | .item | \"read:\" + . + \"#token\"] | unique | if length == 0 then error(\"empty verifier policy\") else join(\",\") end" "$config"
   )
+  [ -z "$extra" ] || capabilities="$capabilities,$extra"
   capability_count=$(jq -er "[$policy_filter | .item] | unique | length" "$config")
   result_file="$stage_dir/$consumer.json"
   token_file="$stage_dir/$token_name"
@@ -71,7 +78,7 @@ mint_verifier() {
 mint_verifier stado-object-api-verifier stado-object-api-verifier-skarbiec-token '.object_api.namespaces[]'
 mint_verifier stado-release-api-verifier stado-release-api-verifier-skarbiec-token '.release_api.publishers[]'
 mint_verifier stado-machine-api-verifier stado-machine-api-verifier-skarbiec-token '.machine_api.clients[]'
-mint_verifier stado-service-api-verifier stado-service-api-verifier-skarbiec-token '.service_api.deployers[]'
+mint_verifier stado-service-api-verifier stado-service-api-verifier-skarbiec-token '.service_api.deployers[]' "$service_runtime_secrets"
 mint_verifier stado-rate-limit-api-verifier stado-rate-limit-api-verifier-skarbiec-token '.rate_limit.clients[]'
 mint_verifier stado-integration-api-verifier stado-integration-api-verifier-skarbiec-token '.integration.clients[]'
 mint_verifier stado-backend-push-api-verifier stado-backend-push-api-verifier-skarbiec-token '.backend.push_clients[]'
