@@ -190,8 +190,8 @@ async fn sync_catalog(path: &Path, json: bool) -> Result<(), CmdError> {
             .get("manifest")
             .ok_or_else(|| CmdError::click("central catalog entry is missing manifest"))?;
         let manifest_bytes = serde_json::to_vec(manifest_value)?;
-        let manifest =
-            release_pipeline::parse_product_manifest(&manifest_bytes).map_err(CmdError::click)?;
+        let manifest = release_pipeline::parse_product_manifest(&manifest_bytes)
+            .map_err(|error| CmdError::click(format!("{repository_name}: {error}")))?;
         let name = product(&manifest).to_string();
         if !products.insert(name.clone()) {
             return Err(CmdError::click(format!(
