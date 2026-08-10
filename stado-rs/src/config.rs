@@ -895,12 +895,10 @@ pub fn wc_backup_local_storage_path() -> &'static str {
     WC_BACKUP_LOCAL_STORAGE_PATH.as_str()
 }
 
-/// Public Stado control origin serving immutable software releases (env
-/// `STADO_RELEASE_API_URL`, config key `release.api_url`, trailing slash
-/// stripped). There is deliberately no storage-provider or public-host
-/// fallback: dispatch and bootstrap fail closed when it is absent.
-pub fn stado_release_api_url() -> String {
-    cfg("STADO_RELEASE_API_URL", "release.api_url", "")
+/// Canonical Stado API origin used by object and immutable-release clients.
+/// `api.url` is the deployment endpoint; releases do not own a second origin.
+pub fn stado_api_url() -> String {
+    cfg("STADO_API_URL", "api.url", "")
         .trim_end_matches('/')
         .to_string()
 }
@@ -920,6 +918,31 @@ pub fn stado_release_platform() -> String {
     cfg("STADO_RELEASE_PLATFORM", "release.platform", "")
         .trim()
         .to_string()
+}
+
+/// Skarbiec key-pair item containing the base64 Ed25519 PKCS#8 release
+/// authority key in `private_key`. The item name is configuration; key bytes
+/// never enter a product manifest or registry document.
+pub fn release_signing_key_item() -> String {
+    cfg(
+        "STADO_RELEASE_SIGNING_KEY_ITEM",
+        "release.signing_key_item",
+        "stado-release-signing",
+    )
+    .trim()
+    .to_string()
+}
+
+/// Trusted release-control key identifier paired with
+/// [`release_signing_key_item`].
+pub fn release_signing_key_id() -> String {
+    cfg(
+        "STADO_RELEASE_SIGNING_KEY_ID",
+        "release.signing_key_id",
+        "stado-release-2026-08",
+    )
+    .trim()
+    .to_string()
 }
 
 /// Exact immutable release object containing the cloud-agent Python
@@ -1942,8 +1965,8 @@ static MACHINE_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
 });
 
 pub const SERVICE_API_VERIFIER_CONSUMER: &str = "stado-service-api-verifier";
-pub const SERVICE_API_ACTIONS: &[&str] = &["status", "restart"];
-pub const ACTIVE_DEPLOYED_SERVICES: &[&str] = &["com.wisent.weles-api"];
+pub const SERVICE_API_ACTIONS: &[&str] = &["status", "restart", "promote", "reconcile"];
+pub const ACTIVE_DEPLOYED_SERVICES: &[&str] = &["com.wisent.weles-api", "image-video-router"];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ServiceDeployer {
