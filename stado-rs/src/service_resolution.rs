@@ -98,8 +98,18 @@ fn default_max_stale_seconds() -> u64 {
     60
 }
 
+/// Long enough that the proxied service always answers first.
+///
+/// A request/response connection sends nothing in either direction while the
+/// service works, so a byte-flow window is also a cap on how long a service may
+/// take. At 120 seconds that cap sat below Brama's own 300-second request
+/// deadline: every model call longer than two minutes was cut by the resolver
+/// underneath a caller that was still being served, and the caller saw a lost
+/// connection rather than an answer or an error. The window still bounds
+/// retained keep-alive sockets, which is what it exists for; it simply no longer
+/// expires before the slowest thing behind it can reply.
 fn default_adapter_idle_seconds() -> u64 {
-    120
+    330
 }
 
 fn identifier(value: &str) -> bool {
