@@ -28,9 +28,10 @@ Every product carries one strict `.wisent-release.json` v1 contract. A product
 that is not released declares only `schema_version`, `product`,
 `releases:false`, and a reason. A releasing product declares its version source,
 platform recipes, argv-array quality and build commands, stage mapping,
-optional runtime contract, promotion policy, immutable inputs, deliveries, and
-provider-neutral mirrors. Repository URLs, branches, hosts, buckets, tokens,
-signing-key bytes, and provider credentials are forbidden from that file.
+promotion policy, immutable inputs, and post-publication deliveries. A runtime
+contract is required only for products reconciled onto registry hosts.
+Repository URLs, branches, hosts, buckets, tokens, signing-key bytes, and
+provider credentials are forbidden from that file.
 
 The product version is selected by AutoVersion and passed explicitly:
 
@@ -58,10 +59,10 @@ committed tree
 
 The source object is create-only and carries metadata for its exact Git commit,
 source digest, and pipeline-manifest digest. A durable
-`stado://release-runs/<id>/run.json` joins those identities to platform job IDs,
-canonical output prefixes, delivery jobs, state, and failure. Repeating submit
-with the same inputs resumes that run and does not rebuild a platform whose
-published output is already recorded.
+`stado://<queue-namespace>/runs/release-pipeline/<id>/run.json` joins those
+identities to platform job IDs, canonical output prefixes, delivery jobs,
+state, and failure. Repeating submit with the same inputs resumes that run and
+does not rebuild a platform whose published output is already recorded.
 
 Platform output coordinates are canonical lowercase identifiers. Each recipe
 names the verified fleet `runner_platform` (`darwin-arm64` or `linux-amd64`),
@@ -79,15 +80,16 @@ configuration. For the default configuration the item is
 `stado-release-signing`, never a secret value in a manifest or command line.
 
 Post-publication deliveries are queue jobs consuming the canonical archive URI
-and digest. Required package or product channels gate completion. Optional
-mirrors are recorded but do not determine canonical release success. No
-GitHub-hosted step is part of the source, qualification, publication,
-promotion, or reconciliation contract.
+and digest. Required package or product channels gate completion; optional
+deliveries are adapters whose failure is retained without changing canonical
+release success. GitHub may be one such optional adapter, but no GitHub-hosted
+step is part of the source, qualification, publication, promotion, or
+reconciliation contract.
 
 `promotion.reconcile:true` is reserved for registry-hosted runtime products and
 requires a runtime contract. Package, web, mobile, source, and archive products
-use `reconcile:false`; they may omit runtime fields and complete through their
-required delivery receipts.
+use `reconcile:false`, omit runtime fields, and complete through their required
+delivery receipts.
 
 ## Product catalog
 
