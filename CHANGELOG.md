@@ -4,6 +4,16 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
 
 ## Unreleased
 
+### Release control
+
+- Added repository-owned Stado release manifests, immutable source inputs,
+  signed build and delivery receipts, and provider-specific delivery adapters.
+- Added fleet-wide product catalog ownership, retry-safe release submission,
+  canonical promotion, exact-digest host reconciliation, and blue-green
+  rollback state.
+- Release-managed runtimes now receive their immutable product, version,
+  platform, and artifact digest identity in the process environment.
+
 ### Onboarding platform
 
 - Added product-scoped delivery for immutable onboarding bundles, sticky
