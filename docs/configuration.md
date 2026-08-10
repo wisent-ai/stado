@@ -283,6 +283,7 @@ stado inference plan chat-primary \
   --cache-dir /mnt/wd16tb/stado/inference/chat-primary \
   --model 'Qwen/Qwen2.5-72B-Instruct-AWQ' \
   --gpu-mode yieldable \
+  --kv-cache-memory-gb 12 \
   --revision '698703eae6604af048a3d2f509995dc302088217'
 stado inference apply <plan-id>
 stado inference doctor chat-primary
@@ -294,6 +295,11 @@ stado inference route set example-client/chat/primary \
 The pinned AWQ model is the quality-first single-GPU profile for the registered
 RTX Pro 6000 Blackwell with 96 GB VRAM. The immutable Hugging Face revision and
 amd64 vLLM image digest above prevent silent model or runtime replacement.
+
+`kv_cache_memory_gb` sets a fixed vLLM KV-cache allocation in GiB. Omitting it
+preserves the pinned image's own memory policy. A smaller cache releases VRAM
+without changing model weights or output quality, but lowers the number of
+tokens and long requests that can remain active concurrently.
 
 `gpu_mode` defaults to `exclusive`, which keeps the GPU reserved for inference.
 `yieldable` makes the local Stado agent the lifecycle owner: it pauses the
