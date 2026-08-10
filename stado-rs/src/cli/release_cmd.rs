@@ -21,8 +21,16 @@ use super::CmdError;
 pub enum ReleaseCommands {
     /// Generate an Ed25519 release authority key pair.
     Keygen(ReleaseKeygenArgs),
-    /// Produce a release archive on a fleet host chosen for the platform.
-    Build(crate::cli::release_build::ReleaseBuildArgs),
+    /// Snapshot, qualify, build, sign, publish, deliver, and promote a product.
+    Submit(crate::cli::release_submit::ReleaseSubmitArgs),
+    /// Manage the Stado-owned product and source policy catalog.
+    Catalog(crate::cli::release_catalog::CatalogArgs),
+    /// Internal provider-neutral release build worker.
+    #[command(hide = true)]
+    Worker(crate::cli::release_submit::ReleaseWorkerArgs),
+    /// Internal provider-neutral post-publication delivery worker.
+    #[command(name = "delivery-worker", hide = true)]
+    DeliveryWorker(crate::cli::release_submit::DeliveryWorkerArgs),
     /// Build, sign, and publish one immutable candidate coordinate.
     Prepare(ReleasePrepareArgs),
     /// Promote exact qualified candidate bytes into registry desired state.
@@ -62,9 +70,13 @@ pub struct ReleasePrepareArgs {
     #[arg(long)]
     launcher: String,
     #[arg(long)]
-    signing_key: PathBuf,
+    signing_key_item: String,
     #[arg(long)]
     key_id: String,
+    #[arg(long)]
+    source_sha256: String,
+    #[arg(long)]
+    pipeline_manifest_sha256: String,
     #[arg(long)]
     qualification: PathBuf,
     #[arg(long, default_value_t = 1)]
@@ -214,61 +226,156 @@ fn qualification(path: &Path) -> Result<ReleaseQualification, CmdError> {
     Ok(value)
 }
 
-async fn prepare(args: &ReleasePrepareArgs) -> Result<(), CmdError> {
-    let (artifact_bytes, artifact_sha256) =
-        release_control::sha256_file(&args.archive).map_err(CmdError::click)?;
-    let private = std::fs::read(&args.signing_key)?;
-    let public = release_control::signing_public_key(&private).map_err(CmdError::click)?;
+pub(crate) struct PipelinePublishRequest<'a> {
+    pub product: &'a str,
+    pub version: &'a str,
+    pub platform: &'a str,
+    pub archive: &'a [u8],
+    pub source_revision: &'a str,
+    pub source_sha256: &'a str,
+    pub pipeline_manifest_sha256: &'a str,
+    pub binary: &'a str,
+    pub launcher: &'a str,
+    pub config_schema: u64,
+    pub state_schema: u64,
+    pub minimum_stado_version: &'a str,
+    pub rollback_compatible_with: &'a [String],
+    pub qualification: ReleaseQualification,
+    pub qualification_receipt: &'a [u8],
+    pub key_id: &'a str,
+    pub private_key: &'a [u8],
+    pub builder: &'a str,
+}
+
+pub(crate) async fn publish_pipeline_release(
+    request: PipelinePublishRequest<'_>,
+) -> Result<(ReleaseArtifactRef, ReleaseManifest), CmdError> {
+    let artifact_bytes = request.archive.len() as u64;
+    let artifact_sha256 = release_control::sha256_bytes(request.archive);
+    let qualification_receipt_sha256 = release_control::sha256_bytes(request.qualification_receipt);
+    if request.qualification.evidence_sha256.as_deref()
+        != Some(qualification_receipt_sha256.as_str())
+    {
+        return Err(CmdError::click(
+            "qualification evidence digest does not match its immutable receipt",
+        ));
+    }
     let manifest = ReleaseManifest {
         schema_version: 1,
-        product: args.product.clone(),
-        version: args.version.clone(),
-        platform: args.platform.clone(),
-        source_revision: args.source_revision.to_lowercase(),
+        product: request.product.to_string(),
+        version: request.version.to_string(),
+        platform: request.platform.to_string(),
+        source_revision: request.source_revision.to_string(),
+        source_sha256: request.source_sha256.to_string(),
+        pipeline_manifest_sha256: request.pipeline_manifest_sha256.to_string(),
+        qualification_receipt_sha256,
         artifact_sha256,
         artifact_bytes,
-        binary: args.binary.clone(),
-        launcher: args.launcher.clone(),
-        config_schema: args.config_schema,
-        state_schema: args.state_schema,
-        minimum_stado_version: args.minimum_stado_version.clone(),
-        rollback_compatible_with: args.rollback_compatible_with.clone(),
-        qualification: qualification(&args.qualification)?,
-        key_id: args.key_id.clone(),
+        binary: request.binary.to_string(),
+        launcher: request.launcher.to_string(),
+        config_schema: request.config_schema,
+        state_schema: request.state_schema,
+        minimum_stado_version: request.minimum_stado_version.to_string(),
+        rollback_compatible_with: request.rollback_compatible_with.to_vec(),
+        qualification: request.qualification,
+        key_id: request.key_id.to_string(),
         built_at: Utc::now().to_rfc3339(),
-        builder: args.builder.clone(),
+        builder: request.builder.to_string(),
     };
     release_control::validate_manifest(&manifest).map_err(CmdError::click)?;
     let manifest_bytes = release_control::canonical_manifest(&manifest).map_err(CmdError::click)?;
-    let signature = release_control::sign_manifest(&private, &manifest).map_err(CmdError::click)?;
-    let base = release_control::release_base(&args.product, &args.version, &args.platform)
+    let signature =
+        release_control::sign_manifest(request.private_key, &manifest).map_err(CmdError::click)?;
+    let base = release_control::release_base(request.product, request.version, request.platform)
         .map_err(CmdError::click)?;
     let archive_uri = format!("{base}/{}", release_control::RELEASE_ARCHIVE_NAME);
+    let qualification_uri = format!("{base}/{}", release_control::RELEASE_QUALIFICATION_NAME);
     let signature_uri = format!("{base}/{}", release_control::RELEASE_SIGNATURE_NAME);
     let manifest_uri = format!("{base}/{}", release_control::RELEASE_MANIFEST_NAME);
-    let archive = std::fs::read(&args.archive)?;
-    put_immutable(&archive_uri, &archive, "application/gzip").await?;
+    put_immutable(&archive_uri, request.archive, "application/gzip").await?;
+    put_immutable(
+        &qualification_uri,
+        request.qualification_receipt,
+        "application/json",
+    )
+    .await?;
     put_immutable(
         &signature_uri,
         format!("{signature}\n").as_bytes(),
         "text/plain",
     )
     .await?;
-    // Manifest is the commit marker and is deliberately published last.
+    // The signed manifest is the immutable commit marker and always lands last.
     put_immutable(&manifest_uri, &manifest_bytes, "application/json").await?;
+    Ok((
+        ReleaseArtifactRef {
+            manifest_uri,
+            signature_uri,
+            archive_uri,
+            manifest_sha256: release_control::sha256_bytes(&manifest_bytes),
+            artifact_sha256: manifest.artifact_sha256.clone(),
+            source_revision: manifest.source_revision.clone(),
+            key_id: manifest.key_id.clone(),
+        },
+        manifest,
+    ))
+}
+
+async fn signing_key(item: &str) -> Result<Vec<u8>, CmdError> {
+    let encoded = crate::credential_store::read_string(item, "private_key")
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "Skarbiec item {item:?} field private_key is required"
+            ))
+        })?;
+    BASE64
+        .decode(encoded)
+        .map_err(|_| CmdError::click("release signing key field is not base64"))
+}
+
+async fn prepare(args: &ReleasePrepareArgs) -> Result<(), CmdError> {
+    let archive = std::fs::read(&args.archive)?;
+    let qualification_receipt = std::fs::read(&args.qualification)?;
+    let private = signing_key(&args.signing_key_item).await?;
+    let public = release_control::signing_public_key(&private).map_err(CmdError::click)?;
+    let (artifact, manifest) = publish_pipeline_release(PipelinePublishRequest {
+        product: &args.product,
+        version: &args.version,
+        platform: &args.platform,
+        archive: &archive,
+        source_revision: &args.source_revision,
+        source_sha256: &args.source_sha256,
+        pipeline_manifest_sha256: &args.pipeline_manifest_sha256,
+        binary: &args.binary,
+        launcher: &args.launcher,
+        config_schema: args.config_schema,
+        state_schema: args.state_schema,
+        minimum_stado_version: &args.minimum_stado_version,
+        rollback_compatible_with: &args.rollback_compatible_with,
+        qualification: qualification(&args.qualification)?,
+        qualification_receipt: &qualification_receipt,
+        key_id: &args.key_id,
+        private_key: &private,
+        builder: &args.builder,
+    })
+    .await?;
     let report = json!({
         "product": args.product,
         "version": args.version,
         "platform": args.platform,
         "source_revision": args.source_revision,
-        "artifact_sha256": manifest.artifact_sha256,
-        "manifest_sha256": release_control::sha256_bytes(&manifest_bytes),
+        "source_sha256": args.source_sha256,
+        "pipeline_manifest_sha256": args.pipeline_manifest_sha256,
+        "artifact_sha256": artifact.artifact_sha256,
+        "manifest_sha256": artifact.manifest_sha256,
         "key_id": args.key_id,
         "public_key": BASE64.encode(public),
         "qualification": manifest.qualification.status,
-        "archive_uri": archive_uri,
-        "signature_uri": signature_uri,
-        "manifest_uri": manifest_uri,
+        "archive_uri": artifact.archive_uri,
+        "signature_uri": artifact.signature_uri,
+        "manifest_uri": artifact.manifest_uri,
     });
     if args.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -286,7 +393,7 @@ async fn prepare(args: &ReleasePrepareArgs) -> Result<(), CmdError> {
     Ok(())
 }
 
-async fn verified_artifact(
+pub(crate) async fn verified_artifact(
     product: &str,
     version: &str,
     platform: &str,
@@ -341,6 +448,17 @@ async fn verified_artifact(
         source_revision: manifest.source_revision,
         key_id: manifest.key_id,
     })
+}
+
+pub(crate) async fn verified_artifact_for_submit(
+    product: &str,
+    version: &str,
+    platform: &str,
+) -> Result<ReleaseArtifactRef, CmdError> {
+    let (document, _) = super::registry::fetch_versioned_document().await?;
+    let control = release_control::control(&document)?
+        .ok_or_else(|| CmdError::click("registry.release_control is not configured"))?;
+    verified_artifact(product, version, platform, &control).await
 }
 
 fn platforms(policy: &ProductReleasePolicy) -> BTreeSet<String> {
@@ -413,6 +531,23 @@ async fn promote(args: &ReleasePromoteArgs) -> Result<(), CmdError> {
         );
     }
     Ok(())
+}
+
+pub(crate) async fn promote_for_submit(
+    product: &str,
+    version: &str,
+    channel: crate::release_pipeline::PipelineChannel,
+) -> Result<(), CmdError> {
+    promote(&ReleasePromoteArgs {
+        product: product.to_string(),
+        version: version.to_string(),
+        channel: match channel {
+            crate::release_pipeline::PipelineChannel::Candidate => ChannelArg::Candidate,
+            crate::release_pipeline::PipelineChannel::Stable => ChannelArg::Stable,
+        },
+        json: false,
+    })
+    .await
 }
 
 async fn agent(args: &ReleaseAgentArgs) -> Result<(), CmdError> {
@@ -548,7 +683,12 @@ async fn rollback(args: &ReleaseRollbackArgs) -> Result<(), CmdError> {
 pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
     match command {
         ReleaseCommands::Keygen(args) => keygen(&args).await,
-        ReleaseCommands::Build(args) => crate::cli::release_build::build(&args).await,
+        ReleaseCommands::Submit(args) => crate::cli::release_submit::submit(&args).await,
+        ReleaseCommands::Catalog(args) => crate::cli::release_catalog::dispatch(args).await,
+        ReleaseCommands::Worker(args) => crate::cli::release_submit::worker(&args).await,
+        ReleaseCommands::DeliveryWorker(args) => {
+            crate::cli::release_submit::delivery_worker(&args).await
+        }
         ReleaseCommands::Prepare(args) => prepare(&args).await,
         ReleaseCommands::Promote(args) => promote(&args).await,
         ReleaseCommands::Agent(args) => agent(&args).await,

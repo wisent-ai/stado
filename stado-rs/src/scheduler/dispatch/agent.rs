@@ -207,8 +207,8 @@ pub fn deployment_substitutions(provider_name: &str) -> BTreeMap<String, String>
             config::agent_skarbiec_secret_fields().join(","),
         ),
         (
-            "STADO_RELEASE_API_URL".to_string(),
-            config::stado_release_api_url(),
+            "STADO_API_URL".to_string(),
+            config::stado_api_url(),
         ),
         (
             "STADO_RELEASE_VERSION".to_string(),
@@ -362,7 +362,7 @@ pub fn render_agent_startup_script(
     }
     for (key, config_key) in [
         ("PROVIDER_KIND", "providers"),
-        ("STADO_RELEASE_API_URL", "release.api_url"),
+        ("STADO_API_URL", "api.url"),
         ("STADO_RELEASE_VERSION", "release.version"),
         ("STADO_RELEASE_PLATFORM", "release.platform"),
         (
@@ -385,15 +385,15 @@ pub fn render_agent_startup_script(
         }
     }
     let release_api = deployment
-        .get("STADO_RELEASE_API_URL")
+        .get("STADO_API_URL")
         .map(String::as_str)
         .unwrap_or_default();
     if !release_api.starts_with("https://") {
         return Err(SchedulerError::InvalidStartupSetting {
-            key: "STADO_RELEASE_API_URL".to_string(),
-            env: "STADO_RELEASE_API_URL",
-            config_key: "release.api_url",
-            reason: "expected an HTTPS Stado release API origin",
+            key: "STADO_API_URL".to_string(),
+            env: "STADO_API_URL",
+            config_key: "api.url",
+            reason: "expected the canonical HTTPS Stado API origin",
         });
     }
     for (key, config_key) in [
