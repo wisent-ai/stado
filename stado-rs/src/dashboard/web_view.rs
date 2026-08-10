@@ -348,6 +348,216 @@ fn policy_script() -> &'static str {
 </script>"#
 }
 
+fn operator_workspace() -> &'static str {
+    r##"
+<style>
+.operator-shell{margin:1.4em 0;border:1px solid #c8ced8;border-radius:14px;overflow:hidden;background:#f8fafc;box-shadow:0 10px 30px rgba(15,23,42,.08)}
+.operator-head{padding:1.2em 1.3em;background:linear-gradient(120deg,#172554,#1e3a8a);color:#fff}
+.operator-head h2{margin:0;border:0;padding:0;color:#fff}.operator-head p{margin:.45em 0 0;color:#dbeafe;max-width:78ch}
+.operator-grid{display:grid;grid-template-columns:minmax(190px,240px) minmax(0,1fr);min-height:560px}
+.operator-nav{padding:.8em;background:#eef2ff;border-right:1px solid #cbd5e1;display:flex;flex-direction:column;gap:.28em}
+.operator-nav button{border:0;background:transparent;text-align:left;padding:.65em .75em;border-radius:8px;color:#334155;font-weight:600;cursor:pointer}
+.operator-nav button:hover,.operator-nav button[aria-current=true]{background:#fff;color:#1d4ed8;box-shadow:0 1px 4px rgba(15,23,42,.12)}
+.operator-main{padding:1.2em;min-width:0}.operator-main h3{margin:.1em 0 .3em;font-size:1.25em}.operator-description{color:#475569;margin:0 0 1em}
+.operator-form{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:1em}.operator-field{display:flex;flex-direction:column;gap:.35em}
+.operator-field-wide{grid-column:1/-1}.operator-field label{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#475569}
+.operator-field select,.operator-field input,.operator-field textarea{box-sizing:border-box;width:100%;border:1px solid #94a3b8;border-radius:7px;padding:.65em;background:#fff;color:#0f172a;font:13px ui-monospace,SFMono-Regular,Menlo,monospace}
+.operator-field select{font-family:-apple-system,system-ui,sans-serif}.operator-field textarea{resize:vertical;min-height:122px}
+.operator-action-note{min-height:2.8em;color:#475569;font-size:13px;margin:.3em 0}
+.operator-controls{display:flex;flex-wrap:wrap;align-items:center;gap:.8em;grid-column:1/-1}
+.operator-controls label{display:flex;align-items:center;gap:.45em;color:#7f1d1d;font-weight:600}.operator-controls input[type=checkbox]{width:auto}
+.operator-run{border:0;border-radius:8px;padding:.7em 1.15em;background:#2563eb;color:#fff;font-weight:700;cursor:pointer}.operator-run:disabled{opacity:.55;cursor:wait}
+.operator-status{font-size:13px;color:#475569}.operator-output{grid-column:1/-1;margin-top:.2em}.operator-output-head{display:flex;justify-content:space-between;align-items:center}
+.operator-output pre{margin:.45em 0 0;min-height:170px;max-height:480px;overflow:auto;padding:1em;border-radius:8px;background:#0f172a;color:#dbeafe;white-space:pre-wrap;overflow-wrap:anywhere}
+.operator-badge{display:inline-block;border-radius:999px;padding:.2em .55em;font-size:11px;font-weight:700;background:#dbeafe;color:#1e40af}.operator-badge.mutating{background:#fee2e2;color:#991b1b}
+.operator-history{grid-column:1/-1}.operator-history ol{margin:.4em 0;padding-left:1.4em;color:#475569;font-size:12px}.operator-history button{border:0;background:none;color:#1d4ed8;cursor:pointer;padding:0}
+@media(max-width:760px){.operator-grid{grid-template-columns:1fr}.operator-nav{border-right:0;border-bottom:1px solid #cbd5e1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.operator-form{grid-template-columns:1fr}.operator-field-wide,.operator-controls,.operator-output,.operator-history{grid-column:1}}
+@media(prefers-color-scheme:dark){.operator-shell{background:#111827;border-color:#475569}.operator-nav{background:#1e293b;border-color:#475569}.operator-nav button{color:#cbd5e1}.operator-nav button:hover,.operator-nav button[aria-current=true]{background:#334155;color:#bfdbfe}.operator-main h3{color:#f8fafc}.operator-description,.operator-action-note,.operator-status,.operator-history ol{color:#cbd5e1}.operator-field label{color:#cbd5e1}.operator-field select,.operator-field input,.operator-field textarea{background:#0f172a;color:#e2e8f0;border-color:#64748b}}
+</style>
+<section class="operator-shell" aria-labelledby="operator-title">
+  <header class="operator-head">
+    <h2 id="operator-title">Operator workspace</h2>
+    <p>Every Stado operator workflow through structured argv, the installed release, and the same policy boundaries as the CLI. No shell is exposed.</p>
+  </header>
+  <div class="operator-grid">
+    <nav class="operator-nav" id="operator-nav" aria-label="Operator workflow"></nav>
+    <div class="operator-main">
+      <h3 id="operator-section-title">Loading operator catalog</h3>
+      <p class="operator-description" id="operator-section-description"></p>
+      <div class="operator-form">
+        <div class="operator-field">
+          <label for="operator-action">Operation</label>
+          <select id="operator-action"></select>
+          <p class="operator-action-note" id="operator-action-note"></p>
+        </div>
+        <div class="operator-field">
+          <label for="operator-timeout">Time limit in seconds</label>
+          <input id="operator-timeout" type="number" min="1" max="300" value="120">
+          <p class="operator-action-note">Finite commands only; output is bounded to 1 MiB per stream.</p>
+        </div>
+        <div class="operator-field operator-field-wide">
+          <label for="operator-args">Argument vector (JSON array; editable)</label>
+          <textarea id="operator-args" spellcheck="false" aria-describedby="operator-args-help"></textarea>
+          <span id="operator-args-help" class="muted">Arguments are passed directly to Stado. They are never parsed by a shell.</span>
+        </div>
+        <div class="operator-field operator-field-wide" id="operator-input-wrap">
+          <label for="operator-input">Input file content (used when an argument is <code>$INPUT</code>)</label>
+          <textarea id="operator-input" spellcheck="false" placeholder="Paste the complete JSON document here when the selected operation uses $INPUT."></textarea>
+        </div>
+        <div class="operator-controls">
+          <label><input id="operator-confirm" type="checkbox"> Confirm policy-changing operation</label>
+          <button class="operator-run" type="button" id="operator-run">Run operation</button>
+          <span class="operator-badge" id="operator-risk">read only</span>
+          <span class="operator-status" id="operator-status" role="status" aria-live="polite"></span>
+        </div>
+        <div class="operator-output">
+          <div class="operator-output-head"><strong>Recorded command result</strong><button type="button" id="operator-copy">Copy output</button></div>
+          <pre id="operator-result" tabindex="0">Choose an operation to inspect its exact argument vector.</pre>
+        </div>
+        <div class="operator-history">
+          <strong>Session history</strong>
+          <ol id="operator-history"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+<script>
+(() => {
+  const state = { catalog: null, section: null, action: null, history: [] };
+  const nav = document.getElementById('operator-nav');
+  const sectionTitle = document.getElementById('operator-section-title');
+  const sectionDescription = document.getElementById('operator-section-description');
+  const actionSelect = document.getElementById('operator-action');
+  const actionNote = document.getElementById('operator-action-note');
+  const argsEditor = document.getElementById('operator-args');
+  const inputEditor = document.getElementById('operator-input');
+  const inputWrap = document.getElementById('operator-input-wrap');
+  const confirm = document.getElementById('operator-confirm');
+  const timeout = document.getElementById('operator-timeout');
+  const risk = document.getElementById('operator-risk');
+  const run = document.getElementById('operator-run');
+  const status = document.getElementById('operator-status');
+  const result = document.getElementById('operator-result');
+  const history = document.getElementById('operator-history');
+  const renderHistory = () => {
+    history.textContent = '';
+    for (const entry of state.history) {
+      const item = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = `${entry.ok ? 'ok' : 'failed'} · ${entry.args.join(' ')}`;
+      button.addEventListener('click', () => { result.textContent = entry.output; result.focus(); });
+      item.appendChild(button);
+      history.appendChild(item);
+    }
+  };
+  const selectAction = (id) => {
+    state.action = state.section.actions.find((candidate) => candidate.id === id) || state.section.actions[0];
+    if (!state.action) return;
+    actionSelect.value = state.action.id;
+    actionNote.textContent = state.action.description;
+    argsEditor.value = JSON.stringify(state.action.args, null, 2);
+    inputWrap.hidden = !state.action.input;
+    if (!state.action.input) inputEditor.value = '';
+    confirm.checked = false;
+    risk.textContent = state.action.read_only ? 'read only' : 'changes state';
+    risk.classList.toggle('mutating', !state.action.read_only);
+    status.textContent = '';
+  };
+  const selectSection = (id) => {
+    state.section = state.catalog.sections.find((candidate) => candidate.id === id) || state.catalog.sections[0];
+    nav.querySelectorAll('button').forEach((button) => button.setAttribute('aria-current', String(button.dataset.id === state.section.id)));
+    sectionTitle.textContent = state.section.label;
+    sectionDescription.textContent = state.section.description;
+    actionSelect.textContent = '';
+    for (const action of state.section.actions) {
+      const option = document.createElement('option');
+      option.value = action.id;
+      option.textContent = action.label;
+      actionSelect.appendChild(option);
+    }
+    selectAction(state.section.actions[0]?.id);
+  };
+  const load = async () => {
+    status.textContent = 'Loading catalog.';
+    try {
+      const response = await fetch('/api/operator/catalog');
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+      state.catalog = payload;
+      nav.textContent = '';
+      for (const section of payload.sections) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.dataset.id = section.id;
+        button.textContent = section.label;
+        button.addEventListener('click', () => selectSection(section.id));
+        nav.appendChild(button);
+      }
+      selectSection(payload.sections[0]?.id);
+      status.textContent = `${payload.sections.length} workflow groups available.`;
+    } catch (error) {
+      sectionTitle.textContent = 'Operator catalog unavailable';
+      status.textContent = error instanceof Error ? error.message : 'Catalog request failed.';
+    }
+  };
+  actionSelect.addEventListener('change', () => selectAction(actionSelect.value));
+  argsEditor.addEventListener('input', () => {
+    status.textContent = 'Argument vector edited; the server will classify its risk.';
+    risk.textContent = 'server classified';
+    risk.classList.add('mutating');
+  });
+  run.addEventListener('click', async () => {
+    let args;
+    try {
+      args = JSON.parse(argsEditor.value);
+      if (!Array.isArray(args) || !args.every((value) => typeof value === 'string')) throw new Error('Argument vector must be an array of strings.');
+    } catch (error) {
+      status.textContent = error instanceof Error ? error.message : 'Invalid argument vector.';
+      return;
+    }
+    run.disabled = true;
+    status.textContent = 'Operation running.';
+    result.textContent = 'Waiting for the recorded Stado result…';
+    try {
+      const response = await fetch('/api/operator/run', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-Stado-Action': 'operator-command'},
+        body: JSON.stringify({
+          args,
+          input: inputEditor.value || null,
+          confirmation: confirm.checked ? 'RUN_MUTATION' : '',
+          timeout_seconds: Number(timeout.value),
+        }),
+      });
+      const payload = await response.json();
+      const rendered = payload.structured != null
+        ? JSON.stringify(payload.structured, null, 2)
+        : [payload.stdout, payload.stderr].filter(Boolean).join('\\n');
+      const output = rendered || payload.error || `Exit code ${payload.exit_code ?? 'unknown'} with no output.`;
+      result.textContent = output;
+      const ok = response.ok && payload.ok;
+      status.textContent = ok ? `Completed with exit code ${payload.exit_code}.` : `Rejected or failed: ${payload.error || payload.exit_code || response.status}.`;
+      state.history.unshift({ok, args, output});
+      state.history = state.history.slice(0, 8);
+      renderHistory();
+    } catch (error) {
+      result.textContent = error instanceof Error ? error.message : 'Operator request failed.';
+      status.textContent = 'Operator request failed safely.';
+    } finally {
+      run.disabled = false;
+    }
+  });
+  document.getElementById('operator-copy').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(result.textContent || ''); status.textContent = 'Output copied.'; }
+    catch (_) { status.textContent = 'Clipboard access was unavailable.'; }
+  });
+  load();
+})();
+</script>"##
+}
+
 // ---------------------------------------------------------------------------
 // render_html
 // ---------------------------------------------------------------------------
@@ -545,6 +755,7 @@ pub fn render_html(state: &Value, cleanup: &Value, refresh: i64) -> String {
     out.push_str(&cleanup_card(cleanup));
     out.push('\n');
     out.push_str(policy_card());
+    out.push_str(operator_workspace());
     out.push_str("\n<h2>autonomy &amp; FinOps</h2><div class=\"cleanup-card\">");
     out.push_str("<div>mode <strong>");
     out.push_str(&e_get(autonomy, "mode", "report"));
@@ -623,7 +834,7 @@ pub fn render_html(state: &Value, cleanup: &Value, refresh: i64) -> String {
     } else {
         out.push_str(&completed_rows);
     }
-    out.push_str("</table>\n<script>\n(() => {\n  const status = document.getElementById('cleanup-status');\n  const buttons = [document.getElementById('cleanup-refresh'), document.getElementById('cleanup-run')];\n  let autoRefresh = window.setTimeout(() => window.location.reload(), ");
+    out.push_str("</table>\n<script>\n(() => {\n  const status = document.getElementById('cleanup-status');\n  const buttons = [document.getElementById('cleanup-refresh'), document.getElementById('cleanup-run')];\n  let autoRefresh = window.setTimeout(() => document.querySelector('.operator-shell')?.contains(document.activeElement) || window.location.reload(), ");
     out.push_str(&refresh_ms.to_string());
     out.push_str(");\n  async function request(url, options) {\n    window.clearTimeout(autoRefresh);\n    buttons.forEach(button => button.disabled = true); status.textContent = options ? 'Cleanup requested; waiting for completion.' : 'Refreshing cleanup status.';\n    try {\n      const response = await fetch(url, options); const payload = await response.json();\n      const report = payload.report || {}; status.textContent = `Service ${payload.service || 'unknown'}; outcome ${report.outcome || 'unknown'}.`;\n      if (response.ok) window.location.reload();\n    } catch (_) { status.textContent = 'Cleanup service request failed safely.'; }\n    finally {\n      buttons.forEach(button => button.disabled = false);\n      autoRefresh = window.setTimeout(() => window.location.reload(), ");
     out.push_str(&refresh_ms.to_string());

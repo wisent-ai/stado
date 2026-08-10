@@ -26,7 +26,9 @@ pub fn path() -> Option<PathBuf> {
 pub fn active() -> Option<Reservation> {
     let body = std::fs::read_to_string(path()?).ok()?;
     let reservation: Reservation = serde_json::from_str(&body).ok()?;
-    (!reservation.deployment.trim().is_empty()
-        && reservation.gpu_mode == super::schema::GPU_EXCLUSIVE)
-        .then_some(reservation)
+    let supported_mode = matches!(
+        reservation.gpu_mode.as_str(),
+        super::schema::GPU_EXCLUSIVE | super::schema::GPU_YIELDABLE
+    );
+    (!reservation.deployment.trim().is_empty() && supported_mode).then_some(reservation)
 }

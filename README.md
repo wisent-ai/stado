@@ -343,9 +343,17 @@ behind the authenticated CLI or machine boundary.
 
 ### Dashboard
 
-The dashboard is an operational view over canonical state. Local onboarding
-binds it to loopback. Remote exposure requires authenticated deployment
-configuration and a trusted reverse proxy.
+The dashboard is the authenticated operator workspace over canonical state.
+It combines queue, agent, artifact, cleanup, registry-policy, FinOps, and
+failure evidence with structured controls for jobs, inference, queue
+maintenance, hosts, services, the complete registry, releases, schedules,
+costs, recovery, diagnostics, alerts, identities, credentials, and cloud
+providers. Every operation is a bounded argv array executed by the installed
+Stado release; the browser never exposes a shell. Mutating operations require
+the dashboard's `operate` permission, an explicit confirmation, and the same
+policy checks as the CLI. Local onboarding binds the dashboard to loopback.
+Remote exposure additionally requires authenticated deployment configuration
+and a trusted reverse proxy.
 
 ## Operational model
 
