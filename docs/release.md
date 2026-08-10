@@ -69,9 +69,10 @@ names the verified fleet `runner_platform` (`darwin-arm64` or `linux-amd64`),
 quality argv in order, one build argv, staged source-to-archive paths, and
 optional `secret_env` references of the form `ENV=item#field`. Builders receive
 no repository coordinate or repository token. They materialize only the exact
-source URI and declared immutable inputs, extract inputs under
-`WISENT_INPUTS_DIR`, and write output through the queue's existing canonical
-job-output collection.
+source URI and declared immutable inputs. Inputs are digest-checked and either
+extracted under `WISENT_INPUTS_DIR` or mounted there as their original archive,
+as declared by each input's `extract` field. Builders write output through the
+queue's existing canonical job-output collection.
 
 Publication writes the archive, immutable qualification receipt, signature,
 and signed manifest last. The signing key is read from the configured Skarbiec
