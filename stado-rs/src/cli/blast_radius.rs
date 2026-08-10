@@ -795,7 +795,7 @@ fn downstream_impacts(
         "configured compute providers are the scheduler's VM creation and lifecycle surface",
     ));
 
-    let release_hit = dependency_owns_release(dependency, &config::stado_release_api_url());
+    let release_hit = dependency_owns_release(dependency, &config::stado_api_url());
     impacts.push(impact(
         "release_channel",
         "high",

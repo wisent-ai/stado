@@ -21,9 +21,10 @@
   ],
   "release_control": {
     "schema_version": 1,
-    "generation": 3,
+    "generation": 4,
     "trusted_keys": {
-      "brama-release-2026-08": "cFrI/ww/EiwBp6HozLu6HH/IdSnUO+P2Xsqvg4vfXIU="
+      "brama-release-2026-08": "cFrI/ww/EiwBp6HozLu6HH/IdSnUO+P2Xsqvg4vfXIU=",
+      "image-video-router-release-2026-08": "DnbGstrZBUJEffC0UDb1q1fOmpHwQ788gk8OVz/2b84="
     },
     "products": {
       "brama": {
@@ -98,6 +99,43 @@
             }
           }
         }
+      },
+      "image-video-router": {
+        "service": "image-video-router",
+        "config_schema": 1,
+        "state_schema": 1,
+        "install_root": "/root/.stado/services/image-video-router",
+        "binary": "bin/image-video-router",
+        "launcher": "bin/start",
+        "binary_env": "IMAGE_VIDEO_ROUTER_BIN",
+        "port_env": "IMAGE_VIDEO_ROUTER_PORT",
+        "runtime_env": "IMAGE_VIDEO_ROUTER_RUNTIME_DIR",
+        "environment": {
+          "IMAGE_VIDEO_ROUTER_SERVICE_ENV_FILE": "/root/.config/image-video-router/service.env"
+        },
+        "strategy": {
+          "kind": "blue-green",
+          "readiness_timeout_seconds": 90,
+          "drain_timeout_seconds": 60,
+          "rollback_window_seconds": 300,
+          "automatic_rollback": true
+        },
+        "targets": {
+          "ubuntu-server-rtx-pro-6000": {
+            "platform": "linux-amd64",
+            "run_as_user": "root",
+            "home": "/root",
+            "state_dir": "/root/.stado/release-state",
+            "runtime_root": "/root/.stado/run",
+            "logs_root": "/root/.stado/logs",
+            "stable_bind": "127.0.0.1:8081",
+            "candidate_ports": [
+              18082,
+              18083
+            ],
+            "readiness_path": "/health"
+          }
+        }
       }
     }
   },
@@ -106,7 +144,7 @@
       "target": "charless-mac-mini",
       "command": "/Users/charles/.stado/bin/stado"
     },
-    "generation": 4,
+    "generation": 5,
     "services": {
       "brama": {
         "placement_profile": "brama-skarbiec",
@@ -138,6 +176,27 @@
           "brama-desktop": {
             "capabilities": [
               "model-routing"
+            ]
+          }
+        }
+      },
+      "image-video-router": {
+        "active_host": "ubuntu-server-rtx-pro-6000",
+        "managed_service": "image-video-router",
+        "endpoints": {
+          "ubuntu-server-rtx-pro-6000": {
+            "url": "http://127.0.0.1:8081"
+          }
+        },
+        "consumers": {
+          "content-platform": {
+            "capabilities": [
+              "media-routing"
+            ]
+          },
+          "weles": {
+            "capabilities": [
+              "media-routing"
             ]
           }
         }
@@ -315,6 +374,7 @@
       ],
       "kind": "local",
       "name": "charless-mac-mini",
+      "release_platform": "darwin-arm64",
       "notes": "Always-on Mac mini for Weles, Skarbiec, Brama, and the Stado control plane.",
       "ssh": "charles@100.120.25.24",
       "host_heuristic": "always-on",
@@ -421,11 +481,22 @@
       ],
       "kind": "local",
       "name": "ubuntu-server-rtx-pro-6000",
+      "release_platform": "linux-amd64",
       "notes": "Operator RTX PRO 6000 workstation. External workloads, including ComfyUI, remain protected by default; local jobs use admission v2 accounting.",
       "slots": 2,
       "ssh": "root@100.126.122.108",
       "vram_gb": 95,
       "role": "burst",
+      "services": [
+        {
+          "name": "image-video-router",
+          "unit": "image-video-router-release.service",
+          "label": "",
+          "path": "/etc/systemd/system/image-video-router-release.service",
+          "kind": "systemd",
+          "managed_since": "2026-08-09T18:47:00Z"
+        }
+      ],
       "service_resolver": {
         "api_bind": "127.0.0.1:17600",
         "refresh_seconds": 5,
@@ -447,6 +518,7 @@
     {
       "name": "lukasz-macbook",
       "kind": "local",
+      "release_platform": "darwin-arm64",
       "ssh": "lukaszbartoszcze@100.81.156.67",
       "hostnames": [
         "lukaszs-macbook-pro-5485.local"

@@ -25,7 +25,7 @@ Only route-local or process-local values should be overridden:
 | `STADO_API_TOKEN` | Dedicated caller token for its mapped object namespace. |
 | `STADO_MACHINE_API_TOKEN` | Machine submit/status/cancel token. |
 | `STADO_SERVICE_API_TOKEN` | Caller-specific deployer token; accepted only for mapped service names/actions. |
-| `STADO_RELEASE_API_URL` | Public HTTPS Stado origin serving `/api/release/object`. |
+| `STADO_API_URL` | Canonical HTTPS Stado origin, including `/api/release/object`. |
 | `STADO_RELEASE_VERSION` | Required exact immutable Stado runtime version. |
 | `STADO_RELEASE_PLATFORM` | Required exact Stado runtime platform for dispatched agents. |
 | `STADO_ALERT_CHANNELS` | Explicit comma-separated optional adapters: `slack`, `telegram`, `sendgrid`, `gcp-pubsub`. |
