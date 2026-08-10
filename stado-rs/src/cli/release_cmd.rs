@@ -14,6 +14,7 @@ use crate::release_control::{
     self, DesiredRelease, ProductReleasePolicy, QualificationStatus, ReleaseArtifactRef,
     ReleaseChannel, ReleaseControl, ReleaseManifest, ReleaseQualification,
 };
+use crate::release_pipeline::{BuildReceipt, StepStatus};
 
 use super::CmdError;
 
@@ -221,10 +222,6 @@ async fn put_immutable(uri: &str, bytes: &[u8], content_type: &str) -> Result<()
     .map(|_| ())
 }
 
-fn qualification(path: &Path) -> Result<ReleaseQualification, CmdError> {
-    let value: ReleaseQualification = serde_json::from_slice(&std::fs::read(path)?)?;
-    Ok(value)
-}
 
 pub(crate) struct PipelinePublishRequest<'a> {
     pub product: &'a str,
@@ -338,6 +335,28 @@ async fn signing_key(item: &str) -> Result<Vec<u8>, CmdError> {
 async fn prepare(args: &ReleasePrepareArgs) -> Result<(), CmdError> {
     let archive = std::fs::read(&args.archive)?;
     let qualification_receipt = std::fs::read(&args.qualification)?;
+    let receipt: BuildReceipt = serde_json::from_slice(&qualification_receipt)?;
+    let artifact_sha256 = release_control::sha256_bytes(&archive);
+    if receipt.product != args.product
+        || receipt.version != args.version
+        || receipt.platform != args.platform
+        || receipt.builder != args.builder
+        || receipt.source_commit != args.source_revision
+        || receipt.source_sha256 != args.source_sha256
+        || receipt.manifest_sha256 != args.pipeline_manifest_sha256
+        || receipt.status != StepStatus::Passed
+        || receipt.artifact.as_ref().map(|value| value.sha256.as_str())
+            != Some(artifact_sha256.as_str())
+    {
+        return Err(CmdError::click(
+            "qualification receipt does not describe this prepared artifact",
+        ));
+    }
+    let qualification = ReleaseQualification {
+        status: QualificationStatus::Passed,
+        evidence_sha256: Some(release_control::sha256_bytes(&qualification_receipt)),
+        completed_at: Some(receipt.completed_at),
+    };
     let private = signing_key(&args.signing_key_item).await?;
     let public = release_control::signing_public_key(&private).map_err(CmdError::click)?;
     let (artifact, manifest) = publish_pipeline_release(PipelinePublishRequest {
@@ -354,7 +373,7 @@ async fn prepare(args: &ReleasePrepareArgs) -> Result<(), CmdError> {
         state_schema: args.state_schema,
         minimum_stado_version: &args.minimum_stado_version,
         rollback_compatible_with: &args.rollback_compatible_with,
-        qualification: qualification(&args.qualification)?,
+        qualification,
         qualification_receipt: &qualification_receipt,
         key_id: &args.key_id,
         private_key: &private,
