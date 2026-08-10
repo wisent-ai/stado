@@ -893,7 +893,14 @@ async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
             .find(|t| &t.name == name)
             .ok_or_else(|| CmdError::click(format!("rollout target {name} is absent")))?;
         let script = format!(
-            "set -eu\n\"$HOME/.stado/bin/stado\" release agent --target {} --once --json\n",
+            "set -eu\n\
+             if [ -x /bin/systemctl ] && /bin/systemctl is-active --quiet wisent-agent.service; then\n\
+               environment=$(/bin/systemctl show wisent-agent.service --property=Environment --value)\n\
+               /usr/bin/env -S \"$environment\" \"$HOME/.stado/bin/stado\" release agent --target {} --once --json\n\
+             else\n\
+               \"$HOME/.stado/bin/stado\" release agent --target {} --once --json\n\
+             fi\n",
+            crate::deploy::shlex_quote(name),
             crate::deploy::shlex_quote(name)
         );
         let output = crate::deploy::host_channel::run_script(target, &script, &runner)
