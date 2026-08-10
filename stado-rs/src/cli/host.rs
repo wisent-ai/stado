@@ -135,7 +135,7 @@ pub async fn publish_beacon(source: &str) -> Result<(), CmdError> {
     // from the control plane's -- the client was asserting an internal detail
     // it has no way to know.
     let stored = payload.get("state").and_then(Value::as_str) == Some("stored")
-        && payload.get("host").and_then(Value::as_str) == Some(host.as_str())
+        && payload.get("host").and_then(Value::as_str) == Some(&host[..])
         && payload
             .get("path")
             .and_then(Value::as_str)
