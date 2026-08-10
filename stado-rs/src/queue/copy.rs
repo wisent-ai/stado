@@ -188,6 +188,18 @@ impl Endpoint {
         }
     }
 
+    /// The value behind one configuration key of this endpoint, for callers that
+    /// check a backend is fully configured before using it.
+    ///
+    /// The first five keys are per-endpoint, because a copy has a source and a
+    /// destination that differ in exactly those. The Stado object store has none of
+    /// them: it is addressed by a URL, a token file and a namespace that are global
+    /// to the process, which is why `describe` above already reads them from config
+    /// rather than from `self`. Answering `None` for them made every required field
+    /// of that backend look unset, so `stado doctor` reported the primary store as
+    /// misconfigured on the same run in which it wrote, read back and deleted a probe
+    /// object through it. A check that contradicts the check below it teaches
+    /// operators to ignore both.
     pub fn locator_value(&self, key: &str) -> Option<&str> {
         match key {
             "bucket" => Some(&self.bucket),
@@ -195,6 +207,10 @@ impl Endpoint {
             "container" => Some(&self.container),
             "region" => Some(&self.region),
             "path" => Some(&self.path),
+            "url" => Some(crate::config::wc_stado_storage_url()),
+            "token-file" => Some(crate::config::wc_stado_storage_token_file()),
+            "namespace" => Some(crate::config::wc_stado_storage_namespace()),
+            "ca-file" => Some(crate::config::wc_stado_storage_ca_file()),
             _ => None,
         }
     }
