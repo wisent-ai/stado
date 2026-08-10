@@ -1121,7 +1121,8 @@ adapters only on loopback, then watches that authority. `GET
 the matching local adapter URL when one is configured. Each adapter resolves
 again for every connection, connects directly when the service is local, and
 otherwise uses the target's registry-owned SSH transport. Adapter streams close
-after `idle_seconds` without traffic (120 seconds by default), bounding retained
+after `idle_seconds` without traffic (330 seconds by default, above the model
+gateway's own request deadline so a slow reply is never cut), bounding retained
 client keep-alive sockets and their SSH transports. New connections fail closed
 during placement transactions and after the cache freshness deadline.
 If authority changes, resolvers adopt the new source only after the old
