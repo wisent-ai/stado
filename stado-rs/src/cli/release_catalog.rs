@@ -22,10 +22,12 @@ pub struct CatalogArgs {
 
 #[derive(Subcommand)]
 enum CatalogCommands {
-    /// Register checked-out products under one local root in Stado's catalog.
+    /// Register products from checked-out manifests or one central catalog.
     Sync {
-        #[arg(long)]
-        root: PathBuf,
+        #[arg(long, required_unless_present = "catalog", conflicts_with = "catalog")]
+        root: Option<PathBuf>,
+        #[arg(long, required_unless_present = "root", conflicts_with = "root")]
+        catalog: Option<PathBuf>,
         #[arg(long)]
         json: bool,
     },
@@ -66,14 +68,13 @@ pub(crate) async fn publish_entry(
     if let Some((existing, version)) = super::storage::fetch_object_versioned(&uri).await? {
         let old: ReleaseCatalogEntry = serde_json::from_slice(&existing)?;
         release_pipeline::validate_catalog_entry(&old).map_err(CmdError::click)?;
-        if old.manifest_sha256 == entry.manifest_sha256
-            && old.manifest == entry.manifest
-            && (entry.source.is_none() || old.source == entry.source)
-        {
-            return Ok(old);
-        }
-        if entry.source.is_none() && old.manifest_sha256 == entry.manifest_sha256 {
-            entry.source = old.source;
+        if old.manifest == entry.manifest {
+            if entry.source.is_none() || old.source == entry.source {
+                return Ok(old);
+            }
+            // A catalog import owns product policy; a release submission adds
+            // immutable source identity without rewriting that policy record.
+            entry.manifest_sha256 = old.manifest_sha256;
         }
         let bytes = serde_json::to_vec(&entry)?;
         super::storage::compare_and_swap_object(&uri, &bytes, "application/json", &version).await?;
@@ -155,6 +156,63 @@ async fn sync(root: &Path, json: bool) -> Result<(), CmdError> {
     Ok(())
 }
 
+fn print_entries(entries: &[ReleaseCatalogEntry], json: bool) -> Result<(), CmdError> {
+    if json {
+        println!("{}", serde_json::to_string_pretty(entries)?);
+    } else {
+        for entry in entries {
+            println!(
+                "cataloged {} manifest={}",
+                entry.product, entry.manifest_sha256
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn sync_catalog(path: &Path, json: bool) -> Result<(), CmdError> {
+    let bytes = std::fs::read(path)?;
+    let document: serde_json::Value = serde_json::from_slice(&bytes)?;
+    let repositories = document
+        .get("repositories")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| CmdError::click("central catalog repositories must be an array"))?;
+    let mut products = BTreeSet::new();
+    let mut entries = Vec::new();
+    for repository in repositories {
+        let manifest_value = repository
+            .get("manifest")
+            .ok_or_else(|| CmdError::click("central catalog entry is missing manifest"))?;
+        let manifest_bytes = serde_json::to_vec(manifest_value)?;
+        let manifest =
+            release_pipeline::parse_product_manifest(&manifest_bytes).map_err(CmdError::click)?;
+        let name = product(&manifest).to_string();
+        if !products.insert(name.clone()) {
+            return Err(CmdError::click(format!(
+                "central catalog contains duplicate product {name:?}"
+            )));
+        }
+        let declared_product = repository
+            .get("product")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| CmdError::click("central catalog entry is missing product"))?;
+        if declared_product != name {
+            return Err(CmdError::click(format!(
+                "central catalog product {declared_product:?} disagrees with manifest {name:?}"
+            )));
+        }
+        let manifest_sha256 = repository
+            .get("manifest_sha256")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| CmdError::click("central catalog entry is missing manifest_sha256"))?;
+        entries.push(publish_entry(manifest, manifest_sha256.to_string(), None).await?);
+    }
+    if entries.is_empty() {
+        return Err(CmdError::click("central catalog contains no repository entries"));
+    }
+    print_entries(&entries, json)
+}
+
 async fn audit(json: bool) -> Result<(), CmdError> {
     let uris = super::storage::list_object_uris("system", &format!("{CATALOG_PREFIX}/")).await?;
     let mut products = BTreeSet::new();
@@ -207,7 +265,17 @@ async fn audit(json: bool) -> Result<(), CmdError> {
 
 pub async fn dispatch(args: CatalogArgs) -> Result<(), CmdError> {
     match args.command {
-        CatalogCommands::Sync { root, json } => sync(&root, json).await,
+        CatalogCommands::Sync {
+            root,
+            catalog,
+            json,
+        } => match (root, catalog) {
+            (Some(root), None) => sync(&root, json).await,
+            (None, Some(catalog)) => sync_catalog(&catalog, json).await,
+            _ => Err(CmdError::click(
+                "catalog sync requires exactly one of --root or --catalog",
+            )),
+        },
         CatalogCommands::Audit { json } => audit(json).await,
     }
 }
