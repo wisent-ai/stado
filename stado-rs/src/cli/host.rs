@@ -184,7 +184,67 @@ fn host_health_api_url() -> Result<url::Url, CmdError> {
     Ok(url)
 }
 
+/// The publisher's bearer from an owner-only file, for a host that cannot
+/// reach Skarbiec.
+///
+/// Skarbiec binds to loopback and the tailnet ingress carries only the object
+/// API, so a Linux registry host has no authenticated path to a broker and
+/// published no beacon at all -- `host ping` called a machine that was serving
+/// releases "down". Every other grant in this fleet already lives as an
+/// owner-only file; this reads the same shape. The bare value in the
+/// environment stays forbidden, which is what `host recover` refuses as an
+/// ambient credential.
+fn host_health_api_token_from_file() -> Result<Option<String>, CmdError> {
+    let Ok(raw) = std::env::var("STADO_HOST_HEALTH_API_TOKEN_FILE") else {
+        return Ok(None);
+    };
+    if raw.trim().is_empty() {
+        return Ok(None);
+    }
+    let path = crate::config_file::expand_tilde(raw.trim());
+    let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
+        CmdError::click(format!(
+            "cannot inspect STADO_HOST_HEALTH_API_TOKEN_FILE {}: {error}",
+            path.display()
+        ))
+    })?;
+    if !metadata.file_type().is_file() {
+        return Err(CmdError::click(format!(
+            "STADO_HOST_HEALTH_API_TOKEN_FILE must be a regular file: {}",
+            path.display()
+        )));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(CmdError::click(format!(
+                "STADO_HOST_HEALTH_API_TOKEN_FILE must be owner-only (chmod 600): {}",
+                path.display()
+            )));
+        }
+    }
+    let token = std::fs::read_to_string(&path)
+        .map_err(|error| {
+            CmdError::click(format!(
+                "cannot read STADO_HOST_HEALTH_API_TOKEN_FILE {}: {error}",
+                path.display()
+            ))
+        })?
+        .trim()
+        .to_string();
+    if token.is_empty() {
+        return Err(CmdError::click(
+            "STADO_HOST_HEALTH_API_TOKEN_FILE is empty",
+        ));
+    }
+    Ok(Some(token))
+}
+
 async fn host_health_api_token() -> Result<String, CmdError> {
+    if let Some(token) = host_health_api_token_from_file()? {
+        return Ok(token);
+    }
     let url = std::env::var("STADO_HOST_HEALTH_SKARBIEC_URL")
         .map_err(|_| CmdError::click("STADO_HOST_HEALTH_SKARBIEC_URL is required"))?;
     let consumer = std::env::var("STADO_HOST_HEALTH_SKARBIEC_CONSUMER")
