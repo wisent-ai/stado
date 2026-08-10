@@ -354,9 +354,17 @@ impl Dashboard {
                 "refusing plaintext dashboard bind on non-loopback address {local_addr}; terminate TLS in a loopback reverse proxy"
             )));
         }
+        // Each boundary reads every item its policy names, and each read is a
+        // gpg decryption in the broker. Seventeen object namespaces against a
+        // real vault with a cold gpg-agent exceeded the previous 15s and the
+        // object API then answered 503 to the entire fleet until someone
+        // restarted it -- a cold agent is a slow start, not a broken grant.
         let startup_timeout = Duration::from_secs(
-            "15".parse::<u64>()
-                .expect("static boundary startup timeout"),
+            std::env::var("WC_DASHBOARD_BOUNDARY_TIMEOUT_SECONDS")
+                .ok()
+                .and_then(|value| value.trim().parse::<u64>().ok())
+                .filter(|seconds| *seconds > 0)
+                .unwrap_or(90),
         );
         // Every verifier reads shared Skarbiec vault/audit state. Starting all
         // boundaries together can overwhelm the listener and fail the whole
