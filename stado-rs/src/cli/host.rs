@@ -106,9 +106,8 @@ pub async fn publish_beacon(source: &str) -> Result<(), CmdError> {
     endpoint.query_pairs_mut().append_pair("host", host);
 
     let token = host_health_api_token().await?;
-    let response = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()?
+    let response = crate::cli::storage::fleet_https_client()
+        .map_err(|error| CmdError::click(error.to_string()))?
         .put(endpoint)
         .bearer_auth(&token)
         .header(reqwest::header::CONTENT_TYPE, "application/json")

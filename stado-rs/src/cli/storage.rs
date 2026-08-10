@@ -1215,34 +1215,10 @@ impl RemoteObjectApi {
         }))
     }
 
-    /// One HTTPS client that trusts what `storage.stado.ca_file` names.
-    ///
-    /// The queue backend already loads that certificate; this client did not,
-    /// so the moment the fleet's object API moved from loopback to a tailnet
-    /// HTTPS origin every read failed with "error sending request" -- which
-    /// reads like the host is down rather than like this process was never
-    /// told whom to trust.
     fn http_client() -> Result<reqwest::Client, CmdError> {
-        let mut builder = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none());
-        let ca_file = crate::config::wc_stado_storage_ca_file().trim().to_string();
-        if !ca_file.is_empty() {
-            let path = crate::config_file::expand_tilde(&ca_file);
-            let pem = std::fs::read(&path).map_err(|error| {
-                CmdError::click(format!(
-                    "cannot read storage.stado.ca_file {}: {error}",
-                    path.display()
-                ))
-            })?;
-            let certificate = reqwest::Certificate::from_pem(&pem).map_err(|error| {
-                CmdError::click(format!(
-                    "storage.stado.ca_file {} is not a PEM certificate: {error}",
-                    path.display()
-                ))
-            })?;
-            builder = builder.add_root_certificate(certificate);
-        }
-        builder.build().map_err(CmdError::from)
+        fleet_https_client()
     }
+
 
     fn endpoint(&self, route: &str, query: &[(&str, &str)]) -> Result<url::Url, CmdError> {
         object_api_endpoint(&self.base_url, route, query)
@@ -1540,6 +1516,35 @@ impl RemoteObjectApi {
             "Stado object API returned HTTP {status}: {detail}{suffix}"
         ))
     }
+}
+
+/// One HTTPS client that trusts what `storage.stado.ca_file` names.
+///
+/// The queue backend already loads that certificate; callers that built their
+/// own client did not, so the moment the fleet's control plane moved from
+/// loopback to a tailnet HTTPS origin they failed with "error sending
+/// request" -- which reads like the host is down rather than like this
+/// process was never told whom to trust.
+pub(crate) fn fleet_https_client() -> Result<reqwest::Client, CmdError> {
+    let mut builder = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none());
+    let ca_file = crate::config::wc_stado_storage_ca_file().trim().to_string();
+    if !ca_file.is_empty() {
+        let path = crate::config_file::expand_tilde(&ca_file);
+        let pem = std::fs::read(&path).map_err(|error| {
+            CmdError::click(format!(
+                "cannot read storage.stado.ca_file {}: {error}",
+                path.display()
+            ))
+        })?;
+        let certificate = reqwest::Certificate::from_pem(&pem).map_err(|error| {
+            CmdError::click(format!(
+                "storage.stado.ca_file {} is not a PEM certificate: {error}",
+                path.display()
+            ))
+        })?;
+        builder = builder.add_root_certificate(certificate);
+    }
+    builder.build().map_err(CmdError::from)
 }
 
 fn configured_object_base_url(variable: &str) -> Result<Option<url::Url>, CmdError> {
