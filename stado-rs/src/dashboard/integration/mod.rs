@@ -60,8 +60,8 @@ fn supports(domain: &str, action: &str) -> bool {
     }
 }
 
-pub(super) async fn validate_startup() -> Result<(), ()> {
-    let clients = crate::config::integration_clients().map_err(|_| ())?;
+pub(super) async fn validate_startup() -> Result<(), String> {
+    let clients = crate::config::integration_clients().map_err(|problems| problems.join("; "))?;
     // A client naming a domain this build does not implement is a stale
     // declaration, not a reason to withdraw the domains that do work. Failing
     // the whole boundary took `enterprise` down together with nine aspirational
@@ -82,7 +82,7 @@ pub(super) async fn validate_startup() -> Result<(), ()> {
     crate::skarbiec::validate_integration_verifier()
         .await
         .map(|_| ())
-        .map_err(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 async fn dispatch(
