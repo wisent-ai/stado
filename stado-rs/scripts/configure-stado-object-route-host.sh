@@ -1,8 +1,26 @@
 #!/bin/sh
 set -eu
 
-config="$HOME/.config/stado/config.json"
-[ -f "$config" ]
+config=
+environment=$(/bin/systemctl show wisent-agent.service --property=Environment --value)
+for assignment in $environment
+do
+  case "$assignment" in
+    STADO_CONFIG=*) config=${assignment#STADO_CONFIG=} ;;
+  esac
+done
+for candidate in "$config" "$HOME/.config/stado/config.json" "$HOME/.stado/config.json" "$HOME/.stado/stado.config.json"
+do
+  if [ -n "$candidate" ] && [ -f "$candidate" ]
+  then
+    config=$candidate
+    break
+  fi
+done
+[ -n "$config" ] && [ -f "$config" ] || {
+  printf '%s\n' "Stado agent config file was not found" >&2
+  exit 1
+}
 temporary="${config}.tmp.$$"
 python_bin=$(command -v python3 || true)
 [ -n "$python_bin" ]
