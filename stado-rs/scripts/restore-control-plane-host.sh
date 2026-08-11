@@ -12,10 +12,11 @@ logs="$HOME/.stado/logs"
 skarbiec_url=http://127.0.0.1:8895
 port=8765
 
-# This host's configured queue backend is the object API that this very
-# process serves, so with the process down the proxy in front answers 502 and
-# the control plane cannot boot itself. It owns the disk store; it reads it
-# directly, exactly like every other store-owning dashboard in this fleet.
+# This host's configured object-API URL is the tailnet origin fronted by a
+# proxy that loops straight back here, so with the process down it cannot boot
+# itself. Forcing a local backend instead would move every write onto a disk
+# no reader reads. The shared store is reachable without the loop over the
+# forward this host already keeps.
 WC_STORAGE_BACKEND=local
 export WC_STORAGE_BACKEND
 
