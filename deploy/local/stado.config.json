@@ -228,6 +228,7 @@
       "items": [
         "compute-marketplace-agent",
         "jeden-agent-auth",
+        "jeden-model-router",
         "trading-autonomy-agent-auth",
         "trading-autonomy-media-router",
         "trading-autonomy-model-router",
@@ -246,6 +247,7 @@
       "secret_fields": [
         "compute-marketplace-agent#token",
         "jeden-agent-auth#agent_auth_secret",
+        "jeden-model-router#token",
         "trading-autonomy-agent-auth#agent_auth_secret",
         "trading-autonomy-media-router#token",
         "trading-autonomy-model-router#token",
