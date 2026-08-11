@@ -886,6 +886,9 @@ pub struct ScheduleCreateArgs {
     /// Pin machine type verbatim.
     #[arg(long, default_value = "")]
     machine_type: String,
+    /// Hard-pin every scheduled job to one registry target or consumer id.
+    #[arg(long, default_value = "")]
+    pinned_host: String,
     /// Git URL to clone before running.
     #[arg(long, default_value = "")]
     repo: String,
