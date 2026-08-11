@@ -1067,7 +1067,13 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         // job_eligible(consumer_id=...) below filters to ONLY the jobs this
         // agent owns. The coordinator's makespan matcher already made the
         // choice; this loop executes it.
-        let mut queued = store.list_jobs_fitting("queue", free_vram_gb, 2000).await?;
+        let listed = store.list_jobs_fitting("queue", free_vram_gb, 2000).await?;
+        let mut queued = Vec::with_capacity(listed.len());
+        for candidate in listed {
+            if let Some(job) = store.read_job("queue", &candidate.job_id).await? {
+                queued.push(job);
+            }
+        }
         queued.sort_by(|a, b| {
             b.priority
                 .cmp(&a.priority)
