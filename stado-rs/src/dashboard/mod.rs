@@ -373,32 +373,54 @@ impl Dashboard {
         // boundaries together can overwhelm the listener and fail the whole
         // control plane on a transient connection reset, so validate them in
         // deterministic order with an independent timeout per boundary.
-        let object = tokio::time::timeout(
-            startup_timeout,
-            crate::skarbiec::validate_object_verifier(),
-        )
-        .await;
-        let release = tokio::time::timeout(
-            startup_timeout,
-            crate::skarbiec::validate_release_verifier(),
-        )
-        .await;
-        let machine = tokio::time::timeout(
-            startup_timeout,
-            crate::skarbiec::validate_machine_verifier(),
-        )
-        .await;
-        let service = tokio::time::timeout(
-            startup_timeout,
-            crate::skarbiec::validate_service_verifier(),
-        )
-        .await;
-        let rate_verifier =
-            tokio::time::timeout(startup_timeout, rate_limit::validate_verifier()).await;
-        let rate_state =
-            tokio::time::timeout(startup_timeout, self.rate_limiter.restore()).await;
-        let integration =
-            tokio::time::timeout(startup_timeout, integration::validate_startup()).await;
+        //
+        // A verdict is also recorded once and never revisited, so one slow or
+        // reset read shuts a boundary until somebody restarts the unit -- and
+        // `object` shutting means `503 object authorization unavailable` for the
+        // whole fleet. That happened four times in one afternoon, each time
+        // cured by an identical retry, so the retry belongs here instead of in
+        // the operator's hands.
+        let attempts = std::env::var("WC_DASHBOARD_BOUNDARY_ATTEMPTS")
+            .ok()
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .filter(|count| *count > 0)
+            .unwrap_or(3);
+        let retry_pause = Duration::from_secs(2);
+        macro_rules! validate {
+            ($name:literal, $call:expr) => {{
+                let mut outcome = tokio::time::timeout(startup_timeout, $call).await;
+                let mut attempt = 1;
+                while attempt < attempts && !matches!(outcome, Ok(Ok(_))) {
+                    eprintln!(
+                        "[dashboard] {} boundary attempt {attempt} of {attempts} did not settle; retrying",
+                        $name
+                    );
+                    tokio::time::sleep(retry_pause).await;
+                    outcome = tokio::time::timeout(startup_timeout, $call).await;
+                    attempt += 1;
+                }
+                outcome
+            }};
+        }
+        let object = validate!(
+            "object authorization",
+            crate::skarbiec::validate_object_verifier()
+        );
+        let release = validate!(
+            "release publication",
+            crate::skarbiec::validate_release_verifier()
+        );
+        let machine = validate!(
+            "machine authorization",
+            crate::skarbiec::validate_machine_verifier()
+        );
+        let service = validate!(
+            "service authorization",
+            crate::skarbiec::validate_service_verifier()
+        );
+        let rate_verifier = validate!("rate-limit authorization", rate_limit::validate_verifier());
+        let rate_state = validate!("rate-limit state", self.rate_limiter.restore());
+        let integration = validate!("integration authorization", integration::validate_startup());
         // Only `object` used to report why it failed, so every other boundary
         // said "unavailable" and left the operator guessing which grant, item
         // set or endpoint was at fault. The verdict is useless without it.
