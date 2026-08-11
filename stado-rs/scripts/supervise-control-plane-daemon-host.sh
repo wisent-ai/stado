@@ -24,6 +24,14 @@ home=$HOME
 binary="$home/.stado/bin/stado"
 logs="$home/.stado/logs"
 skarbiec_url=http://127.0.0.1:8895
+# The fleet's store is not this host's disk. This host's configured object-API
+# URL is the tailnet origin fronted by a proxy that loops straight back here,
+# so with the process down it cannot boot itself -- and forcing a local
+# backend instead silently moves every write onto a disk no reader reads,
+# which is how beacons published from here went stale while reporting success.
+# The shared store is reachable without the loop over the forward this host
+# already keeps.
+storage_backend=local
 port=8765
 
 [ -x "$binary" ] || { printf '%s\n' "missing $binary" >&2; exit 1; }
@@ -34,7 +42,7 @@ bound() {
 }
 
 relaunch_detached() {
-  WC_SKARBIEC_URL="$skarbiec_url" WC_STORAGE_BACKEND=local \
+  WC_SKARBIEC_URL="$skarbiec_url" WC_STORAGE_BACKEND="$storage_backend" \
     /usr/bin/nohup "$binary" local-control-plane \
     < /dev/null >> "$logs/stado-local-control-plane.log" 2>&1 &
 }
@@ -60,7 +68,7 @@ relaunch_detached() {
         <key>WC_SKARBIEC_URL</key>
         <string>$skarbiec_url</string>
         <key>WC_STORAGE_BACKEND</key>
-        <string>local</string>
+        <string>$storage_backend</string>
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     </dict>
