@@ -224,6 +224,7 @@
     "_comment": "Dedicated local workload-agent grant. It is never the control-plane grant; jobs can project only the exact item#field allowlist.",
     "skarbiec": {
       "consumer": "stado-local-agent",
+      "url": "https://charless-mac-mini.tail6443b3.ts.net:9443",
       "token_file": "~/.stado/local-agent-skarbiec-token",
       "items": [
         "compute-marketplace-agent",
