@@ -1,49 +1,48 @@
 #!/bin/sh
 set -eu
 
-config=
+[ "$(uname -s)" = Linux ] || {
+  printf '%s\n' "Stado object route configuration requires systemd" >&2
+  exit 1
+}
+
 environment=$(/bin/systemctl show wisent-agent.service --property=Environment --value)
+current=
 for assignment in $environment
 do
   case "$assignment" in
-    STADO_CONFIG=*) config=${assignment#STADO_CONFIG=} ;;
+    STADO_API_URL=*) current=${assignment#STADO_API_URL=} ;;
   esac
 done
-for candidate in "$config" "$HOME/.config/stado/config.json" "$HOME/.stado/config.json" "$HOME/.stado/stado.config.json"
-do
-  if [ -n "$candidate" ] && [ -f "$candidate" ]
-  then
-    config=$candidate
-    break
-  fi
-done
-[ -n "$config" ] && [ -f "$config" ] || {
-  printf '%s\n' "Stado agent config file was not found" >&2
+[ -n "$current" ] || {
+  printf '%s\n' "wisent-agent.service has no STADO_API_URL" >&2
   exit 1
 }
-temporary="${config}.tmp.$$"
+
 python_bin=$(command -v python3 || true)
 [ -n "$python_bin" ]
-"$python_bin" - "$config" "$temporary" <<'PY'
-import json
+route=$("$python_bin" - "$current" <<'PY'
 import sys
-from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
-source = Path(sys.argv[1])
-temporary = Path(sys.argv[2])
-document = json.loads(source.read_text(encoding="utf-8"))
-stado = document.setdefault("storage", {}).setdefault("stado", {})
-current = str(stado.get("url", ""))
+current = sys.argv[1]
 parsed = urlsplit(current)
 if parsed.scheme != "https" or not parsed.hostname or parsed.path not in ("", "/"):
-    raise SystemExit(f"refusing unexpected Stado object URL: {current!r}")
+    raise SystemExit(f"refusing unexpected Stado API URL: {current!r}")
 host = parsed.hostname
 if ":" in host and not host.startswith("["):
     host = f"[{host}]"
-stado["url"] = urlunsplit(("https", f"{host}:8443", "", "", ""))
-temporary.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-print(stado["url"])
+print(urlunsplit(("https", f"{host}:8443", "", "", "")))
 PY
-/bin/chmod 0600 "$temporary"
-/bin/mv "$temporary" "$config"
+)
+
+unit=wisent-agent.service
+dropin_directory="/etc/systemd/system/${unit}.d"
+dropin="$dropin_directory/stado-object-route.conf"
+temporary="${dropin}.tmp.$$"
+/bin/mkdir -p "$dropin_directory"
+printf '[Service]\nEnvironment="STADO_API_URL=%s"\n' "$route" >"$temporary"
+/bin/chmod 0644 "$temporary"
+/bin/mv "$temporary" "$dropin"
+/bin/systemctl daemon-reload
+printf '%s\n' "$route"
