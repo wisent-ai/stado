@@ -14,6 +14,7 @@ case "$(uname -s)" in
       found=true
       label=$(/usr/bin/basename "$plist" .plist)
       /bin/launchctl bootout "gui/$uid/$label" 2>/dev/null || true
+      /bin/sleep 1
       /bin/launchctl bootstrap "gui/$uid" "$plist"
       /bin/launchctl kickstart -k "gui/$uid/$label"
       /bin/launchctl print "gui/$uid/$label" >/dev/null
