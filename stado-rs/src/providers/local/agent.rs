@@ -735,7 +735,6 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         if smi_free >= 0 && smi_free < free_vram_gb {
             free_vram_gb = smi_free;
         }
-        let mut inference_serving = false;
         if let Some(reservation) = &inference_reservation {
             agent_diag.insert(
                 "inference_reservation".into(),
@@ -746,7 +745,6 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                 Value::from(reservation.gpu_mode.clone()),
             );
             if reservation.gpu_mode == crate::inference::schema::GPU_EXCLUSIVE {
-                inference_serving = true;
                 free_vram_gb = 0;
                 log_fn(&format!(
                     "exclusive inference reservation '{}': GPU claims disabled; CPU-only claims remain eligible",
@@ -783,13 +781,11 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                                     "yieldable inference '{}': pause failed safely: {error}",
                                     reservation.deployment
                                 ));
-                                inference_serving = true;
                                 free_vram_gb = 0;
                             }
                         }
                     }
                     Ok(true) => {
-                        inference_serving = true;
                         free_vram_gb = 0;
                         agent_diag.insert(
                             "inference_runtime_state".into(),
@@ -842,7 +838,6 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                         }
                     }
                     Err(error) => {
-                        inference_serving = true;
                         free_vram_gb = 0;
                         agent_diag.insert(
                             "inference_runtime_state".into(),
@@ -1042,18 +1037,13 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             tokio::time::sleep(Duration::from_secs(10)).await;
             continue;
         }
-        // RAM gate: ordinary compute retains the measured non-wisent reserve.
-        // A serving inference reservation already reduces the scan to
-        // zero-VRAM jobs; for those, MemAvailable is the usable headroom and
-        // only the dynamic safety buffer is reserved. Counting the inference
-        // process RSS again would double-count memory already excluded from
-        // MemAvailable and make every CPU-only maintenance job impossible.
+        // MemAvailable already excludes RAM resident in every non-agent
+        // process. Adding those processes' RSS again double-reserves the same
+        // memory and can permanently wedge a healthy host once its baseline
+        // load exceeds half of physical RAM. Keep only the dynamic headroom;
+        // per-job memory remains represented by Job::memory_gb.
         let fr = helpers::free_ram_gb();
-        let ram_reserve = if inference_serving {
-            helpers::ram_safety_buffer_gb()
-        } else {
-            helpers::static_ram_reserve_gb() + helpers::ram_safety_buffer_gb()
-        };
+        let ram_reserve = helpers::ram_safety_buffer_gb();
         if (0.0..ram_reserve).contains(&fr) {
             log_fn(&format!(
                 "RAM gate: {} GB free < {} GB reserve; skipping claims",
