@@ -1,0 +1,20 @@
+{
+  "name": "wisent-contracts",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "deploy:base-testnet": "hardhat run scripts/deploy.ts --network base-sepolia",
+    "deploy:base": "hardhat run scripts/deploy.ts --network base",
+    "verify": "hardhat verify --network base"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^4.0.0",
+    "@openzeppelin/contracts": "^5.1.0",
+    "hardhat": "^2.22.0",
+    "typescript": "^5.7.0",
+    "ts-node": "^10.9.0",
+    "@types/node": "^22.0.0"
+  }
+}
