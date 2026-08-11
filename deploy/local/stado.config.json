@@ -248,7 +248,7 @@
         "compute-marketplace-agent#token",
         "jeden-agent-auth#agent_auth_secret",
         "jeden-model-router#token",
-        "trading-autonomy-agent-auth#agent_auth_secret",
+        "trading-autonomy-agent-auth#token",
         "trading-autonomy-media-router#token",
         "trading-autonomy-model-router#token",
         "wisent-backend-alert-router#token",
@@ -260,9 +260,8 @@
         "wisent-backend-object-signing#key",
         "wisent-backend-release-runner#token",
         "wisent-backend-scheduler#token",
-        "wisent-trade-agent-email#api-key",
-        "wisent-trade-agent-model-router#token",
-        "wisent-trade-agent-model-router#url"
+        "wisent-trade-agent-email#token",
+        "wisent-trade-agent-model-router#token"
       ]
     }
   }
