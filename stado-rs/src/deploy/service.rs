@@ -822,7 +822,21 @@ if [ \"$os\" = \"Darwin\" ]; then
       exit 66
     fi
   fi
-  if [ -z \"$unit_path\" ]; then unit_path=\"$HOME/Library/LaunchAgents/$unit.plist\"; fi
+  # An unqualified label may name either this login's agent or a system
+  # daemon. Adoption looked only in the login's LaunchAgents and therefore
+  # reported a running always-on daemon as absent, which is the one class of
+  # unit this fleet keeps in the system domain.
+  if [ -z \"$unit_path\" ]; then
+    if [ -f \"$HOME/Library/LaunchAgents/$unit.plist\" ]; then
+      unit_path=\"$HOME/Library/LaunchAgents/$unit.plist\"
+    elif [ -f \"/Library/LaunchDaemons/$unit.plist\" ]; then
+      unit_path=\"/Library/LaunchDaemons/$unit.plist\"
+      domain=\"system\"
+      launch=\"/usr/bin/sudo -n /bin/launchctl\"
+    else
+      unit_path=\"$HOME/Library/LaunchAgents/$unit.plist\"
+    fi
+  fi
 elif [ \"$os\" = \"Linux\" ]; then
   if [ -n \"$linux_unit\" ]; then unit=\"$linux_unit\"; fi
   if [ -z \"$unit_path\" ]; then unit_path=\"$HOME/.config/systemd/user/$unit\"; fi
