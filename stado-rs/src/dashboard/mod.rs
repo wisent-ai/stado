@@ -606,9 +606,7 @@ impl Dashboard {
             }
         } else if object.namespace() == "sources" {
             authorize_release(request, object.key(), false).await
-        } else if let Some(product) =
-            release_catalog_product(object.namespace(), object.key())
-        {
+        } else if let Some(product) = release_catalog_product(object.namespace(), object.key()) {
             authorize_release(request, &format!("{product}/catalog.json"), false).await
         } else {
             authorize_object(request, object.namespace(), object.key(), false, "put").await
@@ -712,9 +710,7 @@ impl Dashboard {
             };
             let authorized = if release_object_namespace(&namespace) {
                 authorize_release(request, &key_or_prefix, list).await
-            } else if let Some(product) =
-                release_catalog_product(&namespace, &key_or_prefix)
-            {
+            } else if let Some(product) = release_catalog_product(&namespace, &key_or_prefix) {
                 authorize_release(request, &format!("{product}/catalog.json"), false).await
             } else {
                 authorize_object(request, &namespace, &key_or_prefix, list, action).await
@@ -1619,9 +1615,7 @@ impl Dashboard {
             }
         } else if object.namespace() == "sources" {
             authorize_release(request, object.key(), false).await
-        } else if let Some(product) =
-            release_catalog_product(object.namespace(), object.key())
-        {
+        } else if let Some(product) = release_catalog_product(object.namespace(), object.key()) {
             authorize_release(request, &format!("{product}/catalog.json"), false).await
         } else {
             authorize_object(request, object.namespace(), object.key(), false, "put").await
@@ -1805,10 +1799,7 @@ impl Dashboard {
         }
         match operator_console::run(&request.body).await {
             Ok(result) => send_json(http_status("200"), &result),
-            Err(error) => send_json(
-                error.status,
-                &json!({"ok": false, "error": error.message}),
-            ),
+            Err(error) => send_json(error.status, &json!({"ok": false, "error": error.message})),
         }
     }
 
@@ -2124,8 +2115,13 @@ async fn read_request(stream: &mut TcpStream) -> std::io::Result<Option<Request>
         ));
     }
     let available = buf.len().saturating_sub(body_start).min(content_length);
-    let mut body = Vec::with_capacity(available);
+    let mut body = Vec::with_capacity(content_length);
     body.extend_from_slice(&buf[body_start..body_start + available]);
+    if body.len() < content_length {
+        let received = body.len();
+        body.resize(content_length, 0);
+        stream.read_exact(&mut body[received..]).await?;
+    }
     Ok(Some(Request {
         method,
         path,
