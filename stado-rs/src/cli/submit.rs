@@ -182,17 +182,25 @@ async fn resolve_input_artifacts(
                 ))
             })?;
         requested.insert(name.to_string(), Value::from(reference));
-        resolved.insert(
-            name.to_string(),
-            Value::Object(Map::from_iter([
-                ("ref".into(), Value::from(manifest.ref_.to_string())),
-                ("uri".into(), Value::from(primary.uri.clone())),
-                (
-                    "manifest_sha256".into(),
-                    Value::from(manifest.verification.manifest_sha256.clone()),
-                ),
-            ])),
-        );
+        let mut resolved_input = Map::from_iter([
+            ("ref".into(), Value::from(manifest.ref_.to_string())),
+            ("uri".into(), Value::from(primary.uri.clone())),
+            (
+                "manifest_sha256".into(),
+                Value::from(manifest.verification.manifest_sha256.clone()),
+            ),
+        ]);
+        if primary.uri.starts_with("stado://") {
+            resolved_input.insert("stado_uri".into(), Value::from(primary.uri.clone()));
+            resolved_input.insert(
+                "relative_path".into(),
+                Value::from(format!("inputs/{name}")),
+            );
+            if !primary.sha256.is_empty() {
+                resolved_input.insert("sha256".into(), Value::from(primary.sha256.clone()));
+            }
+        }
+        resolved.insert(name.to_string(), Value::Object(resolved_input));
     }
     Ok((requested, resolved))
 }
