@@ -205,6 +205,10 @@ impl StadoObjectBackend {
         let response = self
             .request(Method::PUT, self.object_url(path, &options)?)
             .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+            // Reqwest omits Content-Length for an empty Vec body. The object
+            // endpoint requires the header even when the payload is zero bytes,
+            // so empty logs and artifacts must declare their length explicitly.
+            .header(reqwest::header::CONTENT_LENGTH, content.len())
             .body(content)
             .send()
             .await?;
