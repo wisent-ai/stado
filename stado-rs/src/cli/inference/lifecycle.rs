@@ -220,6 +220,21 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
     Ok(())
 }
 
+fn mode_only_change(current: &schema::Deployment, candidate: &schema::Deployment) -> bool {
+    current.resources.gpu_mode != candidate.resources.gpu_mode
+        && current.name == candidate.name
+        && current.target == candidate.target
+        && current.desired_state == candidate.desired_state
+        && current.engine == candidate.engine
+        && current.model == candidate.model
+        && current.resources.gpus == candidate.resources.gpus
+        && current.resources.max_model_len == candidate.resources.max_model_len
+        && current.resources.kv_cache_memory_gb == candidate.resources.kv_cache_memory_gb
+        && current.resources.cache_dir == candidate.resources.cache_dir
+        && current.endpoint == candidate.endpoint
+        && current.credential_item == candidate.credential_item
+}
+
 pub async fn apply(plan_id: &str, json_output: bool) -> Result<(), CmdError> {
     let plan = saved_plan::load(plan_id).map_err(click)?;
     let (document, expected_generation) = crate::cli::registry::fetch_versioned_document().await?;
@@ -229,11 +244,56 @@ pub async fn apply(plan_id: &str, json_output: bool) -> Result<(), CmdError> {
             "registry changed after inference plan creation; create a new plan",
         ));
     }
-    let bearer = super::credential::read().await?;
+    let mut registry = schema::parse(&document).map_err(click)?;
+    let current = registry
+        .deployments
+        .iter()
+        .find(|deployment| deployment.name == plan.deployment.name)
+        .cloned();
     let target = host_channel::canonical_target(&plan.deployment.target)
         .await
         .map_err(click)?;
     let runner = production_runner();
+
+    if let Some(current) = current.filter(|current| mode_only_change(current, &plan.deployment)) {
+        let updated = inference::update_reservation(&target, &plan.deployment, &runner)
+            .await
+            .map_err(click)?;
+        replace(&mut registry, plan.deployment.clone());
+        let next = schema::write(&document, &registry).map_err(click)?;
+        let generation = match crate::cli::registry::push_document_if(&next, &expected_generation)
+            .await
+        {
+            Ok(generation) => generation,
+            Err(error) => {
+                if let Err(restore_error) =
+                    inference::update_reservation(&target, &current, &runner).await
+                {
+                    return Err(CmdError::click(format!(
+                        "{error}; inference reservation restoration also failed: {restore_error}"
+                    )));
+                }
+                return Err(error);
+            }
+        };
+        saved_plan::consume(plan_id).map_err(click)?;
+        if json_output {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "generation": generation,
+                    "deployment": plan.deployment,
+                    "runtime": updated,
+                    "ready": {"status": "unchanged"},
+                }))?
+            );
+        } else {
+            println!("applied inference plan {plan_id} generation={generation}");
+        }
+        return Ok(());
+    }
+
+    let bearer = super::credential::read().await?;
     let installed = match inference::install(&target, &plan.deployment, &bearer, &runner).await {
         Ok(installed) if succeeded(&installed, "started") => installed,
         result => {
@@ -264,7 +324,6 @@ pub async fn apply(plan_id: &str, json_output: bool) -> Result<(), CmdError> {
             return Err(error);
         }
     };
-    let mut registry = schema::parse(&document).map_err(click)?;
     replace(&mut registry, plan.deployment.clone());
     let next = schema::write(&document, &registry).map_err(click)?;
     let generation = match crate::cli::registry::push_document_if(&next, &expected_generation).await
