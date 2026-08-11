@@ -200,7 +200,9 @@ pub(crate) fn parse_secret_env(
     values: &[String],
 ) -> Result<BTreeMap<String, crate::models::JobSecretRef>, CmdError> {
     let env_re = regex::Regex::new(r"^[A-Za-z_][A-Za-z0-9_]*$").expect("static regex compiles");
-    let part_re =
+    let item_re =
+        regex::Regex::new(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$").expect("static regex compiles");
+    let field_re =
         regex::Regex::new(r"^[A-Za-z0-9][A-Za-z0-9._-]*$").expect("static regex compiles");
     let mut parsed = BTreeMap::new();
     for value in values {
@@ -214,7 +216,7 @@ pub(crate) fn parse_secret_env(
                 "--secret-env must be ENV_NAME=SKARBIEC_ITEM#FIELD: {value:?}"
             )));
         };
-        if !env_re.is_match(env_name) || !part_re.is_match(item) || !part_re.is_match(field) {
+        if !env_re.is_match(env_name) || !item_re.is_match(item) || !field_re.is_match(field) {
             return Err(CmdError::click(format!(
                 "--secret-env contains an unsafe environment, item, or field name: {value:?}"
             )));
