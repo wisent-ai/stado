@@ -179,6 +179,7 @@
       "compute-marketplace": {"item": "compute-marketplace-release-publisher", "prefix": "compute-marketplace/"},
       "image-video-router": {"item": "image-video-router-release-publisher", "prefix": "image-video-router/"},
       "jeden": {"item": "jeden-release-publisher", "prefix": "jeden/"},
+      "jeden-desktop": {"item": "jeden-desktop-release-publisher", "prefix": "jeden-desktop/"},
       "oko": {"item": "oko-release-publisher", "prefix": "oko/"},
       "skarbiec": {"item": "skarbiec-release-publisher", "prefix": "skarbiec/"},
       "stado": {"item": "stado-release-publisher", "prefix": "stado/"},
