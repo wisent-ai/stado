@@ -90,6 +90,10 @@ def registry_document():
         HOME / ".stado" / "local-storage" / "registry.json",
         HOME / ".stado" / "local-storage" / "ecosystem" / NAMESPACE / "registry.json",
         HOME / ".stado" / "local-backup" / "registry.json",
+        # A host that has never reached the store has no copy of its own. One
+        # delivered by `stado host install-file` is how it gets its first, and
+        # without this the machine can never be pointed anywhere.
+        HOME / ".stado" / "files" / "registry-next.json",
     ):
         if candidate.is_file():
             print(f"fallback        {candidate}")
