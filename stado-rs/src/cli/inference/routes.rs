@@ -17,14 +17,17 @@ fn deployment<'a>(registry: &'a schema::Registry, name: &str) -> Option<&'a sche
         .find(|deployment| deployment.name == name)
 }
 
-async fn require_ready(registry: &schema::Registry, destination: &str) -> Result<(), CmdError> {
+async fn destination_ready(
+    registry: &schema::Registry,
+    destination: &str,
+) -> Result<bool, CmdError> {
     let Some(deployment) = deployment(registry, destination) else {
         if destination.split_once('/').is_none() {
             return Err(CmdError::click(format!(
                 "unknown route destination '{destination}'"
             )));
         }
-        return Ok(());
+        return Ok(true);
     };
     let bearer = super::credential::read().await?;
     let target = host_channel::canonical_target(&deployment.target)
@@ -33,12 +36,14 @@ async fn require_ready(registry: &schema::Registry, destination: &str) -> Result
     let report = inference::probe(&target, deployment, &bearer, &production_runner())
         .await
         .map_err(click)?;
-    if report.get("status").and_then(Value::as_str) != Some("ready") {
-        return Err(CmdError::click(format!(
-            "route destination '{destination}' is not ready"
-        )));
-    }
-    Ok(())
+    Ok(report.get("status").and_then(Value::as_str) == Some("ready"))
+}
+
+fn yieldable_primary(registry: &schema::Registry, destination: &str) -> bool {
+    deployment(registry, destination).is_some_and(|deployment| {
+        deployment.desired_state == schema::STATE_RUNNING
+            && deployment.resources.gpu_mode == schema::GPU_YIELDABLE
+    })
 }
 
 fn route_host(registry: &schema::Registry) -> Option<&str> {
@@ -80,9 +85,19 @@ pub async fn set(
             "route '{alias}' is '{current}', expected '{expected}'"
         )));
     }
-    require_ready(&registry, to).await?;
+    if !destination_ready(&registry, to).await?
+        && (!yieldable_primary(&registry, to) || fallbacks.is_empty())
+    {
+        return Err(CmdError::click(format!(
+            "route destination '{to}' is not ready"
+        )));
+    }
     for fallback in fallbacks {
-        require_ready(&registry, fallback).await?;
+        if !destination_ready(&registry, fallback).await? {
+            return Err(CmdError::click(format!(
+                "route destination '{fallback}' is not ready"
+            )));
+        }
     }
     let host = route_host(&registry).map(str::to_string);
     registry.routes.insert(alias.to_string(), to.to_string());
