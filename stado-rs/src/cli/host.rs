@@ -2349,15 +2349,28 @@ pub async fn run_helper(
     Ok(())
 }
 
-/// Remove one previously installed helper. Installing a helper is how Stado
-/// runs what the exec allowlist refuses, which makes every diagnostic a file
-/// left behind on someone else's machine; without this the fleet accumulates
-/// them and nothing but the operator's memory says what they were for.
-pub async fn remove_helper(target: &str, name: &str, json: bool) -> Result<(), CmdError> {
+/// The exact removal `host remove-helper` performs, for one named helper on an
+/// already-resolved target.
+///
+/// Shared with `host helpers --prune`, which removes many of these in one run.
+/// One function, because two spellings of "delete a file under `.stado/bin`"
+/// would be two policies about symlinks, about what counts as absent, and
+/// about which channel the deletion is audited on -- and the second one always
+/// turns out to be a shell one-liner somebody wrote in a hurry.
+///
+/// Returns the remote's own word: `removed` or `absent`. Absent is not a
+/// failure; a helper listed by an inventory taken seconds ago and gone by the
+/// time the removal lands is a race with a truthful outcome, and reporting it
+/// as an error would send an operator looking for a fault nobody committed.
+async fn remove_installed_helper(
+    resolved: &ComputeTarget,
+    name: &str,
+    runner: &crate::deploy::Runner,
+) -> Result<String, CmdError> {
+    // The name may have come back from a remote inventory rather than from the
+    // operator's own argv, so it is checked here as well: this is the last
+    // place before it is interpolated into a script that deletes files.
     release_component("helper name", name)?;
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
     let remote_name = crate::deploy::shlex_quote(name);
     // Regular file only: a symlink under that name is not something this
     // command put there, and following it would delete an unrelated path.
@@ -2375,22 +2388,35 @@ else
 fi
 "#
     );
-    let runner = crate::deploy::production_runner();
     let output = crate::deploy::host_channel::run_script_with_timeout(
-        &resolved,
+        resolved,
         &script,
         std::time::Duration::from_secs(crate::monitor::billing::SECONDS_PER_HOUR),
-        &runner,
+        runner,
     )
     .await
     .map_err(|error| CmdError::click(error.to_string()))?;
     if !output.ok() {
         return Err(CmdError::click(format!(
-            "{target}: helper {name} could not be removed: {}",
+            "{}: helper {name} could not be removed: {}",
+            resolved.name,
             crate::deploy::host_channel::last_error_line(&output, "remote removal failed")
         )));
     }
-    let state = output.stdout.trim().to_string();
+    Ok(output.stdout.trim().to_string())
+}
+
+/// Remove one previously installed helper. Installing a helper is how Stado
+/// runs what the exec allowlist refuses, which makes every diagnostic a file
+/// left behind on someone else's machine; without this the fleet accumulates
+/// them and nothing but the operator's memory says what they were for.
+pub async fn remove_helper(target: &str, name: &str, json: bool) -> Result<(), CmdError> {
+    release_component("helper name", name)?;
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let state = remove_installed_helper(&resolved, name, &runner).await?;
     if json {
         println!(
             "{}",
@@ -2404,6 +2430,250 @@ fi
         println!("{target}: {name} {state}");
     }
     Ok(())
+}
+
+/// The helper that inventories `$HOME/.stado/bin` on a target.
+///
+/// Installed with
+/// `stado host install-helper <target> stado-rs/scripts/report-stale-helpers.sh
+/// report-stale-helpers`.
+const INVENTORY_HELPER: &str = "report-stale-helpers";
+
+/// One installed helper script, as the remote inventory reported it.
+struct InstalledHelper {
+    name: String,
+    bytes: u64,
+    /// Seconds since the file was last written, from the remote's own clock
+    /// against this one. Skew shows up as a small negative that clamps to
+    /// zero, which is a helper installed moments ago -- exactly what it is.
+    age_seconds: i64,
+}
+
+/// One `name<TAB>mtime<TAB>size` line from `report-stale-helpers`.
+///
+/// `None` for anything that is not exactly those three fields. A short line, a
+/// number that will not parse, a fourth field from a newer helper: none of
+/// them is a helper this can date or size, and inventing a zero for the
+/// missing half would put a fabricated row at the head of an oldest-first list
+/// -- which is the first thing `--prune` would then delete.
+fn parse_inventory_line(line: &str, now: i64) -> Option<InstalledHelper> {
+    let mut fields = line.split('\t');
+    let name = fields.next().filter(|name| !name.is_empty())?;
+    let modified: i64 = fields.next()?.parse().ok()?;
+    let bytes: u64 = fields.next()?.parse().ok()?;
+    if fields.next().is_some() {
+        return None;
+    }
+    Some(InstalledHelper {
+        name: name.to_string(),
+        bytes,
+        // Clamped: a remote clock ahead of this one is skew, not a helper
+        // installed in the future, and a negative age would sort to the end of
+        // the list and read as the newest thing on the host.
+        age_seconds: (now - modified).max(i64::default()),
+    })
+}
+
+/// A prune that could not remove everything it named, reported after the
+/// table rather than instead of it.
+///
+/// The rows already printed are true and the operator needs them more than
+/// they need an early exit; the non-zero status is what stops a caller
+/// treating a partial sweep as a completed one.
+fn removal_outcome(target: &str, failed: usize) -> Result<(), CmdError> {
+    if failed == usize::default() {
+        return Ok(());
+    }
+    Err(CmdError::click(format!(
+        "{target}: {failed} helper(s) could not be removed; each is reported above with the \
+         remote's own words"
+    )))
+}
+
+/// `stado host helpers TARGET [--older-than-days N] [--prune] [--json]` — every
+/// helper script this host carries, oldest first.
+///
+/// `install-helper` has a writer and no reaper. control-host carries 553
+/// installed helper scripts beside 16 binaries: each was delivered to settle
+/// one incident, none was ever withdrawn, and `host provenance` can only print
+/// the count as a footnote because nothing enumerated them. This is the
+/// enumeration -- name, age and size, which is the least an operator needs to
+/// decide whether a script from an incident nobody remembers may go.
+///
+/// Removal is under `--prune` and never otherwise, and `--prune` demands an
+/// explicit `--older-than-days`: a sweep with no threshold means "remove
+/// everything", which is never the intent on a directory whose 553 entries
+/// include the ones three products currently run.
+///
+/// The inventory comes from the installed helper rather than from a shell
+/// one-liner, and every removal goes back through the same audited channel
+/// `host remove-helper` uses, one named helper at a time. A host without the
+/// inventory helper is an error naming the install command, never an empty
+/// table: "nobody looked" rendered as "nothing is there" is the fold this
+/// fleet has already paid for.
+pub async fn helpers(
+    target: &str,
+    older_than_days: Option<u32>,
+    prune: bool,
+    json: bool,
+) -> Result<(), CmdError> {
+    if prune && older_than_days.is_none() {
+        return Err(CmdError::usage(
+            "--prune requires --older-than-days: removing every helper is never the intent, \
+             and this directory holds the scripts three products currently run",
+        ));
+    }
+    let runner = crate::deploy::production_runner();
+    let inventory =
+        crate::deploy::host_channel::run_installed_helper(target, INVENTORY_HELPER, &runner)
+            .await
+            .map_err(|error| {
+                CmdError::click(format!(
+                    "{target}: cannot read the helper inventory: {error}; install it with \
+                     `stado host install-helper {target} \
+                     stado-rs/scripts/report-stale-helpers.sh {INVENTORY_HELPER}`"
+                ))
+            })?;
+
+    let now = chrono::Utc::now().timestamp();
+    let mut installed: Vec<InstalledHelper> = Vec::new();
+    // A line the inventory format does not explain is carried to the operator
+    // rather than dropped: a row this cannot parse is a row this cannot reason
+    // about, and silently shrinking the population is how a count stops being
+    // evidence.
+    let mut unreadable: Vec<String> = Vec::new();
+    for line in inventory.lines() {
+        let line = line.trim_end();
+        if line.is_empty() {
+            continue;
+        }
+        match parse_inventory_line(line, now) {
+            Some(helper) => installed.push(helper),
+            None => unreadable.push(line.to_string()),
+        }
+    }
+    // Oldest first: the head of this list is where the fossils are, and it is
+    // also exactly what `--prune` acts on, so the two orders cannot disagree.
+    installed.sort_by(|left, right| {
+        right
+            .age_seconds
+            .cmp(&left.age_seconds)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+
+    let threshold = older_than_days.map(|days| {
+        i64::from(days).saturating_mul(
+            i64::try_from(crate::monitor::billing::SECONDS_PER_DAY).unwrap_or(i64::MAX),
+        )
+    });
+    let stale = |helper: &InstalledHelper| {
+        threshold.is_some_and(|threshold| helper.age_seconds >= threshold)
+    };
+
+    let mut pruned: Vec<Value> = Vec::new();
+    let mut failed = usize::default();
+    if prune {
+        let resolved = crate::deploy::host_channel::canonical_target(target)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        // One failure does not end the sweep. A helper that is a symlink is
+        // refused by the removal script by design, and letting that abort the
+        // run would leave the remaining hundreds unreported and the operator
+        // with no idea how far it got.
+        for helper in installed.iter().filter(|helper| stale(*helper)) {
+            match remove_installed_helper(&resolved, &helper.name, &runner).await {
+                Ok(status) => pruned.push(json!({"helper": helper.name, "status": status})),
+                Err(error) => {
+                    failed += 1;
+                    pruned.push(json!({
+                        "helper": helper.name,
+                        "status": "failed",
+                        "error": error.to_string(),
+                    }));
+                }
+            }
+        }
+    }
+
+    let older = installed.iter().filter(|helper| stale(*helper)).count();
+    if json {
+        let rows: Vec<Value> = installed
+            .iter()
+            .map(|helper| {
+                json!({
+                    "helper": helper.name,
+                    "age_seconds": helper.age_seconds,
+                    "bytes": helper.bytes,
+                    "stale": threshold.map(|_| stale(helper)),
+                })
+            })
+            .collect();
+        let mut report = json!({
+            "target": target,
+            "helpers": rows,
+            "total": installed.len(),
+            "older_than_days": older_than_days,
+            "older_than_threshold": older,
+            "unreadable": unreadable,
+        });
+        if prune {
+            report["pruned"] = Value::Array(pruned);
+        }
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return removal_outcome(target, failed);
+    }
+
+    for line in &unreadable {
+        eprintln!("{target}: an inventory line could not be read: {line}");
+    }
+    if installed.is_empty() {
+        println!("{target}: carries no installed helper scripts");
+        return Ok(());
+    }
+    let rows: Vec<Vec<String>> = installed
+        .iter()
+        .map(|helper| {
+            let mut row = vec![
+                helper.name.clone(),
+                super::registry::human_age(chrono::TimeDelta::seconds(helper.age_seconds)),
+                helper.bytes.to_string(),
+            ];
+            if threshold.is_some() {
+                row.push(if stale(helper) { "yes" } else { "no" }.to_string());
+            }
+            row
+        })
+        .collect();
+    if threshold.is_some() {
+        super::table::print(&["HELPER", "AGE", "BYTES", "OLDER"], &rows);
+    } else {
+        super::table::print(&["HELPER", "AGE", "BYTES"], &rows);
+    }
+    for entry in &pruned {
+        println!(
+            "pruned {}: {}{}",
+            entry.get("helper").and_then(Value::as_str).unwrap_or(""),
+            entry.get("status").and_then(Value::as_str).unwrap_or(""),
+            entry
+                .get("error")
+                .and_then(Value::as_str)
+                .map_or_else(String::new, |error| format!(": {error}"))
+        );
+    }
+    // The count is the finding. One helper left behind is untidy; 553 of them
+    // is a directory that accumulated while nobody decided to keep any of it,
+    // and only the number says which of those two an operator is looking at.
+    println!(
+        "\n{target}: {} installed helper script(s) in $HOME/.stado/bin",
+        installed.len()
+    );
+    if let Some(days) = older_than_days {
+        println!("{target}: {older} older than {days} day(s)");
+        if !prune && older != usize::default() {
+            println!("nothing was removed; `--prune` removes exactly those {older}");
+        }
+    }
+    removal_outcome(target, failed)
 }
 
 /// Open a background reverse SSH forward using the exact registry channel.
