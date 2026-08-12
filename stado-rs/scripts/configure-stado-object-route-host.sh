@@ -41,7 +41,8 @@ dropin_directory="/etc/systemd/system/${unit}.d"
 dropin="$dropin_directory/stado-object-route.conf"
 temporary="${dropin}.tmp.$$"
 /bin/mkdir -p "$dropin_directory"
-printf '[Service]\nEnvironment="STADO_API_URL=%s"\n' "$route" >"$temporary"
+printf '[Service]\nEnvironment="STADO_API_URL=%s"\nEnvironment="WC_STADO_STORAGE_URL=%s"\n' \
+  "$route" "$route" >"$temporary"
 /bin/chmod 0644 "$temporary"
 /bin/mv "$temporary" "$dropin"
 /bin/systemctl daemon-reload
