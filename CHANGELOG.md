@@ -43,6 +43,13 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   same Cydonia model as its ordered fallback. With `gpu_mode=yieldable`, queued
   GPU work pauses local vLLM while Brama keeps chat available remotely.
 
+### Credential recovery
+
+- `stado credentials harvest --restore` now writes an owner-local Skarbiec vault
+  through the Skarbiec CLI's field-aware contract instead of the retired
+  whole-item HTTP payload. Restored values still move only over stdin and are
+  never printed.
+
 ## 0.5.0-rc.1 - 2026-07-29
 
 ### Product contract
