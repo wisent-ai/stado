@@ -362,12 +362,12 @@
             "allow_missing_upload_proof": true
           }
         },
-        "low_free_gb": 55,
+        "low_free_gb": 20,
         "max_bytes_per_pass": 21474836480,
         "max_items_per_pass": 100,
         "max_scan_items": 10000,
         "mode": "enforce",
-        "target_free_gb": 60
+        "target_free_gb": 25
       },
       "hostnames": [
         "charless-mac-mini.local"
@@ -458,7 +458,8 @@
           "host_heuristic": "always-on"
         }
       ],
-      "pinned_only": true
+      "pinned_only": true,
+      "slots": 1
     },
     {
       "disk_cleanup": {
