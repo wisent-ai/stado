@@ -356,6 +356,7 @@ pub async fn build_caches(
     root: &str,
     min_age_days: &str,
     apply: bool,
+    force: bool,
 ) -> Result<(), CmdError> {
     let resolved = registry_target(target).await?;
     let runner = crate::deploy::production_runner();
@@ -364,6 +365,7 @@ pub async fn build_caches(
         root,
         min_age_days,
         apply,
+        force,
         &runner,
     )
     .await;
