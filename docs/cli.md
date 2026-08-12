@@ -393,7 +393,7 @@ unavailable.
 | `stado host inventory <target>` | The stado-managed binaries under `$HOME/.stado/bin`, the `$HOME/.stado/forwards/*.url` markers, the listening loopback TCP ports, the Skarbiec vault files under `$HOME/.stado` as metadata, whether the installed `stado` knows a fixed set of subcommands — and, the point of the command, whether each forward marker still matches a live listener. |
 | `stado host release <target> --binary NAME --version X.Y.Z` | Put one registry-declared managed binary on the host: fetch the exact coordinate, verify the operator's configured SHA-256, check the layout, stage it under a versioned directory, and only then atomically repoint the active binary and restart its declared unit. The write counterpart of `host inventory`. `--dry-run` probes read-only and reports the plan. |
 | `stado host install-binary <target> --from PATH [--name NAME]` | Replace one owner-only Stado program on the host with a build proven to run there. It is delivered over the approved channel, signed, executed BEFORE it becomes the installed one, renamed into place rather than written through the file already there — overwriting a Mach-O in place invalidates its signature and the kernel answers the next exec with SIGKILL and no message — verified again, and the previous build is kept. `--rollback` puts that previous build back. |
-| `stado host precheck-runner install <target>` | Install or reconcile the isolated GitHub pre-check runner declared by Stado. The target address and platform come from the canonical registry; Stado obtains a short-lived organization token from `platform-admin-github`, verifies the pinned runner archive, creates an unprivileged account, installs the service, and applies the private-network boundary. |
+| `stado host precheck-runner install <target>` | Install or reconcile the isolated GitHub pre-check runner declared by Stado. The target address and platform come from the canonical registry; Stado obtains a short-lived organization token from the admin-scoped `GITHUB_TOKEN` credential, verifies the pinned runner archive, creates an unprivileged account, installs the service, and applies the private-network boundary. |
 | `stado host precheck-runner status <target>` | Read the service, runner identity, and nftables/PF boundary through the same registry-authorized channel. |
 | `stado host precheck-runner remove <target>` | Deregister the runner with a short-lived removal token, stop and delete its service and files, remove its account, and remove its network boundary. |
 
@@ -411,9 +411,9 @@ installed diagnostic helper. `install`, `status`, and `remove` all resolve
 Apple Silicon from `release_platform`. Fleet host addresses are never embedded
 in the command implementation.
 
-Installation reads `platform-admin-github.value` through Stado's selected
-Skarbiec store and exchanges it for a short-lived organization runner token.
-That token travels only on the host channel's stdin and is consumed by
+Installation reads `GITHUB_TOKEN.value` through Stado's admin-scoped
+Skarbiec coordinates and exchanges it for a short-lived organization runner
+token. That token travels only on the host channel's stdin and is consumed by
 `config.sh`; it is not an argument, repository file, or persistent host
 credential. The Actions Runner archive version and SHA-256 are pinned in the
 Rust release.
