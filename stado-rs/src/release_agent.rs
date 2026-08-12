@@ -287,10 +287,7 @@ fn spawn_release(
         .arg(format!("STADO_RELEASE_PRODUCT={product}"))
         .arg(format!("STADO_RELEASE_VERSION={}", manifest.version))
         .arg(format!("STADO_RELEASE_PLATFORM={}", manifest.platform))
-        .arg(format!(
-            "STADO_RELEASE_SHA256={}",
-            manifest.artifact_sha256
-        ))
+        .arg(format!("STADO_RELEASE_SHA256={}", manifest.artifact_sha256))
         .arg(format!("{}={}", policy.binary_env, binary.display()))
         .arg(format!("{}={port}", policy.port_env))
         .arg(format!("{}={}", policy.runtime_env, runtime.display()));
@@ -440,7 +437,9 @@ async fn fetch_release_bytes(uri: &str) -> Result<Vec<u8>, String> {
     // The release channel is served publicly over the object API.
     // Without STADO_API_URL, JobStorage::read_bytes on the canonical root
     // prefix serves a stale copy and the agent quarantines the release.
-    crate::cli::storage::fetch_object(uri).await.map_err(|e| e.to_string())
+    crate::cli::storage::fetch_object(uri)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 async fn fetch_candidate(
