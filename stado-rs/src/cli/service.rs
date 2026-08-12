@@ -25,6 +25,7 @@ use crate::deploy::service::{
     self, ManagedService, ServiceEnv, ServiceLog, ServiceStatus, SOURCE_RECOVERY, SOURCE_REGISTRY,
 };
 use crate::deploy::{host_channel, production_runner, DeployError};
+use crate::observations;
 use crate::queue::JobStorage;
 use crate::targets;
 
@@ -42,6 +43,14 @@ pub enum ServiceCommands {
     /// reports on hosts that are not currently reachable. A host that has
     /// published no beacon reports `unknown`, which is deliberately not
     /// the same answer as `missing`.
+    ///
+    /// `OBSERVED` is a different question from `STATE` and is answered by a
+    /// different party. `STATE` is what the host says about its own unit;
+    /// `OBSERVED` is when anybody last went and looked at the service from
+    /// outside. A host with a closed lid publishes no beacon and says
+    /// nothing, so `STATE` goes quiet rather than wrong -- and quiet is what
+    /// read as fine for twelve days. `never` in this column means no machine
+    /// has ever confirmed this service from any vantage.
     List {
         #[arg(long)]
         json: bool,
@@ -637,13 +646,29 @@ async fn status(name: &str, json: bool) -> Result<(), CmdError> {
 }
 
 fn render_status(rows: &[ServiceStatus], json: bool) -> Result<(), CmdError> {
+    // Read once for the whole table. The record is a file on this machine and
+    // the answer is the same for every row in one rendering.
+    let seen = observations::load();
     if json {
-        let payload: Vec<Value> = rows.iter().map(ServiceStatus::to_json).collect();
+        let payload: Vec<Value> = rows
+            .iter()
+            .map(|row| {
+                let mut entry = row.to_json();
+                // Carried in the machine-readable form too, because the
+                // consumers of `--json` are the dashboards and gates that
+                // acted on a twelve-day-old `active` without ever being able
+                // to see how old it was.
+                let fact = observations::service_fact(&row.service.name, &row.service.host);
+                entry["observed"] = json!(observations::describe_in(&seen, &fact));
+                entry
+            })
+            .collect();
         return print_json(&Value::Array(payload));
     }
     let cells: Vec<Vec<String>> = rows
         .iter()
         .map(|row| {
+            let fact = observations::service_fact(&row.service.name, &row.service.host);
             vec![
                 row.service.host.clone(),
                 row.service.name.clone(),
@@ -651,6 +676,7 @@ fn render_status(rows: &[ServiceStatus], json: bool) -> Result<(), CmdError> {
                 row.service.source.clone(),
                 row.state.clone(),
                 dash(&row.reported_at),
+                observations::describe_in(&seen, &fact),
                 dash(&row.detail),
             ]
         })
@@ -663,6 +689,7 @@ fn render_status(rows: &[ServiceStatus], json: bool) -> Result<(), CmdError> {
             "SOURCE",
             "STATE",
             "REPORTED_AT",
+            "OBSERVED",
             "DETAIL",
         ],
         &cells,

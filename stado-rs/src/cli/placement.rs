@@ -1,4 +1,6 @@
-//! `stado placement move` — one fenced transaction for a colocated service group.
+//! `stado placement move` — one fenced transaction for a colocated service
+//! group — and `stado host publish-placement-policy`, which makes the registry
+//! the only writer of a host's Weles placement policy.
 //!
 //! The registry profile is the complete operational contract: concrete units
 //! per host, stop/start order, durable files, loopback health probes, and routing
@@ -6,7 +8,14 @@
 //! copies state only after writers stop, activates and probes the destination,
 //! then commits the service declarations with a second CAS. Every failure before
 //! that commit restores destination files, routing, and source services.
+//!
+//! Both halves answer the same question — which host may do what — and the
+//! second half exists because one part of that question was answered twice. A
+//! service's placement lives in the registry and moves under transaction; a
+//! worker's placement lived in the registry AND in a file on the worker's own
+//! disk, and only the file decided.
 
+use std::collections::BTreeSet;
 use std::process::Stdio;
 use std::sync::Arc;
 
@@ -21,7 +30,7 @@ use crate::deploy::{host_channel, production_runner, CommandOutput, DeployError,
 use crate::placement::{
     self, PlacementHost, PlacementProfile, PlacementState, PlacementTransaction, PlacementUnit,
 };
-use crate::targets::{self, ComputeTarget, Registry};
+use crate::targets::{self, ComputeTarget, Registry, WelesPolicy};
 
 use super::{registry, CmdError};
 
@@ -1134,6 +1143,389 @@ async fn move_services(
             Err(CmdError::click(details.join("; ")))
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// host publish-placement-policy
+// ---------------------------------------------------------------------------
+
+/// Basename the policy takes in the target's delivered-files directory, and the
+/// only name [`APPLY_HELPER`] will read.
+const POLICY_FILE: &str = "placement-policy.json";
+
+/// Where the worker reads it, per `weles/src/worker/placement-policy.ts`: the
+/// loader joins `homedir()` with `.config/weles/placement-policy.json` unless
+/// `WELES_PLACEMENT_POLICY_FILE` overrides it. Reported here, never written
+/// here — the move belongs to the helper, because only the host can see what
+/// the document replaced.
+const POLICY_DESTINATION: &str = "$HOME/.config/weles/placement-policy.json";
+
+/// Helper that moves a delivered policy into place and reports both sides of
+/// the change. Installed with
+/// `stado host install-helper <target> stado-rs/scripts/apply-placement-policy.sh
+/// apply-placement-policy`.
+const APPLY_HELPER: &str = "apply-placement-policy";
+
+/// `PLACEMENT_POLICY <phase> <generation> <enabled> <actions>`, tab separated:
+/// the helper's report of what the host carried and what it carries now.
+const POLICY_MARKER: &str = "PLACEMENT_POLICY";
+
+/// `PLACEMENT_VANTAGE <hostname>`: the name the host gave for itself, which is
+/// the string the worker's loader will match its entry against. Printed because
+/// a policy that names every host except the one it is installed on is not an
+/// error the worker reports — it is a worker that declines everything.
+const VANTAGE_MARKER: &str = "PLACEMENT_VANTAGE";
+
+/// What `_source.by` names, so a file on a host traces back to the command that
+/// wrote it rather than to a machine that happened to have write access.
+const PUBLISHED_BY: &str = "stado host publish-placement-policy";
+
+/// The one document shape the worker's loader parses (`schema_version must be
+/// 1`, `placement-policy.ts`). Publishing anything else delivers a file the
+/// consumer refuses.
+const POLICY_SCHEMA_VERSION: u64 = 1;
+
+/// How long a worker keeps a successfully loaded policy before reading the file
+/// again — `CACHE_TTL_MS = 30_000` in `placement-policy.ts`. Reported so an
+/// operator knows whether a still-refusing worker is stale or wrong.
+const POLICY_CACHE_SECONDS: u64 = 30;
+
+/// The worker's own hostname rule, transcribed from `normalizeHostname` in
+/// `weles/src/worker/identity.ts`: trim, lowercase, drop trailing dots.
+///
+/// Transcribed rather than approximated because it is a comparison, and a
+/// comparison the two sides perform differently is a host that matches nothing.
+fn normalize_hostname(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .trim_end_matches('.')
+        .to_string()
+}
+
+/// Every name a target answers to: the registry name first, its declared
+/// `hostnames` as aliases.
+///
+/// The registry name leads because that is what an operator types and what the
+/// rest of this binary keys on. The declared hostnames have to be there because
+/// the worker matches `os.hostname()`, which on a Mac is the `.local` form —
+/// a document carrying only the registry name resolves to no entry, and no
+/// entry is a worker that silently refuses every action rather than an error.
+///
+/// Deduplicated: the loader rejects an entry that declares one identity twice,
+/// and a registry that lists a target's own name under `hostnames` is common.
+fn identities(target: &ComputeTarget) -> Result<(String, Vec<String>), CmdError> {
+    let hostname = normalize_hostname(&target.name);
+    if hostname.is_empty() {
+        return Err(CmdError::click(
+            "the target has no name to publish a placement policy under",
+        ));
+    }
+    let mut aliases: Vec<String> = Vec::new();
+    for declared in &target.hostnames {
+        let alias = normalize_hostname(declared);
+        if alias.is_empty() || alias == hostname || aliases.contains(&alias) {
+            continue;
+        }
+        aliases.push(alias);
+    }
+    Ok((hostname, aliases))
+}
+
+/// The registry's action list, checked against the grammar the consumer
+/// enforces (`ACTION_RE` and `parseActions`, `placement-policy.ts`).
+///
+/// Checked before delivery, because the loader THROWS on a list it dislikes and
+/// a worker whose placement load throws claims nothing at all. A single typo in
+/// the registry would otherwise become a stopped worker discovered by absence —
+/// the same shape of failure this command was written to end, arriving by the
+/// same route.
+fn checked_actions(target: &str, weles: &WelesPolicy) -> Result<Vec<String>, CmdError> {
+    let mut seen = BTreeSet::new();
+    for action in &weles.actions {
+        let legible = !action.is_empty()
+            && action.trim() == action
+            && (action == "*"
+                || action
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'));
+        if !legible {
+            return Err(CmdError::click(format!(
+                "{target} declares the weles action {action:?}, which the worker's placement \
+                 loader refuses: an action is '*', or lowercase letters, digits and \
+                 underscores. A list the loader refuses is not a narrower policy — it is a \
+                 worker that claims nothing"
+            )));
+        }
+        if !seen.insert(action.as_str()) {
+            return Err(CmdError::click(format!(
+                "{target} declares the weles action {action:?} twice, and the worker's loader \
+                 refuses a list with duplicates"
+            )));
+        }
+    }
+    if seen.contains("*") && seen.len() != usize::from(true) {
+        return Err(CmdError::click(format!(
+            "{target} declares the weles wildcard alongside named actions; the loader requires \
+             '*' to stand alone, because a list that says both does not say which one wins"
+        )));
+    }
+    if weles.enabled && weles.actions.is_empty() {
+        return Err(CmdError::click(format!(
+            "{target} declares weles.enabled with an empty action list. The worker resolves \
+             that to disabled — its loader computes `enabled && actions.length > 0` — so \
+             publishing it would deliver a document that says one thing and does the other. \
+             Settle it in the registry first"
+        )));
+    }
+    Ok(weles.actions.clone())
+}
+
+/// One side of the change, as the host reported it.
+struct PolicySnapshot {
+    /// Registry generation the document was stamped with, or the helper's word
+    /// for a file that carried no stamp, could not be parsed, or was not there.
+    generation: String,
+    /// `true`, `false`, or `-` when no entry on that host named this machine.
+    enabled: String,
+    actions: Vec<String>,
+}
+
+/// Read one `PLACEMENT_POLICY <phase> ...` line out of the helper's output.
+///
+/// The before-state arrives as helper output rather than as anything this
+/// process knows, because the file it replaced only ever existed on that host.
+/// A missing line is reported as missing and never defaulted to "the same as
+/// now": defaulting would render every publication as a no-op and hide exactly
+/// the drift this command exists to close.
+fn snapshot(stdout: &str, phase: &str) -> Option<PolicySnapshot> {
+    let prefix = format!("{POLICY_MARKER}\t{phase}\t");
+    let line = stdout.lines().find(|line| line.starts_with(&prefix))?;
+    let mut fields = line[prefix.len()..].split('\t');
+    Some(PolicySnapshot {
+        generation: fields.next()?.to_string(),
+        enabled: fields.next()?.to_string(),
+        actions: fields.next().map(action_list).unwrap_or_default(),
+    })
+}
+
+/// `-` is the helper's word for "no entry, or an empty list", not an action
+/// named `-`.
+fn action_list(field: &str) -> Vec<String> {
+    if field == "-" {
+        return Vec::new();
+    }
+    field
+        .split(',')
+        .filter(|action| !action.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// An empty difference has to read as empty, not as a blank line an operator
+/// scanning a delta will fill in with an assumption.
+fn or_none(actions: &[&str]) -> String {
+    if actions.is_empty() {
+        "(none)".to_string()
+    } else {
+        actions.join(", ")
+    }
+}
+
+/// `stado host publish-placement-policy TARGET [--json]` — put the registry's
+/// `weles` declaration onto the host, stamped with the generation it came from.
+///
+/// The registry declares `weles.actions` per target and the worker never reads
+/// it. The worker reads `~/.config/weles/placement-policy.json` on the box it
+/// runs on. Those two disagreed: the registry listed `apple_create_developer_id`
+/// and the host file did not, so the worker skipped the row in silence for hours
+/// while the registry said it was allowed. Two sources of truth, and the one an
+/// operator edits was not the one that decided.
+///
+/// This makes the host file a cache. It is generated from the registry, stamped
+/// with `_source`, delivered over the audited channel, and refused on arrival if
+/// the stamp is missing. Nothing here lets an operator put a list on a host that
+/// the registry does not already declare — the only input is a target name.
+///
+/// It reports the delta rather than a success word. "Published" tells an
+/// operator nothing; the generation it replaced and the actions that came and
+/// went are the whole content of the operation, and an unchanged list is itself
+/// an answer worth reading.
+#[allow(clippy::too_many_lines)]
+pub async fn publish_placement_policy(
+    target_name: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let (document, generation) = registry::fetch_versioned_document().await?;
+    let declared = parse_registry(&document)?;
+    let resolved = target(&declared, target_name)?.clone();
+    let weles = resolved.weles.as_ref().ok_or_else(|| {
+        CmdError::click(format!(
+            "{} declares no `weles` block in the registry, so there is nothing to publish. \
+             Declare weles.enabled and weles.actions there first: a policy invented here \
+             would be the second source of truth this command exists to remove",
+            resolved.name
+        ))
+    })?;
+    let actions = checked_actions(&resolved.name, weles)?;
+    let (hostname, aliases) = identities(&resolved)?;
+
+    let published_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    let policy = json!({
+        "_source": {
+            "registry_generation": generation,
+            "published_at": published_at,
+            "by": PUBLISHED_BY,
+        },
+        "schema_version": POLICY_SCHEMA_VERSION,
+        "hosts": [{
+            "hostname": hostname,
+            "aliases": aliases,
+            "enabled": weles.enabled,
+            "actions": actions,
+        }],
+    });
+
+    // Staged as a file because the delivery channel carries files: the same
+    // `install-file` path any other artifact takes, checksummed on arrival,
+    // rather than a private scp with the audit trail removed.
+    let staged = tempfile::Builder::new()
+        .prefix("stado-placement-policy-")
+        .suffix(".json")
+        .tempfile()?;
+    std::fs::write(
+        staged.path(),
+        format!("{}\n", serde_json::to_string_pretty(&policy)?),
+    )?;
+    let source = staged
+        .path()
+        .to_str()
+        .ok_or_else(|| CmdError::click("the staged policy path is not valid UTF-8"))?;
+    let (delivered, bytes) = super::host::deliver_file(&resolved.name, source, POLICY_FILE).await?;
+
+    let runner = production_runner();
+    let reported = host_channel::run_installed_helper(&resolved.name, APPLY_HELPER, &runner)
+        .await
+        .map_err(|error| {
+            // Delivered and not installed is a real state, and the operator has
+            // to be told which half happened: the worker is still running the
+            // old list, and a file it does not read is sitting next to it.
+            CmdError::click(format!(
+                "{name}: the policy reached {delivered} and was NOT installed: {error}. Install \
+                 the helper with `stado host install-helper {name} \
+                 stado-rs/scripts/apply-placement-policy.sh {APPLY_HELPER}`, then publish again",
+                name = resolved.name
+            ))
+        })?;
+
+    let installed = snapshot(&reported, "installed").ok_or_else(|| {
+        CmdError::click(format!(
+            "{}: the helper reported no installed policy, so {POLICY_DESTINATION} on that host \
+             is now of unknown provenance; read it there before publishing again",
+            resolved.name
+        ))
+    })?;
+    let previous = snapshot(&reported, "previous");
+    let vantage_prefix = format!("{VANTAGE_MARKER}\t");
+    let vantage = reported
+        .lines()
+        .find_map(|line| line.strip_prefix(&vantage_prefix))
+        .unwrap_or("-")
+        .trim();
+
+    // The delta is computed from what the host reports it now carries, not from
+    // what was sent: the two are the same only if the helper installed exactly
+    // the document that was delivered, and that is the claim worth checking.
+    let before: BTreeSet<&str> = previous
+        .iter()
+        .flat_map(|held| held.actions.iter().map(String::as_str))
+        .collect();
+    let after: BTreeSet<&str> = installed.actions.iter().map(String::as_str).collect();
+    let added: Vec<&str> = after.difference(&before).copied().collect();
+    let removed: Vec<&str> = before.difference(&after).copied().collect();
+    let unchanged: Vec<&str> = after.intersection(&before).copied().collect();
+    let current: Vec<&str> = installed.actions.iter().map(String::as_str).collect();
+    let previous_generation = previous
+        .as_ref()
+        .map_or("unreported", |held| held.generation.as_str());
+    let previous_enabled = previous
+        .as_ref()
+        .map_or("unreported", |held| held.enabled.as_str());
+
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": resolved.name,
+                "vantage": vantage,
+                "delivered": delivered,
+                "bytes": bytes,
+                "installed": POLICY_DESTINATION,
+                "registry_generation": generation,
+                "previous_generation": previous_generation,
+                "published_at": published_at,
+                "enabled": installed.enabled,
+                "previous_enabled": previous_enabled,
+                "actions": current,
+                "previous_actions": previous.as_ref().map(|held| held.actions.clone()),
+                "added": added,
+                "removed": removed,
+                "unchanged": unchanged,
+                "status": "published",
+            }))?
+        );
+        return Ok(());
+    }
+
+    println!("target:      {}", resolved.name);
+    println!("vantage:     {vantage}");
+    println!("delivered:   {delivered} ({bytes} bytes)");
+    println!("installed:   {POLICY_DESTINATION}");
+    println!(
+        "generation:  {previous_generation} -> {}",
+        installed.generation
+    );
+    println!("enabled:     {previous_enabled} -> {}", installed.enabled);
+    println!("actions:     {}", or_none(&current));
+    println!("added:       {}", or_none(&added));
+    println!("removed:     {}", or_none(&removed));
+    println!("unchanged:   {}", or_none(&unchanged));
+
+    // What the replaced file was is worth a sentence of its own. None of these
+    // three is trivia: an unstamped file is the pre-provenance cache this
+    // command retires, an unparseable one is a worker that had been failing its
+    // placement load on every claim, and an absent one is a worker that had
+    // nothing to load at all. All three were silent.
+    match previous_generation {
+        "unstamped" => println!(
+            "\nthe file it replaced carried no _source: nothing on that host could say which \
+             registry read produced it, or when"
+        ),
+        "unreadable" => println!(
+            "\nthe file it replaced did not parse: the worker's loader had been throwing on \
+             every read, and a worker that cannot load placement claims nothing"
+        ),
+        "absent" => println!(
+            "\nthere was no policy file on that host: under WELES_PLACEMENT_MODE=required the \
+             worker had been refusing every action for want of one"
+        ),
+        _ => {}
+    }
+
+    if added.is_empty() && removed.is_empty() {
+        println!(
+            "\nno action changed: {} was already carrying this list, and now carries the \
+             registry generation that proves where it came from",
+            resolved.name
+        );
+    } else {
+        println!(
+            "\n{} may now run what the registry declares and nothing else; its worker re-reads \
+             {POLICY_DESTINATION} within {POLICY_CACHE_SECONDS} seconds",
+            resolved.name
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -54,7 +54,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use super::local_install::{self, InstallPlan, LocalOs};
-use super::{host_channel, host_recovery, py_str_repr, shlex_quote, DeployError, Runner};
+use super::{
+    host_channel, host_recovery, py_str_repr, shlex_quote, CommandOutput, DeployError, Runner,
+};
 use crate::monitor::host_health::{self, HostHealthError};
 use crate::queue::JobStorage;
 use crate::targets::{self, ComputeTarget};
@@ -501,6 +503,14 @@ pub struct RemoteReport {
     pub exit_code: i32,
     /// Raw stdout, for the commands that carry a body after their marker.
     pub stdout: String,
+    /// The end state this operation declared it would leave behind, empty
+    /// for an operation that declares none.
+    pub postcondition: String,
+    /// What the host said about that end state:
+    /// `host_channel::POSTCONDITION_MET` / `_UNMET` / `_UNOBSERVED`.
+    pub postcondition_state: String,
+    /// The probe's own words about what it found.
+    pub postcondition_detail: String,
 }
 
 impl RemoteReport {
@@ -513,23 +523,50 @@ impl RemoteReport {
         }
     }
 
-    /// True when the remote program reported the outcome the caller wanted.
+    /// True when the host was observed in the state the operation intended,
+    /// or the operation declared no end state at all.
+    pub fn postcondition_held(&self) -> bool {
+        self.postcondition.is_empty()
+            || self.postcondition_state == host_channel::POSTCONDITION_MET
+    }
+
+    /// True when the remote program reported the outcome the caller wanted
+    /// AND the host was left in the state that outcome claims.
+    ///
+    /// Both halves, because the outage was exactly one half: the restart's
+    /// own steps each did what they were written to do and the command
+    /// reported on them faithfully, while the unit it was restarting ended
+    /// up unloaded. A step that succeeds is not the same fact as a machine
+    /// that works, and only the second one is worth calling success.
     pub fn succeeded(&self, expected: &str) -> bool {
-        self.status == expected
+        self.status == expected && self.postcondition_held()
     }
 
     /// A one-line failure message, preferring the marker detail over the
     /// bare status word.
+    ///
+    /// An unmet end state is printed BESIDE the operation's own outcome and
+    /// never instead of it. `restarted; postcondition unmet: the unit is
+    /// loaded and has a pid (no job at gui/501/com.wisent.weles-api)` is the
+    /// sentence nobody had during the outage: either half alone sends an
+    /// operator to the wrong place.
     pub fn failure(&self) -> String {
-        if self.detail.is_empty() {
+        let reported = if self.detail.is_empty() {
             self.status.clone()
         } else {
             format!("{}: {}", self.status, self.detail)
+        };
+        if self.postcondition_held() {
+            return reported;
         }
+        format!(
+            "{reported}; postcondition {}: {} ({})",
+            self.postcondition_state, self.postcondition, self.postcondition_detail
+        )
     }
 
     pub fn to_json(&self) -> Value {
-        json!({
+        let mut report = json!({
             "os": self.os,
             "launchd_domain": self.domain,
             "unit": self.unit,
@@ -537,7 +574,15 @@ impl RemoteReport {
             "status": self.status,
             "detail": self.detail,
             "exit_code": self.exit_code,
-        })
+        });
+        if !self.postcondition.is_empty() {
+            report["postcondition"] = json!({
+                "intent": self.postcondition,
+                "state": self.postcondition_state,
+                "detail": self.postcondition_detail,
+            });
+        }
+        report
     }
 }
 
@@ -548,6 +593,35 @@ async fn run_remote(
     runner: &Runner,
 ) -> Result<RemoteReport, DeployError> {
     let output = host_channel::run_script(target, &script, runner).await?;
+    Ok(report_from(output))
+}
+
+/// Feed one fixed remote program to one host and check, on the host and
+/// before the connection closes, that it left behind the state it intended.
+///
+/// The prelude travels separately from the body because the probe is armed
+/// between them: `host_channel::PostCondition::arm` explains why the check
+/// cannot simply be appended to a body whose success path is an early
+/// `exit`.
+async fn run_remote_checked(
+    target: &ComputeTarget,
+    prelude: &str,
+    body: &str,
+    postcondition: &host_channel::PostCondition,
+    runner: &Runner,
+) -> Result<RemoteReport, DeployError> {
+    let (output, verdict) =
+        host_channel::run_checked_script(target, prelude, body, postcondition, runner).await?;
+    let mut report = report_from(output);
+    report.postcondition = verdict.describe;
+    report.postcondition_state = verdict.state;
+    report.postcondition_detail = verdict.detail;
+    Ok(report)
+}
+
+/// One transport result as a report, whether or not the operation declared
+/// an end state.
+fn report_from(output: CommandOutput) -> RemoteReport {
     let mut report = parse_markers(&output.stdout);
     report.exit_code = output.code;
     if report.status.is_empty() && !output.ok() {
@@ -558,7 +632,7 @@ async fn run_remote(
         report.detail = host_channel::last_error_line(&output, "ssh failed");
     }
     report.stdout = output.stdout;
-    Ok(report)
+    report
 }
 
 /// Fold the `STADO_*` marker lines of stdout into a [`RemoteReport`].
@@ -870,6 +944,94 @@ else
 fi
 printf 'STADO_HOST\\t%s\\t%s\\t%s\\t%s\\n' \"$os\" \"$domain\" \"$unit\" \"$unit_path\"
 ";
+
+// ---------------------------------------------------------------------------
+// The end states the lifecycle operations intend
+// ---------------------------------------------------------------------------
+
+/// What launchd currently thinks of the unit, as the two facts every
+/// lifecycle end state is decided on: `pc_loaded` (does a job exist under
+/// this label) and `pc_pid` (is anything running under it).
+///
+/// One spelling, spliced into both probes, so "running" cannot come to mean
+/// one thing when starting and another when stopping — which is how a stop
+/// that only booted out a label ever came to be reported as a stop at all.
+/// The `pid = N` line is read out of the same `launchctl print` the restart
+/// script already uses to decide whether it may kick a job in place, so the
+/// check and the operation agree on what they are looking at.
+const LAUNCHD_STATE: &str = "    pc_pid=''
+    if pc_info=$($launch print \"$domain/$unit\" 2>&1); then
+      pc_loaded=yes
+      pc_pid=$(printf '%s\\n' \"$pc_info\" | /usr/bin/awk '$1 == \"pid\" && $2 == \"=\" { print $3; exit }')
+    else
+      pc_loaded=no
+    fi
+";
+
+/// The end state a restart or a start intends.
+///
+/// Both halves are load-bearing. A unit can be loaded with nothing running
+/// under it (launchd accepted the job and the program died on start), and a
+/// program can be running with no unit loaded — that second one is what the
+/// last-resort fallbacks in these scripts produce, and reporting it as a
+/// successful restart is how an operator comes to believe a service is
+/// under management when the next reboot will not bring it back.
+const RUNNING_DESCRIBE: &str = "the unit is loaded and has a pid";
+
+const RUNNING_PROBE: &str = "  if [ \"$os\" = \"Darwin\" ]; then
+@LAUNCHD_STATE@
+    if [ \"$pc_loaded\" = no ]; then
+      stado_post 'unmet' \"no job at $domain/$unit\"
+    elif [ -n \"$pc_pid\" ]; then
+      stado_post 'met' \"$domain/$unit pid $pc_pid\"
+    else
+      stado_post 'unmet' \"$domain/$unit is loaded with no pid\"
+    fi
+  elif systemctl_user is-active --quiet \"$unit\"; then
+    pc_pid=$(systemctl_user show --property=MainPID --value \"$unit\" 2>/dev/null)
+    if [ -n \"$pc_pid\" ] && [ \"$pc_pid\" != 0 ]; then
+      stado_post 'met' \"$unit pid $pc_pid\"
+    else
+      stado_post 'unmet' \"$unit is active with no main pid\"
+    fi
+  else
+    stado_post 'unmet' \"$unit is not active\"
+  fi
+";
+
+/// The end state a stop intends.
+///
+/// A booted-out label is not the same fact as a stopped service: the sweep
+/// these bodies run exists because a program started once outside its own
+/// label survives every `bootout`, keeps the listening socket, and makes
+/// every later start die on `address already in use`. So the probe asks
+/// whether anything is running under the unit, not whether the label is
+/// gone; a loaded job with no pid is a stopped service and says so.
+const STOPPED_DESCRIBE: &str = "the unit is not running";
+
+const STOPPED_PROBE: &str = "  if [ \"$os\" = \"Darwin\" ]; then
+@LAUNCHD_STATE@
+    if [ \"$pc_loaded\" = no ]; then
+      stado_post 'met' \"no job at $domain/$unit\"
+    elif [ -n \"$pc_pid\" ]; then
+      stado_post 'unmet' \"$domain/$unit still running as pid $pc_pid\"
+    else
+      stado_post 'met' \"$domain/$unit is loaded but not running\"
+    fi
+  elif systemctl_user is-active --quiet \"$unit\"; then
+    stado_post 'unmet' \"$unit is still active\"
+  else
+    stado_post 'met' \"$unit is not active\"
+  fi
+";
+
+/// One declared end state, with the shared launchd observation spliced in.
+fn end_state(describe: &'static str, probe: &str) -> host_channel::PostCondition {
+    host_channel::PostCondition {
+        describe,
+        probe: probe.replace("@LAUNCHD_STATE@", LAUNCHD_STATE),
+    }
+}
 
 /// `service restart`: restart the unit, in place wherever launchd will allow it.
 /// Deliberately narrower than a recovery pass — no disk cleanup, no
@@ -1336,6 +1498,17 @@ done
 say 'listener_stopped' \"$listener_detail\"
 ";
 
+/// The shared prelude with this unit spliced in: the vocabulary (`$unit`,
+/// `$domain`, `$launch`, `systemctl_user`, `say`) every body and every
+/// postcondition probe reads the host through.
+fn remote_prelude(unit: &str, linux_unit: &str, path: &str) -> Result<String, DeployError> {
+    validate_unit_id(unit)?;
+    Ok(REMOTE_PRELUDE
+        .replace("@UNIT@", &shlex_quote(unit))
+        .replace("@LINUX_UNIT@", &shlex_quote(linux_unit))
+        .replace("@PATH@", &quote_unit_path(path)?))
+}
+
 /// Assemble a remote program: the shared prelude with this unit spliced in,
 /// then one fixed body.
 fn remote_script(
@@ -1344,11 +1517,7 @@ fn remote_script(
     path: &str,
     body: &str,
 ) -> Result<String, DeployError> {
-    validate_unit_id(unit)?;
-    let prelude = REMOTE_PRELUDE
-        .replace("@UNIT@", &shlex_quote(unit))
-        .replace("@LINUX_UNIT@", &shlex_quote(linux_unit))
-        .replace("@PATH@", &quote_unit_path(path)?);
+    let prelude = remote_prelude(unit, linux_unit, path)?;
     Ok(format!("{prelude}{body}"))
 }
 
@@ -1356,7 +1525,6 @@ fn remote_script(
 // Write side: one command per remote program
 // ---------------------------------------------------------------------------
 
-/// `service restart` on one host.
 /// Report the argument vector a managed unit runs, exactly as declared.
 pub async fn show_service(
     target: &ComputeTarget,
@@ -1367,14 +1535,25 @@ pub async fn show_service(
     run_remote(target, script, runner).await
 }
 
+/// `service restart` on one host, with the end state it intends checked on
+/// the host before the connection closes. A restart whose own steps report
+/// success while the unit ends up unloaded is reported as the failure it
+/// is: see [`RemoteReport::succeeded`].
 pub async fn restart_service(
     target: &ComputeTarget,
     service: &ManagedService,
     runner: &Runner,
 ) -> Result<RemoteReport, DeployError> {
     let body = RESTART_BODY.replace("@DISOWNED_SWEEP@", DISOWNED_SWEEP);
-    let script = remote_script(service.unit_id(), "", &service.path, &body)?;
-    run_remote(target, script, runner).await
+    let prelude = remote_prelude(service.unit_id(), "", &service.path)?;
+    run_remote_checked(
+        target,
+        &prelude,
+        &body,
+        &end_state(RUNNING_DESCRIBE, RUNNING_PROBE),
+        runner,
+    )
+    .await
 }
 
 /// Atomically replace one runtime secret assignment for a managed service.
@@ -1446,14 +1625,25 @@ pub async fn reset_service_listener(
 
 /// Stop one managed service for a fenced recovery cutover. Unlike
 /// [`retire_service`], this leaves the unit enabled and registered.
+///
+/// The fence is only a fence if the writer is actually gone, so the intended
+/// end state is checked on the host: a stop that boots out a label and
+/// leaves the program serving is reported as a failed stop, not as a stop.
 pub async fn stop_service(
     target: &ComputeTarget,
     service: &ManagedService,
     runner: &Runner,
 ) -> Result<RemoteReport, DeployError> {
     let body = STOP_BODY.replace("@DISOWNED_SWEEP@", DISOWNED_SWEEP);
-    let script = remote_script(service.unit_id(), "", &service.path, &body)?;
-    run_remote(target, script, runner).await
+    let prelude = remote_prelude(service.unit_id(), "", &service.path)?;
+    run_remote_checked(
+        target,
+        &prelude,
+        &body,
+        &end_state(STOPPED_DESCRIBE, STOPPED_PROBE),
+        runner,
+    )
+    .await
 }
 
 /// `service retire` on one host: bootout / disable, files kept.
@@ -1542,6 +1732,13 @@ pub fn plan_deploy(name: &str, program: &str) -> Result<DeployPlan, DeployError>
 }
 
 /// `service deploy` on one host: push the rendered unit and bootstrap it.
+///
+/// This is the fleet's only start, so it carries the start's end state. It
+/// needs one more than restart does: the caller records the unit in the
+/// canonical registry from this report, and a deploy that fell through to
+/// `launchctl submit` or to a bare background process leaves no job under
+/// the label it is about to be declared under. Recording that is how the
+/// registry comes to hold a service the host has never heard of.
 pub async fn deploy_service(
     target: &ComputeTarget,
     plan: &DeployPlan,
@@ -1559,8 +1756,15 @@ pub async fn deploy_service(
         .replace("@LINUX_UNIT@", plan.linux_unit.trim_end_matches('\n'));
     // The path is derived remotely from the unit id, which differs per OS,
     // so both spellings travel and the host picks.
-    let script = remote_script(&plan.label, &plan.unit, "", &body)?;
-    run_remote(target, script, runner).await
+    let prelude = remote_prelude(&plan.label, &plan.unit, "")?;
+    run_remote_checked(
+        target,
+        &prelude,
+        &body,
+        &end_state(RUNNING_DESCRIBE, RUNNING_PROBE),
+        runner,
+    )
+    .await
 }
 
 /// The managed-service record a completed deploy or adopt should be
