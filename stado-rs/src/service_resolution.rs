@@ -42,6 +42,19 @@ pub struct ServiceRoute {
     pub active_host: String,
     pub endpoints: BTreeMap<String, ServiceEndpoint>,
     pub consumers: BTreeMap<String, ServiceConsumer>,
+    /// How this route is checked against the world
+    /// ([`crate::targets::Service::verification`] derives the default when it
+    /// is absent).
+    ///
+    /// Modelled here because two readers parse this same entry with opposite
+    /// strictness: `targets::Service` keeps unmodelled keys in a
+    /// `serde(flatten)` `extra`, this one denies them outright. A field added
+    /// to satisfy the tolerant reader alone would take the resolver down
+    /// fleet-wide the moment it was published — every host refusing the whole
+    /// directory over a key it merely did not know. Any future field on a
+    /// service entry has to land in both places, in the same change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verify: Option<crate::targets::VerifyDescriptor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -346,6 +359,16 @@ pub fn validate_registry_contract(document: &Value) -> Result<(), String> {
     for (name, route) in &directory.services {
         let location = format!("registry.{DIRECTORY_KEY}.services.{name}");
         validate_identifier(name, &location)?;
+        // Only the explicit descriptor is checked: the derived default is
+        // valid by construction, and a registry written before the field
+        // existed must not start failing validation because a newer build can
+        // now name a thing it does not declare.
+        if let Some(verify) = route.verify.as_ref() {
+            let problems = crate::targets::validate_verification(&location, verify);
+            if !problems.is_empty() {
+                return Err(problems.join("; "));
+            }
+        }
         if !target_entries.contains_key(&route.active_host) {
             return Err(format!("{location}.active_host: unknown registry target"));
         }
