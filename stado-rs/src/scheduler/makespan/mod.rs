@@ -340,9 +340,22 @@ pub async fn assign_jobs_at(
     let mut skip_by_key: Vec<((String, String), usize)> = Vec::new();
     let mut to_write: Vec<Job> = Vec::new();
     for mut job in store.list_jobs("queue", 0).await? {
-        // Operator-pinned jobs (pinned_host set at submit) route outside the
-        // makespan model: never assign them elsewhere, never clear the pin.
+        // `pinned_host` is the operator's authority. A coordinator race used
+        // to leave an earlier makespan assignment beside a later host pin;
+        // agent admission correctly required both and no host could claim it.
+        // Remove only the conflicting derived assignment. The pinned host then
+        // claims through the documented assigned_to="" compatibility path.
         if !job.pinned_host.is_empty() {
+            if !job.assigned_to.is_empty()
+                && !job.assigned_to.eq_ignore_ascii_case(&job.pinned_host)
+            {
+                log_fn(&format!(
+                    "clearing conflicting assignment {} from host-pinned job {}",
+                    job.assigned_to, job.job_id
+                ));
+                job.assigned_to.clear();
+                to_write.push(job);
+            }
             continue;
         }
         let rt = match estimate_runtime(&job.command, job.runtime_seconds_estimate, history) {
