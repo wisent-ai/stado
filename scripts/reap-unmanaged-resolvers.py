@@ -20,7 +20,7 @@ import sys
 import time
 
 NONE = len([])
-LABEL = os.environ.get("STADO_RESOLVER_LABEL", "com.wisent.always-on.stado-resolver")
+LABEL = os.environ.get("STADO_RESOLVER_LABEL", "com.wisent.stado-resolver")
 GRACE = float(len("aaa"))
 PATTERN = re.compile(r"resolver\s+serve")
 
