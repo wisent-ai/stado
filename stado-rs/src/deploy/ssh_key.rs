@@ -5,7 +5,6 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-
 use super::DeployError;
 use crate::skarbiec::{Client, SkarbiecError};
 
@@ -13,6 +12,7 @@ const ITEM_PREFIX: &str = "stado-ssh-";
 
 /// The one field these items carry, and the only one this ever needs.
 const PRIVATE_KEY_FIELD: &str = "private_key";
+const OWNER_KEY_FILE_ENV: &str = "STADO_HOST_SSH_KEY_FILE";
 
 /// Owner-only transient private key. Dropping it removes the file on every
 /// success and error path.
@@ -88,10 +88,58 @@ fn write_key(private_key: &str) -> Result<KeyFile, DeployError> {
         .map_err(|error| DeployError(error.to_string()))?;
     Ok(KeyFile(path))
 }
+fn owner_key_override() -> Result<Option<KeyFile>, DeployError> {
+    let Some(raw) = std::env::var_os(OWNER_KEY_FILE_ENV).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let path = PathBuf::from(raw);
+    if !path.is_absolute() {
+        return Err(DeployError(format!(
+            "{OWNER_KEY_FILE_ENV} must name an absolute owner-only regular file"
+        )));
+    }
+    let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
+        DeployError(format!(
+            "cannot inspect {OWNER_KEY_FILE_ENV} {}: {error}",
+            path.display()
+        ))
+    })?;
+    if !metadata.file_type().is_file() {
+        return Err(DeployError(format!(
+            "{OWNER_KEY_FILE_ENV} must name an owner-only regular file"
+        )));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(DeployError(format!(
+                "{OWNER_KEY_FILE_ENV} must not grant group or other permissions"
+            )));
+        }
+    }
+    let private_key = std::fs::read_to_string(&path).map_err(|error| {
+        DeployError(format!(
+            "cannot read {OWNER_KEY_FILE_ENV} {}: {error}",
+            path.display()
+        ))
+    })?;
+    if private_key.trim().is_empty() {
+        return Err(DeployError(format!(
+            "{OWNER_KEY_FILE_ENV} must not be empty"
+        )));
+    }
+    write_key(private_key.trim()).map(Some)
+}
 
 /// Materialize the target-scoped private key through the operator bootstrap
-/// grant. Private material never enters argv, stdout, logs, or registry data.
+/// grant. An explicit owner-only `STADO_HOST_SSH_KEY_FILE` is the recovery
+/// channel when that broker is unavailable. Private material never enters
+/// argv, stdout, logs, or registry data.
 pub async fn materialize(target: &str) -> Result<KeyFile, DeployError> {
+    if let Some(key) = owner_key_override()? {
+        return Ok(key);
+    }
     let id = item_id(target);
     let credentials = crate::credential_store::admin_credentials()
         .map_err(|error| DeployError(error.to_string()))?;
