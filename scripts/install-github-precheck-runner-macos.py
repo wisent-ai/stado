@@ -118,7 +118,7 @@ def safe_extract(archive: pathlib.Path, destination: pathlib.Path) -> None:
             target = (destination / member.name).resolve()
             if destination_resolved not in target.parents and target != destination_resolved:
                 raise SystemExit(f"runner archive escapes destination: {member.name}")
-        bundle.extractall(destination)
+        bundle.extractall(destination, filter="data")
 
 
 def chown_tree(path: pathlib.Path, uid: int, gid: int) -> None:
