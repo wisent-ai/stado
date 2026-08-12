@@ -2144,6 +2144,22 @@ pub(crate) async fn install_secret_value_at_home(
     transfer_secret(target, name, value.as_bytes(), Some(home)).await
 }
 
+/// Deliver one file through the [`install_file`] channel and RETURN where it
+/// landed, for a caller that renders its own report.
+///
+/// A callee that prints is unusable from a machine-readable caller: with
+/// [`install_file`] itself, `stado host publish-placement-policy --json` would
+/// put a delivery report in front of its own document and hand the operator two
+/// JSON objects on one stream. Same channel, same checksum, same owner-only
+/// mode — only the reporting belongs to whoever asked.
+pub(crate) async fn deliver_file(
+    target: &str,
+    source: &str,
+    name: &str,
+) -> Result<(String, usize), CmdError> {
+    stream_file(target, source, name, DELIVERED_FILES_DIR, "u=rw,go=").await
+}
+
 async fn transfer_secret(
     target: &str,
     name: &str,
@@ -2763,6 +2779,25 @@ pub async fn install_binary(
     if bytes == 0 {
         return Err(CmdError::click(format!("{source} is empty")));
     }
+
+    // Computed before anything is delivered, on this machine, because this is
+    // the last moment the answer exists: the checkout the file came out of is
+    // here and nowhere else, and once the process ends nothing on either side
+    // can reconstruct it.
+    let provenance = crate::provenance::describe(std::path::Path::new(source), name);
+    if let Some(unknown) = unprovenanced_reason(source, &provenance) {
+        eprintln!(
+            "{target}: DRIFTED -- installing {name} from a build with no producer: {unknown}. \
+             This is the trade that put stado 0.7.1 on control-host, a control-plane \
+             binary whose version no commit on any branch of this repository has ever \
+             contained, and that left the Weles worker beside it on release main-objapi-fix, \
+             built on a laptop and never published -- installing is one command and releasing \
+             is a pipeline. The install proceeds, because refusing strands whoever is \
+             mid-incident; the manifest at $HOME/{PROVENANCE_DIR}/{name}.json records the gap \
+             so `stado host provenance {target}` finds it later without anyone remembering \
+             this line."
+        );
+    }
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
@@ -2800,7 +2835,17 @@ pub async fn install_binary(
                 staged.display()
             ))
         })?;
-        return finish_install(target, source, name, bytes, &resolved, &runner, json).await;
+        return finish_install(
+            target,
+            source,
+            name,
+            bytes,
+            &provenance,
+            &resolved,
+            &runner,
+            json,
+        )
+        .await;
     }
     let mut copy_argv = crate::deploy::host_channel::ssh_options(&ssh_target);
     copy_argv.pop();
@@ -2818,16 +2863,32 @@ pub async fn install_binary(
         )));
     }
 
-    finish_install(target, source, name, bytes, &resolved, &runner, json).await
+    finish_install(
+        target,
+        source,
+        name,
+        bytes,
+        &provenance,
+        &resolved,
+        &runner,
+        json,
+    )
+    .await
 }
 
 /// Sign, prove, swap and verify -- the half of `install-binary` that is identical
 /// whether the program arrived over ssh or was copied on the spot.
+///
+/// The provenance record travels as an argument rather than being recomputed
+/// here: it is derived on the machine that holds the checkout, and hashing a
+/// release binary twice per install to save a parameter is a poor trade.
+#[allow(clippy::too_many_arguments)]
 async fn finish_install(
     target: &str,
     source: &str,
     name: &str,
     bytes: u64,
+    provenance: &crate::provenance::Provenance,
     resolved: &crate::targets::ComputeTarget,
     runner: &crate::deploy::Runner,
     json: bool,
@@ -2854,6 +2915,20 @@ async fn finish_install(
     };
     let old_version = marker("STADO-BIN-OLD ");
     let new_version = marker("STADO-BIN-NEW ");
+
+    // After the swap and before the report: a manifest that arrives first
+    // would describe a binary that may never land, and a report printed first
+    // would be the same one-line receipt that said `stado 0.7.1 -> stado
+    // 0.7.0` and left nothing behind to check it against.
+    let manifest = deliver_provenance(target, provenance)
+        .await
+        .map_err(|error| {
+            CmdError::click(format!(
+                "{target}: {name} is installed but its provenance manifest could not be \
+                 delivered, so the host now carries an artifact nothing can trace to a \
+                 commit: {error}"
+            ))
+        })?;
     if json {
         println!(
             "{}",
@@ -2864,13 +2939,86 @@ async fn finish_install(
                 "bytes": bytes,
                 "previous_version": old_version,
                 "installed_version": new_version,
+                "commit": provenance.commit,
+                "sha256": provenance.sha256,
+                "builder": provenance.builder,
+                "provenance": manifest,
                 "status": "installed",
             }))?
         );
     } else {
-        println!("{target}: {name} {old_version} -> {new_version}");
+        println!(
+            "{target}: {name} {old_version} -> {new_version} (commit {}, built on {}, recorded at {manifest})",
+            provenance.commit, provenance.builder
+        );
     }
     Ok(())
+}
+
+/// Where a delivered provenance manifest lands, one file per artifact.
+///
+/// Its own directory under `.stado`, not beside the binary in `.stado/bin`:
+/// everything in that directory is executed, and a JSON document that is not
+/// a program has no business sharing a namespace with the ones that are.
+const PROVENANCE_DIR: &str = ".stado/provenance";
+
+/// Why this build cannot be traced to a published commit, or `None` when it
+/// can.
+///
+/// Three distinct answers rather than one boolean, because they send an
+/// operator to three different places: build it inside a checkout, commit
+/// what you built, push what you committed. A single "unverified" would have
+/// described 0.7.1 accurately and told nobody what to do about it.
+fn unprovenanced_reason(
+    source: &str,
+    provenance: &crate::provenance::Provenance,
+) -> Option<String> {
+    let Some(repo) = crate::provenance::source_repo(std::path::Path::new(source)) else {
+        return Some(format!(
+            "{source} does not sit under a git checkout's target/ directory, so no tree \
+             claims to have produced it"
+        ));
+    };
+    if !provenance.names_a_commit() {
+        return Some(format!(
+            "{} has no resolvable HEAD, so the build has no commit to name",
+            repo.display()
+        ));
+    }
+    if !crate::provenance::reachable_in_repo(&provenance.commit, &repo) {
+        return Some(format!(
+            "commit {} is not reachable from origin/main in {}, so it exists only on the \
+             machine that built it",
+            provenance.commit,
+            repo.display()
+        ));
+    }
+    None
+}
+
+/// Deliver one artifact's manifest to the host that now carries the artifact.
+///
+/// Through `stream_file`, the same audited channel the binary itself went
+/// over: owner-only, checksummed on the far side before it takes its name. A
+/// separate private path for the paperwork would be a second way onto these
+/// hosts, which is the shape of the problem this is meant to close.
+async fn deliver_provenance(
+    target: &str,
+    provenance: &crate::provenance::Provenance,
+) -> Result<String, CmdError> {
+    let document = serde_json::to_vec_pretty(provenance)?;
+    let staged = tempfile::Builder::new()
+        .prefix(".stado-provenance-")
+        .suffix(".json")
+        .tempfile()?;
+    std::fs::write(staged.path(), &document)?;
+    let source = staged
+        .path()
+        .to_str()
+        .ok_or_else(|| CmdError::click("provenance staging path is not valid UTF-8"))?;
+    let name = format!("{}.json", provenance.artifact);
+    let (path, _) = stream_file(target, source, &name, PROVENANCE_DIR, "u=rw,go=").await?;
+    Ok(path)
 }
 
 const ROLLBACK_BODY: &str = r#"dir="$HOME/.stado/bin"
@@ -2884,6 +3032,12 @@ previous="$dir/$name.previous"
 /bin/mv "$previous" "$installed"
 "$installed" --version >/dev/null 2>&1 \
   || { printf '%s\n' 'restored build does not run' >&2; exit 1; }
+
+# The manifest described the build that was just removed. Left in place it
+# would name a commit for bytes no longer on this host, which is worse than
+# naming nothing: `host provenance` reports a missing manifest as
+# unprovenanced, and unprovenanced is the truth here until the next install.
+/bin/rm -f "$HOME/.stado/provenance/$name.json"
 "#;
 
 /// Put the previous build of one owner-only Stado program back on TARGET.
@@ -2915,11 +3069,15 @@ async fn rollback_binary(target: &str, name: &str, json: bool) -> Result<(), Cmd
             serde_json::to_string_pretty(&json!({
                 "target": target,
                 "name": name,
+                "provenance": crate::provenance::UNPROVENANCED,
                 "status": "rolled-back",
             }))?
         );
     } else {
-        println!("{target}: {name} restored from the previous build");
+        println!(
+            "{target}: {name} restored from the previous build; its provenance manifest was \
+             dropped, because it described the build just removed"
+        );
     }
     Ok(())
 }
@@ -3039,4 +3197,256 @@ async fn stream_file(
         format!("$HOME/{subdir}/{name}"),
         usize::try_from(bytes).unwrap_or(usize::MAX),
     ))
+}
+
+/// Read back both halves of the question: what the host runs, and what it can
+/// account for.
+///
+/// Two enumerations rather than one. Listing only the manifests would answer
+/// "what has been recorded", which is never the failing case -- a recorded
+/// artifact is by definition one somebody bothered to record. The binaries in
+/// `.stado/bin` are the population; the manifests are the coverage; the
+/// difference is the finding.
+///
+/// `.previous` builds are skipped: they are the rollback copy of an artifact
+/// already listed under its own name, and reporting a second unprovenanced row
+/// for each installed program would bury the real ones.
+///
+/// Manifests are flattened to one line each so the two kinds of output can be
+/// told apart by tag rather than by parsing position, and a host that answers
+/// with unexpected noise cannot turn into a fabricated row.
+const READ_PROVENANCE_BODY: &str = r#"bin="$HOME/.stado/bin"
+dir="$HOME/.stado/provenance"
+if [ -d "$bin" ]; then
+  for program in "$bin"/*; do
+    [ -f "$program" ] || continue
+    case "${program##*/}" in .*|*.previous) continue ;; esac
+    # A release artifact is a compiled program; a helper is a checked-in script
+    # delivered by `host install-helper`. Both live in this directory and only
+    # the first is something a release pipeline produces, so reporting them in
+    # one list buries the question being asked. control-host carries dozens
+    # of helpers accumulated over months -- helpers have a writer and no reaper,
+    # the same accretion that fills ~/.stado/forwards with markers for services
+    # that were renamed years of incidents ago. The shebang is the honest
+    # discriminator and it is readable without executing anything.
+    kind=binary
+    case "$(/usr/bin/head -c 2 "$program" 2>/dev/null)" in '#!') kind=script ;; esac
+    printf 'STADO-ARTIFACT %s %s\n' "$kind" "${program##*/}"
+  done
+fi
+if [ -d "$dir" ]; then
+  for manifest in "$dir"/*.json; do
+    [ -f "$manifest" ] || continue
+    printf 'STADO-MANIFEST %s\n' "$(/usr/bin/tr -d '\n\r' < "$manifest")"
+  done
+fi
+"#;
+
+/// One artifact a host carries, joined to whatever accounts for it.
+struct CarriedArtifact {
+    artifact: String,
+    record: Option<crate::provenance::Provenance>,
+    /// `None` is "no checkout here could answer", never "no". An operator who
+    /// is told `no` walks a build back; one who is told `unknown` clones the
+    /// repository first. Collapsing the two is how a fleet learns to disregard
+    /// its own reports.
+    reachable: Option<bool>,
+    age_seconds: Option<i64>,
+}
+
+/// `stado host provenance TARGET [--json]` — what TARGET carries, and who
+/// produced it.
+///
+/// The command that did not exist on 2026-08-11, when the only record of what
+/// was running the control plane was a version string the repository had never
+/// heard of. Every artifact under the host's Stado bin directory gets a row,
+/// whether or not anything accounts for it, and an artifact with no manifest
+/// is reported `unprovenanced` -- absent from the table is the one outcome
+/// this must never produce, because that is precisely what the fleet did for
+/// months.
+///
+/// Reachability is resolved here rather than read from the manifest, against a
+/// checkout this process can see, because it is a question whose answer
+/// changes: a commit unreachable at install time becomes reachable the moment
+/// someone pushes, and a stored verdict would still be accusing them.
+pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let script = format!("set -euo pipefail\n{READ_PROVENANCE_BODY}");
+    let output = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if !output.ok() {
+        return Err(CmdError::click(format!(
+            "{target}: cannot read provenance manifests: {}",
+            crate::deploy::host_channel::last_error_line(&output, "remote provenance read failed")
+        )));
+    }
+
+    let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut records: std::collections::BTreeMap<String, crate::provenance::Provenance> =
+        std::collections::BTreeMap::new();
+    let mut unreadable: Vec<String> = Vec::new();
+    let mut helpers: usize = 0;
+    for line in output.stdout.lines() {
+        if let Some(artifact) = line.strip_prefix("STADO-ARTIFACT ") {
+            // `<kind> <name>`. A helper script has no release behind it, so
+            // listing it beside the control-plane binary answers a question
+            // nobody asked and hides the one that matters.
+            let mut words = artifact.trim().splitn(2, ' ');
+            let kind = words.next().unwrap_or_default();
+            let Some(name) = words.next().map(str::trim).filter(|name| !name.is_empty()) else {
+                continue;
+            };
+            if kind == "script" {
+                helpers += 1;
+                continue;
+            }
+            names.insert(name.to_string());
+        } else if let Some(document) = line.strip_prefix("STADO-MANIFEST ") {
+            match serde_json::from_str::<crate::provenance::Provenance>(document.trim()) {
+                Ok(record) => {
+                    names.insert(record.artifact.clone());
+                    records.insert(record.artifact.clone(), record);
+                }
+                // A manifest that cannot be parsed is not a missing manifest:
+                // something wrote a file there and it says nothing usable.
+                Err(error) => unreadable.push(error.to_string()),
+            }
+        }
+    }
+
+    let repository = crate::provenance::local_repo();
+    let now = chrono::Utc::now();
+    let carried: Vec<CarriedArtifact> = names
+        .into_iter()
+        .map(|artifact| {
+            let record = records.remove(&artifact);
+            let reachable = match (&record, &repository) {
+                (None, _) => Some(false),
+                (Some(record), _) if !record.names_a_commit() => Some(false),
+                (Some(_), None) => None,
+                (Some(record), Some(repository)) => Some(crate::provenance::reachable_in_repo(
+                    &record.commit,
+                    repository,
+                )),
+            };
+            let age_seconds = record.as_ref().and_then(|record| {
+                chrono::DateTime::parse_from_rfc3339(&record.at)
+                    .ok()
+                    .map(|stamp| (now - stamp.with_timezone(&chrono::Utc)).num_seconds())
+            });
+            CarriedArtifact {
+                artifact,
+                record,
+                reachable,
+                age_seconds,
+            }
+        })
+        .collect();
+
+    let commit_of = |item: &CarriedArtifact| {
+        item.record.as_ref().map_or_else(
+            || crate::provenance::UNPROVENANCED.to_string(),
+            |record| record.commit.clone(),
+        )
+    };
+    let drifted = carried
+        .iter()
+        .filter(|item| item.reachable != Some(true))
+        .count();
+
+    if json {
+        let artifacts: Vec<Value> = carried
+            .iter()
+            .map(|item| {
+                json!({
+                    "artifact": item.artifact,
+                    "manifest": item.record.is_some(),
+                    "commit": commit_of(item),
+                    "sha256": item.record.as_ref().map(|record| record.sha256.clone()),
+                    "builder": item.record.as_ref().map(|record| record.builder.clone()),
+                    "at": item.record.as_ref().map(|record| record.at.clone()),
+                    "age_seconds": item.age_seconds,
+                    "reachable": item.reachable,
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": target,
+                "repository": repository.as_ref().map(|path| path.display().to_string()),
+                "artifacts": artifacts,
+                "unreadable_manifests": unreadable,
+                "drifted": drifted,
+            }))?
+        );
+        return Ok(());
+    }
+
+    let rows: Vec<Vec<String>> = carried
+        .iter()
+        .map(|item| {
+            let age = match (item.age_seconds, &item.record) {
+                (Some(seconds), _) => super::registry::human_age(chrono::TimeDelta::seconds(seconds)),
+                // A manifest whose timestamp will not parse is a manifest
+                // somebody hand-edited; say so instead of showing an age.
+                (None, Some(_)) => "unknown".to_string(),
+                (None, None) => "never".to_string(),
+            };
+            let reachable = match item.reachable {
+                Some(true) => "yes",
+                Some(false) => "no",
+                None => "unknown",
+            };
+            vec![
+                item.artifact.clone(),
+                commit_of(item),
+                item.record
+                    .as_ref()
+                    .map_or_else(|| "-".to_string(), |record| record.builder.clone()),
+                age,
+                reachable.to_string(),
+            ]
+        })
+        .collect();
+    // Before the early return as well as before the table: a host whose only
+    // provenance file is corrupt must not read as a host with nothing to say.
+    for error in &unreadable {
+        eprintln!("{target}: a provenance manifest could not be read: {error}");
+    }
+    if rows.is_empty() {
+        println!("{target}: carries no stado-managed programs");
+        return Ok(());
+    }
+    super::table::print(
+        &["ARTIFACT", "COMMIT", "BUILDER", "AGE", "REACHABLE"],
+        &rows,
+    );
+    if repository.is_none() {
+        println!(
+            "\n{target}: no local checkout was found, so reachability is unknown rather than \
+             answered; run this from the stado source tree to resolve it"
+        );
+    }
+    if drifted != usize::default() {
+        println!(
+            "{target}: {drifted} of {} artifacts have no producer reachable from origin/main",
+            rows.len()
+        );
+    }
+    if helpers != usize::default() {
+        // Not drift, and not nothing. Helpers are delivered one at a time to
+        // solve one incident and are never removed, so the population only
+        // grows; naming the count is what makes an operator notice that a
+        // directory of them accumulated while nobody decided to keep any.
+        println!(
+            "{target}: {helpers} installed helper script(s) alongside, which carry no release \
+             and are not counted above"
+        );
+    }
+    Ok(())
 }

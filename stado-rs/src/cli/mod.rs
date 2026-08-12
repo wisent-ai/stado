@@ -1086,6 +1086,18 @@ enum HostCommands {
     /// Point TARGET's Weles recordings store at PATH.
     #[command(name = "weles-recordings-dir")]
     WelesRecordingsDir { target: String, path: String },
+    /// Publish TARGET's registry `weles` declaration as its placement policy.
+    ///
+    /// The worker decides what it may claim from a file on its own disk, not
+    /// from the registry. This regenerates that file from the registry, stamps
+    /// it with the generation it came from, and reports what changed.
+    #[command(name = "publish-placement-policy")]
+    PublishPlacementPolicy {
+        target: String,
+        /// Emit the publication and its action delta as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Report or revert the GUI-automation enablement of TARGET.
     #[command(name = "gui-automation", subcommand)]
     GuiAutomation(HostGuiAutomationCommands),
@@ -1322,6 +1334,15 @@ enum HostCommands {
     Inventory {
         target: String,
         /// Emit the inventory and its reconciliation as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Report which commit produced each artifact TARGET carries, and whether
+    /// that commit is reachable from origin/main. An artifact with no manifest
+    /// is reported unprovenanced, never omitted.
+    Provenance {
+        target: String,
+        /// Emit the manifests and their reachability as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -1732,6 +1753,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::WelesRecordingsDir { target, path } => {
                 host::weles_recordings_dir(&target, &path).await
             }
+            HostCommands::PublishPlacementPolicy { target, json } => {
+                placement::publish_placement_policy(&target, json).await
+            }
             HostCommands::GuiAutomation(HostGuiAutomationCommands::Status { target }) => {
                 host::gui_automation_status(&target).await
             }
@@ -1855,6 +1879,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             } => host::reconcile(target, apply, json).await,
             HostCommands::Vaults { target, json } => host::vaults(target, json).await,
             HostCommands::Inventory { target, json } => host::inventory(&target, json).await,
+            HostCommands::Provenance { target, json } => host::provenance(&target, json).await,
             HostCommands::Release {
                 target,
                 binary,
