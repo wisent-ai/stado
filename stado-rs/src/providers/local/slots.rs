@@ -754,11 +754,16 @@ async fn materialize_stado_inputs(
 /// job was already moved/dropped by the check itself).
 pub async fn start_slot(
     store: &JobStorage,
-    mut job: Job,
+    job: Job,
     hostname: &str,
     log_fn: &mut dyn FnMut(&str),
     kind: &str,
 ) -> Result<Option<ActiveSlot>, StorageError> {
+    let job_id = job.job_id;
+    let Some(mut job) = store.read_job("queue", &job_id).await? else {
+        log_fn(&format!("claim lost for {job_id}: queued record is absent"));
+        return Ok(None);
+    };
     let cmd = job.command.clone();
     if activation_extraction_must_share_gpu(&cmd) {
         job.exclusive = false;

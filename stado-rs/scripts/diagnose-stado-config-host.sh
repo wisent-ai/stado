@@ -7,4 +7,8 @@ set -eu
 /bin/systemctl is-active --quiet wisent-agent.service
 environment=$(/bin/systemctl show wisent-agent.service --property=Environment --value)
 /usr/bin/env -S "$environment" "$HOME/.stado/bin/stado" config show \
-  | /usr/bin/grep -E 'storage|stado_storage|bucket|local_storage|api'
+  | /usr/bin/grep -E 'storage|stado_storage|bucket|local_storage|api|agent_skarbiec'
+pid=$(/bin/systemctl show wisent-agent.service --property=MainPID --value)
+[ "$pid" -gt 1 ]
+/usr/bin/tr '\000' '\n' <"/proc/$pid/environ" \
+  | /usr/bin/grep '^WC_AGENT_SKARBIEC_'
