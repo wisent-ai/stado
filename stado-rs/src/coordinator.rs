@@ -554,6 +554,12 @@ pub async fn run_tick(
     if n_fired > 0 {
         log(&format!("schedules: fired {n_fired} due schedule(s)"));
     }
+    let n_pin_repairs = repair_conflicting_pinned_assignments(store, log).await?;
+    if n_pin_repairs > 0 {
+        log(&format!(
+            "routing: repaired {n_pin_repairs} conflicting host-pinned assignments"
+        ));
+    }
     // Coordinator-authoritative sizing: re-zero any queued job whose model
     // has no measured peak (stamp the measured peak if one exists) BEFORE
     // assignment. A pre-0.4.237 agent that requeues a job writes the old
@@ -567,12 +573,6 @@ pub async fn run_tick(
     if n_sized > 0 {
         log(&format!(
             "sizing: corrected {n_sized} stale queue gpu_mem_gb values"
-        ));
-    }
-    let n_pin_repairs = repair_conflicting_pinned_assignments(store, log).await?;
-    if n_pin_repairs > 0 {
-        log(&format!(
-            "routing: repaired {n_pin_repairs} conflicting host-pinned assignments"
         ));
     }
     let autonomy_requires_routing = match crate::autonomy::storage::load_policy(store).await {
