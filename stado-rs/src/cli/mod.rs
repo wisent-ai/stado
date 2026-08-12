@@ -1250,6 +1250,22 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Open an encrypted local SSH forwarding channel to TARGET.
+    #[command(name = "forward-remote")]
+    ForwardRemote {
+        target: String,
+        /// Safe name for the local endpoint marker.
+        name: String,
+        /// Loopback port served on TARGET.
+        #[arg(long)]
+        remote_port: u16,
+        /// Loopback port exposed on this control-plane host.
+        #[arg(long)]
+        local_port: u16,
+        /// Emit the forwarding report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Declare the exact version TARGET must run for one managed binary.
     #[command(name = "declare-version")]
     DeclareVersion {
@@ -1851,6 +1867,13 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 local_port,
                 json,
             } => host::forward_local(&target, &name, remote_port, local_port, json).await,
+            HostCommands::ForwardRemote {
+                target,
+                name,
+                remote_port,
+                local_port,
+                json,
+            } => host::forward_remote(&target, &name, remote_port, local_port, json).await,
             HostCommands::Exec {
                 target,
                 json,
