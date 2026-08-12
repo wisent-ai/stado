@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  backend:
+    image: ghcr.io/wisent-ai/compute-backend:latest
+    ports:
+      - '8080:8080'
+    env_file: .env
+    restart: always
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://localhost:8080/healthz']
+      interval: 30s
+      retries: 3
+
+  frontend:
+    image: ghcr.io/wisent-ai/compute-frontend:latest
+    ports:
+      - '3000:3000'
+    env_file: .env
+    restart: always
