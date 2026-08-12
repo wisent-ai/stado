@@ -64,3 +64,13 @@ for path, headers in (
     body = json.loads(response.read())
     print(f"path={path} status={response.status} body={json.dumps(body, sort_keys=True)}")
     connection.close()
+
+unit_paths = [
+    *Path("/root/.config/systemd/user").glob("*resolver*.service"),
+    *Path("/home").glob("*/.config/systemd/user/*resolver*.service"),
+]
+for unit_path in sorted(unit_paths):
+    print(f"unit={unit_path}")
+    for line in unit_path.read_text().splitlines():
+        if not line.startswith(("Environment=", "EnvironmentFile=")):
+            print(f"  {line}")
