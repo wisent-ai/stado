@@ -92,14 +92,6 @@ def runner_identity() -> tuple[int, int]:
         run("/usr/bin/dscl", ".", "-create", f"/Users/{RUNNER_USER}", "IsHidden", "1")
         account = pwd.getpwnam(RUNNER_USER)
     run("/usr/bin/dscl", ".", "-create", f"/Users/{RUNNER_USER}", "Password", "*")
-    run(
-        "/usr/bin/dscl",
-        ".",
-        "-create",
-        f"/Users/{RUNNER_USER}",
-        "AuthenticationAuthority",
-        ";DisabledUser;",
-    )
     if account.pw_uid == 0 or account.pw_gid in {0, 80}:
         raise SystemExit("the pre-check runner account must not be an administrator")
     administrators = run("/usr/sbin/dseditgroup", "-o", "checkmember", "-m", RUNNER_USER, "admin", check=False)
@@ -160,6 +152,11 @@ def install_package(uid: int, gid: int) -> None:
         archive = pathlib.Path(temporary) / "runner.tar.gz"
         download_runner(archive)
         safe_extract(archive, RUNNER_ROOT)
+    # On this SIP-disabled fleet host, a signed .NET host cannot map the
+    # runner's unsigned CoreCLR pages (EACCES/0x8007000C). Existing healthy
+    # repository runners are unsigned for the same reason. The archive was
+    # checksum-verified above, so remove only the host signature.
+    run("/usr/bin/codesign", "--remove-signature", str(RUNNER_ROOT / "bin" / "Runner.Listener"))
     chown_tree(RUNNER_ROOT, uid, gid)
     WORK_DIR.mkdir(mode=0o700)
     DIAG_DIR.mkdir(mode=0o700)
