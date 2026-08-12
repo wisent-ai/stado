@@ -50,6 +50,13 @@ public GitHub and package endpoints reachable. Those CIDRs are protocol network
 classes compiled into Stado, not fleet host addresses; fleet destinations
 remain registry data.
 
+GitHub runner group `stado-precheck` is private-only and grants access to an
+explicit repository list. Eligible Linux jobs use
+`runs-on: [self-hosted, Linux, X64, stado-precheck]`; eligible macOS jobs use
+`runs-on: [self-hosted, macOS, ARM64, stado-precheck]`. Repository access is
+the GitHub-side boundary: workflow-ref restrictions must remain disabled
+because pull-request jobs execute from `refs/pull/*`, not the default branch.
+
 ## Common queries
 
 ### Fleet, queue, quota, and billing
