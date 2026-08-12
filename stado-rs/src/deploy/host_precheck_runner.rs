@@ -13,7 +13,7 @@ use super::{host_channel, production_runner, CommandOutput, DeployError};
 use crate::targets::ComputeTarget;
 
 pub const GITHUB_ORGANIZATION: &str = "wisent-ai";
-pub const GITHUB_CREDENTIAL_ITEM: &str = "platform-admin-github";
+pub const GITHUB_CREDENTIAL_ITEM: &str = "GITHUB_TOKEN";
 pub const RUNNER_GROUP: &str = "stado-precheck";
 pub const RUNNER_USER: &str = "stado-precheck";
 pub const RUNNER_VERSION: &str = "2.336.0";
@@ -111,7 +111,16 @@ fn macos_installer(target: &ComputeTarget, registration_token: &str) -> String {
 }
 
 async fn github_runner_token(kind: &str) -> Result<String, DeployError> {
-    let credential = crate::credential_store::read_string(GITHUB_CREDENTIAL_ITEM, "value")
+    let credentials = crate::credential_store::admin_credentials()
+        .map_err(|error| DeployError(error.to_string()))?;
+    let client = crate::skarbiec::Client::direct(
+        &credentials.url,
+        &credentials.consumer,
+        &credentials.token_file,
+    )
+    .map_err(|error| DeployError(error.to_string()))?;
+    let credential = client
+        .read_string(GITHUB_CREDENTIAL_ITEM, "value")
         .await
         .map_err(|error| DeployError(error.to_string()))?
         .filter(|value| !value.trim().is_empty())
@@ -483,10 +492,12 @@ PLIST
 root plutil -lint "$plist" >/dev/null
 root install -o root -g wheel -m 0644 "$plist" /Library/LaunchDaemons/com.wisent.stado-precheck-runner.plist
 rm -f "$plist"
-root launchctl bootout system/com.wisent.stado-precheck-runner >/dev/null 2>&1 || true
-root launchctl bootstrap system /Library/LaunchDaemons/com.wisent.stado-precheck-runner.plist
+if root launchctl print system/com.wisent.stado-precheck-runner >/dev/null 2>&1; then
+  root launchctl kickstart -k system/com.wisent.stado-precheck-runner
+else
+  root launchctl bootstrap system /Library/LaunchDaemons/com.wisent.stado-precheck-runner.plist
+fi
 root launchctl enable system/com.wisent.stado-precheck-runner
-root launchctl kickstart -k system/com.wisent.stado-precheck-runner
 root launchctl print system/com.wisent.stado-precheck-runner | grep -F 'state = running' >/dev/null
 printf 'runner service: running\nrunner identity: %s uid=%s\nrunner group: %s\nprivate-network egress: blocked\n' "$runner_user" "$uid" "$runner_group"
 "#;
@@ -501,7 +512,11 @@ root nft list table inet stado_precheck
 
 const MACOS_STATUS: &str = r#"set -euo pipefail
 root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi; }
-root launchctl print system/com.wisent.stado-precheck-runner
+if ! root launchctl print system/com.wisent.stado-precheck-runner; then
+  root plutil -lint /Library/LaunchDaemons/com.wisent.stado-precheck-runner.plist >&2 || true
+  root tail -n 80 /Users/Shared/stado-precheck-runner/_diag/launchd.stderr.log >&2 || true
+  exit 1
+fi
 dscl . -read /Users/stado-precheck UniqueID PrimaryGroupID NFSHomeDirectory UserShell Password
 root pfctl -a com.wisent.stado-precheck -sr
 "#;
