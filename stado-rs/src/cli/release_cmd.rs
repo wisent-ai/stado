@@ -18,6 +18,10 @@ use crate::release_pipeline::{BuildReceipt, StepStatus};
 
 use super::CmdError;
 
+// A clap subcommand enum is constructed once per process from parsed argv, so
+// the largest variant costs one stack frame at startup and boxing it would only
+// add an allocation and a deref to every match arm.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 pub enum ReleaseCommands {
     /// Generate an Ed25519 release authority key pair.
@@ -221,7 +225,6 @@ async fn put_immutable(uri: &str, bytes: &[u8], content_type: &str) -> Result<()
     .await
     .map(|_| ())
 }
-
 
 pub(crate) struct PipelinePublishRequest<'a> {
     pub product: &'a str,
