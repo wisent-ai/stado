@@ -41,6 +41,18 @@ pub struct ServiceRoute {
     pub managed_service: Option<String>,
     pub active_host: String,
     pub endpoints: BTreeMap<String, ServiceEndpoint>,
+    /// Addresses hosts would serve on if the service moved to them, never
+    /// addresses to call ([`crate::targets::Service::standby`]).
+    ///
+    /// Nothing in this module resolves through it — a resolver hands out the
+    /// active host's endpoint and a standby address is by construction not
+    /// serving. It is modelled here for the asymmetry recorded on `verify`
+    /// below: this reader denies unknown keys where `targets::Service`
+    /// tolerates them, so a field added on the tolerant side alone takes
+    /// every resolver on the fleet down the moment one directory entry is
+    /// published carrying it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub standby: BTreeMap<String, ServiceEndpoint>,
     pub consumers: BTreeMap<String, ServiceConsumer>,
     /// How this route is checked against the world
     /// ([`crate::targets::Service::verification`] derives the default when it
@@ -396,6 +408,28 @@ pub fn validate_registry_contract(document: &Value) -> Result<(), String> {
                 ));
             }
         }
+        // A standby address is checked for shape and for naming a real host,
+        // and for nothing else. It must be a host-relative loopback origin
+        // like every other address here, because the day it is promoted it
+        // becomes an `endpoints` entry unchanged; but no `ssh` transport is
+        // demanded of its host, since nothing resolves through it while the
+        // service is elsewhere. A declaration nobody validates is how the
+        // wrong port reaches a forward file, so it is validated where it is
+        // written rather than where it is dialled.
+        for (host, endpoint) in &route.standby {
+            if !target_entries.contains_key(host) {
+                return Err(format!(
+                    "{location}.standby.{host}: unknown registry target"
+                ));
+            }
+            if host == &route.active_host {
+                return Err(format!(
+                    "{location}.standby.{host}: is the active host, which serves \
+                     rather than stands by"
+                ));
+            }
+            validate_endpoint(endpoint, &format!("{location}.standby.{host}"))?;
+        }
         if route.consumers.is_empty() {
             return Err(format!("{location}.consumers: must not be empty"));
         }
@@ -428,11 +462,26 @@ pub fn validate_registry_contract(document: &Value) -> Result<(), String> {
                     "{location}.placement_profile: profile does not contain this service"
                 ));
             }
+            // A placement host is named by one map or the other: `endpoints`
+            // if it calls the service, `standby` if it holds the address it
+            // would serve on after the move. Before those were two fields the
+            // coverage rule could read `endpoints` alone; requiring that now
+            // would refuse the whole document the first time a standby
+            // address is filed where it belongs, which is the same fleet-wide
+            // refusal the `standby` field itself is here to avoid. What must
+            // not happen is a placement host with no address anywhere: the
+            // cutover then moves the service to a machine nothing can name.
             let expected: BTreeSet<_> = profile.hosts.keys().cloned().collect();
-            let actual: BTreeSet<_> = route.endpoints.keys().cloned().collect();
-            if actual != expected {
+            let declared: BTreeSet<_> = route
+                .endpoints
+                .keys()
+                .chain(route.standby.keys())
+                .cloned()
+                .collect();
+            if declared != expected {
                 return Err(format!(
-                    "{location}.endpoints: must define every placement host exactly once"
+                    "{location}: endpoints and standby together must name every \
+                     placement host exactly once"
                 ));
             }
             let declared_host = active_profile_host(profile, name, &target_entries)?;
