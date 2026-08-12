@@ -269,7 +269,7 @@ User={RUNNER_USER}
 Group={RUNNER_USER}
 WorkingDirectory={RUNNER_ROOT}
 ExecStartPre={hook}
-ExecStart={RUNNER_ROOT / 'run.sh'}
+ExecStart={RUNNER_ROOT / 'bin' / 'runsvc.sh'}
 Restart=always
 RestartSec=5
 Environment=ACTIONS_RUNNER_HOOK_JOB_STARTED={hook}
