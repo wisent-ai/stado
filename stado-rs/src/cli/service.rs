@@ -1618,7 +1618,7 @@ async fn install_from_archive(
         hasher.update(&bytes);
         hex::encode(hasher.finalize())
     };
-    let version = format!("sha256-{}", &digest[..usize::from(u8::from(12u8))]);
+    let version = format!("sha256-{}", &digest[..usize::from(12u8)]);
     let staged = format!(".stado/.{directory}-{version}.tar.gz");
 
     if crate::deploy::host_channel::target_is_this_host(target) {

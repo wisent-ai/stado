@@ -750,9 +750,7 @@ pub fn validate(data: &Value) -> Vec<String> {
                     .to_string(),
             );
         }
-        if !field_in(root, &crate::capabilities::AGENT_SKARBIEC.token_file)
-            .is_some_and(py_truthy)
-        {
+        if !field_in(root, &crate::capabilities::AGENT_SKARBIEC.token_file).is_some_and(py_truthy) {
             problems.push(
                 "agent.skarbiec.token_file is required; Stado cannot dispatch Azure VMs \
                  without an operator-provided owner-only workload grant"
@@ -780,7 +778,10 @@ pub fn validate(data: &Value) -> Vec<String> {
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    match field_in(root, &crate::capabilities::AGENT_SKARBIEC_SECRET_FIELDS_CONFIG) {
+    match field_in(
+        root,
+        &crate::capabilities::AGENT_SKARBIEC_SECRET_FIELDS_CONFIG,
+    ) {
         None => {}
         Some(Value::Array(fields)) => {
             for entry in fields {
@@ -850,20 +851,24 @@ pub fn validate(data: &Value) -> Vec<String> {
     // to a messaging section an operator chose to declare at all.
     let messaging = get_in(root, "backend.messaging.skarbiec").and_then(Value::as_object);
     if messaging.is_some() {
-        let messaging_consumer =
-            field_in(root, &crate::capabilities::BACKEND_MESSAGING_SKARBIEC.consumer)
-                .and_then(Value::as_str)
-                .unwrap_or_default();
+        let messaging_consumer = field_in(
+            root,
+            &crate::capabilities::BACKEND_MESSAGING_SKARBIEC.consumer,
+        )
+        .and_then(Value::as_str)
+        .unwrap_or_default();
         if messaging_consumer != "wisent-backend-business-messaging" {
             problems.push(
             "backend.messaging.skarbiec.consumer must be the dedicated wisent-backend-business-messaging consumer"
                 .to_string(),
         );
         }
-        let messaging_token_file =
-            field_in(root, &crate::capabilities::BACKEND_MESSAGING_SKARBIEC.token_file)
-                .and_then(Value::as_str)
-                .unwrap_or_default();
+        let messaging_token_file = field_in(
+            root,
+            &crate::capabilities::BACKEND_MESSAGING_SKARBIEC.token_file,
+        )
+        .and_then(Value::as_str)
+        .unwrap_or_default();
         if messaging_token_file.is_empty() {
             problems.push(
             "backend.messaging.skarbiec.token_file must name the owner-only messaging grant file"
@@ -893,9 +898,11 @@ pub fn validate(data: &Value) -> Vec<String> {
             "stado-supabase",
         ];
         let optional_email_item = "wisent-backend-email-provider";
-        let messaging_items =
-            field_in(root, &crate::capabilities::BACKEND_MESSAGING_SKARBIEC_ITEMS_CONFIG)
-                .and_then(Value::as_array);
+        let messaging_items = field_in(
+            root,
+            &crate::capabilities::BACKEND_MESSAGING_SKARBIEC_ITEMS_CONFIG,
+        )
+        .and_then(Value::as_array);
         if !messaging_items.is_some_and(|items| {
             required_messaging_items
                 .iter()
@@ -951,10 +958,9 @@ pub fn validate(data: &Value) -> Vec<String> {
                 crate::config::RATE_LIMIT_API_VERIFIER_CONSUMER
             ));
         }
-        let rate_token_file =
-            field_in(root, &crate::capabilities::RATE_LIMIT_SKARBIEC.token_file)
-                .and_then(Value::as_str)
-                .unwrap_or_default();
+        let rate_token_file = field_in(root, &crate::capabilities::RATE_LIMIT_SKARBIEC.token_file)
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if rate_token_file.is_empty() {
             problems.push(
             "rate_limit.skarbiec.token_file must name the owner-only rate-limit verifier grant file"
@@ -1021,8 +1027,7 @@ pub fn validate(data: &Value) -> Vec<String> {
             if let Err(provider_problems) = crate::config::parse_integration_providers(field_in(
                 root,
                 &crate::capabilities::INTEGRATION_PROVIDERS_CONFIG,
-            ))
-            {
+            )) {
                 problems.extend(provider_problems);
             }
         }
@@ -1085,9 +1090,10 @@ pub fn validate(data: &Value) -> Vec<String> {
     }
     let object_api = root.get("object_api").and_then(Value::as_object);
     if object_api.is_some() {
-        if let Err(object_problems) = crate::config::parse_object_api_namespaces(
-            field_in(root, &crate::capabilities::OBJECT_API_NAMESPACES_CONFIG),
-        ) {
+        if let Err(object_problems) = crate::config::parse_object_api_namespaces(field_in(
+            root,
+            &crate::capabilities::OBJECT_API_NAMESPACES_CONFIG,
+        )) {
             problems.extend(object_problems);
         }
         let object_skarbiec = object_api
@@ -1131,9 +1137,10 @@ pub fn validate(data: &Value) -> Vec<String> {
     }
     let release_api = root.get("release_api").and_then(Value::as_object);
     if release_api.is_some() {
-        if let Err(release_problems) = crate::config::parse_release_publishers(
-            field_in(root, &crate::capabilities::RELEASE_API_PUBLISHERS_CONFIG),
-        ) {
+        if let Err(release_problems) = crate::config::parse_release_publishers(field_in(
+            root,
+            &crate::capabilities::RELEASE_API_PUBLISHERS_CONFIG,
+        )) {
             problems.extend(release_problems);
         }
         let release_skarbiec = release_api
@@ -1179,9 +1186,10 @@ pub fn validate(data: &Value) -> Vec<String> {
     }
     let machine_api = root.get("machine_api").and_then(Value::as_object);
     if machine_api.is_some() {
-        if let Err(machine_problems) = crate::config::parse_machine_api_clients(
-            field_in(root, &crate::capabilities::MACHINE_API_CLIENTS_CONFIG),
-        ) {
+        if let Err(machine_problems) = crate::config::parse_machine_api_clients(field_in(
+            root,
+            &crate::capabilities::MACHINE_API_CLIENTS_CONFIG,
+        )) {
             problems.extend(machine_problems);
         }
         let machine_skarbiec = machine_api
@@ -1233,9 +1241,10 @@ pub fn validate(data: &Value) -> Vec<String> {
     }
     let service_api = root.get("service_api").and_then(Value::as_object);
     if service_api.is_some() {
-        if let Err(service_problems) = crate::config::parse_service_deployers(
-            field_in(root, &crate::capabilities::SERVICE_API_DEPLOYERS_CONFIG),
-        ) {
+        if let Err(service_problems) = crate::config::parse_service_deployers(field_in(
+            root,
+            &crate::capabilities::SERVICE_API_DEPLOYERS_CONFIG,
+        )) {
             problems.extend(service_problems);
         }
         let service_skarbiec = service_api
@@ -1286,13 +1295,14 @@ pub fn validate(data: &Value) -> Vec<String> {
         );
         }
         let local_provider = active_providers.contains(&crate::capabilities::ProviderId::Local);
-        let has_workload_fields =
-            field_in(root, &crate::capabilities::AGENT_SKARBIEC_SECRET_FIELDS_CONFIG)
-                .and_then(Value::as_array)
-                .is_some_and(|fields| !fields.is_empty());
+        let has_workload_fields = field_in(
+            root,
+            &crate::capabilities::AGENT_SKARBIEC_SECRET_FIELDS_CONFIG,
+        )
+        .and_then(Value::as_array)
+        .is_some_and(|fields| !fields.is_empty());
         if local_provider && has_workload_fields {
-            if field_in(root, &crate::capabilities::AGENT_SKARBIEC.consumer)
-                .and_then(Value::as_str)
+            if field_in(root, &crate::capabilities::AGENT_SKARBIEC.consumer).and_then(Value::as_str)
                 != Some("stado-local-agent")
             {
                 problems.push(

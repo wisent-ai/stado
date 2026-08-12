@@ -58,8 +58,8 @@ fn write_config(path: &Path, body: &[u8]) -> Result<(), SkarbiecError> {
         ))
     })?;
     let temporary = parent.join(format!(".stado-config-{}.tmp", std::process::id()));
-    let owner_mode = u32::from_str_radix("600", u32::from(u8::BITS))
-        .map_err(|source| deployment(source.to_string()))?;
+    let owner_mode =
+        u32::from_str_radix("600", u8::BITS).map_err(|source| deployment(source.to_string()))?;
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
     if let Ok(metadata) = std::fs::metadata(path) {

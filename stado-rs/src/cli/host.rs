@@ -134,7 +134,7 @@ pub async fn publish_beacon(source: &str) -> Result<(), CmdError> {
     // from the control plane's -- the client was asserting an internal detail
     // it has no way to know.
     let stored = payload.get("state").and_then(Value::as_str) == Some("stored")
-        && payload.get("host").and_then(Value::as_str) == Some(&host[..])
+        && payload.get("host").and_then(Value::as_str) == Some(host)
         && payload
             .get("path")
             .and_then(Value::as_str)
@@ -237,9 +237,7 @@ fn host_health_api_token_from_file() -> Result<Option<String>, CmdError> {
         .trim()
         .to_string();
     if token.is_empty() {
-        return Err(CmdError::click(
-            "STADO_HOST_HEALTH_API_TOKEN_FILE is empty",
-        ));
+        return Err(CmdError::click("STADO_HOST_HEALTH_API_TOKEN_FILE is empty"));
     }
     Ok(Some(token))
 }
@@ -1042,7 +1040,11 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
             let registry = crate::targets::fetch_registry_remote()
                 .await
                 .map_err(|error| CmdError::click(error.to_string()))?;
-            registry.targets.iter().map(|entry| entry.name.clone()).collect()
+            registry
+                .targets
+                .iter()
+                .map(|entry| entry.name.clone())
+                .collect()
         }
     };
     let mut hosts: Vec<serde_json::Value> = Vec::new();
@@ -1068,23 +1070,45 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
             println!("{name}: {absent}");
             continue;
         }
-        let list = host.get("vaults").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+        let list = host
+            .get("vaults")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         println!("{name}: {} vault(s)", list.len());
         for vault in list {
             println!(
                 "  {:>5} items  {} recipients  {}",
-                vault.get("items").and_then(Value::as_u64).unwrap_or_default(),
-                vault.get("recipients").and_then(Value::as_u64).unwrap_or_default(),
+                vault
+                    .get("items")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default(),
+                vault
+                    .get("recipients")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default(),
                 vault.get("path").and_then(Value::as_str).unwrap_or("")
             );
         }
     }
     println!(
         "{} host(s), {} unreachable, {} vault(s), {} item(s)",
-        summary.get("hosts").and_then(Value::as_u64).unwrap_or_default(),
-        summary.get("unreachable").and_then(Value::as_u64).unwrap_or_default(),
-        summary.get("vaults").and_then(Value::as_u64).unwrap_or_default(),
-        summary.get("items").and_then(Value::as_u64).unwrap_or_default()
+        summary
+            .get("hosts")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        summary
+            .get("unreachable")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        summary
+            .get("vaults")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        summary
+            .get("items")
+            .and_then(Value::as_u64)
+            .unwrap_or_default()
     );
     Ok(())
 }
@@ -1110,8 +1134,7 @@ pub async fn declare_version(
     if version.is_empty() {
         return Err(CmdError::usage("--version must name an exact version"));
     }
-    let (mut document, expected_generation) =
-        super::registry::fetch_versioned_document().await?;
+    let (mut document, expected_generation) = super::registry::fetch_versioned_document().await?;
     let targets = document
         .get_mut("targets")
         .and_then(Value::as_array_mut)
@@ -1129,8 +1152,7 @@ pub async fn declare_version(
         .as_object_mut()
         .ok_or_else(|| CmdError::click("managed_versions is not an object"))?;
     versions.insert(binary.name.to_string(), json!(version));
-    let generation =
-        super::registry::push_document_if(&document, &expected_generation).await?;
+    let generation = super::registry::push_document_if(&document, &expected_generation).await?;
     if json {
         print_json(&json!({
             "target": target,
@@ -1147,7 +1169,11 @@ pub async fn declare_version(
 /// Promote one published version into fleet desired state in one fenced
 /// registry write. Every platform manifest must already exist and identify
 /// the canonical coordinate before `managed_versions` moves.
-pub async fn promote_version(binary: &str, version: &str, json_output: bool) -> Result<(), CmdError> {
+pub async fn promote_version(
+    binary: &str,
+    version: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
     let managed = crate::deploy::host_release::managed_binary(binary)
         .map_err(|error| CmdError::click(error.to_string()))?;
     let version = version.trim();
@@ -1157,8 +1183,7 @@ pub async fn promote_version(binary: &str, version: &str, json_output: bool) -> 
         ));
     }
     crate::cli::storage::release_api_origin()?;
-    let (mut document, expected_generation) =
-        super::registry::fetch_versioned_document().await?;
+    let (mut document, expected_generation) = super::registry::fetch_versioned_document().await?;
     let target_specs: Vec<(String, String)> = document
         .get("targets")
         .and_then(Value::as_array)
@@ -1266,7 +1291,9 @@ pub async fn promote_version(binary: &str, version: &str, json_output: bool) -> 
             .ok_or_else(|| CmdError::click("registry target has no name"))?
             .to_string();
         let observed = observed_platforms.get(&name).ok_or_else(|| {
-            CmdError::click(format!("target {name:?} was not inventoried before promotion"))
+            CmdError::click(format!(
+                "target {name:?} was not inventoried before promotion"
+            ))
         })?;
         if object
             .get("release_platform")
@@ -1283,8 +1310,7 @@ pub async fn promote_version(binary: &str, version: &str, json_output: bool) -> 
             .ok_or_else(|| CmdError::click("managed_versions is not an object"))?;
         versions.insert(managed.name.to_string(), json!(version));
     }
-    let generation =
-        super::registry::push_document_if(&document, &expected_generation).await?;
+    let generation = super::registry::push_document_if(&document, &expected_generation).await?;
     if json_output {
         print_json(&json!({
             "binary": managed.name,
@@ -1336,7 +1362,11 @@ pub async fn reconcile(
             }
             vec![name]
         }
-        None => registry.targets.iter().map(|entry| entry.name.clone()).collect(),
+        None => registry
+            .targets
+            .iter()
+            .map(|entry| entry.name.clone())
+            .collect(),
     };
     if names.is_empty() {
         return Err(CmdError::click("registry has no targets to reconcile"));
@@ -1424,7 +1454,9 @@ pub async fn reconcile(
         }
     }
 
-    let healthy = standings.iter().all(crate::deploy::reconcile::HostStanding::settled)
+    let healthy = standings
+        .iter()
+        .all(crate::deploy::reconcile::HostStanding::settled)
         && deliveries
             .iter()
             .all(|entry| entry.get("status").and_then(Value::as_str) == Some("delivered"));
@@ -1440,9 +1472,7 @@ pub async fn reconcile(
             if standing.platform_verdict != crate::deploy::host_inventory::MATCHED {
                 println!(
                     "{}: platform mismatch — declared {}, observed {}",
-                    standing.target,
-                    standing.declared_release_platform,
-                    standing.release_platform
+                    standing.target, standing.declared_release_platform, standing.release_platform
                 );
             }
             if standing.settled() {
@@ -1451,11 +1481,7 @@ pub async fn reconcile(
             for drift in &standing.drift {
                 println!(
                     "{}: {} is {} — desired {}, active {}",
-                    standing.target,
-                    drift.binary,
-                    drift.verdict,
-                    drift.declared,
-                    drift.installed
+                    standing.target, drift.binary, drift.verdict, drift.declared, drift.installed
                 );
             }
             if !standing.undeclared.is_empty() {
@@ -1470,7 +1496,10 @@ pub async fn reconcile(
             println!(
                 "{} {} on {}: {}",
                 delivery.get("binary").and_then(Value::as_str).unwrap_or(""),
-                delivery.get("version").and_then(Value::as_str).unwrap_or(""),
+                delivery
+                    .get("version")
+                    .and_then(Value::as_str)
+                    .unwrap_or(""),
                 delivery.get("target").and_then(Value::as_str).unwrap_or(""),
                 delivery.get("status").and_then(Value::as_str).unwrap_or("")
             );
@@ -1866,7 +1895,10 @@ pub async fn release(
     );
     println!("declared: {}", cell(report.get("declared_version")));
     println!("artifact: {}", cell(report.get("release_uri")));
-    println!("sha256:   {} (release manifest)", cell(report.get("sha256")));
+    println!(
+        "sha256:   {} (release manifest)",
+        cell(report.get("sha256"))
+    );
     println!(
         "installed: {} ({})",
         cell(report.get("active_version")),
@@ -2315,8 +2347,7 @@ pub async fn run_helper(
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let remote_name = crate::deploy::shlex_quote(name);
-    let script =
-        crate::deploy::host_channel::installed_helper_script(&remote_name, &arguments);
+    let script = crate::deploy::host_channel::installed_helper_script(&remote_name, &arguments);
     let runner = crate::deploy::production_runner();
     let output = crate::deploy::host_channel::run_script_with_timeout(
         &resolved,
@@ -2582,7 +2613,7 @@ pub async fn helpers(
         // refused by the removal script by design, and letting that abort the
         // run would leave the remaining hundreds unreported and the operator
         // with no idea how far it got.
-        for helper in installed.iter().filter(|helper| stale(*helper)) {
+        for helper in installed.iter().filter(|helper| stale(helper)) {
             match remove_installed_helper(&resolved, &helper.name, &runner).await {
                 Ok(status) => pruned.push(json!({"helper": helper.name, "status": status})),
                 Err(error) => {
@@ -2597,7 +2628,7 @@ pub async fn helpers(
         }
     }
 
-    let older = installed.iter().filter(|helper| stale(*helper)).count();
+    let older = installed.iter().filter(|helper| stale(helper)).count();
     if json {
         let rows: Vec<Value> = installed
             .iter()
@@ -3749,7 +3780,9 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
         .iter()
         .map(|item| {
             let age = match (item.age_seconds, &item.record) {
-                (Some(seconds), _) => super::registry::human_age(chrono::TimeDelta::seconds(seconds)),
+                (Some(seconds), _) => {
+                    super::registry::human_age(chrono::TimeDelta::seconds(seconds))
+                }
                 // A manifest whose timestamp will not parse is a manifest
                 // somebody hand-edited; say so instead of showing an age.
                 (None, Some(_)) => "unknown".to_string(),
