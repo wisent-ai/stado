@@ -399,7 +399,13 @@ async fn queued_gpu_job_for_inference(
     active_slot_count: usize,
     pinned_only: bool,
 ) -> Result<Option<(String, i64)>, StorageError> {
-    let mut queued = store.list_jobs_fitting("queue", total_vram_gb, 2000).await?;
+    let listed = store.list_jobs_fitting("queue", total_vram_gb, 2000).await?;
+    let mut queued = Vec::with_capacity(listed.len());
+    for candidate in listed {
+        if let Some(job) = store.read_job("queue", &candidate.job_id).await? {
+            queued.push(job);
+        }
+    }
     queued.sort_by(|left, right| {
         right
             .priority
