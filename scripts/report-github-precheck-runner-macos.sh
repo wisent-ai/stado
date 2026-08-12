@@ -20,7 +20,7 @@ csrutil status 2>&1 || true
 printf '%s\n' '== launchd =='
 sudo -n launchctl print system/com.wisent.stado-precheck-runner 2>&1 || true
 printf '%s\n' '== recent output =='
-tail -n 80 /Users/Shared/stado-precheck-runner/_diag/launchd.stdout.log 2>&1 || true
-tail -n 80 /Users/Shared/stado-precheck-runner/_diag/launchd.stderr.log 2>&1 || true
+sudo -n tail -n 80 /Users/Shared/stado-precheck-runner/_diag/launchd.stdout.log 2>&1 || true
+sudo -n tail -n 80 /Users/Shared/stado-precheck-runner/_diag/launchd.stderr.log 2>&1 || true
 printf '%s\n' '== network boundary =='
 sudo -n pfctl -a com.wisent.stado-precheck -sr 2>&1 || true
