@@ -326,10 +326,7 @@ fn show() -> Result<(), CmdError> {
         "azure_vm_identity_id".into(),
         Value::from(config::azure_vm_identity_id()),
     );
-    resolved.insert(
-        "stado_api_url".into(),
-        Value::from(config::stado_api_url()),
-    );
+    resolved.insert("stado_api_url".into(), Value::from(config::stado_api_url()));
     resolved.insert(
         "stado_release_version".into(),
         Value::from(config::stado_release_version()),

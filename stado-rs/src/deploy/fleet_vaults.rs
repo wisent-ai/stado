@@ -54,10 +54,7 @@ printf '{"host":"%s","vaults":[],"absent":"no skarbiec binary on this host"}\n' 
 /// Ask one host. A host that cannot be reached is reported as unreachable
 /// rather than dropped, because a fleet inventory missing a machine silently
 /// is worse than one that says which machine it could not read.
-pub async fn collect_from(
-    target: &crate::targets::ComputeTarget,
-    runner: &Runner,
-) -> Value {
+pub async fn collect_from(target: &crate::targets::ComputeTarget, runner: &Runner) -> Value {
     match host_channel::run_script(target, REMOTE_VAULT_SCRIPT, runner).await {
         Ok(output) => match serde_json::from_str::<Value>(output.stdout.trim()) {
             Ok(document) => document,
@@ -100,7 +97,10 @@ pub fn summarize(hosts: &[Value]) -> Value {
         vaults = vaults.saturating_add(list.len());
         for vault in list {
             items = items.saturating_add(
-                vault.get("items").and_then(Value::as_u64).unwrap_or_default(),
+                vault
+                    .get("items")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default(),
             );
         }
     }

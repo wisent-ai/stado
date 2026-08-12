@@ -16,7 +16,6 @@
 
 mod enterprise;
 
-
 use serde_json::{json, Value};
 
 use super::{constant_time_eq, http_status, Request, Response};

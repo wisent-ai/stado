@@ -453,9 +453,12 @@ fn validate_service_onboarding(
                 "must be an owner/repository identifier",
             ));
         }
-        let surfaces = onboarding["surface_kinds"]
-            .as_array()
-            .ok_or_else(|| verr(&format!("{onboarding_location}.surface_kinds"), "must be an array"))?;
+        let surfaces = onboarding["surface_kinds"].as_array().ok_or_else(|| {
+            verr(
+                &format!("{onboarding_location}.surface_kinds"),
+                "must be an array",
+            )
+        })?;
         const SURFACES: [&str; 10] = [
             "web", "ios", "android", "macos", "desktop", "cli", "api", "worker", "operator",
             "python",
@@ -1295,7 +1298,11 @@ pub fn validate_verification(location: &str, descriptor: &VerifyDescriptor) -> V
     [
         ("kind", descriptor.kind.as_str(), VERIFY_KINDS.as_slice()),
         ("from", descriptor.from.as_str(), VERIFY_FROMS.as_slice()),
-        ("expect", descriptor.expect.as_str(), VERIFY_EXPECTS.as_slice()),
+        (
+            "expect",
+            descriptor.expect.as_str(),
+            VERIFY_EXPECTS.as_slice(),
+        ),
     ]
     .into_iter()
     .filter_map(|(field, value, known)| verify_problem(location, field, value, known))

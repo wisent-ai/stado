@@ -366,7 +366,6 @@ pub async fn repair_conflicting_pinned_assignments(
     Ok(repaired)
 }
 
-
 /// [`assign_jobs`] with an injectable clock + history map, so tests can
 /// drive the matcher offline without touching the global TTL caches.
 pub async fn assign_jobs_at(

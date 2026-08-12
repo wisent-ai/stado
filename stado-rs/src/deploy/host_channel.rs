@@ -418,10 +418,7 @@ pub struct PostConditionVerdict {
 /// [`POSTCONDITION_UNOBSERVED`] rather than an optimistic default: an
 /// unobserved end state is exactly the thing this channel is no longer
 /// allowed to assume in the operation's favour.
-pub fn postcondition_verdict(
-    stdout: &str,
-    postcondition: &PostCondition,
-) -> PostConditionVerdict {
+pub fn postcondition_verdict(stdout: &str, postcondition: &PostCondition) -> PostConditionVerdict {
     for line in stdout.lines() {
         if let [POSTCONDITION_MARKER, describe, state, detail] = marker_fields(line).as_slice() {
             if *describe == postcondition.describe {

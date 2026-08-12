@@ -170,7 +170,11 @@ async fn ensure_bins_at_version_with(
     let manifest_bytes = fetcher
         .fetch(&format!("{prefix}/{manifest_name}"))
         .await
-        .map_err(|exc| DeployError(format!("release download failed for {manifest_name}: {exc}")))?
+        .map_err(|exc| {
+            DeployError(format!(
+                "release download failed for {manifest_name}: {exc}"
+            ))
+        })?
         .ok_or_else(|| DeployError(format!("{manifest_name} is not published")))?;
     let manifest: Value = serde_json::from_slice(&manifest_bytes)
         .map_err(|error| DeployError(format!("invalid release manifest: {error}")))?;
@@ -189,7 +193,9 @@ async fn ensure_bins_at_version_with(
                     && commit.bytes().all(|byte| byte.is_ascii_hexdigit())
             })
     {
-        return Err(DeployError("release manifest identity is invalid".to_string()));
+        return Err(DeployError(
+            "release manifest identity is invalid".to_string(),
+        ));
     }
     let expected = manifest
         .get("sha256")
@@ -215,8 +221,7 @@ async fn ensure_bins_at_version_with(
     }
     let staging = tempfile::tempdir().map_err(|error| DeployError(error.to_string()))?;
     let extracted = staging.path().join("archive");
-    crate::release_control::safe_extract_archive(&archive, &extracted)
-        .map_err(DeployError)?;
+    crate::release_control::safe_extract_archive(&archive, &extracted).map_err(DeployError)?;
     let mut verified: Vec<(&str, Vec<u8>)> = Vec::with_capacity(LOCAL_BINARIES.len());
     for name in LOCAL_BINARIES {
         let path = extracted.join(name);

@@ -121,14 +121,11 @@ impl ConsoleError {
     }
 }
 
-fn action(
-    id: &str,
-    label: &str,
-    description: &str,
-    args: &[&str],
-    input: Option<&str>,
-) -> Value {
-    let owned = args.iter().map(|value| value.to_string()).collect::<Vec<_>>();
+fn action(id: &str, label: &str, description: &str, args: &[&str], input: Option<&str>) -> Value {
+    let owned = args
+        .iter()
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>();
     json!({
         "id": id,
         "label": label,
@@ -286,28 +283,63 @@ fn is_read_only(args: &[String]) -> bool {
     if family == "azure" && operation == "unusual-activity" {
         return args.get(2).map(String::as_str) == Some("diagnose");
     }
-    if matches!(family, "capabilities" | "overview" | "profiles" | "status" | "doctor" | "results" | "cost" | "mail" | "blast-radius") {
+    if matches!(
+        family,
+        "capabilities"
+            | "overview"
+            | "profiles"
+            | "status"
+            | "doctor"
+            | "results"
+            | "cost"
+            | "mail"
+            | "blast-radius"
+    ) {
         return true;
     }
     matches!(
         (family, operation),
-        ("artifact", "list" | "show" | "resolve" | "verify" | "lineage")
-            | ("billing", "show")
-            | ("host", "health" | "inventory" | "uptime" | "ping" | "disk" | "vaults")
+        (
+            "artifact",
+            "list" | "show" | "resolve" | "verify" | "lineage"
+        ) | ("billing", "show")
+            | (
+                "host",
+                "health" | "inventory" | "uptime" | "ping" | "disk" | "vaults"
+            )
             | ("identity", "list" | "verify")
-            | ("inference", "list" | "status" | "logs" | "plan-logs" | "doctor" | "verify" | "blockers")
+            | (
+                "inference",
+                "list" | "status" | "logs" | "plan-logs" | "doctor" | "verify" | "blockers"
+            )
             | ("instances", "list")
             | ("machine", "status" | "logs" | "artifacts")
             | ("optimize", "status" | "explain")
             | ("queue", "status")
             | ("quota", "show" | "catalog" | "requests" | "azure-replies")
-            | ("registry", "validate" | "pull" | "self" | "doctor" | "beacon-age")
+            | (
+                "registry",
+                "validate" | "pull" | "self" | "doctor" | "beacon-age"
+            )
             | ("release", "catalog" | "status")
             | ("resources", "show" | "verify" | "operations")
             | ("schedule", "list" | "show")
             | ("secrets", "ls" | "doctor" | "inspect-vault")
-            | ("service", "directory" | "list" | "onboarding-catalog" | "status" | "show" | "logs" | "env" | "auth-check")
-            | ("storage", "ls" | "stat" | "cat" | "verify" | "objects" | "url")
+            | (
+                "service",
+                "directory"
+                    | "list"
+                    | "onboarding-catalog"
+                    | "status"
+                    | "show"
+                    | "logs"
+                    | "env"
+                    | "auth-check"
+            )
+            | (
+                "storage",
+                "ls" | "stat" | "cat" | "verify" | "objects" | "url"
+            )
             | ("vast", "status")
             | ("alerts", "channels")
     )
@@ -377,9 +409,7 @@ fn parse_structured_output(stdout: &str) -> Option<Value> {
     }
     serde_json::from_str(trimmed).ok()
 }
-async fn read_bounded<R: AsyncRead + Unpin>(
-    mut reader: R,
-) -> std::io::Result<(Vec<u8>, bool)> {
+async fn read_bounded<R: AsyncRead + Unpin>(mut reader: R) -> std::io::Result<(Vec<u8>, bool)> {
     let mut output = Vec::with_capacity(16 * 1024);
     let mut buffer = [0_u8; 8192];
     let mut truncated = false;
@@ -395,7 +425,6 @@ async fn read_bounded<R: AsyncRead + Unpin>(
     }
     Ok((output, truncated))
 }
-
 
 /// Execute one finite, authenticated CLI action and return bounded captured
 /// output. `current_exe` preserves the exact dashboard release and therefore
@@ -413,13 +442,14 @@ pub(super) async fn run(body: &[u8]) -> Result<Value, ConsoleError> {
         {
             options.mode(0o600);
         }
-        let mut file = options
-            .open(&path)
-            .await
-            .map_err(|error| ConsoleError::unavailable(format!("could not stage input: {error}")))?;
+        let mut file = options.open(&path).await.map_err(|error| {
+            ConsoleError::unavailable(format!("could not stage input: {error}"))
+        })?;
         file.write_all(request.input.as_deref().unwrap_or_default().as_bytes())
             .await
-            .map_err(|error| ConsoleError::unavailable(format!("could not stage input: {error}")))?;
+            .map_err(|error| {
+                ConsoleError::unavailable(format!("could not stage input: {error}"))
+            })?;
         drop(file);
         Some(StagedInput(path))
     } else {
@@ -436,8 +466,9 @@ pub(super) async fn run(body: &[u8]) -> Result<Value, ConsoleError> {
         }
     }
 
-    let executable = std::env::current_exe()
-        .map_err(|error| ConsoleError::unavailable(format!("could not resolve Stado binary: {error}")))?;
+    let executable = std::env::current_exe().map_err(|error| {
+        ConsoleError::unavailable(format!("could not resolve Stado binary: {error}"))
+    })?;
     let mut command = Command::new(executable);
     command
         .args(&args)
@@ -448,9 +479,9 @@ pub(super) async fn run(body: &[u8]) -> Result<Value, ConsoleError> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let mut child = command
-        .spawn()
-        .map_err(|error| ConsoleError::unavailable(format!("could not start Stado command: {error}")))?;
+    let mut child = command.spawn().map_err(|error| {
+        ConsoleError::unavailable(format!("could not start Stado command: {error}"))
+    })?;
     let stdout = child
         .stdout
         .take()
@@ -460,17 +491,17 @@ pub(super) async fn run(body: &[u8]) -> Result<Value, ConsoleError> {
         .take()
         .ok_or_else(|| ConsoleError::unavailable("could not capture command stderr"))?;
     let execution = async {
-        let (stdout_result, stderr_result, status_result) = tokio::join!(
-            read_bounded(stdout),
-            read_bounded(stderr),
-            child.wait(),
-        );
-        let (stdout_bytes, stdout_truncated) = stdout_result
-            .map_err(|error| ConsoleError::unavailable(format!("could not read command stdout: {error}")))?;
-        let (stderr_bytes, stderr_truncated) = stderr_result
-            .map_err(|error| ConsoleError::unavailable(format!("could not read command stderr: {error}")))?;
-        let status = status_result
-            .map_err(|error| ConsoleError::unavailable(format!("could not wait for Stado command: {error}")))?;
+        let (stdout_result, stderr_result, status_result) =
+            tokio::join!(read_bounded(stdout), read_bounded(stderr), child.wait(),);
+        let (stdout_bytes, stdout_truncated) = stdout_result.map_err(|error| {
+            ConsoleError::unavailable(format!("could not read command stdout: {error}"))
+        })?;
+        let (stderr_bytes, stderr_truncated) = stderr_result.map_err(|error| {
+            ConsoleError::unavailable(format!("could not read command stderr: {error}"))
+        })?;
+        let status = status_result.map_err(|error| {
+            ConsoleError::unavailable(format!("could not wait for Stado command: {error}"))
+        })?;
         Ok::<_, ConsoleError>((
             status,
             stdout_bytes,
@@ -479,7 +510,8 @@ pub(super) async fn run(body: &[u8]) -> Result<Value, ConsoleError> {
             stderr_truncated,
         ))
     };
-    let result = tokio::time::timeout(Duration::from_secs(request.timeout_seconds), execution).await;
+    let result =
+        tokio::time::timeout(Duration::from_secs(request.timeout_seconds), execution).await;
     let (status, stdout_bytes, stderr_bytes, stdout_truncated, stderr_truncated) = match result {
         Ok(result) => result?,
         Err(_) => {
