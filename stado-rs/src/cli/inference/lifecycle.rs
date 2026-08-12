@@ -259,38 +259,43 @@ pub async fn apply(plan_id: &str, json_output: bool) -> Result<(), CmdError> {
         let updated = inference::update_reservation(&target, &plan.deployment, &runner)
             .await
             .map_err(click)?;
-        replace(&mut registry, plan.deployment.clone());
-        let next = schema::write(&document, &registry).map_err(click)?;
-        let generation = match crate::cli::registry::push_document_if(&next, &expected_generation)
+        if succeeded(&updated, "updated") {
+            replace(&mut registry, plan.deployment.clone());
+            let next = schema::write(&document, &registry).map_err(click)?;
+            let generation = match crate::cli::registry::push_document_if(
+                &next,
+                &expected_generation,
+            )
             .await
-        {
-            Ok(generation) => generation,
-            Err(error) => {
-                if let Err(restore_error) =
-                    inference::update_reservation(&target, &current, &runner).await
-                {
-                    return Err(CmdError::click(format!(
-                        "{error}; inference reservation restoration also failed: {restore_error}"
-                    )));
+            {
+                Ok(generation) => generation,
+                Err(error) => {
+                    if let Err(restore_error) =
+                        inference::update_reservation(&target, &current, &runner).await
+                    {
+                        return Err(CmdError::click(format!(
+                                "{error}; inference reservation restoration also failed: {restore_error}"
+                            )));
+                    }
+                    return Err(error);
                 }
-                return Err(error);
+            };
+            saved_plan::consume(plan_id).map_err(click)?;
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({
+                        "generation": generation,
+                        "deployment": plan.deployment,
+                        "runtime": updated,
+                        "ready": {"status": "unchanged"},
+                    }))?
+                );
+            } else {
+                println!("applied inference plan {plan_id} generation={generation}");
             }
-        };
-        saved_plan::consume(plan_id).map_err(click)?;
-        if json_output {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json!({
-                    "generation": generation,
-                    "deployment": plan.deployment,
-                    "runtime": updated,
-                    "ready": {"status": "unchanged"},
-                }))?
-            );
-        } else {
-            println!("applied inference plan {plan_id} generation={generation}");
+            return Ok(());
         }
-        return Ok(());
     }
 
     let bearer = super::credential::read().await?;

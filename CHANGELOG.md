@@ -42,6 +42,9 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
 - The documented `chat-primary` profile now uses a Featherless route for the
   same Cydonia model as its ordered fallback. With `gpu_mode=yieldable`, queued
   GPU work pauses local vLLM while Brama keeps chat available remotely.
+- Route publication now accepts a temporarily stopped `yieldable` local primary
+  when an ordered fallback is present; unavailable exclusive primaries and local
+  fallbacks remain rejected.
 
 ### Credential recovery
 
