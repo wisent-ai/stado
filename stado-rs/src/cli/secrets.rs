@@ -152,10 +152,9 @@ async fn harvest(json: bool, restore: Option<&str>, all: bool) -> Result<(), Cmd
                 "no secret-shaped value for {name} in any transcript; run without --restore to see what is there"
             ))
         })?;
-        if crate::credential_store::configured_selector()
-            .map_err(|error| CmdError::click(error.to_string()))?
-            .starts_with("skarbiec")
-        {
+        let selector = crate::credential_store::configured_selector()
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        if selector.starts_with("skarbiec") {
             let binary = skarbiec_binary()?;
             // Skarbiec can encrypt with public recipients even when no owner
             // here can decrypt. Refuse to bury the recovered value in that
@@ -169,11 +168,24 @@ async fn harvest(json: bool, restore: Option<&str>, all: bool) -> Result<(), Cmd
                     )))
                 }
             }
+            let vault = std::env::var("SKARBIEC_VAULT_FILE").map_err(|_| {
+                CmdError::click(
+                    "SKARBIEC_VAULT_FILE is required to restore transcript material into Skarbiec",
+                )
+            })?;
+            store_local_json(
+                &binary,
+                std::path::Path::new(&vault),
+                name,
+                "stado-secret",
+                &json!({"value": value}),
+            )?;
+        } else {
+            client()?
+                .write_item(name, "stado-secret", &json!({"value": value}))
+                .await
+                .map_err(|error| CmdError::click(error.to_string()))?;
         }
-        client()?
-            .write_item(name, "stado-secret", &json!({"value": value}))
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
         println!("restored {name} into the selected credential store from transcript history");
         return Ok(());
     }
@@ -260,6 +272,7 @@ async fn migrate(destination: Option<&str>) -> Result<(), CmdError> {
 /// [`crate::deploy::host_recovery::WC_CANDIDATES`]: one prefix, discovered the
 /// same way, so the two cannot drift apart.
 const SKARBIEC_CANDIDATES: &[&str] = &["$HOME/.stado/bin/skarbiec"];
+const SKARBIEC_ITEM_SCHEMA: &str = "skarbiec.item.v2";
 
 fn skarbiec_binary() -> Result<std::path::PathBuf, CmdError> {
     let home = std::env::var("HOME").map_err(|_| CmdError::click("HOME is not set"))?;
@@ -546,13 +559,14 @@ fn store_local_json(
     binary: &std::path::Path,
     vault: &std::path::Path,
     item: &str,
+    item_type: &str,
     value: &Value,
 ) -> Result<(), CmdError> {
     let mut child = std::process::Command::new(binary)
         .arg("set-json")
         .arg(item)
         .arg("--type")
-        .arg("internal-authority")
+        .arg(item_type)
         .env("SKARBIEC_VAULT_FILE", vault)
         .env_remove("SKARBIEC_UNLOCK")
         .env_remove("SKARBIEC_UNLOCK_FILE")
@@ -560,8 +574,14 @@ fn store_local_json(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()?;
+    let payload = json!({
+        "schema": SKARBIEC_ITEM_SCHEMA,
+        "kind": item_type,
+        "fields": value,
+        "context": {},
+    });
     if let Some(stdin) = child.stdin.as_mut() {
-        stdin.write_all(serde_json::to_string(value)?.as_bytes())?;
+        stdin.write_all(serde_json::to_string(&payload)?.as_bytes())?;
     }
     let output = child.wait_with_output()?;
     if !output.status.success() {
@@ -665,7 +685,7 @@ fn bootstrap_weles(json_output: bool) -> Result<(), CmdError> {
     ];
     let mut stored = Vec::with_capacity(items.len());
     for (item, value) in &items {
-        store_local_json(&binary, &vault, item, value)?;
+        store_local_json(&binary, &vault, item, "internal-authority", value)?;
         stored.push(*item);
     }
     if json_output {
