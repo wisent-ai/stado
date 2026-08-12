@@ -17,6 +17,18 @@ done
 printf '%s\n' '=== object api service ==='
 /bin/launchctl print system/com.wisent.always-on.stado-object-api \
   | /usr/bin/sed -n '1,100p'
+printf '%s\n' '=== skarbiec weles service ==='
+/bin/launchctl print system/com.wisent.always-on.skarbiec-weles \
+  | /usr/bin/sed -n '1,120p'
+printf '%s\n' '=== credential listeners ==='
+/usr/sbin/lsof -nP -iTCP:8895 -iTCP:19095 -sTCP:LISTEN
+printf '%s\n' '=== skarbiec weles log ==='
+skarbiec_weles_log="$HOME/.stado/logs/com.wisent.always-on.skarbiec-weles.log"
+if [ -f "$skarbiec_weles_log" ]; then
+  /usr/bin/tail -n 80 "$skarbiec_weles_log"
+else
+  printf '%s\n' "missing: $skarbiec_weles_log"
+fi
 printf '%s\n' '=== recent log ==='
 if [ -f "$log" ]; then
   /usr/bin/tail -n 120 "$log"

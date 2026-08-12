@@ -11,7 +11,7 @@ do
     printf 'binary=%s\n' "$candidate"
     "$candidate" version
     "$candidate" serve status --json
-    "$candidate" serve --help
+    "$candidate" serve --help 2>&1
     exit 0
   fi
 done
