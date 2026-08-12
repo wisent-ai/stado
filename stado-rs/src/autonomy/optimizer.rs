@@ -490,6 +490,11 @@ fn candidate(
     if job.pin_to_provider && !job.provider.is_empty() && job.provider != offer.provider.as_str() {
         rejected.push(format!("job is pinned to provider {}", job.provider));
     }
+    if !job.pinned_host.is_empty()
+        && !offer.target_id.eq_ignore_ascii_case(&job.pinned_host)
+    {
+        rejected.push(format!("job is pinned to host {}", job.pinned_host));
+    }
     if !offer.existing
         && matches!(
             offer.provider,
@@ -675,8 +680,12 @@ async fn update_job_placement(
     {
         return Ok(false);
     }
-    if !current.pinned_host.is_empty() && current.pinned_host == current.assigned_to {
-        current.pinned_host.clear();
+    if !current.pinned_host.is_empty()
+        && !selected
+            .target_id
+            .eq_ignore_ascii_case(&current.pinned_host)
+    {
+        return Ok(false);
     }
     current.provider = selected.provider.as_str().to_string();
     current.pin_to_provider = true;
