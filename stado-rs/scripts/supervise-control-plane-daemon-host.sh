@@ -17,21 +17,16 @@
 # endpoint exactly as it found it.
 set -eu
 
-label=com.wisent.always-on.stado-object-api
+label=com.wisent.compute.coordinator.charless-control-plane
 plist="/Library/LaunchDaemons/$label.plist"
 owner=$(/usr/bin/id -un)
 home=$HOME
 binary="$home/.stado/bin/stado"
 logs="$home/.stado/logs"
 skarbiec_url=http://127.0.0.1:8895
-# The fleet's store is not this host's disk. This host's configured object-API
-# URL is the tailnet origin fronted by a proxy that loops straight back here,
-# so with the process down it cannot boot itself -- and forcing a local
-# backend instead silently moves every write onto a disk no reader reads,
-# which is how beacons published from here went stale while reporting success.
-# The shared store is reachable without the loop over the forward this host
-# already keeps.
-storage_backend=local
+# This is the fleet coordinator, not the single-device onboarding profile.
+# Storage, provider selection, and credentials come from the host's Stado
+# config; forcing WC_STORAGE_BACKEND=local would fork canonical queue state.
 port=8765
 
 [ -x "$binary" ] || { printf '%s\n' "missing $binary" >&2; exit 1; }
@@ -42,9 +37,10 @@ bound() {
 }
 
 relaunch_detached() {
-  WC_SKARBIEC_URL="$skarbiec_url" WC_STORAGE_BACKEND="$storage_backend" \
-    /usr/bin/nohup "$binary" local-control-plane \
-    < /dev/null >> "$logs/stado-local-control-plane.log" 2>&1 &
+  WC_SKARBIEC_URL="$skarbiec_url" \
+    /usr/bin/nohup "$binary" cloud-control-plane \
+      --bind 127.0.0.1 --port "$port" --interval 30 \
+    < /dev/null >> "$logs/stado-cloud-control-plane.log" 2>&1 &
 }
 
 /usr/bin/sudo -n /usr/bin/tee "$plist" > /dev/null <<PLIST
@@ -59,7 +55,13 @@ relaunch_detached() {
     <key>ProgramArguments</key>
     <array>
         <string>$binary</string>
-        <string>local-control-plane</string>
+        <string>cloud-control-plane</string>
+        <string>--bind</string>
+        <string>127.0.0.1</string>
+        <string>--port</string>
+        <string>$port</string>
+        <string>--interval</string>
+        <string>30</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>
@@ -67,8 +69,8 @@ relaunch_detached() {
         <string>$home</string>
         <key>WC_SKARBIEC_URL</key>
         <string>$skarbiec_url</string>
-        <key>WC_STORAGE_BACKEND</key>
-        <string>$storage_backend</string>
+        <key>STADO_CONFIG</key>
+        <string>$home/.config/stado/config.json</string>
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     </dict>
