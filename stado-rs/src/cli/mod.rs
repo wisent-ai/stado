@@ -1416,6 +1416,9 @@ enum HostBuildCacheCommands {
         root: String,
         #[arg(long)]
         min_age_days: String,
+        /// Remove tagged caches even when they were used today.
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -1802,12 +1805,13 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 target,
                 root,
                 min_age_days,
-            }) => host::build_caches(&target, &root, &min_age_days, false).await,
+            }) => host::build_caches(&target, &root, &min_age_days, false, false).await,
             HostCommands::BuildCaches(HostBuildCacheCommands::Prune {
                 target,
                 root,
                 min_age_days,
-            }) => host::build_caches(&target, &root, &min_age_days, true).await,
+                force,
+            }) => host::build_caches(&target, &root, &min_age_days, true, force).await,
             HostCommands::Uptime { target, json } => host::uptime(&target, json).await,
             HostCommands::Ping { target, json } => host::ping(&target, json).await,
             HostCommands::Disk { target, json } => host::disk(&target, json).await,
