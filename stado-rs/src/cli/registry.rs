@@ -82,6 +82,21 @@ fn removed_top_level_keys(current: &str, payload: &str) -> Vec<String> {
         .collect()
 }
 
+/// The service directory's own publication counter, when the document carries
+/// one.
+///
+/// `ServiceDirectory::generation` is what a consumer compares against the copy
+/// it cached, and `ServiceDirectoryError::Stale` is the answer it gets when its
+/// copy is older. That check only means something if the number never goes
+/// backwards at the authority.
+fn service_directory_generation(text: &str) -> Option<u64> {
+    serde_json::from_str::<Value>(text)
+        .ok()?
+        .get("service_directory")?
+        .get("generation")?
+        .as_u64()
+}
+
 /// The upload half [`push`] and [`push_document`] share: read the current
 /// generation, refuse a write that would delete a top-level key unless the
 /// operator said so, compare-and-swap against it (or atomically create when
@@ -115,6 +130,29 @@ async fn upload_payload(payload: &str, allow_removals: bool) -> Result<(String, 
                     removed.join(", "),
                     blob.version
                 )));
+            }
+        }
+        if let Some(blob) = current.as_ref() {
+            // Same accident as the deleted-key guard above, one level in: the
+            // whole document is replaced, so a writer holding an older copy
+            // publishes its older directory over a newer one and every
+            // consumer's staleness check silently starts agreeing with it.
+            // Observed on 2026-08-12, when the directory went from generation
+            // 10 back to 5 and two corrected endpoints reverted with it.
+            if let (Some(before), Some(after)) = (
+                service_directory_generation(&blob.content),
+                service_directory_generation(payload),
+            ) {
+                if after < before {
+                    return Err(CmdError::click(format!(
+                        "registry upload refused: its service directory is generation \
+                         {after} and the registry already carries {before}. The counter \
+                         consumers use to detect a stale directory would go backwards, \
+                         so every cached copy older than {before} would start looking \
+                         current. Re-pull, re-apply the edit, and push again; pass \
+                         --force only if publishing the older directory is the intent."
+                    )));
+                }
             }
         }
     }
