@@ -247,7 +247,7 @@ def install_hooks(uid: int, gid: int) -> tuple[pathlib.Path, pathlib.Path]:
         "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin "
         f"ACTIONS_RUNNER_HOOK_JOB_STARTED={cleanup} "
         f"ACTIONS_RUNNER_HOOK_JOB_COMPLETED={cleanup} "
-        f"{RUNNER_ROOT / 'run.sh'}\n",
+        f"{RUNNER_ROOT / 'bin' / 'runsvc.sh'}\n",
         encoding="utf-8",
     )
     os.chown(launcher, 0, 0)
