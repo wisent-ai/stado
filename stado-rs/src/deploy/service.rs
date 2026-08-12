@@ -193,8 +193,8 @@ impl ManagedService {
                 );
         }
         if let Some(onboarding) = &self.onboarding {
-            record["onboarding"] = serde_json::to_value(onboarding)
-                .expect("OnboardingProduct is JSON serializable");
+            record["onboarding"] =
+                serde_json::to_value(onboarding).expect("OnboardingProduct is JSON serializable");
         }
         record
     }
@@ -215,8 +215,8 @@ impl ManagedService {
             "managed_since": self.managed_since,
         });
         if let Some(onboarding) = &self.onboarding {
-            record["onboarding"] = serde_json::to_value(onboarding)
-                .expect("OnboardingProduct is JSON serializable");
+            record["onboarding"] =
+                serde_json::to_value(onboarding).expect("OnboardingProduct is JSON serializable");
         }
         record
     }
@@ -1008,6 +1008,17 @@ const DISOWNED_SWEEP: &str = "  program=\"\"
       for pid in $left; do /bin/kill -TERM \"$pid\" >/dev/null 2>&1 || true; done
       /bin/sleep 2
       still=$(/usr/bin/pgrep -f \"^$match\" 2>/dev/null | /usr/bin/tr '\\n' ' ')
+      # A service that serves each adapter from its own process does not go
+      # away on one round of TERM: the process holding the port exits, the
+      # siblings holding theirs do not, and launchd is then refused the ports
+      # it is being asked to bind. Reporting that as \"survived\" left the unit
+      # booted out -- a restart that ends with nothing running. Escalate, and
+      # keep 'survived' for a process that refuses SIGKILL.
+      if [ -n \"$still\" ]; then
+        for pid in $still; do /bin/kill -KILL \"$pid\" >/dev/null 2>&1 || true; done
+        /bin/sleep 2
+        still=$(/usr/bin/pgrep -f \"^$match\" 2>/dev/null | /usr/bin/tr '\\n' ' ')
+      fi
     fi
   fi
 ";
@@ -1717,7 +1728,12 @@ pub fn set_service_onboarding(
     let declared = entry
         .get_mut(SERVICES_KEY)
         .and_then(Value::as_array_mut)
-        .ok_or_else(|| DeployError(format!("{} declares no managed services", py_str_repr(host))))?;
+        .ok_or_else(|| {
+            DeployError(format!(
+                "{} declares no managed services",
+                py_str_repr(host)
+            ))
+        })?;
     let record = declared
         .iter_mut()
         .find(|record| {
