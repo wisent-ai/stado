@@ -43,6 +43,7 @@ use serde_json::{json, Map, Value};
 
 use super::registry;
 use crate::cli::CmdError;
+use crate::observations;
 use crate::targets;
 
 const DIRECTORY_KEY: &str = "service_directory";
@@ -262,6 +263,14 @@ pub async fn dispatch(command: DirectoryCommands) -> Result<(), CmdError> {
     }
 }
 
+/// Every declared service, its placement, and the address each host is handed
+/// -- each address followed by when anyone last confirmed it answers.
+///
+/// The endpoint and its freshness are printed on one line on purpose. Read
+/// alone, `from lukasz-macbook: http://127.0.0.1:8080` is a claim with no
+/// author and no date, and that is the exact rendering an operator believed
+/// for twelve days while the laptop it named was closed. `never` beside it
+/// says the fleet has no evidence for the line it just printed.
 async fn show(as_json: bool) -> Result<(), CmdError> {
     let document = registry::fetch_document().await?;
     let block = directory(&document)?;
@@ -270,6 +279,7 @@ async fn show(as_json: bool) -> Result<(), CmdError> {
         return Ok(());
     }
     let all = services(block)?;
+    let seen = observations::load();
     for (name, entry) in all {
         let active = entry
             .get("active_host")
@@ -282,7 +292,12 @@ async fn show(as_json: bool) -> Result<(), CmdError> {
                     .get("url")
                     .and_then(Value::as_str)
                     .unwrap_or("(no url)");
-                println!("    from {target}: {url}");
+                // Keyed by the host the address is written for, not by the
+                // host serving: reachability is a property of the pair, and
+                // one vantage answering says nothing about the others.
+                let observed =
+                    observations::describe_in(&seen, &observations::service_fact(name, target));
+                println!("    from {target}: {url}  [observed {observed}]");
             }
         }
         if let Some(consumers) = entry.get("consumers").and_then(Value::as_object) {
@@ -477,21 +492,51 @@ async fn connect(
     // knock on this host's own loopback and report the result as if it came
     // from somewhere else, which is the confusion this command exists to end.
     let here = this_target().await.unwrap_or_default();
-    let status = if no_verify || asking != here {
+    let probe = if no_verify || asking != here {
         None
     } else {
-        match answers(&url).await {
-            Ok(status) => Some(status),
-            // Deliberately terminal. The caller asked where this service is,
-            // and the honest answer is that it is placed somewhere that did
-            // not answer -- not some other address that happens to be up.
-            Err(detail) => {
-                return Err(click(format!(
-                    "{name} is placed on {active} and did not answer at {url}: {detail}"
-                )))
-            }
-        }
+        Some(answers(&url).await)
     };
+
+    // A look that is not written down is a look that did not happen: the next
+    // reader of the directory sees `never` and re-derives the same doubt. This
+    // is the one verb in this file that actually knocks, so its result becomes
+    // the fleet's record and not just one line of console output. Recorded
+    // before the failure is raised, because `unreachable` is the state the
+    // whole change exists to preserve -- returning the error first would throw
+    // away the only evidence anyone has that somebody checked.
+    if let Some(outcome) = probe.as_ref() {
+        let (state, detail) = match outcome {
+            Ok(status) => (observations::OBSERVED, format!("HTTP {status} at {url}")),
+            Err(detail) => (observations::UNREACHABLE, format!("{url}: {detail}")),
+        };
+        let fact = observations::service_fact(name, &here);
+        let row = observations::Observation::now(fact, here.as_str(), state, detail);
+        // A record that cannot be written must not turn a successful connect
+        // into a failure: the caller asked where the service is, and the
+        // answer stands whether or not this host can keep notes.
+        if let Err(error) = observations::record(&[row]) {
+            eprintln!("warning: could not record the observation: {error}");
+        }
+    }
+
+    let status = match probe {
+        Some(Ok(status)) => Some(status),
+        // Deliberately terminal. The caller asked where this service is,
+        // and the honest answer is that it is placed somewhere that did
+        // not answer -- not some other address that happens to be up.
+        Some(Err(detail)) => {
+            return Err(click(format!(
+                "{name} is placed on {active} and did not answer at {url}: {detail}"
+            )))
+        }
+        None => None,
+    };
+
+    // The vantage that matters is the one being computed for, not the one
+    // running the command: `--target other-host` prints the address that host
+    // is handed, so the age shown must be the age of that host's evidence.
+    let observed = observations::describe(&observations::service_fact(name, &asking));
 
     if as_json {
         println!(
@@ -504,17 +549,19 @@ async fn connect(
                 "verified": status.is_some(),
                 "status": status,
                 "checked_from": if asking == here { Some(here.clone()) } else { None },
+                "observed": observed,
             }))?
         );
     } else {
         match status {
-            Some(status) => println!("{url}  ({name} on {active}, answered {status})"),
-            None if asking != here => {
-                println!(
-                    "{url}  ({name} on {active}, computed for {asking}, not checked from here)"
-                )
+            Some(status) => {
+                println!("{url}  ({name} on {active}, answered {status}, observed {observed})")
             }
-            None => println!("{url}  ({name} on {active}, unverified)"),
+            None if asking != here => println!(
+                "{url}  ({name} on {active}, computed for {asking}, not checked from here, \
+                 observed {observed})"
+            ),
+            None => println!("{url}  ({name} on {active}, unverified, observed {observed})"),
         }
     }
     Ok(())
@@ -590,12 +637,17 @@ async fn publish(
         );
         return Ok(());
     }
+    // Each marker is an address a consumer on this host will dial without ever
+    // asking again, so the line that announces writing one also says when
+    // anyone last confirmed it answers.
+    let seen = observations::load();
     for entry in &published {
+        let service = entry.get("service").and_then(Value::as_str).unwrap_or("");
         println!(
-            "{} -> {} ({})",
-            entry.get("service").and_then(Value::as_str).unwrap_or(""),
+            "{service} -> {} ({}) [observed {}]",
             entry.get("url").and_then(Value::as_str).unwrap_or(""),
-            entry.get("marker").and_then(Value::as_str).unwrap_or("")
+            entry.get("marker").and_then(Value::as_str).unwrap_or(""),
+            observations::describe_in(&seen, &observations::service_fact(service, &target))
         );
     }
     for entry in &skipped {
@@ -638,6 +690,12 @@ async fn endpoint(name: &str, target: Option<String>, as_json: bool) -> Result<(
         .and_then(|endpoints| endpoints.get(&target))
         .and_then(|endpoint| endpoint.get("url"))
         .and_then(Value::as_str);
+    // The endpoint and the age of the fleet's evidence for it are one answer,
+    // not two. This verb is what scripts and operators use to find out where a
+    // service is; handing back an address with no indication that nobody has
+    // confirmed it since the machine was last awake is how a valid declaration
+    // routed twelve days of work into a closed laptop.
+    let observed = observations::describe(&observations::service_fact(name, &target));
     if as_json {
         println!(
             "{}",
@@ -646,12 +704,15 @@ async fn endpoint(name: &str, target: Option<String>, as_json: bool) -> Result<(
                 "target": target,
                 "active_host": active,
                 "url": url,
+                "observed": observed,
             }))?
         );
         return Ok(());
     }
     match url {
-        Some(url) => println!("{name} active on {active}, reached from {target} at {url}"),
+        Some(url) => println!(
+            "{name} active on {active}, reached from {target} at {url} (observed {observed})"
+        ),
         // Not a default and not an error: an undeclared endpoint means nobody
         // has said how this machine reaches the service, and inventing a
         // loopback address here is what sends a client to the wrong process.
