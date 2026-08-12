@@ -140,19 +140,28 @@ def object_api_url(document):
 
 
 
-def apply_storage(path, backup_store, wanted, local):
+def apply_storage(path, backup_store, wanted, local, required=False):
     """Give one Stado config the fleet's store. True when it had to be written.
 
     The previous file is kept beside the new one, so a config that turns out to
     have been right for a reason nobody wrote down can be put back by copying a
     file rather than by remembering what it said.
+
+    A host that has never had a config is the case this exists for: reporting
+    "settled" for an absent file left the fleet's Linux machine reading its own
+    empty disk while claiming to be pointed at the object API. Satellite configs
+    are different -- one that is absent is a unit this host does not run -- so
+    only the required config is created.
     """
-    if not path.is_file():
+    if not path.is_file() and not required:
         return False
-    try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except ValueError:
-        return False
+    document = {}
+    saved = NONE
+    if path.is_file():
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError:
+            return False
     storage = document.get("storage", {})
     if (
         storage.get("backend") == "stado"
@@ -161,9 +170,12 @@ def apply_storage(path, backup_store, wanted, local):
     ):
         return False
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    saved = path.with_name(f"{path.name}.before-object-api-{stamp}")
-    saved.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
-    os.chmod(saved, OWNER_ONLY)
+    if path.is_file():
+        saved = path.with_name(f"{path.name}.before-object-api-{stamp}")
+        saved.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+        os.chmod(saved, OWNER_ONLY)
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
     storage["backend"] = "stado"
     storage["local"] = storage.get("local", local)
     storage["backup"] = backup_store
@@ -173,7 +185,7 @@ def apply_storage(path, backup_store, wanted, local):
     staging.write_text(json.dumps(document, indent=len("ba")) + "\n", encoding="utf-8")
     os.chmod(staging, OWNER_ONLY)
     staging.replace(path)
-    print(f"backup          {saved}")
+    print(f"backup          {saved or '(new file, nothing to keep)'}")
     return True
 
 
@@ -216,7 +228,7 @@ def main():
     collides = backup_store.get("local", {}).get("path") == local.get("path")
     if collides or not backup_store:
         backup_store = {"backend": "local", "local": {"path": "~/.stado/local-backup"}}
-    if not apply_storage(CONFIG, backup_store, wanted, local):
+    if not apply_storage(CONFIG, backup_store, wanted, local, required=True):
         print("settled         already addressing the object API")
     # Units that carry their own `STADO_CONFIG` are separate readers of the same
     # fleet: the health beacon has one, it declares no storage at all, and it
