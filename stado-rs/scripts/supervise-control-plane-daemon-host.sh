@@ -8,6 +8,10 @@ object_label=com.wisent.always-on.stado-object-api
 coordinator_label=com.wisent.compute.coordinator.charless-control-plane
 object_plist="/Library/LaunchDaemons/$object_label.plist"
 coordinator_plist="/Library/LaunchDaemons/$coordinator_label.plist"
+legacy_system_label=com.wisent.compute.coordinator
+legacy_system_plist="/Library/LaunchDaemons/$legacy_system_label.plist"
+legacy_user_plist="$HOME/Library/LaunchAgents/$legacy_system_label.plist"
+legacy_user_charless_plist="$HOME/Library/LaunchAgents/$coordinator_label.plist"
 owner=$(/usr/bin/id -un)
 home=$HOME
 binary="$home/.stado/bin/stado"
@@ -106,6 +110,9 @@ for plist in "$object_plist" "$coordinator_plist"; do
   /usr/bin/sudo -n /usr/sbin/chown root:wheel "$plist"
   /usr/bin/sudo -n /bin/chmod 644 "$plist"
 done
+/usr/bin/sudo -n /bin/launchctl bootout "system/$legacy_system_label" >/dev/null 2>&1 || true
+/usr/bin/sudo -n /bin/rm -f "$legacy_system_plist"
+/bin/rm -f "$legacy_user_plist" "$legacy_user_charless_plist"
 
 /usr/bin/sudo -n /bin/launchctl bootout "system/$coordinator_label" >/dev/null 2>&1 || true
 /usr/bin/sudo -n /bin/launchctl bootout "system/$object_label" >/dev/null 2>&1 || true
