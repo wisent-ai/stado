@@ -274,7 +274,7 @@ Bootstrap the gateway snapshot before Brama's first managed start:
 ```sh
 stado inference route set example-client/chat/primary \
   --to example-provider/example-model \
-  --expected absent --gateway gpu-host
+  --expected absent --gateway control-host
 ```
 
 ```sh
@@ -282,10 +282,10 @@ stado inference plan chat-primary \
   --host gpu-host \
   --image 'vllm/vllm-openai@sha256:770fe65b2c73ee74a5c42165cf3433de4048cc2cd9c57a937ca4e35aba5aa87b' \
   --cache-dir /mnt/wd16tb/stado/inference/chat-primary \
-  --model 'Qwen/Qwen2.5-72B-Instruct-AWQ' \
+  --model 'TheDrummer/Cydonia-24B-v4.3' \
   --gpu-mode yieldable \
-  --kv-cache-memory-gb 12 \
-  --revision '698703eae6604af048a3d2f509995dc302088217'
+  --max-model-len 16384 \
+  --revision 'db0426d39d4bd4a6d34fdc71db97569da68f55e1'
 stado inference apply <plan-id>
 stado inference doctor chat-primary
 stado inference verify chat-primary
@@ -293,11 +293,11 @@ stado inference route set example-client/chat/primary \
   --to chat-primary \
   --fallback example-provider/example-model \
   --expected example-provider/example-model \
-  --gateway gpu-host
+  --gateway control-host
 ```
-The pinned AWQ model is the quality-first single-GPU profile for the registered
-RTX Pro 6000 Blackwell with 96 GB VRAM. The immutable Hugging Face revision and
-amd64 vLLM image digest above prevent silent model or runtime replacement.
+The pinned Cydonia model is the quality-first single-GPU profile for the
+registered RTX Pro 6000 Blackwell with 96 GB VRAM. The immutable Hugging Face
+revision and amd64 vLLM image digest prevent silent model or runtime replacement.
 
 `kv_cache_memory_gb` sets a fixed vLLM KV-cache allocation in GiB. Omitting it
 preserves the pinned image's own memory policy. A smaller cache releases VRAM
