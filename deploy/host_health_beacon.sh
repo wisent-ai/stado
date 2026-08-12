@@ -31,6 +31,30 @@ if [ ! -x "$STADO_BIN" ]; then
     STADO_BIN=""
 fi
 
+# The same coordinates the macOS collector derives, for the same reason: the
+# health API is the store this host already addresses, and Skarbiec's endpoint
+# is in the service directory. A host that waits for a timer's environment
+# publishes nothing when run any other way, and its silence reads as a dead
+# machine.
+PYTHON_BIN="${PYTHON_BIN:-$(command -v python3 || printf /usr/bin/python3)}"
+READ_STORE_URL='import json,pathlib
+p = pathlib.Path.home() / ".config" / "stado" / "config.json"
+print(json.loads(p.read_text()).get("storage", {}).get("stado", {}).get("url", "") if p.is_file() else "")'
+READ_SKARBIEC='import json,sys
+host = sys.argv[1]
+text = sys.stdin.read().strip()
+doc = json.loads(text) if text else {}
+service = doc.get("service_directory", {}).get("services", {}).get("skarbiec", {})
+print(service.get("endpoints", {}).get(host, {}).get("url", ""))'
+if [ -n "$STADO_BIN" ]; then
+    export STADO_HOST_HEALTH_API_URL="${STADO_HOST_HEALTH_API_URL:-$("$PYTHON_BIN" -c "$READ_STORE_URL")}"
+    declared_skarbiec=$("$STADO_BIN" registry pull 2>/dev/null \
+        | "$PYTHON_BIN" -c "$READ_SKARBIEC" "$HOST_SLUG" || true)
+    export STADO_HOST_HEALTH_SKARBIEC_URL="${declared_skarbiec:-${STADO_HOST_HEALTH_SKARBIEC_URL:-}}"
+    export STADO_HOST_HEALTH_SKARBIEC_CONSUMER="${STADO_HOST_HEALTH_SKARBIEC_CONSUMER:-stado-host-health-beacon}"
+    export STADO_HOST_HEALTH_SKARBIEC_TOKEN_FILE="${STADO_HOST_HEALTH_SKARBIEC_TOKEN_FILE:-$HOME/.stado/host-health-beacon-skarbiec-token}"
+fi
+
 # Use the existing health schedule for a bounded, registry-authorized pass.
 WC_BIN="${WC_BIN:-$STADO_BIN}"
 if [ -x "$WC_BIN" ]; then
