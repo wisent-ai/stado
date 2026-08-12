@@ -55,6 +55,21 @@ if [ -n "$STADO_BIN" ]; then
     export STADO_HOST_HEALTH_SKARBIEC_TOKEN_FILE="${STADO_HOST_HEALTH_SKARBIEC_TOKEN_FILE:-$HOME/.stado/host-health-beacon-skarbiec-token}"
 fi
 
+# Having the binary is not the same as being able to publish. This host reaches
+# the fleet's registry but holds no Skarbiec grant of its own and has no local
+# broker to mint one against, so the publish call fails on a missing token file
+# and the beacon is lost -- while the relay on the always-on Mac is standing by
+# to hand it in. Collect in that case rather than failing: an unpublished
+# beacon printed on stdout is exactly what the relay consumes.
+if [ -z "$collect_only" ]; then
+    grant_file="${STADO_HOST_HEALTH_SKARBIEC_TOKEN_FILE:-}"
+    if [ -z "${STADO_HOST_HEALTH_API_URL:-}" ] || [ -z "${STADO_HOST_HEALTH_SKARBIEC_URL:-}" ] \
+        || [ ! -f "$grant_file" ]; then
+        echo "host_health_beacon: no publishing coordinates here; collecting for a relay" >&2
+        collect_only=yes
+    fi
+fi
+
 # Use the existing health schedule for a bounded, registry-authorized pass.
 WC_BIN="${WC_BIN:-$STADO_BIN}"
 if [ -x "$WC_BIN" ]; then
