@@ -136,6 +136,43 @@ def object_api_url(document):
 
 
 
+def apply_storage(path, backup_store, wanted, local):
+    """Give one Stado config the fleet's store. True when it had to be written.
+
+    The previous file is kept beside the new one, so a config that turns out to
+    have been right for a reason nobody wrote down can be put back by copying a
+    file rather than by remembering what it said.
+    """
+    if not path.is_file():
+        return False
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError:
+        return False
+    storage = document.get("storage", {})
+    if (
+        storage.get("backend") == "stado"
+        and storage.get("stado") == wanted
+        and storage.get("backup") == backup_store
+    ):
+        return False
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    saved = path.with_name(f"{path.name}.before-object-api-{stamp}")
+    saved.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+    os.chmod(saved, OWNER_ONLY)
+    storage["backend"] = "stado"
+    storage["local"] = storage.get("local", local)
+    storage["backup"] = backup_store
+    storage["stado"] = wanted
+    document["storage"] = storage
+    staging = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    staging.write_text(json.dumps(document, indent=len("ba")) + "\n", encoding="utf-8")
+    os.chmod(staging, OWNER_ONLY)
+    staging.replace(path)
+    print(f"backup          {saved}")
+    return True
+
+
 def main():
     document = load()
     storage = document.get("storage", {})
@@ -175,30 +212,16 @@ def main():
     collides = backup_store.get("local", {}).get("path") == local.get("path")
     if collides or not backup_store:
         backup_store = {"backend": "local", "local": {"path": "~/.stado/local-backup"}}
-    settled = (
-        storage.get("backend") == "stado"
-        and storage.get("stado") == wanted
-        and storage.get("backup") == backup_store
-    )
-    if settled:
+    if not apply_storage(CONFIG, backup_store, wanted, local):
         print("settled         already addressing the object API")
-        return NONE
-
-    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    saved = CONFIG.with_name(f"{CONFIG.name}.before-object-api-{stamp}")
-    saved.write_text(CONFIG.read_text(encoding="utf-8"), encoding="utf-8")
-    os.chmod(saved, OWNER_ONLY)
-
-    storage["backend"] = "stado"
-    storage["local"] = local
-    storage["backup"] = backup_store
-    storage["stado"] = wanted
-    document["storage"] = storage
-    staging = CONFIG.with_name(f"{CONFIG.name}.{os.getpid()}.tmp")
-    staging.write_text(json.dumps(document, indent=len("ba")) + "\n", encoding="utf-8")
-    os.chmod(staging, OWNER_ONLY)
-    staging.replace(CONFIG)
-    print(f"backup          {saved}")
+    # Units that carry their own `STADO_CONFIG` are separate readers of the same
+    # fleet: the health beacon has one, it declares no storage at all, and it
+    # therefore reported into a store nothing else reads -- which is why a live
+    # host reads as "never" in `registry beacon-age`. Give every such config the
+    # same store, or the split just moves.
+    for satellite in sorted((HOME / ".stado").glob("*.config.json")):
+        if apply_storage(satellite, backup_store, wanted, local):
+            print(f"aligned         {satellite}")
     print(f"registry after  {pull_digest()}")
     return NONE
 
