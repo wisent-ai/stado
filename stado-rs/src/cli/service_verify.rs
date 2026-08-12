@@ -39,6 +39,24 @@
 //! question with an operational answer. Probing from the serving host proves the
 //! process is alive and proves nothing about whether the fleet can reach it --
 //! which is precisely the gap this fleet fell into.
+//!
+//! One ambiguity is worth stating, because it decides what this command calls a
+//! failure and the data model does not settle it. `Service::endpoints` is keyed
+//! by host, and two readings survive the type: "the address this host uses to
+//! reach the service", and "where this host would serve it if the service moved
+//! here". The field's own comment leans the second way -- a host carrying an
+//! endpoint is not thereby serving -- while `service directory publish`
+//! implements the first, writing `endpoints[<this host>]` into that host's
+//! `~/.stado/forwards/<service>.local` for consumers on it to read.
+//!
+//! This follows `publish`, because that is the code consumers actually run. So
+//! an endpoint that answers nothing from the host it is written for is reported
+//! unreachable even when that host is only standing by: under the executable
+//! reading, a standby host has been handed an address that does not work, and
+//! the day it is promoted is the worst possible time to find out. If the other
+//! reading is the intended one, the fix is in the model -- give a standby
+//! address its own field -- not in this command, which would then be reporting
+//! a real inconsistency between two parts of one system.
 
 use std::collections::BTreeSet;
 use std::time::Duration;
