@@ -7,6 +7,16 @@ export PATH
 config=${STADO_CONFIG:-$HOME/.config/stado/config.json}
 skarbiec=${SKARBIEC_BIN:-$HOME/.stado/bin/skarbiec}
 vault=${SKARBIEC_VAULT_FILE:-$HOME/.stado/skarbiec.vault.json}
+desired=${STADO_AGENT_CONFIG_SOURCE:-$HOME/.stado/files/stado.config.canonical.json}
+if [ -f "$desired" ]; then
+  next=$(/usr/bin/mktemp "$HOME/.config/stado/config.XXXXXX")
+  trap '/bin/rm -f "$next"' EXIT HUP INT TERM
+  /usr/bin/jq --slurpfile desired "$desired" \
+    '.agent.skarbiec = $desired[0].agent.skarbiec' "$config" >"$next"
+  /bin/chmod 600 "$next"
+  /bin/mv "$next" "$config"
+  trap - EXIT HUP INT TERM
+fi
 consumer=$(/usr/bin/jq -er '.agent.skarbiec.consumer | select(type == "string" and length > 0)' "$config")
 token_file=$(/usr/bin/jq -er '.agent.skarbiec.token_file | select(type == "string" and length > 0)' "$config")
 case "$token_file" in
