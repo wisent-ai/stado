@@ -47,6 +47,27 @@ pub enum ServiceCommands {
         json: bool,
     },
 
+    /// Go to each consumer and check the endpoint it is told to use.
+    ///
+    /// `list` reports what hosts say about their units. This reports whether
+    /// the directory's addresses answer, from the machines that must call
+    /// them -- the one question every other check in this binary skips.
+    /// States are `observed`, `unreachable`, and `unverified` for a probe
+    /// that could not run; the third is never folded into the other two.
+    /// Exits non-zero only on `unreachable`, so an uninstalled probe cannot
+    /// masquerade as an outage.
+    Verify {
+        /// Check one host's declarations instead of the whole fleet.
+        #[arg(long)]
+        host: Option<String>,
+        /// Probe from this machine only, without using the fleet channel.
+        /// This is the mode the installed probe helper runs.
+        #[arg(long)]
+        local: bool,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Registry-managed services carrying Echo onboarding product metadata.
     ///
     /// Emits the versioned JSON envelope accepted by Echo's Stado catalog
@@ -341,6 +362,13 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
     match command {
         ServiceCommands::Directory(sub) => crate::cli::directory::dispatch(sub).await,
         ServiceCommands::List { json } => list(json).await,
+        ServiceCommands::Verify { host, local, json } => {
+            if local {
+                crate::cli::service_verify::verify_local(json).await
+            } else {
+                crate::cli::service_verify::verify(host.as_deref(), json).await
+            }
+        }
         ServiceCommands::OnboardingCatalog => onboarding_catalog().await,
         ServiceCommands::Status { name, json } => status(&name, json).await,
         ServiceCommands::Update {
