@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import grp
 import hashlib
+import inspect
 import os
 import pathlib
 import plistlib
@@ -126,7 +127,18 @@ def safe_extract(archive: pathlib.Path, destination: pathlib.Path) -> None:
             target = (destination / member.name).resolve()
             if destination_resolved not in target.parents and target != destination_resolved:
                 raise SystemExit(f"runner archive escapes destination: {member.name}")
-        bundle.extractall(destination, filter="data")
+            if member.issym():
+                linked = (target.parent / member.linkname).resolve()
+            elif member.islnk():
+                linked = (destination / member.linkname).resolve()
+            else:
+                continue
+            if destination_resolved not in linked.parents and linked != destination_resolved:
+                raise SystemExit(f"runner archive link escapes destination: {member.name}")
+        options = {}
+        if "filter" in inspect.signature(bundle.extractall).parameters:
+            options["filter"] = "data"
+        bundle.extractall(destination, **options)
 
 
 def chown_tree(path: pathlib.Path, uid: int, gid: int) -> None:
