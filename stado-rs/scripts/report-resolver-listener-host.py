@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Report the process owning Stado resolver's loopback TCP listener."""
 
+import http.client
+import json
 from pathlib import Path
 import os
 
@@ -37,8 +39,28 @@ for process_dir in Path("/proc").iterdir():
         continue
     found = True
     command = process_dir.joinpath("comm").read_text().strip()
-    cmdline = process_dir.joinpath("cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace").strip()
-    print(f"pid={process_dir.name} command={command} cmdline={cmdline}")
+    cmdline = (
+        process_dir.joinpath("cmdline")
+        .read_bytes()
+        .replace(b"\0", b" ")
+        .decode(errors="replace")
+        .strip()
+    )
+    cgroup = process_dir.joinpath("cgroup").read_text().strip().replace("\n", ",")
+    print(
+        f"pid={process_dir.name} command={command} cmdline={cmdline} cgroup={cgroup}"
+    )
 
 if not found:
     raise SystemExit(f"TCP port {PORT} is listening, but its owner was not visible")
+
+for path, headers in (
+    ("/health", {}),
+    ("/v1/resolve/service/brama", {"X-Stado-Consumer": "wisent-backend"}),
+):
+    connection = http.client.HTTPConnection("127.0.0.1", PORT, timeout=5)
+    connection.request("GET", path, headers=headers)
+    response = connection.getresponse()
+    body = json.loads(response.read())
+    print(f"path={path} status={response.status} body={json.dumps(body, sort_keys=True)}")
+    connection.close()
