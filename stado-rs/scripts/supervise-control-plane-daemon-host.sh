@@ -24,9 +24,10 @@ home=$HOME
 binary="$home/.stado/bin/stado"
 logs="$home/.stado/logs"
 skarbiec_url=http://127.0.0.1:8895
-# This is the fleet coordinator, not the single-device onboarding profile.
-# Storage, provider selection, and credentials come from the host's Stado
-# config; forcing WC_STORAGE_BACKEND=local would fork canonical queue state.
+# This host's local backend is the canonical queue store. The control plane's
+# dashboard exposes it through the authenticated object API; fleet clients use
+# that API instead of mounting this disk.
+storage_backend=local
 port=8765
 
 [ -x "$binary" ] || { printf '%s\n' "missing $binary" >&2; exit 1; }
@@ -37,10 +38,9 @@ bound() {
 }
 
 relaunch_detached() {
-  WC_SKARBIEC_URL="$skarbiec_url" \
-    /usr/bin/nohup "$binary" cloud-control-plane \
-      --bind 127.0.0.1 --port "$port" --interval 30 \
-    < /dev/null >> "$logs/stado-cloud-control-plane.log" 2>&1 &
+  WC_SKARBIEC_URL="$skarbiec_url" WC_STORAGE_BACKEND="$storage_backend" \
+    /usr/bin/nohup "$binary" local-control-plane \
+    < /dev/null >> "$logs/stado-local-control-plane.log" 2>&1 &
 }
 
 /usr/bin/sudo -n /usr/bin/tee "$plist" > /dev/null <<PLIST
@@ -55,13 +55,7 @@ relaunch_detached() {
     <key>ProgramArguments</key>
     <array>
         <string>$binary</string>
-        <string>cloud-control-plane</string>
-        <string>--bind</string>
-        <string>127.0.0.1</string>
-        <string>--port</string>
-        <string>$port</string>
-        <string>--interval</string>
-        <string>30</string>
+        <string>local-control-plane</string>
     </array>
     <key>EnvironmentVariables</key>
     <dict>
@@ -71,6 +65,8 @@ relaunch_detached() {
         <string>$skarbiec_url</string>
         <key>STADO_CONFIG</key>
         <string>$home/.config/stado/config.json</string>
+        <key>WC_STORAGE_BACKEND</key>
+        <string>$storage_backend</string>
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     </dict>
