@@ -2782,6 +2782,92 @@ pub async fn forward_local(
     Ok(())
 }
 
+/// Open a background SSH forward from this host to TARGET's loopback.
+/// Both ends bind loopback; SSH supplies transport encryption and refuses to
+/// report success unless the local listener is established.
+pub async fn forward_remote(
+    target: &str,
+    name: &str,
+    remote_port: u16,
+    local_port: u16,
+    json: bool,
+) -> Result<(), CmdError> {
+    if remote_port == u16::default() || local_port == u16::default() {
+        return Err(CmdError::usage("forwarding ports must be nonzero"));
+    }
+    release_component("forward name", name)?;
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if crate::deploy::host_channel::target_is_this_host(&resolved) {
+        return Err(CmdError::usage(
+            "forward-remote requires a remote registry target",
+        ));
+    }
+    let ssh = resolved
+        .ssh
+        .as_deref()
+        .ok_or_else(|| CmdError::click("registry target has no SSH destination"))?;
+    let mut argv = crate::deploy::host_channel::ssh_options(ssh);
+    let destination = argv
+        .pop()
+        .ok_or_else(|| CmdError::click("SSH channel has no destination"))?;
+    argv.extend([
+        "-f".to_string(),
+        "-N".to_string(),
+        "-o".to_string(),
+        "ExitOnForwardFailure=yes".to_string(),
+        "-o".to_string(),
+        "ServerAliveInterval=30".to_string(),
+        "-o".to_string(),
+        "ServerAliveCountMax=3".to_string(),
+        "-L".to_string(),
+        format!("127.0.0.1:{local_port}:127.0.0.1:{remote_port}"),
+        destination,
+    ]);
+    let (program, arguments) = argv
+        .split_first()
+        .ok_or_else(|| CmdError::click("SSH channel is empty"))?;
+    let output = tokio::process::Command::new(program)
+        .args(arguments)
+        .kill_on_drop(true)
+        .output()
+        .await?;
+    if !output.status.success() {
+        return Err(CmdError::click(format!(
+            "{target}: SSH forwarding failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+                .lines()
+                .next_back()
+                .unwrap_or("ssh forwarding failed")
+        )));
+    }
+    let endpoint = format!("http://127.0.0.1:{local_port}");
+    let home = std::env::var("HOME").map_err(|_| CmdError::click("HOME is not set"))?;
+    let marker_directory = std::path::Path::new(&home).join(".stado").join("forwards");
+    std::fs::create_dir_all(&marker_directory)?;
+    let marker_path = marker_directory.join(format!("{name}.url"));
+    std::fs::write(&marker_path, format!("{endpoint}\n"))?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": target,
+                "remote": format!("127.0.0.1:{remote_port}"),
+                "local": format!("127.0.0.1:{local_port}"),
+                "marker": marker_path,
+                "transport": "ssh",
+                "status": "forwarding",
+            }))?
+        );
+    } else {
+        println!(
+            "{target}: forwarding local 127.0.0.1:{local_port} to 127.0.0.1:{remote_port} over SSH"
+        );
+    }
+    Ok(())
+}
+
 fn release_component(kind: &str, value: &str) -> Result<(), CmdError> {
     if value.is_empty()
         || !value
