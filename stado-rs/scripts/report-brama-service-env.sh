@@ -32,4 +32,15 @@ else
     else
         printf 'gnupg home not declared; default candidate %s\n' "$HOME/.gnupg"
     fi
+
+    routes=$(/usr/bin/sed -n 's/^BRAMA_INFERENCE_ROUTES_FILE=//p' "$env_file")
+    if [ -n "${routes:-}" ] && [ -r "$routes" ]; then
+        printf 'inference routes %s\n' "$routes"
+        /bin/cat "$routes"
+        printf '\n'
+    elif [ -n "${routes:-}" ]; then
+        printf 'inference routes %s are unreadable\n' "$routes"
+    else
+        printf 'inference routes are not declared\n'
+    fi
 fi
