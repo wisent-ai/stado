@@ -47,7 +47,7 @@ use crate::monitor::reap::reap_terminal_runs;
 use crate::providers::{get_provider, BoxProvider, Provider};
 use crate::queue::{JobStorage, StorageError};
 use crate::scheduler::dispatch::r#box::run_box_tick;
-use crate::scheduler::makespan::assign_jobs;
+use crate::scheduler::makespan::{assign_jobs, repair_conflicting_pinned_assignments};
 use crate::scheduler::scheduler::{
     schedule_queued_jobs, schedule_queued_jobs_routed, SchedulerError,
 };
@@ -553,6 +553,12 @@ pub async fn run_tick(
     let n_fired = fire_due_schedules(store, log, Utc::now()).await?;
     if n_fired > 0 {
         log(&format!("schedules: fired {n_fired} due schedule(s)"));
+    }
+    let n_pin_repairs = repair_conflicting_pinned_assignments(store, log).await?;
+    if n_pin_repairs > 0 {
+        log(&format!(
+            "routing: repaired {n_pin_repairs} conflicting host-pinned assignments"
+        ));
     }
     // Coordinator-authoritative sizing: re-zero any queued job whose model
     // has no measured peak (stamp the measured peak if one exists) BEFORE
