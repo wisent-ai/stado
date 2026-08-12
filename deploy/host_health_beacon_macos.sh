@@ -101,11 +101,15 @@ this_target=$("$STADO_BIN" registry self | { IFS="$(printf '\t')" read -r name _
 relay_targets=${WC_BEACON_RELAY_TARGETS:-$("$STADO_BIN" registry pull | "$PYTHON_BIN" -c "$READ_NAMES")}
 for relay in $relay_targets; do
     [ "$relay" != "$this_target" ] || continue
-    if collected=$("$STADO_BIN" host run-helper "$relay" collect-host-health-beacon); then
+    # A host that publishes for itself has no collector under this name, and
+    # the failure it returns is expected rather than interesting. Keep the one
+    # line this script writes and drop the command's error block, so a tick
+    # that worked does not read like a broken one.
+    if collected=$("$STADO_BIN" host run-helper "$relay" collect-host-health-beacon 2>/dev/null); then
         printf '%s' "$collected" | /usr/bin/sed -n '/^{/,/^}/p' | "$STADO_BIN" host publish-beacon - >/dev/null \
             || printf '%s\n' "host_health_beacon: publishing on behalf of $relay failed" >/dev/stderr
     else
-        printf '%s\n' "host_health_beacon: collecting from $relay failed" >/dev/stderr
+        printf '%s\n' "host_health_beacon: no collector on $relay; it publishes for itself" >/dev/stderr
     fi
 done
 
