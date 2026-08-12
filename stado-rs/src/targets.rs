@@ -1176,10 +1176,12 @@ pub const VERIFY_KIND_HTTP: &str = "http";
 /// — which is the whole of what the directory promises for such a service,
 /// and everything an HTTP GET would have lied about.
 pub const VERIFY_KIND_TCP: &str = "tcp";
-/// Probe from every host the directory hands an address to, standby hosts
-/// included: `service directory publish` writes `endpoints[<this host>]` into
-/// that host's forward file, so a host carrying an endpoint has been handed
-/// something it will one day dial.
+/// Probe from every host the directory hands a dial address to: `service
+/// directory publish` writes `endpoints[<this host>]` into that host's
+/// forward file, so every one of them has been handed something it will one
+/// day call and can be held to it. Standby addresses are not in this set —
+/// they live in [`Service::standby`], nothing is meant to answer on them
+/// yet, and probing one manufactures an outage out of a declaration.
 pub const VERIFY_FROM_ENDPOINT_HOLDERS: &str = "endpoint-holders";
 /// Probe only where the service claims to serve. For an endpoint no other
 /// host is expected to reach — a socket bound behind a local-only guard —
@@ -1324,13 +1326,43 @@ pub struct Service {
     /// does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed_service: Option<String>,
-    /// Registry target currently serving it — the key consumers resolve
-    /// [`Service::endpoints`] with.
+    /// Registry target currently serving it. Consumers resolve
+    /// [`Service::endpoints`] with their OWN name, not with this one: the
+    /// active host's entry is simply the address that host uses, which for a
+    /// loopback service is also where it serves.
     pub active_host: String,
-    /// Endpoint per host, including hosts that are standing by. A host that
-    /// carries an endpoint is not thereby serving: only `active_host` is.
+    /// The address a host USES to reach this service, keyed by the machine
+    /// ASKING and never by the machine serving. These services bind loopback
+    /// on their own box, so "where is Brama" has a different true answer per
+    /// client and the directory states each one instead of leaving every
+    /// caller to derive it. `service directory publish` writes
+    /// `endpoints[<this host>]` into that host's
+    /// `~/.stado/forwards/<service>.local`, which is the file consumers on it
+    /// actually read — so an entry here is a promise to that host that the
+    /// address works from where it stands.
+    ///
+    /// One meaning only, now. This comment used to say that a host carrying
+    /// an endpoint is not thereby serving, which reads the map as "where each
+    /// host would serve", while `publish` handed the same string out as a
+    /// number to dial. Both readings survived the type, so on 2026-08-11
+    /// `service verify` reported `brama` unreachable on a laptop that merely
+    /// stands by for it and the entry had to be silenced by hand. The other
+    /// meaning now has [`Service::standby`] and this one has nothing else to
+    /// mean.
     #[serde(default)]
     pub endpoints: BTreeMap<String, ServiceEndpoint>,
+    /// The address a host would serve on if the service moved there — which
+    /// is not a promise that anything answers there now.
+    ///
+    /// A standby host is by definition not running the service, so silence on
+    /// this address is the declared state and not a fault. Nothing may probe
+    /// it and call the result a verdict: `service verify` lists these as
+    /// `unverified` rows so the address is visible before the move rather
+    /// than during it, and never counts one as a failure. Read it through
+    /// [`Service::standby_for`], the dial address through
+    /// [`Service::address_for`], and neither ever falls back to the other.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub standby: BTreeMap<String, ServiceEndpoint>,
     #[serde(default)]
     pub consumers: BTreeMap<String, ServiceConsumer>,
     /// How this declaration is observed, when its author said. Read it through
@@ -1366,6 +1398,29 @@ impl Service {
     /// entry changes verdict because this field came into existence.
     pub fn verification(&self) -> VerifyDescriptor {
         self.verify.clone().unwrap_or_default()
+    }
+
+    /// The address `host` is told to dial, or `None` if the directory hands
+    /// it none.
+    ///
+    /// [`Service::endpoints`] only. A standby address is never a fallback
+    /// here: its one declared property is that nothing is listening on it
+    /// yet, so returning it would answer "what do I call" with an address
+    /// chosen for being dead.
+    pub fn address_for(&self, host: &str) -> Option<&ServiceEndpoint> {
+        self.endpoints.get(host)
+    }
+
+    /// The address `host` would serve on after a move, or `None` if it is not
+    /// standing by for this service.
+    ///
+    /// [`Service::standby`] only, for the same reason in reverse. The pair
+    /// exists so that no caller has to decide which map answers its question:
+    /// one command reading `endpoints` as "would serve here" while another
+    /// read it as "call this" is what cost `brama` a false `unreachable` on
+    /// 2026-08-11.
+    pub fn standby_for(&self, host: &str) -> Option<&ServiceEndpoint> {
+        self.standby.get(host)
     }
 }
 
@@ -1457,8 +1512,7 @@ impl ServiceDirectory {
             .get(service)
             .ok_or_else(|| ServiceDirectoryError::UnknownService(service.to_string()))?;
         entry
-            .endpoints
-            .get(&entry.active_host)
+            .address_for(&entry.active_host)
             .map(|endpoint| endpoint.url.as_str())
             .ok_or_else(|| ServiceDirectoryError::NoEndpoint {
                 service: service.to_string(),

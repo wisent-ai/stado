@@ -58,23 +58,31 @@
 //! author when the registry is validated -- long before an operator has to
 //! read it off a sweep.
 //!
-//! One ambiguity is worth stating, because it decides what this command calls a
-//! failure and the data model does not settle it. `Service::endpoints` is keyed
-//! by host, and two readings survive the type: "the address this host uses to
-//! reach the service", and "where this host would serve it if the service moved
-//! here". The field's own comment leans the second way -- a host carrying an
-//! endpoint is not thereby serving -- while `service directory publish`
-//! implements the first, writing `endpoints[<this host>]` into that host's
-//! `~/.stado/forwards/<service>.local` for consumers on it to read.
+//! One ambiguity used to decide what this command called a failure, and it was
+//! settled in the model rather than here. `Service::endpoints` is keyed by
+//! host, and two readings survived the type: "the address this host uses to
+//! reach the service", which is what `service directory publish` writes into
+//! each host's `~/.stado/forwards/<service>.local`, and "where this host would
+//! serve it if the service moved here", which is what the field's own comment
+//! described. This command followed `publish`, because that is the code
+//! consumers actually run -- and so reported `brama` unreachable on a laptop
+//! that merely stands by for it, silenced at the time by a `from: active-host`
+//! descriptor on that one entry.
 //!
-//! This follows `publish`, because that is the code consumers actually run. So
-//! an endpoint that answers nothing from the host it is written for is reported
-//! unreachable even when that host is only standing by: under the executable
-//! reading, a standby host has been handed an address that does not work, and
-//! the day it is promoted is the worst possible time to find out. If the other
-//! reading is the intended one, the fix is in the model -- give a standby
-//! address its own field -- not in this command, which would then be reporting
-//! a real inconsistency between two parts of one system.
+//! A descriptor on one entry was a patch, not a fix: the next standby address
+//! added would have produced the same false report. The two meanings now have
+//! two fields. `endpoints` is the address a host calls and nothing else;
+//! [`crate::targets::Service::standby`] is the address a host would serve on
+//! after a move, read through `address_for` and `standby_for` so no caller
+//! has to guess which map answers its question. The model was the right place
+//! because a command cannot resolve an ambiguity in the data it reads -- it
+//! can only pick a reading and then be confidently wrong for everyone who
+//! picked the other one, in a report that looks definite either way.
+//!
+//! Probing therefore uses `endpoints` alone. Standby addresses are listed as
+//! their own `unverified` rows: visible, because an address nobody prints is
+//! an address nobody maintains until the move that needs it, and never
+//! failures, because nothing is supposed to answer on them yet.
 
 use std::collections::BTreeSet;
 use std::time::Duration;
@@ -89,8 +97,8 @@ use crate::cli::CmdError;
 // exists to remove.
 use crate::observations::{service_fact, Observation, OBSERVED, UNREACHABLE, UNVERIFIED};
 use crate::targets::{
-    load_registry_auto, Registry, Service, VerifyDescriptor, VERIFY_FROM_ACTIVE_HOST,
-    VERIFY_FROM_ENDPOINT_HOLDERS, VERIFY_KIND_HTTP, VERIFY_KIND_TCP,
+    load_registry_auto, Registry, Service, ServiceDirectory, VerifyDescriptor,
+    VERIFY_FROM_ACTIVE_HOST, VERIFY_FROM_ENDPOINT_HOLDERS, VERIFY_KIND_HTTP, VERIFY_KIND_TCP,
 };
 
 /// Helper that runs this same command in `--local` mode on a remote host.
@@ -104,6 +112,13 @@ const PROBE_HELPER: &str = "probe-service-endpoints";
 /// promptly with the truth.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// What a standby row says in place of a verdict, in the words it prints.
+///
+/// Spelled once, because it is also the wire text an operator greps for and
+/// the sentence that has to keep a reader from reading a blank probe column
+/// as a failure.
+const STANDBY_DETAIL: &str = "standby address for a host that is not serving; not probed";
+
 /// One declaration, checked or explicitly not checked.
 struct Finding {
     service: String,
@@ -111,6 +126,15 @@ struct Finding {
     endpoint: String,
     state: &'static str,
     detail: String,
+    /// Did anything go and look? False only for a standby address, which is
+    /// declared not to be serving and so has nothing to answer for.
+    ///
+    /// A flag rather than a comparison against [`STANDBY_DETAIL`]: two places
+    /// decide something about these rows -- the sweep, which must not print a
+    /// helper's copy of a declaration it read itself, and the observation
+    /// record, which must not file one -- and a decision that turns on
+    /// matching a sentence breaks the day the sentence is reworded.
+    probed: bool,
 }
 
 impl Finding {
@@ -121,6 +145,7 @@ impl Finding {
             "endpoint": self.endpoint,
             "state": self.state,
             "detail": self.detail,
+            "probed": self.probed,
         })
     }
 }
@@ -128,11 +153,15 @@ impl Finding {
 /// Which hosts probe this service?
 ///
 /// [`VERIFY_FROM_ENDPOINT_HOLDERS`], the default, is every host the directory
-/// hands an address to, plus the active host. That map is what a consumer
+/// hands a dial address to, plus the active host. That map is what a consumer
 /// actually reads: `service directory publish` writes `endpoints[<this host>]`
 /// into `~/.stado/forwards/<service>.local` and skips a service that gives
 /// this host no entry. So a host carrying an endpoint has been handed an
 /// address and can be held to it, whether or not it is the one serving.
+///
+/// A host that only stands by holds no entry in that map -- its address lives
+/// in `Service::standby`, is reported by [`standby_findings`], and is never
+/// probed from anywhere.
 ///
 /// [`VERIFY_FROM_ACTIVE_HOST`] is only where the service claims to serve, for
 /// an endpoint no other host was ever meant to reach. Probing that from four
@@ -177,7 +206,10 @@ fn unsupported(service: &str, descriptor: &VerifyDescriptor) -> Option<String> {
     Some(problems.join("; "))
 }
 
-/// The address a given host is told to use.
+/// The address a given host is told to call.
+///
+/// [`Service::address_for`], never the standby map: this feeds the prober,
+/// and a standby address is declared to have nothing listening on it.
 ///
 /// The health path is appended for `http` and withheld for `tcp`: a path is
 /// not something you can send down a socket, and pasting one onto an address
@@ -185,7 +217,7 @@ fn unsupported(service: &str, descriptor: &VerifyDescriptor) -> Option<String> {
 /// host that is supposed to call it is itself a finding: the consumer has been
 /// authorized and given no address.
 fn endpoint_for(service: &Service, host: &str, kind: &str) -> Option<String> {
-    let endpoint = service.endpoints.get(host)?;
+    let endpoint = service.address_for(host)?;
     if kind != VERIFY_KIND_HTTP {
         return Some(endpoint.url.clone());
     }
@@ -340,6 +372,7 @@ async fn local_findings(registry: &Registry, me: &str) -> Vec<Finding> {
                 endpoint: endpoint.unwrap_or_else(|| "-".to_string()),
                 state: UNVERIFIED,
                 detail,
+                probed: true,
             });
             continue;
         }
@@ -350,6 +383,7 @@ async fn local_findings(registry: &Registry, me: &str) -> Vec<Finding> {
                 endpoint: "-".to_string(),
                 state: UNVERIFIED,
                 detail: "no endpoint declared for this host".to_string(),
+                probed: true,
             }),
             Some(url) => {
                 let (state, detail) = probe(&descriptor.kind, &url).await;
@@ -359,8 +393,49 @@ async fn local_findings(registry: &Registry, me: &str) -> Vec<Finding> {
                     endpoint: url,
                     state,
                     detail,
+                    probed: true,
                 });
             }
+        }
+    }
+    findings
+}
+
+/// Every standby address the directory declares, as a row of its own.
+///
+/// Nothing is dialled here, and that is the point. A standby address is where
+/// a host would serve if the service moved to it, so while the service is
+/// elsewhere nothing is listening and silence is the declared state. Probing
+/// it would file `unreachable` against a fleet working exactly as declared --
+/// which is what happened to `brama` on a standby laptop, back when one field
+/// carried both meanings.
+///
+/// Listed rather than dropped, because an address nobody prints is an address
+/// nobody maintains until the move that needs it, and the wrong port is then
+/// discovered during a cutover. `unverified` is the honest word for a row
+/// nobody looked at, and it is the one state [`fail_on_unreachable`] never
+/// counts.
+///
+/// Built from the directory rather than gathered per host: a standby address
+/// has no vantage it could be checked from, it is the same string on every
+/// machine, and a host holding nothing but a standby address is never visited
+/// by the sweep at all -- so collecting these per host would drop exactly the
+/// rows only this function can produce.
+fn standby_findings(directory: &ServiceDirectory, only: Option<&str>) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    for (name, service) in &directory.services {
+        for (host, endpoint) in &service.standby {
+            if only.is_some_and(|wanted| wanted != host.as_str()) {
+                continue;
+            }
+            findings.push(Finding {
+                service: name.clone(),
+                host: host.clone(),
+                endpoint: endpoint.url.clone(),
+                state: UNVERIFIED,
+                detail: STANDBY_DETAIL.to_string(),
+                probed: false,
+            });
         }
     }
     findings
@@ -376,9 +451,18 @@ async fn local_findings(registry: &Registry, me: &str) -> Vec<Finding> {
 /// file [`crate::observations::freshness`] reads to decide whether an answer
 /// is old enough to need asking again.
 ///
-/// One record per finding, `unverified` ones included. "Nobody looked" is a
-/// fact about the fleet worth keeping: it is the difference between a service
-/// nobody has checked since Tuesday and one checked a minute ago.
+/// One record per finding that looked, `unverified` ones included. "Nobody
+/// could look" is a fact about the fleet worth keeping: it is the difference
+/// between a service nobody has checked since Tuesday and one checked a
+/// minute ago.
+///
+/// A standby row is not recorded, because it is not an observation. Nothing
+/// looked at it and nothing ever will while the service is elsewhere, so it
+/// does not decay and has no age worth storing. It would also collide: the
+/// record is keyed by `(fact, vantage)`, and a standby host that is also
+/// handed a dial address produces two rows under one key -- whichever landed
+/// last would decide whether the fleet remembers `observed` or `unverified`
+/// for a probe that did happen.
 ///
 /// A failed write is reported and never fatal. The rows on screen are true
 /// regardless, and a full disk must not turn a working verifier into a command
@@ -386,6 +470,7 @@ async fn local_findings(registry: &Registry, me: &str) -> Vec<Finding> {
 fn record_observations(findings: &[Finding]) {
     let observations: Vec<Observation> = findings
         .iter()
+        .filter(|finding| finding.probed)
         .map(|finding| {
             Observation::now(
                 service_fact(&finding.service, &finding.host),
@@ -418,7 +503,14 @@ pub async fn verify_local(json_output: bool) -> Result<(), CmdError> {
                 crate::targets::registry_location()
             ))
         })?;
-    let findings = local_findings(&registry, &me).await;
+    let mut findings = local_findings(&registry, &me).await;
+    // The standby addresses this machine holds, printed beside what it can
+    // actually reach. An operator on the box asking "what am I party to" is
+    // owed the address it would serve on as well as the ones it calls; the
+    // sweep reads them out of the directory itself and drops this copy.
+    if let Some(directory) = registry.service_directory.as_ref() {
+        findings.extend(standby_findings(directory, Some(me.as_str())));
+    }
     record_observations(&findings);
     emit(&findings, json_output);
     fail_on_unreachable(&findings)
@@ -442,6 +534,7 @@ async fn remote_findings(host: &str, declared: &[(String, String)]) -> Vec<Findi
                 endpoint: endpoint.clone(),
                 state: UNVERIFIED,
                 detail: detail.clone(),
+                probed: true,
             })
             .collect()
     };
@@ -458,6 +551,13 @@ async fn remote_findings(host: &str, declared: &[(String, String)]) -> Vec<Findi
         return unverified("probe returned no usable JSON: not an array".to_string());
     };
     rows.iter()
+        // A standby row is a declaration, not evidence: identical on every
+        // machine, and this sweep already read it out of the directory. Taking
+        // the helper's copy as well would print the same address twice for a
+        // row that has no vantage to be probed from. A helper older than the
+        // flag sends no such rows and reports every one of its own as probed,
+        // which is what it did.
+        .filter(|row| row.get("probed").and_then(Value::as_bool).unwrap_or(true))
         .map(|row| Finding {
             service: field(row, "service"),
             host: host.to_string(),
@@ -468,6 +568,7 @@ async fn remote_findings(host: &str, declared: &[(String, String)]) -> Vec<Findi
                 _ => UNVERIFIED,
             },
             detail: field(row, "detail"),
+            probed: true,
         })
         .collect()
 }
@@ -515,7 +616,14 @@ pub async fn verify(host: Option<&str>, json_output: bool) -> Result<(), CmdErro
                 .push((name.clone(), endpoint));
         }
     }
-    if per_host.is_empty() {
+    // Standby addresses come from the directory in hand, once, for every host
+    // in scope -- including a host that holds nothing else and is therefore
+    // never probed from anywhere. They count towards "is there anything to
+    // report", because a host whose only declaration is a standby address has
+    // a declaration, and answering "no service names that host" would be
+    // false.
+    let standby = standby_findings(directory, host);
+    if per_host.is_empty() && standby.is_empty() {
         return Err(CmdError::click(match host {
             Some(only) => format!("no service in the directory names host {only}"),
             None => "the service directory declares no hosts".to_string(),
@@ -533,6 +641,7 @@ pub async fn verify(host: Option<&str>, json_output: bool) -> Result<(), CmdErro
         }
         findings.extend(remote_findings(target, declared).await);
     }
+    findings.extend(standby);
     record_observations(&findings);
     emit(&findings, json_output);
     fail_on_unreachable(&findings)
@@ -562,6 +671,11 @@ fn emit(findings: &[Finding], json_output: bool) {
 /// A false declaration is a failure, an unchecked one is not. Exiting non-zero
 /// only on `unreachable` is what makes this usable as a gate without making an
 /// uninstalled probe look like an outage.
+///
+/// A standby row is `unverified` for the same reason and is exempt by the same
+/// rule: nothing looked, because there is nothing there to look at yet. It has
+/// to stay visible in the table and out of the count, and one state word does
+/// both.
 fn fail_on_unreachable(findings: &[Finding]) -> Result<(), CmdError> {
     let broken = findings
         .iter()
