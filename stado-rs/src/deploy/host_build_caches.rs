@@ -33,6 +33,7 @@ pub const CACHEDIR_SIGNATURE: &str = "Signature: 8a477f597d28d172789f06886806bc5
 pub const ROOT_ENV: &str = "STADO_CACHE_ROOT";
 pub const AGE_ENV: &str = "STADO_CACHE_MIN_AGE_DAYS";
 pub const APPLY_ENV: &str = "STADO_CACHE_APPLY";
+pub const FORCE_ENV: &str = "STADO_CACHE_FORCE";
 
 /// Two phases. First one `find` pass collects the tag files, so the walk is
 /// never mutated underneath itself — deleting during the walk made `find`
@@ -43,6 +44,7 @@ pub const APPLY_ENV: &str = "STADO_CACHE_APPLY";
 pub const REMOTE_SCRIPT: &str = r#"root="${STADO_CACHE_ROOT:-}"
 days="${STADO_CACHE_MIN_AGE_DAYS:-}"
 apply="${STADO_CACHE_APPLY:-}"
+force="${STADO_CACHE_FORCE:-}"
 signature='Signature: 8a477f597d28d172789f06886806bc55'
 
 if [ -z "$root" ] || [ ! -d "$root" ]; then
@@ -63,7 +65,11 @@ while IFS= read -r tag; do
     printf 'STADO_BUILD_CACHE\tuntagged\t%s\t%s\n' "$dir" -
     continue
   fi
-  aged=$(/usr/bin/find "$dir" -maxdepth 0 -mtime "+$days" 2>/dev/null || true)
+  if [ -n "$force" ]; then
+    aged="$dir"
+  else
+    aged=$(/usr/bin/find "$dir" -maxdepth 0 -mtime "+$days" 2>/dev/null || true)
+  fi
   if [ -z "$aged" ]; then
     printf 'STADO_BUILD_CACHE\ttoo-young\t%s\t%s\n' "$dir" -
     continue
@@ -118,15 +124,17 @@ pub fn validate_days(days: &str) -> Result<(), DeployError> {
 /// The remote invocation. Unlike the other host commands this one does not
 /// escalate: build caches belong to the user that produced them, and running
 /// as root would let it delete another account's files.
-pub fn remote_command(root: &str, days: &str, apply: bool) -> String {
+pub fn remote_command(root: &str, days: &str, apply: bool, force: bool) -> String {
     format!(
-        "/usr/bin/env {}={} {}={} {}={} /bin/sh -c {}",
+        "/usr/bin/env {}={} {}={} {}={} {}={} /bin/sh -c {}",
         ROOT_ENV,
         shlex_quote(root),
         AGE_ENV,
         shlex_quote(days),
         APPLY_ENV,
         shlex_quote(if apply { "apply" } else { "" }),
+        FORCE_ENV,
+        shlex_quote(if force { "force" } else { "" }),
         shlex_quote(REMOTE_SCRIPT)
     )
 }
@@ -162,6 +170,7 @@ pub async fn run_on_host(
     root: &str,
     days: &str,
     apply: bool,
+    force: bool,
     runner: &Runner,
 ) -> BuildCacheReport {
     let mut report = BuildCacheReport {
@@ -189,14 +198,14 @@ pub async fn run_on_host(
         vec![
             "/bin/sh".to_string(),
             "-c".to_string(),
-            remote_command(root, days, apply),
+            remote_command(root, days, apply, force),
         ]
     } else {
         if let Err(error) = validate_ssh_target(destination) {
             report.error = Some(error.0);
             return report;
         }
-        ssh_argv(destination, &remote_command(root, days, apply))
+        ssh_argv(destination, &remote_command(root, days, apply, force))
     };
 
     let mut spec = CommandSpec::new(argv);
