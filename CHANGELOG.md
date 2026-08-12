@@ -37,6 +37,12 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   preventing retained HTTP keep-alives from exhausting file descriptors and
   blocking every routed service.
 
+### Local inference
+
+- The documented `chat-primary` profile now uses a Featherless route for the
+  same Cydonia model as its ordered fallback. With `gpu_mode=yieldable`, queued
+  GPU work pauses local vLLM while Brama keeps chat available remotely.
+
 ## 0.5.0-rc.1 - 2026-07-29
 
 ### Product contract
