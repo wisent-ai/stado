@@ -273,7 +273,8 @@ Bootstrap the gateway snapshot before Brama's first managed start:
 
 ```sh
 stado inference route set wisent-backend/chat/primary \
-  --to qwen/default --expected absent --gateway ubuntu-server-rtx-pro-6000
+  --to featherless/TheDrummer/Cydonia-24B-v4.3 \
+  --expected absent --gateway ubuntu-server-rtx-pro-6000
 ```
 
 ```sh
@@ -289,8 +290,10 @@ stado inference apply <plan-id>
 stado inference doctor chat-primary
 stado inference verify chat-primary
 stado inference route set wisent-backend/chat/primary \
-  --to chat-primary --fallback qwen/default \
-  --expected qwen/default --gateway ubuntu-server-rtx-pro-6000
+  --to chat-primary \
+  --fallback featherless/TheDrummer/Cydonia-24B-v4.3 \
+  --expected featherless/TheDrummer/Cydonia-24B-v4.3 \
+  --gateway ubuntu-server-rtx-pro-6000
 ```
 The pinned AWQ model is the quality-first single-GPU profile for the registered
 RTX Pro 6000 Blackwell with 96 GB VRAM. The immutable Hugging Face revision and
@@ -307,8 +310,8 @@ inference container when an eligible GPU job is queued, advertises the released
 capacity, and resumes inference only after queued and active GPU work has
 cleared. Eligibility includes provider, accelerator, host pin, centralized
 assignment, and capacity constraints; there is no timeout-based eviction.
-Brama's ordered fallback remains available while the local container is
-yielded.
+Brama's ordered Featherless fallback remains available while the local
+container is yielded.
 
 If `plan` or `apply` reports an unmanaged GPU workload, inspect it through the
 same target-scoped host channel instead of opening an ad hoc SSH session:
@@ -359,8 +362,10 @@ registry data. Route changes require `--expected`, probe the destination first,
 stage an owner-only route snapshot on the gateway, compare-and-swap the
 registry, and then atomically commit the snapshot. Brama reloads that file per
 request, so cutover needs no backend restart. Ordered `--fallback` destinations
-are attempted when the primary provider fails; `qwen/default` therefore
-preserves service while local vLLM is unavailable. `rollback` reinstalls the
+are attempted when the primary provider fails;
+`featherless/TheDrummer/Cydonia-24B-v4.3` therefore preserves the same model
+contract while local vLLM is unavailable.
+`rollback` reinstalls the
 recorded prior deployment; `retire` refuses while any primary or fallback route
 still selects the deployment and retains model cache unless `--purge-cache` is
 explicit.
