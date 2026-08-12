@@ -836,6 +836,28 @@ fn validate_program(program: &str) -> Result<(), DeployError> {
     Ok(())
 }
 
+/// An argument the deployed unit is started with. It lands in the same two
+/// places as the program and under the same no-escaping rule, and a unit
+/// whose arguments are empty strings is a unit nobody can read back from
+/// `service show`, so both are refused here rather than at the host.
+fn validate_unit_argument(arg: &str) -> Result<(), DeployError> {
+    if arg.is_empty() {
+        return Err(DeployError(
+            "--arg cannot be empty; drop it instead".to_string(),
+        ));
+    }
+    if arg
+        .chars()
+        .any(|ch| ch.is_control() || "<>&\"'".contains(ch))
+    {
+        return Err(DeployError(format!(
+            "--arg {} contains characters that cannot be rendered into a unit file",
+            py_str_repr(arg)
+        )));
+    }
+    Ok(())
+}
+
 /// Reject a unit id that cannot ride the remote program as a shell word.
 /// `shlex_quote` handles the quoting, but a control character in a launchd
 /// label is never a real unit and would corrupt the marker framing.
@@ -1689,25 +1711,27 @@ pub struct DeployPlan {
 /// the plist; this keeps logs in the remote account's owner-only Stado directory.
 const REMOTE_HOME_PLACEHOLDER: &str = "__STADO_HOME__";
 
-pub fn plan_deploy(name: &str, program: &str) -> Result<DeployPlan, DeployError> {
+pub fn plan_deploy(name: &str, program: &str, args: &[String]) -> Result<DeployPlan, DeployError> {
     validate_service_name(name)?;
     validate_program(program)?;
+    for arg in args {
+        validate_unit_argument(arg)?;
+    }
     let label = local_install::label(DEPLOY_KIND, name);
     let render = |os: LocalOs| {
         let path = match os {
-            LocalOs::Darwin => {
-                "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-            }
-            LocalOs::Linux => {
-                "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-            }
+            LocalOs::Darwin => "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+            LocalOs::Linux => "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         };
+        let mut exec_args = Vec::with_capacity(args.len() + 1);
+        exec_args.push(program.to_string());
+        exec_args.extend(args.iter().cloned());
         InstallPlan {
             name: name.to_string(),
             kind: DEPLOY_KIND.to_string(),
             os,
             label: label.clone(),
-            exec_args: vec![program.to_string()],
+            exec_args,
             env: vec![("PATH".to_string(), path.to_string())],
         }
     };
