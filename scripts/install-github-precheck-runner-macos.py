@@ -89,8 +89,16 @@ def runner_identity() -> tuple[int, int]:
         run("/usr/bin/dscl", ".", "-create", f"/Users/{RUNNER_USER}", "NFSHomeDirectory", str(RUNNER_ROOT))
         run("/usr/bin/dscl", ".", "-create", f"/Users/{RUNNER_USER}", "UserShell", "/bin/sh")
         run("/usr/bin/dscl", ".", "-create", f"/Users/{RUNNER_USER}", "IsHidden", "1")
-        run("/usr/bin/dscl", ".", "-passwd", f"/Users/{RUNNER_USER}", "*")
         account = pwd.getpwnam(RUNNER_USER)
+    run("/usr/bin/dscl", ".", "-create", f"/Users/{RUNNER_USER}", "Password", "*")
+    run(
+        "/usr/bin/dscl",
+        ".",
+        "-create",
+        f"/Users/{RUNNER_USER}",
+        "AuthenticationAuthority",
+        ";DisabledUser;",
+    )
     if account.pw_uid == 0 or account.pw_gid in {0, 80}:
         raise SystemExit("the pre-check runner account must not be an administrator")
     administrators = run("/usr/sbin/dseditgroup", "-o", "checkmember", "-m", RUNNER_USER, "admin", check=False)
