@@ -36,9 +36,9 @@ stado host precheck-runner remove <registry-target>
 ```
 
 Stado resolves the host address and `release_platform` from the canonical
-registry. `install` exchanges `platform-admin-github.value` from the selected
-Skarbiec store for a short-lived organization registration token, transports
-the installer and token on host-channel stdin, verifies the pinned Actions
+registry. `install` exchanges `GITHUB_TOKEN.value` through Stado's
+admin-scoped Skarbiec coordinates for a short-lived organization registration
+token, transports the installer and token on host-channel stdin, verifies the pinned Actions
 Runner archive, and installs the OS service. `remove` uses a short-lived
 removal token before deleting the service, account, files, and network rule.
 
