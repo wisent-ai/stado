@@ -298,6 +298,61 @@ fn validate_variant_config(
     }
 }
 
+/// A key under a storage adapter must be one Stado actually reads.
+///
+/// `storage.stado.ca_file` sat in the deployed configuration for as long as the
+/// fleet published its object API over TLS, and no code path ever read it. It
+/// validated clean, `doctor` was satisfied, and the only storage URL that still
+/// worked was a loopback one — so every host quietly addressed its own store
+/// while both reported the same shared backend, and two machines held different
+/// registries without either noticing. An unknown key is not a harmless extra:
+/// it is a setting an operator believes is in effect.
+///
+/// The catalog is authoritative here in a way it is not for the rest of the
+/// document. A storage adapter's `ConfigField` list names every key its backend
+/// consumes, so anything else under that section is unread by construction, and
+/// saying so at validation time is the difference between a typo and a month of
+/// silent divergence. Sections whose adapter the catalog does not know are left
+/// alone: this reports keys that cannot be read, never adapters it cannot judge.
+fn unread_storage_keys(root: &Map<String, Value>, problems: &mut Vec<String>) {
+    let Some(storage) = root.get("storage").and_then(Value::as_object) else {
+        return;
+    };
+    for (adapter, section) in storage {
+        let Some(section) = section.as_object() else {
+            continue;
+        };
+        let Some(variant) =
+            crate::capabilities::variant(crate::capabilities::RuntimeFacet::Storage, adapter)
+        else {
+            continue;
+        };
+        let mut known = std::collections::BTreeSet::new();
+        for field in variant.config {
+            for path in [Some(field.path), field.fallback_path, field.backup_path]
+                .into_iter()
+                .flatten()
+            {
+                known.insert(path);
+            }
+        }
+        for key in section.keys() {
+            // Operators annotate these documents heavily, and a comment is not a
+            // claim about behaviour.
+            if key.starts_with('_') {
+                continue;
+            }
+            let path = format!("storage.{adapter}.{key}");
+            if !known.contains(path.as_str()) {
+                problems.push(format!(
+                    "{path} is not a key Stado reads; the {adapter:?} backend consumes only [{}]",
+                    known.iter().copied().collect::<Vec<_>>().join(", ")
+                ));
+            }
+        }
+    }
+}
+
 /// Structural validation of a config dict; returns a list of problems.
 pub fn validate(data: &Value) -> Vec<String> {
     let mut problems = crate::capabilities::validate_catalog();
@@ -313,6 +368,7 @@ pub fn validate(data: &Value) -> Vec<String> {
         )),
     }
     unresolved_placeholders(data, "", &mut problems);
+    unread_storage_keys(root, &mut problems);
     if let Some(store) = get_in(root, "credentials.store") {
         match store.as_str().filter(|value| !value.trim().is_empty()) {
             Some(store) => {
