@@ -312,6 +312,10 @@ cleared. Eligibility includes provider, accelerator, host pin, centralized
 assignment, and capacity constraints; there is no timeout-based eviction.
 Brama's ordered Featherless fallback remains available while the local
 container is yielded.
+`route set` therefore accepts a non-ready `yieldable` deployment only as the
+primary of a route with at least one ordered fallback. It still requires an
+`exclusive` primary and every local fallback to be ready, so an unavailable
+deployment cannot be published as the route's only destination.
 
 If `plan` or `apply` reports an unmanaged GPU workload, inspect it through the
 same target-scoped host channel instead of opening an ad hoc SSH session:
