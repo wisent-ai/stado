@@ -8,7 +8,7 @@
 set -eu
 
 logs=$HOME/.stado/logs
-lines=$(printf '%s' 'aaaaaaaaaaaa' | /usr/bin/wc -c | /usr/bin/tr -d ' ')
+lines=${BRAMA_CRASH_TAIL_LINES:-100}
 
 for name in brama-always-on.err brama-always-on.out brama.err brama.out; do
     file=$logs/$name
