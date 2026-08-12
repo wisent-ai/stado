@@ -140,6 +140,13 @@ pub enum DirectoryCommands {
     /// The address is per-caller, so this resolves for the asking target and
     /// writes only what the directory declares. A service with no endpoint
     /// for this machine is reported and skipped, never guessed.
+    ///
+    /// Markers the directory does not declare are reported as `fossil` on
+    /// every run and removed only under `--prune`. Nothing has ever removed
+    /// one: operator-host carries 11 markers of which the directory declares
+    /// 3, including three different names for one endpoint and two different
+    /// ports for one relationship, and a consumer holding an old name resolves
+    /// it forever.
     Publish {
         /// Publish one service instead of every declared endpoint.
         #[arg(long)]
@@ -147,6 +154,11 @@ pub enum DirectoryCommands {
         /// Resolve as this target instead of this machine.
         #[arg(long)]
         target: Option<String>,
+        /// Delete the markers the directory does not declare. Without this
+        /// they are only reported: a marker is an address something on this
+        /// host dials, and removing one by default makes a publish a reaper.
+        #[arg(long)]
+        prune: bool,
         #[arg(long)]
         json: bool,
     },
@@ -238,8 +250,9 @@ pub async fn dispatch(command: DirectoryCommands) -> Result<(), CmdError> {
         DirectoryCommands::Publish {
             service,
             target,
+            prune,
             json,
-        } => publish(service, target, json).await,
+        } => publish(service, target, prune, json).await,
         DirectoryCommands::Profiles { json } => profiles(json).await,
         DirectoryCommands::Bind { name, target, json } => bind(&name, target, json).await,
         DirectoryCommands::Connect {
@@ -567,19 +580,62 @@ async fn connect(
     Ok(())
 }
 
+/// The address the directory hands one target for one service.
+///
+/// One spelling, shared by the write loop and by the sweep that decides what
+/// is a fossil, because "declared for this host" answered two ways is how a
+/// marker gets written by one half of this function and deleted by the other.
+fn endpoint_url<'a>(entry: &'a Value, target: &str) -> Option<&'a str> {
+    entry
+        .get("endpoints")
+        .and_then(Value::as_object)
+        .and_then(|endpoints| endpoints.get(target))
+        .and_then(|endpoint| endpoint.get("url"))
+        .and_then(Value::as_str)
+}
+
 /// Write `~/.stado/forwards/<service>.local` for every service the directory
-/// gives this machine an address for.
+/// gives this machine an address for, and report every marker it does not.
 ///
 /// Owner-only, and written through a temporary file and a rename so a reader
 /// never sees half an address. Skarbiec's reader refuses anything else - it
 /// requires an owner-owned regular file, no group or world write, and exactly
 /// one bounded URL - so writing it any other way produces a file the consumer
 /// rejects.
+///
+/// This end of the directory had a writer and no remover, so the markers only
+/// ever accumulated. operator-host carries 11 of them and the directory
+/// declares 3: one endpoint under three names (`stado-api.local`,
+/// `stado-object.local`, `stado-object-api.local`, all `http://127.0.0.1:8765`),
+/// one relationship under two ports (`weles-skarbiec.local` -> 8786 and
+/// `skarbiec-weles.local` -> 6119, while the registry says 19095), and
+/// `stado-weles-api.local` -> 8766, a port nothing has ever bound. None of
+/// those is a stale copy of a live answer: each is an address some consumer on
+/// this host will dial forever, and no run of anything has ever contradicted
+/// one. So every run now states the difference between what the directory
+/// declares and what the directory left behind.
+///
+/// Reporting is the default and deletion is not. `--prune` removes exactly the
+/// undeclared markers and prints each one; a marker the directory does declare
+/// is never touched by either path.
 async fn publish(
     service: Option<String>,
     target: Option<String>,
+    prune: bool,
     as_json: bool,
 ) -> Result<(), CmdError> {
+    // A fossil is a marker no declaration claims, so it belongs to no service
+    // and cannot be named by one. Pruning under `--service` would either
+    // delete nothing -- the named service is declared, or the run has already
+    // failed below -- or quietly sweep ten markers the operator did not
+    // mention. Refusing is the only reading of the two flags that is not a
+    // surprise.
+    if prune && service.is_some() {
+        return Err(CmdError::usage(
+            "--prune compares the whole directory against every marker present and cannot be \
+             scoped with --service; publish one service, then run `publish --prune` to sweep",
+        ));
+    }
     let document = registry::fetch_document().await?;
     let block = directory(&document)?;
     let target = match target {
@@ -599,13 +655,7 @@ async fn publish(
         if service.as_deref().is_some_and(|wanted| wanted != name) {
             continue;
         }
-        let url = entry
-            .get("endpoints")
-            .and_then(Value::as_object)
-            .and_then(|endpoints| endpoints.get(&target))
-            .and_then(|endpoint| endpoint.get("url"))
-            .and_then(Value::as_str);
-        let Some(url) = url else {
+        let Some(url) = endpoint_url(entry, &target) else {
             skipped.push(json!({
                 "service": name,
                 "reason": format!("{DIRECTORY_KEY} declares no endpoint for {target}"),
@@ -626,16 +676,74 @@ async fn publish(
             service.unwrap_or_default()
         )));
     }
+    // The whole declared set, never the filtered one. `--service` narrows what
+    // this run writes; it cannot narrow what the directory says, and a sweep
+    // that mistook "not published just now" for "not declared" would report
+    // every live marker on the host as a fossil.
+    let declared: std::collections::BTreeSet<&str> = services
+        .iter()
+        .filter(|(_, entry)| endpoint_url(entry, &target).is_some())
+        .map(|(name, _)| name.as_str())
+        .collect();
+    let sweep = sweep_markers(&forwards, &declared)?;
+    let mut pruned: Vec<Value> = Vec::new();
+    let mut failed = usize::default();
+    if prune {
+        // One unlink that will not go through does not end the sweep. The
+        // markers already removed are removed, the rest are still findings,
+        // and an operator who is shown neither has to start the whole
+        // comparison again to learn how far it got.
+        for fossil in &sweep.fossil {
+            let (status, detail) = match std::fs::remove_file(&fossil.marker) {
+                Ok(()) => ("removed", Value::Null),
+                Err(error) => {
+                    failed += 1;
+                    ("failed", Value::String(error.to_string()))
+                }
+            };
+            pruned.push(json!({
+                "service": fossil.service,
+                "url": fossil.value,
+                "marker": fossil.marker.display().to_string(),
+                "status": status,
+                "error": detail,
+            }));
+        }
+    }
+    // Of the markers PRESENT, how many a declaration accounts for. Not the
+    // size of the declared set: the measured sentence is "11 markers, of which
+    // the directory declares 3", and a declared service whose marker this run
+    // did not write is not one of the eleven.
+    let accounted = sweep.present - sweep.fossil.len();
+    let fossils: Vec<Value> = sweep
+        .fossil
+        .iter()
+        .map(|fossil| {
+            json!({
+                "service": fossil.service,
+                "url": fossil.value,
+                "marker": fossil.marker.display().to_string(),
+                "age_seconds": fossil.age_seconds,
+            })
+        })
+        .collect();
     if as_json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": target,
-                "published": published,
-                "skipped": skipped,
-            }))?
-        );
-        return Ok(());
+        // `fossil` is the finding and is emitted whether or not anything was
+        // removed, so a run with `--prune` and one without report the same
+        // population and differ only in what they did about it.
+        let mut report = json!({
+            "target": target,
+            "published": published,
+            "skipped": skipped,
+            "fossil": fossils,
+            "markers_present": sweep.present,
+            "markers_declared": accounted,
+        });
+        if prune {
+            report["pruned"] = Value::Array(pruned);
+        }
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return prune_outcome(failed);
     }
     // Each marker is an address a consumer on this host will dial without ever
     // asking again, so the line that announces writing one also says when
@@ -657,7 +765,174 @@ async fn publish(
             entry.get("reason").and_then(Value::as_str).unwrap_or("")
         );
     }
-    Ok(())
+    // The value and the age are both printed because both are needed to
+    // decide: the value says which of three names for one endpoint this is,
+    // and the age says whether anyone could still plausibly be holding it.
+    for fossil in &sweep.fossil {
+        println!(
+            "fossil {} -> {} ({}, last written {}); {DIRECTORY_KEY} declares no endpoint \
+             for {target}",
+            fossil.service,
+            fossil.value,
+            fossil.marker.display(),
+            fossil.age()
+        );
+    }
+    for entry in &pruned {
+        println!(
+            "pruned {}: {} {}{}",
+            entry.get("service").and_then(Value::as_str).unwrap_or(""),
+            entry.get("status").and_then(Value::as_str).unwrap_or(""),
+            entry.get("marker").and_then(Value::as_str).unwrap_or(""),
+            entry
+                .get("error")
+                .and_then(Value::as_str)
+                .map_or_else(String::new, |error| format!(": {error}"))
+        );
+    }
+    // The count is the thing an operator notices. Eleven markers where three
+    // are declared is not eight small mistakes; it is a directory that
+    // accumulated while nobody decided to keep any of it.
+    if !sweep.fossil.is_empty() {
+        println!(
+            "{} marker(s) in {}, {accounted} declared by the directory for {target}, {} it \
+             does not",
+            sweep.present,
+            forwards.display(),
+            sweep.fossil.len()
+        );
+        if !prune {
+            println!("nothing was removed; `--prune` removes exactly the markers listed above");
+        }
+    }
+    prune_outcome(failed)
+}
+
+/// A sweep that could not remove everything it named, reported after the
+/// listing rather than instead of it.
+///
+/// The fossils are printed either way -- they are the finding, and they are
+/// still true when an unlink fails -- but the command must not exit zero, or a
+/// caller that runs this to convergence will believe the directory is clean.
+fn prune_outcome(failed: usize) -> Result<(), CmdError> {
+    if failed == usize::default() {
+        return Ok(());
+    }
+    Err(CmdError::click(format!(
+        "{failed} forward marker(s) could not be removed; each is reported above with the \
+         filesystem's own words"
+    )))
+}
+
+/// One `~/.stado/forwards/<name>.local` no declaration accounts for.
+struct FossilMarker {
+    /// The service the marker's name claims, which is exactly the name a
+    /// consumer on this host resolves through it.
+    service: String,
+    marker: std::path::PathBuf,
+    /// The address the file hands out. Printed rather than summarised: three
+    /// of these on one host name one endpoint, and two name one relationship
+    /// on two wrong ports, neither of which is visible from the filenames.
+    value: String,
+    /// `None` means the filesystem would not say, never "new". An unknown age
+    /// rendered as zero would sort a fossil to the safe end of the list.
+    age_seconds: Option<i64>,
+}
+
+impl FossilMarker {
+    fn age(&self) -> String {
+        self.age_seconds.map_or_else(
+            || "unknown".to_string(),
+            |seconds| registry::human_age(chrono::TimeDelta::seconds(seconds)),
+        )
+    }
+}
+
+/// What is on disk, against what the directory declares.
+struct MarkerSweep {
+    /// Every marker present, declared or not. The denominator: "8 fossils" is
+    /// a different sentence from "8 of 11".
+    present: usize,
+    /// Undeclared markers, oldest first, because the oldest is the one most
+    /// likely to be held by something nobody remembers writing.
+    fossil: Vec<FossilMarker>,
+}
+
+/// Compare the forwards directory against the declared set.
+///
+/// Read-only. Removal is the caller's decision under an explicit flag, and
+/// keeping the two apart is what makes the report safe to run on every publish.
+///
+/// Only `<name>.local` regular files are considered. A staging file left by an
+/// interrupted write is named `<name>.local.staging` and is not a marker; a
+/// symlink is not something `write_forward_marker` can have produced, and
+/// following one would report -- and under `--prune` delete -- an unrelated
+/// path.
+fn sweep_markers(
+    forwards: &std::path::Path,
+    declared: &std::collections::BTreeSet<&str>,
+) -> Result<MarkerSweep, CmdError> {
+    let mut sweep = MarkerSweep {
+        present: usize::default(),
+        fossil: Vec::new(),
+    };
+    for entry in std::fs::read_dir(forwards)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Some(service) = name.strip_suffix(".local") else {
+            continue;
+        };
+        if service.is_empty() || service.starts_with('.') {
+            continue;
+        }
+        let marker = entry.path();
+        let metadata = marker.symlink_metadata()?;
+        if !metadata.is_file() {
+            continue;
+        }
+        sweep.present += 1;
+        if declared.contains(service) {
+            continue;
+        }
+        // An unreadable marker is still a fossil: the consumer reading it is
+        // running as the owner and may well succeed where this did not, so
+        // dropping the row would hide an address that still resolves.
+        let value = std::fs::read_to_string(&marker).map_or_else(
+            |error| format!("(unreadable: {error})"),
+            |content| {
+                content
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string()
+            },
+        );
+        sweep.fossil.push(FossilMarker {
+            service: service.to_string(),
+            marker,
+            value,
+            age_seconds: marker_age(&metadata),
+        });
+    }
+    sweep
+        .fossil
+        .sort_by(|left, right| right.age_seconds.cmp(&left.age_seconds));
+    Ok(sweep)
+}
+
+/// How long ago the marker was written, in seconds.
+///
+/// A modification time in the future is clock skew, not a marker written
+/// tomorrow; `duration_since` refuses it and the row reads `unknown`, which is
+/// the honest answer and keeps it out of the oldest-first head of the list.
+fn marker_age(metadata: &std::fs::Metadata) -> Option<i64> {
+    let written = metadata.modified().ok()?;
+    let age = std::time::SystemTime::now().duration_since(written).ok()?;
+    i64::try_from(age.as_secs()).ok()
 }
 
 fn write_forward_marker(marker: &std::path::Path, url: &str) -> Result<(), CmdError> {

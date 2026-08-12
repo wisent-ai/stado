@@ -1234,6 +1234,26 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Every helper script TARGET carries, oldest first, with its age and size.
+    ///
+    /// `install-helper` writes into `$HOME/.stado/bin` and nothing removes
+    /// what it wrote: control-host holds 553 installed helper scripts
+    /// beside 16 binaries. Reporting is the default; `--prune` removes the
+    /// ones past `--older-than-days` and refuses to run without it, because
+    /// "remove everything" is never what an operator means here.
+    Helpers {
+        target: String,
+        /// Only count -- and, with --prune, remove -- helpers older than this.
+        #[arg(long)]
+        older_than_days: Option<u32>,
+        /// Remove the helpers past the threshold. Required companion of
+        /// --older-than-days; without it this command only reports.
+        #[arg(long)]
+        prune: bool,
+        /// Emit the inventory as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Open an encrypted reverse SSH forwarding channel to TARGET.
     #[command(name = "forward-local")]
     ForwardLocal {
@@ -1860,6 +1880,12 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::RemoveHelper { target, name, json } => {
                 host::remove_helper(&target, &name, json).await
             }
+            HostCommands::Helpers {
+                target,
+                older_than_days,
+                prune,
+                json,
+            } => host::helpers(&target, older_than_days, prune, json).await,
             HostCommands::ForwardLocal {
                 target,
                 name,
