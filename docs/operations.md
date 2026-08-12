@@ -25,6 +25,31 @@ Every command below enters through Stado. Provider diagnostics belong inside
 the corresponding adapter and are unavailable unless that provider is
 explicitly enabled in the selected profile.
 
+## Isolated GitHub pre-check runners
+
+The runner lifecycle enters only through Stado:
+
+```bash
+stado host precheck-runner install <registry-target>
+stado host precheck-runner status <registry-target>
+stado host precheck-runner remove <registry-target>
+```
+
+Stado resolves the host address and `release_platform` from the canonical
+registry. `install` exchanges `platform-admin-github.value` from the selected
+Skarbiec store for a short-lived organization registration token, transports
+the installer and token on host-channel stdin, verifies the pinned Actions
+Runner archive, and installs the OS service. `remove` uses a short-lived
+removal token before deleting the service, account, files, and network rule.
+
+The runner has one unprivileged `stado-precheck` account and a root-owned
+pre/post-job cleanup hook. Only `_work` and `_diag` are writable by jobs. An
+nftables UID rule on Linux and a PF user rule on macOS reject loopback,
+RFC1918, link-local, unique-local, and CGNAT/Tailscale ranges while leaving
+public GitHub and package endpoints reachable. Those CIDRs are protocol network
+classes compiled into Stado, not fleet host addresses; fleet destinations
+remain registry data.
+
 ## Common queries
 
 ### Fleet, queue, quota, and billing
@@ -40,12 +65,9 @@ not fall back to a provider CLI, ADC, or a different storage backend.
 ### Local agent state
 
 ```bash
-ssh root@<host> '
-  systemctl is-active wisent-agent.service
-  journalctl -u wisent-agent.service --since="5 minutes ago" --no-pager -o cat
-  ps -eo pid,etime,cmd | grep extract_and_upload | grep -v grep
-  nvidia-smi --query-gpu=memory.used,memory.free,utilization.gpu --format=csv,noheader
-'
+stado host health <registry-target>
+stado host inventory <registry-target>
+stado host exec <registry-target> -- nvidia-smi
 ```
 
 ### Inspect one job end-to-end

@@ -40,6 +40,7 @@ pub mod machine;
 pub mod mail;
 pub mod overview;
 pub mod placement;
+pub mod precheck_runner;
 pub mod profiles_cmd;
 pub mod queue;
 pub mod quota;
@@ -1032,6 +1033,31 @@ enum RegistryHostCommands {
 }
 
 #[derive(Subcommand)]
+enum HostPrecheckRunnerCommands {
+    /// Install or reconcile the isolated pre-check runner on TARGET.
+    Install {
+        target: String,
+        /// Emit the lifecycle report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read the installed runner service, identity and network boundary.
+    Status {
+        target: String,
+        /// Emit the lifecycle report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove the runner, service definition and network boundary from TARGET.
+    Remove {
+        target: String,
+        /// Emit the lifecycle report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum HostCommands {
     /// Show the latest Stado health beacon and log tail for TARGET.
     Health {
@@ -1053,6 +1079,9 @@ enum HostCommands {
     /// Manage local macOS and Linux user accounts.
     #[command(subcommand)]
     User(HostUserCommands),
+    /// Manage the isolated GitHub pre-check runner on a registry host.
+    #[command(name = "precheck-runner", subcommand)]
+    PrecheckRunner(HostPrecheckRunnerCommands),
     /// Point TARGET's Weles recordings store at PATH.
     #[command(name = "weles-recordings-dir")]
     WelesRecordingsDir { target: String, path: String },
@@ -1739,6 +1768,17 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 name,
                 json,
             } => host::install_helper(&target, &source, &name, json).await,
+            HostCommands::PrecheckRunner(command) => match command {
+                HostPrecheckRunnerCommands::Install { target, json } => {
+                    precheck_runner::install(&target, json).await
+                }
+                HostPrecheckRunnerCommands::Status { target, json } => {
+                    precheck_runner::status(&target, json).await
+                }
+                HostPrecheckRunnerCommands::Remove { target, json } => {
+                    precheck_runner::remove(&target, json).await
+                }
+            },
             HostCommands::InstallFile {
                 target,
                 source,
