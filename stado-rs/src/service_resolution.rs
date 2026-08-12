@@ -98,18 +98,19 @@ fn default_max_stale_seconds() -> u64 {
     60
 }
 
-/// Long enough that the proxied service always answers first.
+/// Short enough that retained sockets stay bounded: two directory-freshness
+/// windows.
 ///
 /// A request/response connection sends nothing in either direction while the
-/// service works, so a byte-flow window is also a cap on how long a service may
-/// take. At 120 seconds that cap sat below Brama's own 300-second request
-/// deadline: every model call longer than two minutes was cut by the resolver
-/// underneath a caller that was still being served, and the caller saw a lost
-/// connection rather than an answer or an error. The window still bounds
-/// retained keep-alive sockets, which is what it exists for; it simply no longer
-/// expires before the slowest thing behind it can reply.
+/// service works, so this window is also a cap on how long a proxied service may
+/// take to answer. Model dispatch legitimately exceeds two minutes, and raising
+/// this default to cover it tripled retention for every adapter on the fleet --
+/// which exhausted the resolver's file descriptors and took the whole local data
+/// plane down with `Too many open files`. The long window belongs on the
+/// adapters that need it, declared per adapter in the registry, not on
+/// everything.
 fn default_adapter_idle_seconds() -> u64 {
-    330
+    default_max_stale_seconds().saturating_add(default_max_stale_seconds())
 }
 
 fn identifier(value: &str) -> bool {
