@@ -323,6 +323,13 @@ pub enum ServiceCommands {
         /// is a relink rather than a redeploy.
         #[arg(long = "from-artifact")]
         from_artifact: Option<String>,
+        /// One argument the unit is started with; repeat for each. A program
+        /// that needs a subcommand or a port to be the service it is named
+        /// after cannot be deployed without these, and hand-starting it
+        /// beside the unit is how a host ends up serving on a port no
+        /// declaration mentions.
+        #[arg(long = "arg")]
+        args: Vec<String>,
         #[arg(long)]
         json: bool,
     },
@@ -494,6 +501,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             host_heuristic,
             from,
             from_artifact,
+            args,
             json,
         } => {
             deploy(
@@ -502,6 +510,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
                 host_heuristic.as_deref(),
                 from,
                 from_artifact,
+                &args,
                 json,
             )
             .await
@@ -1341,6 +1350,7 @@ async fn deploy(
     host_heuristic: Option<&str>,
     from: Option<String>,
     from_artifact: Option<String>,
+    args: &[String],
     json: bool,
 ) -> Result<(), CmdError> {
     let (target, host_heuristic) = resolve_placement(host, host_heuristic).await?;
@@ -1365,7 +1375,7 @@ async fn deploy(
         }
     };
     let from = from.as_str();
-    let plan = service::plan_deploy(name, from).map_err(click)?;
+    let plan = service::plan_deploy(name, from, args).map_err(click)?;
 
     // Refuse a colliding declaration BEFORE touching the host: pushing a
     // unit that then cannot be recorded would leave an unmanaged unit
