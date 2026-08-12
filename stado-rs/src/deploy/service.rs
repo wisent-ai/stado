@@ -871,15 +871,44 @@ fi
 printf 'STADO_HOST\\t%s\\t%s\\t%s\\t%s\\n' \"$os\" \"$domain\" \"$unit\" \"$unit_path\"
 ";
 
-/// `service restart`: reload the unit from its own file and kick it.
+/// `service restart`: restart the unit, in place wherever launchd will allow it.
 /// Deliberately narrower than a recovery pass — no disk cleanup, no
 /// coordinator teardown, no other agents touched.
+///
+/// Order matters more than it looks. This used to `bootout` first and then
+/// `bootstrap` the unit file back, which recreates the job rather than
+/// restarting it. When launchd still holds children of the old job the
+/// bootstrap fails, and the command returned `restart_failed` with the unit
+/// left *unloaded* — a partial failure strictly worse than never having run
+/// the restart, because the listeners it owned are gone and there is nothing
+/// to roll back to. A control-plane primitive whose failure mode is an outage
+/// will eventually cause one; this one did, on the always-on host.
+///
+/// So a loaded job is kicked in place first: `kickstart -k` never unloads, so
+/// there is no window in which the job does not exist and nothing orphaned to
+/// sweep. The unload-and-recreate path remains for a unit that is not loaded
+/// at all, or whose in-place kick fails, and it no longer exits leaving the
+/// unit down without saying so.
 const RESTART_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
+  if $launch print \"$domain/$unit\" >/dev/null 2>&1; then
+    detail=$($launch kickstart -k \"$domain/$unit\" 2>&1)
+    rc=$?
+    if [ \"$rc\" -eq 0 ]; then
+      say 'restarted' \"$domain in place\"
+      exit 0
+    fi
+  fi
   if [ -f \"$unit_path\" ]; then
     $launch bootout \"$domain/$unit\" >/dev/null 2>&1 || true
 @DISOWNED_SWEEP@
     if [ -n \"$still\" ]; then
-      say 'restart_failed' \"disowned process survived: $still\"
+      $launch enable \"$domain/$unit\" >/dev/null 2>&1 || true
+      $launch bootstrap \"$domain\" \"$unit_path\" >/dev/null 2>&1 || true
+      if $launch print \"$domain/$unit\" >/dev/null 2>&1; then
+        say 'restart_failed' \"disowned process survived: $still; unit reloaded\"
+      else
+        say 'restart_failed' \"disowned process survived: $still; unit is NOT loaded\"
+      fi
       exit 0
     fi
     $launch enable \"$domain/$unit\" >/dev/null || true
