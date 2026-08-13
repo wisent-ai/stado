@@ -95,8 +95,7 @@ fn text(entry: &Value, field: &str) -> String {
 pub async fn examine(target_name: &str, runner: &Runner) -> HostStanding {
     match host_inventory::inventory_host(target_name, runner).await {
         Ok(report)
-            if report.get("status").and_then(Value::as_str)
-                == Some(host_inventory::OK_STATUS) =>
+            if report.get("status").and_then(Value::as_str) == Some(host_inventory::OK_STATUS) =>
         {
             let mut drift = Vec::new();
             let mut undeclared = Vec::new();

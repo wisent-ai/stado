@@ -526,8 +526,7 @@ impl RemoteReport {
     /// True when the host was observed in the state the operation intended,
     /// or the operation declared no end state at all.
     pub fn postcondition_held(&self) -> bool {
-        self.postcondition.is_empty()
-            || self.postcondition_state == host_channel::POSTCONDITION_MET
+        self.postcondition.is_empty() || self.postcondition_state == host_channel::POSTCONDITION_MET
     }
 
     /// True when the remote program reported the outcome the caller wanted

@@ -9,15 +9,13 @@ struct StadoApp: App {
     @StateObject private var auth = WisentAuthStore(productName: "Stado")
 
     var body: some Scene {
-        WindowGroup("Stado Operations Console") {
-            WisentAuthGate(store: auth) {
-                StadoFirstUseRoot(
-                    operationsStore: operationsStore,
-                    cleanupStore: cleanupStore,
-                    deploymentStore: deploymentStore,
-                    auth: auth
-                )
-            }
+        WindowGroup("Stado Operations Console", id: "operations-console") {
+            StadoFirstUseRoot(
+                operationsStore: operationsStore,
+                cleanupStore: cleanupStore,
+                deploymentStore: deploymentStore,
+                auth: auth
+            )
         }
         .defaultSize(
             width: StadoTheme.Layout.windowMinimumWidth,
@@ -33,7 +31,7 @@ struct StadoApp: App {
         .menuBarExtraStyle(.window)
 
         Settings {
-            SettingsView(deploymentStore: deploymentStore)
+            SettingsView(deploymentStore: deploymentStore, operationsStore: operationsStore)
         }
     }
 

@@ -147,6 +147,10 @@ impl CloudflareClient {
     }
 }
 
+// Every parameter is one required field of a tunnel route. Bundling them into a
+// struct moves the same list one indirection away without shortening it, and
+// this is the release gate's lint, not a design review.
+#[allow(clippy::too_many_arguments)]
 async fn route_tunnel(
     api_credential_name: &str,
     tunnel_credential_name: &str,
@@ -429,7 +433,9 @@ async fn required_field(item: &str, field: &str) -> Result<String, CmdError> {
         .map_err(|error| CmdError::click(error.to_string()))?
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
-            CmdError::click(format!("credential field {field:?} of {item:?} is required"))
+            CmdError::click(format!(
+                "credential field {field:?} of {item:?} is required"
+            ))
         })
 }
 

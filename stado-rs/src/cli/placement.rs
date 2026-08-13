@@ -105,7 +105,9 @@ async fn evict(service: &str, host: &str, json: bool) -> Result<(), CmdError> {
         .and_then(|block| block.get("services"))
         .and_then(|services| services.get(service))
         .ok_or_else(|| {
-            CmdError::click(format!("the directory declares no service named {service:?}"))
+            CmdError::click(format!(
+                "the directory declares no service named {service:?}"
+            ))
         })?;
     let active = entry
         .get("active_host")
@@ -117,9 +119,8 @@ async fn evict(service: &str, host: &str, json: bool) -> Result<(), CmdError> {
              Use `stado service stop {service} --host {host}` to stop a placed service"
         )));
     }
-    let port = super::directory::service_port(entry, active).ok_or_else(|| {
-        CmdError::click(format!("the directory declares no port for {service}"))
-    })?;
+    let port = super::directory::service_port(entry, active)
+        .ok_or_else(|| CmdError::click(format!("the directory declares no port for {service}")))?;
     let target = host_channel::canonical_target(host)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
@@ -1246,9 +1247,9 @@ fn checked_actions(target: &str, weles: &WelesPolicy) -> Result<Vec<String>, Cmd
         let legible = !action.is_empty()
             && action.trim() == action
             && (action == "*"
-                || action
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'));
+                || action.bytes().all(|byte| {
+                    byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'
+                }));
         if !legible {
             return Err(CmdError::click(format!(
                 "{target} declares the weles action {action:?}, which the worker's placement \

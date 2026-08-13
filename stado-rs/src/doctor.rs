@@ -1183,9 +1183,8 @@ async fn check_release_channel() -> Check {
         return findings.into_check(RELEASE_ID, RELEASE_TITLE, RELEASE_REMEDY);
     }
 
-    let uri = format!(
-        "stado://releases/stado/{version}/{platform}/release-manifest-{platform}.json"
-    );
+    let uri =
+        format!("stado://releases/stado/{version}/{platform}/release-manifest-{platform}.json");
     let endpoint = format!("{api}/api/release/object");
     let response = match reqwest::Client::new()
         .get(&endpoint)
@@ -1243,9 +1242,9 @@ async fn check_release_channel() -> Check {
                     .and_then(Value::as_str)
                     .is_some_and(|digest| {
                         digest.len() == 64
-                            && digest.bytes().all(|byte| {
-                                byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
-                            })
+                            && digest
+                                .bytes()
+                                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
                     }) =>
         {
             findings.note(
