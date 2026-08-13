@@ -5,7 +5,7 @@ umask 077
 
 stado_bin=${STADO_BIN:-$HOME/.stado/bin/stado}
 config_file=${STADO_CONFIG:-$HOME/.config/stado/config.json}
-node_bin=${NODE_BIN:-$(command -v node || true)}
+node_bin=${NODE_BIN:-/opt/homebrew/bin/node}
 for required in "$stado_bin" "$config_file" "$node_bin"; do
   [ -f "$required" ] || {
     printf '%s\n' "missing control-plane configuration input: $required" >&2
