@@ -16,12 +16,13 @@
     }
   },
   "dashboard": {
-    "_comment": "Loopback-only API for immediate Mac operation. Dashboard view and mutations require deployment-bound authorization; object, machine and managed-service routes require their distinct credentials.",
-    "bind": "localhost"
+    "_comment": "Loopback-only API for immediate Mac operation. Direct dashboard access is locally trusted; HTTPS-proxied object, machine, and managed-service routes still require their distinct credentials.",
+    "bind": "localhost",
+    "trust_https_proxy": true
   },
   "deployment": {
-    "_comment": "Stable local dashboard RLS binding. Never remove this id: unavailable deployment authorization must fail closed.",
-    "id": "local-control-plane"
+    "_comment": "Empty on the loopback-only local control plane. Remote deployments use their registry UUID for RLS binding.",
+    "id": ""
   },
   "backend": {
     "messaging": {

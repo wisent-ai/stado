@@ -3,28 +3,16 @@ import Foundation
 
 enum DashboardEndpointPreference {
     static let key = "dashboardBaseURL"
-
-    private static let migrationKey = "dashboardEndpointSelectionMigrated"
-    private static let legacyLocalDefaults = [
-        "http://127.0.0.1:8765",
-        "http://127.0.0.1:8765/",
-    ]
+    static let localURL = "http://127.0.0.1:8765"
 
     static func load(from defaults: UserDefaults) -> String {
-        let stored = defaults.string(forKey: key) ?? ""
-        guard !defaults.bool(forKey: migrationKey) else { return stored }
-
-        defaults.set(true, forKey: migrationKey)
-        if legacyLocalDefaults.contains(stored) {
-            defaults.removeObject(forKey: key)
-            return ""
-        }
-        return stored
+        let stored = defaults.string(forKey: key)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return stored.isEmpty ? localURL : stored
     }
 
     static func save(_ value: String, to defaults: UserDefaults) {
         defaults.set(value, forKey: key)
-        defaults.set(true, forKey: migrationKey)
     }
 }
 
@@ -100,6 +88,15 @@ final class OperationsStore: ObservableObject {
         let address = try OperationsDashboardAddress(value)
         _ = try await client.fetchState(from: address, authorizationToken: authorizationToken)
         return address.displayString
+    }
+
+    func clearDashboardURL() {
+        requestGeneration &+= 1
+        dashboardURLString = ""
+        snapshot = nil
+        lastUpdated = nil
+        errorMessage = nil
+        isRefreshing = false
     }
 
     func saveDashboardURL(_ value: String) throws {

@@ -1197,8 +1197,11 @@ pub fn template() -> Value {
                 "local": {"path": "~/.stado/local-backup"}
             }
         },
-        "deployment": {"id": "local-control-plane"},
-        "dashboard": {"bind": "localhost"}
+        "deployment": {"id": ""},
+        "dashboard": {
+            "bind": "localhost",
+            "trust_https_proxy": false
+        }
     })
 }
 
