@@ -1139,9 +1139,7 @@ impl RemoteObjectApi {
                 let token_file = std::env::var("STADO_API_TOKEN_FILE")
                     .ok()
                     .filter(|value| !value.trim().is_empty())
-                    .unwrap_or_else(|| {
-                        crate::config::wc_stado_storage_token_file().to_string()
-                    });
+                    .unwrap_or_else(|| crate::config::wc_stado_storage_token_file().to_string());
                 if token_file.trim().is_empty() {
                     return Err(CmdError::click(
                         "STADO_API_TOKEN, STADO_API_TOKEN_FILE or storage.stado.token_file \
@@ -1219,7 +1217,6 @@ impl RemoteObjectApi {
         fleet_https_client()
     }
 
-
     fn endpoint(&self, route: &str, query: &[(&str, &str)]) -> Result<url::Url, CmdError> {
         object_api_endpoint(&self.base_url, route, query)
     }
@@ -1232,7 +1229,6 @@ impl RemoteObjectApi {
             request.bearer_auth(&self.token)
         }
     }
-
 
     async fn put_with_metadata(
         &self,

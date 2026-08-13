@@ -918,9 +918,11 @@ fn sweep_markers(
             age_seconds: marker_age(&metadata),
         });
     }
+    // Oldest first: the marker nobody has rewritten in weeks is the one most
+    // likely to be a fossil worth removing.
     sweep
         .fossil
-        .sort_by(|left, right| right.age_seconds.cmp(&left.age_seconds));
+        .sort_by_key(|marker| std::cmp::Reverse(marker.age_seconds));
     Ok(sweep)
 }
 

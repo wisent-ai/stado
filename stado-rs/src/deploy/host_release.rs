@@ -101,7 +101,6 @@ pub const MARKER: &str = "STADO_RELEASE";
 /// operator where to write the declaration.
 pub const MANAGED_VERSIONS_KEY: &str = "managed_versions";
 
-
 /// One binary this command is allowed to deliver.
 ///
 /// A closed table, not a lookup: an operator naming something not in here
@@ -273,7 +272,6 @@ fn declared_version<'a>(target: &'a ComputeTarget, binary: &str) -> Option<&'a s
         .declared_version(binary)
         .filter(|version| !version.is_empty())
 }
-
 
 // ---------------------------------------------------------------------------
 // The plan
@@ -1010,8 +1008,14 @@ fn planned_steps(plan: &ReleasePlan, unit: Option<&service::ManagedService>) -> 
             plan.release_uri(),
             plan.release_api
         ),
-        format!("verify archive sha256 {} from the release manifest", plan.sha256),
-        format!("extract {} and verify it declares {}", plan.managed.name, plan.version),
+        format!(
+            "verify archive sha256 {} from the release manifest",
+            plan.sha256
+        ),
+        format!(
+            "extract {} and verify it declares {}",
+            plan.managed.name, plan.version
+        ),
         format!("stage it at {}", plan.staged_path()),
         format!(
             "re-check the staged version and atomically repoint {}",
@@ -1062,7 +1066,10 @@ pub(crate) async fn catalog_identity(
         ));
     }
     let exact = |field: &str, wanted: &str| -> Result<(), DeployError> {
-        let found = manifest.get(field).and_then(Value::as_str).unwrap_or_default();
+        let found = manifest
+            .get(field)
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if found == wanted {
             Ok(())
         } else {

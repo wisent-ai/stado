@@ -217,7 +217,9 @@ async fn sync_catalog(path: &Path, json: bool) -> Result<(), CmdError> {
         entries.push(entry);
     }
     if entries.is_empty() {
-        return Err(CmdError::click("central catalog contains no repository entries"));
+        return Err(CmdError::click(
+            "central catalog contains no repository entries",
+        ));
     }
     print_entries(&entries, json)
 }

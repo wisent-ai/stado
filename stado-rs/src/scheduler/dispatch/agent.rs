@@ -206,10 +206,7 @@ pub fn deployment_substitutions(provider_name: &str) -> BTreeMap<String, String>
             "WC_AGENT_SKARBIEC_SECRET_FIELDS".to_string(),
             config::agent_skarbiec_secret_fields().join(","),
         ),
-        (
-            "STADO_API_URL".to_string(),
-            config::stado_api_url(),
-        ),
+        ("STADO_API_URL".to_string(), config::stado_api_url()),
         (
             "STADO_RELEASE_VERSION".to_string(),
             config::stado_release_version(),

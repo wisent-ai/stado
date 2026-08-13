@@ -389,6 +389,9 @@ pub async fn maybe_yield_for_priority(
     Ok(n)
 }
 
+// An admission decision needs the whole picture at once: store, sizing, device,
+// capacity and kind are each read on a different branch below.
+#[allow(clippy::too_many_arguments)]
 async fn queued_gpu_job_for_inference(
     store: &JobStorage,
     sizing: &Sizing,
@@ -399,7 +402,9 @@ async fn queued_gpu_job_for_inference(
     active_slot_count: usize,
     pinned_only: bool,
 ) -> Result<Option<(String, i64)>, StorageError> {
-    let listed = store.list_jobs_fitting("queue", total_vram_gb, 2000).await?;
+    let listed = store
+        .list_jobs_fitting("queue", total_vram_gb, 2000)
+        .await?;
     let mut queued = Vec::with_capacity(listed.len());
     for candidate in listed {
         if let Some(job) = store.read_job("queue", &candidate.job_id).await? {
@@ -437,9 +442,9 @@ async fn queued_gpu_job_for_inference(
 fn inference_container_name(deployment: &str) -> Result<String, String> {
     let valid = !deployment.is_empty()
         && deployment.len() <= 128
-        && deployment
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || b".-_".contains(&byte));
+        && deployment.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || b".-_".contains(&byte)
+        });
     valid
         .then(|| format!("stado-inference-{deployment}"))
         .ok_or_else(|| "inference reservation contains an invalid deployment name".to_string())
@@ -462,10 +467,7 @@ async fn inference_container_running(deployment: &str) -> Result<bool, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim() == "true")
 }
 
-async fn set_inference_container_running(
-    deployment: &str,
-    running: bool,
-) -> Result<(), String> {
+async fn set_inference_container_running(deployment: &str, running: bool) -> Result<(), String> {
     let container = inference_container_name(deployment)?;
     let mut command = tokio::process::Command::new("docker");
     if running {
@@ -780,7 +782,8 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                             "yieldable inference '{}': pausing because {reason}",
                             reservation.deployment
                         ));
-                        match set_inference_container_running(&reservation.deployment, false).await {
+                        match set_inference_container_running(&reservation.deployment, false).await
+                        {
                             Ok(()) => continue,
                             Err(error) => {
                                 log_fn(&format!(
@@ -793,16 +796,11 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                     }
                     Ok(true) => {
                         free_vram_gb = 0;
-                        agent_diag.insert(
-                            "inference_runtime_state".into(),
-                            Value::from("serving"),
-                        );
+                        agent_diag.insert("inference_runtime_state".into(), Value::from("serving"));
                     }
                     Ok(false) if !should_yield && slots.is_empty() => {
-                        agent_diag.insert(
-                            "inference_runtime_state".into(),
-                            Value::from("resuming"),
-                        );
+                        agent_diag
+                            .insert("inference_runtime_state".into(), Value::from("resuming"));
                         publish_capacity(
                             &store,
                             &consumer_id,
@@ -828,27 +826,17 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                         continue;
                     }
                     Ok(false) => {
-                        agent_diag.insert(
-                            "inference_runtime_state".into(),
-                            Value::from("yielded"),
-                        );
+                        agent_diag.insert("inference_runtime_state".into(), Value::from("yielded"));
                         if let Some((job_id, need)) = queued_job {
-                            agent_diag.insert(
-                                "inference_yield_for_job".into(),
-                                Value::from(job_id),
-                            );
-                            agent_diag.insert(
-                                "inference_yield_for_vram_gb".into(),
-                                Value::from(need),
-                            );
+                            agent_diag
+                                .insert("inference_yield_for_job".into(), Value::from(job_id));
+                            agent_diag
+                                .insert("inference_yield_for_vram_gb".into(), Value::from(need));
                         }
                     }
                     Err(error) => {
                         free_vram_gb = 0;
-                        agent_diag.insert(
-                            "inference_runtime_state".into(),
-                            Value::from("unknown"),
-                        );
+                        agent_diag.insert("inference_runtime_state".into(), Value::from("unknown"));
                         log_fn(&format!(
                             "yieldable inference '{}': runtime state unavailable; GPU claims disabled: {error}",
                             reservation.deployment

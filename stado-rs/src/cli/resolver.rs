@@ -131,12 +131,20 @@ fn ssh_command() -> Command {
             .arg("-o")
             .arg(format!("ControlPath={home}/.stado/resolver-ssh-%C"));
     }
-    if let Ok(key_file) = std::env::var("STADO_RESOLVER_SSH_KEY_FILE") {
-        if !key_file.trim().is_empty() {
-            command
-                .args(["-o", "IdentitiesOnly=yes", "-i"])
-                .arg(key_file);
-        }
+    let key_file = std::env::var("STADO_RESOLVER_SSH_KEY_FILE")
+        .ok()
+        .filter(|path| !path.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(std::path::PathBuf::from)
+                .map(|home| home.join(".stado").join("resolver-ssh-key"))
+                .filter(|path| path.is_file())
+        });
+    if let Some(key_file) = key_file {
+        command
+            .args(["-o", "IdentitiesOnly=yes", "-i"])
+            .arg(key_file);
     }
     command
 }

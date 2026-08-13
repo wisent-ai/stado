@@ -42,8 +42,6 @@ fn resolve_pinned_host(value: &str) -> Result<String, CmdError> {
     Ok(format!("{}-{hostname}", target.kind))
 }
 
-
-
 /// `schedule create COMMAND --cron EXPR [...]`: create a recurring schedule
 /// that submits COMMAND on a cron schedule.
 pub async fn create(args: &ScheduleCreateArgs) -> Result<(), CmdError> {

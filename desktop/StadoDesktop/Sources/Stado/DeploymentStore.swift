@@ -17,6 +17,7 @@ final class DeploymentStore: ObservableObject {
     private var generation = 0
 
     private static let selectedDeploymentKey = "selectedStadoDeploymentID"
+    private static let localSourceMigrationKey = "selectedStadoLocalSourceMigration"
 
     init(
         client: DeploymentRegistryClient = DeploymentRegistryClient(),
@@ -24,6 +25,10 @@ final class DeploymentStore: ObservableObject {
     ) {
         self.client = client
         self.defaults = defaults
+        if !defaults.bool(forKey: Self.localSourceMigrationKey) {
+            defaults.removeObject(forKey: Self.selectedDeploymentKey)
+            defaults.set(true, forKey: Self.localSourceMigrationKey)
+        }
         selectedDeploymentID = defaults.string(forKey: Self.selectedDeploymentKey)
     }
 
@@ -41,10 +46,12 @@ final class DeploymentStore: ObservableObject {
         let requestGeneration = generation
         self.identity = identity
         guard let identity else {
+            isLoading = false
             deployments = []
             infrastructureTargets = []
             grants = [:]
             errorMessage = nil
+            selectLocal()
             return
         }
 
@@ -71,6 +78,11 @@ final class DeploymentStore: ObservableObject {
         guard deployments.contains(where: { $0.id == deployment.id }) else { return }
         selectedDeploymentID = deployment.id
         defaults.set(deployment.id, forKey: Self.selectedDeploymentKey)
+    }
+
+    func selectLocal() {
+        selectedDeploymentID = nil
+        defaults.removeObject(forKey: Self.selectedDeploymentKey)
     }
 
     func createDeployment(
@@ -172,15 +184,10 @@ final class DeploymentStore: ObservableObject {
     }
 
     private func reconcileSelection() {
-        if let selectedDeploymentID,
-           deployments.contains(where: { $0.id == selectedDeploymentID }) {
+        guard let selectedDeploymentID else { return }
+        guard deployments.contains(where: { $0.id == selectedDeploymentID }) else {
+            selectLocal()
             return
-        }
-        selectedDeploymentID = deployments.first?.id
-        if let selectedDeploymentID {
-            defaults.set(selectedDeploymentID, forKey: Self.selectedDeploymentKey)
-        } else {
-            defaults.removeObject(forKey: Self.selectedDeploymentKey)
         }
     }
 

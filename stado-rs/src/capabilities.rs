@@ -957,8 +957,7 @@ pub const CREDENTIALS_ADMIN_TOKEN_FILE_CONFIG: ConfigField = ConfigField::scalar
     "credentials.admin.token_file",
 );
 
-pub const API_URL_CONFIG: ConfigField =
-    ConfigField::scalar("api-url", "STADO_API_URL", "api.url");
+pub const API_URL_CONFIG: ConfigField = ConfigField::scalar("api-url", "STADO_API_URL", "api.url");
 pub const DEPLOYMENT_ID_CONFIG: ConfigField =
     ConfigField::scalar("deployment-id", "STADO_DEPLOYMENT_ID", "deployment.id");
 

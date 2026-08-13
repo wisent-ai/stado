@@ -119,10 +119,10 @@ private struct CurrentWorkRow: View {
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: StadoTheme.Space.xxs) {
-                Text(model)
+                Text(displayModel)
                     .font(.subheadline.weight(.medium))
                     .textSelection(.enabled)
-                Text("Model group")
+                Text(model == "(unknown)" ? "No model metadata" : "Model group")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -132,6 +132,10 @@ private struct CurrentWorkRow: View {
         }
         .padding(.vertical, StadoTheme.Space.xs)
         .accessibilityElement(children: .combine)
+    }
+
+    private var displayModel: String {
+        model == "(unknown)" ? "Unclassified workload" : model
     }
 }
 
