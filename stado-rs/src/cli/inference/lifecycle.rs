@@ -94,12 +94,19 @@ async fn restore_after_failed_apply(
         return Ok(());
     };
     let bearer = super::credential::read().await?;
+    let huggingface_token = super::credential::read_huggingface().await?;
     let previous_target = host_channel::canonical_target(&previous.target)
         .await
         .map_err(click)?;
-    inference::install(&previous_target, previous, &bearer, runner)
-        .await
-        .map_err(click)?;
+    inference::install(
+        &previous_target,
+        previous,
+        &bearer,
+        huggingface_token.as_deref(),
+        runner,
+    )
+    .await
+    .map_err(click)?;
     wait_ready(&previous_target, previous, &bearer)
         .await
         .map(|_| ())
@@ -109,12 +116,19 @@ async fn activate(
     runner: &crate::deploy::Runner,
 ) -> Result<(), CmdError> {
     let bearer = super::credential::read().await?;
+    let huggingface_token = super::credential::read_huggingface().await?;
     let target = host_channel::canonical_target(&deployment.target)
         .await
         .map_err(click)?;
-    let installed = inference::install(&target, deployment, &bearer, runner)
-        .await
-        .map_err(click)?;
+    let installed = inference::install(
+        &target,
+        deployment,
+        &bearer,
+        huggingface_token.as_deref(),
+        runner,
+    )
+    .await
+    .map_err(click)?;
     if !succeeded(&installed, "started") {
         return Err(CmdError::click(format!(
             "inference activation failed: {installed}"
@@ -299,7 +313,16 @@ pub async fn apply(plan_id: &str, json_output: bool) -> Result<(), CmdError> {
     }
 
     let bearer = super::credential::read().await?;
-    let installed = match inference::install(&target, &plan.deployment, &bearer, &runner).await {
+    let huggingface_token = super::credential::read_huggingface().await?;
+    let installed = match inference::install(
+        &target,
+        &plan.deployment,
+        &bearer,
+        huggingface_token.as_deref(),
+        &runner,
+    )
+    .await
+    {
         Ok(installed) if succeeded(&installed, "started") => installed,
         result => {
             let install_error = match result {
