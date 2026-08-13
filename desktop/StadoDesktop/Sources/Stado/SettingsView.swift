@@ -10,14 +10,15 @@ struct SettingsView: View {
                 if let deployment = deploymentStore.selectedDeployment {
                     LabeledContent("Name", value: deployment.name)
                     LabeledContent("Provider", value: deployment.provider.title)
-                    LabeledContent("Status", value: deployment.status.rawValue.capitalized)
+                    LabeledContent("Connection", value: connectionStatus)
+                    LabeledContent("Deployment", value: deployment.status.rawValue.capitalized)
                     if let endpoint = deployment.endpoint {
                         endpointRow(endpoint)
                     }
                 } else {
                     LabeledContent("Name", value: "Local Stado")
                     LabeledContent("Provider", value: "This Mac")
-                    LabeledContent("Status", value: localStatus)
+                    LabeledContent("Connection", value: connectionStatus)
                     endpointRow(operationsStore.dashboardURLString)
                 }
             }
@@ -36,7 +37,7 @@ struct SettingsView: View {
         .fixedSize(horizontal: false, vertical: true)
     }
 
-    private var localStatus: String {
+    private var connectionStatus: String {
         if operationsStore.snapshot?.ready == true { return "Connected" }
         if operationsStore.errorMessage != nil { return "Unavailable" }
         return operationsStore.isRefreshing ? "Connecting" : "Configured"

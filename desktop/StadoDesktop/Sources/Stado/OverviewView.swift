@@ -38,9 +38,9 @@ struct OverviewView: View {
                     MetricCard(
                         title: "Free slots",
                         value: snapshot.throughput.liveTotalFreeSlots.formatted(),
-                        detail: "Reported by live workers",
+                        detail: snapshot.liveAgents.isEmpty ? "No live worker reports" : "Reported by live workers",
                         symbol: "gauge.with.dots.needle.50percent",
-                        tone: snapshot.throughput.liveTotalFreeSlots > 0 ? .healthy : .neutral
+                        tone: snapshot.liveAgents.isEmpty ? .warning : (snapshot.throughput.liveTotalFreeSlots > 0 ? .healthy : .neutral)
                     )
                 }
 
@@ -67,14 +67,34 @@ struct OverviewView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            StatusPill(label: "State available", tone: .healthy)
+            StatusPill(label: operationalStatus.label, tone: operationalStatus.tone)
         }
     }
 
     private var sourceDescription: String {
-        let source = snapshot.bucket.map { "Queue source: \($0)" } ?? "Queue source unavailable"
+        let bucket = snapshot.bucket?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let source: String
+        if let bucket, !bucket.isEmpty {
+            source = "Queue source: \(bucket)"
+        } else {
+            source = "Queue source: dashboard-managed storage"
+        }
         guard let lastUpdated else { return source }
         return "\(source) · refreshed \(lastUpdated.formatted(.relative(presentation: .named)))"
+    }
+
+    private var operationalStatus: (label: String, tone: StatusTone) {
+        if snapshot.counts.queue > 0 && snapshot.liveAgents.isEmpty {
+            return ("Queue blocked", .critical)
+        }
+        if snapshot.counts.failed > 0 {
+            return ("Recent failures", .warning)
+        }
+        if snapshot.liveAgents.isEmpty {
+            return ("No live workers", .warning)
+        }
+        return ("Fleet reporting", .healthy)
     }
 
     private var capacityCard: some View {
