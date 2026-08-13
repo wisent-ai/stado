@@ -3725,8 +3725,7 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
         std::collections::BTreeMap::new();
     let mut unreadable: Vec<String> = Vec::new();
     let mut helpers: usize = 0;
-    let mut present: std::collections::BTreeMap<String, String> =
-        std::collections::BTreeMap::new();
+    let mut present: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
     for line in output.stdout.lines() {
         if let Some(artifact) = line.strip_prefix("STADO-ARTIFACT ") {
             // `<kind> <digest> <name>`. A helper script has no release behind
@@ -3878,9 +3877,7 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
         return Ok(());
     }
     super::table::print(
-        &[
-            "ARTIFACT", "COMMIT", "BUILDER", "AGE", "REACHABLE", "BYTES",
-        ],
+        &["ARTIFACT", "COMMIT", "BUILDER", "AGE", "REACHABLE", "BYTES"],
         &rows,
     );
     if repository.is_none() {
