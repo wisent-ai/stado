@@ -4,6 +4,18 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
 
 ## Unreleased
 
+### Desktop
+
+- Restored the local control plane as Stado Desktop's default source, removed
+  mandatory deployment setup from the local path, and made the source visible
+  in Settings.
+- Separated HTTPS proxy trust from deployment RLS identity: the local profile
+  no longer carries an invalid non-UUID deployment binding, direct loopback
+  dashboard access needs no Supabase round trip, and proxied product APIs keep
+  their credential boundaries.
+- Made the macOS bundle use its repository-owned canonical app icon without
+  depending on a nonexistent asset resolver.
+
 ### Onboarding platform
 
 - Added product-scoped delivery for immutable onboarding bundles, sticky

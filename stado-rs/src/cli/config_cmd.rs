@@ -339,6 +339,10 @@ fn show() -> Result<(), CmdError> {
         Value::from(config::stado_release_platform()),
     );
     resolved.insert(
+        "dashboard_trust_https_proxy".into(),
+        Value::from(config::dashboard_trust_https_proxy()),
+    );
+    resolved.insert(
         "stado_deployment_id".into(),
         Value::from(config::stado_deployment_id()),
     );

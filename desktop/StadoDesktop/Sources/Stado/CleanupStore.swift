@@ -107,6 +107,16 @@ final class CleanupStore: ObservableObject {
         }
     }
 
+    func clearDashboardURL() {
+        requestGeneration &+= 1
+        isRefreshing = false
+        isRunningCleanup = false
+        response = nil
+        lastUpdated = nil
+        dashboardURLString = ""
+        errorMessage = nil
+    }
+
     func saveDashboardURL(_ value: String) throws {
         let address = try DashboardAddress(value)
         requestGeneration &+= 1

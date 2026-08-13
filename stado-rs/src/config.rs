@@ -437,6 +437,18 @@ static DASHBOARD_REFRESH_SECONDS: LazyLock<i64> = LazyLock::new(|| {
         "10",
     )
 });
+static DASHBOARD_TRUST_HTTPS_PROXY: LazyLock<bool> = LazyLock::new(|| {
+    let value = cfg(
+        "WC_DASHBOARD_TRUST_HTTPS_PROXY",
+        "dashboard.trust_https_proxy",
+        "false",
+    );
+    let value = value.trim();
+    value == "1"
+        || value.eq_ignore_ascii_case("true")
+        || value.eq_ignore_ascii_case("yes")
+        || value.eq_ignore_ascii_case("on")
+});
 static DASHBOARD_AGENT_FRESH_SECONDS: LazyLock<i64> = LazyLock::new(|| {
     cfg_i64(
         "WC_DASHBOARD_AGENT_FRESH_SECONDS",
@@ -461,6 +473,12 @@ pub fn dashboard_port() -> i64 {
 pub fn dashboard_refresh_seconds() -> i64 {
     *DASHBOARD_REFRESH_SECONDS
 }
+/// Whether the loopback listener accepts host authorities supplied by an HTTPS
+/// reverse proxy. This is independent from deployment RLS identity.
+pub fn dashboard_trust_https_proxy() -> bool {
+    *DASHBOARD_TRUST_HTTPS_PROXY
+}
+
 
 /// Capacity blob is "live" if its published_at is within this many seconds
 /// (env `WC_DASHBOARD_AGENT_FRESH_SECONDS`).
@@ -468,8 +486,8 @@ pub fn dashboard_agent_fresh_seconds() -> i64 {
     *DASHBOARD_AGENT_FRESH_SECONDS
 }
 
-/// Deployment gate for the dashboard and object gateway (env
-/// `STADO_DEPLOYMENT_ID`, config key `deployment.id`), trimmed.
+/// Deployment identity for dashboard RLS (env `STADO_DEPLOYMENT_ID`, config
+/// key `deployment.id`), trimmed.
 ///
 /// Read per call so a process-level override remains dynamic; the config
 /// file itself is cached by [`crate::config_file`].
