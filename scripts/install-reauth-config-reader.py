@@ -24,6 +24,21 @@ FILES = {
     "reauth_config.mjs": TREE / "scripts" / "trajectories" / "_shared" / "reauth_config.mjs",
     "codex-reauth.mjs": TREE / "scripts" / "trajectories" / "codex" / "reauth.mjs",
     "claude-reauth.mjs": TREE / "scripts" / "trajectories" / "claude" / "reauth.mjs",
+    "kimi-reauth.mjs": TREE / "scripts" / "trajectories" / "kimi" / "reauth.mjs",
+    # The launcher is part of the repair: it sourced an env file that no longer
+    # exists, so the scheduled job died before reaching the runner.
+    "codex-reauth-launch.sh": TREE
+    / "scripts"
+    / "worker"
+    / "deploy"
+    / "codex-reauth"
+    / "reauth-launch.sh",
+    "kimi-reauth-launch.sh": TREE
+    / "scripts"
+    / "worker"
+    / "deploy"
+    / "kimi-reauth"
+    / "reauth-launch.sh",
 }
 
 
@@ -49,7 +64,8 @@ def main():
             keep.write_bytes(destination.read_bytes())
             print(f"{name:<20} kept {keep.name}")
         destination.write_bytes(source.read_bytes())
-        os.chmod(destination, 0o644)
+        # A launcher that is not executable is a job that fails at exec.
+        os.chmod(destination, 0o755 if destination.suffix == ".sh" else 0o644)
         print(f"{name:<20} -> {destination} ({destination.stat().st_size} bytes, {digest(destination)})")
     return NONE
 
