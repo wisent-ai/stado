@@ -26,6 +26,13 @@ done
     const enterprise = config.integration.clients["wisent-enterprise"];
     config.integration.clients = enterprise ? { "wisent-enterprise": enterprise } : {};
   }
+  if (config.integration?.providers) {
+    delete config.integration.providers.backend;
+    delete config.integration.providers.most;
+    if (Object.keys(config.integration.providers).length === 0) {
+      delete config.integration.providers;
+    }
+  }
   const temporary = `${path}.tmp-${process.pid}`;
   const mode = fs.statSync(path).mode & 0o777;
   fs.writeFileSync(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode });
