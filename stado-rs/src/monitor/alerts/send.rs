@@ -122,7 +122,9 @@ pub(crate) async fn resend_verified_domains(
         .map(|entries| {
             entries
                 .iter()
-                .filter(|entry| entry.get("status").and_then(serde_json::Value::as_str) == Some("verified"))
+                .filter(|entry| {
+                    entry.get("status").and_then(serde_json::Value::as_str) == Some("verified")
+                })
                 .filter_map(|entry| entry.get("name").and_then(serde_json::Value::as_str))
                 .map(str::to_string)
                 .collect()

@@ -15,6 +15,10 @@ pub const PRODUCT_MANIFEST: &str = ".wisent-release.json";
 pub const SCHEMA_VERSION: u32 = 1;
 pub const RUNNER_PLATFORMS: [&str; 2] = ["darwin-arm64", "linux-amd64"];
 
+// One manifest is parsed per release operation and the two variants are the two
+// shapes a product may legally declare. Boxing the release arm would put an
+// allocation between every reader and the fields it came for.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ProductManifest {
@@ -123,7 +127,6 @@ pub enum PipelineChannel {
     Candidate,
     Stable,
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -510,9 +513,7 @@ pub fn validate_release_manifest(manifest: &ReleasePipelineManifest) -> Result<(
         }
     }
     if manifest.promotion.reconcile != manifest.runtime.is_some() {
-        return Err(
-            "runtime must be declared exactly when promotion.reconcile is true".into(),
-        );
+        return Err("runtime must be declared exactly when promotion.reconcile is true".into());
     }
     if let Some(runtime) = &manifest.runtime {
         if !safe_relative(&runtime.binary)

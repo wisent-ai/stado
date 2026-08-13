@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 struct CleanupMenuView: View {
+    @Environment(\.openWindow) private var openWindow
     @ObservedObject var store: CleanupStore
 
     var body: some View {
@@ -90,11 +91,9 @@ struct CleanupMenuView: View {
             .disabled(store.isRefreshing || store.isRunningCleanup || store.report?.lockBusy == true || store.dashboardAddress == nil)
 
             HStack {
-                Button("Open Dashboard", systemImage: "safari") {
-                    guard let url = store.dashboardAddress?.dashboardURL else { return }
-                    NSWorkspace.shared.open(url)
+                Button("Open Operations Console", systemImage: "rectangle.3.group") {
+                    openWindow(id: "operations-console")
                 }
-                .disabled(store.dashboardAddress == nil)
 
                 Spacer()
 

@@ -627,7 +627,10 @@ async fn ai_agent_request_materializes_pinned_input_and_scoped_secret_without_le
         Some(slot) => slot,
         None => {
             drop(logger);
-            panic!("machine job is admitted; agent log:\n{}", agent_log.join("\n"));
+            panic!(
+                "machine job is admitted; agent log:\n{}",
+                agent_log.join("\n")
+            );
         }
     };
     advance_to_done(slot, &store, &mut logger).await;

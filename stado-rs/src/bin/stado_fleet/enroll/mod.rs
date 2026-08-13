@@ -185,7 +185,7 @@ pub async fn approve(hostname: &str, fleet_name: Option<&str>) -> Result<bool, S
         &document,
         &name,
         &kind,
-        &[request_hostname.clone()],
+        std::slice::from_ref(&request_hostname),
         release_platform,
     )?;
     let generation = push_document(&next).await.map_err(|exc| exc.to_string())?;
