@@ -90,7 +90,10 @@ struct WorkerNode: Decodable, Identifiable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case consumerID, kind, freeSlots, freeVRAMGB, totalVRAMGB, publishedAt, ageSeconds
+        case consumerID = "consumerId"
+        case kind, freeSlots, publishedAt, ageSeconds
+        case freeVRAMGB = "freeVramGb"
+        case totalVRAMGB = "totalVramGb"
     }
 
     init(from decoder: Decoder) throws {
@@ -115,14 +118,15 @@ struct CompletedJob: Decodable, Identifiable, Sendable {
     var id: String { jobID }
 
     enum CodingKeys: String, CodingKey {
-        case jobID, model, task, wallSeconds, completedAt
+        case jobID = "jobId"
+        case model, task, wallSeconds, completedAt
     }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         jobID = try values.decodeIfPresent(String.self, forKey: .jobID) ?? "Unavailable"
-        model = try values.decodeIfPresent(String.self, forKey: .model)
-        task = try values.decodeIfPresent(String.self, forKey: .task)
+        model = operationalMetadata(try values.decodeIfPresent(String.self, forKey: .model))
+        task = operationalMetadata(try values.decodeIfPresent(String.self, forKey: .task))
         wallSeconds = try values.decodeIfPresent(Double.self, forKey: .wallSeconds)
         completedAt = try values.decodeIfPresent(String.self, forKey: .completedAt)
     }
@@ -137,14 +141,15 @@ struct FailedJob: Decodable, Identifiable, Sendable {
     var id: String { jobID }
 
     enum CodingKeys: String, CodingKey {
-        case jobID, model, task, error
+        case jobID = "jobId"
+        case model, task, error
     }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         jobID = try values.decodeIfPresent(String.self, forKey: .jobID) ?? "Unavailable"
-        model = try values.decodeIfPresent(String.self, forKey: .model)
-        task = try values.decodeIfPresent(String.self, forKey: .task)
+        model = operationalMetadata(try values.decodeIfPresent(String.self, forKey: .model))
+        task = operationalMetadata(try values.decodeIfPresent(String.self, forKey: .task))
         error = try values.decodeIfPresent(String.self, forKey: .error)
     }
 }
@@ -186,6 +191,16 @@ struct Throughput: Decodable, Sendable {
         liveTotalFreeSlots = try values.decodeIfPresent(Int.self, forKey: .liveTotalFreeSlots) ?? 0
         projectedRemainingSeconds = try values.decodeIfPresent(Double.self, forKey: .projectedRemainingSeconds)
     }
+}
+
+private func operationalMetadata(_ value: String?) -> String? {
+    guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !value.isEmpty,
+          value != "(unknown)"
+    else {
+        return nil
+    }
+    return value
 }
 
 enum StadoFormat {

@@ -9,6 +9,12 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
 - Restored the local control plane as Stado Desktop's default source, removed
   mandatory deployment setup from the local path, and made the source visible
   in Settings.
+- Kept the local operations console available without a Wisent session, moved
+  account sign-in to remote deployment actions, and made the menu-bar app
+  reopen the native console instead of sending users to a browser.
+- Corrected dashboard state decoding and status presentation so worker,
+  capacity, job, failure, and onboarding labels reflect the published backend
+  snapshot instead of optimistic placeholders.
 - Separated HTTPS proxy trust from deployment RLS identity: the local profile
   no longer carries an invalid non-UUID deployment binding, direct loopback
   dashboard access needs no Supabase round trip, and proxied product APIs keep
