@@ -3407,7 +3407,7 @@ dependencies = [
 [[package]]
 name = "wisent-errors"
 version = "1.0.0"
-source = "git+https://github.com/wisent-ai/wisent-errors#85f27d15aac21761c37c20cdac35ce8ac4831270"
+source = "git+https://github.com/wisent-ai/wisent-errors#b634b71b5f37e2437a584010a22a56c4cc8dbdc1"
 
 [[package]]
 name = "writeable"
