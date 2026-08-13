@@ -98,6 +98,14 @@
     }
   },
 
+  "credentials": {
+    "_comment": "Host-channel key reads are control-plane operations and use the same exact field-scoped coordinator grant reconciled from the registry.",
+    "admin": {
+      "consumer": "stado-control-plane",
+      "token_file": "~/.stado/control-plane-skarbiec-token"
+    }
+  },
+
   "secrets": {
     "_comment": "Coordinator read-only grant for route-only machine and host-health verification items. Managed-service, product, and release publisher tokens use their dedicated verifiers. Provider credentials stay exclusively in adapter managed identities. Host writers use a distinct stado-host-health-beacon grant. Every path fails closed; no application token belongs in env or this file.",
     "skarbiec": {

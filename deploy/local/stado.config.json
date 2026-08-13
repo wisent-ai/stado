@@ -76,6 +76,14 @@
     }
   },
 
+  "credentials": {
+    "_comment": "Host-channel key reads are control-plane operations and use the same exact field-scoped coordinator grant reconciled from the registry.",
+    "admin": {
+      "consumer": "stado-control-plane",
+      "token_file": "~/.stado/control-plane-skarbiec-token"
+    }
+  },
+
   "secrets": {
     "_comment": "Uses the built-in loopback Skarbiec URL; this coordinator grant is distinct from product, release, and service verifiers and may read only route-local machine and host-health verification items. Host writers use the separate stado-host-health-beacon grant and never receive this control-plane grant.",
     "skarbiec": {
