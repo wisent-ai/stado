@@ -12,14 +12,13 @@ target=$(printf '%s\n' "$exec_start" | /bin/sed -n 's/.*--target[ =]\([^ ;}]*\).
   printf '%s\n' "wisent-agent.service has no --target" >&2
   exit 1
 }
-cat_uri='stado://releases/image-video-router/0.1.0/linux-amd64/release.json'
-get_uri='stado://releases/image-video-router/0.1.0/linux-amd64/release.json'
-cat_sha=$(
-  /usr/bin/env -S "$environment" "$HOME/.stado/bin/stado" storage cat "$cat_uri" \
-    | /usr/bin/sha256sum | /usr/bin/cut -d' ' -f1
-)
-get_sha=$(
-  /usr/bin/env -S "$environment" "$HOME/.stado/bin/stado" storage get "$get_uri" - \
-    | /usr/bin/sha256sum | /usr/bin/cut -d' ' -f1
-)
+cat_uri='registry.json'
+get_uri='probierz/registry.json'
+cat_output=$(/usr/bin/mktemp)
+get_output=$(/usr/bin/mktemp)
+trap '/bin/rm -f "$cat_output" "$get_output"' EXIT HUP INT TERM
+/usr/bin/env -S "$environment" "$HOME/.stado/bin/stado" storage cat "$cat_uri" >"$cat_output"
+/usr/bin/env -S "$environment" "$HOME/.stado/bin/stado" storage get "$get_uri" "$get_output"
+cat_sha=$(/usr/bin/sha256sum "$cat_output" | /usr/bin/cut -d' ' -f1)
+get_sha=$(/usr/bin/sha256sum "$get_output" | /usr/bin/cut -d' ' -f1)
 printf '%s\n' "{\"cat\":\"$cat_sha\",\"get\":\"$get_sha\"}"
