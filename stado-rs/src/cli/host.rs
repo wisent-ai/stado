@@ -3620,7 +3620,20 @@ if [ -d "$bin" ]; then
     # discriminator and it is readable without executing anything.
     kind=binary
     case "$(/usr/bin/head -c 2 "$program" 2>/dev/null)" in '#!') kind=script ;; esac
-    printf 'STADO-ARTIFACT %s %s\n' "$kind" "${program##*/}"
+    # The manifest is a claim about specific bytes. Reporting its commit without
+    # checking it still describes the file beside it is the same unverified
+    # declaration this command exists to find: on 2026-08-12 this laptop's
+    # manifest named a commit while the binary next to it had been replaced by
+    # hand, and the tool repeated the manifest with a straight face.
+    digest=-
+    if [ "$kind" = binary ]; then
+      if [ -x /usr/bin/shasum ]; then
+        digest=$(/usr/bin/shasum -a 256 "$program" | /usr/bin/awk '{print $1}')
+      elif command -v sha256sum >/dev/null 2>&1; then
+        digest=$(sha256sum "$program" | /usr/bin/awk '{print $1}')
+      fi
+    fi
+    printf 'STADO-ARTIFACT %s %s %s\n' "$kind" "$digest" "${program##*/}"
   done
 fi
 if [ -d "$dir" ]; then
@@ -3640,6 +3653,12 @@ struct CarriedArtifact {
     /// repository first. Collapsing the two is how a fleet learns to disregard
     /// its own reports.
     reachable: Option<bool>,
+    /// Does the manifest still describe the bytes beside it? `None` when there
+    /// is no manifest or the host could not hash the file. A manifest naming a
+    /// commit for a binary that has since been replaced is worse than no
+    /// manifest: it answers the provenance question confidently and wrongly,
+    /// which is exactly the failure this command was built to expose.
+    describes: Option<bool>,
     age_seconds: Option<i64>,
 }
 
@@ -3679,19 +3698,25 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
         std::collections::BTreeMap::new();
     let mut unreadable: Vec<String> = Vec::new();
     let mut helpers: usize = 0;
+    let mut present: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
     for line in output.stdout.lines() {
         if let Some(artifact) = line.strip_prefix("STADO-ARTIFACT ") {
-            // `<kind> <name>`. A helper script has no release behind it, so
-            // listing it beside the control-plane binary answers a question
-            // nobody asked and hides the one that matters.
-            let mut words = artifact.trim().splitn(2, ' ');
+            // `<kind> <digest> <name>`. A helper script has no release behind
+            // it, so listing it beside the control-plane binary answers a
+            // question nobody asked and hides the one that matters.
+            let mut words = artifact.trim().splitn(3, ' ');
             let kind = words.next().unwrap_or_default();
+            let digest = words.next().unwrap_or_default().trim().to_string();
             let Some(name) = words.next().map(str::trim).filter(|name| !name.is_empty()) else {
                 continue;
             };
             if kind == "script" {
                 helpers += 1;
                 continue;
+            }
+            if !digest.is_empty() && digest != "-" {
+                present.insert(name.to_string(), digest);
             }
             names.insert(name.to_string());
         } else if let Some(document) = line.strip_prefix("STADO-MANIFEST ") {
@@ -3727,10 +3752,15 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
                     .ok()
                     .map(|stamp| (now - stamp.with_timezone(&chrono::Utc)).num_seconds())
             });
+            let describes = match (&record, present.get(&artifact)) {
+                (Some(record), Some(actual)) => Some(record.sha256.eq_ignore_ascii_case(actual)),
+                _ => None,
+            };
             CarriedArtifact {
                 artifact,
                 record,
                 reachable,
+                describes,
                 age_seconds,
             }
         })
@@ -3760,6 +3790,7 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
                     "at": item.record.as_ref().map(|record| record.at.clone()),
                     "age_seconds": item.age_seconds,
                     "reachable": item.reachable,
+                    "describes_artifact": item.describes,
                 })
             })
             .collect();
@@ -3793,6 +3824,11 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
                 Some(false) => "no",
                 None => "unknown",
             };
+            let describes = match item.describes {
+                Some(true) => "match",
+                Some(false) => "REPLACED",
+                None => "-",
+            };
             vec![
                 item.artifact.clone(),
                 commit_of(item),
@@ -3801,6 +3837,7 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
                     .map_or_else(|| "-".to_string(), |record| record.builder.clone()),
                 age,
                 reachable.to_string(),
+                describes.to_string(),
             ]
         })
         .collect();
@@ -3814,7 +3851,9 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
         return Ok(());
     }
     super::table::print(
-        &["ARTIFACT", "COMMIT", "BUILDER", "AGE", "REACHABLE"],
+        &[
+            "ARTIFACT", "COMMIT", "BUILDER", "AGE", "REACHABLE", "BYTES",
+        ],
         &rows,
     );
     if repository.is_none() {
@@ -3827,6 +3866,19 @@ pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
         println!(
             "{target}: {drifted} of {} artifacts have no producer reachable from origin/main",
             rows.len()
+        );
+    }
+    let replaced = carried
+        .iter()
+        .filter(|item| item.describes == Some(false))
+        .count();
+    if replaced != usize::default() {
+        // Louder than drift, because the manifest is not merely absent: it
+        // answers the provenance question, and its answer is about bytes that
+        // are gone. Every reader downstream inherits that wrong answer.
+        println!(
+            "{target}: {replaced} artifact(s) were replaced after their manifest was written, so \
+             the commit shown for them describes bytes that are no longer on the host"
         );
     }
     if helpers != usize::default() {
