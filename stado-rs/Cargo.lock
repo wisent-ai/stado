@@ -2707,6 +2707,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "wisent-errors",
 ]
 
 [[package]]
@@ -3402,6 +3403,11 @@ checksum = "1e90edd2ac1aa278a5c4599b1d89cf03074b610800f866d4026dc199d7929a28"
 dependencies = [
  "memchr",
 ]
+
+[[package]]
+name = "wisent-errors"
+version = "1.0.0"
+source = "git+https://github.com/wisent-ai/wisent-errors#85f27d15aac21761c37c20cdac35ce8ac4831270"
 
 [[package]]
 name = "writeable"
