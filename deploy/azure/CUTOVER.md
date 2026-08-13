@@ -20,10 +20,13 @@ deployment workflow skips every Azure operation and keeps the already-installed
 local profile selected by `STADO_CONFIG`. The canonical registry is created
 only when absent. Rust `stado bootstrap --local` installs the combined
 local coordinator, agent, dashboard, object API, machine API and managed-service
-control API behind Caddy. The local profile fixes `deployment.id` to
-`local-control-plane`: loopback hosts remain accepted, but dashboard view and
-operate requests still require deployment-bound Supabase authorization and fail
-closed when that authorization is unavailable. Product object calls resolve
+control API behind Caddy. The loopback-only local profile leaves
+`deployment.id` empty, so direct local dashboard reads rely on the strict
+loopback Host guard and require no Supabase round trip. It separately enables
+the HTTPS proxy boundary used by credential-scoped object, machine, and
+managed-service clients. Remote deployments set `deployment.id` to their
+registry UUID and require deployment-bound Supabase authorization. Product
+object calls resolve
 their canonical namespace and allowed key prefix, then require only that
 namespace's `<namespace>-object-api/token`. Machine submit/status/cancel requires
 `stado-machine-api/token`. Managed-service status/restart resolves the requested
@@ -182,9 +185,10 @@ The load-bearing values are:
 - `release.api_url`, `release.version`, and `release.platform` identify the
   exact immutable Stado runtime consumed through `/api/release/object`. There
   is no built-in, provider-derived, or mutable release origin.
-- `deployment.id` is stable for dashboard RLS and trusted-proxy binding. The
-  local profile also sets one explicitly; an absent id never opens dashboard
-  view or operate access.
+- `deployment.id` is the dashboard RLS identity for remote deployments. The
+  local profile leaves it empty and separately enables
+  `dashboard.trust_https_proxy`; proxied dashboard view and operate requests
+  remain closed while credential-scoped service APIs stay reachable.
 - The active local coordinator and standalone local agent name separate
   `stado-control-plane` and `stado-local-agent` consumers. Remote Darwin
   registry targets receive only the dedicated local-agent grant; bootstrap

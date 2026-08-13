@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+<title id="title">Stado app icon</title><desc id="desc">Three coordinated compute nodes operating as one herd.</desc>
+<defs><linearGradient id="bg-stado" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#243127"/><stop offset="52%" stop-color="#121A14"/><stop offset="100%" stop-color="#070A07"/></linearGradient></defs>
+<rect width="1024" height="1024" rx="225" fill="url(#bg-stado)"/>
+<g fill="none" stroke="#7FBF82" stroke-linecap="round" stroke-linejoin="round">
+<rect x="184" y="342" width="190" height="340" rx="48" stroke-width="46"/>
+<rect x="417" y="262" width="190" height="420" rx="48" stroke-width="46"/>
+<rect x="650" y="342" width="190" height="340" rx="48" stroke-width="46"/>
+<path d="M228 438 H330 M228 526 H330 M461 370 H563 M461 472 H563 M461 574 H563 M694 438 H796 M694 526 H796" stroke-width="38"/>
+<path d="M279 682 V752 H745 V682" stroke-width="42"/>
+</g>
+<g fill="#7FBF82">
+<circle cx="279" cy="608" r="22"/>
+<circle cx="512" cy="608" r="22"/>
+<circle cx="745" cy="608" r="22"/>
+</g>
+</svg>

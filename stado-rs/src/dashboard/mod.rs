@@ -1723,8 +1723,15 @@ impl Dashboard {
         config::stado_deployment_id()
     }
 
+    fn direct_loopback_request(&self, request: &Request) -> bool {
+        request.header("x-forwarded-proto").is_none()
+            && trusted_request_host(request.header("host"), None, false)
+    }
+
     fn trusted_request_host(&self, value: Option<&str>, forwarded_proto: Option<&str>) -> bool {
-        trusted_request_host(value, forwarded_proto, !self.deployment_id().is_empty())
+        let reverse_proxy_enabled =
+            config::dashboard_trust_https_proxy() || !self.deployment_id().is_empty();
+        trusted_request_host(value, forwarded_proto, reverse_proxy_enabled)
     }
 
     async fn operator_auth_metadata(&self) -> Result<(url::Url, String), ()> {
@@ -1750,11 +1757,16 @@ impl Dashboard {
             return !expected.is_empty()
                 && constant_time_eq(expected.as_bytes(), supplied.as_bytes());
         }
+        if self.direct_loopback_request(request) {
+            // The listener is loopback-only and the Host parser rejects DNS
+            // rebinding. Local Desktop and CLI clients need no Supabase grant.
+            return true;
+        }
         let deployment_id = self.deployment_id();
         if deployment_id.is_empty() {
-            // Local onboarding has no Supabase dependency. The outer host
-            // boundary has already restricted this mode to loopback.
-            return true;
+            // A trusted HTTPS proxy may carry object, machine, and service
+            // credentials, but it never turns an unbound dashboard public.
+            return false;
         }
         let (supabase_url, anon_key) = match self.operator_auth_metadata().await {
             Ok(metadata) => metadata,
@@ -2330,10 +2342,10 @@ fn url_decode(input: &str) -> String {
 // Host-header DNS-rebinding guard + Supabase RLS auth
 // ---------------------------------------------------------------------------
 
-/// Accept loopback Host values for direct local access. A deployment-bound
-/// HTTPS reverse proxy may forward either DNS or IP Host values; because the
-/// listener itself is loopback-only, `X-Forwarded-Proto` cannot be supplied
-/// by external plaintext ingress.
+/// Accept loopback Host values for direct local access. A configured HTTPS
+/// reverse proxy may forward either DNS or IP Host values; because the listener
+/// itself is loopback-only, `X-Forwarded-Proto` cannot be supplied by external
+/// plaintext ingress. Dashboard authorization remains a separate boundary.
 fn trusted_request_host(
     value: Option<&str>,
     forwarded_proto: Option<&str>,

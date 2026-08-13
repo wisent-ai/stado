@@ -3,14 +3,16 @@ set -eu
 
 PRODUCT=${1:?"Usage: import-brand-icon.sh PRODUCT OUTPUT.icns"}
 OUTPUT=${2:?"Usage: import-brand-icon.sh PRODUCT OUTPUT.icns"}
-API_BASE=${WISENT_GROUND_TRUTH_API:-}
 
-if [ -z "$API_BASE" ]; then
-    printf '%s\n' 'WISENT_GROUND_TRUTH_API must point to the canonical asset resolver.' >&2
+if [ "$PRODUCT" != "stado-desktop" ]; then
+    printf 'Unsupported product: %s\n' "$PRODUCT" >&2
     exit 64
 fi
 
-for tool in curl sips iconutil; do
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SOURCE_ASSET=${WISENT_STADO_APP_ICON_FILE:-"$SCRIPT_DIR/../Resources/AppIcon.svg"}
+
+for tool in sips iconutil; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         printf 'Required tool not found: %s\n' "$tool" >&2
         exit 69
@@ -22,10 +24,9 @@ trap 'rm -rf "$WORK_DIR"' EXIT HUP INT TERM
 SOURCE="$WORK_DIR/source.svg"
 PNG="$WORK_DIR/source.png"
 ICONSET="$WORK_DIR/AppIcon.iconset"
-ASSET_URL="${API_BASE%/}/assets/$PRODUCT/app_icon/0/content"
 
-printf 'Importing canonical app icon: %s\n' "$ASSET_URL"
-curl --fail --silent --show-error --location "$ASSET_URL" --output "$SOURCE"
+printf 'Importing canonical app icon: %s\n' "$SOURCE_ASSET"
+cp "$SOURCE_ASSET" "$SOURCE"
 sips -s format png "$SOURCE" --out "$PNG" >/dev/null
 mkdir -p "$ICONSET" "$(dirname "$OUTPUT")"
 
