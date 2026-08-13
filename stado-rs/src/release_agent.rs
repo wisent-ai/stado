@@ -284,6 +284,10 @@ fn spawn_release(
     command
         .args(["-n", "-u", &target.run_as_user, "-H", "/usr/bin/env"])
         .arg(format!("HOME={}", target.home))
+        .arg(format!("STADO_RELEASE_PRODUCT={product}"))
+        .arg(format!("STADO_RELEASE_VERSION={}", manifest.version))
+        .arg(format!("STADO_RELEASE_PLATFORM={}", manifest.platform))
+        .arg(format!("STADO_RELEASE_SHA256={}", manifest.artifact_sha256))
         .arg(format!("{}={}", policy.binary_env, binary.display()))
         .arg(format!("{}={port}", policy.port_env))
         .arg(format!("{}={}", policy.runtime_env, runtime.display()));
@@ -429,6 +433,15 @@ fn start_proxy(
     Ok(child.id() as i32)
 }
 
+async fn fetch_release_bytes(uri: &str) -> Result<Vec<u8>, String> {
+    // The release channel is served publicly over the object API.
+    // Without STADO_API_URL, JobStorage::read_bytes on the canonical root
+    // prefix serves a stale copy and the agent quarantines the release.
+    crate::cli::storage::fetch_object(uri)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 async fn fetch_candidate(
     control: &ReleaseControl,
     product: &str,
@@ -437,9 +450,7 @@ async fn fetch_candidate(
     policy: &ProductReleasePolicy,
     target: &ReleaseTargetPolicy,
 ) -> Result<(ReleaseManifest, Vec<u8>, PathBuf), String> {
-    let manifest_bytes = crate::cli::storage::fetch_object(&artifact.manifest_uri)
-        .await
-        .map_err(|error| error.to_string())?;
+    let manifest_bytes = fetch_release_bytes(&artifact.manifest_uri).await?;
     if release_control::sha256_bytes(&manifest_bytes) != artifact.manifest_sha256 {
         return Err("release manifest digest does not match desired state".to_string());
     }
@@ -469,9 +480,7 @@ async fn fetch_candidate(
             env!("CARGO_PKG_VERSION")
         ));
     }
-    let signature = crate::cli::storage::fetch_object(&artifact.signature_uri)
-        .await
-        .map_err(|error| error.to_string())?;
+    let signature = fetch_release_bytes(&artifact.signature_uri).await?;
     let signature = std::str::from_utf8(&signature)
         .map_err(|_| "release signature is not UTF-8".to_string())?;
     let public_key = control
@@ -479,9 +488,7 @@ async fn fetch_candidate(
         .get(&artifact.key_id)
         .ok_or_else(|| "release signing key is not trusted by registry".to_string())?;
     release_control::verify_manifest(public_key, &manifest, signature)?;
-    let archive = crate::cli::storage::fetch_object(&artifact.archive_uri)
-        .await
-        .map_err(|error| error.to_string())?;
+    let archive = fetch_release_bytes(&artifact.archive_uri).await?;
     if archive.len() as u64 != manifest.artifact_bytes
         || release_control::sha256_bytes(&archive) != manifest.artifact_sha256
     {
@@ -536,6 +543,18 @@ fn next_port(target: &ReleaseTargetPolicy, state: &HostReleaseState) -> u16 {
     }
 }
 
+/// Canonical object URI of one host's rollout status, inside this
+/// deployment's own namespace and its declared `system/` prefix.
+///
+/// The literal `stado://system/...` this replaced named a namespace no grant
+/// declares, so every publish answered 401. Resolving through `ObjectRef`
+/// keeps writer and reader on one path whether they reach the store through
+/// the object API or read the co-located disk directly.
+pub fn release_status_uri(product: &str, target: &str) -> String {
+    let namespace = crate::config::wc_stado_storage_namespace();
+    format!("stado://{namespace}/system/release-status/{product}/{target}.json")
+}
+
 async fn publish_status(state: &HostReleaseState) -> Result<(), String> {
     let status = PublishedStatus {
         schema_version: STATUS_SCHEMA,
@@ -563,10 +582,7 @@ async fn publish_status(state: &HostReleaseState) -> Result<(), String> {
     )
     .map_err(|error| format!("cannot write release status staging: {error}"))?;
     crate::cli::storage::store_object(
-        &format!(
-            "stado://system/release-status/{}/{}.json",
-            state.product, state.target
-        ),
+        &release_status_uri(&state.product, &state.target),
         &temporary.path().display().to_string(),
         "application/json",
         false,

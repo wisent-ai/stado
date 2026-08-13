@@ -1,20 +1,26 @@
-# Stado
+<!-- wisent-banner:start -->
+<p align="center">
+  <img src="assets/readme-banner.webp" alt="stado by Wisent" width="100%">
+</p>
+<!-- wisent-banner:end -->
 
 <!-- wisent-readme-signals:start -->
-[![Release](https://img.shields.io/github/v/release/wisent-ai/stado?display_name=tag&sort=semver)](https://github.com/wisent-ai/stado/releases)
-[![Downloads](https://img.shields.io/github/downloads/wisent-ai/stado/total)](https://github.com/wisent-ai/stado/releases)
-[![License](https://img.shields.io/github/license/wisent-ai/stado)](https://github.com/wisent-ai/stado)
-[![Discord](https://img.shields.io/badge/Discord-Join%20Wisent-5865F2?logo=discord&logoColor=white)](https://discord.gg/qRjpkthq54)
+[![Source](https://img.shields.io/badge/GitHub-Source-181717?logo=github)](https://github.com/wisent-ai/stado) [![Issues](https://img.shields.io/badge/GitHub-Issues-181717?logo=github)](https://github.com/wisent-ai/stado/issues) [![Wisent](https://img.shields.io/badge/Wisent-Website-0B0B0B)](https://wisent.ai) [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/qRjpkthq54) [![LinkedIn](https://img.shields.io/badge/LinkedIn-Follow-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/company/wisent-ai/) [![X](https://img.shields.io/badge/X-Follow-000000?logo=x&logoColor=white)](https://x.com/wisentai) [![Enterprise](https://img.shields.io/badge/Enterprise-Book%20a%20call-0B0B0B?logo=calendly)](https://calendly.com/lbartoszcze)
 <!-- wisent-readme-signals:end -->
 
+# Stado: The Easiest Harness for Managing Compute and Storage Across Local, GCP, AWS, and Azure Infrastructure
 
-**Stado is a self-hosted compute fleet control plane for teams that need to run
-policy-controlled AI workloads across machines they own or explicitly
-authorize.**
+Stado Is the AI DevOps and Infrastructure Hire You Needed.
 
-Stado accepts the result a workload must produce and the constraints it must
-respect, assigns eligible capacity through one durable queue, preserves result
-evidence, and enforces explicit cost, ownership, and safety boundaries.
+Your AI is super smart but confined to your computer. Stado is the missing
+harness it needs to set up and manage civilisation-level infrastructure.
+
+Spin up experiments in seconds on a dedicated GPU. Manage GCP, Azure and AWS
+services from one intuitive client. Rent your local devices. Optimise storage and
+migrate services across locations. Dozens of providers. Millions in available
+hardware. All accessible through one simple client.
+
+Give your AI the muscle it needs.
 
 [Quick start](#quick-start) · [CLI reference](docs/cli.md) ·
 [Architecture](docs/architecture.md) · [Operations](docs/operations.md)
@@ -341,9 +347,17 @@ behind the authenticated CLI or machine boundary.
 
 ### Dashboard
 
-The dashboard is an operational view over canonical state. Local onboarding
-binds it to loopback. Remote exposure requires authenticated deployment
-configuration and a trusted reverse proxy.
+The dashboard is the authenticated operator workspace over canonical state.
+It combines queue, agent, artifact, cleanup, registry-policy, FinOps, and
+failure evidence with structured controls for jobs, inference, queue
+maintenance, hosts, services, the complete registry, releases, schedules,
+costs, recovery, diagnostics, alerts, identities, credentials, and cloud
+providers. Every operation is a bounded argv array executed by the installed
+Stado release; the browser never exposes a shell. Mutating operations require
+the dashboard's `operate` permission, an explicit confirmation, and the same
+policy checks as the CLI. Local onboarding binds the dashboard to loopback.
+Remote exposure additionally requires authenticated deployment configuration
+and a trusted reverse proxy.
 
 ## Operational model
 

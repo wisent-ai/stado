@@ -25,6 +25,7 @@ use crate::deploy::service::{
     self, ManagedService, ServiceEnv, ServiceLog, ServiceStatus, SOURCE_RECOVERY, SOURCE_REGISTRY,
 };
 use crate::deploy::{host_channel, production_runner, DeployError};
+use crate::observations;
 use crate::queue::JobStorage;
 use crate::targets;
 
@@ -42,7 +43,36 @@ pub enum ServiceCommands {
     /// reports on hosts that are not currently reachable. A host that has
     /// published no beacon reports `unknown`, which is deliberately not
     /// the same answer as `missing`.
+    ///
+    /// `OBSERVED` is a different question from `STATE` and is answered by a
+    /// different party. `STATE` is what the host says about its own unit;
+    /// `OBSERVED` is when anybody last went and looked at the service from
+    /// outside. A host with a closed lid publishes no beacon and says
+    /// nothing, so `STATE` goes quiet rather than wrong -- and quiet is what
+    /// read as fine for twelve days. `never` in this column means no machine
+    /// has ever confirmed this service from any vantage.
     List {
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Go to each consumer and check the endpoint it is told to use.
+    ///
+    /// `list` reports what hosts say about their units. This reports whether
+    /// the directory's addresses answer, from the machines that must call
+    /// them -- the one question every other check in this binary skips.
+    /// States are `observed`, `unreachable`, and `unverified` for a probe
+    /// that could not run; the third is never folded into the other two.
+    /// Exits non-zero only on `unreachable`, so an uninstalled probe cannot
+    /// masquerade as an outage.
+    Verify {
+        /// Check one host's declarations instead of the whole fleet.
+        #[arg(long)]
+        host: Option<String>,
+        /// Probe from this machine only, without using the fleet channel.
+        /// This is the mode the installed probe helper runs.
+        #[arg(long)]
+        local: bool,
         #[arg(long)]
         json: bool,
     },
@@ -293,6 +323,13 @@ pub enum ServiceCommands {
         /// is a relink rather than a redeploy.
         #[arg(long = "from-artifact")]
         from_artifact: Option<String>,
+        /// One argument the unit is started with; repeat for each. A program
+        /// that needs a subcommand or a port to be the service it is named
+        /// after cannot be deployed without these, and hand-starting it
+        /// beside the unit is how a host ends up serving on a port no
+        /// declaration mentions.
+        #[arg(long = "arg")]
+        args: Vec<String>,
         #[arg(long)]
         json: bool,
     },
@@ -341,6 +378,13 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
     match command {
         ServiceCommands::Directory(sub) => crate::cli::directory::dispatch(sub).await,
         ServiceCommands::List { json } => list(json).await,
+        ServiceCommands::Verify { host, local, json } => {
+            if local {
+                crate::cli::service_verify::verify_local(json).await
+            } else {
+                crate::cli::service_verify::verify(host.as_deref(), json).await
+            }
+        }
         ServiceCommands::OnboardingCatalog => onboarding_catalog().await,
         ServiceCommands::Status { name, json } => status(&name, json).await,
         ServiceCommands::Update {
@@ -457,6 +501,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             host_heuristic,
             from,
             from_artifact,
+            args,
             json,
         } => {
             deploy(
@@ -465,6 +510,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
                 host_heuristic.as_deref(),
                 from,
                 from_artifact,
+                &args,
                 json,
             )
             .await
@@ -609,13 +655,29 @@ async fn status(name: &str, json: bool) -> Result<(), CmdError> {
 }
 
 fn render_status(rows: &[ServiceStatus], json: bool) -> Result<(), CmdError> {
+    // Read once for the whole table. The record is a file on this machine and
+    // the answer is the same for every row in one rendering.
+    let seen = observations::load();
     if json {
-        let payload: Vec<Value> = rows.iter().map(ServiceStatus::to_json).collect();
+        let payload: Vec<Value> = rows
+            .iter()
+            .map(|row| {
+                let mut entry = row.to_json();
+                // Carried in the machine-readable form too, because the
+                // consumers of `--json` are the dashboards and gates that
+                // acted on a twelve-day-old `active` without ever being able
+                // to see how old it was.
+                let fact = observations::service_fact(&row.service.name, &row.service.host);
+                entry["observed"] = json!(observations::describe_in(&seen, &fact));
+                entry
+            })
+            .collect();
         return print_json(&Value::Array(payload));
     }
     let cells: Vec<Vec<String>> = rows
         .iter()
         .map(|row| {
+            let fact = observations::service_fact(&row.service.name, &row.service.host);
             vec![
                 row.service.host.clone(),
                 row.service.name.clone(),
@@ -623,6 +685,7 @@ fn render_status(rows: &[ServiceStatus], json: bool) -> Result<(), CmdError> {
                 row.service.source.clone(),
                 row.state.clone(),
                 dash(&row.reported_at),
+                observations::describe_in(&seen, &fact),
                 dash(&row.detail),
             ]
         })
@@ -635,6 +698,7 @@ fn render_status(rows: &[ServiceStatus], json: bool) -> Result<(), CmdError> {
             "SOURCE",
             "STATE",
             "REPORTED_AT",
+            "OBSERVED",
             "DETAIL",
         ],
         &cells,
@@ -1286,6 +1350,7 @@ async fn deploy(
     host_heuristic: Option<&str>,
     from: Option<String>,
     from_artifact: Option<String>,
+    args: &[String],
     json: bool,
 ) -> Result<(), CmdError> {
     let (target, host_heuristic) = resolve_placement(host, host_heuristic).await?;
@@ -1310,7 +1375,7 @@ async fn deploy(
         }
     };
     let from = from.as_str();
-    let plan = service::plan_deploy(name, from).map_err(click)?;
+    let plan = service::plan_deploy(name, from, args).map_err(click)?;
 
     // Refuse a colliding declaration BEFORE touching the host: pushing a
     // unit that then cannot be recorded would leave an unmanaged unit
@@ -1553,7 +1618,7 @@ async fn install_from_archive(
         hasher.update(&bytes);
         hex::encode(hasher.finalize())
     };
-    let version = format!("sha256-{}", &digest[..usize::from(u8::from(12u8))]);
+    let version = format!("sha256-{}", &digest[..usize::from(12u8)]);
     let staged = format!(".stado/.{directory}-{version}.tar.gz");
 
     if crate::deploy::host_channel::target_is_this_host(target) {

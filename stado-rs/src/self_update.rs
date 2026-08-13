@@ -40,6 +40,16 @@ pub const RELEASE_BINARIES: &[&str] = &[
     "stado-mcp",
 ];
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReleaseArchiveManifest {
+    product: String,
+    version: String,
+    platform: String,
+    source_commit: String,
+    sha256: String,
+}
+
 /// Self-update failure. Every variant aborts before any binary is
 /// replaced; the caller logs and keeps running the old binary.
 #[derive(Debug, thiserror::Error)]
@@ -148,11 +158,11 @@ fn release_coordinates_error(api_url: &str, version: &str, platform: &str) -> Op
         );
     }
     if api_url.contains('<') && api_url.contains('>') {
-        return Some("release.api_url contains an unresolved placeholder".to_string());
+        return Some("api.url contains an unresolved placeholder".to_string());
     }
     let parsed = match url::Url::parse(api_url) {
         Ok(parsed) => parsed,
-        Err(error) => return Some(format!("release.api_url is not an absolute URL: {error}")),
+        Err(error) => return Some(format!("api.url is not an absolute URL: {error}")),
     };
     if parsed.scheme() != "https"
         || parsed.host_str().is_none()
@@ -163,8 +173,7 @@ fn release_coordinates_error(api_url: &str, version: &str, platform: &str) -> Op
         || parsed.fragment().is_some()
     {
         return Some(
-            "release.api_url must be an HTTPS origin without credentials, query, or fragment"
-                .to_string(),
+            "api.url must be an HTTPS origin without credentials, query, or fragment".to_string(),
         );
     }
     None
@@ -183,7 +192,7 @@ pub struct HttpReleaseFetcher {
 impl HttpReleaseFetcher {
     /// Bind every fetch to the configured immutable release coordinate.
     pub fn new() -> Self {
-        let api_url = crate::config::stado_release_api_url();
+        let api_url = crate::config::stado_api_url();
         let version = crate::config::stado_release_version();
         let platform = crate::config::stado_release_platform();
         let configuration_error = release_coordinates_error(&api_url, &version, &platform);
@@ -418,37 +427,57 @@ async fn install_release_with(
         SelfUpdateError::InstallDirNotWritable(install_dir.to_path_buf(), error.to_string())
     })?;
     let prefix = format!("{to}/{platform}");
-    let sums_bytes = fetcher
-        .fetch(&format!("{prefix}/{SHA256SUMS_NAME}"))
+    let manifest_name = format!("release-manifest-{platform}.json");
+    let manifest_bytes = fetcher
+        .fetch(&format!("{prefix}/{manifest_name}"))
         .await?
-        .ok_or_else(|| SelfUpdateError::Fetch(format!("{prefix}/{SHA256SUMS_NAME} is missing")))?;
-    let sums = parse_sha256sums(
-        std::str::from_utf8(&sums_bytes)
-            .map_err(|error| SelfUpdateError::MalformedSums(format!("not UTF-8: {error}")))?,
-    )?;
+        .ok_or_else(|| SelfUpdateError::Fetch(format!("{prefix}/{manifest_name} is missing")))?;
+    let manifest: ReleaseArchiveManifest = serde_json::from_slice(&manifest_bytes)
+        .map_err(|error| SelfUpdateError::Fetch(format!("invalid release manifest: {error}")))?;
+    if manifest.product != "stado"
+        || manifest.version != to
+        || manifest.platform != platform
+        || !matches!(manifest.source_commit.len(), 40 | 64)
+        || !manifest
+            .source_commit
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+        || manifest.sha256.len() != 64
+        || !manifest
+            .sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(SelfUpdateError::Fetch(
+            "release manifest identity or digest is invalid".to_string(),
+        ));
+    }
+    let archive_name = format!("stado-v{to}-{platform}.tar.gz");
+    let archive_bytes = fetcher
+        .fetch(&format!("{prefix}/{archive_name}"))
+        .await?
+        .ok_or_else(|| SelfUpdateError::Fetch(format!("{prefix}/{archive_name} is missing")))?;
+    let actual = sha256_hex(&archive_bytes);
+    if actual != manifest.sha256 {
+        return Err(SelfUpdateError::HashMismatch {
+            name: archive_name,
+            expected: manifest.sha256,
+            actual,
+        });
+    }
+    let extracted = staging.path().join("archive");
+    crate::release_control::safe_extract_archive(&archive_bytes, &extracted)
+        .map_err(SelfUpdateError::Fetch)?;
     let mut staged: Vec<(String, PathBuf)> = Vec::with_capacity(targets.len());
     for name in &targets {
-        let expected = sums
-            .get(name)
-            .ok_or_else(|| SelfUpdateError::MissingSum(name.clone()))?;
-        let bytes = fetcher
-            .fetch(&format!("{prefix}/{name}"))
-            .await?
-            .ok_or_else(|| SelfUpdateError::Fetch(format!("{prefix}/{name} is missing")))?;
-        let actual = sha256_hex(&bytes);
-        if actual != *expected {
-            return Err(SelfUpdateError::HashMismatch {
-                name: name.clone(),
-                expected: expected.clone(),
-                actual,
-            });
+        let staged_path = extracted.join(name);
+        let metadata = std::fs::symlink_metadata(&staged_path)?;
+        if !metadata.file_type().is_file() || metadata.len() == 0 {
+            return Err(SelfUpdateError::Fetch(format!(
+                "release archive member {name} is not a non-empty regular file"
+            )));
         }
-        let staged_path = staging.path().join(name);
-        std::fs::write(&staged_path, &bytes)?;
-        log_fn(&format!(
-            "self-update: verified {name} {to} ({} bytes)",
-            bytes.len()
-        ));
+        log_fn(&format!("self-update: verified {name} {to}"));
         staged.push((name.clone(), staged_path));
     }
     for (name, staged_path) in &staged {

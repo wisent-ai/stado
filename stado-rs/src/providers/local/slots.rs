@@ -703,8 +703,13 @@ async fn materialize_stado_inputs(
             )));
         }
         let object = crate::object_store::ObjectRef::parse(uri)?;
+        let storage_path = if object.namespace() == crate::config::wc_stado_storage_namespace() {
+            object.key().to_string()
+        } else {
+            object.storage_path()
+        };
         let content = store
-            .read_bytes(&object.storage_path())
+            .read_bytes(&storage_path)
             .await?
             .ok_or_else(|| StorageError::Other(format!("input {name} is absent: {object}")))?;
         if let Some(expected) = spec
@@ -749,11 +754,16 @@ async fn materialize_stado_inputs(
 /// job was already moved/dropped by the check itself).
 pub async fn start_slot(
     store: &JobStorage,
-    mut job: Job,
+    job: Job,
     hostname: &str,
     log_fn: &mut dyn FnMut(&str),
     kind: &str,
 ) -> Result<Option<ActiveSlot>, StorageError> {
+    let job_id = job.job_id;
+    let Some(mut job) = store.read_job("queue", &job_id).await? else {
+        log_fn(&format!("claim lost for {job_id}: queued record is absent"));
+        return Ok(None);
+    };
     let cmd = job.command.clone();
     if activation_extraction_must_share_gpu(&cmd) {
         job.exclusive = false;

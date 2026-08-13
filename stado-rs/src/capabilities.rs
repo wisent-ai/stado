@@ -849,6 +849,10 @@ impl RuntimeAdapter {
 pub enum ConfigValueKind {
     Scalar,
     List,
+    /// A whole JSON subtree (a client map, a namespace map) that a parser in
+    /// `config` or `rate_limit` turns into typed policy. Its environment
+    /// override carries the same JSON encoded as one string.
+    Document,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -884,6 +888,13 @@ impl ConfigField {
     pub const fn list(key: &'static str, env: &'static str, path: &'static str) -> Self {
         Self {
             value_kind: ConfigValueKind::List,
+            ..Self::scalar(key, env, path)
+        }
+    }
+
+    pub const fn document(key: &'static str, env: &'static str, path: &'static str) -> Self {
+        Self {
+            value_kind: ConfigValueKind::Document,
             ..Self::scalar(key, env, path)
         }
     }
@@ -930,10 +941,310 @@ pub const STORAGE_BACKEND_CONFIG: ConfigField =
         .required()
         .with_backup("WC_BACKUP_STORAGE_BACKEND", "storage.backup.backend", false);
 
+pub const CREDENTIALS_STORE_CONFIG: ConfigField = ConfigField::scalar(
+    "credentials-store",
+    "STADO_CREDENTIALS_STORE",
+    "credentials.store",
+);
+pub const CREDENTIALS_ADMIN_CONSUMER_CONFIG: ConfigField = ConfigField::scalar(
+    "credentials-admin-consumer",
+    "STADO_CREDENTIALS_ADMIN_CONSUMER",
+    "credentials.admin.consumer",
+);
+pub const CREDENTIALS_ADMIN_TOKEN_FILE_CONFIG: ConfigField = ConfigField::scalar(
+    "credentials-admin-token-file",
+    "STADO_CREDENTIALS_ADMIN_TOKEN_FILE",
+    "credentials.admin.token_file",
+);
+
+pub const API_URL_CONFIG: ConfigField = ConfigField::scalar("api-url", "STADO_API_URL", "api.url");
+pub const DEPLOYMENT_ID_CONFIG: ConfigField =
+    ConfigField::scalar("deployment-id", "STADO_DEPLOYMENT_ID", "deployment.id");
+
+pub const RELEASE_VERSION_CONFIG: ConfigField = ConfigField::scalar(
+    "release-version",
+    "STADO_RELEASE_VERSION",
+    "release.version",
+);
+pub const RELEASE_PLATFORM_CONFIG: ConfigField = ConfigField::scalar(
+    "release-platform",
+    "STADO_RELEASE_PLATFORM",
+    "release.platform",
+);
+pub const RELEASE_SIGNING_KEY_ID_CONFIG: ConfigField = ConfigField::scalar(
+    "release-signing-key-id",
+    "STADO_RELEASE_SIGNING_KEY_ID",
+    "release.signing_key_id",
+);
+pub const RELEASE_SIGNING_KEY_ITEM_CONFIG: ConfigField = ConfigField::scalar(
+    "release-signing-key-item",
+    "STADO_RELEASE_SIGNING_KEY_ITEM",
+    "release.signing_key_item",
+);
+pub const RELEASE_AGENT_RUNTIME_BUNDLE_URI_CONFIG: ConfigField = ConfigField::scalar(
+    "release-agent-runtime-bundle-uri",
+    "STADO_AGENT_RUNTIME_BUNDLE_URI",
+    "release.agent_runtime_bundle_uri",
+);
+pub const RELEASE_AGENT_RUNTIME_BUNDLE_SHA256_CONFIG: ConfigField = ConfigField::scalar(
+    "release-agent-runtime-bundle-sha256",
+    "STADO_AGENT_RUNTIME_BUNDLE_SHA256",
+    "release.agent_runtime_bundle_sha256",
+);
+
+pub const ALERT_CHANNELS_CONFIG: ConfigField =
+    ConfigField::list("alert-channels", "STADO_ALERT_CHANNELS", "alerts.channels");
+pub const ALERT_EMAIL_TO_CONFIG: ConfigField =
+    ConfigField::scalar("alert-email-to", "WC_EMAIL_TO", "alerts.email_to");
+pub const ALERT_EMAIL_FROM_CONFIG: ConfigField =
+    ConfigField::scalar("alert-email-from", "WC_EMAIL_FROM", "alerts.email_from");
+pub const ALERT_RESEND_ITEM_CONFIG: ConfigField =
+    ConfigField::scalar("alert-resend-item", "WC_RESEND_ITEM", "alerts.resend_item");
+pub const ALERT_RESEND_FIELD_CONFIG: ConfigField = ConfigField::scalar(
+    "alert-resend-field",
+    "WC_RESEND_FIELD",
+    "alerts.resend_field",
+);
+/// Paging authenticates with its own grant rather than the control-plane one,
+/// so the alert section carries a consumer and token file but no endpoint: the
+/// verifier URL is the deployment's single Skarbiec.
+pub const ALERT_SKARBIEC_CONSUMER_CONFIG: ConfigField = ConfigField::scalar(
+    "alert-skarbiec-consumer",
+    "WC_ALERT_SKARBIEC_CONSUMER",
+    "alerts.skarbiec.consumer",
+);
+pub const ALERT_SKARBIEC_TOKEN_FILE_CONFIG: ConfigField = ConfigField::scalar(
+    "alert-skarbiec-token-file",
+    "WC_ALERT_SKARBIEC_TOKEN_FILE",
+    "alerts.skarbiec.token_file",
+);
+
+pub const DASHBOARD_BIND_CONFIG: ConfigField =
+    ConfigField::scalar("dashboard-bind", "WC_DASHBOARD_BIND", "dashboard.bind");
+pub const DASHBOARD_PORT_CONFIG: ConfigField =
+    ConfigField::scalar("dashboard-port", "WC_DASHBOARD_PORT", "dashboard.port");
+pub const DASHBOARD_REFRESH_SECONDS_CONFIG: ConfigField = ConfigField::scalar(
+    "dashboard-refresh-seconds",
+    "WC_DASHBOARD_REFRESH_SECONDS",
+    "dashboard.refresh_seconds",
+);
+pub const DASHBOARD_AGENT_FRESH_SECONDS_CONFIG: ConfigField = ConfigField::scalar(
+    "dashboard-agent-fresh-seconds",
+    "WC_DASHBOARD_AGENT_FRESH_SECONDS",
+    "dashboard.agent_fresh_seconds",
+);
+
+/// The three keys a Skarbiec-backed boundary binds: the verifier endpoint, the
+/// consumer it authenticates as, and the owner-only file holding the grant.
+///
+/// They are a triple rather than three loose entries because the rule that
+/// matters is a relation between boundaries — every boundary's token file must
+/// name a different grant — and stating that rule over a list of literal dotted
+/// paths is how a boundary gets forgotten when a new API surface is added.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SkarbiecBinding {
+    pub url: ConfigField,
+    pub consumer: ConfigField,
+    pub token_file: ConfigField,
+}
+
+macro_rules! skarbiec_binding {
+    ($key:literal, $env:literal, $path:literal) => {
+        SkarbiecBinding {
+            url: ConfigField::scalar(
+                concat!($key, "-url"),
+                concat!($env, "_URL"),
+                concat!($path, ".url"),
+            ),
+            consumer: ConfigField::scalar(
+                concat!($key, "-consumer"),
+                concat!($env, "_CONSUMER"),
+                concat!($path, ".consumer"),
+            ),
+            token_file: ConfigField::scalar(
+                concat!($key, "-token-file"),
+                concat!($env, "_TOKEN_FILE"),
+                concat!($path, ".token_file"),
+            ),
+        }
+    };
+}
+
+pub const SECRETS_SKARBIEC: SkarbiecBinding =
+    skarbiec_binding!("secrets-skarbiec", "WC_SKARBIEC", "secrets.skarbiec");
+pub const AGENT_SKARBIEC: SkarbiecBinding =
+    skarbiec_binding!("agent-skarbiec", "WC_AGENT_SKARBIEC", "agent.skarbiec");
+pub const OBJECT_API_SKARBIEC: SkarbiecBinding = skarbiec_binding!(
+    "object-api-skarbiec",
+    "WC_OBJECT_SKARBIEC",
+    "object_api.skarbiec"
+);
+pub const RELEASE_API_SKARBIEC: SkarbiecBinding = skarbiec_binding!(
+    "release-api-skarbiec",
+    "WC_RELEASE_SKARBIEC",
+    "release_api.skarbiec"
+);
+pub const MACHINE_API_SKARBIEC: SkarbiecBinding = skarbiec_binding!(
+    "machine-api-skarbiec",
+    "WC_MACHINE_SKARBIEC",
+    "machine_api.skarbiec"
+);
+pub const SERVICE_API_SKARBIEC: SkarbiecBinding = skarbiec_binding!(
+    "service-api-skarbiec",
+    "WC_SERVICE_SKARBIEC",
+    "service_api.skarbiec"
+);
+pub const RATE_LIMIT_SKARBIEC: SkarbiecBinding = skarbiec_binding!(
+    "rate-limit-skarbiec",
+    "WC_RATE_LIMIT_SKARBIEC",
+    "rate_limit.skarbiec"
+);
+pub const INTEGRATION_SKARBIEC: SkarbiecBinding = skarbiec_binding!(
+    "integration-skarbiec",
+    "WC_INTEGRATION_SKARBIEC",
+    "integration.skarbiec"
+);
+pub const BACKEND_MESSAGING_SKARBIEC: SkarbiecBinding = skarbiec_binding!(
+    "backend-messaging-skarbiec",
+    "WC_BACKEND_MESSAGING_SKARBIEC",
+    "backend.messaging.skarbiec"
+);
+
+/// Provider grants Stado resolves on an integration's behalf live behind their
+/// own endpoint, distinct from the integration verifier above.
+pub const INTEGRATION_PROVIDER_SKARBIEC_URL_CONFIG: ConfigField = ConfigField::scalar(
+    "integration-provider-skarbiec-url",
+    "WC_INTEGRATION_PROVIDER_SKARBIEC_URL",
+    "integration.provider_skarbiec.url",
+);
+
+pub const AGENT_SKARBIEC_ITEMS_CONFIG: ConfigField = ConfigField::list(
+    "agent-skarbiec-items",
+    "WC_AGENT_SKARBIEC_ITEMS",
+    "agent.skarbiec.items",
+);
+pub const AGENT_SKARBIEC_SECRET_FIELDS_CONFIG: ConfigField = ConfigField::list(
+    "agent-skarbiec-secret-fields",
+    "WC_AGENT_SKARBIEC_SECRET_FIELDS",
+    "agent.skarbiec.secret_fields",
+);
+pub const BACKEND_MESSAGING_SKARBIEC_ITEMS_CONFIG: ConfigField = ConfigField::list(
+    "backend-messaging-skarbiec-items",
+    "WC_BACKEND_MESSAGING_SKARBIEC_ITEMS",
+    "backend.messaging.skarbiec.items",
+);
+
+pub const RATE_LIMIT_CLIENTS_CONFIG: ConfigField = ConfigField::document(
+    "rate-limit-clients",
+    "WC_RATE_LIMIT_CLIENTS",
+    "rate_limit.clients",
+);
+pub const INTEGRATION_CLIENTS_CONFIG: ConfigField = ConfigField::document(
+    "integration-clients",
+    "WC_INTEGRATION_CLIENTS",
+    "integration.clients",
+);
+pub const INTEGRATION_PROVIDERS_CONFIG: ConfigField = ConfigField::document(
+    "integration-providers",
+    "WC_INTEGRATION_PROVIDERS",
+    "integration.providers",
+);
+pub const OBJECT_API_NAMESPACES_CONFIG: ConfigField = ConfigField::document(
+    "object-api-namespaces",
+    "WC_OBJECT_API_NAMESPACES",
+    "object_api.namespaces",
+);
+pub const RELEASE_API_PUBLISHERS_CONFIG: ConfigField = ConfigField::document(
+    "release-api-publishers",
+    "WC_RELEASE_API_PUBLISHERS",
+    "release_api.publishers",
+);
+pub const MACHINE_API_CLIENTS_CONFIG: ConfigField = ConfigField::document(
+    "machine-api-clients",
+    "WC_MACHINE_API_CLIENTS",
+    "machine_api.clients",
+);
+pub const SERVICE_API_DEPLOYERS_CONFIG: ConfigField = ConfigField::document(
+    "service-api-deployers",
+    "WC_SERVICE_API_DEPLOYERS",
+    "service_api.deployers",
+);
+
+/// Every configuration key the control plane reads itself, as opposed to the
+/// keys an adapter reads on its behalf — those hang off
+/// [`CapabilityVariant::config`] and are reachable through [`config_field`].
+///
+/// This list is the register of readers, and it is exhaustive on purpose.
+/// `storage.stado.ca_file` showed what the alternative costs: a key an operator
+/// wrote, `config validate` accepted, `doctor` blessed, and no code path ever
+/// consulted, for months. A setting reaches this binary only through
+/// [`crate::config_file::field_value`], which takes a catalogued field and not a
+/// dotted string, so a key absent from here and from a variant's `config` is a
+/// key that cannot be read — and one that validation is free to call out.
 pub const CONTROL_CONFIG: &[ConfigField] = &[
     PROVIDERS_CONFIG,
     DISABLED_PROVIDERS_CONFIG,
     STORAGE_BACKEND_CONFIG,
+    CREDENTIALS_STORE_CONFIG,
+    CREDENTIALS_ADMIN_CONSUMER_CONFIG,
+    CREDENTIALS_ADMIN_TOKEN_FILE_CONFIG,
+    API_URL_CONFIG,
+    DEPLOYMENT_ID_CONFIG,
+    RELEASE_VERSION_CONFIG,
+    RELEASE_PLATFORM_CONFIG,
+    RELEASE_SIGNING_KEY_ID_CONFIG,
+    RELEASE_SIGNING_KEY_ITEM_CONFIG,
+    RELEASE_AGENT_RUNTIME_BUNDLE_URI_CONFIG,
+    RELEASE_AGENT_RUNTIME_BUNDLE_SHA256_CONFIG,
+    ALERT_CHANNELS_CONFIG,
+    ALERT_EMAIL_TO_CONFIG,
+    ALERT_EMAIL_FROM_CONFIG,
+    ALERT_RESEND_ITEM_CONFIG,
+    ALERT_RESEND_FIELD_CONFIG,
+    ALERT_SKARBIEC_CONSUMER_CONFIG,
+    ALERT_SKARBIEC_TOKEN_FILE_CONFIG,
+    DASHBOARD_BIND_CONFIG,
+    DASHBOARD_PORT_CONFIG,
+    DASHBOARD_REFRESH_SECONDS_CONFIG,
+    DASHBOARD_AGENT_FRESH_SECONDS_CONFIG,
+    SECRETS_SKARBIEC.url,
+    SECRETS_SKARBIEC.consumer,
+    SECRETS_SKARBIEC.token_file,
+    AGENT_SKARBIEC.url,
+    AGENT_SKARBIEC.consumer,
+    AGENT_SKARBIEC.token_file,
+    AGENT_SKARBIEC_ITEMS_CONFIG,
+    AGENT_SKARBIEC_SECRET_FIELDS_CONFIG,
+    OBJECT_API_SKARBIEC.url,
+    OBJECT_API_SKARBIEC.consumer,
+    OBJECT_API_SKARBIEC.token_file,
+    OBJECT_API_NAMESPACES_CONFIG,
+    RELEASE_API_SKARBIEC.url,
+    RELEASE_API_SKARBIEC.consumer,
+    RELEASE_API_SKARBIEC.token_file,
+    RELEASE_API_PUBLISHERS_CONFIG,
+    MACHINE_API_SKARBIEC.url,
+    MACHINE_API_SKARBIEC.consumer,
+    MACHINE_API_SKARBIEC.token_file,
+    MACHINE_API_CLIENTS_CONFIG,
+    SERVICE_API_SKARBIEC.url,
+    SERVICE_API_SKARBIEC.consumer,
+    SERVICE_API_SKARBIEC.token_file,
+    SERVICE_API_DEPLOYERS_CONFIG,
+    RATE_LIMIT_SKARBIEC.url,
+    RATE_LIMIT_SKARBIEC.consumer,
+    RATE_LIMIT_SKARBIEC.token_file,
+    RATE_LIMIT_CLIENTS_CONFIG,
+    INTEGRATION_SKARBIEC.url,
+    INTEGRATION_SKARBIEC.consumer,
+    INTEGRATION_SKARBIEC.token_file,
+    INTEGRATION_PROVIDER_SKARBIEC_URL_CONFIG,
+    INTEGRATION_CLIENTS_CONFIG,
+    INTEGRATION_PROVIDERS_CONFIG,
+    BACKEND_MESSAGING_SKARBIEC.url,
+    BACKEND_MESSAGING_SKARBIEC.consumer,
+    BACKEND_MESSAGING_SKARBIEC.token_file,
+    BACKEND_MESSAGING_SKARBIEC_ITEMS_CONFIG,
 ];
 
 const BACKUP_BUCKET_ENV: &str = "WC_BACKUP_BUCKET";
@@ -1037,6 +1348,15 @@ const STADO_OBJECT_STORAGE_CONFIG: &[ConfigField] = &[
         "storage.stado.namespace",
     )
     .required(),
+    // Optional on purpose: a loopback HTTP endpoint performs no handshake, and a
+    // publicly signed origin is already covered by the system trust store. It is
+    // required in exactly one case -- a fleet object API published on the tailnet
+    // under a private authority -- and that case previously had no way to say so.
+    ConfigField::scalar(
+        "ca-file",
+        "WC_STADO_STORAGE_CA_FILE",
+        "storage.stado.ca_file",
+    ),
 ];
 
 const LOCAL_STORAGE_CONFIG: &[ConfigField] =
@@ -2011,11 +2331,28 @@ fn validate_product_catalog(problems: &mut Vec<String>) {
 pub fn validate_catalog() -> Vec<String> {
     let mut problems = Vec::new();
     validate_product_catalog(&mut problems);
+    // Two entries claiming one path or one environment variable would make the
+    // question this catalog exists to answer -- which reader owns this key --
+    // have two answers, and the resolver would silently pick the first.
+    let mut control_paths = BTreeSet::new();
+    let mut control_envs = BTreeSet::new();
     for field in CONTROL_CONFIG {
         if config_binding_incomplete(field) || backup_binding_incomplete(field) {
             problems.push(format!(
                 "control field {} has an incomplete configuration binding",
                 field.key
+            ));
+        }
+        if !control_paths.insert(field.path) {
+            problems.push(format!(
+                "control field {} duplicates configuration path {}",
+                field.key, field.path
+            ));
+        }
+        if !control_envs.insert(field.env) {
+            problems.push(format!(
+                "control field {} duplicates environment override {}",
+                field.key, field.env
             ));
         }
     }

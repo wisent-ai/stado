@@ -389,6 +389,107 @@ pub async fn maybe_yield_for_priority(
     Ok(n)
 }
 
+// An admission decision needs the whole picture at once: store, sizing, device,
+// capacity and kind are each read on a different branch below.
+#[allow(clippy::too_many_arguments)]
+async fn queued_gpu_job_for_inference(
+    store: &JobStorage,
+    sizing: &Sizing,
+    gpu_type: &str,
+    total_vram_gb: i64,
+    kind: &str,
+    consumer_id: &str,
+    active_slot_count: usize,
+    pinned_only: bool,
+) -> Result<Option<(String, i64)>, StorageError> {
+    let listed = store
+        .list_jobs_fitting("queue", total_vram_gb, 2000)
+        .await?;
+    let mut queued = Vec::with_capacity(listed.len());
+    for candidate in listed {
+        if let Some(job) = store.read_job("queue", &candidate.job_id).await? {
+            queued.push(job);
+        }
+    }
+    queued.sort_by(|left, right| {
+        right
+            .priority
+            .cmp(&left.priority)
+            .then_with(|| left.created_at.cmp(&right.created_at))
+    });
+    for job in queued {
+        let need = job
+            .gpu_mem_gb
+            .max(estimate_gpu_memory(&job.command, sizing, store).await?);
+        if need <= 0
+            || !helpers::job_eligible(
+                &job,
+                gpu_type,
+                total_vram_gb,
+                kind,
+                consumer_id,
+                active_slot_count,
+                pinned_only,
+            )
+        {
+            continue;
+        }
+        return Ok(Some((job.job_id, need)));
+    }
+    Ok(None)
+}
+
+fn inference_container_name(deployment: &str) -> Result<String, String> {
+    let valid = !deployment.is_empty()
+        && deployment.len() <= 128
+        && deployment.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || b".-_".contains(&byte)
+        });
+    valid
+        .then(|| format!("stado-inference-{deployment}"))
+        .ok_or_else(|| "inference reservation contains an invalid deployment name".to_string())
+}
+
+async fn inference_container_running(deployment: &str) -> Result<bool, String> {
+    let container = inference_container_name(deployment)?;
+    let output = tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio::process::Command::new("docker")
+            .args(["inspect", "--format={{.State.Running}}", &container])
+            .output(),
+    )
+    .await
+    .map_err(|_| "docker inspect timed out".to_string())?
+    .map_err(|error| format!("docker inspect failed: {error}"))?;
+    if !output.status.success() {
+        return Ok(false);
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim() == "true")
+}
+
+async fn set_inference_container_running(deployment: &str, running: bool) -> Result<(), String> {
+    let container = inference_container_name(deployment)?;
+    let mut command = tokio::process::Command::new("docker");
+    if running {
+        command.args(["start", &container]);
+    } else {
+        command.args(["stop", "--time", "30", &container]);
+    }
+    let output = tokio::time::timeout(Duration::from_secs(45), command.output())
+        .await
+        .map_err(|_| "docker inference transition timed out".to_string())?
+        .map_err(|error| format!("docker inference transition failed: {error}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let detail = String::from_utf8_lossy(&output.stderr);
+    Err(format!(
+        "docker inference transition exited {}: {}",
+        output.status,
+        detail.trim().chars().take(400).collect::<String>()
+    ))
+}
+
 // ---------------------------------------------------------------------------
 // run_agent
 // ---------------------------------------------------------------------------
@@ -614,28 +715,7 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             // Cloud replacement was requested through the provider adapter.
             DriftOutcome::SelfTerminated => return Ok(()),
         }
-        if let Some(reservation) = crate::inference::reservation::active() {
-            agent_diag.insert(
-                "inference_reservation".into(),
-                Value::from(reservation.deployment.clone()),
-            );
-            publish_capacity(
-                &store,
-                &consumer_id,
-                kind,
-                &BTreeMap::new(),
-                Some(i64::default()),
-                Some(total_vram_gb),
-                Some(agent_diag.clone()),
-            )
-            .await?;
-            log_fn(&format!(
-                "exclusive inference reservation '{}': publishing zero compute capacity",
-                reservation.deployment
-            ));
-            tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
-            continue;
-        }
+        let inference_reservation = crate::inference::reservation::active();
         if vast_active {
             publish_capacity(
                 &store,
@@ -662,6 +742,108 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         let smi_free = helpers::smi_free_vram_gb().await;
         if smi_free >= 0 && smi_free < free_vram_gb {
             free_vram_gb = smi_free;
+        }
+        if let Some(reservation) = &inference_reservation {
+            agent_diag.insert(
+                "inference_reservation".into(),
+                Value::from(reservation.deployment.clone()),
+            );
+            agent_diag.insert(
+                "inference_gpu_mode".into(),
+                Value::from(reservation.gpu_mode.clone()),
+            );
+            if reservation.gpu_mode == crate::inference::schema::GPU_EXCLUSIVE {
+                free_vram_gb = 0;
+                log_fn(&format!(
+                    "exclusive inference reservation '{}': GPU claims disabled; CPU-only claims remain eligible",
+                    reservation.deployment
+                ));
+            } else {
+                let queued_job = queued_gpu_job_for_inference(
+                    &store,
+                    &sizing,
+                    &gpu_type,
+                    total_vram_gb,
+                    kind,
+                    &consumer_id,
+                    slots.len(),
+                    pinned_only,
+                )
+                .await?;
+                let gpu_work_active = used_vram > 0;
+                let should_yield = gpu_work_active || queued_job.is_some();
+                match inference_container_running(&reservation.deployment).await {
+                    Ok(true) if should_yield => {
+                        let reason = queued_job
+                            .as_ref()
+                            .map(|(job_id, need)| format!("queued job {job_id} needs {need} GiB"))
+                            .unwrap_or_else(|| "an admitted GPU job is active".to_string());
+                        log_fn(&format!(
+                            "yieldable inference '{}': pausing because {reason}",
+                            reservation.deployment
+                        ));
+                        match set_inference_container_running(&reservation.deployment, false).await
+                        {
+                            Ok(()) => continue,
+                            Err(error) => {
+                                log_fn(&format!(
+                                    "yieldable inference '{}': pause failed safely: {error}",
+                                    reservation.deployment
+                                ));
+                                free_vram_gb = 0;
+                            }
+                        }
+                    }
+                    Ok(true) => {
+                        free_vram_gb = 0;
+                        agent_diag.insert("inference_runtime_state".into(), Value::from("serving"));
+                    }
+                    Ok(false) if !should_yield && slots.is_empty() => {
+                        agent_diag
+                            .insert("inference_runtime_state".into(), Value::from("resuming"));
+                        publish_capacity(
+                            &store,
+                            &consumer_id,
+                            kind,
+                            &BTreeMap::new(),
+                            Some(0),
+                            Some(total_vram_gb),
+                            Some(agent_diag.clone()),
+                        )
+                        .await?;
+                        log_fn(&format!(
+                            "yieldable inference '{}': GPU queue drained; resuming service",
+                            reservation.deployment
+                        ));
+                        if let Err(error) =
+                            set_inference_container_running(&reservation.deployment, true).await
+                        {
+                            log_fn(&format!(
+                                "yieldable inference '{}': resume failed: {error}",
+                                reservation.deployment
+                            ));
+                        }
+                        continue;
+                    }
+                    Ok(false) => {
+                        agent_diag.insert("inference_runtime_state".into(), Value::from("yielded"));
+                        if let Some((job_id, need)) = queued_job {
+                            agent_diag
+                                .insert("inference_yield_for_job".into(), Value::from(job_id));
+                            agent_diag
+                                .insert("inference_yield_for_vram_gb".into(), Value::from(need));
+                        }
+                    }
+                    Err(error) => {
+                        free_vram_gb = 0;
+                        agent_diag.insert("inference_runtime_state".into(), Value::from("unknown"));
+                        log_fn(&format!(
+                            "yieldable inference '{}': runtime state unavailable; GPU claims disabled: {error}",
+                            reservation.deployment
+                        ));
+                    }
+                }
+            }
         }
         let (refuse_disk, disk_diag) = disk_gate::gate_and_maybe_evict(log_fn);
         agent_diag.extend(diag_map(&disk_diag));
@@ -849,12 +1031,13 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             tokio::time::sleep(Duration::from_secs(10)).await;
             continue;
         }
-        // RAM gate: refuse new slots when MemAvailable drops below the
-        // measured non-wisent baseline (ComfyUI, system daemons) plus a
-        // dynamic safety buffer. This replaces the previous 30%-of-total
-        // guess with a live reserve computed from /proc/*/status.
+        // MemAvailable already excludes RAM resident in every non-agent
+        // process. Adding those processes' RSS again double-reserves the same
+        // memory and can permanently wedge a healthy host once its baseline
+        // load exceeds half of physical RAM. Keep only the dynamic headroom;
+        // per-job memory remains represented by Job::memory_gb.
         let fr = helpers::free_ram_gb();
-        let ram_reserve = helpers::static_ram_reserve_gb() + helpers::ram_safety_buffer_gb();
+        let ram_reserve = helpers::ram_safety_buffer_gb();
         if (0.0..ram_reserve).contains(&fr) {
             log_fn(&format!(
                 "RAM gate: {} GB free < {} GB reserve; skipping claims",
@@ -868,7 +1051,13 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         // job_eligible(consumer_id=...) below filters to ONLY the jobs this
         // agent owns. The coordinator's makespan matcher already made the
         // choice; this loop executes it.
-        let mut queued = store.list_jobs_fitting("queue", free_vram_gb, 2000).await?;
+        let listed = store.list_jobs_fitting("queue", free_vram_gb, 2000).await?;
+        let mut queued = Vec::with_capacity(listed.len());
+        for candidate in listed {
+            if let Some(job) = store.read_job("queue", &candidate.job_id).await? {
+                queued.push(job);
+            }
+        }
         queued.sort_by(|a, b| {
             b.priority
                 .cmp(&a.priority)

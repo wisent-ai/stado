@@ -285,6 +285,8 @@ pub struct Schedule {
     #[serde(default)]
     pub pin_to_provider: bool,
     #[serde(default)]
+    pub pinned_host: String,
+    #[serde(default)]
     pub repo: String,
     #[serde(default)]
     pub repo_ref: String,
@@ -370,6 +372,7 @@ impl Schedule {
             preemptible: self.preemptible,
             max_cost_per_hour_usd: self.max_cost_per_hour_usd,
             pin_to_provider: self.pin_to_provider,
+            pinned_host: self.pinned_host.clone(),
             repo: self.repo.clone(),
             repo_ref: self.repo_ref.clone(),
             repo_workdir: self.repo_workdir.clone(),

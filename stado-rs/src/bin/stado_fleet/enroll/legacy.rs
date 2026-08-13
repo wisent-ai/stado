@@ -48,6 +48,7 @@ pub fn register_verified(
     destination: &str,
     kind: &str,
     hostname: &str,
+    release_platform: &str,
     takeover: bool,
 ) -> Result<Value, String> {
     let mut next = document.clone();
@@ -63,9 +64,20 @@ pub fn register_verified(
         if !takeover {
             return Err(format!("target '{name}' is already registered"));
         }
+        let declared_platform = target
+            .get("release_platform")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !declared_platform.is_empty() && declared_platform != release_platform {
+            return Err(format!(
+                "target '{name}' declares release_platform {declared_platform}, \
+                 but enrollment observed {release_platform}"
+            ));
+        }
         target["ssh"] = Value::String(destination.to_string());
         target["kind"] = Value::String(kind.to_string());
         target["hostnames"] = json!([hostname]);
+        target["release_platform"] = Value::String(release_platform.to_string());
         target["notes"] = Value::String(
             "legacy declaration repaired by verified `stado_fleet enroll`".to_string(),
         );
@@ -76,6 +88,7 @@ pub fn register_verified(
         "name": name,
         "kind": kind,
         "ssh": destination,
+        "release_platform": release_platform,
         "hostnames": [hostname],
         "notes": "enrolled by verified `stado_fleet enroll`",
     }));

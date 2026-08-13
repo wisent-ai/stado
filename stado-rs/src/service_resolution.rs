@@ -41,7 +41,32 @@ pub struct ServiceRoute {
     pub managed_service: Option<String>,
     pub active_host: String,
     pub endpoints: BTreeMap<String, ServiceEndpoint>,
+    /// Addresses hosts would serve on if the service moved to them, never
+    /// addresses to call ([`crate::targets::Service::standby`]).
+    ///
+    /// Nothing in this module resolves through it — a resolver hands out the
+    /// active host's endpoint and a standby address is by construction not
+    /// serving. It is modelled here for the asymmetry recorded on `verify`
+    /// below: this reader denies unknown keys where `targets::Service`
+    /// tolerates them, so a field added on the tolerant side alone takes
+    /// every resolver on the fleet down the moment one directory entry is
+    /// published carrying it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub standby: BTreeMap<String, ServiceEndpoint>,
     pub consumers: BTreeMap<String, ServiceConsumer>,
+    /// How this route is checked against the world
+    /// ([`crate::targets::Service::verification`] derives the default when it
+    /// is absent).
+    ///
+    /// Modelled here because two readers parse this same entry with opposite
+    /// strictness: `targets::Service` keeps unmodelled keys in a
+    /// `serde(flatten)` `extra`, this one denies them outright. A field added
+    /// to satisfy the tolerant reader alone would take the resolver down
+    /// fleet-wide the moment it was published — every host refusing the whole
+    /// directory over a key it merely did not know. Any future field on a
+    /// service entry has to land in both places, in the same change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verify: Option<crate::targets::VerifyDescriptor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,6 +101,8 @@ pub struct ResolverAdapter {
     pub service: String,
     pub bind: String,
     pub consumer: String,
+    #[serde(default = "default_adapter_idle_seconds")]
+    pub idle_seconds: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,6 +121,21 @@ fn default_refresh_seconds() -> u64 {
 
 fn default_max_stale_seconds() -> u64 {
     60
+}
+
+/// Short enough that retained sockets stay bounded: two directory-freshness
+/// windows.
+///
+/// A request/response connection sends nothing in either direction while the
+/// service works, so this window is also a cap on how long a proxied service may
+/// take to answer. Model dispatch legitimately exceeds two minutes, and raising
+/// this default to cover it tripled retention for every adapter on the fleet --
+/// which exhausted the resolver's file descriptors and took the whole local data
+/// plane down with `Too many open files`. The long window belongs on the
+/// adapters that need it, declared per adapter in the registry, not on
+/// everything.
+fn default_adapter_idle_seconds() -> u64 {
+    default_max_stale_seconds().saturating_add(default_max_stale_seconds())
 }
 
 fn identifier(value: &str) -> bool {
@@ -251,6 +293,9 @@ fn validate_resolver_config(
         let adapter_location = format!("{location}.adapters[{index}]");
         validate_identifier(&adapter.service, &format!("{adapter_location}.service"))?;
         validate_identifier(&adapter.consumer, &format!("{adapter_location}.consumer"))?;
+        if adapter.idle_seconds == 0 {
+            return Err(format!("{adapter_location}.idle_seconds: must be positive"));
+        }
         let bind: std::net::SocketAddr = adapter
             .bind
             .parse()
@@ -326,6 +371,16 @@ pub fn validate_registry_contract(document: &Value) -> Result<(), String> {
     for (name, route) in &directory.services {
         let location = format!("registry.{DIRECTORY_KEY}.services.{name}");
         validate_identifier(name, &location)?;
+        // Only the explicit descriptor is checked: the derived default is
+        // valid by construction, and a registry written before the field
+        // existed must not start failing validation because a newer build can
+        // now name a thing it does not declare.
+        if let Some(verify) = route.verify.as_ref() {
+            let problems = crate::targets::validate_verification(&location, verify);
+            if !problems.is_empty() {
+                return Err(problems.join("; "));
+            }
+        }
         if !target_entries.contains_key(&route.active_host) {
             return Err(format!("{location}.active_host: unknown registry target"));
         }
@@ -352,6 +407,28 @@ pub fn validate_registry_contract(document: &Value) -> Result<(), String> {
                     "{location}.endpoints.{host}: remote resolution requires targets[].ssh"
                 ));
             }
+        }
+        // A standby address is checked for shape and for naming a real host,
+        // and for nothing else. It must be a host-relative loopback origin
+        // like every other address here, because the day it is promoted it
+        // becomes an `endpoints` entry unchanged; but no `ssh` transport is
+        // demanded of its host, since nothing resolves through it while the
+        // service is elsewhere. A declaration nobody validates is how the
+        // wrong port reaches a forward file, so it is validated where it is
+        // written rather than where it is dialled.
+        for (host, endpoint) in &route.standby {
+            if !target_entries.contains_key(host) {
+                return Err(format!(
+                    "{location}.standby.{host}: unknown registry target"
+                ));
+            }
+            if host == &route.active_host {
+                return Err(format!(
+                    "{location}.standby.{host}: is the active host, which serves \
+                     rather than stands by"
+                ));
+            }
+            validate_endpoint(endpoint, &format!("{location}.standby.{host}"))?;
         }
         if route.consumers.is_empty() {
             return Err(format!("{location}.consumers: must not be empty"));
@@ -385,11 +462,26 @@ pub fn validate_registry_contract(document: &Value) -> Result<(), String> {
                     "{location}.placement_profile: profile does not contain this service"
                 ));
             }
+            // A placement host is named by one map or the other: `endpoints`
+            // if it calls the service, `standby` if it holds the address it
+            // would serve on after the move. Before those were two fields the
+            // coverage rule could read `endpoints` alone; requiring that now
+            // would refuse the whole document the first time a standby
+            // address is filed where it belongs, which is the same fleet-wide
+            // refusal the `standby` field itself is here to avoid. What must
+            // not happen is a placement host with no address anywhere: the
+            // cutover then moves the service to a machine nothing can name.
             let expected: BTreeSet<_> = profile.hosts.keys().cloned().collect();
-            let actual: BTreeSet<_> = route.endpoints.keys().cloned().collect();
-            if actual != expected {
+            let declared: BTreeSet<_> = route
+                .endpoints
+                .keys()
+                .chain(route.standby.keys())
+                .cloned()
+                .collect();
+            if declared != expected {
                 return Err(format!(
-                    "{location}.endpoints: must define every placement host exactly once"
+                    "{location}: endpoints and standby together must name every \
+                     placement host exactly once"
                 ));
             }
             let declared_host = active_profile_host(profile, name, &target_entries)?;

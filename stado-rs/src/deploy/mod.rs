@@ -62,6 +62,7 @@ use futures::future::BoxFuture;
 
 pub mod artifact_install;
 pub mod bootstrap;
+pub mod fleet_vaults;
 pub mod host_build_caches;
 pub mod host_channel;
 pub mod host_cleanup;
@@ -70,6 +71,7 @@ pub mod host_exec;
 pub mod host_gui_automation;
 pub mod host_inventory;
 pub mod host_ping;
+pub mod host_precheck_runner;
 pub mod host_reboot;
 pub mod host_recovery;
 pub mod host_release;
@@ -80,6 +82,7 @@ pub mod inference;
 pub mod inference_process;
 pub mod inference_routes;
 pub mod local_install;
+pub mod reconcile;
 pub mod service;
 pub mod ssh_key;
 
