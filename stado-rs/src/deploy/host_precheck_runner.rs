@@ -306,7 +306,7 @@ hook=$(mktemp)
 cat > "$hook" <<'HOOK'
 #!/bin/sh
 set -eu
-find /opt/wisent/stado-precheck-runner/_work -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+find /opt/wisent/stado-precheck-runner/_work -mindepth 1 -maxdepth 1 ! -name '_*' -exec rm -rf -- {} +
 HOOK
 root install -o root -g root -m 0755 "$hook" "$runner_root/clean-work.sh"
 rm -f "$hook"
@@ -350,7 +350,6 @@ ExecStartPre=$runner_root/clean-work.sh
 ExecStart=$runner_root/bin/runsvc.sh
 Restart=always
 RestartSec=5
-Environment=ACTIONS_RUNNER_HOOK_JOB_STARTED=$runner_root/clean-work.sh
 Environment=ACTIONS_RUNNER_HOOK_JOB_COMPLETED=$runner_root/clean-work.sh
 NoNewPrivileges=true
 PrivateTmp=true
@@ -430,6 +429,7 @@ if [ ! -f "$runner_root/.runner" ]; then
   root mkdir -p "$runner_root"
   root tar -xzf "$archive" -C "$runner_root"
   root codesign --remove-signature "$runner_root/bin/Runner.Listener"
+  root codesign --remove-signature "$runner_root/bin/Runner.Worker"
   root chown -R "$runner_user:$runner_user" "$runner_root"
   root mkdir -p "$runner_root/_work" "$runner_root/_diag"
   printf '%s' "$token" > "$token_file"
@@ -451,7 +451,7 @@ hook=$(mktemp)
 cat > "$hook" <<'HOOK'
 #!/bin/sh
 set -eu
-find /Users/Shared/stado-precheck-runner/_work -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+find /Users/Shared/stado-precheck-runner/_work -mindepth 1 -maxdepth 1 ! -name '_*' -exec rm -rf -- {} +
 HOOK
 root install -o root -g wheel -m 0755 "$hook" "$runner_root/clean-work.sh"
 rm -f "$hook"
@@ -469,7 +469,7 @@ cat > "$launcher" <<LAUNCHER
 set -eu
 /sbin/pfctl -a com.wisent.stado-precheck -f /etc/pf.anchors/com.wisent.stado-precheck
 /sbin/pfctl -E >/dev/null 2>&1 || true
-exec /usr/bin/sudo -u $runner_user -H -- /usr/bin/env HOME=$runner_root PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin ACTIONS_RUNNER_HOOK_JOB_STARTED=$runner_root/clean-work.sh ACTIONS_RUNNER_HOOK_JOB_COMPLETED=$runner_root/clean-work.sh $runner_root/bin/runsvc.sh
+exec /usr/bin/sudo -u $runner_user -H -- /usr/bin/env HOME=$runner_root PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin ACTIONS_RUNNER_HOOK_JOB_COMPLETED=$runner_root/clean-work.sh $runner_root/bin/runsvc.sh
 LAUNCHER
 root install -o root -g wheel -m 0755 "$launcher" "$runner_root/start-runner.sh"
 rm -f "$launcher"

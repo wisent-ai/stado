@@ -293,9 +293,7 @@ fn identity(
     )[..32]
         .into()
 }
-async fn builder(
-    platform: &str,
-) -> Result<(crate::targets::ComputeTarget, String), CmdError> {
+async fn builder(platform: &str) -> Result<(crate::targets::ComputeTarget, String), CmdError> {
     let registry = crate::targets::fetch_registry_remote()
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
@@ -354,6 +352,9 @@ fn input(uri: &str, path: &str, sha: &str) -> Value {
     json!({"stado_uri":uri,"relative_path":path,"sha256":sha})
 }
 
+// The build request's identity: every argument is a distinct coordinate the
+// worker is required to receive, and each is already validated by the caller.
+#[allow(clippy::too_many_arguments)]
 async fn enqueue(
     id: &str,
     m: &ReleasePipelineManifest,
@@ -656,9 +657,7 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
     save(&mut run).await?;
     let platforms: Vec<_> = m.platforms.keys().cloned().collect();
     for p in &platforms {
-        if !run.platforms.contains_key(p)
-            || run.platforms[p].state == PlatformRunState::Failed
-        {
+        if !run.platforms.contains_key(p) || run.platforms[p].state == PlatformRunState::Failed {
             let r = match enqueue(
                 &id,
                 &m,
@@ -684,9 +683,7 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
     let store = match JobStorage::new().await {
         Ok(store) => store,
         Err(error) => {
-            return Err(
-                persist_failure(&mut run, CmdError::click(error.to_string())).await
-            )
+            return Err(persist_failure(&mut run, CmdError::click(error.to_string())).await)
         }
     };
     let (key, private) = match signing(&run.product).await {

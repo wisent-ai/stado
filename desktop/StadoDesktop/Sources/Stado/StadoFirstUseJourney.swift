@@ -117,21 +117,25 @@ struct StadoFirstUseRoot: View {
                 ProgressView("Loading Stado…")
                     .controlSize(.large)
             } else if journey.isAtConsole {
-                ZStack(alignment: .bottom) {
-                    ConsoleView(
-                        store: operationsStore,
-                        cleanupStore: cleanupStore,
-                        deploymentStore: deploymentStore,
-                        auth: auth
-                    )
+                ConsoleView(
+                    store: operationsStore,
+                    cleanupStore: cleanupStore,
+                    deploymentStore: deploymentStore,
+                    auth: auth
+                )
+                .safeAreaInset(edge: .bottom, spacing: 0) {
                     if !journey.isCompleted {
                         firstSuccessCoach
-                            .padding()
+                            .padding(.horizontal)
+                            .padding(.bottom, 8)
                     }
                 }
             } else {
                 StadoOnboardingView(journey: journey)
             }
+        }
+        .task {
+            await auth.start()
         }
         .task {
             await journey.start()
@@ -146,12 +150,13 @@ struct StadoFirstUseRoot: View {
 
     private var firstSuccessCoach: some View {
         HStack(spacing: 12) {
-            Image(systemName: "checkmark.circle")
+            Image(systemName: queueIsBlocked ? "exclamationmark.triangle.fill" : "clock")
                 .font(.title2)
+                .foregroundStyle(queueIsBlocked ? Color.orange : Color.secondary)
             VStack(alignment: .leading, spacing: 3) {
-                Text("First result: one authorized job")
+                Text(queueIsBlocked ? "First job is waiting for a worker" : "Waiting for the first completed job")
                     .font(.headline)
-                Text("This guide completes when the dashboard reports a real completed job. Deployment setup remains a separate confirmed flow.")
+                Text(firstSuccessDetail)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -160,6 +165,18 @@ struct StadoFirstUseRoot: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
         .shadow(radius: 8)
         .accessibilityElement(children: .combine)
+    }
+
+    private var queueIsBlocked: Bool {
+        guard let snapshot = operationsStore.snapshot else { return false }
+        return snapshot.counts.queue > 0 && snapshot.liveAgents.isEmpty
+    }
+
+    private var firstSuccessDetail: String {
+        if queueIsBlocked {
+            return "Jobs are queued, but no worker is live. This guide completes after one authorized job finishes."
+        }
+        return "This guide completes after the dashboard reports one authorized job completion."
     }
 }
 

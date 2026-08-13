@@ -182,7 +182,7 @@ pub(super) fn file_store(path: &Path, doc: &Value) -> Result<(), SkarbiecError> 
             .and_then(|name| name.to_str())
             .unwrap_or("store")
     ));
-    let owner_mode = u32::from_str_radix("600", u32::from(u8::BITS))
+    let owner_mode = u32::from_str_radix("600", u8::BITS)
         .map_err(|source| SkarbiecError::Deployment(source.to_string()))?;
     let mut file = std::fs::OpenOptions::new()
         .write(true)

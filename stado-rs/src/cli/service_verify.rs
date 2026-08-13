@@ -263,10 +263,7 @@ async fn probe(kind: &str, endpoint: &str) -> (&'static str, String) {
 /// what let `fetch failed` sit in a log for twelve days looking like an
 /// application bug.
 async fn probe_http(url: &str) -> (&'static str, String) {
-    let client = match reqwest::Client::builder()
-        .timeout(PROBE_TIMEOUT)
-        .build()
-    {
+    let client = match reqwest::Client::builder().timeout(PROBE_TIMEOUT).build() {
         Ok(client) => client,
         Err(error) => return (UNVERIFIED, format!("no HTTP client: {error}")),
     };
@@ -538,11 +535,16 @@ async fn remote_findings(host: &str, declared: &[(String, String)]) -> Vec<Findi
             })
             .collect()
     };
-    let output =
-        match crate::deploy::host_channel::run_installed_helper(host, PROBE_HELPER, &runner).await {
-            Ok(output) => output,
-            Err(error) => return unverified(root_cause(&error)),
-        };
+    let output = match crate::deploy::host_channel::run_installed_helper(
+        host,
+        PROBE_HELPER,
+        &runner,
+    )
+    .await
+    {
+        Ok(output) => output,
+        Err(error) => return unverified(root_cause(&error)),
+    };
     let parsed: Value = match serde_json::from_str(output.trim()) {
         Ok(parsed) => parsed,
         Err(error) => return unverified(format!("probe returned no usable JSON: {error}")),
@@ -657,8 +659,8 @@ fn emit(findings: &[Finding], json_output: bool) {
         return;
     }
     println!(
-        "{:<22} {:<20} {:<34} {:<12} {}",
-        "SERVICE", "HOST", "ENDPOINT", "STATE", "DETAIL"
+        "{:<22} {:<20} {:<34} {:<12} DETAIL",
+        "SERVICE", "HOST", "ENDPOINT", "STATE"
     );
     for finding in findings {
         println!(

@@ -29,7 +29,7 @@ stado doctor --fix-hints
 Expected results:
 
 - `config init` prints the path to the new `$HOME/.stado/config.json`;
-- the file selects only the local compute provider, local primary and backup storage, a local deployment identity, and loopback dashboard binding;
+- the file selects only the local compute provider, local primary and backup storage, no remote deployment binding, and loopback dashboard binding;
 - `config validate` prints `config ok (<path>)`;
 - `doctor --fix-hints` reports actionable missing workload dependencies without requiring cloud credentials.
 

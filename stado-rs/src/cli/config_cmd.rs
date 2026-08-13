@@ -110,6 +110,8 @@ fn initialize_local_registry(home: &std::path::Path) -> Result<(), CmdError> {
         vec![identity]
     };
     let policy_unit = crate::providers::local::disk_cleanup::STATE_VERSION;
+    let release_platform = crate::self_update::platform_triple_short()
+        .map_err(|error| CmdError::click(error.to_string()))?;
     let registry = serde_json::json!({
         "schema_version": crate::targets::REGISTRY_SCHEMA_VERSION,
         "coordinators": [],
@@ -117,6 +119,7 @@ fn initialize_local_registry(home: &std::path::Path) -> Result<(), CmdError> {
             "name": target_name,
             "kind": "local",
             "hostnames": hostnames,
+            "release_platform": release_platform,
             "slots": policy_unit,
             "disk_cleanup": {
                 "mode": "off",
@@ -326,10 +329,7 @@ fn show() -> Result<(), CmdError> {
         "azure_vm_identity_id".into(),
         Value::from(config::azure_vm_identity_id()),
     );
-    resolved.insert(
-        "stado_api_url".into(),
-        Value::from(config::stado_api_url()),
-    );
+    resolved.insert("stado_api_url".into(), Value::from(config::stado_api_url()));
     resolved.insert(
         "stado_release_version".into(),
         Value::from(config::stado_release_version()),
@@ -337,6 +337,10 @@ fn show() -> Result<(), CmdError> {
     resolved.insert(
         "stado_release_platform".into(),
         Value::from(config::stado_release_platform()),
+    );
+    resolved.insert(
+        "dashboard_trust_https_proxy".into(),
+        Value::from(config::dashboard_trust_https_proxy()),
     );
     resolved.insert(
         "stado_deployment_id".into(),

@@ -59,8 +59,8 @@ fn write_key(private_key: &str) -> Result<KeyFile, DeployError> {
         .map_err(|error| DeployError(error.to_string()))?
         .as_nanos();
     let path = std::env::temp_dir().join(format!("stado-host-key-{}-{nonce}", std::process::id()));
-    let owner_mode = u32::from_str_radix("600", u32::from(u8::BITS))
-        .map_err(|error| DeployError(error.to_string()))?;
+    let owner_mode =
+        u32::from_str_radix("600", u8::BITS).map_err(|error| DeployError(error.to_string()))?;
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)

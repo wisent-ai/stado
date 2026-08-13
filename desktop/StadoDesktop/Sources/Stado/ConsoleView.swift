@@ -36,6 +36,7 @@ struct ConsoleView: View {
     @State private var selection: ConsoleSection? = .overview
     @State private var showsDeploymentSetup = false
     @State private var showsDeploymentAccess = false
+    @State private var showsAccountConnection = false
 
     var body: some View {
         NavigationSplitView {
@@ -59,6 +60,22 @@ struct ConsoleView: View {
                 .navigationTitle((selection ?? .overview).title)
                 .toolbar {
                     ToolbarItemGroup(placement: .primaryAction) {
+                        Button {
+                            showsAccountConnection = true
+                        } label: {
+                            Label(
+                                auth.identity == nil ? "Sign in to Wisent" : "Wisent account",
+                                systemImage: auth.identity == nil
+                                    ? "person.crop.circle"
+                                    : "person.crop.circle.badge.checkmark"
+                            )
+                        }
+                        .help(
+                            auth.identity == nil
+                                ? "Sign in to manage remote Stado deployments"
+                                : "Manage the Wisent account used for remote deployments"
+                        )
+
                         SettingsLink {
                             Label("Settings", systemImage: "gearshape")
                         }
@@ -88,7 +105,9 @@ struct ConsoleView: View {
         .task(id: auth.identity?.organization.id) {
             configureAuthorization()
             await deploymentStore.load(identity: auth.identity)
-            configureSelectedDeployment()
+            configureSelectedSource()
+            await store.refresh()
+            await cleanupStore.refresh()
         }
         .onChange(of: auth.session?.accessToken) { _, _ in
             configureAuthorization()
@@ -98,7 +117,7 @@ struct ConsoleView: View {
             }
         }
         .onChange(of: deploymentStore.selectedDeploymentID) { _, _ in
-            configureSelectedDeployment()
+            configureSelectedSource()
         }
         .sheet(
             isPresented: Binding(
@@ -107,7 +126,7 @@ struct ConsoleView: View {
                         && !deploymentStore.isLoading
                         && (
                             showsDeploymentSetup
-                                || deploymentStore.selectedDeployment?.status != .ready
+                                || (!store.isConfigured && deploymentStore.selectedDeployment?.status != .ready)
                         )
                 },
                 set: { showsDeploymentSetup = $0 }
@@ -131,6 +150,27 @@ struct ConsoleView: View {
                 )
             }
         }
+        .sheet(isPresented: $showsAccountConnection) {
+            WisentAuthGate(store: auth) {
+                VStack(spacing: StadoTheme.Space.md) {
+                    Image(systemName: "person.crop.circle.badge.checkmark")
+                        .font(.system(size: 36))
+                        .foregroundStyle(.green)
+                    Text("Wisent account connected")
+                        .font(.title2.weight(.semibold))
+                    Text("Remote deployment management is available. Local Stado remains connected directly on this Mac.")
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.secondary)
+                    Button("Done") {
+                        showsAccountConnection = false
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                }
+                .padding(StadoTheme.Space.xl)
+                .frame(minWidth: 460, minHeight: 280)
+            }
+        }
     }
     private func configureAuthorization() {
         store.configureAuthorization(token: auth.session?.accessToken)
@@ -138,13 +178,24 @@ struct ConsoleView: View {
     }
 
 
-    private func configureSelectedDeployment() {
-        guard let endpoint = deploymentStore.selectedDeployment?.endpoint else { return }
+    private func configureSelectedSource() {
+        let endpoint: String
+        if let deployment = deploymentStore.selectedDeployment {
+            guard let selectedEndpoint = deployment.endpoint else {
+                store.clearDashboardURL()
+                cleanupStore.clearDashboardURL()
+                return
+            }
+            endpoint = selectedEndpoint
+        } else {
+            endpoint = DashboardEndpointPreference.localURL
+        }
         do {
             try store.saveDashboardURL(endpoint)
             try cleanupStore.saveDashboardURL(endpoint)
         } catch {
-            return
+            store.clearDashboardURL()
+            cleanupStore.clearDashboardURL()
         }
     }
 
@@ -224,13 +275,22 @@ struct ConsoleView: View {
                     .frame(width: StadoTheme.Layout.statusDot, height: StadoTheme.Layout.statusDot)
                     .accessibilityHidden(true)
                 Menu {
+                    Button {
+                        deploymentStore.selectLocal()
+                    } label: {
+                        Label(
+                            "Local Stado",
+                            systemImage: deploymentStore.selectedDeploymentID == nil
+                                ? "checkmark"
+                                : "desktopcomputer"
+                        )
+                    }
+                    if !deploymentStore.deployments.isEmpty {
+                        Divider()
+                    }
                     ForEach(deploymentStore.deployments) { deployment in
                         Button {
                             deploymentStore.select(deployment)
-                            Task {
-                                await store.refresh()
-                                await cleanupStore.refresh()
-                            }
                         } label: {
                             Label(
                                 deployment.name,
@@ -244,19 +304,19 @@ struct ConsoleView: View {
                         Divider()
                     }
                     Button {
-                        showsDeploymentSetup = true
+                        presentDeploymentSetup()
                     } label: {
                         Label("New Deployment…", systemImage: "plus")
                     }
                     Button {
-                        showsDeploymentAccess = true
+                        presentDeploymentAccess()
                     } label: {
                         Label("Manage Access…", systemImage: "person.2")
                     }
                     .disabled(deploymentStore.selectedDeployment == nil)
                 } label: {
                     VStack(alignment: .leading, spacing: StadoTheme.Space.xxs) {
-                        Text(deploymentStore.selectedDeployment?.name ?? sourceLabel)
+                        Text(deploymentStore.selectedDeployment?.name ?? "Local Stado")
                             .font(.caption.weight(.semibold))
                         Text(sourceLabel)
                             .font(.caption2)
@@ -271,6 +331,22 @@ struct ConsoleView: View {
         }
         .padding(StadoTheme.Space.sm)
         .background(.bar)
+    }
+
+    private func presentDeploymentSetup() {
+        if auth.identity == nil {
+            showsAccountConnection = true
+        } else {
+            showsDeploymentSetup = true
+        }
+    }
+
+    private func presentDeploymentAccess() {
+        if auth.identity == nil {
+            showsAccountConnection = true
+        } else {
+            showsDeploymentAccess = true
+        }
     }
 
     private var sourceTone: StatusTone {

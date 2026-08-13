@@ -221,7 +221,10 @@ fn checkout_root(directory: &Path) -> Option<PathBuf> {
 /// reachability is unknown, and unknown is then reported as unknown rather
 /// than folded into "not reachable".
 pub fn local_repo() -> Option<PathBuf> {
-    if let Some(repo) = std::env::current_exe().ok().and_then(|exe| source_repo(&exe)) {
+    if let Some(repo) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| source_repo(&exe))
+    {
         return Some(repo);
     }
     checkout_root(&std::env::current_dir().ok()?)

@@ -490,9 +490,7 @@ fn candidate(
     if job.pin_to_provider && !job.provider.is_empty() && job.provider != offer.provider.as_str() {
         rejected.push(format!("job is pinned to provider {}", job.provider));
     }
-    if !job.pinned_host.is_empty()
-        && !offer.target_id.eq_ignore_ascii_case(&job.pinned_host)
-    {
+    if !job.pinned_host.is_empty() && !offer.target_id.eq_ignore_ascii_case(&job.pinned_host) {
         rejected.push(format!("job is pinned to host {}", job.pinned_host));
     }
     if !offer.existing
