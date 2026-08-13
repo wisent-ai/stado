@@ -32,7 +32,7 @@ if parsed.scheme != "https" or not parsed.hostname or parsed.path not in ("", "/
 host = parsed.hostname
 if ":" in host and not host.startswith("["):
     host = f"[{host}]"
-print(urlunsplit(("https", f"{host}:8443", "", "", "")))
+print(urlunsplit(("https", f"{host}:8765", "", "", "")))
 PY
 )
 

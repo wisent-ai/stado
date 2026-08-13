@@ -6,7 +6,7 @@ set -eu
   exit 1
 }
 
-environment_file="$HOME/.stado/files/stado-agent-grant.env"
+environment_file="$HOME/.stado/stado-agent-grant.env"
 [ -f "$environment_file" ] || {
   printf '%s\n' "missing $environment_file" >&2
   exit 1
