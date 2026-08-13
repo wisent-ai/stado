@@ -33,7 +33,7 @@ struct StadoApp: App {
         .menuBarExtraStyle(.window)
 
         Settings {
-            SettingsView(deploymentStore: deploymentStore)
+            SettingsView(deploymentStore: deploymentStore, operationsStore: operationsStore)
         }
     }
 

@@ -88,7 +88,9 @@ struct ConsoleView: View {
         .task(id: auth.identity?.organization.id) {
             configureAuthorization()
             await deploymentStore.load(identity: auth.identity)
-            configureSelectedDeployment()
+            configureSelectedSource()
+            await store.refresh()
+            await cleanupStore.refresh()
         }
         .onChange(of: auth.session?.accessToken) { _, _ in
             configureAuthorization()
@@ -98,7 +100,7 @@ struct ConsoleView: View {
             }
         }
         .onChange(of: deploymentStore.selectedDeploymentID) { _, _ in
-            configureSelectedDeployment()
+            configureSelectedSource()
         }
         .sheet(
             isPresented: Binding(
@@ -107,7 +109,7 @@ struct ConsoleView: View {
                         && !deploymentStore.isLoading
                         && (
                             showsDeploymentSetup
-                                || deploymentStore.selectedDeployment?.status != .ready
+                                || (!store.isConfigured && deploymentStore.selectedDeployment?.status != .ready)
                         )
                 },
                 set: { showsDeploymentSetup = $0 }
@@ -138,13 +140,24 @@ struct ConsoleView: View {
     }
 
 
-    private func configureSelectedDeployment() {
-        guard let endpoint = deploymentStore.selectedDeployment?.endpoint else { return }
+    private func configureSelectedSource() {
+        let endpoint: String
+        if let deployment = deploymentStore.selectedDeployment {
+            guard let selectedEndpoint = deployment.endpoint else {
+                store.clearDashboardURL()
+                cleanupStore.clearDashboardURL()
+                return
+            }
+            endpoint = selectedEndpoint
+        } else {
+            endpoint = DashboardEndpointPreference.localURL
+        }
         do {
             try store.saveDashboardURL(endpoint)
             try cleanupStore.saveDashboardURL(endpoint)
         } catch {
-            return
+            store.clearDashboardURL()
+            cleanupStore.clearDashboardURL()
         }
     }
 
@@ -256,7 +269,7 @@ struct ConsoleView: View {
                     .disabled(deploymentStore.selectedDeployment == nil)
                 } label: {
                     VStack(alignment: .leading, spacing: StadoTheme.Space.xxs) {
-                        Text(deploymentStore.selectedDeployment?.name ?? sourceLabel)
+                        Text(deploymentStore.selectedDeployment?.name ?? "Local Stado")
                             .font(.caption.weight(.semibold))
                         Text(sourceLabel)
                             .font(.caption2)
