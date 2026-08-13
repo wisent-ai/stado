@@ -110,6 +110,8 @@ fn initialize_local_registry(home: &std::path::Path) -> Result<(), CmdError> {
         vec![identity]
     };
     let policy_unit = crate::providers::local::disk_cleanup::STATE_VERSION;
+    let release_platform = crate::self_update::platform_triple_short()
+        .map_err(|error| CmdError::click(error.to_string()))?;
     let registry = serde_json::json!({
         "schema_version": crate::targets::REGISTRY_SCHEMA_VERSION,
         "coordinators": [],
@@ -117,6 +119,7 @@ fn initialize_local_registry(home: &std::path::Path) -> Result<(), CmdError> {
             "name": target_name,
             "kind": "local",
             "hostnames": hostnames,
+            "release_platform": release_platform,
             "slots": policy_unit,
             "disk_cleanup": {
                 "mode": "off",
