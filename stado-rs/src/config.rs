@@ -479,7 +479,6 @@ pub fn dashboard_trust_https_proxy() -> bool {
     *DASHBOARD_TRUST_HTTPS_PROXY
 }
 
-
 /// Capacity blob is "live" if its published_at is within this many seconds
 /// (env `WC_DASHBOARD_AGENT_FRESH_SECONDS`).
 pub fn dashboard_agent_fresh_seconds() -> i64 {
