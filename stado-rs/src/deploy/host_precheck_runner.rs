@@ -306,7 +306,7 @@ hook=$(mktemp)
 cat > "$hook" <<'HOOK'
 #!/bin/sh
 set -eu
-find /opt/wisent/stado-precheck-runner/_work -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+find /opt/wisent/stado-precheck-runner/_work -mindepth 1 -maxdepth 1 ! -name '_*' -exec rm -rf -- {} +
 HOOK
 root install -o root -g root -m 0755 "$hook" "$runner_root/clean-work.sh"
 rm -f "$hook"
@@ -451,7 +451,7 @@ hook=$(mktemp)
 cat > "$hook" <<'HOOK'
 #!/bin/sh
 set -eu
-find /Users/Shared/stado-precheck-runner/_work -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+find /Users/Shared/stado-precheck-runner/_work -mindepth 1 -maxdepth 1 ! -name '_*' -exec rm -rf -- {} +
 HOOK
 root install -o root -g wheel -m 0755 "$hook" "$runner_root/clean-work.sh"
 rm -f "$hook"
