@@ -200,6 +200,14 @@ export LC_ALL
 stado_home="$HOME/.stado"
 bin_dir="$stado_home/bin"
 forward_dir="$stado_home/forwards"
+
+kernel=$(/usr/bin/uname -s 2>/dev/null || :)
+architecture=$(/usr/bin/uname -m 2>/dev/null || :)
+case "$kernel:$architecture" in
+  Darwin:arm64) release_platform=darwin-arm64 ;;
+  Linux:x86_64|Linux:amd64) release_platform=linux-amd64 ;;
+  *) release_platform=unsupported ;;
+esac
 field_limit=200
 # The cap on how many files each vault section reports. A directory with a
 # thousand files must not produce an unbounded report; what was matched
@@ -299,7 +307,8 @@ else
   forwards_dir_state=missing
 fi
 
-printf '{"forwards_dir_state":"%s","managed_binaries":[' "$forwards_dir_state"
+printf '{"release_platform":"%s","forwards_dir_state":"%s","managed_binaries":[' \
+  "$release_platform" "$forwards_dir_state"
 
 separator=""
 for binary_name in stado skarbiec; do
@@ -718,6 +727,8 @@ pub struct Inventory {
     /// through that sanitizer, so this is the field that says whether any of
     /// them can be believed.
     pub sanitizer_state: String,
+    /// Platform derived from the remote kernel and architecture.
+    pub release_platform: String,
     pub forwards_dir_state: String,
     pub managed_binaries: Vec<ManagedBinary>,
     pub forwards: Vec<ForwardMarker>,
@@ -772,6 +783,7 @@ fn clamp_vault_section(files: &mut Vec<VaultFile>, seen: &mut u64) {
 /// Cap every string in the inventory.
 fn clamp_inventory(inventory: &mut Inventory) {
     clamp(&mut inventory.forwards_dir_state);
+    clamp(&mut inventory.release_platform);
     clamp(&mut inventory.sanitizer_state);
     clamp(&mut inventory.listeners_state);
     for binary in &mut inventory.managed_binaries {
@@ -1099,6 +1111,22 @@ pub fn to_report(
     report.insert(
         "sanitizer_state".to_string(),
         json!(inventory.sanitizer_state),
+    );
+    report.insert(
+        "release_platform".to_string(),
+        json!(inventory.release_platform),
+    );
+    report.insert(
+        "declared_release_platform".to_string(),
+        json!(target.release_platform),
+    );
+    report.insert(
+        "release_platform_verdict".to_string(),
+        json!(if inventory.release_platform == target.release_platform {
+            MATCHED
+        } else {
+            MISMATCHED
+        }),
     );
     report.insert(
         "forwards_dir_state".to_string(),

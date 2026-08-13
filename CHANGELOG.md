@@ -15,6 +15,15 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   their credential boundaries.
 - Made the macOS bundle use its repository-owned canonical app icon without
   depending on a nonexistent asset resolver.
+### Release control
+
+- Added repository-owned Stado release manifests, immutable source inputs,
+  signed build and delivery receipts, and provider-specific delivery adapters.
+- Added fleet-wide product catalog ownership, retry-safe release submission,
+  canonical promotion, exact-digest host reconciliation, and blue-green
+  rollback state.
+- Release-managed runtimes now receive their immutable product, version,
+  platform, and artifact digest identity in the process environment.
 
 ### Onboarding platform
 
@@ -24,6 +33,36 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   a real authorized job result rather than deployment or setup navigation.
 - Replaced the Oko-specific onboarding relay with the same closed,
   least-privilege operation contract used by every registered product client.
+
+### Coding clients
+
+- Added `stado host jeden-connect` to place interactive Jeden RPC sessions on
+  live registry hosts, require existing ledgers for resume placement, and carry
+  the canonical bidirectional stream to native desktop clients.
+
+### Service routing
+
+- Directory consumer mutations now advance the routing generation atomically,
+  preventing resolvers from rejecting changed directories as stale.
+- Resolver adapters now close idle client streams after a bounded interval,
+  preventing retained HTTP keep-alives from exhausting file descriptors and
+  blocking every routed service.
+
+### Local inference
+
+- The documented `chat-primary` profile now uses a Featherless route for the
+  same Cydonia model as its ordered fallback. With `gpu_mode=yieldable`, queued
+  GPU work pauses local vLLM while Brama keeps chat available remotely.
+- Route publication now accepts a temporarily stopped `yieldable` local primary
+  when an ordered fallback is present; unavailable exclusive primaries and local
+  fallbacks remain rejected.
+
+### Credential recovery
+
+- `stado credentials harvest --restore` now writes an owner-local Skarbiec vault
+  through the Skarbiec CLI's field-aware contract instead of the retired
+  whole-item HTTP payload. Restored values still move only over stdin and are
+  never printed.
 
 ## 0.5.0-rc.1 - 2026-07-29
 
@@ -39,8 +78,8 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
 
 ### Release engineering
 
-- Changed production publication from default-branch pushes to explicit
-  `stado-v*` tags or manual dispatch.
+- Replaced the split tag-triggered publication path with one default-branch
+  release/delivery run using standard `v<version>` tags.
 - Unified crate licensing with the repository Apache License file.
 - Defined nightly, candidate, and stable channels, immutable release manifests,
   supported platforms, compatibility rules, and upgrade/rollback gates.

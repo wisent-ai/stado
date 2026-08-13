@@ -30,6 +30,19 @@ const REQUESTS_PREFIX: &str = "enrollments/";
 const STATUS_PENDING: &str = "pending";
 const STATUS_APPROVED: &str = "approved";
 
+/// Map one directly observed operating-system and architecture pair to the
+/// closed immutable-release platform table. Both Rust's local constants and
+/// the exact `uname` spellings used by remote enrollment are accepted.
+pub fn release_platform(os: &str, arch: &str) -> Result<&'static str, String> {
+    match (os.trim(), arch.trim()) {
+        ("macos", "aarch64") | ("Darwin", "arm64") => Ok("darwin-arm64"),
+        ("linux", "x86_64") | ("Linux", "x86_64") => Ok("linux-amd64"),
+        (os, arch) => Err(format!(
+            "unsupported release platform observation: os={os:?}, arch={arch:?}"
+        )),
+    }
+}
+
 fn request_path(hostname: &str) -> String {
     format!("{REQUESTS_PREFIX}{hostname}.json")
 }
@@ -81,6 +94,7 @@ pub async fn join() -> Result<bool, String> {
         Ok(document) => catalog::require_join_allowed(&document)?,
         Err(_) => println!("note: registry not readable here; the catalog gates at approve"),
     }
+    release_platform(std::env::consts::OS, std::env::consts::ARCH)?;
     let request = build_request(&hostname, std::env::consts::OS, std::env::consts::ARCH);
     let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
     let created = store
@@ -156,9 +170,24 @@ pub async fn approve(hostname: &str, fleet_name: Option<&str>) -> Result<bool, S
         .and_then(Value::as_str)
         .unwrap_or("local")
         .to_string();
+    let request_os = request
+        .get("os")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "join request has no operating system".to_string())?;
+    let request_arch = request
+        .get("arch")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "join request has no architecture".to_string())?;
+    let release_platform = release_platform(request_os, request_arch)?;
     let document = fetch_document().await.map_err(|exc| exc.to_string())?;
     catalog::require_join_allowed(&document)?;
-    let next = register_target(&document, &name, &kind, &[request_hostname.clone()])?;
+    let next = register_target(
+        &document,
+        &name,
+        &kind,
+        std::slice::from_ref(&request_hostname),
+        release_platform,
+    )?;
     let generation = push_document(&next).await.map_err(|exc| exc.to_string())?;
     println!("approved '{request_hostname}' as target '{name}' (generation {generation})");
     if let Some(fleet) = fleet_name {

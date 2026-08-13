@@ -25,7 +25,7 @@ Only route-local or process-local values should be overridden:
 | `STADO_API_TOKEN` | Dedicated caller token for its mapped object namespace. |
 | `STADO_MACHINE_API_TOKEN` | Machine submit/status/cancel token. |
 | `STADO_SERVICE_API_TOKEN` | Caller-specific deployer token; accepted only for mapped service names/actions. |
-| `STADO_RELEASE_API_URL` | Public HTTPS Stado origin serving `/api/release/object`. |
+| `STADO_API_URL` | Canonical HTTPS Stado origin, including `/api/release/object`. |
 | `STADO_RELEASE_VERSION` | Required exact immutable Stado runtime version. |
 | `STADO_RELEASE_PLATFORM` | Required exact Stado runtime platform for dispatched agents. |
 | `STADO_ALERT_CHANNELS` | Explicit comma-separated optional adapters: `slack`, `telegram`, `sendgrid`, `gcp-pubsub`. |
@@ -273,7 +273,8 @@ Bootstrap the gateway snapshot before Brama's first managed start:
 
 ```sh
 stado inference route set example-client/chat/primary \
-  --to qwen/default --expected absent --gateway gpu-host
+  --to example-provider/example-model \
+  --expected absent --gateway control-host
 ```
 
 ```sh
@@ -281,18 +282,40 @@ stado inference plan chat-primary \
   --host gpu-host \
   --image 'vllm/vllm-openai@sha256:770fe65b2c73ee74a5c42165cf3433de4048cc2cd9c57a937ca4e35aba5aa87b' \
   --cache-dir /mnt/wd16tb/stado/inference/chat-primary \
-  --model 'Qwen/Qwen2.5-72B-Instruct-AWQ' \
-  --revision '698703eae6604af048a3d2f509995dc302088217'
+  --model 'TheDrummer/Cydonia-24B-v4.3' \
+  --gpu-mode yieldable \
+  --max-model-len 16384 \
+  --revision 'db0426d39d4bd4a6d34fdc71db97569da68f55e1'
 stado inference apply <plan-id>
 stado inference doctor chat-primary
 stado inference verify chat-primary
 stado inference route set example-client/chat/primary \
-  --to chat-primary --fallback qwen/default \
-  --expected qwen/default --gateway gpu-host
+  --to chat-primary \
+  --fallback example-provider/example-model \
+  --expected example-provider/example-model \
+  --gateway control-host
 ```
-The pinned AWQ model is the quality-first single-GPU profile for the registered
-RTX Pro 6000 Blackwell with 96 GB VRAM. The immutable Hugging Face revision and
-amd64 vLLM image digest above prevent silent model or runtime replacement.
+The pinned Cydonia model is the quality-first single-GPU profile for the
+registered RTX Pro 6000 Blackwell with 96 GB VRAM. The immutable Hugging Face
+revision and amd64 vLLM image digest prevent silent model or runtime replacement.
+
+`kv_cache_memory_gb` sets a fixed vLLM KV-cache allocation in GiB. Omitting it
+preserves the pinned image's own memory policy. A smaller cache releases VRAM
+without changing model weights or output quality, but lowers the number of
+tokens and long requests that can remain active concurrently.
+
+`gpu_mode` defaults to `exclusive`, which keeps the GPU reserved for inference.
+`yieldable` makes the local Stado agent the lifecycle owner: it pauses the
+inference container when an eligible GPU job is queued, advertises the released
+capacity, and resumes inference only after queued and active GPU work has
+cleared. Eligibility includes provider, accelerator, host pin, centralized
+assignment, and capacity constraints; there is no timeout-based eviction.
+Brama's ordered Featherless fallback remains available while the local
+container is yielded.
+`route set` therefore accepts a non-ready `yieldable` deployment only as the
+primary of a route with at least one ordered fallback. It still requires an
+`exclusive` primary and every local fallback to be ready, so an unavailable
+deployment cannot be published as the route's only destination.
 
 If `plan` or `apply` reports an unmanaged GPU workload, inspect it through the
 same target-scoped host channel instead of opening an ad hoc SSH session:
@@ -343,8 +366,10 @@ registry data. Route changes require `--expected`, probe the destination first,
 stage an owner-only route snapshot on the gateway, compare-and-swap the
 registry, and then atomically commit the snapshot. Brama reloads that file per
 request, so cutover needs no backend restart. Ordered `--fallback` destinations
-are attempted when the primary provider fails; `qwen/default` therefore
-preserves service while local vLLM is unavailable. `rollback` reinstalls the
+are attempted when the primary provider fails;
+`example-provider/example-model` therefore preserves the same model
+contract while local vLLM is unavailable.
+`rollback` reinstalls the
 recorded prior deployment; `retire` refuses while any primary or fallback route
 still selects the deployment and retains model cache unless `--purge-cache` is
 explicit.

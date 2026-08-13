@@ -78,6 +78,11 @@ pub async fn install(
     let endpoint_host = shlex_quote(&deployment.endpoint.host);
     let port = deployment.endpoint.port;
     let max_model_len = deployment.resources.max_model_len;
+    let kv_cache_argument = deployment
+        .resources
+        .kv_cache_memory_gb
+        .map(|gib| format!(" --kv-cache-memory {}", gib * 1024 * 1024 * 1024))
+        .unwrap_or_default();
     let cache_dir = deployment
         .resources
         .cache_dir
@@ -143,7 +148,7 @@ systemctl --user disable --now "$unit" || true
 rm -f "$HOME/.config/systemd/user/$unit"
 systemctl --user daemon-reload || true
 docker rm -f "stado-inference-$name" || true
-container=$(docker run --detach --restart unless-stopped --name "stado-inference-$name" --gpus all --network host --ipc host --env-file "$root/runtime.env" -v {cache_mount} {raw_image} --model {raw_repository} --revision {raw_revision} --served-model-name {raw_name} --host {raw_endpoint_host} --port {port} --max-model-len {max_model_len} --enable-auto-tool-choice --tool-call-parser hermes)
+container=$(docker run --detach --restart unless-stopped --name "stado-inference-$name" --gpus all --network host --ipc host --env-file "$root/runtime.env" -v {cache_mount} {raw_image} --model {raw_repository} --revision {raw_revision} --served-model-name {raw_name} --host {raw_endpoint_host} --port {port} --max-model-len {max_model_len}{kv_cache_argument} --enable-auto-tool-choice --tool-call-parser hermes)
 printf 'CONTAINER\t%s\n' "$container"
 printf 'STATUS\tstarted\n'
 "#,
@@ -156,6 +161,47 @@ printf 'STATUS\tstarted\n'
     let output =
         host_channel::run_script_with_timeout(target, &script, startup_timeout(), runner).await?;
     Ok(report(target, &output, "started"))
+}
+
+pub async fn update_reservation(
+    target: &ComputeTarget,
+    deployment: &Deployment,
+    runner: &Runner,
+) -> Result<Value, DeployError> {
+    safe_runtime(deployment)?;
+    let name = shlex_quote(&deployment.name);
+    let reservation = Reservation {
+        deployment: deployment.name.clone(),
+        target: deployment.target.clone(),
+        gpu_mode: deployment.resources.gpu_mode.clone(),
+        engine: deployment.engine.name.clone(),
+        model: deployment.model.repository.clone(),
+        revision: deployment.model.revision.clone(),
+        endpoint_host: deployment.endpoint.host.clone(),
+        port: deployment.endpoint.port,
+    };
+    let reservation =
+        shlex_quote(&STANDARD.encode(
+            serde_json::to_vec(&reservation).map_err(|error| DeployError(error.to_string()))?,
+        ));
+    let script = format!(
+        r#"set -euo pipefail
+name={name}
+path="$HOME/.stado/inference/reservation.json"
+if [ ! -f "$path" ] || ! grep -F '"deployment":"'"$name"'"' "$path" >/dev/null; then
+  printf 'ERROR\tactive inference reservation does not match %s\n' "$name"; exit 1
+fi
+temporary="$path.tmp.$$"
+trap 'rm -f "$temporary"' EXIT
+printf '%s' {reservation} | base64 --decode > "$temporary"
+chmod 600 "$temporary"
+mv "$temporary" "$path"
+trap - EXIT
+printf 'STATUS\tupdated\n'
+"#
+    );
+    let output = host_channel::run_script(target, &script, runner).await?;
+    Ok(report(target, &output, "updated"))
 }
 
 pub async fn status(

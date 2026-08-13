@@ -93,6 +93,7 @@ pub(crate) async fn construct_backend(
             crate::config::wc_stado_storage_url(),
             crate::config::wc_stado_storage_namespace(),
             crate::config::wc_stado_storage_token_file(),
+            crate::config::wc_stado_storage_ca_file(),
         )?)),
         StorageAdapter::Local => Ok(Arc::new(LocalBackend::new(locator.path)?)),
     }

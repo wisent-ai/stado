@@ -51,7 +51,6 @@ use crate::providers;
 use crate::queue::{control, copy::Endpoint, JobStorage};
 use crate::scheduler::dispatch::agent;
 use crate::scheduler::quota;
-use crate::self_update;
 use crate::targets;
 
 /// Prefix the storage round-trip probe writes under. Not a queue-state
@@ -1149,16 +1148,15 @@ async fn check_quota(store: Option<&JobStorage>, store_error: &str) -> Check {
 
 const RELEASE_ID: &str = "release";
 const RELEASE_TITLE: &str = "Release channel";
-const RELEASE_REMEDY: &str = "set STADO_RELEASE_API_URL plus exact STADO_RELEASE_VERSION and \
-     STADO_RELEASE_PLATFORM (config keys release.api_url, release.version, and \
-     release.platform); publish both the binary and SHA256SUMS at the canonical \
-     stado://releases/stado/<version>/<platform>/ prefix";
+const RELEASE_REMEDY: &str = "set canonical STADO_API_URL plus exact STADO_RELEASE_VERSION and \
+     STADO_RELEASE_PLATFORM (config keys api.url, release.version, and release.platform); publish \
+     the canonical archive and manifest for every supported platform";
 
 /// GET the exact release checksum manifest through the same public Stado route
 /// used by agent startup. A missing coordinate, route failure, malformed
 /// manifest, or absent binary checksum is a hard failure before dispatch.
 async fn check_release_channel() -> Check {
-    let api = config::stado_release_api_url();
+    let api = config::stado_api_url();
     let version = config::stado_release_version();
     let platform = config::stado_release_platform();
     let local_only = config::wc_providers()
@@ -1185,7 +1183,8 @@ async fn check_release_channel() -> Check {
         return findings.into_check(RELEASE_ID, RELEASE_TITLE, RELEASE_REMEDY);
     }
 
-    let uri = format!("stado://releases/stado/{version}/{platform}/SHA256SUMS");
+    let uri =
+        format!("stado://releases/stado/{version}/{platform}/release-manifest-{platform}.json");
     let endpoint = format!("{api}/api/release/object");
     let response = match reqwest::Client::new()
         .get(&endpoint)
@@ -1225,22 +1224,45 @@ async fn check_release_channel() -> Check {
             return findings.into_check(RELEASE_ID, RELEASE_TITLE, RELEASE_REMEDY);
         }
     };
-    match self_update::parse_sha256sums(&body) {
-        Ok(sums) if sums.contains_key("stado") => findings.note(
-            Status::Pass,
-            format!("{uri} is immutable, reachable, and supplies the stado checksum"),
-        ),
+    match serde_json::from_str::<Value>(&body) {
+        Ok(manifest)
+            if manifest.get("product").and_then(Value::as_str) == Some("stado")
+                && manifest.get("version").and_then(Value::as_str) == Some(version.as_str())
+                && manifest.get("platform").and_then(Value::as_str) == Some(platform.as_str())
+                && manifest.as_object().is_some_and(|object| object.len() == 5)
+                && manifest
+                    .get("source_commit")
+                    .and_then(Value::as_str)
+                    .is_some_and(|commit| {
+                        matches!(commit.len(), 40 | 64)
+                            && commit.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    })
+                && manifest
+                    .get("sha256")
+                    .and_then(Value::as_str)
+                    .is_some_and(|digest| {
+                        digest.len() == 64
+                            && digest
+                                .bytes()
+                                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                    }) =>
+        {
+            findings.note(
+                Status::Pass,
+                format!("{uri} is reachable and identifies the immutable release archive"),
+            )
+        }
         Ok(_) => {
             findings.note(
                 Status::Fail,
-                format!("{uri} has no checksum for stado; agent installation fails closed"),
+                format!("{uri} has invalid identity or archive digest"),
             );
             findings.remedy(RELEASE_REMEDY);
         }
         Err(error) => {
             findings.note(
                 Status::Fail,
-                format!("{uri} is not a valid checksum manifest: {error}"),
+                format!("{uri} is not a valid release manifest: {error}"),
             );
             findings.remedy(RELEASE_REMEDY);
         }

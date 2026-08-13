@@ -2,6 +2,10 @@
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+template_dir=$script_dir
+if [ ! -f "$template_dir/com.wisent.stado-resolver.plist.tmpl" ]; then
+  template_dir=$HOME/.stado/files
+fi
 stado_bin=${STADO_BIN:-$HOME/.stado/bin/stado}
 resolver_user=${STADO_RESOLVER_USER:-$(id -un)}
 if [ ! -x "$stado_bin" ]; then
@@ -28,7 +32,7 @@ case $(uname -s) in
         -e "s|{TARGET}|$target|g" \
         -e "s|{HOME}|$HOME|g" \
         -e "s|{USER}|$resolver_user|g" \
-        "$script_dir/com.wisent.stado-resolver.system.plist.tmpl" > "$rendered"
+        "$template_dir/com.wisent.stado-resolver.system.plist.tmpl" > "$rendered"
       destination=/Library/LaunchDaemons/com.wisent.stado-resolver.plist
       sudo launchctl bootout system/com.wisent.stado-resolver >/dev/null 2>&1 || true
       sudo install -o root -g wheel -m 0644 "$rendered" "$destination"
@@ -41,7 +45,7 @@ case $(uname -s) in
         -e "s|{STADO_BIN}|$stado_bin|g" \
         -e "s|{TARGET}|$target|g" \
         -e "s|{HOME}|$HOME|g" \
-        "$script_dir/com.wisent.stado-resolver.plist.tmpl" > "$destination"
+        "$template_dir/com.wisent.stado-resolver.plist.tmpl" > "$destination"
       launchctl bootout "gui/$(id -u)/com.wisent.stado-resolver" >/dev/null 2>&1 || true
       launchctl bootstrap "gui/$(id -u)" "$destination"
       launchctl enable "gui/$(id -u)/com.wisent.stado-resolver"
@@ -56,7 +60,7 @@ case $(uname -s) in
       -e "s|{STADO_BIN}|$stado_bin|g" \
       -e "s|{TARGET}|$target|g" \
       -e "s|{HOME}|$HOME|g" \
-      "$script_dir/stado-service-resolver.service.tmpl" > "$destination"
+      "$template_dir/stado-service-resolver.service.tmpl" > "$destination"
     systemctl --user daemon-reload
     systemctl --user enable --now stado-service-resolver.service
     ;;

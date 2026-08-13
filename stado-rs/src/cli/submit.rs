@@ -182,17 +182,25 @@ async fn resolve_input_artifacts(
                 ))
             })?;
         requested.insert(name.to_string(), Value::from(reference));
-        resolved.insert(
-            name.to_string(),
-            Value::Object(Map::from_iter([
-                ("ref".into(), Value::from(manifest.ref_.to_string())),
-                ("uri".into(), Value::from(primary.uri.clone())),
-                (
-                    "manifest_sha256".into(),
-                    Value::from(manifest.verification.manifest_sha256.clone()),
-                ),
-            ])),
-        );
+        let mut resolved_input = Map::from_iter([
+            ("ref".into(), Value::from(manifest.ref_.to_string())),
+            ("uri".into(), Value::from(primary.uri.clone())),
+            (
+                "manifest_sha256".into(),
+                Value::from(manifest.verification.manifest_sha256.clone()),
+            ),
+        ]);
+        if primary.uri.starts_with("stado://") {
+            resolved_input.insert("stado_uri".into(), Value::from(primary.uri.clone()));
+            resolved_input.insert(
+                "relative_path".into(),
+                Value::from(format!("inputs/{name}")),
+            );
+            if !primary.sha256.is_empty() {
+                resolved_input.insert("sha256".into(), Value::from(primary.sha256.clone()));
+            }
+        }
+        resolved.insert(name.to_string(), Value::Object(resolved_input));
     }
     Ok((requested, resolved))
 }
@@ -200,7 +208,9 @@ pub(crate) fn parse_secret_env(
     values: &[String],
 ) -> Result<BTreeMap<String, crate::models::JobSecretRef>, CmdError> {
     let env_re = regex::Regex::new(r"^[A-Za-z_][A-Za-z0-9_]*$").expect("static regex compiles");
-    let part_re =
+    let item_re =
+        regex::Regex::new(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$").expect("static regex compiles");
+    let field_re =
         regex::Regex::new(r"^[A-Za-z0-9][A-Za-z0-9._-]*$").expect("static regex compiles");
     let mut parsed = BTreeMap::new();
     for value in values {
@@ -214,7 +224,7 @@ pub(crate) fn parse_secret_env(
                 "--secret-env must be ENV_NAME=SKARBIEC_ITEM#FIELD: {value:?}"
             )));
         };
-        if !env_re.is_match(env_name) || !part_re.is_match(item) || !part_re.is_match(field) {
+        if !env_re.is_match(env_name) || !item_re.is_match(item) || !field_re.is_match(field) {
             return Err(CmdError::click(format!(
                 "--secret-env contains an unsafe environment, item, or field name: {value:?}"
             )));

@@ -65,7 +65,11 @@ async fn observe_apple_accounts(target_name: &str) -> Option<Vec<String>> {
         return None;
     }
     let found = account_ids(report.get("stdout").and_then(Value::as_str)?);
-    if found.is_empty() { None } else { Some(found) }
+    if found.is_empty() {
+        None
+    } else {
+        Some(found)
+    }
 }
 
 /// Ask the host which of its users hold Apple accounts, via the installed probe.
@@ -135,7 +139,9 @@ fn is_local_target(target: &ComputeTarget) -> bool {
     let Ok(output) = std::process::Command::new("hostname").arg("-s").output() else {
         return false;
     };
-    let host = String::from_utf8_lossy(&output.stdout).trim().to_lowercase();
+    let host = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .to_lowercase();
     if host.is_empty() {
         return false;
     }
@@ -143,7 +149,14 @@ fn is_local_target(target: &ComputeTarget) -> bool {
     // while the registry records the mDNS form "operator-host.local", and
     // an exact match silently fails on that suffix -- reporting the local machine as
     // unverifiable while standing on it.
-    let label = |value: &str| value.to_lowercase().split('.').next().unwrap_or("").to_string();
+    let label = |value: &str| {
+        value
+            .to_lowercase()
+            .split('.')
+            .next()
+            .unwrap_or("")
+            .to_string()
+    };
     let host = label(&host);
     label(&target.name) == host || target.hostnames.iter().any(|name| label(name) == host)
 }
@@ -158,7 +171,11 @@ fn local_apple_accounts() -> Option<Vec<String>> {
         return None;
     }
     let found = account_ids(&String::from_utf8_lossy(&output.stdout));
-    if found.is_empty() { None } else { Some(found) }
+    if found.is_empty() {
+        None
+    } else {
+        Some(found)
+    }
 }
 
 fn binding_row(target: &ComputeTarget, binding: &IdentityBinding, observed: Option<bool>) -> Value {
@@ -179,7 +196,9 @@ fn binding_row(target: &ComputeTarget, binding: &IdentityBinding, observed: Opti
 }
 
 pub async fn list(json_output: bool) -> Result<(), CmdError> {
-    let registry = load_registry_auto().await.map_err(|error| CmdError::click(error.to_string()))?;
+    let registry = load_registry_auto()
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
     let rows: Vec<Value> = registry
         .targets
         .iter()
@@ -191,14 +210,17 @@ pub async fn list(json_output: bool) -> Result<(), CmdError> {
         })
         .collect();
     if json_output {
-        println!("{}", serde_json::to_string_pretty(&rows).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&rows).unwrap_or_default()
+        );
         return Ok(());
     }
     if rows.is_empty() {
         println!("no host declares an identity binding");
         return Ok(());
     }
-    println!("{:<24} {:<16} {:<32} {}", "HOST", "KIND", "IDENTITY", "USER");
+    println!("{:<24} {:<16} {:<32} USER", "HOST", "KIND", "IDENTITY");
     for row in &rows {
         println!(
             "{:<24} {:<16} {:<32} {}",
@@ -217,7 +239,9 @@ pub async fn list(json_output: bool) -> Result<(), CmdError> {
 /// that needs a trusted device can gate on this and fail with "no host holds
 /// <identity>" instead of dispatching work that cannot possibly complete.
 pub async fn verify(kind: String, identity: String, json_output: bool) -> Result<(), CmdError> {
-    let registry = load_registry_auto().await.map_err(|error| CmdError::click(error.to_string()))?;
+    let registry = load_registry_auto()
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
     let mut rows: Vec<Value> = Vec::new();
     let mut satisfied = false;
 
@@ -228,11 +252,11 @@ pub async fn verify(kind: String, identity: String, json_output: bool) -> Result
             }
             let observed = match binding.kind.as_str() {
                 // Reading the machine we are already running on needs neither SSH nor
-                // sudo: a user's own MobileMeAccounts is readable by that user. Going
-                // out over the network to ask a question we can answer in-process was
-                // what made this host report `unknown` while it was in fact signed in
-                // -- a false negative that points the operator at the wrong machine.
-                APPLE_ACCOUNT if is_local_target(target) => {
+                // sudo only when the binding names the channel's login user. A binding
+                // for another local user still needs the installed multi-user probe;
+                // reading this process's preferences would confidently answer the
+                // wrong account.
+                APPLE_ACCOUNT if is_local_target(target) && probes_own_user(target, binding) => {
                     local_apple_accounts().map(|found| found.iter().any(|e| e == &identity))
                 }
                 // A binding naming someone other than the channel's login user is

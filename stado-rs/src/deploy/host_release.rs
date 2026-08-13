@@ -9,12 +9,13 @@
 //!
 //! It is not a new idea. Weles already ships the pattern this follows step
 //! for step (`weles/scripts/worker/deploy/README.md`, "macOS worker +
-//! auto-deploy"): fetch the exact configured artifact through
-//! `/api/release/object`, verify its independently configured SHA-256, check
-//! the required layout, stage it under a versioned directory, and only after
-//! every artifact is verified repoint the active release and restart the
-//! units. "A missing or mismatched worker or browser artifact leaves the
-//! currently active release untouched and aborts the deployment." That
+//! auto-deploy"): fetch the canonical platform manifest and adjacent archive
+//! through `/api/release/object`, verify the archive SHA-256, check the
+//! required layout, stage the selected member under a versioned directory,
+//! and only after every artifact is verified repoint the active release and
+//! restart the unit.
+//! A missing or mismatched release archive leaves the currently active
+//! release untouched and aborts the deployment. That
 //! sentence is the whole design; everything below is it, applied to one
 //! managed binary instead of a worker tree.
 //!
@@ -28,13 +29,11 @@
 //! - **`--version` is an exact coordinate**, not a channel and not an
 //!   alias. `latest` is a legal path segment, which is exactly why nothing
 //!   here resolves one — see [`crate::release::canonical_coordinate`].
-//! - **The digest is configured, never derived.** The host verifies what it
-//!   downloaded against a SHA-256 the OPERATOR recorded for that coordinate,
-//!   carried down from this side. It never fetches its own checksum
-//!   manifest, so an endpoint that can serve a wrong artifact cannot also
-//!   serve the checksum that would bless it. This is the one place this
-//!   module is deliberately stricter than [`crate::deploy::bootstrap`],
-//!   whose remote script downloads `SHA256SUMS` next to the binaries.
+//! - **The digest comes from the canonical release manifest.** The control
+//!   plane reads `release-manifest-<platform>.json` through the same Stado release API
+//!   and storage contract that serves the artifact, validates its immutable
+//!   product/version/platform/source-commit identity, and carries that digest
+//!   to the host. Missing or malformed catalog data is a refusal.
 //! - **Delivery executes a declaration; it does not replace one.** A host
 //!   that declares no version for the binary, or declares a different one
 //!   than `--version` names, is refused. Deciding what a host should run is
@@ -101,12 +100,6 @@ pub const MARKER: &str = "STADO_RELEASE";
 /// supposed to be running. Named here only so a refusal can tell an
 /// operator where to write the declaration.
 pub const MANAGED_VERSIONS_KEY: &str = "managed_versions";
-
-/// Config key holding the operator's own record of what each release
-/// coordinate must contain: `"<binary>/<version>/<platform>" -> <sha256>`.
-pub const DIGESTS_KEY: &str = "release.managed_digests";
-/// Environment override for [`DIGESTS_KEY`], carrying the same JSON object.
-pub const DIGESTS_ENV: &str = "STADO_MANAGED_RELEASE_DIGESTS";
 
 /// One binary this command is allowed to deliver.
 ///
@@ -280,45 +273,6 @@ fn declared_version<'a>(target: &'a ComputeTarget, binary: &str) -> Option<&'a s
         .filter(|version| !version.is_empty())
 }
 
-/// The coordinate a configured digest is keyed by.
-pub fn digest_coordinate(binary: &str, version: &str, platform: &str) -> String {
-    format!("{binary}/{version}/{platform}")
-}
-
-/// The operator's recorded SHA-256 for one exact coordinate.
-///
-/// Absent is a refusal, never a fallback. The point of a configured digest
-/// is that it is an independent record of what the coordinate must contain;
-/// a command that shrugged and checksummed whatever arrived would verify
-/// only that the download was not corrupted in flight, which is the one
-/// failure TLS already covers.
-pub fn configured_digest(
-    binary: &str,
-    version: &str,
-    platform: &str,
-) -> Result<String, DeployError> {
-    let coordinate = digest_coordinate(binary, version, platform);
-    let table = match std::env::var(DIGESTS_ENV) {
-        Ok(raw) if !raw.trim().is_empty() => serde_json::from_str::<Value>(&raw)
-            .map_err(|error| DeployError(format!("{DIGESTS_ENV} is not JSON: {error}")))?,
-        _ => crate::config_file::get(DIGESTS_KEY).unwrap_or(Value::Null),
-    };
-    let Some(digest) = table.get(coordinate.as_str()).and_then(Value::as_str) else {
-        return Err(DeployError(format!(
-            "no configured SHA-256 for {coordinate}; record it under {DIGESTS_KEY} \
-             (or {DIGESTS_ENV}) first. The digest is the operator's own record of what \
-             that coordinate contains, so this command will not accept one computed \
-             from whatever the host happens to download"
-        )));
-    };
-    if !is_sha256(digest) {
-        return Err(DeployError(format!(
-            "configured SHA-256 for {coordinate} is not 64 lowercase hex characters"
-        )));
-    }
-    Ok(digest.to_string())
-}
-
 // ---------------------------------------------------------------------------
 // The plan
 // ---------------------------------------------------------------------------
@@ -329,7 +283,8 @@ pub struct ReleaseRequest {
     pub binary: String,
     pub version: String,
     pub platform: String,
-    /// The operator's recorded digest for the coordinate.
+    /// Commit and digest stated by the canonical immutable release manifest.
+    pub source_commit: String,
     pub sha256: String,
     /// The public Stado origin serving immutable releases.
     pub release_api: String,
@@ -344,6 +299,7 @@ pub struct ReleasePlan {
     pub version: String,
     pub platform: String,
     pub sha256: String,
+    pub source_commit: String,
     pub release_api: String,
     pub declared_version: String,
     pub dry_run: bool,
@@ -351,10 +307,23 @@ pub struct ReleasePlan {
 
 impl ReleasePlan {
     /// The exact object the host will fetch.
+    /// The exact immutable archive the host will fetch.
     pub fn release_uri(&self) -> String {
         format!(
-            "stado://releases/{}/{}/{}/{}",
-            self.managed.product, self.version, self.platform, self.managed.name
+            "stado://releases/{}/{}/{}/{}-v{}-{}.tar.gz",
+            self.managed.product,
+            self.version,
+            self.platform,
+            self.managed.product,
+            self.version,
+            self.platform
+        )
+    }
+
+    pub fn archive_name(&self) -> String {
+        format!(
+            "{}-v{}-{}.tar.gz",
+            self.managed.product, self.version, self.platform
         )
     }
 
@@ -387,11 +356,26 @@ pub fn plan(target: &ComputeTarget, request: &ReleaseRequest) -> Result<ReleaseP
         )));
     }
     let platform = managed_platform(&request.platform)?;
-    if !is_sha256(&request.sha256) {
+    if target.release_platform != platform {
         return Err(DeployError(format!(
-            "the configured SHA-256 for {} is not 64 lowercase hex characters",
-            digest_coordinate(managed.name, &request.version, platform)
+            "target {:?} declares release_platform {}, not {platform}",
+            target.name, target.release_platform
         )));
+    }
+    if !is_sha256(&request.sha256) {
+        return Err(DeployError(
+            "the canonical release manifest carries an invalid SHA-256".to_string(),
+        ));
+    }
+    if !matches!(request.source_commit.len(), 40 | 64)
+        || !request
+            .source_commit
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(DeployError(
+            "the canonical release manifest carries an invalid source_commit".to_string(),
+        ));
     }
     if !request.release_api.starts_with("https://")
         || request
@@ -400,9 +384,7 @@ pub fn plan(target: &ComputeTarget, request: &ReleaseRequest) -> Result<ReleaseP
             .any(|byte| byte.is_ascii_whitespace())
     {
         return Err(DeployError(
-            "the Stado release origin must be a whitespace-free HTTPS URL; set \
-             STADO_RELEASE_API_URL or release.api_url"
-                .to_string(),
+            "canonical STADO_API_URL must be a whitespace-free HTTPS URL".to_string(),
         ));
     }
     let Some(declared) = declared_version(target, managed.name) else {
@@ -426,6 +408,7 @@ pub fn plan(target: &ComputeTarget, request: &ReleaseRequest) -> Result<ReleaseP
         version: request.version.clone(),
         platform: platform.to_string(),
         sha256: request.sha256.clone(),
+        source_commit: request.source_commit.clone(),
         release_api: request.release_api.trim_end_matches('/').to_string(),
         declared_version: declared.to_string(),
         dry_run: request.dry_run,
@@ -604,73 +587,74 @@ say sanitizer "$sanitizer_state"
 say step probe
 "##;
 
-/// Phase two: fetch, verify, check the layout, stage.
-///
-/// Nothing in here touches `$HOME/.stado/bin`. Every exit before the last
-/// line leaves the running version exactly as it was, which is the property
-/// the phase split exists to make obvious.
+/// Phase two: fetch the release archive, verify its catalog digest, extract
+/// exactly the fixed managed-binary member, verify its declared version, and stage it.
 pub const REMOTE_STAGE_BODY: &str = r##"
 stado_release_step=stage
 stado_home="$HOME/.stado"
 staged_dir="$stado_home/releases/$binary/$version/$platform"
 staged_path="$staged_dir/$binary"
+archive_path="$staged_dir/.$archive_name.incoming"
 incoming="$staged_dir/.$binary.incoming"
 
 case "$release_api" in
   https://*) ;;
   *) say fetch refused_not_https; exit 1 ;;
 esac
-if [ ! -x /usr/bin/curl ]; then
-  say fetch no_curl
-  exit 1
-fi
-if [ ! -x /usr/bin/openssl ]; then
-  say verify no_openssl
-  exit 1
-fi
+for required in /usr/bin/curl /usr/bin/openssl /usr/bin/tar; do
+  if [ ! -x "$required" ]; then
+    say fetch "missing_${required##*/}"
+    exit 1
+  fi
+done
 
 /bin/mkdir -p "$staged_dir"
-/bin/rm -f "$incoming"
+/bin/rm -f "$archive_path" "$incoming"
 if /usr/bin/curl -fsSL --get \
-  --data-urlencode "uri=stado://releases/$product/$version/$platform/$binary" \
-  "$release_api/api/release/object" -o "$incoming"; then
+  --data-urlencode "uri=stado://releases/$product/$version/$platform/$archive_name" \
+  "$release_api/api/release/object" -o "$archive_path"; then
   say fetch ok
 else
-  /bin/rm -f "$incoming"
+  /bin/rm -f "$archive_path" "$incoming"
   say fetch failed
   exit 1
 fi
 
-# Against the digest this side carried down, never against a manifest
-# fetched from the same place as the artifact.
-digest_line=$(/usr/bin/openssl dgst -sha256 -r "$incoming")
+digest_line=$(/usr/bin/openssl dgst -sha256 -r "$archive_path")
 actual_sha256=${digest_line%% *}
-# The comparison below is against the RAW value, never the sanitized copy
-# `say` prints. Sanitizing is a reporting concern; a broken sanitizer must
-# not be able to turn a mismatched digest into a matching one.
 say sha256 "$actual_sha256"
 if [ "$actual_sha256" != "$expected_sha256" ]; then
-  /bin/rm -f "$incoming"
+  /bin/rm -f "$archive_path" "$incoming"
   say verify mismatch
   exit 1
 fi
 say verify ok
 
+member_count=0
+while IFS= read -r member; do
+  if [ "$member" = "$binary" ]; then
+    member_count=$((member_count + 1))
+  fi
+done <<EOF
+$(/usr/bin/tar -tzf "$archive_path")
+EOF
+if [ "$member_count" -ne 1 ]; then
+  /bin/rm -f "$archive_path" "$incoming"
+  say layout archive_member_missing_or_duplicated
+  exit 1
+fi
+if ! /usr/bin/tar -xOzf "$archive_path" "$binary" > "$incoming"; then
+  /bin/rm -f "$archive_path" "$incoming"
+  say layout archive_extract_failed
+  exit 1
+fi
+/bin/rm -f "$archive_path"
 if [ ! -s "$incoming" ]; then
   /bin/rm -f "$incoming"
   say layout empty
   exit 1
 fi
 /bin/chmod 755 "$incoming"
-if [ ! -x "$incoming" ]; then
-  /bin/rm -f "$incoming"
-  say layout not_executable
-  exit 1
-fi
-# The strongest layout check available for a single binary, and the one that
-# catches a correct digest recorded against the wrong coordinate: the
-# artifact has to declare the version it was fetched as. It is safe to run
-# only because the digest already matched.
 read_version "$incoming"
 if [ "$read_version_state" != reported ]; then
   /bin/rm -f "$incoming"
@@ -684,20 +668,14 @@ if [ "$read_version_value" != "$version" ]; then
 fi
 say layout ok
 
-# Publishing into the versioned slot is the last thing the phase does. The
-# bytes have matched the configured digest, so replacing whatever was in the
-# slot is a repair rather than a loss.
 /bin/mv -f "$incoming" "$staged_path"
 say staged "$version"
 say step stage
 "##;
 
-/// Phase three: activate, atomically.
-///
-/// The digest is checked again here, against the staged file. That is not
-/// belt and braces: it makes "an unverified artifact cannot become the
-/// active one" true of this program on its own, so the guarantee does not
-/// rest solely on the caller having run the phases in order.
+/// Phase three: atomically activate the version-checked file staged from the
+/// digest-verified archive. Re-reading the version makes this phase refuse a
+/// replaced or corrupt staged file independently of the caller's ordering.
 pub const REMOTE_ACTIVATE_BODY: &str = r##"
 stado_release_step=activate
 stado_home="$HOME/.stado"
@@ -706,56 +684,36 @@ active_path="$bin_dir/$binary"
 staged_path="$stado_home/releases/$binary/$version/$platform/$binary"
 pending="$bin_dir/.$binary.pending"
 
-if [ ! -x /usr/bin/openssl ]; then
-  say verify no_openssl
-  exit 1
-fi
-if [ -L "$staged_path" ] || [ ! -f "$staged_path" ]; then
+if [ -L "$staged_path" ] || [ ! -f "$staged_path" ] || [ ! -x "$staged_path" ]; then
   say verify staged_missing
   exit 1
 fi
-digest_line=$(/usr/bin/openssl dgst -sha256 -r "$staged_path")
-actual_sha256=${digest_line%% *}
-# Raw value again, for the reason the stage program states.
-say sha256 "$actual_sha256"
-if [ "$actual_sha256" != "$expected_sha256" ]; then
-  say verify mismatch
+read_version "$staged_path"
+if [ "$read_version_state" != reported ] || [ "$read_version_value" != "$version" ]; then
+  say verify staged_version_mismatch
   exit 1
 fi
 say verify ok
 
 /bin/mkdir -p "$bin_dir"
 /bin/rm -f "$pending"
-# A hard link, not a copy: the active binary IS the staged inode, so what
-# runs is provably the verified bytes and no second copy can drift from
-# them. It stays a regular file because host inventory refuses to read
-# through a symlink and would report the active binary as unreadable.
 /bin/ln "$staged_path" "$pending"
 /bin/chmod 755 "$pending"
-# One rename(2) in one directory. There is no instant at which the active
-# path is missing or half-written.
 /bin/mv -f "$pending" "$active_path"
 say activated "$version"
 say step activate
 "##;
 
-/// The coordinates one program is bound to, as quoted shell assignments.
-///
-/// The programs themselves are `&'static str` and no operator word is ever
-/// interpolated into one. What varies is this header, and every value in it
-/// has already passed a closed table ([`MANAGED_BINARIES`], [`PLATFORMS`])
-/// or a strict format check ([`is_exact_semver`], [`is_sha256`],
-/// HTTPS) before [`plan`] returned — then it is shell-quoted anyway, and the
-/// programs re-check what they can. This is the shape
-/// [`crate::deploy::bootstrap::remote_install_script`] uses.
+/// The checked coordinates one remote program is bound to.
 fn bindings(plan: &ReleasePlan) -> String {
     format!(
-        "binary={}\nproduct={}\nversion={}\nplatform={}\nexpected_sha256={}\n\
+        "binary={}\nproduct={}\nversion={}\nplatform={}\narchive_name={}\nexpected_sha256={}\n\
          release_api={}\nversion_argument={}\nversion_shape={}\n",
         shlex_quote(plan.managed.name),
         shlex_quote(plan.managed.product),
         shlex_quote(&plan.version),
         shlex_quote(&plan.platform),
+        shlex_quote(&plan.archive_name()),
         shlex_quote(&plan.sha256),
         shlex_quote(&plan.release_api),
         shlex_quote(plan.managed.version_argument),
@@ -877,6 +835,7 @@ pub async fn release_target(
     let plan = plan(target, request)?;
 
     let mut report = host_channel::base_report(target);
+    report.insert("source_commit".to_string(), json!(plan.source_commit));
     report.insert("binary".to_string(), json!(plan.managed.name));
     report.insert("version".to_string(), json!(plan.version));
     report.insert("platform".to_string(), json!(plan.platform));
@@ -1049,11 +1008,17 @@ fn planned_steps(plan: &ReleasePlan, unit: Option<&service::ManagedService>) -> 
             plan.release_uri(),
             plan.release_api
         ),
-        format!("verify sha256 {} against the fetched object", plan.sha256),
-        format!("verify the artifact declares {}", plan.version),
+        format!(
+            "verify archive sha256 {} from the release manifest",
+            plan.sha256
+        ),
+        format!(
+            "extract {} and verify it declares {}",
+            plan.managed.name, plan.version
+        ),
         format!("stage it at {}", plan.staged_path()),
         format!(
-            "re-verify sha256 and atomically repoint {} at the staged artifact",
+            "re-check the staged version and atomically repoint {}",
             plan.active_path()
         ),
     ];
@@ -1067,39 +1032,110 @@ fn planned_steps(plan: &ReleasePlan, unit: Option<&service::ManagedService>) -> 
     steps
 }
 
+pub(crate) async fn catalog_identity(
+    managed: &ManagedBinary,
+    version: &str,
+    platform: &str,
+) -> Result<(String, String), DeployError> {
+    let manifest_uri = format!(
+        "stado://releases/{}/{version}/{platform}/release-manifest-{platform}.json",
+        managed.product
+    );
+    let bytes = crate::cli::storage::fetch_object(&manifest_uri)
+        .await
+        .map_err(|error| {
+            DeployError(format!(
+                "canonical release manifest is unavailable at {manifest_uri}: {error}"
+            ))
+        })?;
+    let manifest: Value = serde_json::from_slice(&bytes)
+        .map_err(|error| DeployError(format!("canonical release manifest is invalid: {error}")))?;
+    let object = manifest.as_object().ok_or_else(|| {
+        DeployError("canonical release manifest must be a JSON object".to_string())
+    })?;
+    let expected_fields = ["platform", "product", "sha256", "source_commit", "version"];
+    if object.len() != expected_fields.len()
+        || expected_fields
+            .iter()
+            .any(|field| !object.contains_key(*field))
+    {
+        return Err(DeployError(
+            "canonical release manifest must contain exactly product, version, platform, \
+             source_commit, and sha256"
+                .to_string(),
+        ));
+    }
+    let exact = |field: &str, wanted: &str| -> Result<(), DeployError> {
+        let found = manifest
+            .get(field)
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if found == wanted {
+            Ok(())
+        } else {
+            Err(DeployError(format!(
+                "canonical release manifest {field} is {found:?}, expected {wanted:?}"
+            )))
+        }
+    };
+    exact("product", managed.product)?;
+    exact("version", version)?;
+    exact("platform", platform)?;
+    let source_commit = manifest
+        .get("source_commit")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let sha256 = manifest
+        .get("sha256")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    if !is_sha256(&sha256) {
+        return Err(DeployError(format!(
+            "canonical release manifest has no valid SHA-256 for {}",
+            managed.name
+        )));
+    }
+    if !matches!(source_commit.len(), 40 | 64)
+        || !source_commit.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(DeployError(
+            "canonical release manifest source_commit is invalid".to_string(),
+        ));
+    }
+    Ok((source_commit, sha256))
+}
+
 /// Deliver one managed binary to one canonical registry host.
-///
-/// The only thing this adds to [`release_target`] is where the coordinates
-/// come from: the registry for the host, and the operator's configuration
-/// for the origin and the digest.
 pub async fn release_host(
     target_name: &str,
     binary: &str,
     version: &str,
-    platform: &str,
     dry_run: bool,
     runner: &Runner,
 ) -> Result<Value, DeployError> {
-    // The binary and platform are resolved before the digest is looked up so
-    // an unknown name is answered with the allowlist rather than with a
-    // complaint about a coordinate nobody could have configured.
     let managed = managed_binary(binary)?;
-    let platform = managed_platform(platform)?;
     if !is_exact_semver(version) {
         return Err(DeployError(format!(
             "{version:?} is not an exact version; --version takes a semantic version such as \
              0.5.1, never a channel, an alias or a range. A release coordinate is immutable"
         )));
     }
+    let target = host_channel::canonical_target(target_name).await?;
+    let platform = managed_platform(&target.release_platform)?;
+    let release_api = crate::cli::storage::release_api_origin()
+        .map_err(|error| DeployError(error.to_string()))?;
+    let (source_commit, sha256) = catalog_identity(managed, version, platform).await?;
     let request = ReleaseRequest {
         binary: managed.name.to_string(),
         version: version.to_string(),
         platform: platform.to_string(),
-        sha256: configured_digest(managed.name, version, platform)?,
-        release_api: crate::config::stado_release_api_url(),
+        source_commit,
+        sha256,
+        release_api,
         dry_run,
     };
-    let target = host_channel::canonical_target(target_name).await?;
     release_target(&target, &request, runner).await
 }
 
