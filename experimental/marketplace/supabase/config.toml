@@ -1,0 +1,12 @@
+[project]
+id = "compute-wisent"
+
+[db]
+port = 54322
+major_version = 15
+
+[studio]
+port = 54323
+
+[api]
+port = 54321

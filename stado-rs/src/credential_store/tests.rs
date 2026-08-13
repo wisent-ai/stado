@@ -191,7 +191,6 @@ async fn skarbiec_helpers_honor_file_backend() {
         Err(SkarbiecError::MissingValue(id)) => assert_eq!(id, "stado-missing"),
         other => panic!("missing item must be MissingValue, got {other:?}"),
     }
-
 }
 
 #[cfg(unix)]

@@ -42,7 +42,12 @@ struct ObjectDescriptor {
 }
 
 impl StadoObjectBackend {
-    pub fn new(base_url: &str, namespace: &str, token_file: &str) -> Result<Self, StorageError> {
+    pub fn new(
+        base_url: &str,
+        namespace: &str,
+        token_file: &str,
+        ca_file: &str,
+    ) -> Result<Self, StorageError> {
         let mut base_url = Url::parse(base_url.trim())
             .map_err(|error| StorageError::Other(format!("invalid Stado storage URL: {error}")))?;
         let host = base_url.host_str().unwrap_or_default().to_ascii_lowercase();
@@ -106,8 +111,48 @@ impl StadoObjectBackend {
             base_url,
             namespace: namespace.to_string(),
             token,
-            client: Client::new(),
+            client: Self::client(ca_file)?,
         })
+    }
+
+    /// The HTTPS client, trusting the configured private authority in addition to
+    /// the system roots.
+    ///
+    /// A default client carries only the operating system's trust store, so an
+    /// object API published on the fleet's tailnet -- signed by the tailnet's own
+    /// authority -- fails during the handshake. `reqwest` surfaces that as the
+    /// opaque "error sending request", which reads like the host is down rather
+    /// than like this process was never told whom to trust. `storage.stado.ca_file`
+    /// was already in the deployed configuration and no code path read it, so the
+    /// only URL that ever worked was a loopback one and every host quietly
+    /// addressed its own store instead of the fleet's.
+    ///
+    /// The certificate is added, never substituted: publicly signed endpoints keep
+    /// working, and this cannot become a way to disable verification.
+    fn client(ca_file: &str) -> Result<Client, StorageError> {
+        let ca_file = ca_file.trim();
+        if ca_file.is_empty() {
+            return Ok(Client::new());
+        }
+        let path = crate::config_file::expand_tilde(ca_file);
+        let pem = std::fs::read(&path).map_err(|error| {
+            StorageError::Other(format!(
+                "cannot read Stado storage CA file {}: {error}",
+                path.display()
+            ))
+        })?;
+        let certificate = reqwest::Certificate::from_pem(&pem).map_err(|error| {
+            StorageError::Other(format!(
+                "Stado storage CA file {} is not a PEM certificate: {error}",
+                path.display()
+            ))
+        })?;
+        Client::builder()
+            .add_root_certificate(certificate)
+            .build()
+            .map_err(|error| {
+                StorageError::Other(format!("cannot build Stado storage HTTPS client: {error}"))
+            })
     }
 
     fn object(&self, path: &str) -> Result<ObjectRef, StorageError> {
@@ -160,6 +205,10 @@ impl StadoObjectBackend {
         let response = self
             .request(Method::PUT, self.object_url(path, &options)?)
             .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+            // Reqwest omits Content-Length for an empty Vec body. The object
+            // endpoint requires the header even when the payload is zero bytes,
+            // so empty logs and artifacts must declare their length explicitly.
+            .header(reqwest::header::CONTENT_LENGTH, content.len())
             .body(content)
             .send()
             .await?;

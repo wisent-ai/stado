@@ -45,37 +45,26 @@ pub async fn validate_object_verifier() -> Result<usize, SkarbiecError> {
     }
 
     let mut token_owners = HashMap::<Vec<u8>, &str>::new();
-    // Reads share one client concurrently: the Skarbiec listener is
-    // thread-per-connection, so serial per-item reads would multiply the
-    // vault's gpg latency by the namespace count for no benefit.
-    let reads: Vec<(&str, Result<Option<String>, SkarbiecError>)> =
-        futures::future::join_all(namespaces.iter().map(|(namespace, policy)| {
-            let client = &client;
-            async move {
-                (
-                    namespace.as_str(),
-                    client.read_string(policy.item(), "token").await,
-                )
-            }
-        }))
-        .await;
-    for (namespace, result) in reads {
-        // Which namespace could not be read is the whole content of this
-        // failure, and `?` alone drops it: the check then reports a bare
-        // "HTTP 403" for a sweep over seventeen items and leaves the operator
-        // to find the one by hand.
-        let token = result
+    // A Skarbiec request decrypts and rewrites shared vault/audit state.
+    // Unbounded startup fan-out caused intermittent connection resets and
+    // made the complete authorization boundary fail closed. Read serially:
+    // startup latency is bounded by the outer timeout, while the vault sees
+    // one operation at a time.
+    for (namespace, policy) in namespaces {
+        let token = client
+            .read_string(policy.item(), "token")
+            .await
             .map_err(|error| {
                 SkarbiecError::Deployment(format!(
                     "reading {}/token for namespace {namespace} failed: {error}",
-                    namespaces[namespace].item()
+                    policy.item()
                 ))
             })?
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| {
                 SkarbiecError::Deployment(format!(
                     "Skarbiec item {}/token is missing or empty for namespace {namespace}",
-                    namespaces[namespace].item()
+                    policy.item()
                 ))
             })?;
         let digest = Sha256::digest(token.as_bytes()).to_vec();

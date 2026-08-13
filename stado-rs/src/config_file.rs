@@ -123,6 +123,22 @@ pub fn config_path() -> Result<Option<PathBuf>, ConfigError> {
 
 /// Dotted-key walk over a JSON object; None when any segment is missing or
 /// an intermediate value is not an object (Python `_get`).
+///
+/// Private, and it must stay private. A caller holding a string-path reader can
+/// read a key nobody catalogued, and — the expensive direction — an operator can
+/// write a key nobody reads: that is precisely how `storage.stado.ca_file` came
+/// to sit in the deployed configuration with no reader at all. Configuration
+/// keys reach this walk only through a `ConfigField`: [`field_value`] for the
+/// running process, [`field_in`] and [`binding_in`] for a document under
+/// validation, and the dotted `get`/`resolve`/`resolve_list` primitives that
+/// `config.rs` drives from catalog entries rather than from literals.
+///
+/// What legitimately stays on the string form is everything that is not a
+/// configuration key: `schema_version` (the document's own contract), the
+/// placeholder walk over arbitrary nodes, the section-presence gates that ask
+/// only whether an operator declared a section at all, and the map sections
+/// whose member names are operator data rather than settings —
+/// `storage.<adapter>` and `integration.providers`.
 fn get_in<'a>(data: &'a Map<String, Value>, dotted: &str) -> Option<&'a Value> {
     let mut current: Option<&Value> = None;
     for (index, part) in dotted.split('.').enumerate() {
@@ -211,6 +227,89 @@ pub fn resolve_list(env_name: &str, dotted: &str, default: &[&str]) -> Vec<Strin
     default.iter().map(|s| s.to_string()).collect()
 }
 
+/// Every binding a catalogued field declares, in the precedence the catalog
+/// intends: the field's own environment override and path, then its fallback,
+/// then its backup replica. `ConfigField` states the pairs; this states their
+/// order once, so no reader can quietly grow a second one.
+fn field_bindings(
+    field: &crate::capabilities::ConfigField,
+) -> [(Option<&'static str>, Option<&'static str>); 3] {
+    [
+        (Some(field.env), Some(field.path)),
+        (field.fallback_env, field.fallback_path),
+        (field.backup_env, field.backup_path),
+    ]
+}
+
+/// Decode an environment override the way the catalog says the key reads: a
+/// scalar verbatim, a list as a trimmed comma split, a document as the JSON its
+/// parser expects. A set-but-empty variable counts as unset, matching
+/// [`resolve`]. A malformed document override yields None rather than a panic;
+/// the parser that owns the key already reports it against the key's own name.
+fn env_value(name: &str, kind: crate::capabilities::ConfigValueKind) -> Option<Value> {
+    let raw = std::env::var(name).ok().filter(|value| !value.is_empty())?;
+    match kind {
+        crate::capabilities::ConfigValueKind::Scalar => Some(Value::String(raw)),
+        crate::capabilities::ConfigValueKind::List => Some(Value::Array(
+            raw.split(',')
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .map(|part| Value::String(part.to_string()))
+                .collect(),
+        )),
+        crate::capabilities::ConfigValueKind::Document => serde_json::from_str(&raw).ok(),
+    }
+}
+
+/// The value of a catalogued configuration field, taken from the environment or
+/// the loaded config file in the catalog's own precedence.
+///
+/// Reading by dotted string is no longer available, and the incident that took
+/// it away is `storage.stado.ca_file`: it sat in the deployed configuration for
+/// months, read by nothing, while `config validate` and `doctor` both passed the
+/// whole time — because naming a key was free and binding it to a reader was
+/// optional. Every validator compared the document against itself; none of them
+/// could ask whether any code would ever consult the key, so the fleet published
+/// its object API under a private authority and trusted nothing.
+///
+/// A field is a reader. Requiring one here is what lets the catalog answer "who
+/// reads this?" for every setting, and what lets validation refuse a key that
+/// nobody does.
+///
+/// A path that is present but null counts as unwritten, so a null primary falls
+/// through to the fallback and backup bindings instead of shadowing them.
+pub fn field_value(field: &crate::capabilities::ConfigField) -> Option<Value> {
+    let data = load_config_file().expect("invalid stado config file");
+    field_bindings(field).into_iter().find_map(|(env, path)| {
+        env.and_then(|name| env_value(name, field.value_kind))
+            .or_else(|| {
+                path.and_then(|path| get_in(data, path))
+                    .filter(|value| !value.is_null())
+                    .cloned()
+            })
+    })
+}
+
+/// The value a *document* binds to a catalogued field's own path.
+///
+/// Validation judges the file an operator is about to deploy, so it deliberately
+/// does not consult the environment: an override exported in the shell that runs
+/// `stado config validate` is not a property of the document being validated.
+fn field_in<'a>(
+    root: &'a Map<String, Value>,
+    field: &crate::capabilities::ConfigField,
+) -> Option<&'a Value> {
+    get_in(root, field.path)
+}
+
+/// The value a document binds to one of a field's alternate paths — the fallback
+/// an older layout still honours, or the backup replica's mirror of the key.
+/// Both paths come from the catalog; a None path means the field declares no
+/// such binding, which is not the same as the binding being unset.
+fn binding_in<'a>(root: &'a Map<String, Value>, path: Option<&str>) -> Option<&'a Value> {
+    path.and_then(|path| get_in(root, path))
+}
+
 fn unresolved_placeholders(value: &Value, path: &str, problems: &mut Vec<String>) {
     match value {
         Value::Object(fields) => {
@@ -279,13 +378,8 @@ fn validate_variant_config(
         if !required {
             continue;
         }
-        let configured = path
-            .and_then(|path| get_in(root, path))
-            .is_some_and(py_truthy);
-        let fallback = (!backup)
-            .then_some(field.fallback_path)
-            .flatten()
-            .and_then(|path| get_in(root, path))
+        let configured = binding_in(root, path).is_some_and(py_truthy);
+        let fallback = binding_in(root, (!backup).then_some(field.fallback_path).flatten())
             .is_some_and(py_truthy);
         if !configured && !fallback {
             problems.push(format!(
@@ -294,6 +388,61 @@ fn validate_variant_config(
                 variant.id,
                 path.unwrap_or(field.path)
             ));
+        }
+    }
+}
+
+/// A key under a storage adapter must be one Stado actually reads.
+///
+/// `storage.stado.ca_file` sat in the deployed configuration for as long as the
+/// fleet published its object API over TLS, and no code path ever read it. It
+/// validated clean, `doctor` was satisfied, and the only storage URL that still
+/// worked was a loopback one — so every host quietly addressed its own store
+/// while both reported the same shared backend, and two machines held different
+/// registries without either noticing. An unknown key is not a harmless extra:
+/// it is a setting an operator believes is in effect.
+///
+/// The catalog is authoritative here in a way it is not for the rest of the
+/// document. A storage adapter's `ConfigField` list names every key its backend
+/// consumes, so anything else under that section is unread by construction, and
+/// saying so at validation time is the difference between a typo and a month of
+/// silent divergence. Sections whose adapter the catalog does not know are left
+/// alone: this reports keys that cannot be read, never adapters it cannot judge.
+fn unread_storage_keys(root: &Map<String, Value>, problems: &mut Vec<String>) {
+    let Some(storage) = root.get("storage").and_then(Value::as_object) else {
+        return;
+    };
+    for (adapter, section) in storage {
+        let Some(section) = section.as_object() else {
+            continue;
+        };
+        let Some(variant) =
+            crate::capabilities::variant(crate::capabilities::RuntimeFacet::Storage, adapter)
+        else {
+            continue;
+        };
+        let mut known = std::collections::BTreeSet::new();
+        for field in variant.config {
+            for path in [Some(field.path), field.fallback_path, field.backup_path]
+                .into_iter()
+                .flatten()
+            {
+                known.insert(path);
+            }
+        }
+        for key in section.keys() {
+            // Operators annotate these documents heavily, and a comment is not a
+            // claim about behaviour.
+            if key.starts_with('_') {
+                continue;
+            }
+            let path = format!("storage.{adapter}.{key}");
+            if !known.contains(path.as_str()) {
+                problems.push(format!(
+                    "{path} is not a key Stado reads; the {adapter:?} backend consumes only [{}]",
+                    known.iter().copied().collect::<Vec<_>>().join(", ")
+                ));
+            }
         }
     }
 }
@@ -313,7 +462,8 @@ pub fn validate(data: &Value) -> Vec<String> {
         )),
     }
     unresolved_placeholders(data, "", &mut problems);
-    if let Some(store) = get_in(root, "credentials.store") {
+    unread_storage_keys(root, &mut problems);
+    if let Some(store) = field_in(root, &crate::capabilities::CREDENTIALS_STORE_CONFIG) {
         match store.as_str().filter(|value| !value.trim().is_empty()) {
             Some(store) => {
                 if let Err(error) = crate::credential_store::parse_selector(store) {
@@ -323,14 +473,17 @@ pub fn validate(data: &Value) -> Vec<String> {
             None => problems.push("credentials.store must be a non-empty string".to_string()),
         }
     }
-    for field in ["credentials.admin.consumer", "credentials.admin.token_file"] {
-        if get_in(root, field)
+    for field in [
+        &crate::capabilities::CREDENTIALS_ADMIN_CONSUMER_CONFIG,
+        &crate::capabilities::CREDENTIALS_ADMIN_TOKEN_FILE_CONFIG,
+    ] {
+        if field_in(root, field)
             .is_some_and(|value| !value.as_str().is_some_and(|entry| !entry.trim().is_empty()))
         {
-            problems.push(format!("{field} must be a non-empty string"));
+            problems.push(format!("{} must be a non-empty string", field.path));
         }
     }
-    if let Some(channels) = get_in(root, "alerts.channels") {
+    if let Some(channels) = field_in(root, &crate::capabilities::ALERT_CHANNELS_CONFIG) {
         match channels {
             Value::Array(values) => {
                 let supported = crate::capabilities::configurable_ids(
@@ -355,7 +508,7 @@ pub fn validate(data: &Value) -> Vec<String> {
     let primary_field = crate::capabilities::STORAGE_BACKEND_CONFIG;
     let primary = catalog_variant(
         crate::capabilities::RuntimeFacet::Storage,
-        get_in(root, primary_field.path),
+        field_in(root, &primary_field),
         primary_field.path,
         &mut problems,
     );
@@ -368,7 +521,7 @@ pub fn validate(data: &Value) -> Vec<String> {
         .expect("storage backend catalog entry must define its backup path");
     let backup_variant = catalog_variant(
         crate::capabilities::RuntimeFacet::Storage,
-        get_in(root, backup_path),
+        binding_in(root, primary_field.backup_path),
         backup_path,
         &mut problems,
     );
@@ -393,7 +546,7 @@ pub fn validate(data: &Value) -> Vec<String> {
             ));
         }
     }
-    let configured_providers = match get_in(root, crate::capabilities::PROVIDERS_CONFIG.path)
+    let configured_providers = match field_in(root, &crate::capabilities::PROVIDERS_CONFIG)
         .filter(|value| !value.is_null())
     {
         Some(Value::Array(providers)) if providers.is_empty() => {
@@ -408,7 +561,7 @@ pub fn validate(data: &Value) -> Vec<String> {
         }
         None => &[],
     };
-    let disabled_providers = match get_in(root, crate::capabilities::DISABLED_PROVIDERS_CONFIG.path)
+    let disabled_providers = match field_in(root, &crate::capabilities::DISABLED_PROVIDERS_CONFIG)
         .filter(|value| !value.is_null())
     {
         Some(Value::Array(providers)) => providers.as_slice(),
@@ -485,11 +638,8 @@ pub fn validate(data: &Value) -> Vec<String> {
             continue;
         };
         for field in variant.config.iter().filter(|field| field.required) {
-            let configured = get_in(root, field.path).is_some_and(py_truthy)
-                || field
-                    .fallback_path
-                    .and_then(|path| get_in(root, path))
-                    .is_some_and(py_truthy);
+            let configured = field_in(root, field).is_some_and(py_truthy)
+                || binding_in(root, field.fallback_path).is_some_and(py_truthy);
             if !configured {
                 problems.push(format!(
                     "{} provider needs {} (environment override {})",
@@ -506,19 +656,21 @@ pub fn validate(data: &Value) -> Vec<String> {
     .iter()
     .any(|provider| active_providers.contains(provider));
     if cloud_agent_provider {
-        let release_api = get_in(root, "release.api_url")
+        let api = field_in(root, &crate::capabilities::API_URL_CONFIG)
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if release_api.is_empty() {
+        if api.is_empty() {
             problems.push(
-                "cloud agents need explicit release.api_url for the public Stado release endpoint"
-                    .to_string(),
+                "cloud agents need explicit api.url for the canonical Stado endpoint".to_string(),
             );
-        } else if !release_api.starts_with("https://") {
-            problems.push("release.api_url must use HTTPS".to_string());
+        } else if !api.starts_with("https://") {
+            problems.push("api.url must use HTTPS".to_string());
         }
-        for key in ["release.version", "release.platform"] {
-            let value = get_in(root, key)
+        for field in [
+            &crate::capabilities::RELEASE_VERSION_CONFIG,
+            &crate::capabilities::RELEASE_PLATFORM_CONFIG,
+        ] {
+            let value = field_in(root, field)
                 .and_then(Value::as_str)
                 .unwrap_or_default();
             if value.is_empty()
@@ -528,41 +680,43 @@ pub fn validate(data: &Value) -> Vec<String> {
                     .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
             {
                 problems.push(format!(
-                    "{key} must be an exact non-empty release coordinate containing only letters, digits, '.', '_' or '-'"
+                    "{} must be an exact non-empty release coordinate containing only letters, digits, '.', '_' or '-'",
+                    field.path
                 ));
             }
         }
     }
     let azure_provider = active_providers.contains(&crate::capabilities::ProviderId::Azure);
     if azure_provider {
-        if !get_in(root, "deployment.id").is_some_and(py_truthy) {
+        if !field_in(root, &crate::capabilities::DEPLOYMENT_ID_CONFIG).is_some_and(py_truthy) {
             problems.push(
                 "Azure control plane needs deployment.id for dashboard RLS and trusted-proxy \
                  deployment binding"
                     .to_string(),
             );
         }
-        for (key, remedy) in [
+        let control = crate::capabilities::SECRETS_SKARBIEC;
+        for (field, remedy) in [
             (
-                "secrets.skarbiec.url",
+                &control.url,
                 "Azure control plane needs secrets.skarbiec.url to resolve service credentials",
             ),
             (
-                "secrets.skarbiec.consumer",
+                &control.consumer,
                 "Azure control plane needs a dedicated secrets.skarbiec.consumer",
             ),
             (
-                "secrets.skarbiec.token_file",
+                &control.token_file,
                 "Azure control plane needs an owner-only secrets.skarbiec.token_file",
             ),
         ] {
-            if !get_in(root, key).is_some_and(py_truthy) {
+            if !field_in(root, field).is_some_and(py_truthy) {
                 problems.push(remedy.to_string());
             }
         }
     }
     if azure_provider
-        && get_in(root, "secrets.skarbiec.consumer").and_then(Value::as_str)
+        && field_in(root, &crate::capabilities::SECRETS_SKARBIEC.consumer).and_then(Value::as_str)
             != Some("stado-control-plane")
     {
         problems.push(
@@ -572,10 +726,10 @@ pub fn validate(data: &Value) -> Vec<String> {
         );
     }
     if azure_provider {
-        let agent_url = get_in(root, "agent.skarbiec.url")
+        let agent_url = field_in(root, &crate::capabilities::AGENT_SKARBIEC.url)
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let agent_consumer = get_in(root, "agent.skarbiec.consumer")
+        let agent_consumer = field_in(root, &crate::capabilities::AGENT_SKARBIEC.consumer)
             .and_then(Value::as_str)
             .unwrap_or_default();
         if !agent_url.starts_with("https://") {
@@ -596,14 +750,14 @@ pub fn validate(data: &Value) -> Vec<String> {
                     .to_string(),
             );
         }
-        if !get_in(root, "agent.skarbiec.token_file").is_some_and(py_truthy) {
+        if !field_in(root, &crate::capabilities::AGENT_SKARBIEC.token_file).is_some_and(py_truthy) {
             problems.push(
                 "agent.skarbiec.token_file is required; Stado cannot dispatch Azure VMs \
                  without an operator-provided owner-only workload grant"
                     .to_string(),
             );
         }
-        let agent_items = get_in(root, "agent.skarbiec.items")
+        let agent_items = field_in(root, &crate::capabilities::AGENT_SKARBIEC_ITEMS_CONFIG)
             .and_then(Value::as_array)
             .filter(|items| !items.is_empty());
         if !agent_items.is_some_and(|items| {
@@ -620,11 +774,14 @@ pub fn validate(data: &Value) -> Vec<String> {
             );
         }
     }
-    let configured_items = get_in(root, "agent.skarbiec.items")
+    let configured_items = field_in(root, &crate::capabilities::AGENT_SKARBIEC_ITEMS_CONFIG)
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    match get_in(root, "agent.skarbiec.secret_fields") {
+    match field_in(
+        root,
+        &crate::capabilities::AGENT_SKARBIEC_SECRET_FIELDS_CONFIG,
+    ) {
         None => {}
         Some(Value::Array(fields)) => {
             for entry in fields {
@@ -678,52 +835,60 @@ pub fn validate(data: &Value) -> Vec<String> {
             "agent.skarbiec.secret_fields must be an array of item#field strings".to_string(),
         ),
     }
-    let control_token_file = get_in(root, "secrets.skarbiec.token_file")
+    let control_token_file = field_in(root, &crate::capabilities::SECRETS_SKARBIEC.token_file)
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let object_token_file = get_in(root, "object_api.skarbiec.token_file")
+    let object_token_file = field_in(root, &crate::capabilities::OBJECT_API_SKARBIEC.token_file)
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let release_token_file = get_in(root, "release_api.skarbiec.token_file")
+    let release_token_file = field_in(root, &crate::capabilities::RELEASE_API_SKARBIEC.token_file)
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let machine_token_file = get_in(root, "machine_api.skarbiec.token_file")
+    let machine_token_file = field_in(root, &crate::capabilities::MACHINE_API_SKARBIEC.token_file)
         .and_then(Value::as_str)
         .unwrap_or_default();
+    // Section-presence gate rather than a key read: the checks below apply only
+    // to a messaging section an operator chose to declare at all.
     let messaging = get_in(root, "backend.messaging.skarbiec").and_then(Value::as_object);
     if messaging.is_some() {
-        let messaging_consumer = messaging
-            .and_then(|section| section.get("consumer"))
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        let messaging_consumer = field_in(
+            root,
+            &crate::capabilities::BACKEND_MESSAGING_SKARBIEC.consumer,
+        )
+        .and_then(Value::as_str)
+        .unwrap_or_default();
         if messaging_consumer != "wisent-backend-business-messaging" {
             problems.push(
             "backend.messaging.skarbiec.consumer must be the dedicated wisent-backend-business-messaging consumer"
                 .to_string(),
         );
         }
-        let messaging_token_file = messaging
-            .and_then(|section| section.get("token_file"))
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        let messaging_token_file = field_in(
+            root,
+            &crate::capabilities::BACKEND_MESSAGING_SKARBIEC.token_file,
+        )
+        .and_then(Value::as_str)
+        .unwrap_or_default();
         if messaging_token_file.is_empty() {
             problems.push(
             "backend.messaging.skarbiec.token_file must name the owner-only messaging grant file"
                 .to_string(),
         );
         }
-        for other_path in [
-            "secrets.skarbiec.token_file",
-            "agent.skarbiec.token_file",
-            "object_api.skarbiec.token_file",
-            "release_api.skarbiec.token_file",
-            "service_api.skarbiec.token_file",
+        for other in [
+            crate::capabilities::SECRETS_SKARBIEC,
+            crate::capabilities::AGENT_SKARBIEC,
+            crate::capabilities::OBJECT_API_SKARBIEC,
+            crate::capabilities::RELEASE_API_SKARBIEC,
+            crate::capabilities::SERVICE_API_SKARBIEC,
         ] {
             if !messaging_token_file.is_empty()
-                && get_in(root, other_path).and_then(Value::as_str) == Some(messaging_token_file)
+                && field_in(root, &other.token_file).and_then(Value::as_str)
+                    == Some(messaging_token_file)
             {
                 problems.push(format!(
-                    "backend.messaging.skarbiec.token_file must be distinct from {other_path}"
+                    "backend.messaging.skarbiec.token_file must be distinct from {}",
+                    other.token_file.path
                 ));
             }
         }
@@ -733,9 +898,11 @@ pub fn validate(data: &Value) -> Vec<String> {
             "stado-supabase",
         ];
         let optional_email_item = "wisent-backend-email-provider";
-        let messaging_items = messaging
-            .and_then(|section| section.get("items"))
-            .and_then(Value::as_array);
+        let messaging_items = field_in(
+            root,
+            &crate::capabilities::BACKEND_MESSAGING_SKARBIEC_ITEMS_CONFIG,
+        )
+        .and_then(Value::as_array);
         if !messaging_items.is_some_and(|items| {
             required_messaging_items
                 .iter()
@@ -767,17 +934,14 @@ pub fn validate(data: &Value) -> Vec<String> {
     let rate_limit = root.get("rate_limit").and_then(Value::as_object);
     if rate_limit.is_some() {
         if let Err(problem) = crate::rate_limit::parse_clients(
-            rate_limit
-                .and_then(|section| section.get("clients"))
-                .cloned(),
+            field_in(root, &crate::capabilities::RATE_LIMIT_CLIENTS_CONFIG).cloned(),
         ) {
             problems.push(problem);
         }
         let rate_skarbiec = rate_limit
             .and_then(|section| section.get("skarbiec"))
             .and_then(Value::as_object);
-        if rate_skarbiec
-            .and_then(|section| section.get("url"))
+        if field_in(root, &crate::capabilities::RATE_LIMIT_SKARBIEC.url)
             .is_some_and(|url| !py_truthy(url))
         {
             problems.push(
@@ -785,8 +949,7 @@ pub fn validate(data: &Value) -> Vec<String> {
                     .to_string(),
             );
         }
-        if rate_skarbiec
-            .and_then(|section| section.get("consumer"))
+        if field_in(root, &crate::capabilities::RATE_LIMIT_SKARBIEC.consumer)
             .and_then(Value::as_str)
             != Some(crate::config::RATE_LIMIT_API_VERIFIER_CONSUMER)
         {
@@ -795,8 +958,7 @@ pub fn validate(data: &Value) -> Vec<String> {
                 crate::config::RATE_LIMIT_API_VERIFIER_CONSUMER
             ));
         }
-        let rate_token_file = rate_skarbiec
-            .and_then(|section| section.get("token_file"))
+        let rate_token_file = field_in(root, &crate::capabilities::RATE_LIMIT_SKARBIEC.token_file)
             .and_then(Value::as_str)
             .unwrap_or_default();
         if rate_token_file.is_empty() {
@@ -805,20 +967,22 @@ pub fn validate(data: &Value) -> Vec<String> {
                 .to_string(),
         );
         }
-        for other_path in [
-            "secrets.skarbiec.token_file",
-            "agent.skarbiec.token_file",
-            "backend.messaging.skarbiec.token_file",
-            "object_api.skarbiec.token_file",
-            "release_api.skarbiec.token_file",
-            "machine_api.skarbiec.token_file",
-            "service_api.skarbiec.token_file",
+        for other in [
+            crate::capabilities::SECRETS_SKARBIEC,
+            crate::capabilities::AGENT_SKARBIEC,
+            crate::capabilities::BACKEND_MESSAGING_SKARBIEC,
+            crate::capabilities::OBJECT_API_SKARBIEC,
+            crate::capabilities::RELEASE_API_SKARBIEC,
+            crate::capabilities::MACHINE_API_SKARBIEC,
+            crate::capabilities::SERVICE_API_SKARBIEC,
         ] {
             if !rate_token_file.is_empty()
-                && get_in(root, other_path).and_then(Value::as_str) == Some(rate_token_file)
+                && field_in(root, &other.token_file).and_then(Value::as_str)
+                    == Some(rate_token_file)
             {
                 problems.push(format!(
-                    "rate_limit.skarbiec.token_file must be distinct from {other_path}"
+                    "rate_limit.skarbiec.token_file must be distinct from {}",
+                    other.token_file.path
                 ));
             }
         }
@@ -840,8 +1004,10 @@ pub fn validate(data: &Value) -> Vec<String> {
     }
     let integration = root.get("integration").and_then(Value::as_object);
     if integration.is_some() {
-        let integration_clients =
-            crate::config::parse_integration_clients(get_in(root, "integration.clients"));
+        let integration_clients = crate::config::parse_integration_clients(field_in(
+            root,
+            &crate::capabilities::INTEGRATION_CLIENTS_CONFIG,
+        ));
         match &integration_clients {
             Ok(clients) => {
                 for item in clients.values().map(|client| client.item()) {
@@ -858,17 +1024,17 @@ pub fn validate(data: &Value) -> Vec<String> {
             Err(integration_problems) => problems.extend(integration_problems.iter().cloned()),
         }
         if integration.is_some_and(|section| section.contains_key("providers")) {
-            if let Err(provider_problems) =
-                crate::config::parse_integration_providers(get_in(root, "integration.providers"))
-            {
+            if let Err(provider_problems) = crate::config::parse_integration_providers(field_in(
+                root,
+                &crate::capabilities::INTEGRATION_PROVIDERS_CONFIG,
+            )) {
                 problems.extend(provider_problems);
             }
         }
         let integration_skarbiec = integration
             .and_then(|section| section.get("skarbiec"))
             .and_then(Value::as_object);
-        if integration_skarbiec
-            .and_then(|section| section.get("url"))
+        if field_in(root, &crate::capabilities::INTEGRATION_SKARBIEC.url)
             .is_some_and(|url| !py_truthy(url))
         {
             problems.push(
@@ -876,8 +1042,7 @@ pub fn validate(data: &Value) -> Vec<String> {
                     .to_string(),
             );
         }
-        if integration_skarbiec
-            .and_then(|section| section.get("consumer"))
+        if field_in(root, &crate::capabilities::INTEGRATION_SKARBIEC.consumer)
             .and_then(Value::as_str)
             != Some(crate::config::INTEGRATION_API_VERIFIER_CONSUMER)
         {
@@ -886,31 +1051,33 @@ pub fn validate(data: &Value) -> Vec<String> {
                 crate::config::INTEGRATION_API_VERIFIER_CONSUMER
             ));
         }
-        let integration_token_file = integration_skarbiec
-            .and_then(|section| section.get("token_file"))
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        let integration_token_file =
+            field_in(root, &crate::capabilities::INTEGRATION_SKARBIEC.token_file)
+                .and_then(Value::as_str)
+                .unwrap_or_default();
         if integration_token_file.is_empty() {
             problems.push(
             "integration.skarbiec.token_file must name the owner-only integration verifier grant file"
                 .to_string(),
         );
         }
-        for other_path in [
-            "secrets.skarbiec.token_file",
-            "agent.skarbiec.token_file",
-            "backend.messaging.skarbiec.token_file",
-            "rate_limit.skarbiec.token_file",
-            "object_api.skarbiec.token_file",
-            "release_api.skarbiec.token_file",
-            "machine_api.skarbiec.token_file",
-            "service_api.skarbiec.token_file",
+        for other in [
+            crate::capabilities::SECRETS_SKARBIEC,
+            crate::capabilities::AGENT_SKARBIEC,
+            crate::capabilities::BACKEND_MESSAGING_SKARBIEC,
+            crate::capabilities::RATE_LIMIT_SKARBIEC,
+            crate::capabilities::OBJECT_API_SKARBIEC,
+            crate::capabilities::RELEASE_API_SKARBIEC,
+            crate::capabilities::MACHINE_API_SKARBIEC,
+            crate::capabilities::SERVICE_API_SKARBIEC,
         ] {
             if !integration_token_file.is_empty()
-                && get_in(root, other_path).and_then(Value::as_str) == Some(integration_token_file)
+                && field_in(root, &other.token_file).and_then(Value::as_str)
+                    == Some(integration_token_file)
             {
                 problems.push(format!(
-                    "integration.skarbiec.token_file must be distinct from {other_path}"
+                    "integration.skarbiec.token_file must be distinct from {}",
+                    other.token_file.path
                 ));
             }
         }
@@ -923,16 +1090,16 @@ pub fn validate(data: &Value) -> Vec<String> {
     }
     let object_api = root.get("object_api").and_then(Value::as_object);
     if object_api.is_some() {
-        if let Err(object_problems) = crate::config::parse_object_api_namespaces(
-            object_api.and_then(|section| section.get("namespaces")),
-        ) {
+        if let Err(object_problems) = crate::config::parse_object_api_namespaces(field_in(
+            root,
+            &crate::capabilities::OBJECT_API_NAMESPACES_CONFIG,
+        )) {
             problems.extend(object_problems);
         }
         let object_skarbiec = object_api
             .and_then(|section| section.get("skarbiec"))
             .and_then(Value::as_object);
-        if object_skarbiec
-            .and_then(|section| section.get("url"))
+        if field_in(root, &crate::capabilities::OBJECT_API_SKARBIEC.url)
             .is_some_and(|url| !py_truthy(url))
         {
             problems.push(
@@ -940,8 +1107,7 @@ pub fn validate(data: &Value) -> Vec<String> {
                     .to_string(),
             );
         }
-        if object_skarbiec
-            .and_then(|section| section.get("consumer"))
+        if field_in(root, &crate::capabilities::OBJECT_API_SKARBIEC.consumer)
             .and_then(Value::as_str)
             != Some(crate::config::OBJECT_API_VERIFIER_CONSUMER)
         {
@@ -971,16 +1137,16 @@ pub fn validate(data: &Value) -> Vec<String> {
     }
     let release_api = root.get("release_api").and_then(Value::as_object);
     if release_api.is_some() {
-        if let Err(release_problems) = crate::config::parse_release_publishers(
-            release_api.and_then(|section| section.get("publishers")),
-        ) {
+        if let Err(release_problems) = crate::config::parse_release_publishers(field_in(
+            root,
+            &crate::capabilities::RELEASE_API_PUBLISHERS_CONFIG,
+        )) {
             problems.extend(release_problems);
         }
         let release_skarbiec = release_api
             .and_then(|section| section.get("skarbiec"))
             .and_then(Value::as_object);
-        if release_skarbiec
-            .and_then(|section| section.get("url"))
+        if field_in(root, &crate::capabilities::RELEASE_API_SKARBIEC.url)
             .is_some_and(|url| !py_truthy(url))
         {
             problems.push(
@@ -988,8 +1154,7 @@ pub fn validate(data: &Value) -> Vec<String> {
                     .to_string(),
             );
         }
-        if release_skarbiec
-            .and_then(|section| section.get("consumer"))
+        if field_in(root, &crate::capabilities::RELEASE_API_SKARBIEC.consumer)
             .and_then(Value::as_str)
             != Some(crate::config::RELEASE_API_VERIFIER_CONSUMER)
         {
@@ -1021,16 +1186,16 @@ pub fn validate(data: &Value) -> Vec<String> {
     }
     let machine_api = root.get("machine_api").and_then(Value::as_object);
     if machine_api.is_some() {
-        if let Err(machine_problems) = crate::config::parse_machine_api_clients(
-            machine_api.and_then(|section| section.get("clients")),
-        ) {
+        if let Err(machine_problems) = crate::config::parse_machine_api_clients(field_in(
+            root,
+            &crate::capabilities::MACHINE_API_CLIENTS_CONFIG,
+        )) {
             problems.extend(machine_problems);
         }
         let machine_skarbiec = machine_api
             .and_then(|section| section.get("skarbiec"))
             .and_then(Value::as_object);
-        if machine_skarbiec
-            .and_then(|section| section.get("url"))
+        if field_in(root, &crate::capabilities::MACHINE_API_SKARBIEC.url)
             .is_some_and(|url| !py_truthy(url))
         {
             problems.push(
@@ -1038,8 +1203,7 @@ pub fn validate(data: &Value) -> Vec<String> {
                     .to_string(),
             );
         }
-        if machine_skarbiec
-            .and_then(|section| section.get("consumer"))
+        if field_in(root, &crate::capabilities::MACHINE_API_SKARBIEC.consumer)
             .and_then(Value::as_str)
             != Some(crate::config::MACHINE_API_VERIFIER_CONSUMER)
         {
@@ -1059,7 +1223,7 @@ pub fn validate(data: &Value) -> Vec<String> {
                 || machine_token_file == object_token_file
                 || machine_token_file == release_token_file
                 || machine_token_file
-                    == get_in(root, "agent.skarbiec.token_file")
+                    == field_in(root, &crate::capabilities::AGENT_SKARBIEC.token_file)
                         .and_then(Value::as_str)
                         .unwrap_or_default())
         {
@@ -1077,16 +1241,16 @@ pub fn validate(data: &Value) -> Vec<String> {
     }
     let service_api = root.get("service_api").and_then(Value::as_object);
     if service_api.is_some() {
-        if let Err(service_problems) = crate::config::parse_service_deployers(
-            service_api.and_then(|section| section.get("deployers")),
-        ) {
+        if let Err(service_problems) = crate::config::parse_service_deployers(field_in(
+            root,
+            &crate::capabilities::SERVICE_API_DEPLOYERS_CONFIG,
+        )) {
             problems.extend(service_problems);
         }
         let service_skarbiec = service_api
             .and_then(|section| section.get("skarbiec"))
             .and_then(Value::as_object);
-        if service_skarbiec
-            .and_then(|section| section.get("url"))
+        if field_in(root, &crate::capabilities::SERVICE_API_SKARBIEC.url)
             .is_some_and(|url| !py_truthy(url))
         {
             problems.push(
@@ -1094,8 +1258,7 @@ pub fn validate(data: &Value) -> Vec<String> {
                     .to_string(),
             );
         }
-        if service_skarbiec
-            .and_then(|section| section.get("consumer"))
+        if field_in(root, &crate::capabilities::SERVICE_API_SKARBIEC.consumer)
             .and_then(Value::as_str)
             != Some(crate::config::SERVICE_API_VERIFIER_CONSUMER)
         {
@@ -1104,10 +1267,10 @@ pub fn validate(data: &Value) -> Vec<String> {
                 crate::config::SERVICE_API_VERIFIER_CONSUMER
             ));
         }
-        let service_token_file = service_skarbiec
-            .and_then(|section| section.get("token_file"))
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        let service_token_file =
+            field_in(root, &crate::capabilities::SERVICE_API_SKARBIEC.token_file)
+                .and_then(Value::as_str)
+                .unwrap_or_default();
         if service_token_file.is_empty() {
             problems.push(
             "service_api.skarbiec.token_file must name the owner-only service verifier grant file"
@@ -1132,11 +1295,14 @@ pub fn validate(data: &Value) -> Vec<String> {
         );
         }
         let local_provider = active_providers.contains(&crate::capabilities::ProviderId::Local);
-        let has_workload_fields = get_in(root, "agent.skarbiec.secret_fields")
-            .and_then(Value::as_array)
-            .is_some_and(|fields| !fields.is_empty());
+        let has_workload_fields = field_in(
+            root,
+            &crate::capabilities::AGENT_SKARBIEC_SECRET_FIELDS_CONFIG,
+        )
+        .and_then(Value::as_array)
+        .is_some_and(|fields| !fields.is_empty());
         if local_provider && has_workload_fields {
-            if get_in(root, "agent.skarbiec.consumer").and_then(Value::as_str)
+            if field_in(root, &crate::capabilities::AGENT_SKARBIEC.consumer).and_then(Value::as_str)
                 != Some("stado-local-agent")
             {
                 problems.push(
@@ -1144,10 +1310,10 @@ pub fn validate(data: &Value) -> Vec<String> {
                         .to_string(),
                 );
             }
-            let agent_token = get_in(root, "agent.skarbiec.token_file")
+            let agent_token = field_in(root, &crate::capabilities::AGENT_SKARBIEC.token_file)
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            let control_token = get_in(root, "secrets.skarbiec.token_file")
+            let control_token = field_in(root, &crate::capabilities::SECRETS_SKARBIEC.token_file)
                 .and_then(Value::as_str)
                 .unwrap_or_default();
             if agent_token.is_empty() || agent_token == control_token {
@@ -1158,10 +1324,7 @@ pub fn validate(data: &Value) -> Vec<String> {
             }
         }
     }
-    let port = root
-        .get("dashboard")
-        .and_then(Value::as_object)
-        .and_then(|d| d.get("port"));
+    let port = field_in(root, &crate::capabilities::DASHBOARD_PORT_CONFIG);
     if let Some(port) = port.filter(|p| !p.is_null()) {
         let ok = port.as_i64().is_some_and(|p| p > 0 && p < 65536);
         if !ok {

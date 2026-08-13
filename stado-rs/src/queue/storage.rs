@@ -331,12 +331,24 @@ impl JobStorage {
     /// Exactly one agent can win the create-if-absent race. A concurrent
     /// cancellation marker fences the winner before workload execution.
     pub async fn claim_queued_job(&self, job: &Job) -> Result<bool, StorageError> {
+        let queue_path = format!("queue/{}.json", job.job_id);
+        if !self.backend.exists(&queue_path).await? {
+            return Ok(false);
+        }
         let running_path = format!("running/{}.json", job.job_id);
         if !self
             .backend
             .upload_text_if_absent(&running_path, &job.to_json())
             .await?
         {
+            return Ok(false);
+        }
+        // A competing agent may have completed and removed the queued record
+        // after this agent listed it but before the running claim landed.
+        // Never resurrect that stale in-memory copy after the winner removes
+        // its running record.
+        if !self.backend.exists(&queue_path).await? {
+            self.backend.delete(&running_path).await?;
             return Ok(false);
         }
         self.backend
@@ -352,9 +364,7 @@ impl JobStorage {
             return Ok(false);
         }
 
-        self.backend
-            .delete(&format!("queue/{}.json", job.job_id))
-            .await?;
+        self.backend.delete(&queue_path).await?;
         self.delete_priority_marker(&job.job_id).await?;
         Ok(true)
     }

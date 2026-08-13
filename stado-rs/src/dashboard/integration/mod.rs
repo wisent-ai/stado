@@ -16,7 +16,6 @@
 
 mod enterprise;
 
-
 use serde_json::{json, Value};
 
 use super::{constant_time_eq, http_status, Request, Response};
@@ -60,20 +59,29 @@ fn supports(domain: &str, action: &str) -> bool {
     }
 }
 
-pub(super) async fn validate_startup() -> Result<(), ()> {
-    let clients = crate::config::integration_clients().map_err(|_| ())?;
-    for policy in clients.values() {
+pub(super) async fn validate_startup() -> Result<(), String> {
+    let clients = crate::config::integration_clients().map_err(|problems| problems.join("; "))?;
+    // A client naming a domain this build does not implement is a stale
+    // declaration, not a reason to withdraw the domains that do work. Failing
+    // the whole boundary took `enterprise` down together with nine aspirational
+    // entries, and every integration caller met a closed door instead.
+    for (name, policy) in clients.iter() {
         for allowed in policy.allowed_actions() {
-            let (domain, action) = allowed.split_once('/').ok_or(())?;
-            if !supports(domain, action) {
-                return Err(());
+            match allowed.split_once('/') {
+                None => eprintln!(
+                    "[dashboard] integration client {name} declares {allowed} without a domain; ignoring that action"
+                ),
+                Some((domain, action)) if !supports(domain, action) => eprintln!(
+                    "[dashboard] integration client {name} declares unimplemented {domain}/{action}; ignoring that action"
+                ),
+                Some(_) => {}
             }
         }
     }
     crate::skarbiec::validate_integration_verifier()
         .await
         .map(|_| ())
-        .map_err(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 async fn dispatch(

@@ -791,6 +791,14 @@ static WC_STADO_STORAGE_NAMESPACE: LazyLock<String> = LazyLock::new(|| {
         "",
     )
 });
+static WC_STADO_STORAGE_CA_FILE: LazyLock<String> = LazyLock::new(|| {
+    resolve_storage_binding(
+        crate::capabilities::StorageAdapter::StadoObject,
+        "ca-file",
+        false,
+        "",
+    )
+});
 static WC_LOCAL_STORAGE_PATH: LazyLock<String> = LazyLock::new(|| {
     let default = expand_tilde("~/.stado/local-storage");
     resolve_storage_binding(
@@ -872,6 +880,18 @@ pub fn wc_stado_storage_namespace() -> &'static str {
     WC_STADO_STORAGE_NAMESPACE.as_str()
 }
 
+/// PEM root certificate that signs the Stado object API's HTTPS endpoint.
+///
+/// A fleet that publishes its object API on the tailnet is served by a private
+/// certificate authority the operating system has never heard of. Without this the
+/// client has only the system roots, every request to that endpoint dies in the
+/// handshake as "error sending request", and the sole configuration left standing
+/// is a loopback URL -- so each host addresses its own store and the fleet stops
+/// sharing one registry. Empty means a publicly trusted authority, or loopback.
+pub fn wc_stado_storage_ca_file() -> &'static str {
+    WC_STADO_STORAGE_CA_FILE.as_str()
+}
+
 /// Root directory of the device-local storage backend (env
 /// `WC_LOCAL_STORAGE_PATH`).
 pub fn wc_local_storage_path() -> &'static str {
@@ -913,12 +933,10 @@ pub fn wc_backup_local_storage_path() -> &'static str {
     WC_BACKUP_LOCAL_STORAGE_PATH.as_str()
 }
 
-/// Public Stado control origin serving immutable software releases (env
-/// `STADO_RELEASE_API_URL`, config key `release.api_url`, trailing slash
-/// stripped). There is deliberately no storage-provider or public-host
-/// fallback: dispatch and bootstrap fail closed when it is absent.
-pub fn stado_release_api_url() -> String {
-    cfg("STADO_RELEASE_API_URL", "release.api_url", "")
+/// Canonical Stado API origin used by object and immutable-release clients.
+/// `api.url` is the deployment endpoint; releases do not own a second origin.
+pub fn stado_api_url() -> String {
+    cfg("STADO_API_URL", "api.url", "")
         .trim_end_matches('/')
         .to_string()
 }
@@ -938,6 +956,31 @@ pub fn stado_release_platform() -> String {
     cfg("STADO_RELEASE_PLATFORM", "release.platform", "")
         .trim()
         .to_string()
+}
+
+/// Skarbiec key-pair item containing the base64 Ed25519 PKCS#8 release
+/// authority key in `private_key`. The item name is configuration; key bytes
+/// never enter a product manifest or registry document.
+pub fn release_signing_key_item() -> String {
+    cfg(
+        "STADO_RELEASE_SIGNING_KEY_ITEM",
+        "release.signing_key_item",
+        "stado-release-signing",
+    )
+    .trim()
+    .to_string()
+}
+
+/// Trusted release-control key identifier paired with
+/// [`release_signing_key_item`].
+pub fn release_signing_key_id() -> String {
+    cfg(
+        "STADO_RELEASE_SIGNING_KEY_ID",
+        "release.signing_key_id",
+        "stado-release-2026-08",
+    )
+    .trim()
+    .to_string()
 }
 
 /// Exact immutable release object containing the cloud-agent Python
@@ -1960,8 +2003,8 @@ static MACHINE_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
 });
 
 pub const SERVICE_API_VERIFIER_CONSUMER: &str = "stado-service-api-verifier";
-pub const SERVICE_API_ACTIONS: &[&str] = &["status", "restart"];
-pub const ACTIVE_DEPLOYED_SERVICES: &[&str] = &["com.wisent.weles-api"];
+pub const SERVICE_API_ACTIONS: &[&str] = &["status", "restart", "promote", "reconcile"];
+pub const ACTIVE_DEPLOYED_SERVICES: &[&str] = &["com.wisent.weles-api", "image-video-router"];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ServiceDeployer {

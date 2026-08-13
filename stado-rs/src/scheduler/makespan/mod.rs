@@ -317,6 +317,54 @@ pub async fn assign_jobs(store: &JobStorage, log_fn: &dyn Fn(&str)) -> Result<us
     let history = history::global().history(store, log_fn).await?;
     assign_jobs_at(store, Utc::now(), &history, log_fn).await
 }
+/// Clear derived assignments that contradict an operator host pin.
+///
+/// This invariant applies in both legacy makespan and autonomy routing modes.
+/// Versioned writes prevent a coordinator tick from resurrecting a job that an
+/// agent moved out of the queue concurrently.
+pub async fn repair_conflicting_pinned_assignments(
+    store: &JobStorage,
+    log_fn: &dyn Fn(&str),
+) -> Result<usize, StorageError> {
+    let mut repaired = 0;
+    for candidate in store.list_jobs("queue", 0).await? {
+        if candidate.pinned_host.is_empty()
+            || candidate.assigned_to.is_empty()
+            || candidate
+                .assigned_to
+                .eq_ignore_ascii_case(&candidate.pinned_host)
+        {
+            continue;
+        }
+        let path = format!("queue/{}.json", candidate.job_id);
+        let Some(versioned) = store.read_text_versioned(&path).await? else {
+            continue;
+        };
+        let mut job = Job::from_json(&versioned.content)?;
+        if job.pinned_host.is_empty()
+            || job.assigned_to.is_empty()
+            || job.assigned_to.eq_ignore_ascii_case(&job.pinned_host)
+        {
+            continue;
+        }
+        let previous = std::mem::take(&mut job.assigned_to);
+        match store
+            .compare_and_swap_text(&path, &versioned.version, &job.to_json())
+            .await
+        {
+            Ok(_) => {
+                repaired += 1;
+                log_fn(&format!(
+                    "cleared conflicting assignment {previous} from host-pinned job {}",
+                    job.job_id
+                ));
+            }
+            Err(StorageError::StorageConflict(_)) | Err(StorageError::NotFound(_)) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(repaired)
+}
 
 /// [`assign_jobs`] with an injectable clock + history map, so tests can
 /// drive the matcher offline without touching the global TTL caches.
@@ -340,8 +388,8 @@ pub async fn assign_jobs_at(
     let mut skip_by_key: Vec<((String, String), usize)> = Vec::new();
     let mut to_write: Vec<Job> = Vec::new();
     for mut job in store.list_jobs("queue", 0).await? {
-        // Operator-pinned jobs (pinned_host set at submit) route outside the
-        // makespan model: never assign them elsewhere, never clear the pin.
+        // Host-pinned jobs route outside the makespan model. The coordinator
+        // repairs contradictory derived assignments before routing begins.
         if !job.pinned_host.is_empty() {
             continue;
         }

@@ -18,6 +18,12 @@ pub enum SecretsCommands {
     Put {
         /// Credential item id.
         name: String,
+        /// Canonical Skarbiec kind. Defaults to the payload's own `kind` when
+        /// stdin carries one, else `stado-secret`. An SSH host key stored as a
+        /// free-form secret loses the schema's guarantee that both halves are
+        /// present, which is how one fleet key ended up shaped unlike its peers.
+        #[arg(long = "type")]
+        item_type: Option<String>,
     },
     /// Print one credential item value or one exact string field to stdout.
     Get {
@@ -116,7 +122,9 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
         // unlock is precisely the state where every other verb is unavailable.
         SecretsCommands::TryUnlock {} => try_unlock(),
         SecretsCommands::Migrate { to } => migrate(to.as_deref()).await,
-        SecretsCommands::Put { name } => put(&client()?, &name).await,
+        SecretsCommands::Put { name, item_type } => {
+            put(&client()?, &name, item_type.as_deref()).await
+        }
         SecretsCommands::Get { name, field } => get(&client()?, &name, field.as_deref()).await,
         SecretsCommands::Ls { json } => ls(&client()?, json).await,
         SecretsCommands::Rm { name } => rm(&client()?, &name).await,
@@ -144,10 +152,9 @@ async fn harvest(json: bool, restore: Option<&str>, all: bool) -> Result<(), Cmd
                 "no secret-shaped value for {name} in any transcript; run without --restore to see what is there"
             ))
         })?;
-        if crate::credential_store::configured_selector()
-            .map_err(|error| CmdError::click(error.to_string()))?
-            .starts_with("skarbiec")
-        {
+        let selector = crate::credential_store::configured_selector()
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        if selector.starts_with("skarbiec") {
             let binary = skarbiec_binary()?;
             // Skarbiec can encrypt with public recipients even when no owner
             // here can decrypt. Refuse to bury the recovered value in that
@@ -161,11 +168,24 @@ async fn harvest(json: bool, restore: Option<&str>, all: bool) -> Result<(), Cmd
                     )))
                 }
             }
+            let vault = std::env::var("SKARBIEC_VAULT_FILE").map_err(|_| {
+                CmdError::click(
+                    "SKARBIEC_VAULT_FILE is required to restore transcript material into Skarbiec",
+                )
+            })?;
+            store_local_json(
+                &binary,
+                std::path::Path::new(&vault),
+                name,
+                "stado-secret",
+                &json!({"value": value}),
+            )?;
+        } else {
+            client()?
+                .write_item(name, "stado-secret", &json!({"value": value}))
+                .await
+                .map_err(|error| CmdError::click(error.to_string()))?;
         }
-        client()?
-            .write_item(name, "stado-secret", &json!({"value": value}))
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
         println!("restored {name} into the selected credential store from transcript history");
         return Ok(());
     }
@@ -252,6 +272,7 @@ async fn migrate(destination: Option<&str>) -> Result<(), CmdError> {
 /// [`crate::deploy::host_recovery::WC_CANDIDATES`]: one prefix, discovered the
 /// same way, so the two cannot drift apart.
 const SKARBIEC_CANDIDATES: &[&str] = &["$HOME/.stado/bin/skarbiec"];
+const SKARBIEC_ITEM_SCHEMA: &str = "skarbiec.item.v2";
 
 fn skarbiec_binary() -> Result<std::path::PathBuf, CmdError> {
     let home = std::env::var("HOME").map_err(|_| CmdError::click("HOME is not set"))?;
@@ -538,13 +559,14 @@ fn store_local_json(
     binary: &std::path::Path,
     vault: &std::path::Path,
     item: &str,
+    item_type: &str,
     value: &Value,
 ) -> Result<(), CmdError> {
     let mut child = std::process::Command::new(binary)
         .arg("set-json")
         .arg(item)
         .arg("--type")
-        .arg("internal-authority")
+        .arg(item_type)
         .env("SKARBIEC_VAULT_FILE", vault)
         .env_remove("SKARBIEC_UNLOCK")
         .env_remove("SKARBIEC_UNLOCK_FILE")
@@ -552,8 +574,14 @@ fn store_local_json(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()?;
+    let payload = json!({
+        "schema": SKARBIEC_ITEM_SCHEMA,
+        "kind": item_type,
+        "fields": value,
+        "context": {},
+    });
     if let Some(stdin) = child.stdin.as_mut() {
-        stdin.write_all(serde_json::to_string(value)?.as_bytes())?;
+        stdin.write_all(serde_json::to_string(&payload)?.as_bytes())?;
     }
     let output = child.wait_with_output()?;
     if !output.status.success() {
@@ -657,7 +685,7 @@ fn bootstrap_weles(json_output: bool) -> Result<(), CmdError> {
     ];
     let mut stored = Vec::with_capacity(items.len());
     for (item, value) in &items {
-        store_local_json(&binary, &vault, item, value)?;
+        store_local_json(&binary, &vault, item, "internal-authority", value)?;
         stored.push(*item);
     }
     if json_output {
@@ -811,19 +839,31 @@ fn read_value_from_stdin() -> Result<String, CmdError> {
     Ok(value.strip_suffix('\r').unwrap_or(value).to_string())
 }
 
-async fn put(vault: &crate::skarbiec::Client, name: &str) -> Result<(), CmdError> {
+async fn put(
+    vault: &crate::skarbiec::Client,
+    name: &str,
+    item_type: Option<&str>,
+) -> Result<(), CmdError> {
     let input = read_value_from_stdin()?;
     if input.is_empty() {
         return Err(CmdError::click(
             "stdin was empty; pipe the value in (stado secrets put NAME < file)",
         ));
     }
-    let value = serde_json::from_str(&input).unwrap_or_else(|_| json!({"value": input}));
+    let value: Value = serde_json::from_str(&input).unwrap_or_else(|_| json!({"value": input}));
+    // The kind is the payload's shape, so the payload decides it when it says
+    // so. Forcing `stado-secret` on every write is how one item ends up holding
+    // a key pair with no schema requiring its public half.
+    let declared = value
+        .get("kind")
+        .and_then(Value::as_str)
+        .filter(|kind| !kind.trim().is_empty());
+    let item_kind = item_type.or(declared).unwrap_or("stado-secret");
     vault
-        .write_item(name, "stado-secret", &value)
+        .write_item(name, item_kind, &value)
         .await
         .map_err(|err| CmdError::click(err.to_string()))?;
-    println!("stored credential item {name:?}");
+    println!("stored credential item {name:?} as {item_kind:?}");
     Ok(())
 }
 

@@ -77,6 +77,7 @@
   "services": {
     "brama": {
       "allowed_models": [
+        "-best",
         "wisent-backend/chat/primary",
         "wisent-backend/chat/fallback",
         "wisent-backend/evaluation",
@@ -85,14 +86,23 @@
         "weles/agent/primary"
       ],
       "model_aliases": {
-        "wisent-backend/chat/primary": "qwen/default",
-        "wisent-backend/chat/fallback": "qwen/default",
+        "-best": "claude-code/claude-opus-4-6",
+        "wisent-backend/chat/primary": "featherless/TheDrummer/Cydonia-24B-v4.3",
+        "wisent-backend/chat/fallback": "featherless/TheDrummer/Cydonia-24B-v4.3",
         "wisent-backend/evaluation": "openai/default",
         "wisent-backend/embeddings": "openai/embeddings",
         "wisent-backend/moderation": "openai/moderation",
-        "weles/agent/primary": "qwen/default"
+        "weles/agent/primary": "featherless/TheDrummer/Cydonia-24B-v4.3"
       },
-      "required_provider_capabilities": ["local-openai", "openai", "qwen"]
+      "required_provider_capabilities": ["featherless", "openai"]
+    }
+  },
+
+  "credentials": {
+    "_comment": "Host-channel key reads are control-plane operations and use the same exact field-scoped coordinator grant reconciled from the registry.",
+    "admin": {
+      "consumer": "stado-control-plane",
+      "token_file": "~/.stado/control-plane-skarbiec-token"
     }
   },
 
@@ -206,6 +216,7 @@
       "compute-marketplace": {"item": "compute-marketplace-release-publisher", "prefix": "compute-marketplace/"},
       "image-video-router": {"item": "image-video-router-release-publisher", "prefix": "image-video-router/"},
       "jeden": {"item": "jeden-release-publisher", "prefix": "jeden/"},
+      "jeden-desktop": {"item": "jeden-desktop-release-publisher", "prefix": "jeden-desktop/"},
       "oko": {"item": "oko-release-publisher", "prefix": "oko/"},
       "skarbiec": {"item": "skarbiec-release-publisher", "prefix": "skarbiec/"},
       "stado": {"item": "stado-release-publisher", "prefix": "stado/"},
@@ -239,6 +250,12 @@
         "item": "wisent-backend-release-deployer",
         "services": ["wisent-backend"],
         "actions": ["status", "restart"]
+      },
+      "image-video-router": {
+        "consumer": "image-video-router-release-deployer",
+        "item": "image-video-router-release-deployer",
+        "services": ["image-video-router"],
+        "actions": ["promote", "reconcile"]
       }
     }
   },

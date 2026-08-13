@@ -20,6 +20,8 @@
 //! POST /api/service/restart?name=... - restart one managed service on every declared host
 //! POST /api/rate-limit/consume - authenticated shared atomic rate-limit consume
 //! POST /api/integration/enterprise/<action> - authenticated read-only fleet projection
+//! GET /api/operator/catalog - structured operator workflow and command catalog
+//! POST /api/operator/run - authenticated bounded execution of one catalog command
 //! GET /healthz           - liveness (before auth, after the Host guard)
 //! GET /livez             - Cloud Run liveness alias
 //!
@@ -44,6 +46,7 @@
 
 mod integration;
 mod operator_auth;
+mod operator_console;
 pub mod policy;
 pub mod summary;
 pub mod web_view;
@@ -354,45 +357,93 @@ impl Dashboard {
                 "refusing plaintext dashboard bind on non-loopback address {local_addr}; terminate TLS in a loopback reverse proxy"
             )));
         }
+        // Each boundary reads every item its policy names, and each read is a
+        // gpg decryption in the broker. Seventeen object namespaces against a
+        // real vault with a cold gpg-agent exceeded the previous 15s and the
+        // object API then answered 503 to the entire fleet until someone
+        // restarted it -- a cold agent is a slow start, not a broken grant.
         let startup_timeout = Duration::from_secs(
-            "15".parse::<u64>()
-                .expect("static boundary startup timeout"),
+            std::env::var("WC_DASHBOARD_BOUNDARY_TIMEOUT_SECONDS")
+                .ok()
+                .and_then(|value| value.trim().parse::<u64>().ok())
+                .filter(|seconds| *seconds > 0)
+                .unwrap_or(90),
         );
-        let (
-            object,
-            release,
-            machine,
-            service,
-            rate_verifier,
-            rate_state,
-            integration,
-        ) = tokio::join!(
-            tokio::time::timeout(startup_timeout, crate::skarbiec::validate_object_verifier()),
-            tokio::time::timeout(
-                startup_timeout,
-                crate::skarbiec::validate_release_verifier()
-            ),
-            tokio::time::timeout(
-                startup_timeout,
-                crate::skarbiec::validate_machine_verifier()
-            ),
-            tokio::time::timeout(
-                startup_timeout,
-                crate::skarbiec::validate_service_verifier()
-            ),
-            tokio::time::timeout(startup_timeout, rate_limit::validate_verifier()),
-            tokio::time::timeout(startup_timeout, self.rate_limiter.restore()),
-            tokio::time::timeout(startup_timeout, integration::validate_startup()),
-        );
-        match &object {
-            Ok(Err(error)) => {
-                eprintln!("[dashboard] object authorization boundary error: {error}")
-            }
-            Err(error) => {
-                eprintln!("[dashboard] object authorization boundary timed out: {error}")
-            }
-            Ok(Ok(_)) => {}
+        // Every verifier reads shared Skarbiec vault/audit state. Starting all
+        // boundaries together can overwhelm the listener and fail the whole
+        // control plane on a transient connection reset, so validate them in
+        // deterministic order with an independent timeout per boundary.
+        //
+        // A verdict is also recorded once and never revisited, so one slow or
+        // reset read shuts a boundary until somebody restarts the unit -- and
+        // `object` shutting means `503 object authorization unavailable` for the
+        // whole fleet. That happened four times in one afternoon, each time
+        // cured by an identical retry, so the retry belongs here instead of in
+        // the operator's hands.
+        let attempts = std::env::var("WC_DASHBOARD_BOUNDARY_ATTEMPTS")
+            .ok()
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .filter(|count| *count > 0)
+            .unwrap_or(3);
+        let retry_pause = Duration::from_secs(2);
+        macro_rules! validate {
+            ($name:literal, $call:expr) => {{
+                let mut outcome = tokio::time::timeout(startup_timeout, $call).await;
+                let mut attempt = 1;
+                while attempt < attempts && !matches!(outcome, Ok(Ok(_))) {
+                    eprintln!(
+                        "[dashboard] {} boundary attempt {attempt} of {attempts} did not settle; retrying",
+                        $name
+                    );
+                    tokio::time::sleep(retry_pause).await;
+                    outcome = tokio::time::timeout(startup_timeout, $call).await;
+                    attempt += 1;
+                }
+                outcome
+            }};
         }
+        let object = validate!(
+            "object authorization",
+            crate::skarbiec::validate_object_verifier()
+        );
+        let release = validate!(
+            "release publication",
+            crate::skarbiec::validate_release_verifier()
+        );
+        let machine = validate!(
+            "machine authorization",
+            crate::skarbiec::validate_machine_verifier()
+        );
+        let service = validate!(
+            "service authorization",
+            crate::skarbiec::validate_service_verifier()
+        );
+        let rate_verifier = validate!("rate-limit authorization", rate_limit::validate_verifier());
+        let rate_state = validate!("rate-limit state", self.rate_limiter.restore());
+        let integration = validate!("integration authorization", integration::validate_startup());
+        // Only `object` used to report why it failed, so every other boundary
+        // said "unavailable" and left the operator guessing which grant, item
+        // set or endpoint was at fault. The verdict is useless without it.
+        macro_rules! explain {
+            ($outcome:expr, $name:literal) => {
+                match &$outcome {
+                    Ok(Err(error)) => {
+                        eprintln!("[dashboard] {} boundary error: {error:?}", $name)
+                    }
+                    Err(error) => {
+                        eprintln!("[dashboard] {} boundary timed out: {error:?}", $name)
+                    }
+                    Ok(Ok(_)) => {}
+                }
+            };
+        }
+        explain!(object, "object authorization");
+        explain!(release, "release publication");
+        explain!(machine, "machine authorization");
+        explain!(service, "service authorization");
+        explain!(rate_verifier, "rate-limit authorization");
+        explain!(rate_state, "rate-limit state");
+        explain!(integration, "integration authorization");
         let boundaries = BoundaryAvailability {
             object: matches!(object, Ok(Ok(_))),
             release: matches!(release, Ok(Ok(_))),
@@ -532,7 +583,9 @@ impl Dashboard {
                 .boundaries
                 .read()
                 .expect("dashboard boundary state lock");
-            if object.namespace() == "releases" {
+            if release_object_namespace(object.namespace())
+                || release_catalog_product(object.namespace(), object.key()).is_some()
+            {
                 boundaries.release
             } else {
                 boundaries.object
@@ -551,6 +604,10 @@ impl Dashboard {
             } else {
                 Ok(false)
             }
+        } else if object.namespace() == "sources" {
+            authorize_release(request, object.key(), false).await
+        } else if let Some(product) = release_catalog_product(object.namespace(), object.key()) {
+            authorize_release(request, &format!("{product}/catalog.json"), false).await
         } else {
             authorize_object(request, object.namespace(), object.key(), false, "put").await
         };
@@ -630,7 +687,9 @@ impl Dashboard {
                     .boundaries
                     .read()
                     .expect("dashboard boundary state lock");
-                if namespace == "releases" {
+                if release_object_namespace(&namespace)
+                    || release_catalog_product(&namespace, &key_or_prefix).is_some()
+                {
                     boundaries.release
                 } else {
                     boundaries.object
@@ -649,8 +708,10 @@ impl Dashboard {
             } else {
                 "get"
             };
-            let authorized = if namespace == "releases" {
+            let authorized = if release_object_namespace(&namespace) {
                 authorize_release(request, &key_or_prefix, list).await
+            } else if let Some(product) = release_catalog_product(&namespace, &key_or_prefix) {
+                authorize_release(request, &format!("{product}/catalog.json"), false).await
             } else {
                 authorize_object(request, &namespace, &key_or_prefix, list, action).await
             };
@@ -800,6 +861,9 @@ impl Dashboard {
                 },
             );
         }
+        if request.path == "/api/operator/catalog" {
+            return Ok(send_json(http_status("200"), &operator_console::catalog()));
+        }
         if request.path == "/api/cleanup.json" {
             let report =
                 read_cleanup_state().map_err(|exc| DashboardError::Other(exc.to_string()))?;
@@ -900,7 +964,7 @@ impl Dashboard {
             Ok(scope) => scope,
             Err(response) => return Ok(response),
         };
-        let prefix = if namespace == "releases" {
+        let prefix = if release_object_namespace(&namespace) {
             config::release_publisher_for_list(&requested_prefix).map(|(_, authorized)| authorized)
         } else {
             config::object_api_namespace(&namespace)
@@ -1315,7 +1379,33 @@ impl Dashboard {
             .header("content-type")
             .unwrap_or("application/octet-stream")
             .to_string();
-        let metadata = crate::object_store::metadata(object, &content_type);
+        let mut metadata = crate::object_store::metadata(object, &content_type);
+        if let Some(raw) = request.header("x-stado-object-metadata") {
+            let extra: std::collections::BTreeMap<String, String> = match serde_json::from_str(raw)
+            {
+                Ok(value) => value,
+                Err(error) => {
+                    return Ok(send_json(
+                        http_status("400"),
+                        &json!({"error": format!("invalid object metadata: {error}")}),
+                    ))
+                }
+            };
+            for (name, value) in extra {
+                if !name.starts_with("stado-")
+                    || metadata.contains_key(&name)
+                    || value.is_empty()
+                    || name.chars().any(char::is_control)
+                    || value.chars().any(char::is_control)
+                {
+                    return Ok(send_json(
+                        http_status("400"),
+                        &json!({"error": "custom object metadata must use unique non-empty stado-* fields"}),
+                    ));
+                }
+                metadata.insert(name, value);
+            }
+        }
         self.store.backend().set_metadata(&path, &metadata).await?;
         let landed = self.store.backend().list_blobs_with_meta(&path).await?;
         let Some(blob) = landed.into_iter().find(|blob| blob.name == path) else {
@@ -1463,6 +1553,9 @@ impl Dashboard {
         if path == "/api/registry/policy" {
             return self.post_registry_policy(request).await;
         }
+        if path == "/api/operator/run" {
+            return self.post_operator_run(request).await;
+        }
         if request.path != "/api/cleanup/run" {
             return if path == "/api/cleanup/run" {
                 cleanup_failure(http_status("400"))
@@ -1499,7 +1592,9 @@ impl Dashboard {
                 .boundaries
                 .read()
                 .expect("dashboard boundary state lock");
-            if object.namespace() == "releases" {
+            if release_object_namespace(object.namespace())
+                || release_catalog_product(object.namespace(), object.key()).is_some()
+            {
                 boundaries.release
             } else {
                 boundaries.object
@@ -1518,6 +1613,10 @@ impl Dashboard {
             } else {
                 Ok(false)
             }
+        } else if object.namespace() == "sources" {
+            authorize_release(request, object.key(), false).await
+        } else if let Some(product) = release_catalog_product(object.namespace(), object.key()) {
+            authorize_release(request, &format!("{product}/catalog.json"), false).await
         } else {
             authorize_object(request, object.namespace(), object.key(), false, "put").await
         };
@@ -1557,7 +1656,7 @@ impl Dashboard {
             Ok(object) => object,
             Err(response) => return response,
         };
-        if object.namespace() == "releases" {
+        if release_object_namespace(object.namespace()) {
             return send_json(
                 http_status("403"),
                 &json!({"error": "release objects are immutable and cannot be deleted"}),
@@ -1660,13 +1759,47 @@ impl Dashboard {
                 &json!({"error": "beacon host must match the query and reported_at/units are required"}),
             );
         }
-        let path = format!("{}/{host}.json", crate::monitor::host_health::HEALTH_PREFIX);
+        let path = crate::monitor::host_health::beacon_object_path(&host);
         match self.store.upload_bytes(&path, &request.body).await {
             Ok(()) => send_json(
                 http_status("200"),
                 &json!({"state": "stored", "host": host, "path": path}),
             ),
             Err(error) => send_json(http_status("500"), &json!({"error": error.to_string()})),
+        }
+    }
+
+    async fn post_operator_run(&self, request: &Request) -> Response {
+        if request.path != "/api/operator/run"
+            || request.header("x-stado-action") != Some("operator-command")
+        {
+            return send_json(
+                http_status("403"),
+                &json!({"ok": false, "error": "forbidden"}),
+            );
+        }
+        let content_type = request
+            .header("content-type")
+            .unwrap_or("")
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim();
+        let content_length = request
+            .header("content-length")
+            .and_then(|value| value.parse::<usize>().ok());
+        if content_type != "application/json"
+            || request.header("transfer-encoding").is_some()
+            || content_length != Some(request.body.len())
+        {
+            return send_json(
+                http_status("400"),
+                &json!({"ok": false, "error": "invalid JSON request framing"}),
+            );
+        }
+        match operator_console::run(&request.body).await {
+            Ok(result) => send_json(http_status("200"), &result),
+            Err(error) => send_json(error.status, &json!({"ok": false, "error": error.message})),
         }
     }
 
@@ -1739,7 +1872,9 @@ impl Dashboard {
         if let Some(metadata) = &self.operator_auth_override {
             return Ok((metadata.supabase_url.clone(), metadata.anon_key.clone()));
         }
-        operator_auth::operator_auth_metadata().await.map_err(|_| ())
+        operator_auth::operator_auth_metadata()
+            .await
+            .map_err(|_| ())
     }
 
     /// Validate host-health publication or a Wisent session/deployment grant.
@@ -1980,6 +2115,8 @@ async fn read_request(stream: &mut TcpStream) -> std::io::Result<Option<Request>
     };
     let max_body_bytes = if object_put {
         crate::object_store::max_object_bytes()
+    } else if method == "POST" && path == "/api/operator/run" {
+        operator_console::MAX_REQUEST_BYTES
     } else {
         MAX_HEAD_BYTES
     };
@@ -1990,8 +2127,13 @@ async fn read_request(stream: &mut TcpStream) -> std::io::Result<Option<Request>
         ));
     }
     let available = buf.len().saturating_sub(body_start).min(content_length);
-    let mut body = Vec::with_capacity(available);
+    let mut body = Vec::with_capacity(content_length);
     body.extend_from_slice(&buf[body_start..body_start + available]);
+    if body.len() < content_length {
+        let received = body.len();
+        body.resize(content_length, 0);
+        stream.read_exact(&mut body[received..]).await?;
+    }
     Ok(Some(Request {
         method,
         path,
@@ -2445,6 +2587,23 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 /// namespace and key boundary. Out-of-scope requests and bearer mismatches are
 /// unauthorized; invalid configuration or an unavailable exact item is
 /// reported separately so the route can return a redacted 503.
+fn release_object_namespace(namespace: &str) -> bool {
+    matches!(namespace, "releases" | "sources")
+}
+
+fn release_catalog_product<'a>(namespace: &str, key: &'a str) -> Option<&'a str> {
+    if namespace != "system" {
+        return None;
+    }
+    let product = key
+        .strip_prefix("release-catalog/")?
+        .strip_suffix(".json")?;
+    if product.is_empty() || product.contains('/') {
+        None
+    } else {
+        Some(product)
+    }
+}
 async fn authorize_object(
     request: &Request,
     namespace: &str,
@@ -2469,15 +2628,11 @@ async fn authorize_object(
     let expected = match crate::skarbiec::read_object_token(policy.item(), "token").await {
         Ok(Some(value)) if !value.is_empty() => value,
         Ok(_) => {
-            eprintln!(
-                "[dashboard] object verifier item unavailable for namespace {namespace}"
-            );
+            eprintln!("[dashboard] object verifier item unavailable for namespace {namespace}");
             return Err(());
         }
         Err(error) => {
-            eprintln!(
-                "[dashboard] object verifier failed for namespace {namespace}: {error}"
-            );
+            eprintln!("[dashboard] object verifier failed for namespace {namespace}: {error}");
             return Err(());
         }
     };

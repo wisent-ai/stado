@@ -1,0 +1,139 @@
+{
+  "schema_version": 1,
+  "product": "stado",
+  "releases": true,
+  "version_source": {
+    "kind": "regex",
+    "path": "stado-rs/Cargo.toml",
+    "pattern": "(?m)^version\\s*=\\s*\"(?P<version>[^\"]+)\"\\s*$"
+  },
+  "platforms": {
+    "darwin-arm64": {
+      "runner_platform": "darwin-arm64",
+      "quality": [
+        {
+          "name": "fmt",
+          "argv": [
+            "cargo",
+            "fmt",
+            "--manifest-path",
+            "stado-rs/Cargo.toml",
+            "--all",
+            "--",
+            "--check"
+          ]
+        },
+        {
+          "name": "clippy",
+          "argv": [
+            "cargo",
+            "clippy",
+            "--manifest-path",
+            "stado-rs/Cargo.toml",
+            "--locked",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings"
+          ]
+        }
+      ],
+      "build": {
+        "argv": [
+          "cargo",
+          "build",
+          "--manifest-path",
+          "stado-rs/Cargo.toml",
+          "--locked",
+          "--release",
+          "--bin",
+          "stado"
+        ]
+      },
+      "stage": {
+        "stado-rs/target/release/stado": "bin/stado"
+      }
+    },
+    "linux-amd64": {
+      "runner_platform": "linux-amd64",
+      "quality": [
+        {
+          "name": "fmt",
+          "argv": [
+            "cargo",
+            "fmt",
+            "--manifest-path",
+            "stado-rs/Cargo.toml",
+            "--all",
+            "--",
+            "--check"
+          ]
+        },
+        {
+          "name": "clippy",
+          "argv": [
+            "cargo",
+            "clippy",
+            "--manifest-path",
+            "stado-rs/Cargo.toml",
+            "--locked",
+            "--all-targets",
+            "--",
+            "-D",
+            "warnings"
+          ]
+        }
+      ],
+      "build": {
+        "argv": [
+          "cargo",
+          "build",
+          "--manifest-path",
+          "stado-rs/Cargo.toml",
+          "--locked",
+          "--release",
+          "--bin",
+          "stado"
+        ]
+      },
+      "stage": {
+        "stado-rs/target/release/stado": "bin/stado"
+      }
+    }
+  },
+  "promotion": {
+    "channels": [
+      "candidate",
+      "stable"
+    ],
+    "reconcile": false
+  },
+  "deliveries": [
+    {
+      "name": "fleet-darwin",
+      "platform": "darwin-arm64",
+      "argv": [
+        "python3",
+        "scripts/release/install-fleet.py",
+        "--target",
+        "lukasz-macbook",
+        "--target",
+        "charless-mac-mini"
+      ],
+      "required": true,
+      "secret_env": {}
+    },
+    {
+      "name": "fleet-linux",
+      "platform": "linux-amd64",
+      "argv": [
+        "python3",
+        "scripts/release/install-fleet.py",
+        "--target",
+        "ubuntu-server-rtx-pro-6000"
+      ],
+      "required": true,
+      "secret_env": {}
+    }
+  ]
+}

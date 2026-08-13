@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ../backend
+    ports:
+      - '8080:8080'
+    env_file: ../.env
+    depends_on:
+      - db
+    restart: unless-stopped
+
+  frontend:
+    build: ../frontend
+    ports:
+      - '3000:3000'
+    env_file: ../.env
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  db:
+    image: postgres:15-alpine
+    ports:
+      - '54322:5432'
+    environment:
+      POSTGRES_DB: compute
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../supabase/migrations:/docker-entrypoint-initdb.d
+
+volumes:
+  pgdata:

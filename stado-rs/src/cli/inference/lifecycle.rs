@@ -10,8 +10,10 @@ pub struct PlanOptions {
     pub image: String,
     pub model: String,
     pub revision: String,
+    pub gpu_mode: String,
     pub port: u16,
     pub max_model_len: u64,
+    pub kv_cache_memory_gb: Option<u64>,
     pub cache_dir: Option<String>,
     pub json: bool,
 }
@@ -122,6 +124,14 @@ async fn activate(
 }
 
 pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
+    if !matches!(
+        options.gpu_mode.as_str(),
+        schema::GPU_EXCLUSIVE | schema::GPU_YIELDABLE
+    ) {
+        return Err(CmdError::click(
+            "gpu mode must be 'exclusive' or 'yieldable'",
+        ));
+    }
     let document = crate::cli::registry::fetch_document().await?;
     schema::validate(&document).map_err(click)?;
     let mut registry = schema::parse(&document).map_err(click)?;
@@ -152,10 +162,9 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
         deployment.name != options.name
             && deployment.target == options.host
             && deployment.desired_state == schema::STATE_RUNNING
-            && deployment.resources.gpu_mode == schema::GPU_EXCLUSIVE
     }) {
         return Err(CmdError::click(format!(
-            "target '{}' already has an exclusive inference deployment",
+            "target '{}' already has a running inference deployment",
             options.host
         )));
     }
@@ -172,9 +181,10 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
             revision: options.revision,
         },
         resources: schema::Resources {
-            gpu_mode: schema::GPU_EXCLUSIVE.to_string(),
+            gpu_mode: options.gpu_mode,
             gpus: u16::from(true),
             max_model_len: options.max_model_len,
+            kv_cache_memory_gb: options.kv_cache_memory_gb,
             cache_dir: options.cache_dir,
         },
         endpoint: schema::Endpoint {
@@ -210,6 +220,21 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
     Ok(())
 }
 
+fn mode_only_change(current: &schema::Deployment, candidate: &schema::Deployment) -> bool {
+    current.resources.gpu_mode != candidate.resources.gpu_mode
+        && current.name == candidate.name
+        && current.target == candidate.target
+        && current.desired_state == candidate.desired_state
+        && current.engine == candidate.engine
+        && current.model == candidate.model
+        && current.resources.gpus == candidate.resources.gpus
+        && current.resources.max_model_len == candidate.resources.max_model_len
+        && current.resources.kv_cache_memory_gb == candidate.resources.kv_cache_memory_gb
+        && current.resources.cache_dir == candidate.resources.cache_dir
+        && current.endpoint == candidate.endpoint
+        && current.credential_item == candidate.credential_item
+}
+
 pub async fn apply(plan_id: &str, json_output: bool) -> Result<(), CmdError> {
     let plan = saved_plan::load(plan_id).map_err(click)?;
     let (document, expected_generation) = crate::cli::registry::fetch_versioned_document().await?;
@@ -219,11 +244,61 @@ pub async fn apply(plan_id: &str, json_output: bool) -> Result<(), CmdError> {
             "registry changed after inference plan creation; create a new plan",
         ));
     }
-    let bearer = super::credential::read().await?;
+    let mut registry = schema::parse(&document).map_err(click)?;
+    let current = registry
+        .deployments
+        .iter()
+        .find(|deployment| deployment.name == plan.deployment.name)
+        .cloned();
     let target = host_channel::canonical_target(&plan.deployment.target)
         .await
         .map_err(click)?;
     let runner = production_runner();
+
+    if let Some(current) = current.filter(|current| mode_only_change(current, &plan.deployment)) {
+        let updated = inference::update_reservation(&target, &plan.deployment, &runner)
+            .await
+            .map_err(click)?;
+        if succeeded(&updated, "updated") {
+            replace(&mut registry, plan.deployment.clone());
+            let next = schema::write(&document, &registry).map_err(click)?;
+            let generation = match crate::cli::registry::push_document_if(
+                &next,
+                &expected_generation,
+            )
+            .await
+            {
+                Ok(generation) => generation,
+                Err(error) => {
+                    if let Err(restore_error) =
+                        inference::update_reservation(&target, &current, &runner).await
+                    {
+                        return Err(CmdError::click(format!(
+                                "{error}; inference reservation restoration also failed: {restore_error}"
+                            )));
+                    }
+                    return Err(error);
+                }
+            };
+            saved_plan::consume(plan_id).map_err(click)?;
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({
+                        "generation": generation,
+                        "deployment": plan.deployment,
+                        "runtime": updated,
+                        "ready": {"status": "unchanged"},
+                    }))?
+                );
+            } else {
+                println!("applied inference plan {plan_id} generation={generation}");
+            }
+            return Ok(());
+        }
+    }
+
+    let bearer = super::credential::read().await?;
     let installed = match inference::install(&target, &plan.deployment, &bearer, &runner).await {
         Ok(installed) if succeeded(&installed, "started") => installed,
         result => {
@@ -254,7 +329,6 @@ pub async fn apply(plan_id: &str, json_output: bool) -> Result<(), CmdError> {
             return Err(error);
         }
     };
-    let mut registry = schema::parse(&document).map_err(click)?;
     replace(&mut registry, plan.deployment.clone());
     let next = schema::write(&document, &registry).map_err(click)?;
     let generation = match crate::cli::registry::push_document_if(&next, &expected_generation).await

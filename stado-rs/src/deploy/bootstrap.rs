@@ -44,7 +44,7 @@ case "$(uname -s)-$(uname -m)" in
 esac
 case "$release_api" in
   https://*) ;;
-  *) echo "STADO_RELEASE_API_URL must use HTTPS"; false ;;
+  *) echo "STADO_API_URL must use HTTPS"; false ;;
 esac
 case "$release_version" in
   *[![:alnum:]._-]*|"") echo "invalid STADO_RELEASE_VERSION"; false ;;
@@ -52,21 +52,48 @@ esac
 release_api="${release_api%/}"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-release_get() {
+manifest_name="release-manifest-$platform.json"
+archive_name="stado-v$release_version-$platform.tar.gz"
+for name in "$manifest_name" "$archive_name"; do
   curl -fsSL --get \
     --data-urlencode "uri=stado://releases/stado/$release_version/$platform/$name" \
     "$release_api/api/release/object" \
     -o "$tmp/$name"
-}
-for name in stado stado-fix stado-watchdog SHA256SUMS; do
-  release_get
 done
-verify() {
-  if command -v sha256sum >/dev/null 2>&1; then sha256sum -c -; else shasum -a 256 -c -; fi
-}
-(cd "$tmp" && for name in stado stado-fix stado-watchdog; do grep -E "[ *]$name\$" SHA256SUMS | verify; done)
+python3 - "$tmp" "$release_version" "$platform" <<'PY'
+import hashlib, json, os, pathlib, sys, tarfile
+root, version, platform = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+manifest = json.loads((root / f"release-manifest-{platform}.json").read_text())
+if set(manifest) != {"product", "version", "platform", "source_commit", "sha256"}:
+    raise SystemExit("release manifest has unexpected fields")
+if (manifest["product"], manifest["version"], manifest["platform"]) != ("stado", version, platform):
+    raise SystemExit("release manifest identity mismatch")
+if not isinstance(manifest["source_commit"], str) or len(manifest["source_commit"]) not in (40, 64):
+    raise SystemExit("release manifest source commit is invalid")
+if any(character not in "0123456789abcdefABCDEF" for character in manifest["source_commit"]):
+    raise SystemExit("release manifest source commit is invalid")
+if not isinstance(manifest["sha256"], str) or len(manifest["sha256"]) != 64:
+    raise SystemExit("release manifest digest is invalid")
+if any(character not in "0123456789abcdef" for character in manifest["sha256"]):
+    raise SystemExit("release manifest digest is invalid")
+archive = root / f"stado-v{version}-{platform}.tar.gz"
+if hashlib.sha256(archive.read_bytes()).hexdigest() != manifest["sha256"]:
+    raise SystemExit("release archive digest mismatch")
+required = {"stado", "stado-fix", "stado-watchdog"}
+with tarfile.open(archive, "r:gz") as bundle:
+    members = bundle.getmembers()
+    for name in required:
+        matches = [member for member in members if member.name == name and member.isfile()]
+        if len(matches) != 1:
+            raise SystemExit(f"release archive has invalid member {name}")
+        source = bundle.extractfile(matches[0])
+        if source is None:
+            raise SystemExit(f"release archive cannot read member {name}")
+        destination = root / name
+        destination.write_bytes(source.read())
+        os.chmod(destination, 0o755)
+PY
 for name in stado stado-fix stado-watchdog; do
-  chmod 755 "$tmp/$name"
   mv "$tmp/$name" "$BIN_DIR/$name"
 done
 echo "$platform"
@@ -159,7 +186,7 @@ pub fn install_spec(ssh_target: &str) -> CommandSpec {
     CommandSpec::new(ssh_argv(
         ssh_target,
         &remote_install_script(
-            &crate::config::stado_release_api_url(),
+            &crate::config::stado_api_url(),
             &crate::config::stado_release_version(),
         ),
     ))

@@ -47,7 +47,7 @@ use crate::monitor::reap::reap_terminal_runs;
 use crate::providers::{get_provider, BoxProvider, Provider};
 use crate::queue::{JobStorage, StorageError};
 use crate::scheduler::dispatch::r#box::run_box_tick;
-use crate::scheduler::makespan::assign_jobs;
+use crate::scheduler::makespan::{assign_jobs, repair_conflicting_pinned_assignments};
 use crate::scheduler::scheduler::{
     schedule_queued_jobs, schedule_queued_jobs_routed, SchedulerError,
 };
@@ -554,6 +554,12 @@ pub async fn run_tick(
     if n_fired > 0 {
         log(&format!("schedules: fired {n_fired} due schedule(s)"));
     }
+    let n_pin_repairs = repair_conflicting_pinned_assignments(store, log).await?;
+    if n_pin_repairs > 0 {
+        log(&format!(
+            "routing: repaired {n_pin_repairs} conflicting host-pinned assignments"
+        ));
+    }
     // Coordinator-authoritative sizing: re-zero any queued job whose model
     // has no measured peak (stamp the measured peak if one exists) BEFORE
     // assignment. A pre-0.4.237 agent that requeues a job writes the old
@@ -670,7 +676,7 @@ pub async fn run(target: Option<&str>, once: bool) -> Result<i32, String> {
         .await
         .map_err(|err| err.to_string())?;
     loop {
-        if !config::stado_release_api_url().is_empty()
+        if !config::stado_api_url().is_empty()
             && !config::stado_release_version().is_empty()
             && !config::stado_release_platform().is_empty()
         {
