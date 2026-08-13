@@ -65,12 +65,20 @@ pub async fn install(
     target: &ComputeTarget,
     deployment: &Deployment,
     api_key: &str,
+    huggingface_token: Option<&str>,
     runner: &Runner,
 ) -> Result<Value, DeployError> {
     safe_runtime(deployment)?;
     if api_key.is_empty() || api_key.chars().any(char::is_control) {
         return Err(DeployError(
             "inference bearer must be non-empty and single-line".to_string(),
+        ));
+    }
+    if huggingface_token
+        .is_some_and(|token| token.is_empty() || token.chars().any(char::is_control))
+    {
+        return Err(DeployError(
+            "Hugging Face token must be non-empty and single-line".to_string(),
         ));
     }
     let name = shlex_quote(&deployment.name);
@@ -96,6 +104,9 @@ pub async fn install(
         .map(|path| format!("{path}:/data/huggingface"))
         .unwrap_or_else(|| "\"$root/cache:/data/huggingface\"".to_string());
     let secret = shlex_quote(&STANDARD.encode(api_key));
+    let huggingface_secret = huggingface_token
+        .map(|token| shlex_quote(&STANDARD.encode(token)))
+        .unwrap_or_else(|| "''".to_string());
     let unit = shlex_quote(&unit_name(&deployment.name));
     let reservation = Reservation {
         deployment: deployment.name.clone(),
@@ -140,6 +151,11 @@ chmod 600 "$root/api-key"
 printf 'VLLM_API_KEY=' > "$root/runtime.env"
 cat "$root/api-key" >> "$root/runtime.env"
 printf 'HF_HOME=/data/huggingface\n' >> "$root/runtime.env"
+if [ -n {huggingface_secret} ]; then
+  printf 'HF_TOKEN=' >> "$root/runtime.env"
+  printf '%s' {huggingface_secret} | base64 --decode >> "$root/runtime.env"
+  printf '\n' >> "$root/runtime.env"
+fi
 chmod 600 "$root/runtime.env"
 printf '%s' {reservation} | base64 --decode > "$reservation"
 chmod 600 "$reservation"
