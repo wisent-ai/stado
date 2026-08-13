@@ -40,6 +40,9 @@ tar = "0.4"
 flate2 = "1"
 async-trait = "0.1"
 tempfile = "3"
+# The fleet's failure vocabulary. Extracted from src/failure.rs, so depending
+# on it here replaces a local copy rather than adding a second opinion.
+wisent-errors = { git = "https://github.com/wisent-ai/wisent-errors" }
 
 [dev-dependencies]
 parking_lot = "0.12"

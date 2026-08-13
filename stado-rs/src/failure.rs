@@ -8,8 +8,9 @@
 //! either hammered a permanent error or gave up on a transient one.
 //!
 //! This module is the ecosystem failure contract as it applies to a CLI. The
-//! code set, the severities, the retryability and the classification rules are
-//! mirrored from `image-video-router/src/failure/classify.rs`, not reinvented.
+//! code set, the severities, the retryability and the classification rules
+//! come from the `wisent-errors` package, which was extracted from this file
+//! rather than rewritten, so they are not reinvented here either.
 //! Two things are deliberately different here, because the recipient is
 //! different:
 //!
@@ -27,23 +28,28 @@
 //! What the contract still buys us here is rule one — an infrastructure
 //! failure is never dressed up as a missing resource, and never as success.
 
-use std::fmt;
 use std::sync::LazyLock;
 
 use regex::Regex;
 
+/// The vocabulary and everything derivable from a code come from the fleet
+/// package. `wisent-errors` was extracted from this module verbatim: the code
+/// set, the severity per code, the retryable and outage sets, the
+/// upstream-status classification and the exit-code remap are the same values
+/// this file used to spell out, and are now spelled out once for every
+/// language. The local names are re-exported so no caller in this crate
+/// changes.
+pub use wisent_errors::{Code as FailureCode, Severity};
+
 /// The technical detail carried into the structured log line is bounded: an
 /// upstream body pasted whole turns one failure into an unreadable log page.
 /// The operator still has the unbounded original on the line above it.
+///
+/// This bound stays local and stays tighter than the package's envelope bound:
+/// it governs the CLI's own log line, which the fleet's shippers have been
+/// ingesting at this width.
 fn max_detail_chars() -> usize {
     "300".parse().expect("valid detail bound")
-}
-
-/// Exit codes come from `sysexits.h`, the convention operator scripts already
-/// know. Spelled as parsed text rather than as bare literals: numbers in this
-/// crate carry their provenance in the string they are read from.
-fn sysexit(digits: &str) -> i32 {
-    digits.parse().expect("valid sysexits.h code")
 }
 
 /// `EX_UNAVAILABLE`. The single fleet-wide signal for "this failure is worth
@@ -55,138 +61,7 @@ fn sysexit(digits: &str) -> i32 {
 /// dead dependency is, while a broken configuration is our outage but retrying
 /// it forever fixes nothing.
 pub fn retry_exit_code() -> i32 {
-    sysexit("69")
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FailureCode {
-    Config,
-    Auth,
-    NotFound,
-    RateLimit,
-    Timeout,
-    InfraDown,
-    Unknown,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Severity {
-    Warning,
-    Error,
-    Critical,
-}
-
-impl Severity {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Warning => "warning",
-            Self::Error => "error",
-            Self::Critical => "critical",
-        }
-    }
-}
-
-impl fmt::Display for Severity {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
-impl FailureCode {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Config => "config",
-            Self::Auth => "auth",
-            Self::NotFound => "not_found",
-            Self::RateLimit => "rate_limit",
-            Self::Timeout => "timeout",
-            Self::InfraDown => "infra_down",
-            Self::Unknown => "unknown",
-        }
-    }
-
-    pub fn severity(self) -> Severity {
-        match self {
-            Self::Config | Self::InfraDown => Severity::Critical,
-            Self::Timeout | Self::Unknown => Severity::Error,
-            Self::RateLimit | Self::Auth | Self::NotFound => Severity::Warning,
-        }
-    }
-
-    /// Worth running the same command again without changing anything.
-    pub fn retryable(self) -> bool {
-        matches!(self, Self::Timeout | Self::InfraDown | Self::RateLimit)
-    }
-
-    /// Our side is broken, as opposed to the request being wrong. Drives what
-    /// the human sentence says; the exit code follows [`Self::retryable`].
-    pub fn outage(self) -> bool {
-        matches!(self, Self::Config | Self::Timeout | Self::InfraDown)
-    }
-
-    /// One sentence, for the human who just ran the command. It answers the
-    /// only question that decides what they do next: is this ours or theirs?
-    pub fn operator_summary(self) -> &'static str {
-        match self {
-            Self::Config => "our deployment configuration is incomplete or wrong",
-            Self::Auth => "the credentials this command used were rejected",
-            Self::NotFound => "what the command asked for is not there",
-            Self::RateLimit => "an upstream is throttling us",
-            Self::Timeout => "an upstream did not answer in time",
-            Self::InfraDown => "infrastructure we depend on is unreachable",
-            Self::Unknown => "the command failed and we could not attribute the failure",
-        }
-    }
-
-    /// The exit code this failure leaves the process with, given the code the
-    /// command already chose. Only the retryable path is remapped — usage
-    /// errors and the long-standing runtime code keep the values every
-    /// existing script already reads.
-    pub fn exit_code(self, current: i32) -> i32 {
-        if self.retryable() {
-            retry_exit_code()
-        } else {
-            current
-        }
-    }
-
-    /// Classify a status an upstream answered one of our calls with.
-    ///
-    /// A server error becomes `infra_down` and never `not_found`: collapsing
-    /// 5xx into "nothing there" is exactly what let a storage outage read as
-    /// an empty queue.
-    pub fn from_upstream_status(status: u16) -> Self {
-        let Ok(status) = reqwest::StatusCode::from_u16(status) else {
-            return Self::Unknown;
-        };
-        if status == reqwest::StatusCode::UNAUTHORIZED
-            || status == reqwest::StatusCode::FORBIDDEN
-            || status == reqwest::StatusCode::PROXY_AUTHENTICATION_REQUIRED
-        {
-            return Self::Auth;
-        }
-        if status == reqwest::StatusCode::NOT_FOUND || status == reqwest::StatusCode::GONE {
-            return Self::NotFound;
-        }
-        if status == reqwest::StatusCode::REQUEST_TIMEOUT
-            || status == reqwest::StatusCode::GATEWAY_TIMEOUT
-        {
-            return Self::Timeout;
-        }
-        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            return Self::RateLimit;
-        }
-        if status.is_server_error() {
-            return Self::InfraDown;
-        }
-        Self::Unknown
-    }
-}
-
-impl fmt::Display for FailureCode {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
-    }
+    FailureCode::RETRY_EXIT
 }
 
 /// A missing or malformed environment variable is our outage, not the
