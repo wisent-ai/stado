@@ -111,7 +111,7 @@ fn repo_prelude(job: &Job) -> String {
          && git -C {workdir} fetch --quiet --depth 1 origin {repo_ref} \
          && git -C {workdir} checkout --quiet --detach {repo_ref} \
          && test \"$(git -C {workdir} rev-parse HEAD)\" = {repo_ref} \
-         && cd {workdir}{install} && cd .. && "
+         && cd {workdir}{install} && "
     )
 }
 
@@ -445,7 +445,7 @@ mod tests {
             cmd.ends_with(
                 "pip install --break-system-packages --upgrade pip setuptools wheel \
                  && pip install --break-system-packages --no-build-isolation '.[train]' \
-                 && cd .. && export A=1 && python run.py"
+                 && export A=1 && python run.py"
             ),
             "{cmd}"
         );

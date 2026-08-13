@@ -22,6 +22,7 @@ pub mod bootstrap;
 pub mod cancel;
 pub mod capabilities;
 pub mod cloudflare;
+pub mod coding;
 pub mod config_cmd;
 pub mod control_plane;
 pub mod coordinator;
@@ -31,6 +32,7 @@ pub mod directory;
 pub mod disk_cleanup;
 pub mod doctor;
 pub mod host;
+pub mod identity;
 pub mod inference;
 pub mod instances;
 pub mod job;
@@ -38,20 +40,22 @@ pub mod machine;
 pub mod mail;
 pub mod overview;
 pub mod placement;
+pub mod precheck_runner;
 pub mod profiles_cmd;
 pub mod queue;
 pub mod quota;
-pub mod identity;
 pub mod recovery;
 pub mod registry;
-pub mod release_build;
+pub mod release_catalog;
 pub mod release_cmd;
+pub mod release_submit;
 pub mod resolver;
 pub mod resources;
 pub mod results;
 pub mod schedule;
 pub mod secrets;
 pub mod service;
+pub mod service_verify;
 pub mod status;
 pub mod storage;
 pub mod submit;
@@ -884,6 +888,9 @@ pub struct ScheduleCreateArgs {
     /// Pin machine type verbatim.
     #[arg(long, default_value = "")]
     machine_type: String,
+    /// Hard-pin every scheduled job to one registry target or consumer id.
+    #[arg(long, default_value = "")]
+    pinned_host: String,
     /// Git URL to clone before running.
     #[arg(long, default_value = "")]
     repo: String,
@@ -1003,6 +1010,12 @@ fn parse_target_kind(raw: &str) -> Result<String, String> {
         })
 }
 
+fn parse_release_platform(raw: &str) -> Result<String, String> {
+    crate::deploy::host_release::managed_platform(raw)
+        .map(str::to_string)
+        .map_err(|error| error.to_string())
+}
+
 #[derive(Subcommand)]
 enum RegistryHostCommands {
     /// Onboard HOST into the canonical registry, validated.
@@ -1014,6 +1027,34 @@ enum RegistryHostCommands {
         /// Registry target kind.
         #[arg(long, default_value = "local", value_parser = parse_target_kind)]
         kind: String,
+        /// Release platform confirmed during enrollment.
+        #[arg(long, value_parser = parse_release_platform)]
+        release_platform: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum HostPrecheckRunnerCommands {
+    /// Install or reconcile the isolated pre-check runner on TARGET.
+    Install {
+        target: String,
+        /// Emit the lifecycle report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read the installed runner service, identity and network boundary.
+    Status {
+        target: String,
+        /// Emit the lifecycle report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove the runner, service definition and network boundary from TARGET.
+    Remove {
+        target: String,
+        /// Emit the lifecycle report as JSON.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -1039,9 +1080,24 @@ enum HostCommands {
     /// Manage local macOS and Linux user accounts.
     #[command(subcommand)]
     User(HostUserCommands),
+    /// Manage the isolated GitHub pre-check runner on a registry host.
+    #[command(name = "precheck-runner", subcommand)]
+    PrecheckRunner(HostPrecheckRunnerCommands),
     /// Point TARGET's Weles recordings store at PATH.
     #[command(name = "weles-recordings-dir")]
     WelesRecordingsDir { target: String, path: String },
+    /// Publish TARGET's registry `weles` declaration as its placement policy.
+    ///
+    /// The worker decides what it may claim from a file on its own disk, not
+    /// from the registry. This regenerates that file from the registry, stamps
+    /// it with the generation it came from, and reports what changed.
+    #[command(name = "publish-placement-policy")]
+    PublishPlacementPolicy {
+        target: String,
+        /// Emit the publication and its action delta as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Report or revert the GUI-automation enablement of TARGET.
     #[command(name = "gui-automation", subcommand)]
     GuiAutomation(HostGuiAutomationCommands),
@@ -1178,6 +1234,26 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Every helper script TARGET carries, oldest first, with its age and size.
+    ///
+    /// `install-helper` writes into `$HOME/.stado/bin` and nothing removes
+    /// what it wrote: charless-mac-mini holds 553 installed helper scripts
+    /// beside 16 binaries. Reporting is the default; `--prune` removes the
+    /// ones past `--older-than-days` and refuses to run without it, because
+    /// "remove everything" is never what an operator means here.
+    Helpers {
+        target: String,
+        /// Only count -- and, with --prune, remove -- helpers older than this.
+        #[arg(long)]
+        older_than_days: Option<u32>,
+        /// Remove the helpers past the threshold. Required companion of
+        /// --older-than-days; without it this command only reports.
+        #[arg(long)]
+        prune: bool,
+        /// Emit the inventory as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Open an encrypted reverse SSH forwarding channel to TARGET.
     #[command(name = "forward-local")]
     ForwardLocal {
@@ -1194,6 +1270,61 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Open an encrypted local SSH forwarding channel to TARGET.
+    #[command(name = "forward-remote")]
+    ForwardRemote {
+        target: String,
+        /// Safe name for the local endpoint marker.
+        name: String,
+        /// Loopback port served on TARGET.
+        #[arg(long)]
+        remote_port: u16,
+        /// Loopback port exposed on this control-plane host.
+        #[arg(long)]
+        local_port: u16,
+        /// Emit the forwarding report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Declare the exact version TARGET must run for one managed binary.
+    #[command(name = "declare-version")]
+    DeclareVersion {
+        target: String,
+        #[arg(long)]
+        binary: String,
+        #[arg(long)]
+        version: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Promote one exact published version to every registry target.
+    #[command(name = "promote-version")]
+    PromoteVersion {
+        #[arg(long)]
+        binary: String,
+        #[arg(long)]
+        version: String,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Compare active versions with desired state; omit TARGET for the fleet.
+    Reconcile {
+        target: Option<String>,
+        /// Close every deliverable difference.
+        #[arg(long)]
+        apply: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Which Skarbiec vaults the fleet holds; omit TARGET to ask every host.
+    Vaults {
+        /// Ask one host instead of the whole registry.
+        target: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Run one approved read-only command on TARGET (allowlist, not a shell).
     Exec {
         target: String,
@@ -1204,6 +1335,19 @@ enum HostCommands {
         /// see the allowlist.
         #[arg(last = true)]
         command: Vec<String>,
+    },
+    /// Place an interactive Jeden RPC session on a live registry host and
+    /// attach it to this process's stdin/stdout.
+    #[command(name = "jeden-connect")]
+    JedenConnect {
+        /// Repository name under ~/Documents/CodingProjects/Wisent.
+        workspace: String,
+        /// Reconnect to the host that owns an existing durable session.
+        #[arg(long)]
+        target: Option<String>,
+        /// Require the selected host to own this ~/.jeden/sessions ledger.
+        #[arg(long)]
+        resume: Option<String>,
     },
     /// Deliver one file of any size to TARGET's owner-only Stado files
     /// directory, checksummed on arrival.
@@ -1229,27 +1373,25 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Deliver one registry-declared managed binary to TARGET: fetch the
-    /// exact coordinate, verify its configured SHA-256, stage it, and only
-    /// then repoint the active binary and restart its unit.
+    /// Report which commit produced each artifact TARGET carries, and whether
+    /// that commit is reachable from origin/main. An artifact with no manifest
+    /// is reported unprovenanced, never omitted.
+    Provenance {
+        target: String,
+        /// Emit the manifests and their reachability as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Deliver one registry-declared managed binary to TARGET.
     Release {
         target: String,
-        /// Managed binary to deliver. Run with an unmanaged one to see the
-        /// list; the name selects a fixed entry and never becomes a path.
         #[arg(long)]
         binary: String,
-        /// Exact immutable version, and it must match what the registry
-        /// declares for this host. Not a channel and not an alias.
         #[arg(long)]
         version: String,
-        /// Published release platform.
-        #[arg(long, default_value = crate::deploy::host_release::DEFAULT_PLATFORM)]
-        platform: String,
-        /// Probe the host read-only and report the plan without fetching,
-        /// staging, activating or restarting anything.
+        /// Report the plan without mutation.
         #[arg(long)]
         dry_run: bool,
-        /// Emit the delivery report as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -1274,6 +1416,9 @@ enum HostBuildCacheCommands {
         root: String,
         #[arg(long)]
         min_age_days: String,
+        /// Remove tagged caches even when they were used today.
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -1594,16 +1739,21 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             RegistryCommands::Pull => registry::pull().await,
             RegistryCommands::SelfTarget { name_only } => registry::self_target(name_only).await,
             RegistryCommands::Doctor { json } => registry::doctor(json).await,
-            RegistryCommands::Host(RegistryHostCommands::Add { host, ssh, kind }) => {
-                registry::host_add(&host, &ssh, &kind).await
-            }
+            RegistryCommands::Host(RegistryHostCommands::Add {
+                host,
+                ssh,
+                kind,
+                release_platform,
+            }) => registry::host_add(&host, &ssh, &kind, &release_platform).await,
             RegistryCommands::BeaconAge { json } => registry::beacon_age(json).await,
         },
         Commands::Identity(sub) => match sub {
             IdentityCommands::List { json } => identity::list(json).await,
-            IdentityCommands::Verify { kind, identity, json } => {
-                identity::verify(kind, identity, json).await
-            }
+            IdentityCommands::Verify {
+                kind,
+                identity,
+                json,
+            } => identity::verify(kind, identity, json).await,
         },
         Commands::Host(sub) => match sub {
             HostCommands::Health { target, json } => host::health(&target, json).await,
@@ -1642,6 +1792,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::WelesRecordingsDir { target, path } => {
                 host::weles_recordings_dir(&target, &path).await
             }
+            HostCommands::PublishPlacementPolicy { target, json } => {
+                placement::publish_placement_policy(&target, json).await
+            }
             HostCommands::GuiAutomation(HostGuiAutomationCommands::Status { target }) => {
                 host::gui_automation_status(&target).await
             }
@@ -1652,12 +1805,13 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 target,
                 root,
                 min_age_days,
-            }) => host::build_caches(&target, &root, &min_age_days, false).await,
+            }) => host::build_caches(&target, &root, &min_age_days, false, false).await,
             HostCommands::BuildCaches(HostBuildCacheCommands::Prune {
                 target,
                 root,
                 min_age_days,
-            }) => host::build_caches(&target, &root, &min_age_days, true).await,
+                force,
+            }) => host::build_caches(&target, &root, &min_age_days, true, force).await,
             HostCommands::Uptime { target, json } => host::uptime(&target, json).await,
             HostCommands::Ping { target, json } => host::ping(&target, json).await,
             HostCommands::Disk { target, json } => host::disk(&target, json).await,
@@ -1679,6 +1833,17 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 name,
                 json,
             } => host::install_helper(&target, &source, &name, json).await,
+            HostCommands::PrecheckRunner(command) => match command {
+                HostPrecheckRunnerCommands::Install { target, json } => {
+                    precheck_runner::install(&target, json).await
+                }
+                HostPrecheckRunnerCommands::Status { target, json } => {
+                    precheck_runner::status(&target, json).await
+                }
+                HostPrecheckRunnerCommands::Remove { target, json } => {
+                    precheck_runner::remove(&target, json).await
+                }
+            },
             HostCommands::InstallFile {
                 target,
                 source,
@@ -1719,6 +1884,12 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::RemoveHelper { target, name, json } => {
                 host::remove_helper(&target, &name, json).await
             }
+            HostCommands::Helpers {
+                target,
+                older_than_days,
+                prune,
+                json,
+            } => host::helpers(&target, older_than_days, prune, json).await,
             HostCommands::ForwardLocal {
                 target,
                 name,
@@ -1726,20 +1897,49 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 local_port,
                 json,
             } => host::forward_local(&target, &name, remote_port, local_port, json).await,
+            HostCommands::ForwardRemote {
+                target,
+                name,
+                remote_port,
+                local_port,
+                json,
+            } => host::forward_remote(&target, &name, remote_port, local_port, json).await,
             HostCommands::Exec {
                 target,
                 json,
                 command,
             } => host::exec(&target, command, json).await,
+            HostCommands::JedenConnect {
+                workspace,
+                target,
+                resume,
+            } => coding::connect_jeden(&workspace, target.as_deref(), resume.as_deref()).await,
+            HostCommands::DeclareVersion {
+                target,
+                binary,
+                version,
+                json,
+            } => host::declare_version(&target, &binary, &version, json).await,
+            HostCommands::PromoteVersion {
+                binary,
+                version,
+                json,
+            } => host::promote_version(&binary, &version, json).await,
+            HostCommands::Reconcile {
+                target,
+                apply,
+                json,
+            } => host::reconcile(target, apply, json).await,
+            HostCommands::Vaults { target, json } => host::vaults(target, json).await,
             HostCommands::Inventory { target, json } => host::inventory(&target, json).await,
+            HostCommands::Provenance { target, json } => host::provenance(&target, json).await,
             HostCommands::Release {
                 target,
                 binary,
                 version,
-                platform,
                 dry_run,
                 json,
-            } => host::release(&target, &binary, &version, &platform, dry_run, json).await,
+            } => host::release(&target, &binary, &version, dry_run, json).await,
         },
         Commands::Bootstrap {
             target,

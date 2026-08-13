@@ -106,9 +106,8 @@ pub async fn publish_beacon(source: &str) -> Result<(), CmdError> {
     endpoint.query_pairs_mut().append_pair("host", host);
 
     let token = host_health_api_token().await?;
-    let response = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()?
+    let response = crate::cli::storage::fleet_https_client()
+        .map_err(|error| CmdError::click(error.to_string()))?
         .put(endpoint)
         .bearer_auth(&token)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
@@ -129,14 +128,18 @@ pub async fn publish_beacon(source: &str) -> Result<(), CmdError> {
             "Stado host-health API returned invalid JSON: {error}"
         ))
     })?;
-    let expected_path = format!("{}/{host}.json", crate::monitor::host_health::HEALTH_PREFIX);
-    if payload
-        != json!({
-            "state": "stored",
-            "host": host,
-            "path": expected_path,
-        })
-    {
+    // The publisher checks that the server stored THIS host's beacon, and
+    // nothing about where. Reconstructing the server's storage layout here
+    // made a correct publication fail on any host whose namespace differs
+    // from the control plane's -- the client was asserting an internal detail
+    // it has no way to know.
+    let stored = payload.get("state").and_then(Value::as_str) == Some("stored")
+        && payload.get("host").and_then(Value::as_str) == Some(host)
+        && payload
+            .get("path")
+            .and_then(Value::as_str)
+            .is_some_and(|path| path.ends_with(&format!("{host}.json")));
+    if !stored {
         return Err(CmdError::click(
             "Stado host-health API returned an inconsistent publish response",
         ));
@@ -184,7 +187,65 @@ fn host_health_api_url() -> Result<url::Url, CmdError> {
     Ok(url)
 }
 
+/// The publisher's bearer from an owner-only file, for a host that cannot
+/// reach Skarbiec.
+///
+/// Skarbiec binds to loopback and the tailnet ingress carries only the object
+/// API, so a Linux registry host has no authenticated path to a broker and
+/// published no beacon at all -- `host ping` called a machine that was serving
+/// releases "down". Every other grant in this fleet already lives as an
+/// owner-only file; this reads the same shape. The bare value in the
+/// environment stays forbidden, which is what `host recover` refuses as an
+/// ambient credential.
+fn host_health_api_token_from_file() -> Result<Option<String>, CmdError> {
+    let Ok(raw) = std::env::var("STADO_HOST_HEALTH_API_TOKEN_FILE") else {
+        return Ok(None);
+    };
+    if raw.trim().is_empty() {
+        return Ok(None);
+    }
+    let path = crate::config_file::expand_tilde(raw.trim());
+    let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
+        CmdError::click(format!(
+            "cannot inspect STADO_HOST_HEALTH_API_TOKEN_FILE {}: {error}",
+            path.display()
+        ))
+    })?;
+    if !metadata.file_type().is_file() {
+        return Err(CmdError::click(format!(
+            "STADO_HOST_HEALTH_API_TOKEN_FILE must be a regular file: {}",
+            path.display()
+        )));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(CmdError::click(format!(
+                "STADO_HOST_HEALTH_API_TOKEN_FILE must be owner-only (chmod 600): {}",
+                path.display()
+            )));
+        }
+    }
+    let token = std::fs::read_to_string(&path)
+        .map_err(|error| {
+            CmdError::click(format!(
+                "cannot read STADO_HOST_HEALTH_API_TOKEN_FILE {}: {error}",
+                path.display()
+            ))
+        })?
+        .trim()
+        .to_string();
+    if token.is_empty() {
+        return Err(CmdError::click("STADO_HOST_HEALTH_API_TOKEN_FILE is empty"));
+    }
+    Ok(Some(token))
+}
+
 async fn host_health_api_token() -> Result<String, CmdError> {
+    if let Some(token) = host_health_api_token_from_file()? {
+        return Ok(token);
+    }
     let url = std::env::var("STADO_HOST_HEALTH_SKARBIEC_URL")
         .map_err(|_| CmdError::click("STADO_HOST_HEALTH_SKARBIEC_URL is required"))?;
     let consumer = std::env::var("STADO_HOST_HEALTH_SKARBIEC_CONSUMER")
@@ -293,6 +354,7 @@ pub async fn build_caches(
     root: &str,
     min_age_days: &str,
     apply: bool,
+    force: bool,
 ) -> Result<(), CmdError> {
     let resolved = registry_target(target).await?;
     let runner = crate::deploy::production_runner();
@@ -301,6 +363,7 @@ pub async fn build_caches(
         root,
         min_age_days,
         apply,
+        force,
         &runner,
     )
     .await;
@@ -958,6 +1021,498 @@ pub async fn exec(target: &str, words: Vec<String>, json: bool) -> Result<(), Cm
 /// The only thing it takes is the registry target name. There is no path,
 /// file name, port or pattern to pass, because a command that took one
 /// would be a command that could be pointed at `~/.ssh/id_ed25519`.
+/// `stado host vaults [TARGET]` — which Skarbiec vaults the fleet holds.
+///
+/// Without a target this asks every registry host, because "how many vaults
+/// does this fleet have" is the question a machine cannot answer about
+/// itself: a vault is a file, and the desktop client that lists them is
+/// honest that it only sees the machine it runs on.
+///
+/// Only an owner, three counts and a path cross the wire. Skarbiec's own
+/// documentation calls item, consumer and scope names "the map" and holds
+/// them above the encrypted values in confidentiality, so a fleet sweep
+/// reports how much is held and never what.
+pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> {
+    let runner = crate::deploy::production_runner();
+    let names: Vec<String> = match target {
+        Some(name) => vec![name],
+        None => {
+            let registry = crate::targets::fetch_registry_remote()
+                .await
+                .map_err(|error| CmdError::click(error.to_string()))?;
+            registry
+                .targets
+                .iter()
+                .map(|entry| entry.name.clone())
+                .collect()
+        }
+    };
+    let mut hosts: Vec<serde_json::Value> = Vec::new();
+    for name in &names {
+        let resolved = crate::deploy::host_channel::canonical_target(name)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        let answer = crate::deploy::fleet_vaults::collect_from(&resolved, &runner).await;
+        hosts.push(crate::deploy::fleet_vaults::attribute(name, answer));
+    }
+    let summary = crate::deploy::fleet_vaults::summarize(&hosts);
+    if json {
+        print_json(&json!({"summary": summary, "hosts": hosts}));
+        return Ok(());
+    }
+    for host in &hosts {
+        let name = host.get("target").and_then(Value::as_str).unwrap_or("?");
+        if let Some(error) = host.get("error").and_then(Value::as_str) {
+            println!("{name}: {error}");
+            continue;
+        }
+        if let Some(absent) = host.get("absent").and_then(Value::as_str) {
+            println!("{name}: {absent}");
+            continue;
+        }
+        let list = host
+            .get("vaults")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        println!("{name}: {} vault(s)", list.len());
+        for vault in list {
+            println!(
+                "  {:>5} items  {} recipients  {}",
+                vault
+                    .get("items")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default(),
+                vault
+                    .get("recipients")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default(),
+                vault.get("path").and_then(Value::as_str).unwrap_or("")
+            );
+        }
+    }
+    println!(
+        "{} host(s), {} unreachable, {} vault(s), {} item(s)",
+        summary
+            .get("hosts")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        summary
+            .get("unreachable")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        summary
+            .get("vaults")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        summary
+            .get("items")
+            .and_then(Value::as_u64)
+            .unwrap_or_default()
+    );
+    Ok(())
+}
+
+/// `stado host declare-version TARGET --binary B --version V` — say what a
+/// host must run.
+///
+/// `managed_versions` is the declaration every version verdict is measured
+/// against, and nothing wrote it: `host inventory` compared each host's
+/// binaries to a field that was empty on all three, so every answer was
+/// "undeclared" and the fleet looked fine while running whatever it happened
+/// to have. Delivery refuses a version the registry has not declared, so
+/// without this command the delivery path could not be reached at all.
+pub async fn declare_version(
+    target: &str,
+    binary: &str,
+    version: &str,
+    json: bool,
+) -> Result<(), CmdError> {
+    let binary = crate::deploy::host_release::managed_binary(binary)
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let version = version.trim();
+    if version.is_empty() {
+        return Err(CmdError::usage("--version must name an exact version"));
+    }
+    let (mut document, expected_generation) = super::registry::fetch_versioned_document().await?;
+    let targets = document
+        .get_mut("targets")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| CmdError::click("registry.targets: must be an array"))?;
+    let entry = targets
+        .iter_mut()
+        .find_map(|candidate| {
+            let object = candidate.as_object_mut()?;
+            (object.get("name").and_then(Value::as_str) == Some(target)).then_some(object)
+        })
+        .ok_or_else(|| CmdError::click(format!("registry declares no target {target:?}")))?;
+    let versions = entry
+        .entry("managed_versions".to_string())
+        .or_insert_with(|| Value::Object(serde_json::Map::new()))
+        .as_object_mut()
+        .ok_or_else(|| CmdError::click("managed_versions is not an object"))?;
+    versions.insert(binary.name.to_string(), json!(version));
+    let generation = super::registry::push_document_if(&document, &expected_generation).await?;
+    if json {
+        print_json(&json!({
+            "target": target,
+            "binary": binary.name,
+            "version": version,
+            "generation": generation,
+        }));
+        return Ok(());
+    }
+    println!("{target}: {} declared at {version}", binary.name);
+    Ok(())
+}
+
+/// Promote one published version into fleet desired state in one fenced
+/// registry write. Every platform manifest must already exist and identify
+/// the canonical coordinate before `managed_versions` moves.
+pub async fn promote_version(
+    binary: &str,
+    version: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let managed = crate::deploy::host_release::managed_binary(binary)
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let version = version.trim();
+    if !crate::deploy::host_release::is_exact_semver(version) {
+        return Err(CmdError::usage(
+            "--version must name an exact immutable semantic version",
+        ));
+    }
+    crate::cli::storage::release_api_origin()?;
+    let (mut document, expected_generation) = super::registry::fetch_versioned_document().await?;
+    let target_specs: Vec<(String, String)> = document
+        .get("targets")
+        .and_then(Value::as_array)
+        .ok_or_else(|| CmdError::click("registry.targets: must be an array"))?
+        .iter()
+        .map(|target| {
+            let object = target
+                .as_object()
+                .ok_or_else(|| CmdError::click("registry target must be an object"))?;
+            let name = object
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+                .ok_or_else(|| CmdError::click("registry target has no name"))?;
+            let platform = match object.get("release_platform") {
+                None | Some(Value::Null) => "",
+                Some(Value::String(platform)) => platform.as_str(),
+                Some(_) => {
+                    return Err(CmdError::click(format!(
+                        "registry target {name:?} has a non-string release_platform"
+                    )));
+                }
+            };
+            Ok((name.to_string(), platform.to_string()))
+        })
+        .collect::<Result<_, CmdError>>()?;
+    if target_specs.is_empty() {
+        return Err(CmdError::click(
+            "registry has no targets; refusing an empty desired-state promotion",
+        ));
+    }
+
+    // Resolve every legacy omission before mutating the in-memory document.
+    // A failed channel, malformed inventory, unsupported observation, or
+    // disagreement with an existing declaration aborts the one fenced write.
+    let runner = crate::deploy::production_runner();
+    let mut observed_platforms = std::collections::BTreeMap::new();
+    let mut platforms = std::collections::BTreeSet::new();
+    let mut migrated = Vec::new();
+    for (name, declared) in &target_specs {
+        let report = crate::deploy::host_inventory::inventory_host(name, &runner)
+            .await
+            .map_err(|error| {
+                CmdError::click(format!(
+                    "cannot verify release_platform for {name:?}: {error}"
+                ))
+            })?;
+        if report.get("status").and_then(Value::as_str)
+            != Some(crate::deploy::host_inventory::OK_STATUS)
+        {
+            let detail = report
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("host inventory did not complete");
+            return Err(CmdError::click(format!(
+                "cannot verify release_platform for {name:?}: {detail}"
+            )));
+        }
+        if report.get("sanitizer_state").and_then(Value::as_str)
+            != Some(crate::deploy::host_inventory::SANITIZER_OK)
+        {
+            return Err(CmdError::click(format!(
+                "cannot verify release_platform for {name:?}: host inventory sanitizer failed"
+            )));
+        }
+        let observed = report
+            .get("release_platform")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "cannot verify release_platform for {name:?}: inventory omitted it"
+                ))
+            })?;
+        let observed = crate::deploy::host_release::managed_platform(observed)
+            .map_err(|error| CmdError::click(format!("{name}: {error}")))?;
+        if !declared.is_empty() && declared != observed {
+            return Err(CmdError::click(format!(
+                "registry target {name:?} declares release_platform {declared}, \
+                 but verified inventory observed {observed}"
+            )));
+        }
+        if declared.is_empty() {
+            migrated.push(name.clone());
+        }
+        observed_platforms.insert(name.clone(), observed.to_string());
+        platforms.insert(observed.to_string());
+    }
+    for platform in &platforms {
+        crate::deploy::host_release::catalog_identity(managed, version, platform)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+    }
+
+    let targets = document
+        .get_mut("targets")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| CmdError::click("registry.targets: must be an array"))?;
+    for target in targets {
+        let object = target
+            .as_object_mut()
+            .ok_or_else(|| CmdError::click("registry target must be an object"))?;
+        let name = object
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or_else(|| CmdError::click("registry target has no name"))?
+            .to_string();
+        let observed = observed_platforms.get(&name).ok_or_else(|| {
+            CmdError::click(format!(
+                "target {name:?} was not inventoried before promotion"
+            ))
+        })?;
+        if object
+            .get("release_platform")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .is_empty()
+        {
+            object.insert("release_platform".to_string(), json!(observed));
+        }
+        let versions = object
+            .entry("managed_versions".to_string())
+            .or_insert_with(|| Value::Object(serde_json::Map::new()))
+            .as_object_mut()
+            .ok_or_else(|| CmdError::click("managed_versions is not an object"))?;
+        versions.insert(managed.name.to_string(), json!(version));
+    }
+    let generation = super::registry::push_document_if(&document, &expected_generation).await?;
+    if json_output {
+        print_json(&json!({
+            "binary": managed.name,
+            "version": version,
+            "targets": target_specs.iter().map(|(name, _)| name).collect::<Vec<_>>(),
+            "platforms": platforms,
+            "migrated_release_platforms": migrated,
+            "generation": generation,
+        }));
+    } else {
+        println!(
+            "{} {version} promoted to {} target(s), migrated {} release platform(s), \
+             generation {generation}",
+            managed.name,
+            target_specs.len(),
+            migrated.len(),
+        );
+    }
+    Ok(())
+}
+
+/// `stado host reconcile [TARGET] [--apply]` — what the fleet runs against
+/// what it was told to run.
+///
+/// Without `--apply` nothing changes: an operator must be able to see drift
+/// without a machine moving under them. With it, every host that is BEHIND
+/// its declaration is delivered through the ordinary `host release` path,
+/// which verifies the digest before it repoints anything.
+///
+/// Only `behind` is delivered. A host running something NEWER than the
+/// declaration is a stale declaration, not a stale host, and quietly
+/// downgrading it would be this command destroying work rather than
+/// reconciling it.
+pub async fn reconcile(
+    target: Option<String>,
+    apply: bool,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let runner = crate::deploy::production_runner();
+    let registry = crate::targets::fetch_registry_remote()
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let names: Vec<String> = match target {
+        Some(name) => {
+            if registry.targets.iter().all(|entry| entry.name != name) {
+                return Err(CmdError::click(format!(
+                    "registry declares no target {name:?}"
+                )));
+            }
+            vec![name]
+        }
+        None => registry
+            .targets
+            .iter()
+            .map(|entry| entry.name.clone())
+            .collect(),
+    };
+    if names.is_empty() {
+        return Err(CmdError::click("registry has no targets to reconcile"));
+    }
+
+    let mut standings = Vec::with_capacity(names.len());
+    for name in &names {
+        standings.push(crate::deploy::reconcile::examine(name, &runner).await);
+    }
+
+    let mut deliveries: Vec<Value> = Vec::new();
+    if apply {
+        for standing in &standings {
+            if !standing.needs_delivery() {
+                continue;
+            }
+            let entry = registry
+                .targets
+                .iter()
+                .find(|entry| entry.name == standing.target)
+                .ok_or_else(|| {
+                    CmdError::click(format!("registry target {:?} disappeared", standing.target))
+                })?;
+            for drifted in &standing.drift {
+                if drifted.verdict != "behind" && drifted.verdict != "absent" {
+                    continue;
+                }
+                let binary = &drifted.binary;
+                let version = entry.declared_version(binary).ok_or_else(|| {
+                    CmdError::click(format!(
+                        "{} has no desired {binary} version",
+                        standing.target
+                    ))
+                })?;
+                let outcome = crate::deploy::host_release::release_host(
+                    &standing.target,
+                    binary,
+                    version,
+                    false,
+                    &runner,
+                )
+                .await;
+                deliveries.push(match outcome {
+                    Ok(report)
+                        if matches!(
+                            report.get("status").and_then(Value::as_str),
+                            Some(
+                                crate::deploy::host_release::RELEASED_STATUS
+                                    | crate::deploy::host_release::ALREADY_ACTIVE_STATUS
+                            )
+                        ) =>
+                    {
+                        json!({
+                            "target": standing.target,
+                            "binary": binary,
+                            "version": version,
+                            "status": "delivered",
+                            "report": report,
+                        })
+                    }
+                    Ok(report) => json!({
+                        "target": standing.target,
+                        "binary": binary,
+                        "version": version,
+                        "status": "failed",
+                        "detail": report
+                            .get("error")
+                            .and_then(Value::as_str)
+                            .unwrap_or("delivery returned a non-success report"),
+                        "report": report,
+                    }),
+                    Err(error) => json!({
+                        "target": standing.target,
+                        "binary": binary,
+                        "version": version,
+                        "status": "failed",
+                        "detail": error.to_string(),
+                    }),
+                });
+            }
+        }
+        standings.clear();
+        for name in &names {
+            standings.push(crate::deploy::reconcile::examine(name, &runner).await);
+        }
+    }
+
+    let healthy = standings
+        .iter()
+        .all(crate::deploy::reconcile::HostStanding::settled)
+        && deliveries
+            .iter()
+            .all(|entry| entry.get("status").and_then(Value::as_str) == Some("delivered"));
+    let report = crate::deploy::reconcile::report(&standings, &deliveries);
+    if json_output {
+        print_json(&report);
+    } else {
+        for standing in &standings {
+            if let Some(detail) = &standing.unreachable {
+                println!("{}: unreachable — {detail}", standing.target);
+                continue;
+            }
+            if standing.platform_verdict != crate::deploy::host_inventory::MATCHED {
+                println!(
+                    "{}: platform mismatch — declared {}, observed {}",
+                    standing.target, standing.declared_release_platform, standing.release_platform
+                );
+            }
+            if standing.settled() {
+                println!("{}: active versions match desired state", standing.target);
+            }
+            for drift in &standing.drift {
+                println!(
+                    "{}: {} is {} — desired {}, active {}",
+                    standing.target, drift.binary, drift.verdict, drift.declared, drift.installed
+                );
+            }
+            if !standing.undeclared.is_empty() {
+                println!(
+                    "{}: missing desired versions — {}",
+                    standing.target,
+                    standing.undeclared.join(", ")
+                );
+            }
+        }
+        for delivery in &deliveries {
+            println!(
+                "{} {} on {}: {}",
+                delivery.get("binary").and_then(Value::as_str).unwrap_or(""),
+                delivery
+                    .get("version")
+                    .and_then(Value::as_str)
+                    .unwrap_or(""),
+                delivery.get("target").and_then(Value::as_str).unwrap_or(""),
+                delivery.get("status").and_then(Value::as_str).unwrap_or("")
+            );
+        }
+    }
+    if !healthy {
+        return Err(CmdError::click(
+            "reconcile incomplete: every target must be reachable, platform-matched, declared, \
+             and active at its desired versions",
+        ));
+    }
+    Ok(())
+}
 pub async fn inventory(target: &str, json: bool) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
     let report = crate::deploy::host_inventory::inventory_host(target, &runner)
@@ -1309,14 +1864,13 @@ pub async fn release(
     target: &str,
     binary: &str,
     version: &str,
-    platform: &str,
     dry_run: bool,
     json: bool,
 ) -> Result<(), CmdError> {
     use crate::deploy::host_release;
 
     let runner = crate::deploy::production_runner();
-    let report = host_release::release_host(target, binary, version, platform, dry_run, &runner)
+    let report = host_release::release_host(target, binary, version, dry_run, &runner)
         .await
         .map_err(|exc| CmdError::click(exc.to_string()))?;
     // Three outcomes are success, and conflating them would be the lie this
@@ -1341,7 +1895,10 @@ pub async fn release(
     );
     println!("declared: {}", cell(report.get("declared_version")));
     println!("artifact: {}", cell(report.get("release_uri")));
-    println!("sha256:   {} (configured)", cell(report.get("sha256")));
+    println!(
+        "sha256:   {} (release manifest)",
+        cell(report.get("sha256"))
+    );
     println!(
         "installed: {} ({})",
         cell(report.get("active_version")),
@@ -1621,6 +2178,22 @@ pub(crate) async fn install_secret_value_at_home(
     transfer_secret(target, name, value.as_bytes(), Some(home)).await
 }
 
+/// Deliver one file through the [`install_file`] channel and RETURN where it
+/// landed, for a caller that renders its own report.
+///
+/// A callee that prints is unusable from a machine-readable caller: with
+/// [`install_file`] itself, `stado host publish-placement-policy --json` would
+/// put a delivery report in front of its own document and hand the operator two
+/// JSON objects on one stream. Same channel, same checksum, same owner-only
+/// mode — only the reporting belongs to whoever asked.
+pub(crate) async fn deliver_file(
+    target: &str,
+    source: &str,
+    name: &str,
+) -> Result<(String, usize), CmdError> {
+    stream_file(target, source, name, DELIVERED_FILES_DIR, "u=rw,go=").await
+}
+
 async fn transfer_secret(
     target: &str,
     name: &str,
@@ -1774,8 +2347,7 @@ pub async fn run_helper(
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let remote_name = crate::deploy::shlex_quote(name);
-    let script =
-        crate::deploy::host_channel::installed_helper_script(&remote_name, &arguments);
+    let script = crate::deploy::host_channel::installed_helper_script(&remote_name, &arguments);
     let runner = crate::deploy::production_runner();
     let output = crate::deploy::host_channel::run_script_with_timeout(
         &resolved,
@@ -1810,15 +2382,28 @@ pub async fn run_helper(
     Ok(())
 }
 
-/// Remove one previously installed helper. Installing a helper is how Stado
-/// runs what the exec allowlist refuses, which makes every diagnostic a file
-/// left behind on someone else's machine; without this the fleet accumulates
-/// them and nothing but the operator's memory says what they were for.
-pub async fn remove_helper(target: &str, name: &str, json: bool) -> Result<(), CmdError> {
+/// The exact removal `host remove-helper` performs, for one named helper on an
+/// already-resolved target.
+///
+/// Shared with `host helpers --prune`, which removes many of these in one run.
+/// One function, because two spellings of "delete a file under `.stado/bin`"
+/// would be two policies about symlinks, about what counts as absent, and
+/// about which channel the deletion is audited on -- and the second one always
+/// turns out to be a shell one-liner somebody wrote in a hurry.
+///
+/// Returns the remote's own word: `removed` or `absent`. Absent is not a
+/// failure; a helper listed by an inventory taken seconds ago and gone by the
+/// time the removal lands is a race with a truthful outcome, and reporting it
+/// as an error would send an operator looking for a fault nobody committed.
+async fn remove_installed_helper(
+    resolved: &ComputeTarget,
+    name: &str,
+    runner: &crate::deploy::Runner,
+) -> Result<String, CmdError> {
+    // The name may have come back from a remote inventory rather than from the
+    // operator's own argv, so it is checked here as well: this is the last
+    // place before it is interpolated into a script that deletes files.
     release_component("helper name", name)?;
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
     let remote_name = crate::deploy::shlex_quote(name);
     // Regular file only: a symlink under that name is not something this
     // command put there, and following it would delete an unrelated path.
@@ -1836,22 +2421,35 @@ else
 fi
 "#
     );
-    let runner = crate::deploy::production_runner();
     let output = crate::deploy::host_channel::run_script_with_timeout(
-        &resolved,
+        resolved,
         &script,
         std::time::Duration::from_secs(crate::monitor::billing::SECONDS_PER_HOUR),
-        &runner,
+        runner,
     )
     .await
     .map_err(|error| CmdError::click(error.to_string()))?;
     if !output.ok() {
         return Err(CmdError::click(format!(
-            "{target}: helper {name} could not be removed: {}",
+            "{}: helper {name} could not be removed: {}",
+            resolved.name,
             crate::deploy::host_channel::last_error_line(&output, "remote removal failed")
         )));
     }
-    let state = output.stdout.trim().to_string();
+    Ok(output.stdout.trim().to_string())
+}
+
+/// Remove one previously installed helper. Installing a helper is how Stado
+/// runs what the exec allowlist refuses, which makes every diagnostic a file
+/// left behind on someone else's machine; without this the fleet accumulates
+/// them and nothing but the operator's memory says what they were for.
+pub async fn remove_helper(target: &str, name: &str, json: bool) -> Result<(), CmdError> {
+    release_component("helper name", name)?;
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let state = remove_installed_helper(&resolved, name, &runner).await?;
     if json {
         println!(
             "{}",
@@ -1865,6 +2463,250 @@ fi
         println!("{target}: {name} {state}");
     }
     Ok(())
+}
+
+/// The helper that inventories `$HOME/.stado/bin` on a target.
+///
+/// Installed with
+/// `stado host install-helper <target> stado-rs/scripts/report-stale-helpers.sh
+/// report-stale-helpers`.
+const INVENTORY_HELPER: &str = "report-stale-helpers";
+
+/// One installed helper script, as the remote inventory reported it.
+struct InstalledHelper {
+    name: String,
+    bytes: u64,
+    /// Seconds since the file was last written, from the remote's own clock
+    /// against this one. Skew shows up as a small negative that clamps to
+    /// zero, which is a helper installed moments ago -- exactly what it is.
+    age_seconds: i64,
+}
+
+/// One `name<TAB>mtime<TAB>size` line from `report-stale-helpers`.
+///
+/// `None` for anything that is not exactly those three fields. A short line, a
+/// number that will not parse, a fourth field from a newer helper: none of
+/// them is a helper this can date or size, and inventing a zero for the
+/// missing half would put a fabricated row at the head of an oldest-first list
+/// -- which is the first thing `--prune` would then delete.
+fn parse_inventory_line(line: &str, now: i64) -> Option<InstalledHelper> {
+    let mut fields = line.split('\t');
+    let name = fields.next().filter(|name| !name.is_empty())?;
+    let modified: i64 = fields.next()?.parse().ok()?;
+    let bytes: u64 = fields.next()?.parse().ok()?;
+    if fields.next().is_some() {
+        return None;
+    }
+    Some(InstalledHelper {
+        name: name.to_string(),
+        bytes,
+        // Clamped: a remote clock ahead of this one is skew, not a helper
+        // installed in the future, and a negative age would sort to the end of
+        // the list and read as the newest thing on the host.
+        age_seconds: (now - modified).max(i64::default()),
+    })
+}
+
+/// A prune that could not remove everything it named, reported after the
+/// table rather than instead of it.
+///
+/// The rows already printed are true and the operator needs them more than
+/// they need an early exit; the non-zero status is what stops a caller
+/// treating a partial sweep as a completed one.
+fn removal_outcome(target: &str, failed: usize) -> Result<(), CmdError> {
+    if failed == usize::default() {
+        return Ok(());
+    }
+    Err(CmdError::click(format!(
+        "{target}: {failed} helper(s) could not be removed; each is reported above with the \
+         remote's own words"
+    )))
+}
+
+/// `stado host helpers TARGET [--older-than-days N] [--prune] [--json]` — every
+/// helper script this host carries, oldest first.
+///
+/// `install-helper` has a writer and no reaper. charless-mac-mini carries 553
+/// installed helper scripts beside 16 binaries: each was delivered to settle
+/// one incident, none was ever withdrawn, and `host provenance` can only print
+/// the count as a footnote because nothing enumerated them. This is the
+/// enumeration -- name, age and size, which is the least an operator needs to
+/// decide whether a script from an incident nobody remembers may go.
+///
+/// Removal is under `--prune` and never otherwise, and `--prune` demands an
+/// explicit `--older-than-days`: a sweep with no threshold means "remove
+/// everything", which is never the intent on a directory whose 553 entries
+/// include the ones three products currently run.
+///
+/// The inventory comes from the installed helper rather than from a shell
+/// one-liner, and every removal goes back through the same audited channel
+/// `host remove-helper` uses, one named helper at a time. A host without the
+/// inventory helper is an error naming the install command, never an empty
+/// table: "nobody looked" rendered as "nothing is there" is the fold this
+/// fleet has already paid for.
+pub async fn helpers(
+    target: &str,
+    older_than_days: Option<u32>,
+    prune: bool,
+    json: bool,
+) -> Result<(), CmdError> {
+    if prune && older_than_days.is_none() {
+        return Err(CmdError::usage(
+            "--prune requires --older-than-days: removing every helper is never the intent, \
+             and this directory holds the scripts three products currently run",
+        ));
+    }
+    let runner = crate::deploy::production_runner();
+    let inventory =
+        crate::deploy::host_channel::run_installed_helper(target, INVENTORY_HELPER, &runner)
+            .await
+            .map_err(|error| {
+                CmdError::click(format!(
+                    "{target}: cannot read the helper inventory: {error}; install it with \
+                     `stado host install-helper {target} \
+                     stado-rs/scripts/report-stale-helpers.sh {INVENTORY_HELPER}`"
+                ))
+            })?;
+
+    let now = chrono::Utc::now().timestamp();
+    let mut installed: Vec<InstalledHelper> = Vec::new();
+    // A line the inventory format does not explain is carried to the operator
+    // rather than dropped: a row this cannot parse is a row this cannot reason
+    // about, and silently shrinking the population is how a count stops being
+    // evidence.
+    let mut unreadable: Vec<String> = Vec::new();
+    for line in inventory.lines() {
+        let line = line.trim_end();
+        if line.is_empty() {
+            continue;
+        }
+        match parse_inventory_line(line, now) {
+            Some(helper) => installed.push(helper),
+            None => unreadable.push(line.to_string()),
+        }
+    }
+    // Oldest first: the head of this list is where the fossils are, and it is
+    // also exactly what `--prune` acts on, so the two orders cannot disagree.
+    installed.sort_by(|left, right| {
+        right
+            .age_seconds
+            .cmp(&left.age_seconds)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+
+    let threshold = older_than_days.map(|days| {
+        i64::from(days).saturating_mul(
+            i64::try_from(crate::monitor::billing::SECONDS_PER_DAY).unwrap_or(i64::MAX),
+        )
+    });
+    let stale = |helper: &InstalledHelper| {
+        threshold.is_some_and(|threshold| helper.age_seconds >= threshold)
+    };
+
+    let mut pruned: Vec<Value> = Vec::new();
+    let mut failed = usize::default();
+    if prune {
+        let resolved = crate::deploy::host_channel::canonical_target(target)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        // One failure does not end the sweep. A helper that is a symlink is
+        // refused by the removal script by design, and letting that abort the
+        // run would leave the remaining hundreds unreported and the operator
+        // with no idea how far it got.
+        for helper in installed.iter().filter(|helper| stale(helper)) {
+            match remove_installed_helper(&resolved, &helper.name, &runner).await {
+                Ok(status) => pruned.push(json!({"helper": helper.name, "status": status})),
+                Err(error) => {
+                    failed += 1;
+                    pruned.push(json!({
+                        "helper": helper.name,
+                        "status": "failed",
+                        "error": error.to_string(),
+                    }));
+                }
+            }
+        }
+    }
+
+    let older = installed.iter().filter(|helper| stale(helper)).count();
+    if json {
+        let rows: Vec<Value> = installed
+            .iter()
+            .map(|helper| {
+                json!({
+                    "helper": helper.name,
+                    "age_seconds": helper.age_seconds,
+                    "bytes": helper.bytes,
+                    "stale": threshold.map(|_| stale(helper)),
+                })
+            })
+            .collect();
+        let mut report = json!({
+            "target": target,
+            "helpers": rows,
+            "total": installed.len(),
+            "older_than_days": older_than_days,
+            "older_than_threshold": older,
+            "unreadable": unreadable,
+        });
+        if prune {
+            report["pruned"] = Value::Array(pruned);
+        }
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return removal_outcome(target, failed);
+    }
+
+    for line in &unreadable {
+        eprintln!("{target}: an inventory line could not be read: {line}");
+    }
+    if installed.is_empty() {
+        println!("{target}: carries no installed helper scripts");
+        return Ok(());
+    }
+    let rows: Vec<Vec<String>> = installed
+        .iter()
+        .map(|helper| {
+            let mut row = vec![
+                helper.name.clone(),
+                super::registry::human_age(chrono::TimeDelta::seconds(helper.age_seconds)),
+                helper.bytes.to_string(),
+            ];
+            if threshold.is_some() {
+                row.push(if stale(helper) { "yes" } else { "no" }.to_string());
+            }
+            row
+        })
+        .collect();
+    if threshold.is_some() {
+        super::table::print(&["HELPER", "AGE", "BYTES", "OLDER"], &rows);
+    } else {
+        super::table::print(&["HELPER", "AGE", "BYTES"], &rows);
+    }
+    for entry in &pruned {
+        println!(
+            "pruned {}: {}{}",
+            entry.get("helper").and_then(Value::as_str).unwrap_or(""),
+            entry.get("status").and_then(Value::as_str).unwrap_or(""),
+            entry
+                .get("error")
+                .and_then(Value::as_str)
+                .map_or_else(String::new, |error| format!(": {error}"))
+        );
+    }
+    // The count is the finding. One helper left behind is untidy; 553 of them
+    // is a directory that accumulated while nobody decided to keep any of it,
+    // and only the number says which of those two an operator is looking at.
+    println!(
+        "\n{target}: {} installed helper script(s) in $HOME/.stado/bin",
+        installed.len()
+    );
+    if let Some(days) = older_than_days {
+        println!("{target}: {older} older than {days} day(s)");
+        if !prune && older != usize::default() {
+            println!("nothing was removed; `--prune` removes exactly those {older}");
+        }
+    }
+    removal_outcome(target, failed)
 }
 
 /// Open a background reverse SSH forward using the exact registry channel.
@@ -1968,6 +2810,92 @@ pub async fn forward_local(
     } else {
         println!(
             "{target}: forwarding 127.0.0.1:{remote_port} to local 127.0.0.1:{local_port} over SSH"
+        );
+    }
+    Ok(())
+}
+
+/// Open a background SSH forward from this host to TARGET's loopback.
+/// Both ends bind loopback; SSH supplies transport encryption and refuses to
+/// report success unless the local listener is established.
+pub async fn forward_remote(
+    target: &str,
+    name: &str,
+    remote_port: u16,
+    local_port: u16,
+    json: bool,
+) -> Result<(), CmdError> {
+    if remote_port == u16::default() || local_port == u16::default() {
+        return Err(CmdError::usage("forwarding ports must be nonzero"));
+    }
+    release_component("forward name", name)?;
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if crate::deploy::host_channel::target_is_this_host(&resolved) {
+        return Err(CmdError::usage(
+            "forward-remote requires a remote registry target",
+        ));
+    }
+    let ssh = resolved
+        .ssh
+        .as_deref()
+        .ok_or_else(|| CmdError::click("registry target has no SSH destination"))?;
+    let mut argv = crate::deploy::host_channel::ssh_options(ssh);
+    let destination = argv
+        .pop()
+        .ok_or_else(|| CmdError::click("SSH channel has no destination"))?;
+    argv.extend([
+        "-f".to_string(),
+        "-N".to_string(),
+        "-o".to_string(),
+        "ExitOnForwardFailure=yes".to_string(),
+        "-o".to_string(),
+        "ServerAliveInterval=30".to_string(),
+        "-o".to_string(),
+        "ServerAliveCountMax=3".to_string(),
+        "-L".to_string(),
+        format!("127.0.0.1:{local_port}:127.0.0.1:{remote_port}"),
+        destination,
+    ]);
+    let (program, arguments) = argv
+        .split_first()
+        .ok_or_else(|| CmdError::click("SSH channel is empty"))?;
+    let output = tokio::process::Command::new(program)
+        .args(arguments)
+        .kill_on_drop(true)
+        .output()
+        .await?;
+    if !output.status.success() {
+        return Err(CmdError::click(format!(
+            "{target}: SSH forwarding failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+                .lines()
+                .next_back()
+                .unwrap_or("ssh forwarding failed")
+        )));
+    }
+    let endpoint = format!("http://127.0.0.1:{local_port}");
+    let home = std::env::var("HOME").map_err(|_| CmdError::click("HOME is not set"))?;
+    let marker_directory = std::path::Path::new(&home).join(".stado").join("forwards");
+    std::fs::create_dir_all(&marker_directory)?;
+    let marker_path = marker_directory.join(format!("{name}.url"));
+    std::fs::write(&marker_path, format!("{endpoint}\n"))?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": target,
+                "remote": format!("127.0.0.1:{remote_port}"),
+                "local": format!("127.0.0.1:{local_port}"),
+                "marker": marker_path,
+                "transport": "ssh",
+                "status": "forwarding",
+            }))?
+        );
+    } else {
+        println!(
+            "{target}: forwarding local 127.0.0.1:{local_port} to 127.0.0.1:{remote_port} over SSH"
         );
     }
     Ok(())
@@ -2237,8 +3165,27 @@ pub async fn install_binary(
     let bytes = std::fs::metadata(source)
         .map_err(|error| CmdError::click(format!("cannot read {source}: {error}")))?
         .len();
-    if bytes == u64::MIN {
+    if bytes == 0 {
         return Err(CmdError::click(format!("{source} is empty")));
+    }
+
+    // Computed before anything is delivered, on this machine, because this is
+    // the last moment the answer exists: the checkout the file came out of is
+    // here and nowhere else, and once the process ends nothing on either side
+    // can reconstruct it.
+    let provenance = crate::provenance::describe(std::path::Path::new(source), name);
+    if let Some(unknown) = unprovenanced_reason(source, &provenance) {
+        eprintln!(
+            "{target}: DRIFTED -- installing {name} from a build with no producer: {unknown}. \
+             This is the trade that put stado 0.7.1 on charless-mac-mini, a control-plane \
+             binary whose version no commit on any branch of this repository has ever \
+             contained, and that left the Weles worker beside it on release main-objapi-fix, \
+             built on a laptop and never published -- installing is one command and releasing \
+             is a pipeline. The install proceeds, because refusing strands whoever is \
+             mid-incident; the manifest at $HOME/{PROVENANCE_DIR}/{name}.json records the gap \
+             so `stado host provenance {target}` finds it later without anyone remembering \
+             this line."
+        );
     }
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
@@ -2277,7 +3224,17 @@ pub async fn install_binary(
                 staged.display()
             ))
         })?;
-        return finish_install(target, source, name, bytes, &resolved, &runner, json).await;
+        return finish_install(
+            target,
+            source,
+            name,
+            bytes,
+            &provenance,
+            &resolved,
+            &runner,
+            json,
+        )
+        .await;
     }
     let mut copy_argv = crate::deploy::host_channel::ssh_options(&ssh_target);
     copy_argv.pop();
@@ -2295,16 +3252,32 @@ pub async fn install_binary(
         )));
     }
 
-    finish_install(target, source, name, bytes, &resolved, &runner, json).await
+    finish_install(
+        target,
+        source,
+        name,
+        bytes,
+        &provenance,
+        &resolved,
+        &runner,
+        json,
+    )
+    .await
 }
 
 /// Sign, prove, swap and verify -- the half of `install-binary` that is identical
 /// whether the program arrived over ssh or was copied on the spot.
+///
+/// The provenance record travels as an argument rather than being recomputed
+/// here: it is derived on the machine that holds the checkout, and hashing a
+/// release binary twice per install to save a parameter is a poor trade.
+#[allow(clippy::too_many_arguments)]
 async fn finish_install(
     target: &str,
     source: &str,
     name: &str,
     bytes: u64,
+    provenance: &crate::provenance::Provenance,
     resolved: &crate::targets::ComputeTarget,
     runner: &crate::deploy::Runner,
     json: bool,
@@ -2331,6 +3304,20 @@ async fn finish_install(
     };
     let old_version = marker("STADO-BIN-OLD ");
     let new_version = marker("STADO-BIN-NEW ");
+
+    // After the swap and before the report: a manifest that arrives first
+    // would describe a binary that may never land, and a report printed first
+    // would be the same one-line receipt that said `stado 0.7.1 -> stado
+    // 0.7.0` and left nothing behind to check it against.
+    let manifest = deliver_provenance(target, provenance)
+        .await
+        .map_err(|error| {
+            CmdError::click(format!(
+                "{target}: {name} is installed but its provenance manifest could not be \
+                 delivered, so the host now carries an artifact nothing can trace to a \
+                 commit: {error}"
+            ))
+        })?;
     if json {
         println!(
             "{}",
@@ -2341,13 +3328,86 @@ async fn finish_install(
                 "bytes": bytes,
                 "previous_version": old_version,
                 "installed_version": new_version,
+                "commit": provenance.commit,
+                "sha256": provenance.sha256,
+                "builder": provenance.builder,
+                "provenance": manifest,
                 "status": "installed",
             }))?
         );
     } else {
-        println!("{target}: {name} {old_version} -> {new_version}");
+        println!(
+            "{target}: {name} {old_version} -> {new_version} (commit {}, built on {}, recorded at {manifest})",
+            provenance.commit, provenance.builder
+        );
     }
     Ok(())
+}
+
+/// Where a delivered provenance manifest lands, one file per artifact.
+///
+/// Its own directory under `.stado`, not beside the binary in `.stado/bin`:
+/// everything in that directory is executed, and a JSON document that is not
+/// a program has no business sharing a namespace with the ones that are.
+const PROVENANCE_DIR: &str = ".stado/provenance";
+
+/// Why this build cannot be traced to a published commit, or `None` when it
+/// can.
+///
+/// Three distinct answers rather than one boolean, because they send an
+/// operator to three different places: build it inside a checkout, commit
+/// what you built, push what you committed. A single "unverified" would have
+/// described 0.7.1 accurately and told nobody what to do about it.
+fn unprovenanced_reason(
+    source: &str,
+    provenance: &crate::provenance::Provenance,
+) -> Option<String> {
+    let Some(repo) = crate::provenance::source_repo(std::path::Path::new(source)) else {
+        return Some(format!(
+            "{source} does not sit under a git checkout's target/ directory, so no tree \
+             claims to have produced it"
+        ));
+    };
+    if !provenance.names_a_commit() {
+        return Some(format!(
+            "{} has no resolvable HEAD, so the build has no commit to name",
+            repo.display()
+        ));
+    }
+    if !crate::provenance::reachable_in_repo(&provenance.commit, &repo) {
+        return Some(format!(
+            "commit {} is not reachable from origin/main in {}, so it exists only on the \
+             machine that built it",
+            provenance.commit,
+            repo.display()
+        ));
+    }
+    None
+}
+
+/// Deliver one artifact's manifest to the host that now carries the artifact.
+///
+/// Through `stream_file`, the same audited channel the binary itself went
+/// over: owner-only, checksummed on the far side before it takes its name. A
+/// separate private path for the paperwork would be a second way onto these
+/// hosts, which is the shape of the problem this is meant to close.
+async fn deliver_provenance(
+    target: &str,
+    provenance: &crate::provenance::Provenance,
+) -> Result<String, CmdError> {
+    let document = serde_json::to_vec_pretty(provenance)?;
+    let staged = tempfile::Builder::new()
+        .prefix(".stado-provenance-")
+        .suffix(".json")
+        .tempfile()?;
+    std::fs::write(staged.path(), &document)?;
+    let source = staged
+        .path()
+        .to_str()
+        .ok_or_else(|| CmdError::click("provenance staging path is not valid UTF-8"))?;
+    let name = format!("{}.json", provenance.artifact);
+    let (path, _) = stream_file(target, source, &name, PROVENANCE_DIR, "u=rw,go=").await?;
+    Ok(path)
 }
 
 const ROLLBACK_BODY: &str = r#"dir="$HOME/.stado/bin"
@@ -2361,6 +3421,12 @@ previous="$dir/$name.previous"
 /bin/mv "$previous" "$installed"
 "$installed" --version >/dev/null 2>&1 \
   || { printf '%s\n' 'restored build does not run' >&2; exit 1; }
+
+# The manifest described the build that was just removed. Left in place it
+# would name a commit for bytes no longer on this host, which is worse than
+# naming nothing: `host provenance` reports a missing manifest as
+# unprovenanced, and unprovenanced is the truth here until the next install.
+/bin/rm -f "$HOME/.stado/provenance/$name.json"
 "#;
 
 /// Put the previous build of one owner-only Stado program back on TARGET.
@@ -2392,11 +3458,15 @@ async fn rollback_binary(target: &str, name: &str, json: bool) -> Result<(), Cmd
             serde_json::to_string_pretty(&json!({
                 "target": target,
                 "name": name,
+                "provenance": crate::provenance::UNPROVENANCED,
                 "status": "rolled-back",
             }))?
         );
     } else {
-        println!("{target}: {name} restored from the previous build");
+        println!(
+            "{target}: {name} restored from the previous build; its provenance manifest was \
+             dropped, because it described the build just removed"
+        );
     }
     Ok(())
 }
@@ -2516,4 +3586,258 @@ async fn stream_file(
         format!("$HOME/{subdir}/{name}"),
         usize::try_from(bytes).unwrap_or(usize::MAX),
     ))
+}
+
+/// Read back both halves of the question: what the host runs, and what it can
+/// account for.
+///
+/// Two enumerations rather than one. Listing only the manifests would answer
+/// "what has been recorded", which is never the failing case -- a recorded
+/// artifact is by definition one somebody bothered to record. The binaries in
+/// `.stado/bin` are the population; the manifests are the coverage; the
+/// difference is the finding.
+///
+/// `.previous` builds are skipped: they are the rollback copy of an artifact
+/// already listed under its own name, and reporting a second unprovenanced row
+/// for each installed program would bury the real ones.
+///
+/// Manifests are flattened to one line each so the two kinds of output can be
+/// told apart by tag rather than by parsing position, and a host that answers
+/// with unexpected noise cannot turn into a fabricated row.
+const READ_PROVENANCE_BODY: &str = r#"bin="$HOME/.stado/bin"
+dir="$HOME/.stado/provenance"
+if [ -d "$bin" ]; then
+  for program in "$bin"/*; do
+    [ -f "$program" ] || continue
+    case "${program##*/}" in .*|*.previous) continue ;; esac
+    # A release artifact is a compiled program; a helper is a checked-in script
+    # delivered by `host install-helper`. Both live in this directory and only
+    # the first is something a release pipeline produces, so reporting them in
+    # one list buries the question being asked. charless-mac-mini carries dozens
+    # of helpers accumulated over months -- helpers have a writer and no reaper,
+    # the same accretion that fills ~/.stado/forwards with markers for services
+    # that were renamed years of incidents ago. The shebang is the honest
+    # discriminator and it is readable without executing anything.
+    kind=binary
+    case "$(/usr/bin/head -c 2 "$program" 2>/dev/null)" in '#!') kind=script ;; esac
+    printf 'STADO-ARTIFACT %s %s\n' "$kind" "${program##*/}"
+  done
+fi
+if [ -d "$dir" ]; then
+  for manifest in "$dir"/*.json; do
+    [ -f "$manifest" ] || continue
+    printf 'STADO-MANIFEST %s\n' "$(/usr/bin/tr -d '\n\r' < "$manifest")"
+  done
+fi
+"#;
+
+/// One artifact a host carries, joined to whatever accounts for it.
+struct CarriedArtifact {
+    artifact: String,
+    record: Option<crate::provenance::Provenance>,
+    /// `None` is "no checkout here could answer", never "no". An operator who
+    /// is told `no` walks a build back; one who is told `unknown` clones the
+    /// repository first. Collapsing the two is how a fleet learns to disregard
+    /// its own reports.
+    reachable: Option<bool>,
+    age_seconds: Option<i64>,
+}
+
+/// `stado host provenance TARGET [--json]` — what TARGET carries, and who
+/// produced it.
+///
+/// The command that did not exist on 2026-08-11, when the only record of what
+/// was running the control plane was a version string the repository had never
+/// heard of. Every artifact under the host's Stado bin directory gets a row,
+/// whether or not anything accounts for it, and an artifact with no manifest
+/// is reported `unprovenanced` -- absent from the table is the one outcome
+/// this must never produce, because that is precisely what the fleet did for
+/// months.
+///
+/// Reachability is resolved here rather than read from the manifest, against a
+/// checkout this process can see, because it is a question whose answer
+/// changes: a commit unreachable at install time becomes reachable the moment
+/// someone pushes, and a stored verdict would still be accusing them.
+pub async fn provenance(target: &str, json: bool) -> Result<(), CmdError> {
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let script = format!("set -euo pipefail\n{READ_PROVENANCE_BODY}");
+    let output = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if !output.ok() {
+        return Err(CmdError::click(format!(
+            "{target}: cannot read provenance manifests: {}",
+            crate::deploy::host_channel::last_error_line(&output, "remote provenance read failed")
+        )));
+    }
+
+    let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut records: std::collections::BTreeMap<String, crate::provenance::Provenance> =
+        std::collections::BTreeMap::new();
+    let mut unreadable: Vec<String> = Vec::new();
+    let mut helpers: usize = 0;
+    for line in output.stdout.lines() {
+        if let Some(artifact) = line.strip_prefix("STADO-ARTIFACT ") {
+            // `<kind> <name>`. A helper script has no release behind it, so
+            // listing it beside the control-plane binary answers a question
+            // nobody asked and hides the one that matters.
+            let mut words = artifact.trim().splitn(2, ' ');
+            let kind = words.next().unwrap_or_default();
+            let Some(name) = words.next().map(str::trim).filter(|name| !name.is_empty()) else {
+                continue;
+            };
+            if kind == "script" {
+                helpers += 1;
+                continue;
+            }
+            names.insert(name.to_string());
+        } else if let Some(document) = line.strip_prefix("STADO-MANIFEST ") {
+            match serde_json::from_str::<crate::provenance::Provenance>(document.trim()) {
+                Ok(record) => {
+                    names.insert(record.artifact.clone());
+                    records.insert(record.artifact.clone(), record);
+                }
+                // A manifest that cannot be parsed is not a missing manifest:
+                // something wrote a file there and it says nothing usable.
+                Err(error) => unreadable.push(error.to_string()),
+            }
+        }
+    }
+
+    let repository = crate::provenance::local_repo();
+    let now = chrono::Utc::now();
+    let carried: Vec<CarriedArtifact> = names
+        .into_iter()
+        .map(|artifact| {
+            let record = records.remove(&artifact);
+            let reachable = match (&record, &repository) {
+                (None, _) => Some(false),
+                (Some(record), _) if !record.names_a_commit() => Some(false),
+                (Some(_), None) => None,
+                (Some(record), Some(repository)) => Some(crate::provenance::reachable_in_repo(
+                    &record.commit,
+                    repository,
+                )),
+            };
+            let age_seconds = record.as_ref().and_then(|record| {
+                chrono::DateTime::parse_from_rfc3339(&record.at)
+                    .ok()
+                    .map(|stamp| (now - stamp.with_timezone(&chrono::Utc)).num_seconds())
+            });
+            CarriedArtifact {
+                artifact,
+                record,
+                reachable,
+                age_seconds,
+            }
+        })
+        .collect();
+
+    let commit_of = |item: &CarriedArtifact| {
+        item.record.as_ref().map_or_else(
+            || crate::provenance::UNPROVENANCED.to_string(),
+            |record| record.commit.clone(),
+        )
+    };
+    let drifted = carried
+        .iter()
+        .filter(|item| item.reachable != Some(true))
+        .count();
+
+    if json {
+        let artifacts: Vec<Value> = carried
+            .iter()
+            .map(|item| {
+                json!({
+                    "artifact": item.artifact,
+                    "manifest": item.record.is_some(),
+                    "commit": commit_of(item),
+                    "sha256": item.record.as_ref().map(|record| record.sha256.clone()),
+                    "builder": item.record.as_ref().map(|record| record.builder.clone()),
+                    "at": item.record.as_ref().map(|record| record.at.clone()),
+                    "age_seconds": item.age_seconds,
+                    "reachable": item.reachable,
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": target,
+                "repository": repository.as_ref().map(|path| path.display().to_string()),
+                "artifacts": artifacts,
+                "unreadable_manifests": unreadable,
+                "drifted": drifted,
+            }))?
+        );
+        return Ok(());
+    }
+
+    let rows: Vec<Vec<String>> = carried
+        .iter()
+        .map(|item| {
+            let age = match (item.age_seconds, &item.record) {
+                (Some(seconds), _) => {
+                    super::registry::human_age(chrono::TimeDelta::seconds(seconds))
+                }
+                // A manifest whose timestamp will not parse is a manifest
+                // somebody hand-edited; say so instead of showing an age.
+                (None, Some(_)) => "unknown".to_string(),
+                (None, None) => "never".to_string(),
+            };
+            let reachable = match item.reachable {
+                Some(true) => "yes",
+                Some(false) => "no",
+                None => "unknown",
+            };
+            vec![
+                item.artifact.clone(),
+                commit_of(item),
+                item.record
+                    .as_ref()
+                    .map_or_else(|| "-".to_string(), |record| record.builder.clone()),
+                age,
+                reachable.to_string(),
+            ]
+        })
+        .collect();
+    // Before the early return as well as before the table: a host whose only
+    // provenance file is corrupt must not read as a host with nothing to say.
+    for error in &unreadable {
+        eprintln!("{target}: a provenance manifest could not be read: {error}");
+    }
+    if rows.is_empty() {
+        println!("{target}: carries no stado-managed programs");
+        return Ok(());
+    }
+    super::table::print(
+        &["ARTIFACT", "COMMIT", "BUILDER", "AGE", "REACHABLE"],
+        &rows,
+    );
+    if repository.is_none() {
+        println!(
+            "\n{target}: no local checkout was found, so reachability is unknown rather than \
+             answered; run this from the stado source tree to resolve it"
+        );
+    }
+    if drifted != usize::default() {
+        println!(
+            "{target}: {drifted} of {} artifacts have no producer reachable from origin/main",
+            rows.len()
+        );
+    }
+    if helpers != usize::default() {
+        // Not drift, and not nothing. Helpers are delivered one at a time to
+        // solve one incident and are never removed, so the population only
+        // grows; naming the count is what makes an operator notice that a
+        // directory of them accumulated while nobody decided to keep any.
+        println!(
+            "{target}: {helpers} installed helper script(s) alongside, which carry no release \
+             and are not counted above"
+        );
+    }
+    Ok(())
 }

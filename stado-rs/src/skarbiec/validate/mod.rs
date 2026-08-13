@@ -34,12 +34,16 @@ pub(crate) async fn read_token_fields(
     let in_flight = std::thread::available_parallelism()
         .map(std::num::NonZeroUsize::get)
         .unwrap_or_else(|_| std::num::NonZeroUsize::MIN.get());
-    futures::stream::iter(items.into_iter().map(|item| client.read_string(item, "token")))
-        .buffered(in_flight)
-        .collect::<Vec<_>>()
-        .await
-        .into_iter()
-        .collect()
+    futures::stream::iter(
+        items
+            .into_iter()
+            .map(|item| client.read_string(item, "token")),
+    )
+    .buffered(in_flight)
+    .collect::<Vec<_>>()
+    .await
+    .into_iter()
+    .collect()
 }
 
 /// Validate the auth verifier independently from all provider domains.

@@ -1,0 +1,22 @@
+name: Agent CI
+
+on:
+  push:
+    paths: ['agent/**', 'Cargo.toml', 'Cargo.lock']
+  pull_request:
+    paths: ['agent/**', 'Cargo.toml', 'Cargo.lock']
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build -p wisent-agent --release
+      - name: Upload linux-amd64 binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: wisent-agent-linux-amd64
+          path: target/release/wisent-agent

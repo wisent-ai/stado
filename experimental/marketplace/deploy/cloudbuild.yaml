@@ -1,0 +1,13 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-f'
+      - 'backend/Dockerfile'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/wisent-480400/compute-backend/wisent-backend:latest'
+      - '.'
+images:
+  - 'us-central1-docker.pkg.dev/wisent-480400/compute-backend/wisent-backend:latest'
+options:
+  machineType: 'E2_HIGHCPU_8'

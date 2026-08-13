@@ -393,12 +393,38 @@ unavailable.
 | `stado host inventory <target>` | The stado-managed binaries under `$HOME/.stado/bin`, the `$HOME/.stado/forwards/*.url` markers, the listening loopback TCP ports, the Skarbiec vault files under `$HOME/.stado` as metadata, whether the installed `stado` knows a fixed set of subcommands — and, the point of the command, whether each forward marker still matches a live listener. |
 | `stado host release <target> --binary NAME --version X.Y.Z` | Put one registry-declared managed binary on the host: fetch the exact coordinate, verify the operator's configured SHA-256, check the layout, stage it under a versioned directory, and only then atomically repoint the active binary and restart its declared unit. The write counterpart of `host inventory`. `--dry-run` probes read-only and reports the plan. |
 | `stado host install-binary <target> --from PATH [--name NAME]` | Replace one owner-only Stado program on the host with a build proven to run there. It is delivered over the approved channel, signed, executed BEFORE it becomes the installed one, renamed into place rather than written through the file already there — overwriting a Mach-O in place invalidates its signature and the kernel answers the next exec with SIGKILL and no message — verified again, and the previous build is kept. `--rollback` puts that previous build back. |
+| `stado host precheck-runner install <target>` | Install or reconcile the isolated GitHub pre-check runner declared by Stado. The target address and platform come from the canonical registry; Stado obtains a short-lived organization token from the admin-scoped `GITHUB_TOKEN` credential, verifies the pinned runner archive, creates an unprivileged account, installs the service, and applies the private-network boundary. |
+| `stado host precheck-runner status <target>` | Read the service, runner identity, and nftables/PF boundary through the same registry-authorized channel. |
+| `stado host precheck-runner remove <target>` | Deregister the runner with a short-lived removal token, stop and delete its service and files, remove its account, and remove its network boundary. |
 
 Diagnostic and recovery commands resolve their target from the canonical registry and
 refuse a target that is unknown, not a local host, or has no registry-managed
 ssh destination. They share one channel, `deploy/host_channel.rs`, which
 derives its ssh options from `host reboot`'s rather than copying them, so the
 commands cannot drift apart. All accept `--json`.
+
+### `stado host precheck-runner`
+
+This is the complete lifecycle; there is no Python installer or separately
+installed diagnostic helper. `install`, `status`, and `remove` all resolve
+`<target>` through the canonical registry and select Linux x86-64 or macOS
+Apple Silicon from `release_platform`. Fleet host addresses are never embedded
+in the command implementation.
+
+Installation reads `GITHUB_TOKEN.value` through Stado's admin-scoped
+Skarbiec coordinates and exchanges it for a short-lived organization runner
+token. That token travels only on the host channel's stdin and is consumed by
+`config.sh`; it is not an argument, repository file, or persistent host
+credential. The Actions Runner archive version and SHA-256 are pinned in the
+Rust release.
+
+The runner account is `stado-precheck`, with only `_work` and `_diag` writable.
+A root-owned job hook removes prior workspace contents before and after each
+job. Linux applies an nftables rule to that UID; macOS applies a PF rule to the
+same account. The blocked CIDRs are the fixed RFC1918, loopback, link-local,
+unique-local, and CGNAT network classes—not addresses of fleet hosts—so a job
+can reach public GitHub/package services but not loopback, LAN, Tailscale, or
+other private services.
 
 ### `stado host inventory`
 
@@ -549,7 +575,7 @@ this closes the gap by carrying out exactly what the registry already
 declares.
 
 ```
-stado host release TARGET --binary NAME --version X.Y.Z [--platform P] [--dry-run] [--json]
+stado host release TARGET --binary NAME --version X.Y.Z [--dry-run] [--json]
 ```
 
 The order of operations is the design, and it is Weles's shipped auto-deploy
@@ -557,11 +583,11 @@ order (`weles/scripts/worker/deploy/README.md`) applied to one binary:
 
 1. **probe** — read the host: its platform, the version the installed binary
    declares, whether the coordinate is already staged. Writes nothing.
-2. **stage** — fetch the exact coordinate through `/api/release/object`,
-   verify the configured SHA-256, check the layout, confirm the artifact
-   itself declares the requested version, and publish it into
-   `$HOME/.stado/releases/<binary>/<version>/<platform>/`.
-3. **activate** — re-verify the staged digest, hard-link it beside the live
+2. **stage** — read `release-manifest-<platform>.json` through the canonical
+   Stado API, fetch the adjacent product archive, verify its SHA-256, extract
+   the fixed root member, confirm that binary declares the requested version,
+   and publish it into `$HOME/.stado/releases/<binary>/<version>/<platform>/`.
+3. **activate** — re-check the staged version, hard-link it beside the live
    binary and `rename(2)` it over `$HOME/.stado/bin/<binary>`.
 4. **restart** — restart the unit the registry declares runs it, through the
    same program `stado service restart` uses.
@@ -577,22 +603,16 @@ version untouched. `active_version_unchanged: true` says so in the report.
 |---|---|
 | `--binary` not in the compile-time table (`stado`, `skarbiec`) | The operator's word selects a fixed entry and never becomes a path or a URI segment — `host exec`'s rule. A refusal prints the list. |
 | `--version` is not an exact semantic version | A coordinate is immutable. `latest` is a legal path segment, which is exactly why nothing here resolves an alias, a channel or a range. `+build` is refused too: it is not a canonical coordinate segment. |
-| `--platform` not in the published set | Same closed-table rule. The host's own `uname` is checked against it as well, so a plan built for one platform cannot be applied on another. |
-| No configured SHA-256 for the coordinate | The digest is the operator's independent record of what the coordinate contains. A checksum computed from whatever the host downloaded would only prove the transfer was not corrupted, which TLS already covers. |
+| Missing or mismatched `release_platform` | Enrollment records the platform and inventory confirms it from the remote kernel before delivery. |
+| Missing, malformed, or mismatched release manifest | The canonical catalog is the only digest source; delivery fails closed. |
 | The registry declares no version for this host and binary | Delivery carries out a declaration; it does not stand in for one. |
 | `--version` disagrees with the declaration | Change the declaration if that is the intent. Delivering past it would make the registry describe a host it no longer describes. |
-| The release origin is not HTTPS | Checked here and again on the host. |
+| The canonical Stado API origin is not HTTPS | Checked here and again on the host. |
 | The host's field sanitizer failed its own probe | Every string the host reported is then suspect, including the version this command would compare against. |
 
-The digest lives in the operator-owned config under `release.managed_digests`
-(or the `STADO_MANAGED_RELEASE_DIGESTS` environment override), keyed by the
-exact coordinate:
-
-```yaml
-release:
-  managed_digests:
-    stado/0.5.1/darwin-arm64: 3f6c...  # 64 lowercase hex characters
-```
+The digest is the archive `sha256` in the immutable canonical manifest. There
+is no operator-local digest table and no release-specific API origin that can
+drift from the Stado release catalog.
 
 Running it twice is not running it twice: when the host already declares the
 requested version the command reports `already_active` and sends no further
@@ -1126,8 +1146,11 @@ adapters only on loopback, then watches that authority. `GET
 /v1/resolve/service/<name>` requires `X-Stado-Consumer`; the response includes
 the matching local adapter URL when one is configured. Each adapter resolves
 again for every connection, connects directly when the service is local, and
-otherwise uses the target's registry-owned SSH transport. New connections fail
-closed during placement transactions and after the cache freshness deadline.
+otherwise uses the target's registry-owned SSH transport. Adapter streams close
+after `idle_seconds` without traffic (330 seconds by default, above the model
+gateway's own request deadline so a slow reply is never cut), bounding retained
+client keep-alive sockets and their SSH transports. New connections fail closed
+during placement transactions and after the cache freshness deadline.
 If authority changes, resolvers adopt the new source only after the old
 authority has delivered a valid snapshot naming it.
 

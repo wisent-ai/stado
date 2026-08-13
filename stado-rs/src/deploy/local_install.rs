@@ -26,6 +26,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::future::BoxFuture;
+use serde_json::Value;
 
 use super::{
     py_dict_repr, shlex_quote, write_if_changed, CommandOutput, CommandSpec, DeployError, Runner,
@@ -120,14 +121,9 @@ fn release_platform() -> Result<&'static str, DeployError> {
     }
 }
 
-/// Populate `~/.stado/bin/` from the exact release configured by
-/// [`crate::config::stado_release_version`] when any service binary is
-/// missing. Every binary is checksum-verified against that immutable release's
-/// SHA256SUMS before anything is installed; a fully populated dir is a no-op.
-///
-/// Objects are fetched through the provider-neutral public Stado release API.
-/// Local install never discovers a cloud CLI, SDK credential, project, bucket,
-/// or mutable channel pointer.
+/// Populate `~/.stado/bin/` from the exact archive configured by
+/// [`crate::config::stado_release_version`] when any service binary is missing.
+/// The canonical manifest digest is verified before extraction or installation.
 pub async fn ensure_bins(home: &Path, echo: &mut dyn FnMut(&str)) -> Result<(), DeployError> {
     ensure_bins_with(home, &crate::self_update::HttpReleaseFetcher::new(), echo).await
 }
@@ -150,7 +146,7 @@ async fn ensure_bins_at_version_with(
 ) -> Result<(), DeployError> {
     use std::os::unix::fs::PermissionsExt;
 
-    use crate::self_update::{parse_sha256sums, sha256_hex, SHA256SUMS_NAME};
+    use crate::self_update::sha256_hex;
     let bin_dir = home.join(".stado").join("bin");
     if LOCAL_BINARIES
         .iter()
@@ -170,44 +166,73 @@ async fn ensure_bins_at_version_with(
         ));
     }
     let prefix = format!("{version}/{platform}");
-    let sums_bytes = fetcher
-        .fetch(&format!("{prefix}/{SHA256SUMS_NAME}"))
+    let manifest_name = format!("release-manifest-{platform}.json");
+    let manifest_bytes = fetcher
+        .fetch(&format!("{prefix}/{manifest_name}"))
         .await
         .map_err(|exc| {
             DeployError(format!(
-                "release download failed for {SHA256SUMS_NAME}: {exc}"
+                "release download failed for {manifest_name}: {exc}"
             ))
         })?
-        .ok_or_else(|| {
-            DeployError(format!(
-                "release download failed for {SHA256SUMS_NAME}: not published"
-            ))
-        })?;
-    let sums = parse_sha256sums(
-        std::str::from_utf8(&sums_bytes).map_err(|exc| DeployError(exc.to_string()))?,
-    )
-    .map_err(|exc| DeployError(exc.to_string()))?;
-    // Download + verify EVERY binary before installing the first
-    // (self_update's abort-before-first-rename stance): a bad hash leaves
-    // ~/.stado/bin untouched.
+        .ok_or_else(|| DeployError(format!("{manifest_name} is not published")))?;
+    let manifest: Value = serde_json::from_slice(&manifest_bytes)
+        .map_err(|error| DeployError(format!("invalid release manifest: {error}")))?;
+    let object = manifest
+        .as_object()
+        .ok_or_else(|| DeployError("release manifest must be an object".to_string()))?;
+    if object.len() != 5
+        || manifest.get("product").and_then(Value::as_str) != Some("stado")
+        || manifest.get("version").and_then(Value::as_str) != Some(version)
+        || manifest.get("platform").and_then(Value::as_str) != Some(platform)
+        || !manifest
+            .get("source_commit")
+            .and_then(Value::as_str)
+            .is_some_and(|commit| {
+                matches!(commit.len(), 40 | 64)
+                    && commit.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
+    {
+        return Err(DeployError(
+            "release manifest identity is invalid".to_string(),
+        ));
+    }
+    let expected = manifest
+        .get("sha256")
+        .and_then(Value::as_str)
+        .filter(|digest| {
+            digest.len() == 64
+                && digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+        .ok_or_else(|| DeployError("release manifest sha256 is invalid".to_string()))?;
+    let archive_name = format!("stado-v{version}-{platform}.tar.gz");
+    let archive = fetcher
+        .fetch(&format!("{prefix}/{archive_name}"))
+        .await
+        .map_err(|exc| DeployError(format!("release download failed for {archive_name}: {exc}")))?
+        .ok_or_else(|| DeployError(format!("{archive_name} is not published")))?;
+    let actual = sha256_hex(&archive);
+    if actual != expected {
+        return Err(DeployError(format!(
+            "sha256 mismatch for {archive_name}: expected {expected}, got {actual}"
+        )));
+    }
+    let staging = tempfile::tempdir().map_err(|error| DeployError(error.to_string()))?;
+    let extracted = staging.path().join("archive");
+    crate::release_control::safe_extract_archive(&archive, &extracted).map_err(DeployError)?;
     let mut verified: Vec<(&str, Vec<u8>)> = Vec::with_capacity(LOCAL_BINARIES.len());
     for name in LOCAL_BINARIES {
-        let bytes = fetcher
-            .fetch(&format!("{prefix}/{name}"))
-            .await
-            .map_err(|exc| DeployError(format!("release download failed for {name}: {exc}")))?
-            .ok_or_else(|| {
-                DeployError(format!("release download failed for {name}: not published"))
-            })?;
-        let expected = sums
-            .get(name)
-            .ok_or_else(|| DeployError(format!("SHA256SUMS has no entry for {name}")))?;
-        let actual = sha256_hex(&bytes);
-        if actual != *expected {
+        let path = extracted.join(name);
+        let metadata =
+            std::fs::symlink_metadata(&path).map_err(|error| DeployError(error.to_string()))?;
+        if !metadata.file_type().is_file() || metadata.len() == 0 {
             return Err(DeployError(format!(
-                "sha256 mismatch for {name}: expected {expected}, got {actual}"
+                "release archive member {name} is not a non-empty regular file"
             )));
         }
+        let bytes = std::fs::read(path).map_err(|error| DeployError(error.to_string()))?;
         verified.push((name, bytes));
     }
     for (name, bytes) in verified {

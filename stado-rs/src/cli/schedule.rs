@@ -24,6 +24,23 @@ fn created_by() -> String {
     }
     std::env::var("LOGNAME").unwrap_or_default()
 }
+fn resolve_pinned_host(value: &str) -> Result<String, CmdError> {
+    if value.is_empty() {
+        return Ok(String::new());
+    }
+    let registry =
+        crate::targets::load_bundled_registry().map_err(|exc| CmdError::click(exc.to_string()))?;
+    let Some(target) = registry.lookup(value) else {
+        return Ok(value.to_string());
+    };
+    let Some(hostname) = target.hostnames.first() else {
+        return Err(CmdError::click(format!(
+            "--pinned-host target '{value}' has no hostnames[] in the registry; \
+             cannot derive its consumer_id."
+        )));
+    };
+    Ok(format!("{}-{hostname}", target.kind))
+}
 
 /// `schedule create COMMAND --cron EXPR [...]`: create a recurring schedule
 /// that submits COMMAND on a cron schedule.
@@ -57,6 +74,7 @@ pub async fn create(args: &ScheduleCreateArgs) -> Result<(), CmdError> {
     sched.gpu_type = args.gpu_type.clone();
     sched.vram_gb = args.vram_gb;
     sched.machine_type = args.machine_type.clone();
+    sched.pinned_host = resolve_pinned_host(&args.pinned_host)?;
     sched.repo = args.repo.clone();
     sched.repo_ref = args.repo_ref.clone();
     sched.repo_workdir = args.repo_workdir.clone();
