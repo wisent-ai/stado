@@ -350,7 +350,6 @@ ExecStartPre=$runner_root/clean-work.sh
 ExecStart=$runner_root/bin/runsvc.sh
 Restart=always
 RestartSec=5
-Environment=ACTIONS_RUNNER_HOOK_JOB_STARTED=$runner_root/clean-work.sh
 Environment=ACTIONS_RUNNER_HOOK_JOB_COMPLETED=$runner_root/clean-work.sh
 NoNewPrivileges=true
 PrivateTmp=true
@@ -469,7 +468,7 @@ cat > "$launcher" <<LAUNCHER
 set -eu
 /sbin/pfctl -a com.wisent.stado-precheck -f /etc/pf.anchors/com.wisent.stado-precheck
 /sbin/pfctl -E >/dev/null 2>&1 || true
-exec /usr/bin/sudo -u $runner_user -H -- /usr/bin/env HOME=$runner_root PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin ACTIONS_RUNNER_HOOK_JOB_STARTED=$runner_root/clean-work.sh ACTIONS_RUNNER_HOOK_JOB_COMPLETED=$runner_root/clean-work.sh $runner_root/bin/runsvc.sh
+exec /usr/bin/sudo -u $runner_user -H -- /usr/bin/env HOME=$runner_root PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin ACTIONS_RUNNER_HOOK_JOB_COMPLETED=$runner_root/clean-work.sh $runner_root/bin/runsvc.sh
 LAUNCHER
 root install -o root -g wheel -m 0755 "$launcher" "$runner_root/start-runner.sh"
 rm -f "$launcher"
