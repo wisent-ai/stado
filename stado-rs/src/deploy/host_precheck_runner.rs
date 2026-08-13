@@ -429,6 +429,7 @@ if [ ! -f "$runner_root/.runner" ]; then
   root mkdir -p "$runner_root"
   root tar -xzf "$archive" -C "$runner_root"
   root codesign --remove-signature "$runner_root/bin/Runner.Listener"
+  root codesign --remove-signature "$runner_root/bin/Runner.Worker"
   root chown -R "$runner_user:$runner_user" "$runner_root"
   root mkdir -p "$runner_root/_work" "$runner_root/_diag"
   printf '%s' "$token" > "$token_file"
