@@ -3127,6 +3127,18 @@ fi
 
 printf 'STADO-BIN-OLD %s\n' "$old_version"
 printf 'STADO-BIN-NEW %s\n' "$new_version"
+# The bytes that ended up on disk, which on Darwin are not the bytes that were
+# delivered: the ad-hoc codesign above rewrites the signature in place. A
+# manifest recording the source digest therefore describes a file that never
+# existed here, and `host provenance` correctly but uselessly reports every Mac
+# install as REPLACED. The installed digest is the only one worth recording.
+installed_digest=-
+if [ -x /usr/bin/shasum ]; then
+  installed_digest=$(/usr/bin/shasum -a 256 "$installed" | /usr/bin/awk '{print $1}')
+elif command -v sha256sum >/dev/null 2>&1; then
+  installed_digest=$(sha256sum "$installed" | /usr/bin/awk '{print $1}')
+fi
+printf 'STADO-BIN-SHA256 %s\n' "$installed_digest"
 "#;
 
 /// Replace an owner-only Stado program on TARGET with a build proven to run there.
@@ -3304,6 +3316,21 @@ async fn finish_install(
     };
     let old_version = marker("STADO-BIN-OLD ");
     let new_version = marker("STADO-BIN-NEW ");
+
+    // Prefer the digest the host measured after the swap over the one computed
+    // from the source file. They differ on Darwin, where the install ad-hoc
+    // signs the binary in place, and the manifest has to describe the bytes a
+    // later reader will hash -- otherwise every Mac install reports itself as
+    // REPLACED and the check trains people to ignore it.
+    let installed_digest = marker("STADO-BIN-SHA256 ");
+    let mut provenance = provenance.clone();
+    if !installed_digest.is_empty()
+        && installed_digest != "-"
+        && installed_digest.chars().all(|c| c.is_ascii_hexdigit())
+    {
+        provenance.sha256 = installed_digest;
+    }
+    let provenance = &provenance;
 
     // After the swap and before the report: a manifest that arrives first
     // would describe a binary that may never land, and a report printed first
