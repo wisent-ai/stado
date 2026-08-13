@@ -252,11 +252,11 @@ pub async fn verify(kind: String, identity: String, json_output: bool) -> Result
             }
             let observed = match binding.kind.as_str() {
                 // Reading the machine we are already running on needs neither SSH nor
-                // sudo: a user's own MobileMeAccounts is readable by that user. Going
-                // out over the network to ask a question we can answer in-process was
-                // what made this host report `unknown` while it was in fact signed in
-                // -- a false negative that points the operator at the wrong machine.
-                APPLE_ACCOUNT if is_local_target(target) => {
+                // sudo only when the binding names the channel's login user. A binding
+                // for another local user still needs the installed multi-user probe;
+                // reading this process's preferences would confidently answer the
+                // wrong account.
+                APPLE_ACCOUNT if is_local_target(target) && probes_own_user(target, binding) => {
                     local_apple_accounts().map(|found| found.iter().any(|e| e == &identity))
                 }
                 // A binding naming someone other than the channel's login user is
