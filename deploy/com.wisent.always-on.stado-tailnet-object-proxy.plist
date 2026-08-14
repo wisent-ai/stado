@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The tailnet front door for charless-mac-mini's object API, as a system daemon.
+
+  It existed before as gui/com.wisent.compute.service.stado-tailnet-object-proxy,
+  a LaunchAgent in charles's user domain on a machine nobody logs into. That
+  domain does not exist there: `launchctl print` answers "Unrecognized target
+  specifier", so the proxy never ran, the declared https://100.120.25.24:8765
+  endpoint was refused for every off-host caller, and the fleet's Linux member
+  read its own empty disk while three configs went on naming that URL. It is the
+  same fault as a headed browser job in the Background session -- a unit placed
+  in a session the host does not have -- and it gets the same repair: a network
+  front door needs no human logged in, so it belongs in the system domain.
+
+  It runs the launcher that already carries the bind address, the upstream and
+  the TLS material, so this unit adds no second declaration of any of them:
+  $HOME/.stado/bin/start-stado-tailnet-object-proxy binds 100.120.25.24:8765,
+  forwards to 127.0.0.1:8765, and serves $HOME/.stado/stado-tailnet-server.crt
+  with its matching key. The tailnet address is bound explicitly; 0.0.0.0 would
+  publish the fleet's store to every network this machine ever joins.
+
+  UserName keeps it as charles so it reads exactly the owner-only files it read
+  before, and HOME is declared because launchd gives a daemon none, while the
+  launcher resolves every path through it.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.wisent.always-on.stado-tailnet-object-proxy</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/charles/.stado/bin/start-stado-tailnet-object-proxy</string>
+    </array>
+    <key>UserName</key>
+    <string>charles</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/charles</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/charles/.stado/logs/com.wisent.always-on.stado-tailnet-object-proxy.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/charles/.stado/logs/com.wisent.always-on.stado-tailnet-object-proxy.log</string>
+</dict>
+</plist>
