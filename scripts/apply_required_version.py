@@ -24,12 +24,18 @@ def main() -> None:
         capture_output=True,
         text=True,
     ).stdout
-    match = re.search(
-        r"The next version must be (?P<version>[0-9]+(?:\.[0-9]+)+)", report
+    required_versions = set(
+        re.findall(
+            r"Cargo\.toml declares [^,\n]+, but [^\n]+ requires "
+            r"(?P<version>[0-9]+(?:\.[0-9]+)+)",
+            report,
+        )
     )
-    if match is None:
-        raise SystemExit("release gate did not report a required version")
-    required = match.group("version")
+    if len(required_versions) != 1:
+        raise SystemExit(
+            "release gate did not report exactly one candidate-required version"
+        )
+    required = required_versions.pop()
     subprocess.run(
         ["cargo", "set-version", required],
         cwd=root / "stado-rs",

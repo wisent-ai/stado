@@ -10,6 +10,7 @@ pub struct PlanOptions {
     pub image: String,
     pub model: String,
     pub revision: String,
+    pub loras: Vec<String>,
     pub gpu_mode: String,
     pub port: u16,
     pub max_model_len: u64,
@@ -42,6 +43,14 @@ fn replace(registry: &mut schema::Registry, deployment: schema::Deployment) {
     registry
         .deployments
         .sort_by(|left, right| left.name.cmp(&right.name));
+}
+
+fn serves_model(deployment: &schema::Deployment, model: &str) -> bool {
+    deployment.name == model
+        || deployment
+            .adapters
+            .iter()
+            .any(|adapter| adapter.name == model)
 }
 
 async fn wait_ready(
@@ -136,6 +145,19 @@ async fn activate(
     }
     wait_ready(&target, deployment, &bearer).await.map(|_| ())
 }
+fn parse_lora(value: &str) -> Result<schema::Adapter, CmdError> {
+    let (name, model) = value
+        .split_once('=')
+        .ok_or_else(|| CmdError::click("--lora must be name=repository@immutable-revision"))?;
+    let (repository, revision) = model
+        .rsplit_once('@')
+        .ok_or_else(|| CmdError::click("--lora must be name=repository@immutable-revision"))?;
+    Ok(schema::Adapter {
+        name: name.to_string(),
+        repository: repository.to_string(),
+        revision: revision.to_string(),
+    })
+}
 
 pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
     if !matches!(
@@ -194,6 +216,11 @@ pub async fn plan(options: PlanOptions) -> Result<(), CmdError> {
             repository: options.model,
             revision: options.revision,
         },
+        adapters: options
+            .loras
+            .iter()
+            .map(|value| parse_lora(value))
+            .collect::<Result<Vec<_>, _>>()?,
         resources: schema::Resources {
             gpu_mode: options.gpu_mode,
             gpus: u16::from(true),
@@ -241,6 +268,7 @@ fn mode_only_change(current: &schema::Deployment, candidate: &schema::Deployment
         && current.desired_state == candidate.desired_state
         && current.engine == candidate.engine
         && current.model == candidate.model
+        && current.adapters == candidate.adapters
         && current.resources.gpus == candidate.resources.gpus
         && current.resources.max_model_len == candidate.resources.max_model_len
         && current.resources.kv_cache_memory_gb == candidate.resources.kv_cache_memory_gb
@@ -399,10 +427,11 @@ pub async fn rollback(name: &str, json_output: bool) -> Result<(), CmdError> {
             "inference deployment '{name}' has no rollback generation"
         ))
     })?;
-    let runner = production_runner();
-    activate(&previous, &runner).await?;
     replace(&mut registry, previous.clone());
     let next = schema::write(&document, &registry).map_err(click)?;
+    schema::validate(&next).map_err(click)?;
+    let runner = production_runner();
+    activate(&previous, &runner).await?;
     let generation = match crate::cli::registry::push_document_if(&next, &expected_generation).await
     {
         Ok(generation) => generation,
@@ -439,29 +468,29 @@ pub async fn rollback(name: &str, json_output: bool) -> Result<(), CmdError> {
 pub async fn retire(name: &str, purge_cache: bool, json_output: bool) -> Result<(), CmdError> {
     let (document, expected_generation) = crate::cli::registry::fetch_versioned_document().await?;
     let mut registry = schema::parse(&document).map_err(click)?;
-    if let Some(alias) = registry
-        .routes
-        .iter()
-        .find_map(|(alias, destination)| (destination == name).then_some(alias))
-        .or_else(|| {
-            registry.fallbacks.iter().find_map(|(alias, destinations)| {
-                destinations
-                    .iter()
-                    .any(|destination| destination == name)
-                    .then_some(alias)
-            })
-        })
-    {
-        return Err(CmdError::click(format!(
-            "route '{alias}' still points at '{name}'"
-        )));
-    }
     let deployment = registry
         .deployments
         .iter()
         .find(|deployment| deployment.name == name)
         .cloned()
         .ok_or_else(|| CmdError::click(format!("unknown inference deployment '{name}'")))?;
+    if let Some(alias) = registry
+        .routes
+        .iter()
+        .find_map(|(alias, destination)| serves_model(&deployment, destination).then_some(alias))
+        .or_else(|| {
+            registry.fallbacks.iter().find_map(|(alias, destinations)| {
+                destinations
+                    .iter()
+                    .any(|destination| serves_model(&deployment, destination))
+                    .then_some(alias)
+            })
+        })
+    {
+        return Err(CmdError::click(format!(
+            "route '{alias}' still points at deployment '{name}' or one of its adapters"
+        )));
+    }
     let target = host_channel::canonical_target(&deployment.target)
         .await
         .map_err(click)?;

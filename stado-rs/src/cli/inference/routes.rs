@@ -17,11 +17,25 @@ fn deployment<'a>(registry: &'a schema::Registry, name: &str) -> Option<&'a sche
         .find(|deployment| deployment.name == name)
 }
 
+fn deployment_for_model<'a>(
+    registry: &'a schema::Registry,
+    name: &str,
+) -> Option<&'a schema::Deployment> {
+    deployment(registry, name).or_else(|| {
+        registry.deployments.iter().find(|deployment| {
+            deployment
+                .adapters
+                .iter()
+                .any(|adapter| adapter.name == name)
+        })
+    })
+}
+
 async fn destination_ready(
     registry: &schema::Registry,
     destination: &str,
 ) -> Result<bool, CmdError> {
-    let Some(deployment) = deployment(registry, destination) else {
+    let Some(deployment) = deployment_for_model(registry, destination) else {
         if destination.split_once('/').is_none() {
             return Err(CmdError::click(format!(
                 "unknown route destination '{destination}'"
@@ -33,14 +47,29 @@ async fn destination_ready(
     let target = host_channel::canonical_target(&deployment.target)
         .await
         .map_err(click)?;
-    let report = inference::probe(&target, deployment, &bearer, &production_runner())
+    let report = if deployment.name == destination {
+        inference::probe(&target, deployment, &bearer, &production_runner()).await
+    } else {
+        inference::verify_completion(
+            &target,
+            deployment,
+            destination,
+            &bearer,
+            &production_runner(),
+        )
         .await
-        .map_err(click)?;
-    Ok(report.get("status").and_then(Value::as_str) == Some("ready"))
+    }
+    .map_err(click)?;
+    Ok(report.get("status").and_then(Value::as_str)
+        == Some(if deployment.name == destination {
+            "ready"
+        } else {
+            "verified"
+        }))
 }
 
 fn yieldable_primary(registry: &schema::Registry, destination: &str) -> bool {
-    deployment(registry, destination).is_some_and(|deployment| {
+    deployment_for_model(registry, destination).is_some_and(|deployment| {
         deployment.desired_state == schema::STATE_RUNNING
             && deployment.resources.gpu_mode == schema::GPU_YIELDABLE
     })
