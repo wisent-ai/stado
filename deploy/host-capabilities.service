@@ -4,6 +4,16 @@
 # host-health-beacon.service line for line, because a host publishing what it
 # can do and a host publishing whether it is alive are the same kind of job and
 # should fail, log and restart the same way.
+#
+# Every run of this unit publishes over the fleet's tailnet TLS path, so this
+# host's capability object goes stale the moment that certificate stops being
+# trusted -- and a stale capability reads as "nothing has measured this host",
+# not as "TLS expired". The leaf expires 2028-11-16 and the authority 2036-08-11.
+# Re-issue from the Skarbiec item `stado-tailnet-ca` on charless-mac-mini with
+# scripts/mint-tailnet-authority.py, swap with
+# scripts/swap-tailnet-server-certificate.py and reload with
+# scripts/reload-tailnet-object-proxy.py; minting a NEW authority instead would
+# force every consumer to re-anchor.
 Description=Wisent host capability measurement and publication (one-shot)
 
 [Service]
