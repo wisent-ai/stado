@@ -120,7 +120,7 @@ pub const WC_BIN_FALLBACK: &str = "$HOME/.stado/bin/stado";
 /// (`providers::local::python_bin`).
 pub const WC_PYTHON_FALLBACK: &str = "python3";
 
-/// The remote agent systemd unit.
+/// The remote agent systemd unit used by callers without registry metadata.
 pub fn agent_unit_text(
     name: &str,
     slots: i64,
@@ -128,6 +128,23 @@ pub fn agent_unit_text(
     wc_python: &str,
     user: &str,
 ) -> String {
+    agent_unit_text_with_gpu_type(name, slots, None, stado_bin, wc_python, user)
+}
+
+fn agent_unit_text_with_gpu_type(
+    name: &str,
+    slots: i64,
+    gpu_type: Option<&str>,
+    stado_bin: &str,
+    wc_python: &str,
+    user: &str,
+) -> String {
+    let gpu_flag = if gpu_type.is_some() {
+        " --gpu-type "
+    } else {
+        ""
+    };
+    let gpu_type = gpu_type.unwrap_or("");
     format!(
         "[Unit]\n\
          Description=Wisent Compute local GPU agent ({name})\n\
@@ -139,7 +156,7 @@ pub fn agent_unit_text(
          Environment=WC_LOCAL_SLOTS={slots}\n\
          Environment=PYTHONUNBUFFERED=1\n\
          Environment=WC_PYTHON={wc_python}\n\
-         ExecStart={stado_bin} agent --target {name}\n\
+         ExecStart={stado_bin} agent --target {name}{gpu_flag}{gpu_type}\n\
          Restart=on-failure\n\
          RestartSec=30\n\
          User={user}\n\
@@ -230,7 +247,14 @@ pub fn unit_installs(
 ) -> Vec<(String, String, CommandSpec)> {
     let ssh_target = target.ssh.as_deref().unwrap_or("");
     let user = remote_user(ssh_target);
-    let agent_text = agent_unit_text(&target.name, target.slots, stado_bin, wc_python, &user);
+    let agent_text = agent_unit_text_with_gpu_type(
+        &target.name,
+        target.slots,
+        target.gpu_type.as_deref(),
+        stado_bin,
+        wc_python,
+        &user,
+    );
     let watchdog_text = watchdog_unit_text(
         &target.name,
         &sibling_bin(stado_bin, "stado-watchdog"),
