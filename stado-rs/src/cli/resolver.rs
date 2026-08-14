@@ -431,9 +431,19 @@ async fn bind_loopback(value: &str) -> Result<TcpListener, CmdError> {
             "resolver bind {value:?} must be loopback"
         )));
     }
-    TcpListener::bind(address)
-        .await
-        .map_err(|error| CmdError::click(format!("could not bind {value}: {error}")))
+    TcpListener::bind(address).await.map_err(|error| {
+        // A stable port held by something else is the failure this resolver
+        // cannot recover from by waiting: a stale forward left behind by an
+        // earlier instance accepts connections and answers none, so every
+        // reader sees a live socket in front of nothing. Name the holder here
+        // rather than retrying into it.
+        CmdError::click(format!(
+            "could not bind {value}: {error}. Something else already holds this \
+             resolver port; find it with `lsof -nP -iTCP:{} -sTCP:LISTEN` and stop \
+             it before starting the resolver.",
+            address.port()
+        ))
+    })
 }
 
 async fn watch_registry(state: Arc<ResolverState>, refresh_seconds: u64) -> Result<(), String> {
@@ -528,6 +538,19 @@ async fn proxy_connection(
         .port_or_known_default()
         .ok_or_else(|| "resolved endpoint has no port".to_string())?;
     let idle = Duration::from_secs(adapter.idle_seconds);
+    // The directory is supposed to name where a service listens. When it names
+    // this adapter's own bind instead, the proxy dials itself: the connection is
+    // accepted, forwarded to the same socket, accepted again, and the reader
+    // waits on a chain that never reaches a server. It looks exactly like a
+    // healthy port with a hung backend, so say it instead of recursing.
+    if format!("{host}:{port}") == adapter.bind {
+        return Err(format!(
+            "service {} resolves to {}, which is this adapter's own bind: the service \
+             directory must carry the address the service listens on, not the stable \
+             port published for its clients",
+            adapter.service, adapter.bind
+        ));
+    }
     if resolved.active_host == state.local_target {
         let upstream = TcpStream::connect((host, port))
             .await
