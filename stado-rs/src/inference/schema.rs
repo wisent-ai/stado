@@ -27,6 +27,13 @@ pub struct Model {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Adapter {
+    pub name: String,
+    pub repository: String,
+    pub revision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Resources {
     pub gpu_mode: String,
     pub gpus: u16,
@@ -52,6 +59,8 @@ pub struct Deployment {
     pub desired_state: String,
     pub engine: Engine,
     pub model: Model,
+    #[serde(default)]
+    pub adapters: Vec<Adapter>,
     pub resources: Resources,
     pub endpoint: Endpoint,
     pub credential_item: String,
@@ -279,6 +288,22 @@ pub fn validate(document: &Value) -> Result<(), String> {
             return Err(format!(
                 "{location}.model: safe repository and immutable revision are required"
             ));
+        }
+        for adapter in &deployment.adapters {
+            if !identifier(&adapter.name) || !names.insert(adapter.name.as_str()) {
+                return Err(format!(
+                    "{location}.adapters: names must be unique lowercase identifiers"
+                ));
+            }
+            if !safe_reference(&adapter.repository, "/") || !immutable_revision(&adapter.revision) {
+                return Err(format!(
+                    "{location}.adapters.{}: safe repository and immutable revision are required",
+                    adapter.name
+                ));
+            }
+            if deployment.desired_state == STATE_RUNNING {
+                running_names.insert(adapter.name.as_str());
+            }
         }
         if !matches!(
             deployment.resources.gpu_mode.as_str(),
