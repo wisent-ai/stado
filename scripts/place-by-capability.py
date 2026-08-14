@@ -16,18 +16,23 @@ reads each candidate's capability object
 through the same `/api/object` endpoint the host-health beacon publishes and the
 capability publisher writes, and matches `--requires` against what was measured.
 
-Two rules make the answer honest:
+Three rules make the answer honest:
 
   - a capability satisfies a requirement only when it was measured `true`;
   - a measurement older than `--max-stale-seconds` satisfies nothing. An old yes
     is not a yes -- a laptop that had a console session yesterday is a laptop
-    with the lid shut today, and placing a browser job on it costs a whole run.
+    with the lid shut today, and placing a browser job on it costs a whole run;
+  - a capability says what a host CAN do, and the registry target's `placement`
+    policy says what it MAY be used for. Both must pass. The operator's own
+    laptop can open a window and must never be handed a customer login, so it
+    declares `placement.excludes`, and an excluded candidate is refused in its
+    own words rather than mixed in with hosts whose measurement failed.
 
 Output is split by channel so the answer is machine-readable:
 
   - success: exactly one host name on stdout, exit 0;
-  - refusal: one line per candidate on stderr naming the measurement that
-    disqualified it, nothing on stdout, exit 1;
+  - refusal: one line per candidate on stderr naming the policy or the
+    measurement that disqualified it, nothing on stdout, exit 1;
   - the registry or this host's object API declaration being unreadable: exit 2.
 
 Runs unchanged locally and as a Stado helper on any host: it takes the store URL,
@@ -51,6 +56,13 @@ ZERO = len([])
 FIRST = len(["first"])
 SCHEMA = "wisent.host-capabilities.v1"
 PREFIX = "host_capabilities"
+# The registry target key that says what a host MAY be used for. Exclusions
+# only: an accepts-allowlist would silently disqualify every host that has not
+# declared one, which is the same silence this whole model is replacing.
+POLICY_KEY = "placement"
+POLICY_EXCLUDES = "excludes"
+POLICY_REASON = "reason"
+POLICY_KEYS = (POLICY_EXCLUDES, POLICY_REASON)
 HOME = pathlib.Path(os.path.expanduser("~"))
 CONFIG = pathlib.Path(os.environ.get("STADO_CONFIG") or HOME / ".config" / "stado" / "config.json")
 # The registry is reached through the stado binary rather than re-derived from
@@ -136,6 +148,13 @@ def read_object(settings, uri):
 
 
 def registry_targets():
+    """Return {target name: its declared placement policy or NONE}.
+
+    The policy travels with the candidate list because it answers the other half
+    of the question. A capability says what a host CAN do; the registry says
+    what it MAY be used for, and a host that can open a window is still the
+    wrong host when it is the machine the operator is sitting in front of.
+    """
     if not STADO.is_file():
         raise Unreadable(f"{STADO} is not installed here, so the candidate list cannot be read")
     proc = subprocess.run(
@@ -147,10 +166,14 @@ def registry_targets():
         document = json.loads(proc.stdout)
     except ValueError as problem:
         raise Unreadable(f"stado registry pull did not print a registry: {problem}") from problem
-    names = [entry.get("name") for entry in document.get("targets", []) if entry.get("name")]
-    if not names:
+    declared = {
+        entry["name"]: entry.get(POLICY_KEY)
+        for entry in document.get("targets", [])
+        if entry.get("name")
+    }
+    if not declared:
         raise Unreadable("the canonical registry declares no targets")
-    return names
+    return declared
 
 
 def parse_measured_at(text):
@@ -201,6 +224,38 @@ def disqualification(target, document, requires, max_stale_seconds, now):
     return NONE
 
 
+def policy_refusal(policy, requires):
+    """Return why the registry forbids this placement, or NONE if it allows it.
+
+    Kept apart from `disqualification` on purpose: a host that measured false
+    and a host that is forbidden are two different facts, and a run that spelled
+    them the same way would send an operator to fix a capability that is fine.
+    """
+    if policy is NONE:
+        return NONE
+    if not isinstance(policy, dict):
+        return f"its registry target declares {POLICY_KEY} as {type(policy).__name__}, not an object"
+    unknown = sorted(key for key in policy if key not in POLICY_KEYS)
+    if unknown:
+        # Fail closed. A policy half of which this matcher cannot read is a
+        # policy that may forbid exactly the placement about to be made.
+        return (
+            f"its {POLICY_KEY} policy declares {', '.join(unknown)}, which this matcher does not "
+            f"read; only {' and '.join(POLICY_KEYS)} are understood"
+        )
+    excludes = policy.get(POLICY_EXCLUDES, [])
+    if not isinstance(excludes, list):
+        return f"its {POLICY_KEY}.{POLICY_EXCLUDES} is not a list of capability ids"
+    forbidden = [capability for capability in requires if capability in excludes]
+    if not forbidden:
+        return NONE
+    reason = policy.get(POLICY_REASON) or "no reason declared"
+    return (
+        f"excluded by placement policy declared on the target: {', '.join(forbidden)} "
+        f"may not be placed here ({reason})"
+    )
+
+
 def place(requires, max_stale_seconds, candidates=NONE):
     """Return (host, refusals). `host` is NONE when no candidate qualifies.
 
@@ -208,11 +263,19 @@ def place(requires, max_stale_seconds, candidates=NONE):
     second copy of this matching is a second answer waiting to disagree.
     """
     settings = storage_settings()
-    names = candidates or registry_targets()
+    declared = registry_targets()
+    names = candidates or list(declared)
     now = datetime.datetime.now(datetime.timezone.utc)
     qualified = []
     refusals = []
     for target in sorted(names):
+        # Policy first: a forbidden host is forbidden whether or not anything
+        # measured it, and reading its measurement would only invite the reader
+        # to argue with a capability that was never the objection.
+        forbidden = policy_refusal(declared.get(target), requires)
+        if forbidden:
+            refusals.append(f"{target}  {forbidden}")
+            continue
         uri = capability_uri(settings, target)
         try:
             body = read_object(settings, uri)
