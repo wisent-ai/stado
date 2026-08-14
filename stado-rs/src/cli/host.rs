@@ -425,6 +425,166 @@ pub async fn gui_automation_disable(target: &str, bundle: &str) -> Result<(), Cm
     print_report(&report)
 }
 
+const MANAGED_GUI_BUNDLES: [&str; 2] = [
+    "ai.wisent.probierz.desktop",
+    "ai.wisent.weles.desktop",
+];
+const WISENT_TEAM_ID: &str = "LNTWB5B9DV";
+
+fn pppc_entries(policy: &str) -> String {
+    use std::fmt::Write as _;
+
+    let mut entries = String::with_capacity(MANAGED_GUI_BUNDLES.len() * 700);
+    for bundle in MANAGED_GUI_BUNDLES {
+        let requirement = format!(
+            "identifier \"{bundle}\" and anchor apple generic and certificate leaf[subject.OU] = \"{WISENT_TEAM_ID}\""
+        );
+        write!(
+            entries,
+            r#"
+                <dict>
+                    <key>Identifier</key>
+                    <string>{bundle}</string>
+                    <key>IdentifierType</key>
+                    <string>bundleID</string>
+                    <key>CodeRequirement</key>
+                    <string>{requirement}</string>
+                    <key>StaticCode</key>
+                    <false/>
+                    {policy}
+                </dict>"#
+        )
+        .expect("writing to a String cannot fail");
+    }
+    entries
+}
+
+fn desktop_permissions_profile_xml() -> String {
+    let accessibility = pppc_entries("<key>Allowed</key>\n                    <true/>");
+    let user_controlled = pppc_entries(
+        "<key>Authorization</key>\n                    <string>AllowStandardUserToSetSystemService</string>",
+    );
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>PayloadContent</key>
+    <array>
+        <dict>
+            <key>PayloadDisplayName</key>
+            <string>Wisent Desktop Privacy Preferences</string>
+            <key>PayloadIdentifier</key>
+            <string>ai.wisent.desktop.permissions.pppc</string>
+            <key>PayloadType</key>
+            <string>com.apple.TCC.configuration-profile-policy</string>
+            <key>PayloadUUID</key>
+            <string>28BC6F37-9DC6-4EAE-B10A-D2E29B146AC5</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>Services</key>
+            <dict>
+                <key>Accessibility</key>
+                <array>{accessibility}
+                </array>
+                <key>ListenEvent</key>
+                <array>{user_controlled}
+                </array>
+                <key>ScreenCapture</key>
+                <array>{user_controlled}
+                </array>
+            </dict>
+        </dict>
+    </array>
+    <key>PayloadDescription</key>
+    <string>Least-privilege PPPC policy for Wisent GUI automation hosts.</string>
+    <key>PayloadDisplayName</key>
+    <string>Wisent Desktop Permissions</string>
+    <key>PayloadIdentifier</key>
+    <string>ai.wisent.desktop.permissions</string>
+    <key>PayloadOrganization</key>
+    <string>Wisent</string>
+    <key>PayloadRemovalDisallowed</key>
+    <false/>
+    <key>PayloadScope</key>
+    <string>System</string>
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadUUID</key>
+    <string>F9D35BE1-F9EE-48D4-A665-C72526875116</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+</dict>
+</plist>
+"#
+    )
+}
+
+/// `stado host desktop-permissions profile OUTPUT` — render the one canonical
+/// PPPC payload for managed Wisent GUI hosts.
+///
+/// The output is deterministic and replaced atomically only when its bytes
+/// differ. macOS no longer permits command-line profile installation, so Stado
+/// deliberately renders the MDM input instead of pretending a local `profiles`
+/// invocation can grant TCC access. Camera and microphone remain user decisions;
+/// Screen Recording and Input Monitoring are made standard-user controllable,
+/// while Accessibility is pre-authorized only for Probierz and Weles.
+pub fn desktop_permissions_profile(output: &str, json: bool) -> Result<(), CmdError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path = std::path::Path::new(output);
+    if output.is_empty() {
+        return Err(CmdError::click("OUTPUT must not be empty".to_string()));
+    }
+    if let Ok(metadata) = std::fs::symlink_metadata(path) {
+        if metadata.file_type().is_symlink() {
+            return Err(CmdError::click(format!(
+                "refusing to replace symlink {}",
+                path.display()
+            )));
+        }
+    }
+    let desired = desktop_permissions_profile_xml();
+    let unchanged = std::fs::read(path)
+        .map(|current| current == desired.as_bytes())
+        .unwrap_or(false);
+    let state = if unchanged {
+        "unchanged"
+    } else {
+        let parent = path.parent().filter(|parent| !parent.as_os_str().is_empty());
+        if let Some(parent) = parent {
+            if !parent.is_dir() {
+                return Err(CmdError::click(format!(
+                    "output directory does not exist: {}",
+                    parent.display()
+                )));
+            }
+        }
+        let temporary = path.with_extension("mobileconfig.stado-tmp");
+        std::fs::write(&temporary, desired.as_bytes())?;
+        std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o644))?;
+        std::fs::rename(&temporary, path)?;
+        "written"
+    };
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "bundles": MANAGED_GUI_BUNDLES,
+                "output": path,
+                "state": state,
+            }))?
+        );
+    } else {
+        println!(
+            "{state}\t{}\t{} managed bundles",
+            path.display(),
+            MANAGED_GUI_BUNDLES.len()
+        );
+    }
+    Ok(())
+}
+
 /// Read one line with terminal echo disabled (Python
 /// `click.prompt(..., hide_input=True)`).
 fn prompt_hidden(prompt: &str) -> Result<String, CmdError> {
