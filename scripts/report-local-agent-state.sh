@@ -17,6 +17,9 @@ else
   for unit in $units; do
     printf '\n== %s ==\n' "$unit"
     systemctl status "$unit" --no-pager -n 0 2>&1 | sed -n '1,16p' || true
+    systemctl show "$unit" --no-pager \
+      -p FragmentPath -p DropInPaths -p ExecStart -p EnvironmentFiles 2>/dev/null \
+      | sed 's/^/  /' || true
     journalctl -u "$unit" -n 80 --no-pager 2>&1 | sed 's/^/  /' || true
   done
 fi
