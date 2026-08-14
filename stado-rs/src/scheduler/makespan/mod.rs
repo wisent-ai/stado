@@ -317,11 +317,13 @@ pub async fn assign_jobs(store: &JobStorage, log_fn: &dyn Fn(&str)) -> Result<us
     let history = history::global().history(store, log_fn).await?;
     assign_jobs_at(store, Utc::now(), &history, log_fn).await
 }
-/// Clear derived assignments that contradict an operator host pin.
+/// Make every operator host pin explicit in the derived assignment field.
 ///
-/// This invariant applies in both legacy makespan and autonomy routing modes.
-/// Versioned writes prevent a coordinator tick from resurrecting a job that an
-/// agent moved out of the queue concurrently.
+/// An empty assignment normally means any eligible agent may race to claim.
+/// Mirroring `pinned_host` into `assigned_to` keeps older coordinators from
+/// deriving a contradictory consumer while preserving the agent's hard-pin
+/// check. Versioned writes prevent a coordinator tick from resurrecting a job
+/// that an agent moved out of the queue concurrently.
 pub async fn repair_conflicting_pinned_assignments(
     store: &JobStorage,
     log_fn: &dyn Fn(&str),
@@ -329,7 +331,6 @@ pub async fn repair_conflicting_pinned_assignments(
     let mut repaired = 0;
     for candidate in store.list_jobs("queue", 0).await? {
         if candidate.pinned_host.is_empty()
-            || candidate.assigned_to.is_empty()
             || candidate
                 .assigned_to
                 .eq_ignore_ascii_case(&candidate.pinned_host)
@@ -342,12 +343,12 @@ pub async fn repair_conflicting_pinned_assignments(
         };
         let mut job = Job::from_json(&versioned.content)?;
         if job.pinned_host.is_empty()
-            || job.assigned_to.is_empty()
             || job.assigned_to.eq_ignore_ascii_case(&job.pinned_host)
         {
             continue;
         }
-        let previous = std::mem::take(&mut job.assigned_to);
+        let pinned_host = job.pinned_host.clone();
+        let previous = std::mem::replace(&mut job.assigned_to, pinned_host.clone());
         match store
             .compare_and_swap_text(&path, &versioned.version, &job.to_json())
             .await
@@ -355,7 +356,7 @@ pub async fn repair_conflicting_pinned_assignments(
             Ok(_) => {
                 repaired += 1;
                 log_fn(&format!(
-                    "cleared conflicting assignment {previous} from host-pinned job {}",
+                    "assigned host-pinned job {} to {pinned_host} instead of {previous:?}",
                     job.job_id
                 ));
             }
