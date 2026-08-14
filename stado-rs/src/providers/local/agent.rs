@@ -531,15 +531,15 @@ fn diag_map(d: &DiskGateDiag) -> [(String, Value); 4] {
 ///
 /// kind: capacity-broadcast label distinguishing physical workstations
 /// (kind="local") from ephemeral cloud-agent VMs (kind="gcp", ...).
-/// target_identity: canonical registry name used by `--pinned-host`; ad-hoc
-/// agents without a registry target retain the legacy `{kind}-{hostname}` ID.
+/// target_consumer_id: canonical queue identity derived from the registry
+/// target's kind and primary hostname; ad-hoc agents derive the same shape.
 /// No global error handler wraps the loop body: unexpected errors
 /// crash the agent visibly (returned as Err) so the operator can diagnose.
 pub async fn run_agent(
     gpu_type: &str,
     idle_shutdown: bool,
     kind: &str,
-    target_identity: Option<&str>,
+    target_consumer_id: Option<&str>,
 ) -> anyhow::Result<()> {
     let log_fn = &mut |msg: &str| agent_log(msg);
 
@@ -563,7 +563,7 @@ pub async fn run_agent(
     let store = JobStorage::new().await?;
     log_fn("init: JobStorage done");
     let sizing = Sizing::new();
-    let consumer_id = target_identity
+    let consumer_id = target_consumer_id
         .map(str::to_string)
         .unwrap_or_else(|| format!("{kind}-{hostname}"));
     let mut slots: Vec<ActiveSlot> = Vec::new();
