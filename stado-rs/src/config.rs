@@ -1006,6 +1006,16 @@ pub fn stado_agent_runtime_bundle_sha256() -> String {
     .to_string()
 }
 
+static BILLING_PROVIDERS: LazyLock<Vec<String>> = LazyLock::new(|| {
+    canonicalize_capability_names(
+        crate::capabilities::RuntimeFacet::Billing,
+        cfg_list(
+            "WC_BILLING_PROVIDERS",
+            "billing.providers",
+            &["gcp", "azure"],
+        ),
+    )
+});
 static BILLING_DATASET: LazyLock<String> = LazyLock::new(|| {
     std::env::var("WC_BILLING_DATASET").unwrap_or_else(|_| "billing_export".to_string())
 });
@@ -2638,6 +2648,13 @@ static INTEGRATION_PROVIDER_SKARBIEC_URL: LazyLock<String> = LazyLock::new(|| {
         skarbiec_url(),
     )
 });
+
+/// Billing sources queried by the collector. This is independent from compute
+/// provider enablement: an account may stay fenced for provisioning while its
+/// spend and grant state remain monitored.
+pub fn billing_providers() -> &'static [String] {
+    &BILLING_PROVIDERS
+}
 
 /// BigQuery billing export dataset (env `WC_BILLING_DATASET`).
 ///
