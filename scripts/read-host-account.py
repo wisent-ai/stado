@@ -137,10 +137,26 @@ def main():
         for capability in grant.get("capabilities", [])
         if capability.get("item") == item
     ]
+    print(f"vault        {VAULT}")
     print(f"consumers    {','.join(grants) or '(none registered)'}")
+    # `stado credentials ls` lists only what the credential-store admin consumer
+    # holds a capability on, so an item's presence there is a measurement of the
+    # grant rather than of the vault: until a consumer held a capability on it this
+    # item was one of the thirty-two the catalogue could not see.
+    catalogue = run(str(STADO), "credentials", "ls")
+    listed = any(
+        line.split()[ZERO] == item
+        for line in catalogue.stdout.splitlines()[ONE + ONE :]
+        if line.split()
+    )
+    print(f"catalogue    stado credentials ls {'lists' if listed else 'does NOT list'} {item}")
     print(
         f"delivery     stado host install-credential <host> {item} {SECRET_FIELD} <basename>"
     )
+    # The delivery command does not read this file: it asks the Skarbiec service
+    # named in Stado's config, so that process has to have the grant loaded. On a
+    # long-running `skarbiec serve` a grant minted afterwards is not in effect yet.
+    print("             (authenticates through the Skarbiec service, which must hold this grant)")
     print("document     (redacted; the value is never printed by this script)")
     print(json.dumps(redacted(document), indent=len("  "), sort_keys=True))
 
