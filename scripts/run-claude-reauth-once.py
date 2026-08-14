@@ -30,20 +30,24 @@ def main():
         capture_output=True,
         text=True,
         check=False,
-        cwd=str(HOME / "weles"),
         env={
             **os.environ,
             "HOME": str(HOME),
             "PATH": f"/opt/homebrew/bin:/usr/local/bin:{os.environ.get('PATH', '/usr/bin:/bin')}",
+            # Default to the runner, which is the real path: it sets
+            # `CLAUDE_LOGIN_PROXY=none` before spawning the login helper, and a
+            # login started without that asks for a residential proxy this fleet
+            # does not have. `REAUTH_ENTRY` still allows exercising one step.
         },
-        timeout=float(len("s" * 240)),
     )
     print(f"exit {proc.returncode}")
     for stream, text in (("stdout", proc.stdout), ("stderr", proc.stderr)):
         lines = [line for line in text.splitlines() if line.strip()]
         print(f"== {stream} ({len(lines)} lines)")
         for line in lines[-TAIL:]:
-            print(f"  {line[: len('a' * 220)]}")
+            # The login helper's own error arrives as one long tail; truncating
+            # it here is how "no blob" stayed unexplained for a day.
+            print(f"  {line[: len('a' * 2000)]}")
     return NONE
 
 
