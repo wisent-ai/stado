@@ -155,9 +155,10 @@ fn matches_any(haystack: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| haystack.contains(needle))
 }
 
-/// Bounded technical detail for the structured log line.
+/// Bounded technical detail for the structured log line. The width is this
+/// CLI's own; the cut is the package's, so the fleet has one trim rule.
 pub fn bounded_detail(text: &str) -> String {
-    text.trim().chars().take(max_detail_chars()).collect()
+    wisent_errors::trim_detail(text, max_detail_chars())
 }
 
 /// The status an upstream answered with, if the message names one.

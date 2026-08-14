@@ -42,7 +42,11 @@ async-trait = "0.1"
 tempfile = "3"
 # The fleet's failure vocabulary. Extracted from src/failure.rs, so depending
 # on it here replaces a local copy rather than adding a second opinion.
-wisent-errors = { git = "https://github.com/wisent-ai/wisent-errors" }
+#
+# Pinned to a commit, not to a branch. A shared failure vocabulary that moves
+# under this crate with no commit here saying so is how the trim rule changed
+# twice in one hour; the lock is the second guard, this rev is the first.
+wisent-errors = { git = "https://github.com/wisent-ai/wisent-errors", rev = "e3014d2c900e499e171aeed8804da10bc7d93bf8" }
 
 [dev-dependencies]
 parking_lot = "0.12"
