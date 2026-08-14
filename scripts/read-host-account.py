@@ -63,9 +63,22 @@ def redacted(document):
 
 
 def main():
-    if len(sys.argv) != len(["self", "target"]):
-        raise SystemExit("usage: read-host-account.py <registry-target>")
-    target = sys.argv[ONE]
+    if len(sys.argv) > len(["self", "target"]):
+        raise SystemExit("usage: read-host-account.py [registry-target]")
+    # A Stado helper is run with no arguments, so with none this asks about the
+    # host it is running on -- which is the question a host asks about itself.
+    if len(sys.argv) == len(["self"]):
+        resolved = run(str(STADO), "registry", "self")
+        if resolved.returncode != ZERO:
+            raise SystemExit(
+                f"no target given and `registry self` failed: "
+                f"{resolved.stderr.strip().splitlines()[-ONE:]}"
+            )
+        # `registry self` answers `<name>\t<kind>\t<hostname>`; the target name is
+        # the first column, and the hostname is deliberately not it.
+        target = resolved.stdout.strip().splitlines()[-ONE].split("\t")[ZERO]
+    else:
+        target = sys.argv[ONE]
     faults = []
 
     pulled = run(str(STADO), "registry", "pull")
@@ -88,6 +101,18 @@ def main():
         print(f"fault        {target} declares no account_ref, so no account can be found")
         return ONE
 
+    # Where the credential must NOT be is as load-bearing as where it must be. A
+    # host-account exists so an operator or a repair path can authenticate TO a
+    # host, so it belongs in the vault of whoever does that -- never in the vault
+    # of the machine it opens, where compromising the host would hand over the
+    # host's own admin account.
+    here = run(str(STADO), "registry", "self")
+    myself = (
+        here.stdout.strip().splitlines()[-ONE].split("\t")[ZERO]
+        if here.returncode == ZERO and here.stdout.strip()
+        else ""
+    )
+    opens_this_host = myself == target
     envelope = next(
         (
             entry
@@ -97,8 +122,17 @@ def main():
         NONE,
     )
     if envelope is NONE:
+        if opens_this_host:
+            print(f"posture      correct: {target} does not keep the account that opens it")
+            print(f"read it on   any host that authenticates to {target}, not on {target}")
+            return NONE
         print(f"fault        the vault holds no item {item}; the declaration has no reader")
         return ONE
+    if opens_this_host:
+        faults.append(
+            f"{target} holds {item}, the account that opens {target}; taking the host "
+            "would then hand over the host's own admin account"
+        )
     print(f"item         {item}")
     print(f"kind         {envelope.get('kind')} (expected {KIND})")
     print(f"revision     {envelope.get('revision')} updated {envelope.get('updated_at')}")
