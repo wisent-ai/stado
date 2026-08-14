@@ -162,8 +162,8 @@ def self_test():
     return failures
 
 
-def find_evidence_line(literal):
-    """One real partition line carrying the literal, kept for the before/after
+def find_evidence_line(literals):
+    """One real partition line carrying a literal, kept for the before/after
     proof. Returns (path, line index, displayable text)."""
     for path in sorted(LAKE.rglob("*.ndjson")):
         try:
@@ -171,16 +171,26 @@ def find_evidence_line(literal):
         except (OSError, UnicodeDecodeError):
             continue
         for index, line in enumerate(lines):
-            if literal in line and "sudo -S" in line:
-                return path, index, line.replace(literal, "<SECRET>")
+            for literal in literals:
+                if literal in line and "sudo -S" in line:
+                    return path, index, line.replace(literal, "<SECRET>")
     return NONE, NONE, NONE
 
 
-def byte_search(literal):
-    """Independent of the scrub: how many files still carry the literal."""
-    needle = literal.encode("utf-8")
-    files = ZERO
-    occurrences = ZERO
+def fingerprint(literal):
+    """What may be printed about a secret: how long it is and which one it is."""
+    return (
+        f"len={len(literal)} "
+        f"sha256[:8]={hashlib.sha256(literal.encode('utf-8')).hexdigest()[: len('a' * 8)]}"
+    )
+
+
+def byte_search(literals):
+    """Independent of the scrub: how many files still carry each literal. One walk
+    over the Lake, because reading 65k files once is already the expensive part."""
+    needles = {literal: literal.encode("utf-8") for literal in literals}
+    files = {literal: ZERO for literal in literals}
+    occurrences = {literal: ZERO for literal in literals}
     scanned = ZERO
     for path in LAKE.rglob("*"):
         if not path.is_file():
@@ -190,13 +200,16 @@ def byte_search(literal):
             blob = path.read_bytes()
         except OSError:
             continue
-        found = blob.count(needle)
-        if found:
-            files += 1
-            occurrences += found
-            print(f"  still present: {path.relative_to(LAKE)} x{found}")
-    print(f"  searched {scanned} files: {files} files, {occurrences} occurrences")
-    return files
+        for literal, needle in needles.items():
+            found = blob.count(needle)
+            if found:
+                files[literal] += 1
+                occurrences[literal] += found
+                print(f"  still present: {path.relative_to(LAKE)} x{found} ({fingerprint(literal)})")
+    print(f"  searched {scanned} files")
+    for literal in literals:
+        print(f"  {fingerprint(literal)}: {files[literal]} files, {occurrences[literal]} occurrences")
+    return sum(files.values())
 
 
 def main():
@@ -208,25 +221,34 @@ def main():
     # execute bit, so a directory this process creates cannot be entered again.
     # Relax it for this process only; the secret is read, never written.
     os.umask(0o022)
-    literal = SECRET_FILE.read_text(encoding="utf-8").split("\n")[0]
-    digest = hashlib.sha256(literal.encode("utf-8")).hexdigest()[: len("a" * 8)]
-    print(f"literal len={len(literal)} sha256[:8]={digest}")
+    literals = [line for line in SECRET_FILE.read_text(encoding="utf-8").split("\n") if line.strip()]
+    payload = "\n".join(literals)
+    for literal in literals:
+        print(f"literal {fingerprint(literal)}")
     print(f"lake {LAKE}")
+    applied_cleanly = False
     try:
         failures = self_test()
         if failures:
             raise SystemExit(f"self-test failures {failures}; the real Lake was not touched")
 
-        path, index, display = find_evidence_line(literal)
+        path, index, display = find_evidence_line(literals)
         if path is not NONE:
             print(f"--- before {path.relative_to(LAKE)} line {index + 1}")
             print("  " + display[: len("a" * 700)])
 
-        preview = run_scrub(LAKE, literal, apply_changes=False)
+        preview = run_scrub(LAKE, payload, apply_changes=False)
         show("lake preview", preview)
-        applied = run_scrub(LAKE, literal, apply_changes=True)
+        applied = run_scrub(LAKE, payload, apply_changes=True)
         show("lake apply", applied)
-        verify = run_scrub(LAKE, literal, apply_changes=False)
+        if "state writer lock is held" in applied.stdout + applied.stderr:
+            # The streamer holds the lease for the length of a catch-up, which is
+            # minutes to hours after a backfill. That is not a failure and the
+            # delivered literal must survive for the next run.
+            print("lake busy: the streamer holds the writer lease; nothing was rewritten")
+            return 75
+        applied_cleanly = True
+        verify = run_scrub(LAKE, payload, apply_changes=False)
         show("lake preview after apply", verify)
 
         if path is not NONE:
@@ -237,12 +259,15 @@ def main():
             print("  PASS line parses as JSON after the rewrite")
 
         print("--- independent byte search")
-        remaining = byte_search(literal)
+        remaining = byte_search(literals)
         print(f"remaining files with the literal {remaining}")
         return 1 if remaining else 0
     finally:
-        SECRET_FILE.unlink()
-        print(f"removed {SECRET_FILE}")
+        if applied_cleanly:
+            SECRET_FILE.unlink()
+            print(f"removed {SECRET_FILE}")
+        else:
+            print(f"kept {SECRET_FILE} for the next run")
 
 
 sys.exit(main())
