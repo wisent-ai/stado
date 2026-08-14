@@ -1,0 +1,13 @@
+[Unit]
+Description=Wisent host capability publication (every {INTERVAL_SECONDS}s)
+
+[Timer]
+# The measurement launches a browser and waits for it, so this cadence is slower
+# than the health beacon's minute: a publication that overlaps its predecessor
+# buys nothing, and placement's staleness window is minutes wide, not seconds.
+OnBootSec=60s
+OnUnitActiveSec={INTERVAL_SECONDS}s
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target
