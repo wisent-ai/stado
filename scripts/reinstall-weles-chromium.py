@@ -52,8 +52,12 @@ def main():
         for key in ("WELES_CHROMIUM_RELEASE_VERSION", "STADO_RELEASE_API_URL", "STADO_RELEASE_LOCAL_ROOT")
     }
     print(f"coordinates {named}")
+    # The receipt covers the archive, not the extracted tree: a bundle damaged
+    # after extraction still verifies. `--force` re-extracts from the release,
+    # which is the repair when the browser dies at launch while its receipt
+    # says everything is fine.
     proc = subprocess.run(
-        ["/bin/bash", str(INSTALLER)],
+        ["/bin/bash", str(INSTALLER), "--force"],
         capture_output=True,
         text=True,
         check=False,
