@@ -531,9 +531,16 @@ fn diag_map(d: &DiskGateDiag) -> [(String, Value); 4] {
 ///
 /// kind: capacity-broadcast label distinguishing physical workstations
 /// (kind="local") from ephemeral cloud-agent VMs (kind="gcp", ...).
+/// target_identity: canonical registry name used by `--pinned-host`; ad-hoc
+/// agents without a registry target retain the legacy `{kind}-{hostname}` ID.
 /// No global error handler wraps the loop body: unexpected errors
 /// crash the agent visibly (returned as Err) so the operator can diagnose.
-pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyhow::Result<()> {
+pub async fn run_agent(
+    gpu_type: &str,
+    idle_shutdown: bool,
+    kind: &str,
+    target_identity: Option<&str>,
+) -> anyhow::Result<()> {
     let log_fn = &mut |msg: &str| agent_log(msg);
 
     let mut gpu_type = gpu_type.to_string();
@@ -556,7 +563,9 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
     let store = JobStorage::new().await?;
     log_fn("init: JobStorage done");
     let sizing = Sizing::new();
-    let consumer_id = format!("{kind}-{hostname}");
+    let consumer_id = target_identity
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("{kind}-{hostname}"));
     let mut slots: Vec<ActiveSlot> = Vec::new();
     let mut agent_diag: Map<String, Value> = Map::new();
     let fleet_staging = std::env::var("STADO_HF_FLUSH_STAGING_DIR")
