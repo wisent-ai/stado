@@ -125,18 +125,14 @@ def beacon_unit():
         candidate = SYSTEMD / name
         if candidate.is_file():
             return "system", SYSTEMD, True, candidate
-    # A host with no local beacon unit does not publish its own beacon either:
-    # this fleet's Linux member is measured locally and handed in by an
-    # operator (deploy/host_health_beacon.sh collect-only plus
-    # scripts/publish-linux-beacon-via-stado.sh). Inventing a timer here would
-    # give that host a lifecycle it does not have, so the refusal names the
-    # mechanism it does have.
-    raise SystemExit(
-        f"no host-health-beacon unit in {SYSTEMD}; this host does not publish its own\n"
-        "beacon either, so its capabilities follow the same route: run\n"
-        "`scripts/hand-in-host-capabilities.py <target>` from an operator machine,\n"
-        "which measures here through the registry SSH channel and publishes from there"
-    )
+    # This fleet's Linux member runs no beacon unit of its own: it is measured
+    # locally and handed in by an operator. That is a fact about the beacon, not
+    # an argument for leaving capabilities unscheduled, and now that the host can
+    # reach the store directly its own init is the mechanism it does have. The
+    # absence is reported rather than papered over, because a reader comparing
+    # the two publications should know they are not on the same footing.
+    print(f"beacon      none in {SYSTEMD}; this host hands its beacon in, so systemd is the cadence")
+    return "system", SYSTEMD, True, NONE
 
 
 def log_path(plist):
@@ -335,7 +331,6 @@ def main():
     domain, folder, as_root, beacon = beacon_unit()
     if platform.system() == "Darwin":
         return install_macos(domain, folder, as_root, beacon, python)
-    print(f"beacon      {beacon}")
     return install_linux(python)
 
 
