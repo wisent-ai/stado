@@ -1,7 +1,7 @@
 {
   "coordinators": [
     {
-      "active": false,
+      "active": true,
       "host": "https://stado.wisent.com",
       "interval_seconds": 180,
       "name": "local-control-plane",
@@ -10,7 +10,7 @@
       "state_uri": "stado://system/registry"
     },
     {
-      "active": true,
+      "active": false,
       "host_heuristic": "always-on",
       "interval_seconds": 180,
       "name": "charless-control-plane",
@@ -21,10 +21,11 @@
   ],
   "release_control": {
     "schema_version": 1,
-    "generation": 4,
+    "generation": 5,
     "trusted_keys": {
       "brama-release-2026-08": "cFrI/ww/EiwBp6HozLu6HH/IdSnUO+P2Xsqvg4vfXIU=",
-      "image-video-router-release-2026-08": "DnbGstrZBUJEffC0UDb1q1fOmpHwQ788gk8OVz/2b84="
+      "image-video-router-release-2026-08": "DnbGstrZBUJEffC0UDb1q1fOmpHwQ788gk8OVz/2b84=",
+      "stado-release-2026-08": "B+RYG4IfwMN5WHRI+z1VczTVrcYYAcnP/EyhMQY6LeU="
     },
     "products": {
       "brama": {
@@ -144,20 +145,21 @@
       "target": "charless-mac-mini",
       "command": "/Users/charles/.stado/bin/stado"
     },
-    "generation": 5,
+    "generation": 7,
     "services": {
       "brama": {
-        "placement_profile": "brama-skarbiec",
         "active_host": "charless-mac-mini",
-        "endpoints": {
-          "charless-mac-mini": {
-            "url": "http://127.0.0.1:8080"
-          },
-          "lukasz-macbook": {
-            "url": "http://127.0.0.1:8080"
-          }
-        },
         "consumers": {
+          "brama-desktop": {
+            "capabilities": [
+              "model-routing"
+            ]
+          },
+          "lem": {
+            "capabilities": [
+              "model-routing"
+            ]
+          },
           "operator": {
             "capabilities": [
               "model-routing"
@@ -168,17 +170,26 @@
               "model-routing"
             ]
           },
-          "wisent-backend": {
+          "wisent-app": {
             "capabilities": [
               "model-routing"
             ]
           },
-          "brama-desktop": {
+          "wisent-backend": {
             "capabilities": [
               "model-routing"
             ]
           }
-        }
+        },
+        "endpoints": {
+          "charless-mac-mini": {
+            "url": "http://127.0.0.1:8080"
+          },
+          "lukasz-macbook": {
+            "url": "http://127.0.0.1:8080"
+          }
+        },
+        "placement_profile": "brama-skarbiec"
       },
       "image-video-router": {
         "active_host": "ubuntu-server-rtx-pro-6000",
@@ -202,20 +213,21 @@
         }
       },
       "skarbiec": {
-        "placement_profile": "brama-skarbiec",
         "active_host": "charless-mac-mini",
-        "endpoints": {
-          "charless-mac-mini": {
-            "url": "http://127.0.0.1:8895"
-          },
-          "lukasz-macbook": {
-            "url": "http://127.0.0.1:8787"
-          }
-        },
         "consumers": {
           "brama": {
             "capabilities": [
               "secret-acquisition"
+            ]
+          },
+          "brama-desktop": {
+            "capabilities": [
+              "secret-acquisition"
+            ]
+          },
+          "lem": {
+            "capabilities": [
+              "credential-acquisition"
             ]
           },
           "operator": {
@@ -232,13 +244,17 @@
             "capabilities": [
               "secret-acquisition"
             ]
-          },
-          "brama-desktop": {
-            "capabilities": [
-              "secret-acquisition"
-            ]
           }
-        }
+        },
+        "endpoints": {
+          "charless-mac-mini": {
+            "url": "http://127.0.0.1:8895"
+          },
+          "lukasz-macbook": {
+            "url": "http://127.0.0.1:8787"
+          }
+        },
+        "placement_profile": "brama-skarbiec"
       },
       "skarbiec-weles": {
         "managed_service": "com.wisent.always-on.skarbiec-weles",
@@ -252,6 +268,51 @@
           "weles": {
             "capabilities": [
               "secret-acquisition"
+            ]
+          }
+        }
+      },
+      "weles-admission": {
+        "active_host": "charless-mac-mini",
+        "consumers": {
+          "operator": {
+            "capabilities": [
+              "credential-lifecycle"
+            ]
+          },
+          "skarbiec": {
+            "capabilities": [
+              "credential-lifecycle"
+            ]
+          }
+        },
+        "endpoints": {
+          "charless-mac-mini": {
+            "url": "http://127.0.0.1:8794"
+          }
+        },
+        "managed_service": "com.wisent.always-on.weles"
+      },
+      "stado-object-api": {
+        "managed_service": "com.wisent.always-on.weles",
+        "active_host": "charless-mac-mini",
+        "endpoints": {
+          "charless-mac-mini": {
+            "url": "http://127.0.0.1:8765"
+          },
+          "lukasz-macbook": {
+            "url": "http://127.0.0.1:18776"
+          }
+        },
+        "consumers": {
+          "weles": {
+            "capabilities": [
+              "object-storage"
+            ]
+          },
+          "stado-local-agent": {
+            "capabilities": [
+              "object-storage"
             ]
           }
         }
@@ -345,8 +406,75 @@
     }
   ],
   "inference": {
-    "deployments": [],
-    "routes": {}
+    "gateway_target": "charless-mac-mini",
+    "deployments": [
+      {
+        "name": "chat-primary",
+        "target": "ubuntu-server-rtx-pro-6000",
+        "desired_state": "running",
+        "engine": {
+          "name": "vllm",
+          "image": "vllm/vllm-openai@sha256:770fe65b2c73ee74a5c42165cf3433de4048cc2cd9c57a937ca4e35aba5aa87b"
+        },
+        "model": {
+          "repository": "TheDrummer/Cydonia-24B-v4.3",
+          "revision": "db0426d39d4bd4a6d34fdc71db97569da68f55e1"
+        },
+        "resources": {
+          "gpu_mode": "yieldable",
+          "gpus": 1,
+          "max_model_len": 16384,
+          "kv_cache_memory_gb": null,
+          "cache_dir": "/mnt/wd16tb/stado/inference/chat-primary"
+        },
+        "endpoint": {
+          "host": "100.126.122.108",
+          "visibility": "tailscale",
+          "port": 8001,
+          "protocol": "openai-chat"
+        },
+        "credential_item": "provider:local-openai",
+        "previous": {
+          "name": "chat-primary",
+          "target": "ubuntu-server-rtx-pro-6000",
+          "desired_state": "running",
+          "engine": {
+            "name": "vllm",
+            "image": "vllm/vllm-openai@sha256:770fe65b2c73ee74a5c42165cf3433de4048cc2cd9c57a937ca4e35aba5aa87b"
+          },
+          "model": {
+            "repository": "TheDrummer/Cydonia-24B-v4.3",
+            "revision": "db0426d39d4bd4a6d34fdc71db97569da68f55e1"
+          },
+          "resources": {
+            "gpu_mode": "exclusive",
+            "gpus": 1,
+            "max_model_len": 16384,
+            "kv_cache_memory_gb": null,
+            "cache_dir": "/mnt/wd16tb/stado/inference/chat-primary"
+          },
+          "endpoint": {
+            "host": "100.126.122.108",
+            "visibility": "tailscale",
+            "port": 8001,
+            "protocol": "openai-chat"
+          },
+          "credential_item": "provider:local-openai",
+          "previous": null
+        }
+      }
+    ],
+    "routes": {
+      "weles/agent/primary": "chat-primary",
+      "wisent-backend/chat/fallback": "chat-primary",
+      "wisent-backend/chat/primary": "chat-primary",
+      "wisent-backend/evaluation": "chat-primary"
+    },
+    "fallbacks": {
+      "wisent-backend/chat/primary": [
+        "featherless/TheDrummer/Cydonia-24B-v4.3"
+      ]
+    }
   },
   "schema_version": 2,
   "targets": [
@@ -358,8 +486,9 @@
             "min_age_seconds": 2592000
           },
           "weles_recordings": {
-            "min_age_seconds": 604800,
-            "allow_missing_upload_proof": true
+            "min_age_seconds": 86400,
+            "allow_missing_upload_proof": true,
+            "root": "~/weles/recordings"
           }
         },
         "low_free_gb": 20,
@@ -380,41 +509,46 @@
       "host_heuristic": "always-on",
       "role": "always-on",
       "service_resolver": {
-        "api_bind": "127.0.0.1:17600",
-        "refresh_seconds": 5,
-        "max_stale_seconds": 15,
         "adapters": [
           {
-            "service": "brama",
             "bind": "127.0.0.1:17601",
-            "consumer": "weles"
+            "consumer": "weles",
+            "service": "brama"
           },
           {
-            "service": "skarbiec",
             "bind": "127.0.0.1:17602",
-            "consumer": "operator"
+            "consumer": "weles",
+            "service": "skarbiec-weles"
           },
           {
-            "service": "skarbiec-weles",
-            "bind": "127.0.0.1:17613",
-            "consumer": "weles"
-          },
-          {
-            "service": "skarbiec",
             "bind": "127.0.0.1:17612",
-            "consumer": "brama"
+            "consumer": "brama",
+            "service": "skarbiec"
           },
           {
-            "service": "brama",
             "bind": "127.0.0.1:17621",
-            "consumer": "brama-desktop"
+            "consumer": "brama-desktop",
+            "service": "brama"
           },
           {
-            "service": "skarbiec",
             "bind": "127.0.0.1:17622",
-            "consumer": "brama-desktop"
+            "consumer": "brama-desktop",
+            "service": "skarbiec"
+          },
+          {
+            "bind": "127.0.0.1:17614",
+            "consumer": "skarbiec",
+            "service": "weles-admission"
+          },
+          {
+            "bind": "127.0.0.1:17603",
+            "consumer": "weles",
+            "service": "stado-object-api"
           }
-        ]
+        ],
+        "api_bind": "127.0.0.1:17600",
+        "max_stale_seconds": 15,
+        "refresh_seconds": 5
       },
       "weles": {
         "actions": [],
@@ -422,44 +556,105 @@
       },
       "services": [
         {
-          "name": "com.wisent.always-on.skarbiec",
-          "unit": "",
+          "host_heuristic": "always-on",
+          "kind": "launchd",
           "label": "com.wisent.always-on.skarbiec",
-          "path": "/Library/LaunchDaemons/com.wisent.always-on.skarbiec.plist",
-          "kind": "launchd",
           "managed_since": "2026-08-04T00:35:49.438547+00:00",
-          "host_heuristic": "always-on"
+          "name": "com.wisent.always-on.skarbiec",
+          "path": "/Library/LaunchDaemons/com.wisent.always-on.skarbiec.plist",
+          "unit": ""
         },
         {
-          "name": "com.wisent.always-on.skarbiec-weles",
-          "unit": "",
+          "host_heuristic": "always-on",
+          "kind": "launchd",
           "label": "com.wisent.always-on.skarbiec-weles",
-          "path": "/Library/LaunchDaemons/com.wisent.always-on.skarbiec-weles.plist",
-          "kind": "launchd",
           "managed_since": "2026-08-04T01:03:51Z",
-          "host_heuristic": "always-on"
+          "name": "com.wisent.always-on.skarbiec-weles",
+          "path": "/Library/LaunchDaemons/com.wisent.always-on.skarbiec-weles.plist",
+          "unit": ""
         },
         {
-          "name": "com.wisent.always-on.weles",
-          "unit": "",
+          "host_heuristic": "always-on",
+          "kind": "launchd",
           "label": "com.wisent.always-on.weles",
-          "path": "/Library/LaunchDaemons/com.wisent.always-on.weles.plist",
-          "kind": "launchd",
           "managed_since": "2026-08-04T00:36:01.183071+00:00",
-          "host_heuristic": "always-on"
+          "name": "com.wisent.always-on.weles",
+          "onboarding": {
+            "display_name": "Weles",
+            "first_success_fact": "authorized_browser_workflow_completed",
+            "onboarding_kind": "both",
+            "product_id": "weles",
+            "repository": "wisent-ai/weles",
+            "status": "active",
+            "surface_kinds": [
+              "web",
+              "worker",
+              "operator"
+            ]
+          },
+          "path": "/Library/LaunchDaemons/com.wisent.always-on.weles.plist",
+          "unit": ""
         },
         {
-          "name": "com.wisent.always-on.brama",
-          "unit": "",
-          "label": "com.wisent.always-on.brama",
-          "path": "/Library/LaunchDaemons/com.wisent.always-on.brama.plist",
           "kind": "launchd",
-          "managed_since": "2026-08-04T00:36:09.627166+00:00",
-          "host_heuristic": "always-on"
+          "label": "com.wisent.always-on.brama",
+          "managed_since": "2026-08-05T01:51:59.832778+00:00",
+          "name": "com.wisent.always-on.brama",
+          "path": "/Library/LaunchDaemons/com.wisent.always-on.brama.plist",
+          "unit": ""
+        },
+        {
+          "host_heuristic": "always-on",
+          "kind": "launchd",
+          "label": "com.wisent.host-health-beacon",
+          "managed_since": "2026-08-07T00:00:49.244217+00:00",
+          "name": "com.wisent.host-health-beacon",
+          "path": "/Library/LaunchDaemons/com.wisent.host-health-beacon.plist",
+          "unit": ""
+        },
+        {
+          "name": "com.wisent.stado-resolver",
+          "unit": "",
+          "label": "com.wisent.stado-resolver",
+          "path": "/Library/LaunchDaemons/com.wisent.stado-resolver.plist",
+          "kind": "launchd",
+          "managed_since": "2026-08-12T15:50:13.954599+00:00"
+        },
+        {
+          "name": "com.wisent.always-on.weles-api",
+          "unit": "",
+          "label": "com.wisent.always-on.weles-api",
+          "path": "/Library/LaunchDaemons/com.wisent.always-on.weles-api.plist",
+          "kind": "launchd",
+          "managed_since": "2026-08-13T02:52:54.359146+00:00"
+        },
+        {
+          "name": "weles-keyword-planner-api",
+          "unit": "",
+          "label": "com.wisent.compute.service.weles-keyword-planner-api",
+          "path": "/Users/charles/Library/LaunchAgents/com.wisent.compute.service.weles-keyword-planner-api.plist",
+          "kind": "launchd",
+          "managed_since": "2026-08-13T18:25:14.538845+00:00"
         }
       ],
       "pinned_only": true,
-      "slots": 1
+      "slots": 1,
+      "identities": [
+        {
+          "identity": "charlesaxel90@icloud.com",
+          "kind": "apple-account",
+          "user": "charles"
+        },
+        {
+          "identity": "controlyourai@gmail.com",
+          "kind": "apple-account",
+          "user": "controlyourai-relay"
+        }
+      ],
+      "managed_versions": {
+        "skarbiec": "0.1.3",
+        "stado": "0.6.0"
+      }
     },
     {
       "disk_cleanup": {
@@ -496,6 +691,14 @@
           "path": "/etc/systemd/system/image-video-router-release.service",
           "kind": "systemd",
           "managed_since": "2026-08-09T18:47:00Z"
+        },
+        {
+          "name": "stado-resolver",
+          "unit": "com.wisent.compute.service.stado-resolver.service",
+          "label": "",
+          "path": "/root/.config/systemd/user/com.wisent.compute.service.stado-resolver.service",
+          "kind": "systemd",
+          "managed_since": "2026-08-12T18:18:18.435646+00:00"
         }
       ],
       "service_resolver": {
@@ -514,6 +717,17 @@
             "consumer": "wisent-backend"
           }
         ]
+      },
+      "training": {
+        "enabled": true,
+        "kinds": [
+          "label-model"
+        ],
+        "models_dir": "/mnt/wd16tb/stado/training"
+      },
+      "managed_versions": {
+        "skarbiec": "0.1.3",
+        "stado": "0.7.1"
       }
     },
     {
@@ -530,8 +744,8 @@
       "disk_cleanup": {
         "mode": "off",
         "check_interval_seconds": 300,
-        "low_free_gb": 30,
-        "target_free_gb": 60,
+        "low_free_gb": 10,
+        "target_free_gb": 12,
         "max_bytes_per_pass": 53687091200,
         "max_items_per_pass": 50,
         "max_scan_items": 10000,
@@ -539,31 +753,111 @@
       },
       "role": "interactive",
       "service_resolver": {
-        "api_bind": "127.0.0.1:17600",
-        "refresh_seconds": 5,
-        "max_stale_seconds": 15,
         "adapters": [
           {
-            "service": "brama",
             "bind": "127.0.0.1:17601",
-            "consumer": "operator"
+            "consumer": "operator",
+            "service": "brama"
           },
           {
-            "service": "skarbiec",
             "bind": "127.0.0.1:17602",
-            "consumer": "operator"
+            "consumer": "operator",
+            "service": "skarbiec"
           },
           {
-            "service": "brama",
             "bind": "127.0.0.1:17621",
-            "consumer": "brama-desktop"
+            "consumer": "brama-desktop",
+            "service": "brama"
           },
           {
-            "service": "skarbiec",
             "bind": "127.0.0.1:17622",
-            "consumer": "brama-desktop"
+            "consumer": "brama-desktop",
+            "service": "skarbiec"
+          },
+          {
+            "bind": "127.0.0.1:17614",
+            "consumer": "skarbiec",
+            "service": "weles-admission"
+          },
+          {
+            "bind": "127.0.0.1:18776",
+            "consumer": "stado-local-agent",
+            "service": "stado-object-api"
           }
-        ]
+        ],
+        "api_bind": "127.0.0.1:17600",
+        "max_stale_seconds": 15,
+        "refresh_seconds": 5
+      },
+      "identities": [
+        {
+          "identity": "controlyourai@gmail.com",
+          "kind": "apple-account",
+          "user": "lukaszbartoszcze"
+        }
+      ],
+      "services": [
+        {
+          "kind": "launchd",
+          "label": "com.wisent.compute.service.com.wisent.stado-host-health-api",
+          "managed_since": "2026-08-07T00:04:22.290635+00:00",
+          "name": "com.wisent.stado-host-health-api",
+          "path": "/Users/lukaszbartoszcze/Library/LaunchAgents/com.wisent.compute.service.com.wisent.stado-host-health-api.plist",
+          "unit": ""
+        },
+        {
+          "kind": "launchd",
+          "label": "com.wisent.compute.service.com.wisent.stado-host-health-forward",
+          "managed_since": "2026-08-07T00:04:40.808562+00:00",
+          "name": "com.wisent.stado-host-health-forward",
+          "path": "/Users/lukaszbartoszcze/Library/LaunchAgents/com.wisent.compute.service.com.wisent.stado-host-health-forward.plist",
+          "unit": ""
+        },
+        {
+          "name": "com.wisent.always-on.weles",
+          "unit": "",
+          "label": "com.wisent.compute.service.com.wisent.always-on.weles",
+          "path": "/Users/lukaszbartoszcze/Library/LaunchAgents/com.wisent.compute.service.com.wisent.always-on.weles.plist",
+          "kind": "launchd",
+          "managed_since": "2026-08-08T23:24:25.731653+00:00"
+        },
+        {
+          "name": "com.wisent.compute.service.com.wisent.stado-dashboard",
+          "unit": "",
+          "label": "com.wisent.compute.service.com.wisent.stado-dashboard",
+          "path": "/Users/lukaszbartoszcze/Library/LaunchAgents/com.wisent.compute.service.com.wisent.stado-dashboard.plist",
+          "kind": "launchd",
+          "managed_since": "2026-08-13T05:03:28.689793+00:00"
+        },
+        {
+          "name": "com.wisent.transcript-lake-stream",
+          "unit": "",
+          "label": "com.wisent.transcript-lake-stream",
+          "path": "/Users/lukaszbartoszcze/Library/LaunchAgents/com.wisent.transcript-lake-stream.plist",
+          "kind": "launchd",
+          "managed_since": "2026-08-13T16:39:49.143665+00:00"
+        },
+        {
+          "name": "oko-autonomy",
+          "unit": "",
+          "label": "com.wisent.compute.service.oko-autonomy",
+          "path": "/Users/lukaszbartoszcze/Library/LaunchAgents/com.wisent.compute.service.oko-autonomy.plist",
+          "kind": "launchd",
+          "managed_since": "2026-08-14T04:37:55.120343+00:00"
+        }
+      ],
+      "weles": {
+        "actions": [
+          "native_2fa"
+        ],
+        "enabled": true
+      },
+      "transcript_lake": {
+        "root": "/Users/lukaszbartoszcze/.transcript-lake"
+      },
+      "managed_versions": {
+        "skarbiec": "0.1.3",
+        "stado": "0.6.0"
       }
     }
   ]
