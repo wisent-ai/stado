@@ -25,6 +25,7 @@ FILES = {
     "codex-reauth.mjs": TREE / "scripts" / "trajectories" / "codex" / "reauth.mjs",
     "claude-reauth.mjs": TREE / "scripts" / "trajectories" / "claude" / "reauth.mjs",
     "kimi-reauth.mjs": TREE / "scripts" / "trajectories" / "kimi" / "reauth.mjs",
+    "kimi-login.mjs": TREE / "scripts" / "trajectories" / "kimi" / "login.mjs",
     # The launcher is part of the repair: it sourced an env file that no longer
     # exists, so the scheduled job died before reaching the runner.
     "codex-reauth-launch.sh": TREE
@@ -38,6 +39,12 @@ FILES = {
     / "worker"
     / "deploy"
     / "kimi-reauth"
+    / "reauth-launch.sh",
+    "claude-reauth-launch.sh": TREE
+    / "scripts"
+    / "worker"
+    / "deploy"
+    / "claude-reauth"
     / "reauth-launch.sh",
 }
 
