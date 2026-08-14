@@ -16,6 +16,10 @@ service=/etc/systemd/system/stado-host-beacon.service
 timer=/etc/systemd/system/stado-host-beacon.timer
 helper="$HOME/.stado/bin/publish-host-beacon"
 token="$HOME/.stado/host-health-api-beacon-token"
+# The anchor this host verifies the fleet store with. It is a copy: the authority
+# itself is Skarbiec item `stado-tailnet-ca` in charless-mac-mini's vault, and
+# `scripts/install-tailnet-anchor.py` is what replaces this file. Re-issue from
+# that item rather than minting a new authority, which would re-anchor every host.
 ca="$HOME/.stado/stado-tailnet-ca.crt"
 # One endpoint for every beacon: the supervised service that owns the
 # fleet store. The always-on host owns a different disk, so a beacon

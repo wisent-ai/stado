@@ -20,6 +20,14 @@
   with its matching key. The tailnet address is bound explicitly; 0.0.0.0 would
   publish the fleet's store to every network this machine ever joins.
 
+  The authority that signs that certificate is Skarbiec item `stado-tailnet-ca`
+  (kind `certificate`, fields `certificate` and `private_key`) in this host's own
+  vault, $HOME/.stado/skarbiec.vault.json. It is named here because the previous
+  authority was minted by hand and its private key was never kept: proving that
+  took an exact search of 845 candidate files across three hosts, and the repair
+  cost every consumer a new anchor. Re-issue the leaf from that item; never mint a
+  second authority.
+
   UserName keeps it as charles so it reads exactly the owner-only files it read
   before, and HOME is declared because launchd gives a daemon none, while the
   launcher resolves every path through it.
