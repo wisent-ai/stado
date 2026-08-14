@@ -1253,6 +1253,180 @@ pub const CONTROL_CONFIG: &[ConfigField] = &[
     BACKEND_MESSAGING_SKARBIEC_ITEMS_CONFIG,
 ];
 
+// ---------------------------------------------------------------------------
+// Declaration catalog: which reader honours a field an operator writes
+// ---------------------------------------------------------------------------
+
+/// Which document carries a declaration, and therefore which reader would have
+/// to consult it for the declaration to mean anything.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DeclarationSurface {
+    /// A key on one `registry.targets[]` entry, dotted from the target root
+    /// (`weles.actions`).
+    RegistryTarget,
+    /// A key in the deployed configuration document, dotted from its root
+    /// (`storage.stado.ca_file`).
+    Configuration,
+}
+
+impl DeclarationSurface {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::RegistryTarget => "registry target",
+            Self::Configuration => "config",
+        }
+    }
+}
+
+/// What turns a declaration into behaviour. Writing a field is free; being read
+/// is the whole value of having written it, and the two have to be recorded
+/// together or nobody can tell them apart.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Consumer {
+    /// A fleet process reads the declaration and acts on it. The string names
+    /// the exact code path, so the claim is checkable rather than asserted.
+    Fleet(&'static str),
+    /// No process reads the declaration; an operator-invoked command copies its
+    /// value to somewhere a consumer does read. Until somebody runs that
+    /// command by hand the declared value changes nothing anywhere, and the two
+    /// copies drift in the meantime — which is exactly how the registry came to
+    /// list a Weles action the worker had never heard of.
+    OperatorCopy {
+        command: &'static str,
+        destination: &'static str,
+    },
+    /// Nothing in this build reads it at all.
+    Unread,
+}
+
+/// A sibling declaration that decides whether a reader can act on this one.
+///
+/// `storage.stado.ca_file` is the case in hand: the certificate is loaded only
+/// on the TLS path, so on a deployment whose `storage.stado.url` is plain
+/// loopback HTTP the reader exists and still never consults the value. A field
+/// whose reader cannot be reached is as unread as one with no reader.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct SiblingCondition {
+    /// Dotted path of the sibling, from the same surface root.
+    pub path: &'static str,
+    /// Prefix the sibling's value must carry for the reader to run.
+    pub value_prefix: &'static str,
+}
+
+/// One declaration an operator can write, and the reader that honours it.
+///
+/// This is [`ConfigField`]'s idea — a key reaches this binary only through a
+/// catalogued entry — carried across to the fields a registry target declares,
+/// where nothing enforced it: `weles.actions` sat on two hosts with no fleet
+/// reader at all, and `storage.stado.ca_file` sat in the deployed configuration
+/// for months while every validator compared the document against itself.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DeclaredField {
+    /// Dotted path from the surface's root.
+    pub path: &'static str,
+    pub surface: DeclarationSurface,
+    pub consumer: Consumer,
+    /// Condition the surrounding document must satisfy for the consumer above
+    /// to be reachable at all.
+    pub reached_when: Option<SiblingCondition>,
+}
+
+impl DeclaredField {
+    pub const fn read(
+        path: &'static str,
+        surface: DeclarationSurface,
+        reader: &'static str,
+    ) -> Self {
+        Self {
+            path,
+            surface,
+            consumer: Consumer::Fleet(reader),
+            reached_when: None,
+        }
+    }
+
+    pub const fn unread(path: &'static str, surface: DeclarationSurface) -> Self {
+        Self {
+            consumer: Consumer::Unread,
+            ..Self::read(path, surface, "")
+        }
+    }
+
+    pub const fn operator_copy(
+        path: &'static str,
+        surface: DeclarationSurface,
+        command: &'static str,
+        destination: &'static str,
+    ) -> Self {
+        Self {
+            consumer: Consumer::OperatorCopy {
+                command,
+                destination,
+            },
+            ..Self::read(path, surface, "")
+        }
+    }
+
+    pub const fn reached_when(mut self, path: &'static str, value_prefix: &'static str) -> Self {
+        self.reached_when = Some(SiblingCondition { path, value_prefix });
+        self
+    }
+
+    /// True when a declared value reaches a process that acts on it without an
+    /// operator retyping a command first.
+    pub const fn has_fleet_consumer(&self) -> bool {
+        matches!(self.consumer, Consumer::Fleet(_))
+    }
+}
+
+/// Every declaration whose reader (or absence of one) this build can name.
+///
+/// The catalog is authoritative for the paths it lists. It deliberately does NOT
+/// list every modelled registry key: a key `ComputeTarget` models is read by the
+/// deserializer and the code around it, and a key it does not model lands in
+/// `ComputeTarget::extra`, which is by construction the set of keys no typed
+/// reader in this build can name. `registry doctor` reports an unmodelled key
+/// that is absent from here, so a field added tomorrow with no reader fails
+/// without anybody remembering to catalogue it — the entries below are the
+/// exceptions, not the mechanism.
+pub const DECLARED_FIELDS: &[DeclaredField] = &[
+    // Unmodelled target keys that genuinely are read, out of raw JSON.
+    DeclaredField::read(
+        "services",
+        DeclarationSurface::RegistryTarget,
+        "cli::registry::declared_units, deploy::service, cli::service",
+    ),
+    DeclaredField::read(
+        "service_resolver",
+        DeclarationSurface::RegistryTarget,
+        "service_resolution::resolver_config",
+    ),
+    // Known offenders. `weles.actions` is modelled (`WelesPolicy::actions`) and
+    // still reaches no host by itself: the worker reads its own
+    // `placement-policy.json`, and `stado placement weles-policy` is what
+    // copies the registry value there when an operator runs it.
+    DeclaredField::operator_copy(
+        "weles.actions",
+        DeclarationSurface::RegistryTarget,
+        "stado placement weles-policy publish",
+        "~/.config/weles/placement-policy.json on the target host",
+    ),
+    DeclaredField::read(
+        "storage.stado.ca_file",
+        DeclarationSurface::Configuration,
+        "queue::stado_object::StadoObjectBackend::client",
+    )
+    .reached_when("storage.stado.url", "https://"),
+];
+
+/// The catalogued declaration for one dotted path on one surface.
+pub fn declared_field(surface: DeclarationSurface, path: &str) -> Option<&'static DeclaredField> {
+    DECLARED_FIELDS
+        .iter()
+        .find(|field| field.surface == surface && field.path == path)
+}
+
 const BACKUP_BUCKET_ENV: &str = "WC_BACKUP_BUCKET";
 const BACKUP_BUCKET_PATH: &str = "storage.backup.bucket";
 const AWS_REGION_CONFIG: ConfigField = ConfigField::scalar("region", "AWS_REGION", "aws.region");
@@ -2359,6 +2533,26 @@ pub fn validate_catalog() -> Vec<String> {
             problems.push(format!(
                 "control field {} duplicates environment override {}",
                 field.key, field.env
+            ));
+        }
+    }
+    // Same reasoning one surface over: two entries for one declaration would
+    // let `registry doctor` answer "who reads this" twice, and a `Fleet` entry
+    // shadowing an `Unread` one would clear an offender by accident. An empty
+    // reader string is the same silence spelled differently.
+    let mut declared = BTreeSet::new();
+    for field in DECLARED_FIELDS {
+        if !declared.insert((field.surface.label(), field.path)) {
+            problems.push(format!(
+                "declared field {} on the {} surface is catalogued twice",
+                field.path,
+                field.surface.label()
+            ));
+        }
+        if matches!(field.consumer, Consumer::Fleet(reader) if reader.trim().is_empty()) {
+            problems.push(format!(
+                "declared field {} claims a reader without naming one",
+                field.path
             ));
         }
     }
