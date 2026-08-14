@@ -19,6 +19,23 @@ async fn document_and_deployment(name: &str) -> Result<(Value, Deployment), CmdE
     Ok((document, deployment))
 }
 
+async fn document_and_model(name: &str) -> Result<(Value, Deployment), CmdError> {
+    let document = crate::cli::registry::fetch_document().await?;
+    let registry = schema::parse(&document).map_err(click)?;
+    let deployment = registry
+        .deployments
+        .into_iter()
+        .find(|deployment| {
+            deployment.name == name
+                || deployment
+                    .adapters
+                    .iter()
+                    .any(|adapter| adapter.name == name)
+        })
+        .ok_or_else(|| CmdError::click(format!("unknown inference model '{name}'")))?;
+    Ok((document, deployment))
+}
+
 pub async fn list(json_output: bool) -> Result<(), CmdError> {
     let document = crate::cli::registry::fetch_document().await?;
     let registry = schema::parse(&document).map_err(click)?;
@@ -146,14 +163,15 @@ pub async fn doctor(name: &str, json_output: bool) -> Result<(), CmdError> {
 }
 
 pub async fn verify(name: &str, json_output: bool) -> Result<(), CmdError> {
-    let (_, deployment) = document_and_deployment(name).await?;
+    let (_, deployment) = document_and_model(name).await?;
     let bearer = super::credential::read().await?;
     let target = host_channel::canonical_target(&deployment.target)
         .await
         .map_err(click)?;
-    let result = inference::verify_completion(&target, &deployment, &bearer, &production_runner())
-        .await
-        .map_err(click)?;
+    let result =
+        inference::verify_completion(&target, &deployment, name, &bearer, &production_runner())
+            .await
+            .map_err(click)?;
     if json_output {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else if let Some(stdout) = result.get("stdout").and_then(Value::as_str) {
