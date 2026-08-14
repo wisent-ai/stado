@@ -60,6 +60,16 @@ else
     SIGN_ARGS+=(--timestamp=none)
 fi
 
+APP_PROVISIONING_PROFILE=${WISENT_APP_PROVISIONING_PROFILE:-}
+if [[ -n "$APP_PROVISIONING_PROFILE" ]]; then
+    if [[ ! -f "$APP_PROVISIONING_PROFILE" ]]; then
+        print -u2 "App provisioning profile not found: $APP_PROVISIONING_PROFILE"
+        exit 1
+    fi
+    install -m 0644 "$APP_PROVISIONING_PROFILE" "$BUNDLE/Contents/embedded.provisionprofile"
+    SIGN_ARGS+=(--entitlements "$ROOT/Resources/WisentDesktop.entitlements")
+fi
+
 print "→ signing with $IDENTITY"
 codesign "${SIGN_ARGS[@]}" "$BUNDLE/Contents/MacOS/Stado"
 codesign "${SIGN_ARGS[@]}" "$BUNDLE"
