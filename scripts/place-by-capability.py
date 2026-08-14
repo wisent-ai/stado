@@ -218,10 +218,15 @@ def disqualification(target, document, requires, max_stale_seconds, now):
     for capability in requires:
         measurement = capabilities.get(capability)
         if not isinstance(measurement, dict):
-            return f"it does not measure {capability} at all"
+            return f"it does not measure {capability} at all ({age:.0f}s ago)"
         if measurement.get("value") is not True:
             detail = measurement.get("detail") or "no detail recorded"
-            return f"{capability} measured false: {detail}"
+            # The age rides along even when the value is what disqualified the
+            # host. A bare `false` from a document nobody has refreshed in
+            # twelve minutes and a `false` measured a moment ago are different
+            # repairs -- one is a host to fix, the other is a publisher to
+            # start -- and a reader must not have to go and look it up.
+            return f"{capability} measured false {age:.0f}s ago: {detail}"
     return NONE
 
 
