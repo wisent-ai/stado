@@ -64,6 +64,11 @@ pub struct AdminCredentials {
 /// Bootstrap coordinates used for store administration. They stay outside the
 /// selected store to avoid circular authentication.
 pub fn admin_credentials() -> Result<AdminCredentials, SkarbiecError> {
+    let url = crate::config_file::resolve(
+        "STADO_CREDENTIALS_ADMIN_URL",
+        "credentials.admin.url",
+        crate::config::skarbiec_url(),
+    );
     let consumer = crate::config_file::resolve(
         "STADO_CREDENTIALS_ADMIN_CONSUMER",
         "credentials.admin.consumer",
@@ -84,7 +89,7 @@ pub fn admin_credentials() -> Result<AdminCredentials, SkarbiecError> {
         ));
     }
     Ok(AdminCredentials {
-        url: crate::config::skarbiec_url().to_string(),
+        url,
         consumer,
         token_file,
     })
