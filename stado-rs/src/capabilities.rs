@@ -946,6 +946,11 @@ pub const CREDENTIALS_STORE_CONFIG: ConfigField = ConfigField::scalar(
     "STADO_CREDENTIALS_STORE",
     "credentials.store",
 );
+pub const CREDENTIALS_ADMIN_URL_CONFIG: ConfigField = ConfigField::scalar(
+    "credentials-admin-url",
+    "STADO_CREDENTIALS_ADMIN_URL",
+    "credentials.admin.url",
+);
 pub const CREDENTIALS_ADMIN_CONSUMER_CONFIG: ConfigField = ConfigField::scalar(
     "credentials-admin-consumer",
     "STADO_CREDENTIALS_ADMIN_CONSUMER",
@@ -1186,6 +1191,7 @@ pub const CONTROL_CONFIG: &[ConfigField] = &[
     DISABLED_PROVIDERS_CONFIG,
     STORAGE_BACKEND_CONFIG,
     CREDENTIALS_STORE_CONFIG,
+    CREDENTIALS_ADMIN_URL_CONFIG,
     CREDENTIALS_ADMIN_CONSUMER_CONFIG,
     CREDENTIALS_ADMIN_TOKEN_FILE_CONFIG,
     API_URL_CONFIG,

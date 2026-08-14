@@ -343,7 +343,7 @@ fn home_path(relative: &str) -> PathBuf {
 fn credential_client() -> Result<crate::skarbiec::Client, CmdError> {
     let credentials = crate::credential_store::admin_credentials()
         .map_err(|error| CmdError::click(error.to_string()))?;
-    crate::skarbiec::Client::new(
+    crate::skarbiec::Client::direct(
         &credentials.url,
         &credentials.consumer,
         &credentials.token_file,
@@ -501,13 +501,9 @@ async fn refresh_operator_token(item_id: &str) -> Result<OperatorToken, CmdError
         .filter(|value| !value.is_empty())
         .ok_or_else(|| CmdError::click("Azure refresh response has no access_token"))?
         .to_string();
-    if let Some(rotated) = body
-        .get("refresh_token")
-        .and_then(Value::as_str)
-        .filter(|value| *value != refresh_token)
-    {
-        store_operator_item(item_id, &tenant_id, &account, rotated, &body).await?;
-    }
+    // The operator grant is read-only by design. Microsoft may return a
+    // replacement refresh token here, but persisting it would require a
+    // distinct credential-lifecycle writer; never widen the reader grant.
     Ok(OperatorToken {
         access_token,
         tenant_id,
