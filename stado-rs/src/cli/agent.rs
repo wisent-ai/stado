@@ -17,12 +17,13 @@ fn env_value_str(v: &serde_json::Value) -> String {
 }
 
 /// The shared --auto/--target registry-application half of the Python
-/// command. Returns the (possibly registry-supplied) gpu_type.
+/// command. Returns the effective GPU type and canonical target identity.
 async fn apply_registry_target(
     mut gpu_type: String,
     target: Option<&str>,
     auto: bool,
-) -> Result<String, CmdError> {
+) -> Result<(String, Option<String>), CmdError> {
+    let mut target_identity = None;
     if auto {
         let hostname = vast::system_hostname();
         let t = local_agent::lookup_self_auto(&hostname)
@@ -48,6 +49,7 @@ async fn apply_registry_target(
             "agent --auto: target={} gpu_type={gpu_type} slots={effective_slots} registry_slots={}",
             t.name, t.slots
         );
+        target_identity = Some(t.name);
     } else if let Some(target) = target {
         let t = local_agent::lookup_auto(target)
             .await
@@ -75,8 +77,9 @@ async fn apply_registry_target(
             "agent: target={} gpu_type={gpu_type} slots={effective_slots} registry_slots={}",
             t.name, t.slots
         );
+        target_identity = Some(t.name);
     }
-    Ok(gpu_type)
+    Ok((gpu_type, target_identity))
 }
 
 /// Python the `agent` click command body.
@@ -105,7 +108,8 @@ pub async fn run(
         ))
     })?;
     let kind = execution.id.to_string();
-    let gpu_type = apply_registry_target(gpu_type, target.as_deref(), auto).await?;
+    let (gpu_type, target_identity) =
+        apply_registry_target(gpu_type, target.as_deref(), auto).await?;
 
     // Auto-enable the Vast bridge when stado-vast/api_key exists in
     // Skarbiec and this is a local consumer. The defensive helper performs
@@ -170,7 +174,9 @@ pub async fn run(
         println!("[vast] auto-list thread started (price-gpu=${vast_price_gpu}/h)");
     }
     loop {
-        match local_agent::run_agent(&gpu_type, idle_shutdown, &kind).await {
+        match local_agent::run_agent(&gpu_type, idle_shutdown, &kind, target_identity.as_deref())
+            .await
+        {
             Ok(()) => return Ok(()),
             Err(error) => {
                 local_agent::agent_log(&format!(
