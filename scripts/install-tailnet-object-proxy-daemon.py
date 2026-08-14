@@ -37,6 +37,12 @@ AGENT = HOME / "Library" / "LaunchAgents" / "com.wisent.compute.service.stado-ta
 # which is the only way a file of this repo's reaches a fleet host.
 DELIVERED = HOME / ".stado" / "files" / f"{LABEL}.plist"
 LAUNCHER = HOME / ".stado" / "bin" / "start-stado-tailnet-object-proxy"
+# The launcher serves ~/.stado/stado-tailnet-server.crt with its matching key. The
+# authority behind them is Skarbiec item `stado-tailnet-ca` in this host's vault:
+# re-issue the leaf from that item with scripts/mint-tailnet-authority.py, swap it
+# with scripts/swap-tailnet-server-certificate.py, and reload with
+# scripts/reload-tailnet-object-proxy.py, which does not need root because this
+# unit declares UserName and KeepAlive.
 LOGS = HOME / ".stado" / "logs"
 
 
