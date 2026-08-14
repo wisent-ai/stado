@@ -1044,6 +1044,19 @@ pub struct ComputeTarget {
     /// target that holds none.
     #[serde(default, deserialize_with = "de_null_as_default")]
     pub identities: Vec<IdentityBinding>,
+    /// Skarbiec item holding this host's machine account, by item id
+    /// (`host-account-<name>`). It is the only pointer from a host name to the
+    /// credential that logs into that host, so it is modelled rather than left
+    /// in [`ComputeTarget::extra`]: host repair has to follow it from Rust, and
+    /// `registry doctor` reports an unmodelled, uncatalogued target key as a
+    /// declaration with no reader — correctly, while it sits there.
+    ///
+    /// Read today by `scripts/read-host-account.py`, which resolves the pointer
+    /// and fails when the vault holds no such item or the item names a different
+    /// host, and by `scripts/put-host-account.py`, which refuses to write a
+    /// credential the registry does not point at.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_ref: Option<String>,
     #[serde(default)]
     pub disk_cleanup: Option<DiskCleanupPolicy>,
     /// env_overrides and agent_args propagate via the GCS registry to
