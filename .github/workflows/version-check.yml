@@ -60,7 +60,11 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, stado-control-plane]
     env:
-      STADO_API_URL: https://stado.wisent.com
+      # The release gate runs on the control-plane host but must query the same
+      # public HTTPS ingress as installers. The Tailscale Funnel is that ingress;
+      # stado.wisent.com is a Namecheap zone and cannot target a Cloudflare
+      # Tunnel by an unproxied CNAME.
+      STADO_API_URL: https://lukaszs-macbook-pro-4007-2.tail6443b3.ts.net
       # This job only reads the release channel; it never publishes to it. Reading it
       # as `stado-release-publisher` borrowed the publishing identity to answer a
       # question, and that identity's grant file on this control plane is stale --
