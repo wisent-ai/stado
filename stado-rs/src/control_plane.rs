@@ -129,7 +129,7 @@ pub async fn run_local(host: &str, port: i64, interval: i64) -> Result<(), Contr
     })?;
     spawn_daemon("stado-local-agent", || async {
         // Python: threading.Thread(target=run_agent, kwargs={"kind": "local"}).
-        if let Err(exc) = run_agent("", false, "local").await {
+        if let Err(exc) = run_agent("", false, "local", None).await {
             local_log(&format!("agent exited: {exc}"));
         }
     })?;
