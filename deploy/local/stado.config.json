@@ -2,6 +2,10 @@
   "_comment": "Concrete outage-safe Mac profile. Only the local provider and local storage are active; Azure, AWS and GCP remain explicitly fenced.",
   "providers": ["local"],
   "providers_disabled": ["azure", "aws", "gcp"],
+  "billing": {
+    "_comment": "Azure remains monitored while compute provisioning stays fenced. GCP billing is intentionally detached and is not an active health source.",
+    "providers": ["azure"]
+  },
   "storage": {
     "backend": "local",
     "local": {
