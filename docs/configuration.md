@@ -35,6 +35,7 @@ Only route-local or process-local values should be overridden:
 | `STADO_HOST_HEALTH_SKARBIEC_CONSUMER` | Exactly `stado-host-health-beacon`. |
 | `STADO_HOST_HEALTH_SKARBIEC_TOKEN_FILE` | Owner-only grant scoped only to `stado-host-health-api`. |
 | `STADO_CREDENTIALS_STORE` | Requested credential backend (`skarbiec`, `skarbiec://<https-origin>`, or `file://<absolute-path>`). A value different from `credentials.store` is a pending migration. |
+| `STADO_CREDENTIALS_ADMIN_URL` | Canonical Skarbiec origin used only for store administration and migration; defaults to the shared Skarbiec URL. |
 | `STADO_CREDENTIALS_ADMIN_CONSUMER` | Skarbiec bootstrap consumer used only for store administration and migration. |
 | `STADO_CREDENTIALS_ADMIN_TOKEN_FILE` | Owner-only bootstrap grant for the credential-store administrator. |
 
@@ -67,6 +68,7 @@ credentials, service tokens, and SSH host keys:
   "credentials": {
     "store": "skarbiec",
     "admin": {
+      "url": "http://127.0.0.1:8787",
       "consumer": "local-operator",
       "token_file": "~/.stado/local-operator-skarbiec-token"
     }
