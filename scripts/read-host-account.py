@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+"""Confirm that a fleet host's operating-system account exists, without exposing it.
+
+Given a registry target name this follows the only pointer the fleet has -- the
+target's `account_ref` -- into Skarbiec, and reports what is there: the account
+username, the length and digest of the password, the tags a consumer can find the
+item by, and which registered consumers hold a capability on it. The password
+itself is never printed; the redacted document at the end is the paste-safe proof
+that both fields are present.
+
+The point is that a later agent never has to ask a human for this credential
+again, and never has to read it to know it is there. When the value really is
+needed, the reader is Stado's own consumer path -- `stado host install-credential`
+delivers one exact field to one host as an owner-only file and prints nothing --
+so this script names that command instead of becoming a way to print a secret.
+
+Exits non-zero when the declaration and the world disagree: a target that names
+an item nothing holds, or an item whose context names a different host, is the
+same failure shape as a registry field with no reader.
+"""
+
+import hashlib
+import json
+import os
+import pathlib
+import subprocess
+import sys
+
+NONE = None
+ZERO = len([])
+ONE = len("a")
+HOME = pathlib.Path(os.path.expanduser("~"))
+SKARBIEC = HOME / ".stado" / "bin" / "skarbiec"
+STADO = HOME / ".stado" / "bin" / "stado"
+VAULT = os.environ.get("SKARBIEC_VAULT_FILE", str(HOME / ".stado" / "skarbiec.vault.json"))
+KIND = "host-account"
+SECRET_FIELD = "password"
+ENVIRONMENT = {
+    **os.environ,
+    "SKARBIEC_VAULT_FILE": VAULT,
+    "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+}
+
+
+def run(*args):
+    return subprocess.run(
+        args, capture_output=True, text=True, check=False, env=ENVIRONMENT
+    )
+
+
+def digest(value):
+    return "sha256:" + hashlib.sha256(value.encode()).hexdigest()[: len("a" * 12)]
+
+
+def redacted(document):
+    """The item as stored, with every secret field replaced by its measurement."""
+    copy = json.loads(json.dumps(document))
+    for name, value in copy.get("fields", {}).items():
+        if name == "username" or not isinstance(value, str):
+            continue
+        copy["fields"][name] = f"<redacted {len(value)} chars {digest(value)}>"
+    return copy
+
+
+def main():
+    if len(sys.argv) != len(["self", "target"]):
+        raise SystemExit("usage: read-host-account.py <registry-target>")
+    target = sys.argv[ONE]
+    faults = []
+
+    pulled = run(str(STADO), "registry", "pull")
+    if pulled.returncode != ZERO:
+        raise SystemExit(f"registry pull failed: {pulled.stderr.strip().splitlines()[-1:]}")
+    declaration = next(
+        (
+            entry
+            for entry in json.loads(pulled.stdout).get("targets", [])
+            if entry.get("name") == target
+        ),
+        NONE,
+    )
+    if declaration is NONE:
+        raise SystemExit(f"no registry target named {target}")
+    item = declaration.get("account_ref")
+    print(f"target       {target}")
+    print(f"account_ref  {item or '(absent)'}   (registry target field)")
+    if not item:
+        print(f"fault        {target} declares no account_ref, so no account can be found")
+        return ONE
+
+    envelope = next(
+        (
+            entry
+            for entry in json.loads(run(str(SKARBIEC), "list").stdout)
+            if entry.get("id") == item
+        ),
+        NONE,
+    )
+    if envelope is NONE:
+        print(f"fault        the vault holds no item {item}; the declaration has no reader")
+        return ONE
+    print(f"item         {item}")
+    print(f"kind         {envelope.get('kind')} (expected {KIND})")
+    print(f"revision     {envelope.get('revision')} updated {envelope.get('updated_at')}")
+    print(f"tags         {','.join(envelope.get('tags', [])) or '(none)'}")
+    if envelope.get("kind") != KIND:
+        faults.append(f"item {item} is kind {envelope.get('kind')}, not {KIND}")
+    if envelope.get("deleted"):
+        faults.append(f"item {item} is in the trash")
+
+    read = run(str(SKARBIEC), "get", item)
+    if read.returncode != ZERO:
+        print(f"fault        {item} is unreadable here: {read.stderr.strip().splitlines()[-1:]}")
+        return ONE
+    document = json.loads(read.stdout)
+    fields = document.get("fields", {})
+    context = document.get("context", {})
+    account = context.get("account_ref", "")
+    print(f"context      {account or '(unnamed)'} source_kind {context.get('source_kind', '(none)')}")
+    print(f"username     {fields.get('username') or '(absent)'}")
+    secret = fields.get(SECRET_FIELD)
+    if isinstance(secret, str) and secret:
+        print(f"{SECRET_FIELD}     {len(secret)} chars {digest(secret)}")
+    else:
+        print(f"{SECRET_FIELD}     (absent)")
+        faults.append(f"item {item} carries no {SECRET_FIELD}")
+    # A credential naming a different host than the target that points at it is
+    # the contradiction this whole convention exists to make visible.
+    if account and not account.endswith(f"@{target}"):
+        faults.append(f"context account_ref {account} does not name host {target}")
+    if account and fields.get("username") and account != f"{fields['username']}@{target}":
+        faults.append(f"context account_ref {account} disagrees with username {fields['username']}")
+
+    grants = [
+        f"{grant['consumer']}:{capability['action']}"
+        for grant in json.loads(run(str(SKARBIEC), "tokens").stdout)
+        for capability in grant.get("capabilities", [])
+        if capability.get("item") == item
+    ]
+    print(f"consumers    {','.join(grants) or '(none registered)'}")
+    print(
+        f"delivery     stado host install-credential <host> {item} {SECRET_FIELD} <basename>"
+    )
+    print("document     (redacted; the value is never printed by this script)")
+    print(json.dumps(redacted(document), indent=len("  "), sort_keys=True))
+
+    for fault in faults:
+        print(f"fault        {fault}")
+    return ONE if faults else NONE
+
+
+sys.exit(main())
