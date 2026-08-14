@@ -393,7 +393,15 @@ async fn azure_section(_store: &JobStorage) -> Value {
     // whole-item form outright, which turned a configured Azure credential
     // into a "skarbiec_error" row on every billing tick.
     let mut sp = serde_json::Map::new();
-    for field in ["tenant_id", "client_id", "client_secret"] {
+    for field in [
+        "tenant_id",
+        "client_id",
+        "client_secret",
+        "billing_account",
+        "billing_profile",
+        "billing_profile_system_id",
+        "subscription_id",
+    ] {
         match vault.read_string(secret_name, field).await {
             Ok(Some(value)) => {
                 sp.insert(field.to_string(), Value::from(value));
@@ -514,7 +522,9 @@ async fn azure_section_with(
     } else {
         return azure_error(
             "config_error",
-            "Azure SP secret needs billing_account+billing_profile or subscription_id".to_string(),
+            "Azure SP secret needs billing_account+billing_profile_system_id, \
+             billing_account+billing_profile, or subscription_id"
+                .to_string(),
         );
     };
 
@@ -534,16 +544,14 @@ async fn azure_section_with(
             "endpoint": url,
         });
     }
-    if status == reqwest::StatusCode::NO_CONTENT {
-        return json!({
-            "status": "no_credits",
-            "detail": "Azure returned no credit balance for this billing profile",
-            "endpoint": url,
-        });
-    }
-    let body: Value = match serde_json::from_str(&body_text) {
-        Ok(body) => body,
-        Err(err) => return error_section(err.to_string()),
+    let balance_reported = status != reqwest::StatusCode::NO_CONTENT;
+    let body: Value = if balance_reported {
+        match serde_json::from_str(&body_text) {
+            Ok(body) => body,
+            Err(err) => return error_section(err.to_string()),
+        }
+    } else {
+        json!({})
     };
     let props = body.get("properties").unwrap_or(&body).clone();
     let amount = extract_amount(&props);
@@ -615,6 +623,12 @@ async fn azure_section_with(
 
     json!({
         "status": "ok",
+        "balance_reported": balance_reported,
+        "detail": if balance_reported {
+            Value::Null
+        } else {
+            json!("Azure returned no credit balance; subscription grant metadata remains authoritative")
+        },
         "available_balance": amount,
         "estimated_balance": estimated,
         "currency": currency,
@@ -674,21 +688,27 @@ pub async fn live_snapshot(store: &JobStorage) -> Value {
     let variants = crate::capabilities::get(crate::capabilities::RuntimeFacet::Billing.as_str())
         .map(|capability| capability.variants)
         .unwrap_or_default();
-    let sections = futures::future::join_all(variants.iter().map(|variant| async move {
-        let value = match variant.adapter {
-            crate::capabilities::RuntimeAdapter::Billing(
-                crate::capabilities::BillingAdapter::Gcp,
-            ) => gcp_section().await,
-            crate::capabilities::RuntimeAdapter::Billing(
-                crate::capabilities::BillingAdapter::Azure,
-            ) => azure_section(store).await,
-            _ => error_section(format!(
-                "billing catalog variant {:?} has no billing adapter",
-                variant.id
-            )),
-        };
-        (variant.id, value)
-    }))
+    let enabled = config::billing_providers();
+    let sections = futures::future::join_all(
+        variants
+            .iter()
+            .filter(|variant| enabled.iter().any(|provider| provider == variant.id))
+            .map(|variant| async move {
+                let value = match variant.adapter {
+                    crate::capabilities::RuntimeAdapter::Billing(
+                        crate::capabilities::BillingAdapter::Gcp,
+                    ) => gcp_section().await,
+                    crate::capabilities::RuntimeAdapter::Billing(
+                        crate::capabilities::BillingAdapter::Azure,
+                    ) => azure_section(store).await,
+                    _ => error_section(format!(
+                        "billing catalog variant {:?} has no billing adapter",
+                        variant.id
+                    )),
+                };
+                (variant.id, value)
+            }),
+    )
     .await;
     billing_document_from_sections(sections)
 }
@@ -869,8 +889,14 @@ pub const HEALTH_KEY: &str = "account_health";
 
 /// Provider sections carried by the billing document, in catalog order.
 pub fn providers() -> Vec<&'static str> {
+    let enabled = config::billing_providers();
     crate::capabilities::provider_ids(crate::capabilities::RuntimeFacet::Billing)
         .into_iter()
+        .filter(|provider| {
+            enabled
+                .iter()
+                .any(|configured| configured == provider.as_str())
+        })
         .map(|provider| provider.as_str())
         .collect()
 }
