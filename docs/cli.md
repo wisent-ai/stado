@@ -88,9 +88,11 @@ unavailable rather than inferred.
 ## `stado billing show|refresh [--json]`
 
 `billing show` reads the latest coordinator snapshot. `billing refresh` queries
-GCP and Azure immediately, prints the result even when the disabled source GCP
-bucket cannot cache it, and attempts to publish the same document to
-`billing_health/credits.json`.
+the sources selected by `billing.providers` (or `WC_BILLING_PROVIDERS`);
+the default is `["gcp", "azure"]`. Source selection is independent from compute
+provider enablement, so a fenced account can remain monitored without allowing
+the scheduler to provision into it. The command attempts to publish the result
+to `billing_health/credits.json`.
 
 Azure uses the Microsoft Customer Agreement credits endpoint and reports the
 current and estimated balances, pending eligible charges, expired credit,
@@ -102,18 +104,22 @@ separate `skarbiec` repository/service. `WC_SKARBIEC_URL` addresses the local
 Stado resolver adapter (default `http://127.0.0.1:17602`), never a physical
 Skarbiec host. `WC_SKARBIEC_CONSUMER` selects the scoped consumer (default
 `stado-control-plane`), and `WC_SKARBIEC_TOKEN_FILE` selects its owner-only
-grant file (default `~/.stado/skarbiec-token`). Raw grants are not accepted
+grant file (default `~/.stado/control-plane-skarbiec-token`). Raw grants are not accepted
 from environment variables.
 `WC_AZURE_BILLING_SECRET` selects the item
 id (default `wisent-azure-billing-sp`). There is no credential fallback to
 Azure Key Vault, a local credential file, process environment, queue storage,
 or another cloud's secret manager.
 
-The item is a JSON object with lowercase fields `tenant_id`, `client_id`,
-`client_secret`, `billing_account`, `billing_profile_system_id`, and optionally
-`subscription_id`. The Azure principal needs Billing profile reader on the
-selected billing profile. The Stado consumer grant needs
-`read:wisent-azure-billing-sp` (or a matching read glob).
+The item is a canonical Skarbiec bundle with lowercase fields `tenant_id`,
+`client_id`, `client_secret`, `billing_account`, `billing_profile`,
+`billing_profile_system_id`, and optionally `subscription_id`. The Azure
+principal needs Billing account reader plus subscription Billing Reader on the
+selected billing profile and subscription. The Stado consumer grant needs an
+exact `read:wisent-azure-billing-sp#<field>` capability for every field above.
+An HTTP 204 from the balance endpoint is a successful query with
+`balance_reported: false`; billing-property grant and subscription state remain
+available and authoritative.
 
 ## `stado billing watch [--interval DURATION] [--once] [--json]`
 
