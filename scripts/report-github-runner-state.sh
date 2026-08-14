@@ -29,7 +29,9 @@ found=false
 for directory in "$HOME/actions-runner/_diag" \
                  "$HOME/.github-runner/_diag" \
                  "$HOME/github-runner/_diag" \
-                 "$HOME/.stado/github-runner/_diag"; do
+                 "$HOME/.stado/github-runner/_diag" \
+                 "/Users/Shared/stado-precheck-runner/_diag" \
+                 "/Users/Shared/jeden-desktop-release-runner/_diag"; do
   [ -d "$directory" ] || continue
   latest=
   for log in "$directory"/Runner_*.log; do
