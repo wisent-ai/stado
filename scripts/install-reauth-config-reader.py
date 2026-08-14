@@ -26,6 +26,12 @@ FILES = {
     "claude-reauth.mjs": TREE / "scripts" / "trajectories" / "claude" / "reauth.mjs",
     "kimi-reauth.mjs": TREE / "scripts" / "trajectories" / "kimi" / "reauth.mjs",
     "kimi-login.mjs": TREE / "scripts" / "trajectories" / "kimi" / "login.mjs",
+    "claude-login.mjs": TREE / "scripts" / "trajectories" / "claude" / "login.mjs",
+    "codex-login.mjs": TREE / "scripts" / "trajectories" / "codex" / "login.mjs",
+    # The capability declaration the logins now read. Without it on the host the
+    # runtime guard has nothing to check against and every browser login refuses
+    # to start, so it travels with the runners rather than after them.
+    "trajectory-requirements.json": TREE / "scripts" / "trajectories" / "requirements.json",
     # The launcher is part of the repair: it sourced an env file that no longer
     # exists, so the scheduled job died before reaching the runner.
     "codex-reauth-launch.sh": TREE
