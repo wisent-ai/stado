@@ -60,7 +60,10 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, stado-control-plane]
     env:
-      STADO_API_URL: https://stado.wisent.com
+      # The gate runs on the control plane that owns the canonical release store.
+      # Address its loopback listener directly: the public DNS route is a delivery
+      # surface, not part of deciding whether the underlying release object exists.
+      STADO_API_URL: http://127.0.0.1:8765
       # This job only reads the release channel; it never publishes to it. Reading it
       # as `stado-release-publisher` borrowed the publishing identity to answer a
       # question, and that identity's grant file on this control plane is stale --
