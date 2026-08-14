@@ -51,6 +51,9 @@ HOME = pathlib.Path(os.path.expanduser("~"))
 AGENTS = HOME / "Library" / "LaunchAgents"
 DAEMONS = pathlib.Path("/Library/LaunchDaemons")
 LOGS = HOME / ".stado" / "logs"
+# Where `stado host install-file` lands a unit delivered from another host, and
+# where this installer stages its own copies before elevating.
+DELIVERED = HOME / ".stado" / "files"
 UID = os.getuid()
 OWNER_ONLY = 0o600
 STADO = pathlib.Path(os.environ.get("STADO_BIN") or HOME / ".stado" / "bin" / "stado")
@@ -183,9 +186,13 @@ def placement(module, requires, max_stale_seconds):
 
 
 def source_document(label):
+    # The delivered copy comes last: a unit already installed on this host is
+    # the truth about this host, and a delivery only matters where the job has
+    # never run, which is exactly the host placement has just chosen.
     for path in (AGENTS / f"{label}.plist", DAEMONS / f"{label}.plist",
                  AGENTS / f"{label}.plist.awaiting-graphical-session",
-                 AGENTS / f"{label}.plist.superseded-by-system-daemon"):
+                 AGENTS / f"{label}.plist.superseded-by-system-daemon",
+                 DELIVERED / f"{label}.plist"):
         if path.is_file():
             try:
                 return path, plistlib.loads(path.read_bytes())
@@ -330,18 +337,46 @@ def retire_daemon(label):
     return "system daemon removed"
 
 
+def deliver(host, label, document):
+    """Hand the placed host the unit itself, since the job has never run there."""
+    if not STADO.is_file():
+        return [f"{STADO} is absent here, so {label} cannot reach {host}"]
+    DELIVERED.mkdir(parents=True, exist_ok=True)
+    staging = DELIVERED / f"{label}.plist"
+    with staging.open("wb") as handle:
+        plistlib.dump(document, handle)
+    os.chmod(staging, OWNER_ONLY)
+    return [
+        line
+        for line in run(
+            str(STADO), "host", "install-file", host, str(staging), f"{label}.plist"
+        ).splitlines()
+        if line.strip()
+    ]
+
+
 def delegate(host):
     """Run this same installer on the host placement named.
 
     This cannot bounce between hosts: the placed host asks the same question and
-    is its own answer, so it installs locally and delegates to nobody.
+    is its own answer, so it installs locally and delegates to nobody. It also
+    cannot be handed operator words -- `run-helper` passes none -- which is why
+    the unit travels as a file and the installer re-derives everything there.
     """
     if not STADO.is_file():
         return [f"{STADO} is absent here, so the placed host cannot be reached"]
     source = pathlib.Path(__file__).resolve()
     transfer = run(str(STADO), "host", "install-helper", host, str(source), HELPER_NAME)
+    matcher = ""
+    beside = next((path for path in PLACEMENT_CANDIDATES if path.is_file()), NONE)
+    if beside is not NONE:
+        # The placed host must be able to ask the same question this host asked,
+        # or its own run refuses for want of a matcher.
+        matcher = run(
+            str(STADO), "host", "install-helper", host, str(beside), "place-by-capability"
+        )
     executed = run(str(STADO), "host", "run-helper", host, HELPER_NAME)
-    return [line for line in (transfer + executed).splitlines() if line.strip()]
+    return [line for line in (transfer + matcher + executed).splitlines() if line.strip()]
 
 
 def main():
@@ -416,13 +451,16 @@ def main():
             print(f"     not {line}")
         print(f"   retired      {retire_daemon(label)}")
         if host != here:
-            # The job belongs on another machine; staging it here would leave a
-            # unit one login away from running in the wrong place.
+            # The job belongs on another machine, and it has never run there, so
+            # the unit travels with the decision. Staging a copy here as well
+            # would leave it one login away from running in the wrong place.
             stray = AGENTS / f"{label}.plist.awaiting-graphical-session"
             if stray.is_file():
                 stray.unlink()
             elsewhere.append(host)
-            print(f"   delegated    installing on {host} through stado")
+            print(f"   delegated    {host} will install it; delivering the unit there")
+            for line in deliver(host, label, shaped(document, as_daemon=False)):
+                print(f"     {line}")
             continue
         if not graphical:
             # The measurement says this host can own a window and launchd says
