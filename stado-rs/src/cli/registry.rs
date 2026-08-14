@@ -26,6 +26,7 @@ use std::path::PathBuf;
 use chrono::{DateTime, TimeDelta, Utc};
 use serde_json::{json, Map, Value};
 
+use crate::capabilities::{Consumer, DeclarationSurface, DeclaredField, SiblingCondition};
 use crate::monitor::host_health;
 use crate::queue::{capacity, JobStorage};
 use crate::targets::{
@@ -549,6 +550,13 @@ struct Finding {
     subject: String,
     /// What specifically disagrees.
     detail: String,
+    /// Unit label this finding is about, when it is about one.
+    ///
+    /// Two rows for one cause is noise. A unit that is missing because its host
+    /// cannot satisfy what the unit needs produces both a `capability-unsatisfied`
+    /// and a `missing-plist`; the second is the symptom of the first, and
+    /// [`doctor`] drops it so the row that survives names the cause.
+    unit: Option<String>,
 }
 
 impl Finding {
@@ -557,12 +565,623 @@ impl Finding {
             kind,
             subject: subject.as_ref().to_string(),
             detail: detail.into(),
+            unit: None,
         }
+    }
+
+    /// Name the unit this finding is about, so one cause cannot be reported twice.
+    fn about(mut self, unit: impl Into<String>) -> Self {
+        self.unit = Some(unit.into());
+        self
     }
 
     fn to_json(&self) -> Value {
         json!({"finding": self.kind, "subject": self.subject, "detail": self.detail})
     }
+}
+
+/// Object prefix the per-host capability measurements live under, alongside
+/// `host_health/` and read through the same object API
+/// (`stado://<namespace>/host_capabilities/<registry-target-name>.json`).
+const CAPABILITIES_PREFIX: &str = "host_capabilities";
+
+/// The only measurement schema this build understands. A document carrying
+/// anything else is reported rather than guessed at: a requirement checked
+/// against a shape nobody agreed on is worse than an unchecked one.
+const CAPABILITIES_SCHEMA: &str = "wisent.host-capabilities.v1";
+
+/// One measured capability: the answer, and the measurement that produced it.
+struct MeasuredCapability {
+    value: bool,
+    detail: String,
+}
+
+/// One `host_capabilities/<target>.json` object.
+struct Measurement {
+    /// Store-relative object name, so a finding names what to go and read.
+    path: String,
+    schema: String,
+    /// The host's own stamp, falling back to the object mtime the same way
+    /// [`Beacon::observed_at`] does.
+    measured_at: Option<DateTime<Utc>>,
+    capabilities: BTreeMap<String, MeasuredCapability>,
+}
+
+/// Every capability measurement in the store, keyed by the registry target name
+/// the object is published under.
+///
+/// One prefix listing plus the bodies it finds, exactly like [`load_beacons`]:
+/// the two signals are published the same way and are read the same way.
+async fn load_capability_measurements(
+    store: &JobStorage,
+) -> Result<BTreeMap<String, Measurement>, crate::queue::StorageError> {
+    let prefix = format!("{CAPABILITIES_PREFIX}/");
+    let mut measurements = BTreeMap::new();
+    for blob in store.list_blobs_with_meta(&prefix).await? {
+        let Some(target) = blob
+            .name
+            .strip_prefix(&prefix)
+            .and_then(|stem| stem.strip_suffix(".json"))
+        else {
+            continue;
+        };
+        let Some(body) = store
+            .download_text(&blob.name)
+            .await?
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        else {
+            continue;
+        };
+        let capabilities = body
+            .get("capabilities")
+            .and_then(Value::as_object)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .map(|(id, entry)| {
+                        (
+                            id.clone(),
+                            MeasuredCapability {
+                                value: entry.get("value").and_then(Value::as_bool) == Some(true),
+                                detail: entry
+                                    .get("detail")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("no detail recorded")
+                                    .to_string(),
+                            },
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        measurements.insert(
+            target.to_string(),
+            Measurement {
+                path: blob.name.clone(),
+                schema: body
+                    .get("schema")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                measured_at: body
+                    .get("measured_at")
+                    .and_then(Value::as_str)
+                    .and_then(|stamp| DateTime::parse_from_rfc3339(stamp).ok())
+                    .map(|stamp| stamp.with_timezone(&Utc))
+                    .or(blob.updated),
+                capabilities,
+            },
+        );
+    }
+    Ok(measurements)
+}
+
+/// Object prefix the published job requirement declarations live under, read
+/// through the same object API as the beacons and the measurements.
+const REQUIREMENTS_PREFIX: &str = "job_requirements";
+
+/// The only requirement schema this build understands.
+const REQUIREMENTS_SCHEMA: &str = "wisent.trajectory-requirements.v1";
+
+/// How long a published requirement declaration is believed.
+///
+/// Deliberately not the beacon window: a requirement is republished when the job
+/// changes, not on a heartbeat, so judging it in minutes would mark every
+/// declaration stale within one and teach operators to skip the row. A week is
+/// longer than the fleet goes between Weles releases, so an object older than
+/// that is a declaration nobody is republishing — which is the failure this
+/// window exists to catch, an object that no longer matches the repository file
+/// it is supposed to be a copy of.
+fn requirements_stale_after_seconds() -> i64 {
+    TimeDelta::weeks(1).num_seconds()
+}
+
+/// One declared service and the job it runs.
+struct RequirementClaim {
+    /// Service name as the registry spells it.
+    unit: String,
+    /// The identifier the beacon reports the unit under, so a `missing-plist` row
+    /// for the same unit can be recognised as this finding's symptom.
+    label: String,
+    /// Trajectory id the service entry names, e.g. `kimi/login`.
+    trajectory: String,
+}
+
+/// Every published requirement declaration, resolved to what each trajectory
+/// needs.
+struct Declarations {
+    /// Trajectory id -> the object that declares it and the capability ids it
+    /// names.
+    needs: BTreeMap<String, (String, Vec<String>)>,
+    /// Objects found under the prefix, so a finding can say what was consulted.
+    objects: Vec<String>,
+    /// Objects this build would not read, and why. A service pointing into one is
+    /// reported rather than silently treated as satisfied.
+    refused: Vec<String>,
+}
+
+impl Declarations {
+    /// What was consulted, for a finding that has to explain an absence.
+    fn consulted(&self) -> String {
+        let read = if self.objects.is_empty() {
+            format!("no object exists under {REQUIREMENTS_PREFIX}/")
+        } else {
+            format!("read {}", self.objects.join(", "))
+        };
+        if self.refused.is_empty() {
+            read
+        } else {
+            format!("{read}; refused {}", self.refused.join("; "))
+        }
+    }
+}
+
+/// Every requirement declaration in the store.
+///
+/// The declaration is the job author's document, published verbatim
+/// (`stado://<namespace>/job_requirements/weles-trajectories.json` carries the
+/// bytes of `weles/scripts/trajectories/requirements.json`). The registry names
+/// which job a service runs and nothing more, so this is the one place a
+/// capability list for a job exists — a copy in the registry would be the second
+/// source of truth that `unread-declaration` and this whole command exist to
+/// prevent.
+async fn load_job_requirements(
+    store: &JobStorage,
+    now: DateTime<Utc>,
+) -> Result<Declarations, crate::queue::StorageError> {
+    let prefix = format!("{REQUIREMENTS_PREFIX}/");
+    let mut declarations = Declarations {
+        needs: BTreeMap::new(),
+        objects: Vec::new(),
+        refused: Vec::new(),
+    };
+    for blob in store.list_blobs_with_meta(&prefix).await? {
+        if !blob.name.ends_with(".json") {
+            continue;
+        }
+        declarations.objects.push(blob.name.clone());
+        let Some(body) = store
+            .download_text(&blob.name)
+            .await?
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        else {
+            declarations
+                .refused
+                .push(format!("{} is not readable JSON", blob.name));
+            continue;
+        };
+        let schema = body
+            .get("schema")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if schema != REQUIREMENTS_SCHEMA {
+            declarations.refused.push(format!(
+                "{} carries schema {schema:?} rather than {REQUIREMENTS_SCHEMA}",
+                blob.name
+            ));
+            continue;
+        }
+        if let Some(published) = blob.updated {
+            let age = now - published;
+            if age.num_seconds() > requirements_stale_after_seconds() {
+                declarations.refused.push(format!(
+                    "{} was published {} ago ({}), past the {}s republication window",
+                    blob.name,
+                    human_age(age),
+                    published.to_rfc3339(),
+                    requirements_stale_after_seconds()
+                ));
+                continue;
+            }
+        }
+        let Some(trajectories) = body.get("trajectories").and_then(Value::as_object) else {
+            declarations
+                .refused
+                .push(format!("{} carries no trajectories map", blob.name));
+            continue;
+        };
+        for (trajectory, value) in trajectories {
+            // A non-string entry is dropped rather than guessed at: a garbled
+            // requirement must not be able to pass as a satisfied one.
+            let capabilities = value
+                .as_array()
+                .map(|ids| {
+                    ids.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            declarations
+                .needs
+                .insert(trajectory.clone(), (blob.name.clone(), capabilities));
+        }
+    }
+    Ok(declarations)
+}
+
+/// Which job each service declared on this target runs.
+///
+/// The registry's whole role in this join is the identifier: `trajectory` on the
+/// service entry, never a capability list. A service that names no trajectory
+/// declares no requirement, so every registry written before this field existed
+/// stays clean.
+fn declared_trajectories(target: &ComputeTarget) -> Vec<RequirementClaim> {
+    let Some(services) = target.extra.get("services").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    services
+        .iter()
+        .filter_map(|entry| {
+            let trajectory = entry
+                .get("trajectory")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())?;
+            let text = |key: &str| {
+                entry
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+            };
+            let unit = text("name").or_else(|| text("label"));
+            Some(RequirementClaim {
+                unit: unit.unwrap_or("(unnamed service)").to_string(),
+                // The beacon reports a unit under its launchd label or systemd
+                // unit, and that is the key the missing-plist row is filed
+                // under, so it is resolved here exactly as `declared_units`
+                // resolves it.
+                label: text("label")
+                    .or_else(|| text("unit"))
+                    .or(unit)
+                    .unwrap_or_default()
+                    .to_string(),
+                trajectory: trajectory.to_string(),
+            })
+        })
+        .collect()
+}
+
+/// What stops one host's last measurement from satisfying a capability list, one
+/// clause per reason, empty when nothing does.
+///
+/// The single place that answers "can this host run this job", so the finding
+/// about a host that declares the job and the finding about a job no host
+/// declares cannot answer it differently. A missing, mis-schema'd or stale
+/// measurement disqualifies the host in one clause rather than once per
+/// capability: the operator's next action is the same however many ids were
+/// named, and it is to go and measure the host.
+fn measurement_gaps(
+    target: &str,
+    capabilities: &[String],
+    measurement: Option<&Measurement>,
+    now: DateTime<Utc>,
+) -> Vec<String> {
+    // A job that needs nothing of the host is satisfied by every host, measured
+    // or not: `codex/reauth` declares exactly that.
+    if capabilities.is_empty() {
+        return Vec::new();
+    }
+    let Some(measurement) = measurement else {
+        return vec![format!(
+            "{CAPABILITIES_PREFIX}/{target}.json does not exist: nothing has measured this host"
+        )];
+    };
+    if measurement.schema != CAPABILITIES_SCHEMA {
+        return vec![format!(
+            "{} carries schema {:?} rather than {CAPABILITIES_SCHEMA}",
+            measurement.path, measurement.schema
+        )];
+    }
+    match measurement.measured_at {
+        None => {
+            return vec![format!(
+                "{} carries neither measured_at nor an object timestamp, so its age cannot be \
+                 judged",
+                measurement.path
+            )]
+        }
+        Some(measured) => {
+            let age = now - measured;
+            if age.num_seconds() > stale_after_seconds() {
+                return vec![format!(
+                    "{} was measured {} ago ({}), past the {}s liveness window",
+                    measurement.path,
+                    human_age(age),
+                    measured.to_rfc3339(),
+                    stale_after_seconds()
+                )];
+            }
+        }
+    }
+    capabilities
+        .iter()
+        .filter_map(
+            |capability| match measurement.capabilities.get(capability) {
+                None => Some(format!(
+                    "{} does not measure {capability}",
+                    measurement.path
+                )),
+                Some(measured) if !measured.value => {
+                    Some(format!("{capability} measured false: {}", measured.detail))
+                }
+                Some(_) => None,
+            },
+        )
+        .collect()
+}
+
+/// Every hop of the join that fails for one declared service, one sentence each:
+/// declared service -> trajectory id -> published requirement -> measured
+/// capability. Empty means the host is measured able to run what it is declared to
+/// run.
+fn unmet_requirements(
+    target: &str,
+    claim: &RequirementClaim,
+    declarations: &Declarations,
+    measurement: Option<&Measurement>,
+    now: DateTime<Utc>,
+) -> Vec<String> {
+    let unit = &claim.unit;
+    let trajectory = &claim.trajectory;
+    let Some((source, capabilities)) = declarations.needs.get(trajectory) else {
+        return vec![format!(
+            "{unit} runs trajectory {trajectory}, and no published declaration names it: {}",
+            declarations.consulted()
+        )];
+    };
+    let needs = capabilities.join(", ");
+    measurement_gaps(target, capabilities, measurement, now)
+        .into_iter()
+        .map(|gap| {
+            format!("{unit} runs {trajectory}, which {source} says requires {needs}, and {gap}")
+        })
+        .collect()
+}
+
+/// Jobs in the published roster that nothing runs and no host could.
+///
+/// A declared service entry is the RESULT of a placement that succeeded, so a
+/// trajectory no target declares is a job waiting for a host. That is only worth
+/// reporting when no candidate can take it: while some measured host satisfies the
+/// requirement, placement has an answer and the absence is a step not yet taken
+/// rather than a contradiction. The row names each candidate and the measurement
+/// that disqualified it, so it says what would have to change, and it disappears by
+/// itself the moment a capable host exists and the unit is adopted where it runs.
+fn unplaced_jobs(
+    registry: &Registry,
+    declarations: &Declarations,
+    measurements: &BTreeMap<String, Measurement>,
+    placed: &BTreeSet<&str>,
+    now: DateTime<Utc>,
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    for (trajectory, (source, capabilities)) in &declarations.needs {
+        if capabilities.is_empty() || placed.contains(trajectory.as_str()) {
+            continue;
+        }
+        let mut disqualified = Vec::new();
+        for target in &registry.targets {
+            // Only kind=local names a machine that can hold a session and run a
+            // browser; "gcp" and "vast" targets are dispatcher pools.
+            if !target.is_provider(crate::capabilities::ProviderId::Local) {
+                continue;
+            }
+            let gaps = measurement_gaps(
+                &target.name,
+                capabilities,
+                measurements.get(&target.name),
+                now,
+            );
+            if gaps.is_empty() {
+                disqualified.clear();
+                break;
+            }
+            disqualified.push(format!("{}: {}", target.name, gaps.join(", ")));
+        }
+        if !disqualified.is_empty() {
+            findings.push(Finding::new(
+                "job-unplaced",
+                trajectory,
+                format!(
+                    "{source} says it requires {}, no registry target declares a service that \
+                     runs it, and no host can take it — {}",
+                    capabilities.join(", "),
+                    disqualified.join("; ")
+                ),
+            ));
+        }
+    }
+    findings
+}
+
+/// The value at a dotted path, or `None` when any segment is absent.
+fn value_at<'a>(root: &'a Value, dotted: &str) -> Option<&'a Value> {
+    dotted
+        .split('.')
+        .try_fold(root, |value, key| value.get(key))
+}
+
+/// One line of JSON for a declared value, so a finding shows what was written
+/// rather than only where.
+fn rendered(value: &Value) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| value.to_string())
+}
+
+/// Why a declared value never reaches behaviour, or `None` when it does.
+///
+/// The catalog decides, in one place, for both surfaces: a fleet reader whose
+/// reachability condition holds is read, and everything else is a declaration an
+/// operator wrote for nobody.
+fn unread_reason(field: &DeclaredField, sibling: Option<String>) -> Option<String> {
+    match field.consumer {
+        Consumer::Fleet(reader) => {
+            let condition = field.reached_when?;
+            let observed = sibling.unwrap_or_else(|| "(absent)".to_string());
+            if observed.starts_with(condition.value_prefix) {
+                return None;
+            }
+            Some(format!(
+                "its only reader {reader} runs when {} starts with {:?}, and that key is {observed}",
+                condition.path, condition.value_prefix
+            ))
+        }
+        Consumer::OperatorCopy {
+            command,
+            destination,
+        } => Some(format!(
+            "no fleet process reads it: only `{command}` copies it to {destination}, and only when \
+             an operator runs that command"
+        )),
+        Consumer::Unread => Some("no code path in this build reads it".to_string()),
+    }
+}
+
+/// A sibling value rendered for a finding: strings bare, everything else as JSON,
+/// so a URL reads as a URL and a number still reads unambiguously.
+fn sibling_value(root: &Value, condition: SiblingCondition) -> Option<String> {
+    value_at(root, condition.path).map(|value| {
+        value
+            .as_str()
+            .map_or_else(|| rendered(value), str::to_string)
+    })
+}
+
+/// Registry fields on one target that no consumer reads, from both halves of the
+/// rule.
+///
+/// The derived half needs no catalog: a key [`ComputeTarget`] does not model
+/// lands in `extra`, which is by construction the set of keys no typed reader in
+/// this build can name, so a field added tomorrow with no reader fails without
+/// anybody remembering to declare it. The catalogued half covers what the derived
+/// half cannot see — a path inside a block this build does model, where the
+/// deserializer accepting a value proves nothing about anyone acting on it.
+fn unread_declarations(target: &ComputeTarget, entry: &Value) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    for (key, value) in &target.extra {
+        match crate::capabilities::declared_field(DeclarationSurface::RegistryTarget, key) {
+            Some(field) => {
+                if let Some(reason) = unread_reason(
+                    field,
+                    field.reached_when.and_then(|c| sibling_value(entry, c)),
+                ) {
+                    findings.push(Finding::new(
+                        "unread-declaration",
+                        &target.name,
+                        format!(
+                            "{} {key} is declared as {} but {reason}",
+                            field.surface.label(),
+                            rendered(value)
+                        ),
+                    ));
+                }
+            }
+            None => findings.push(Finding::new(
+                "unread-declaration",
+                &target.name,
+                format!(
+                    "registry target key {key} is declared as {} and is neither modelled by \
+                     ComputeTarget nor catalogued in capabilities::DECLARED_FIELDS, so no reader \
+                     in this build can consult it",
+                    rendered(value)
+                ),
+            )),
+        }
+    }
+    // Dotted paths only: a top-level catalogued key that this build does not
+    // model was already answered by the loop above, and answering it twice would
+    // report one defect as two.
+    for field in crate::capabilities::DECLARED_FIELDS {
+        if field.surface != DeclarationSurface::RegistryTarget || !field.path.contains('.') {
+            continue;
+        }
+        let Some(value) = value_at(entry, field.path) else {
+            continue;
+        };
+        let Some(reason) = unread_reason(
+            field,
+            field.reached_when.and_then(|c| sibling_value(entry, c)),
+        ) else {
+            continue;
+        };
+        findings.push(Finding::new(
+            "unread-declaration",
+            &target.name,
+            format!(
+                "{} {} is declared as {} but {reason}",
+                field.surface.label(),
+                field.path,
+                rendered(value)
+            ),
+        ));
+    }
+    findings
+}
+
+/// Configuration keys this deployment carries that no reader on it can consult.
+///
+/// The document is the one this process would honour, so the answer is about the
+/// deployment actually running rather than about the schema. Reading it cannot
+/// fail here: every caller reaches `doctor` through a storage handle that already
+/// loaded and parsed the same file.
+fn unread_configuration() -> Vec<Finding> {
+    let subject = crate::config_file::config_path()
+        .ok()
+        .flatten()
+        .map_or_else(
+            || "stado config".to_string(),
+            |path| path.display().to_string(),
+        );
+    let mut findings = Vec::new();
+    for field in crate::capabilities::DECLARED_FIELDS {
+        if field.surface != DeclarationSurface::Configuration {
+            continue;
+        }
+        let Some(value) = crate::config_file::get(field.path).filter(|value| !value.is_null())
+        else {
+            continue;
+        };
+        let sibling = field
+            .reached_when
+            .and_then(|condition| crate::config_file::get(condition.path))
+            .map(|value| {
+                value
+                    .as_str()
+                    .map_or_else(|| rendered(&value), str::to_string)
+            });
+        if let Some(reason) = unread_reason(field, sibling) {
+            findings.push(Finding::new(
+                "unread-declaration",
+                &subject,
+                format!(
+                    "{} {} is declared as {} but {reason}",
+                    field.surface.label(),
+                    field.path,
+                    rendered(&value)
+                ),
+            ));
+        }
+    }
+    findings
 }
 
 /// `stado registry doctor [--json]` — diff registry declarations against
@@ -632,22 +1251,28 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
         }
         for declared in declared_units(target) {
             match beacon.unit_state(&declared.id) {
-                None => findings.push(Finding::new(
-                    "missing-plist",
-                    &target.name,
-                    format!(
-                        "registry declares service {} ({}) but {} reports no such unit",
-                        declared.name, declared.id, beacon.path
-                    ),
-                )),
-                Some(state) if state != ACTIVE_STATE => findings.push(Finding::new(
-                    "unit-not-active",
-                    &target.name,
-                    format!(
-                        "registry declares service {} ({}) but {} reports state={state}",
-                        declared.name, declared.id, beacon.path
-                    ),
-                )),
+                None => findings.push(
+                    Finding::new(
+                        "missing-plist",
+                        &target.name,
+                        format!(
+                            "registry declares service {} ({}) but {} reports no such unit",
+                            declared.name, declared.id, beacon.path
+                        ),
+                    )
+                    .about(declared.id.as_str()),
+                ),
+                Some(state) if state != ACTIVE_STATE => findings.push(
+                    Finding::new(
+                        "unit-not-active",
+                        &target.name,
+                        format!(
+                            "registry declares service {} ({}) but {} reports state={state}",
+                            declared.name, declared.id, beacon.path
+                        ),
+                    )
+                    .about(declared.id.as_str()),
+                ),
                 Some(_) => {}
             }
         }
@@ -698,6 +1323,161 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
         }
     }
 
+    // Three declaration checks the beacons cannot answer. They compare the
+    // document with itself and with the last measurement rather than with a
+    // heartbeat, so they run for every target, including the dispatcher pools
+    // the liveness checks above skip.
+    //
+    // The raw document, not the typed `Registry`: `service_directory` and
+    // `service_resolver` are raw-JSON blocks whose model lives in
+    // `service_resolution`, and the unread-declaration check is about exactly the
+    // keys no model in this build names.
+    let document = fetch_document().await?;
+    let entries: BTreeMap<&str, &Value> = document
+        .get("targets")
+        .and_then(Value::as_array)
+        .map(|targets| {
+            targets
+                .iter()
+                .filter_map(|entry| {
+                    entry
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .map(|name| (name, entry))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    for loop_back in
+        crate::service_resolution::self_referencing_endpoints(&document).map_err(CmdError::click)?
+    {
+        findings.push(Finding::new(
+            "self-referencing-endpoint",
+            &loop_back.target,
+            format!(
+                "service_directory.services.{}.{}.{} is {}, which is {} on that same target: the \
+                 adapter would proxy to itself",
+                loop_back.service,
+                loop_back.map,
+                loop_back.target,
+                loop_back.address,
+                loop_back.adapter
+            ),
+        ));
+    }
+
+    // Which declared service runs which job. The published roster is read whether
+    // or not anything declares one, because a job the roster names and no target
+    // declares is itself a finding: a declared service entry is the result of a
+    // placement that succeeded, so a job with no entry anywhere is a job waiting
+    // for a host that can take it.
+    let claims: Vec<(&ComputeTarget, RequirementClaim)> = registry
+        .targets
+        .iter()
+        .flat_map(|target| {
+            declared_trajectories(target)
+                .into_iter()
+                .map(move |claim| (target, claim))
+        })
+        .collect();
+    let mut measured_hosts = usize::default();
+    let mut roster = usize::default();
+    // An unreadable prefix is not an absent object, and reporting it as one would
+    // say a host cannot do something when the truth is that nobody here may look.
+    // Both reads share that reasoning, so both report the store's own words.
+    match (
+        load_job_requirements(&store, now).await,
+        load_capability_measurements(&store).await,
+    ) {
+        (Ok(declarations), Ok(measurements)) => {
+            measured_hosts = measurements.len();
+            roster = declarations.needs.len();
+            for (target, claim) in &claims {
+                for reason in unmet_requirements(
+                    &target.name,
+                    claim,
+                    &declarations,
+                    measurements.get(&target.name),
+                    now,
+                ) {
+                    findings.push(
+                        Finding::new("capability-unsatisfied", &target.name, reason)
+                            .about(claim.label.as_str()),
+                    );
+                }
+            }
+            let placed: BTreeSet<&str> = claims
+                .iter()
+                .map(|(_, claim)| claim.trajectory.as_str())
+                .collect();
+            findings.extend(unplaced_jobs(
+                &registry,
+                &declarations,
+                &measurements,
+                &placed,
+                now,
+            ));
+        }
+        // One row, not one per claim: the cause is a store that will not answer,
+        // and it is the same cause for every job.
+        (declarations, measurements) => {
+            let refused = [
+                declarations
+                    .err()
+                    .map(|exc| format!("{REQUIREMENTS_PREFIX}/ could not be read: {exc}")),
+                measurements
+                    .err()
+                    .map(|exc| format!("{CAPABILITIES_PREFIX}/ could not be read: {exc}")),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<String>>()
+            .join("; ");
+            findings.push(Finding::new(
+                "capability-unsatisfied",
+                format!("{REQUIREMENTS_PREFIX}/"),
+                format!(
+                    "{} declared trajectory claim(s) cannot be judged and no job can be placed: \
+                     {refused}",
+                    claims.len()
+                ),
+            ));
+        }
+    }
+
+    for target in &registry.targets {
+        let empty = Value::Null;
+        let entry = entries.get(target.name.as_str()).copied().unwrap_or(&empty);
+        findings.extend(unread_declarations(target, entry));
+    }
+    findings.extend(unread_configuration());
+
+    // One cause, one row. A unit the beacon does not report on a host that cannot
+    // satisfy what the unit needs is already reported as `capability-unsatisfied`,
+    // and the `missing-plist` row for the same label is that finding's symptom:
+    // installing the plist would not make the host able to run it.
+    let caused: Vec<(String, String)> = findings
+        .iter()
+        .filter(|finding| finding.kind == "capability-unsatisfied")
+        .filter_map(|finding| {
+            finding
+                .unit
+                .clone()
+                .map(|unit| (finding.subject.clone(), unit))
+        })
+        .collect();
+    findings.retain(|finding| {
+        if finding.kind != "missing-plist" {
+            return true;
+        }
+        let Some(unit) = finding.unit.as_deref() else {
+            return true;
+        };
+        !caused
+            .iter()
+            .any(|(subject, symptom)| subject == &finding.subject && symptom == unit)
+    });
+
     let location = targets::registry_location();
     if as_json {
         echo_json(&json!({
@@ -707,6 +1487,9 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
                 "targets": registry.targets.len(),
                 "beacons": beacons.len(),
                 "capacity_consumers": consumers.len(),
+                "requirement_claims": claims.len(),
+                "declared_trajectories": roster,
+                "capability_measurements": measured_hosts,
             },
             "findings": findings.iter().map(Finding::to_json).collect::<Vec<Value>>(),
         }));
