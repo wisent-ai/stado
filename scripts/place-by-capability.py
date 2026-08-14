@@ -147,13 +147,16 @@ def read_object(settings, uri):
         raise Unreadable(f"{base} is unreachable from here: {problem}") from problem
 
 
-def registry_targets():
-    """Return {target name: its declared placement policy or NONE}.
+def registry_declarations():
+    """Return {target name: its whole registry entry}.
 
-    The policy travels with the candidate list because it answers the other half
-    of the question. A capability says what a host CAN do; the registry says
-    what it MAY be used for, and a host that can open a window is still the
-    wrong host when it is the machine the operator is sitting in front of.
+    The entry travels with the candidate list because it answers the halves of
+    the question no measurement can. A capability says what a host CAN do; the
+    target's `placement` policy says what it MAY be used for -- a host that can
+    open a window is still the wrong host when it is the machine the operator is
+    sitting in front of -- and `release_platform` says what shape of unit it can
+    load at all, which is what a caller needs once placement stops answering
+    with the host that happens to be running the installer.
     """
     if not STADO.is_file():
         raise Unreadable(f"{STADO} is not installed here, so the candidate list cannot be read")
@@ -167,9 +170,7 @@ def registry_targets():
     except ValueError as problem:
         raise Unreadable(f"stado registry pull did not print a registry: {problem}") from problem
     declared = {
-        entry["name"]: entry.get(POLICY_KEY)
-        for entry in document.get("targets", [])
-        if entry.get("name")
+        entry["name"]: entry for entry in document.get("targets", []) if entry.get("name")
     }
     if not declared:
         raise Unreadable("the canonical registry declares no targets")
@@ -263,7 +264,7 @@ def place(requires, max_stale_seconds, candidates=NONE):
     second copy of this matching is a second answer waiting to disagree.
     """
     settings = storage_settings()
-    declared = registry_targets()
+    declared = registry_declarations()
     names = candidates or list(declared)
     now = datetime.datetime.now(datetime.timezone.utc)
     qualified = []
@@ -272,7 +273,7 @@ def place(requires, max_stale_seconds, candidates=NONE):
         # Policy first: a forbidden host is forbidden whether or not anything
         # measured it, and reading its measurement would only invite the reader
         # to argue with a capability that was never the objection.
-        forbidden = policy_refusal(declared.get(target), requires)
+        forbidden = policy_refusal(declared.get(target, {}).get(POLICY_KEY), requires)
         if forbidden:
             refusals.append(f"{target}  {forbidden}")
             continue
