@@ -39,6 +39,7 @@ import json
 import os
 import pathlib
 import plistlib
+import platform
 import re
 import subprocess
 import sys
@@ -397,12 +398,34 @@ def main():
     source, declared = requirements_table()
     matcher, matcher_note = placement_module()
 
+    declarations = {}
+    # The matcher is installed as its own helper, so the two can be different
+    # ages on the same host. Ask what this copy can answer instead of assuming.
+    reader = getattr(matcher, "registry_declarations", NONE) if matcher is not NONE else NONE
+    if reader is NONE and matcher is not NONE:
+        print("registry         this matcher predates registry_declarations; "
+              "the placed host's platform cannot be checked")
+    elif reader is not NONE:
+        try:
+            declarations = reader()
+        except matcher.Unreadable as problem:
+            # Losing the registry costs the platform check below, not the run.
+            print(f"registry         unreadable: {problem}")
+
     print(f"caller session   {run('/bin/launchctl', 'managername').strip()}")
     print(f"gui/{UID} domain  {'present' if graphical else 'absent -- nobody is logged in on this host'}")
-    print(f"this host        {here or 'not a registry target (stado registry self said nothing)'}")
+    print(f"this host        {here or 'not a registry target (stado registry self said nothing)'}  "
+          f"{platform.system()} {platform.machine()}")
     print(f"requirements     {source}")
     print(f"matcher          {matcher_note}")
     print(f"staleness window {arguments.max_stale_seconds:.0f}s")
+    if platform.system() != "Darwin":
+        # These units are launchd plists. On any other system this installer has
+        # nothing true to do, and staging plists there would leave a declaration
+        # nothing can ever load.
+        print(f"refused          this host runs {platform.system()}; these are launchd units and "
+              "only macOS loads them")
+        return NONE
 
     elsewhere = []
     for label in TRAJECTORY_OF:
@@ -450,6 +473,17 @@ def main():
         for line in refusals:
             print(f"     not {line}")
         print(f"   retired      {retire_daemon(label)}")
+        # Placement answers with the host the work belongs on, and that is no
+        # longer always a Mac: once the fleet's browser work moves to Linux under
+        # a virtual display, the right answer is a host that cannot load a
+        # launchd plist at all. Say that instead of shipping a plist to it.
+        shape = (declarations.get(host, {}).get("release_platform") or "").strip()
+        if shape and not shape.startswith("darwin"):
+            print(f"   refused      {host} is the right host and the wrong shape: its registry "
+                  f"release_platform is {shape}, and this unit is a launchd plist, which only "
+                  "macOS loads; that trajectory needs a systemd unit there")
+            print(f"   staged       {stage_agent(label, shaped(document, as_daemon=False))}")
+            continue
         if host != here:
             # The job belongs on another machine, and it has never run there, so
             # the unit travels with the decision. Staging a copy here as well
