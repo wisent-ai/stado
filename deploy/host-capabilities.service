@@ -1,0 +1,14 @@
+[Unit]
+# One measurement-and-publication pass, the Linux twin of the macOS
+# com.wisent.host-capabilities LaunchAgent/LaunchDaemon. It is modelled on
+# host-health-beacon.service line for line, because a host publishing what it
+# can do and a host publishing whether it is alive are the same kind of job and
+# should fail, log and restart the same way.
+Description=Wisent host capability measurement and publication (one-shot)
+
+[Service]
+Type=oneshot
+User={USER}
+Group={GROUP}
+Environment=HOME={HOME}
+ExecStart={PYTHON} {HOME}/.stado/bin/publish-host-capabilities

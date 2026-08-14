@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Periodic publication of one macOS host's measured capabilities.
+
+  A capability object is only worth reading while it is fresh: placement refuses
+  a measurement older than its staleness window, so a one-shot publication makes
+  a host invisible minutes after somebody ran the script by hand. This is the
+  same shape as the health beacon that already runs on every host in this fleet
+  -- RunAtLoad plus a StartInterval, one log file, no supervisor of its own.
+
+  The domain is not a detail here, it is the point. This unit is rendered into
+  whichever launchd domain the host's health beacon already occupies: the system
+  domain on a machine nobody logs into, the user's Aqua domain on the operator's
+  laptop. A unit in a session its host does not have never runs at all, which is
+  exactly the fault the capability model exists to make visible, and installing
+  the measurer that way would be the joke that writes itself.
+
+  The account is deliberately NOT overridden here. launchd refused this unit
+  with EX_CONFIG the moment a UserName was added, and the fix belongs in the
+  measurement rather than the unit: what matters is the session of the account
+  the registry declares for this target, not the account that happens to run the
+  measurement, so `measure-host-capabilities.py` inspects the declared one.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{PYTHON}</string>
+        <string>{SCRIPT_PATH}</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>{HOME}</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartInterval</key>
+    <integer>{INTERVAL_SECONDS}</integer>
+    <key>StandardOutPath</key>
+    <string>{LOG_PATH}</string>
+    <key>StandardErrorPath</key>
+    <string>{LOG_PATH}</string>
+</dict>
+</plist>
