@@ -148,6 +148,37 @@ def main():
         f"  caffeinate       exit {awake.returncode}  "
         f"wrote {awake_shot.stat().st_size if awake_shot.is_file() else 0} bytes"
     )
+
+    # "Trying to load the allocator multiple times" is what Chromium says when
+    # something is injected into it. Anything inherited from the deployment
+    # environment would do that to every launch here, so name the variables and
+    # try once with a scrubbed environment.
+    injected = {
+        name: value[: len("a" * 60)]
+        for name, value in os.environ.items()
+        if name.startswith("DYLD_") or name.startswith("LD_")
+    }
+    print(f"  injected env     {injected or '(none)'}")
+    scrubbed = subprocess.run(
+        [
+            str(binary),
+            "--headless=new",
+            f"--user-data-dir={profile}-scrubbed",
+            "--no-first-run",
+            f"--screenshot={shot}-scrubbed.png",
+            "about:blank",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=float(len("s" * 40)),
+        env={"HOME": str(HOME), "PATH": "/usr/bin:/bin", "USER": os.environ.get("USER", "")},
+    )
+    written = pathlib.Path(f"{shot}-scrubbed.png")
+    print(
+        f"  scrubbed env     exit {scrubbed.returncode}  "
+        f"wrote {written.stat().st_size if written.is_file() else 0} bytes"
+    )
     return NONE
 
 
