@@ -1402,6 +1402,16 @@ pub const DECLARED_FIELDS: &[DeclaredField] = &[
         DeclarationSurface::RegistryTarget,
         "service_resolution::resolver_config",
     ),
+    // The host's own refusal, next to what it can do: an excluded capability is a
+    // policy answer ("may not run here") and not a measurement, so the matcher
+    // reports it as a distinct reason rather than as a host that failed a probe.
+    // The reader is the placement matcher, which is Python today; `Fleet` asks for
+    // the reader's name, not for its language.
+    DeclaredField::read(
+        "placement",
+        DeclarationSurface::RegistryTarget,
+        "scripts/place-by-capability.py",
+    ),
     // Known offenders. `weles.actions` is modelled (`WelesPolicy::actions`) and
     // still reaches no host by itself: the worker reads its own
     // `placement-policy.json`, and `stado placement weles-policy` is what

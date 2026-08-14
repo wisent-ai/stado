@@ -95,6 +95,16 @@ CATALOG = [
         "when": NONE,
     },
     {
+        # An excluded capability is a policy answer ("may not run here") and not a
+        # measurement, so the matcher that reads this reports it as its own kind of
+        # refusal. The reader is Python today; a reader is named, not typed.
+        "surface": REGISTRY_TARGET,
+        "path": "placement",
+        "consumer": "fleet",
+        "reader": "scripts/place-by-capability.py",
+        "when": NONE,
+    },
+    {
         "surface": REGISTRY_TARGET,
         "path": "weles.actions",
         "consumer": "operator-copy",
