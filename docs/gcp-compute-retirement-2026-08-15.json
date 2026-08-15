@@ -62,6 +62,60 @@
     "matching_machine_images_found": ["zimage-comfyui-20260202", "zimage-controlnet-20260202"],
     "decision": "retain named disks until their contents can be exported; do not infer that source code repositories preserve disk data"
   },
+  "disk_retirement_classification": {
+    "safe_to_delete_when_compute_mutation_is_available": [
+      "image-video-router-vm",
+      "weles-apple-auth-prod",
+      "wisent-agent-80gb-1777754741-3",
+      "wisent-agent-a100-1777737822-27",
+      "wisent-1333bd59",
+      "wisent-25757579",
+      "wisent-5c56e71c",
+      "wisent-6fd1aaad",
+      "wisent-72c5dfcd",
+      "wisent-7c82d36c",
+      "wisent-82f03ff4",
+      "wisent-88eaf01f",
+      "wisent-b5d3e0ee",
+      "wisent-bc5a7895",
+      "wisent-ed259745"
+    ],
+    "retain_for_unique_data_export": [
+      {
+        "name": "content-platform-vm",
+        "risk": "high",
+        "reason": "The workload moved to Echo and Weles, but the VM was also a recordings host and no evidence proves that its ~/weles/recordings contents were copied."
+      },
+      {
+        "name": "needher-watermark-a100-80gb-20260622",
+        "risk": "unknown",
+        "reason": "Needher watermark/content pipeline disk; no output or checkpoint export is evidenced."
+      },
+      {
+        "name": "vatt-a100",
+        "risk": "unknown",
+        "reason": "One-off VATT A100 experiment; no output destination is evidenced."
+      },
+      {
+        "name": "sapiens2-bodyhorror",
+        "risk": "unknown",
+        "reason": "Completed Sapiens2/Needher experiment; no unique output export is evidenced."
+      },
+      {
+        "name": "wisent-zimage-interp-jt",
+        "risk": "unknown",
+        "reason": "Echo Z-Image interpolation experiment; no checkpoint or result migration is evidenced."
+      }
+    ],
+    "evidence": [
+      ".transcript-lake/events/runtime=omp/date=2026-07-28/part-459280cdc004.ndjson:224-232",
+      ".transcript-lake/events/runtime=claude/date=2026-04-22/part-96a2eadf91c4.ndjson:533-546",
+      "docs/incidents/2026-07-27-gcp-billing-outage.md:136-183",
+      "stado-rs/data/registry.json:194-210",
+      "stado-rs/data/registry.json:259-294",
+      "stado-rs/data/registry.json:553-595"
+    ]
+  },
   "workload_classification": {
     "fully_replaced": [
       {"gcp_family":"weles-apple-auth-prod","replacement":"Weles on charless-mac-mini","unit":"com.wisent.always-on.weles"},
@@ -89,11 +143,15 @@
     {"name":"comfyui-static-ip","scope":"us-central1","address":"34.173.83.213","state":"RESERVED"},
     {"name":"wisent-dev-ip","scope":"us-central1","address":"34.171.69.169","state":"RESERVED"}
   ],
-  "retirement_probe": {
-    "operation": "delete TERMINATED instance wisent-5c56e71c in us-central1-b",
+  "retirement_attempts": {
     "result": "blocked",
     "error": "This API method requires billing to be enabled.",
-    "decision": "do not link billing; keep all residual resources inert and preserve this inventory"
+    "operations": [
+      "delete TERMINATED instance wisent-5c56e71c in us-central1-b",
+      "delete RESERVED address comfyui-static-ip in us-central1"
+    ],
+    "conclusion": "Independent Compute Engine resource families reject deletion while billing is detached; there is no supported deletion route that preserves the five disks awaiting unique-data export.",
+    "decision": "do not link billing and do not delete project wisent-480400; keep all residual resources inert under billingEnabled=false"
   },
   "sources": [
     "gcloud billing projects describe wisent-480400 --format=json",
