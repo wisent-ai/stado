@@ -65,12 +65,20 @@ pub async fn install(
     target: &ComputeTarget,
     deployment: &Deployment,
     api_key: &str,
+    huggingface_token: Option<&str>,
     runner: &Runner,
 ) -> Result<Value, DeployError> {
     safe_runtime(deployment)?;
     if api_key.is_empty() || api_key.chars().any(char::is_control) {
         return Err(DeployError(
             "inference bearer must be non-empty and single-line".to_string(),
+        ));
+    }
+    if huggingface_token
+        .is_some_and(|token| token.is_empty() || token.chars().any(char::is_control))
+    {
+        return Err(DeployError(
+            "Hugging Face token must be non-empty and single-line".to_string(),
         ));
     }
     let name = shlex_quote(&deployment.name);
@@ -95,7 +103,48 @@ pub async fn install(
         .as_deref()
         .map(|path| format!("{path}:/data/huggingface"))
         .unwrap_or_else(|| "\"$root/cache:/data/huggingface\"".to_string());
+    let adapter_downloads = deployment
+        .adapters
+        .iter()
+        .map(|adapter| {
+            let adapter_path = format!(
+                "/data/huggingface/stado-adapters/{}/{}",
+                adapter.name, adapter.revision
+            );
+            let python = format!(
+                "from huggingface_hub import snapshot_download; snapshot_download(repo_id={}, revision={}, local_dir={})",
+                serde_json::to_string(&adapter.repository).expect("repository is serializable"),
+                serde_json::to_string(&adapter.revision).expect("revision is serializable"),
+                serde_json::to_string(&adapter_path).expect("adapter path is serializable"),
+            );
+            format!(
+                "docker run --rm --env-file \"$root/runtime.env\" -v {cache_mount} --entrypoint python3 {image} -c {}",
+                shlex_quote(&python)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let lora_arguments = if deployment.adapters.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " --enable-lora --max-loras {} --max-lora-rank 64 --lora-modules {}",
+            deployment.adapters.len(),
+            deployment
+                .adapters
+                .iter()
+                .map(|adapter| format!(
+                    "{}=/data/huggingface/stado-adapters/{}/{}",
+                    adapter.name, adapter.name, adapter.revision
+                ))
+                .collect::<Vec<_>>()
+                .join(" ")
+        )
+    };
     let secret = shlex_quote(&STANDARD.encode(api_key));
+    let huggingface_secret = huggingface_token
+        .map(|token| shlex_quote(&STANDARD.encode(token)))
+        .unwrap_or_else(|| "''".to_string());
     let unit = shlex_quote(&unit_name(&deployment.name));
     let reservation = Reservation {
         deployment: deployment.name.clone(),
@@ -104,6 +153,7 @@ pub async fn install(
         engine: deployment.engine.name.clone(),
         model: deployment.model.repository.clone(),
         revision: deployment.model.revision.clone(),
+        adapters: deployment.adapters.clone(),
         endpoint_host: deployment.endpoint.host.clone(),
         port: deployment.endpoint.port,
     };
@@ -140,15 +190,21 @@ chmod 600 "$root/api-key"
 printf 'VLLM_API_KEY=' > "$root/runtime.env"
 cat "$root/api-key" >> "$root/runtime.env"
 printf 'HF_HOME=/data/huggingface\n' >> "$root/runtime.env"
+if [ -n {huggingface_secret} ]; then
+  printf 'HF_TOKEN=' >> "$root/runtime.env"
+  printf '%s' {huggingface_secret} | base64 --decode >> "$root/runtime.env"
+  printf '\n' >> "$root/runtime.env"
+fi
 chmod 600 "$root/runtime.env"
 printf '%s' {reservation} | base64 --decode > "$reservation"
 chmod 600 "$reservation"
 docker pull {image}
+{adapter_downloads}
 systemctl --user disable --now "$unit" || true
 rm -f "$HOME/.config/systemd/user/$unit"
 systemctl --user daemon-reload || true
 docker rm -f "stado-inference-$name" || true
-container=$(docker run --detach --restart unless-stopped --name "stado-inference-$name" --gpus all --network host --ipc host --env-file "$root/runtime.env" -v {cache_mount} {raw_image} --model {raw_repository} --revision {raw_revision} --served-model-name {raw_name} --host {raw_endpoint_host} --port {port} --max-model-len {max_model_len}{kv_cache_argument} --enable-auto-tool-choice --tool-call-parser hermes)
+container=$(docker run --detach --restart unless-stopped --name "stado-inference-$name" --gpus all --network host --ipc host --env-file "$root/runtime.env" -v {cache_mount} {raw_image} --model {raw_repository} --revision {raw_revision} --served-model-name {raw_name} --host {raw_endpoint_host} --port {port} --max-model-len {max_model_len}{kv_cache_argument}{lora_arguments} --enable-auto-tool-choice --tool-call-parser hermes)
 printf 'CONTAINER\t%s\n' "$container"
 printf 'STATUS\tstarted\n'
 "#,
@@ -177,6 +233,7 @@ pub async fn update_reservation(
         engine: deployment.engine.name.clone(),
         model: deployment.model.repository.clone(),
         revision: deployment.model.revision.clone(),
+        adapters: deployment.adapters.clone(),
         endpoint_host: deployment.endpoint.host.clone(),
         port: deployment.endpoint.port,
     };
@@ -253,6 +310,7 @@ printf 'READY\tauthenticated\n'
 pub async fn verify_completion(
     target: &ComputeTarget,
     deployment: &Deployment,
+    served_model: &str,
     api_key: &str,
     runner: &Runner,
 ) -> Result<Value, DeployError> {
@@ -260,7 +318,7 @@ pub async fn verify_completion(
     let secret = shlex_quote(&STANDARD.encode(api_key));
     let payload = shlex_quote(
         &json!({
-            "model": deployment.name,
+            "model": served_model,
             "messages": [{"role": "user", "content": "Reply with the single word ready."}],
             "max_tokens": u8::BITS,
         })
