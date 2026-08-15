@@ -57,6 +57,7 @@ if [ ! -f "$runner_root/.runner" ]; then
 else
   mkdir -p "$runner_root/_work" "$runner_root/_diag"
 fi
+printf '%s\n' "$HOME/.stado/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" > "$runner_root/.path"
 
 cat > "$launcher" <<'LAUNCHER'
 #!/bin/sh
