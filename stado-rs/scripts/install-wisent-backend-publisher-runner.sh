@@ -97,11 +97,13 @@ plutil -lint "$plist" >/dev/null
 uid=$(id -u)
 launchctl bootout "gui/$uid/com.wisent.actions-runner.wisent-backend-publisher" >/dev/null 2>&1 || true
 rm -f "$HOME/Library/LaunchAgents/com.wisent.actions-runner.wisent-backend-publisher.plist"
-root launchctl bootout system/com.wisent.actions-runner.wisent-backend-publisher >/dev/null 2>&1 || true
 root install -o root -g wheel -m 0644 "$plist" /Library/LaunchDaemons/com.wisent.actions-runner.wisent-backend-publisher.plist
-root launchctl bootstrap system /Library/LaunchDaemons/com.wisent.actions-runner.wisent-backend-publisher.plist
+if root launchctl print system/com.wisent.actions-runner.wisent-backend-publisher >/dev/null 2>&1; then
+  root launchctl kickstart -k system/com.wisent.actions-runner.wisent-backend-publisher
+else
+  root launchctl bootstrap system /Library/LaunchDaemons/com.wisent.actions-runner.wisent-backend-publisher.plist
+fi
 root launchctl enable system/com.wisent.actions-runner.wisent-backend-publisher
-root launchctl kickstart -k system/com.wisent.actions-runner.wisent-backend-publisher
 root launchctl print system/com.wisent.actions-runner.wisent-backend-publisher | grep -F 'state = running' >/dev/null
 
 printf '%s\n' "wisent-backend publisher runner registered and running as $runner_name"
