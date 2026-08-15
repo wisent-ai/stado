@@ -62,6 +62,28 @@
     "matching_machine_images_found": ["zimage-comfyui-20260202", "zimage-controlnet-20260202"],
     "decision": "retain named disks until their contents can be exported; do not infer that source code repositories preserve disk data"
   },
+  "workload_classification": {
+    "fully_replaced": [
+      {"gcp_family":"weles-apple-auth-prod","replacement":"Weles on charless-mac-mini","unit":"com.wisent.always-on.weles"},
+      {"gcp_family":"model-router Cloud Run family","replacement":"Brama on charless-mac-mini","unit":"com.wisent.always-on.brama"},
+      {"gcp_family":"content-platform-vm","replacement":"Echo","placement":"Vercel project echo"},
+      {"gcp_family":"wisent-mig-api-blue/green","replacement":"wisent-backend on charless-mac-mini","unit":"com.wisent.compute.service.wisent-backend-api"}
+    ],
+    "declared_but_currently_offline": [
+      {"gcp_family":"image-video-router-vm","replacement":"image-video-router","target":"ubuntu-server-rtx-pro-6000","unit":"image-video-router-release.service"},
+      {"gcp_family":"wisent-mig-inference-blue/green","replacement":"Stado inference deployment chat-primary routed by Brama","target":"ubuntu-server-rtx-pro-6000"},
+      {"gcp_family":"label-model portion of wisent-mig-training-blue/green","replacement":"Stado label-model training capability","target":"ubuntu-server-rtx-pro-6000"}
+    ],
+    "replacement_gaps": [
+      {"gcp_family":"image-gen-comfyui MIG/templates/images","reason":"image-video-router needs an external ComfyUI engine and does not replace it"},
+      {"gcp_family":"wisent-mig-images-blue/green","reason":"superseded wisent-backend-images has no evidence-backed full replacement"},
+      {"gcp_family":"non-label workloads from wisent-mig-training-blue/green","reason":"declared label-model capability is narrower than the former general training family"},
+      {"gcp_family":"needher-watermark-a100-80gb-20260622, vatt-a100, wisent-zimage-interp-jt","reason":"no matching current Stado service, inference deployment, training capability, or active owner declaration"},
+      {"gcp_family":"sapiens2-bodyhorror","reason":"completed research workload with unique outputs; not a service to restart"},
+      {"gcp_family":"wisent-agent-* and wisent-<hash> workers","reason":"Stado replaces scheduling, but disk names do not prove workload or data migration"}
+    ],
+    "retirement_rule":"delete no persistent disk until it maps to a fully replaced workload or its unique contents have been exported"
+  },
   "reserved_addresses": [
     {"name":"wisent-lb-ip","scope":"global","address":"34.95.101.115","state":"IN_USE"},
     {"name":"comfyui-static-ip","scope":"us-central1","address":"34.173.83.213","state":"RESERVED"},
