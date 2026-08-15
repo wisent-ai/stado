@@ -65,7 +65,13 @@ VAULTS = (
 IDENTIFIER_FIELDS = ("username", "user", "login", "email", "account", "id", "url", "host")
 MIN_LENGTH = len("a" * 12)
 MIN_CLASSES = len("abc")
-TIMEOUT = 3600
+# The inner scrub now waits for the streamer's writer lease before it rewrites
+# anything, and a backfill can hold that lease for hours; on top of the wait it
+# still has to sweep several gigabytes. A timeout shorter than wait + sweep
+# turns every scheduled run into a killed process that reports nothing, which
+# is how this job spent its first hours. launchd will not start a second copy
+# while one runs, so a long ceiling costs nothing.
+TIMEOUT = 4 * 3600
 # Where a scheduled run remembers how far it got. Not in the Lake: the Lake is the
 # thing being repaired, and its own tooling deletes derived files.
 STATE = (
@@ -211,10 +217,13 @@ def collect(vault):
         else:
             skipped.append((item["id"], kind, ",".join(reasons) or "no fields"))
     print(f"vault {vault.name}")
-    for kind in sorted(per_kind):
+    # Some stored items carry no kind at all, and a set with None in it cannot
+    # be sorted against strings -- the fault that made this job exit 1 every
+    # hour while reporting nothing. An unkinded item is still material.
+    for kind in sorted(per_kind, key=lambda name: name or ""):
         counters = per_kind[kind]
         print(
-            f"  kind {kind:20s} items={counters['items']:4d}"
+            f"  kind {(kind or 'unkinded'):20s} items={counters['items']:4d}"
             f" contributed={counters['contributed']:4d} values={counters['values']:4d}"
             f" fields_rejected={counters['rejected']:4d}"
         )
