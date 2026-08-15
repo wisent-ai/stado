@@ -10,13 +10,24 @@ same `gui/<uid>` domain, so it runs as the user whose keyring unlocks the vault.
 resolves its keyring through it, which fails in a way that reads like a missing
 vault.
 
-Writes the plist and reports the unit's state. Bootstrapping is left to the caller
-(`launchctl bootstrap gui/<uid> <plist>`), because a helper running in the launchd
-Background session cannot reach the GUI domain, and the same file works from either.
+A LaunchAgent cannot read ~/Documents: macOS answers `Operation not permitted` with
+no prompt, because the job holds no Documents grant and granting one would change
+this host's security posture. So the two scripts are COPIED to
+`~/.local/libexec/transcript-lake-scrub/` and the unit runs the copies, the same
+separation the streamer has between its checkout and `~/.local/bin`. Digests of both
+are reported, so a stale copy is visible rather than silent; re-running this installs
+the current source.
+
+Writes the copies and the plist, then reports the unit's state. Bootstrapping is left
+to the caller (`launchctl bootstrap gui/<uid> <plist>`), because a helper running in
+the launchd Background session cannot reach the GUI domain, and the same file works
+from either.
 """
 
+import hashlib
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 
@@ -27,15 +38,15 @@ LABEL = "com.wisent.transcript-lake-secret-scrub"
 AGENTS = HOME / "Library" / "LaunchAgents"
 LOGS = HOME / "Library" / "Logs"
 PLIST = AGENTS / f"{LABEL}.plist"
-JOB = (
-    HOME
-    / "Documents"
-    / "CodingProjects"
-    / "Wisent"
-    / "wisent-compute"
-    / "scripts"
-    / "scrub-lake-from-vault.py"
+LIBEXEC = HOME / ".local" / "libexec" / "transcript-lake-scrub"
+WISENT = HOME / "Documents" / "CodingProjects" / "Wisent"
+# (source in the repository, installed name) — the job first, its scrub second.
+SOURCES = (
+    (WISENT / "wisent-compute" / "scripts" / "scrub-lake-from-vault.py", "scrub-lake-from-vault.py"),
+    (WISENT / "transcript-lake" / "scripts" / "scrub-known-secret.py", "scrub-known-secret.py"),
 )
+JOB = LIBEXEC / SOURCES[ZERO][1]
+
 LOG = LOGS / "transcript-lake-secret-scrub.log"
 # Hourly. The streamer imports continuously, and a secret that reached the archive
 # should not sit there for a day; a full pass measured under three minutes.
@@ -50,6 +61,7 @@ TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
     <key>ProgramArguments</key>
     <array>
         <string>/usr/bin/python3</string>
+        <string>-u</string>
         <string>{job}</string>
     </array>
     <key>EnvironmentVariables</key>
@@ -80,10 +92,25 @@ TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
 """
 
 
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()[: len("a" * 8)]
+
+
 def main():
     os.umask(0o022)
-    if not JOB.is_file():
-        raise SystemExit(f"no job script at {JOB}")
+    for source, _ in SOURCES:
+        if not source.is_file():
+            raise SystemExit(f"no source at {source}")
+    LIBEXEC.mkdir(parents=True, exist_ok=True)
+    os.chmod(LIBEXEC, 0o755)
+    for source, name in SOURCES:
+        installed = LIBEXEC / name
+        fresh = not installed.is_file() or digest(installed) != digest(source)
+        if fresh:
+            shutil.copyfile(source, installed)
+            os.chmod(installed, 0o755)
+        print(f"{'installed' if fresh else 'unchanged'} {installed} sha256[:8]={digest(installed)}"
+              f" from {source}")
     AGENTS.mkdir(parents=True, exist_ok=True)
     LOGS.mkdir(parents=True, exist_ok=True)
     content = TEMPLATE.format(
