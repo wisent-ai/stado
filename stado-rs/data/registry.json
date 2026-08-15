@@ -635,6 +635,14 @@
           "path": "/Users/charles/Library/LaunchAgents/com.wisent.compute.service.weles-keyword-planner-api.plist",
           "kind": "launchd",
           "managed_since": "2026-08-13T18:25:14.538845+00:00"
+        },
+        {
+          "name": "com.wisent.actions-runner.wisent-backend-publisher",
+          "unit": "",
+          "label": "com.wisent.actions-runner.wisent-backend-publisher",
+          "path": "/Library/LaunchDaemons/com.wisent.actions-runner.wisent-backend-publisher.plist",
+          "kind": "launchd",
+          "managed_since": "2026-08-15T16:57:43.770653+00:00"
         }
       ],
       "pinned_only": true,
