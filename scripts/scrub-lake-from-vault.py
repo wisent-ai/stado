@@ -39,7 +39,7 @@ NONE = None
 ZERO = len("")
 HOME = pathlib.Path(os.environ.get("HOME") or os.path.expanduser("~"))
 SKARBIEC = HOME / ".stado" / "bin" / "skarbiec"
-SCRUB = (
+REPO_SCRUB = (
     HOME
     / "Documents"
     / "CodingProjects"
@@ -48,6 +48,7 @@ SCRUB = (
     / "scripts"
     / "scrub-known-secret.py"
 )
+
 PYTHON = "/usr/bin/python3"
 LAKE = pathlib.Path(os.environ.get("LAKE_DATA") or (HOME / ".transcript-lake"))
 # Both vaults this host owns, named explicitly: ~/.stado holds around twenty
@@ -65,6 +66,36 @@ IDENTIFIER_FIELDS = ("username", "user", "login", "email", "account", "id", "url
 MIN_LENGTH = len("a" * 12)
 MIN_CLASSES = len("abc")
 TIMEOUT = 3600
+# Where a scheduled run remembers how far it got. Not in the Lake: the Lake is the
+# thing being repaired, and its own tooling deletes derived files.
+STATE = (
+    pathlib.Path(os.environ.get("HOME") or os.path.expanduser("~"))
+    / "Library"
+    / "Application Support"
+    / "wisent-transcript-lake-scrub"
+    / "state.json"
+)
+# A run covers what changed since the previous one, with a small overlap for clock
+# and mtime granularity, and sweeps everything once a day because the literal list
+# grows when the vault does.
+OVERLAP_SECONDS = 60 * 10
+FULL_SWEEP_SECONDS = 60 * 60 * 24
+
+
+def resolve_scrub():
+    """Where the scrub script is, in the order a caller can rely on.
+
+    A LaunchAgent cannot read ~/Documents: macOS denies it with `Operation not
+    permitted` and no prompt, because the job holds no Documents grant. So the
+    installed copy sits beside this file outside ~/Documents and wins, and the
+    repository path is the fallback for an operator running this by hand.
+    """
+    named = os.environ.get("LAKE_SCRUB_SCRIPT")
+    sibling = pathlib.Path(__file__).resolve().parent / "scrub-known-secret.py"
+    for candidate in (pathlib.Path(named) if named else NONE, sibling, REPO_SCRUB):
+        if candidate is not NONE and candidate.is_file():
+            return candidate
+    return REPO_SCRUB
 
 
 def digest(value):
@@ -112,56 +143,112 @@ def run(argv, vault, stdin=NONE):
 
 
 def collect(vault):
-    """Every value in one vault that could be a secret in text, plus counters.
+    """Every value in one vault that could be a secret in text, with coverage
+    reported per kind and every item that contributed nothing named.
 
     `list` returns envelope metadata only, so it is safe to log; `get` returns
     decrypted fields, so its output is consumed here and never surfaces."""
     if not vault.is_file():
         print(f"vault {vault} absent")
-        return set(), {}
+        return set()
     listing = run([str(SKARBIEC), "list"], vault)
     if listing.returncode != ZERO:
         print(f"vault {vault} unreadable: {listing.stderr.strip().splitlines()[-1:]}")
-        return set(), {"unreadable": 1}
+        return set()
     items = json.loads(listing.stdout)
     values = set()
-    tally = {"items": len(items), "read_failed": ZERO, "fields": ZERO, "rejected": ZERO}
+    per_kind = {}
+    skipped = []
+    unreadable = []
     for item in items:
         if item.get("deleted"):
             continue
+        # A Weles-managed item can carry no kind at all, and `None` does not sort.
+        kind = item.get("kind") or "unknown"
+        counters = per_kind.setdefault(
+            kind, {"items": ZERO, "contributed": ZERO, "values": ZERO, "rejected": ZERO}
+        )
+        counters["items"] += 1
         read = run([str(SKARBIEC), "get", item["id"]], vault)
         if read.returncode != ZERO:
-            tally["read_failed"] += 1
+            unreadable.append((item["id"], kind, "unreadable"))
             continue
         try:
             document = json.loads(read.stdout)
         except ValueError:
-            tally["read_failed"] += 1
+            unreadable.append((item["id"], kind, "not JSON"))
             continue
         fields = document.get("fields")
         if not isinstance(fields, dict):
+            skipped.append((item["id"], kind, "no fields"))
             continue
+        contributed = ZERO
+        reasons = []
         for name, value in fields.items():
             if name.lower() in IDENTIFIER_FIELDS:
+                reasons.append(f"{name}:identifier")
                 continue
-            tally["fields"] += 1
             if material(value):
                 values.add(value)
+                contributed += 1
             else:
-                tally["rejected"] += 1
-    print(
-        f"vault {vault.name} items={tally['items']} fields={tally['fields']}"
-        f" material={len(values)} rejected_as_not_secret={tally['rejected']}"
-        f" unreadable_items={tally['read_failed']}"
-    )
-    return values, tally
+                counters["rejected"] += 1
+                reasons.append(
+                    f"{name}:"
+                    + (
+                        "empty"
+                        if not isinstance(value, str) or not value
+                        else "multiline"
+                        if "\n" in value or "\r" in value
+                        else f"len<{MIN_LENGTH}"
+                        if len(value) < MIN_LENGTH
+                        else f"classes<{MIN_CLASSES}"
+                    )
+                )
+        counters["values"] += contributed
+        if contributed:
+            counters["contributed"] += 1
+        else:
+            skipped.append((item["id"], kind, ",".join(reasons) or "no fields"))
+    print(f"vault {vault.name}")
+    for kind in sorted(per_kind):
+        counters = per_kind[kind]
+        print(
+            f"  kind {kind:20s} items={counters['items']:4d}"
+            f" contributed={counters['contributed']:4d} values={counters['values']:4d}"
+            f" fields_rejected={counters['rejected']:4d}"
+        )
+    print(f"  items contributing nothing {len(skipped)}, unreadable {len(unreadable)}")
+    for item_id, kind, reason in (skipped + unreadable)[: len("a" * 40)]:
+        print(f"    skipped {item_id} kind={kind} why={reason[: len('a' * 90)]}")
+    if len(skipped) + len(unreadable) > len("a" * 40):
+        print(f"    ... and {len(skipped) + len(unreadable) - len('a' * 40)} more")
+    return values
+
+
+def read_state():
+    """When the last run and the last full sweep happened. A missing or damaged
+    state file means: sweep everything, which is the safe direction."""
+    try:
+        return json.loads(STATE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def write_state(state):
+    STATE.parent.mkdir(parents=True, exist_ok=True)
+    temporary = STATE.with_name(f"{STATE.name}.tmp-{os.getpid()}")
+    temporary.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+    os.replace(temporary, STATE)
 
 
 def main():
     started = time.time()
     print(f"started {time.strftime('%Y-%m-%dT%H:%M:%S%z')}")
-    if not SCRUB.is_file():
-        raise SystemExit(f"no scrub script at {SCRUB}")
+    scrub_script = resolve_scrub()
+    if not scrub_script.is_file():
+        raise SystemExit(f"no scrub script at {scrub_script}")
+    print(f"scrub {scrub_script} sha256[:8]={digest(scrub_script.read_text(encoding='utf-8'))}")
     if not SKARBIEC.is_file():
         raise SystemExit(f"no skarbiec binary at {SKARBIEC}")
     if not LAKE.is_dir():
@@ -169,8 +256,7 @@ def main():
 
     literals = set()
     for vault in VAULTS:
-        values, _ = collect(vault)
-        literals |= values
+        literals |= collect(vault)
     print(f"literals from the vaults {len(literals)}")
     for value in sorted(literals, key=digest):
         print(f"  literal len={len(value)} sha256[:8]={digest(value)}")
@@ -179,14 +265,26 @@ def main():
         print(f"finished in {time.time() - started:.1f}s")
         return ZERO
 
+    # Incremental by default and complete once a day: partitions are append-only, so
+    # only a file written since the last pass can have gained a secret, but a full
+    # sweep still has to happen because the literal list itself changes when the
+    # vault does, and a new item's value may sit in an old partition.
+    state = read_state()
+    last_full = float(state.get("last_full_sweep", ZERO))
+    full = time.time() - last_full > FULL_SWEEP_SECONDS
+    since = ZERO if full else max(float(state.get("last_run", ZERO)) - OVERLAP_SECONDS, ZERO)
+    print(f"sweep {'full' if full else 'incremental'} since={since:.0f}")
+
     scrub = run(
         [
             PYTHON,
-            str(SCRUB),
+            str(scrub_script),
             "--secret-file",
             "-",
             "--data-dir",
             str(LAKE),
+            "--since",
+            str(int(since)),
             "--apply",
         ],
         VAULTS[ZERO],
@@ -197,10 +295,24 @@ def main():
     for line in scrub.stderr.splitlines():
         print("  stderr " + line[: len("a" * 200)])
     print(f"scrub exit {scrub.returncode}")
+    busy = "state writer lock is held" in scrub.stdout + scrub.stderr
+    if busy:
+        # The streamer holds the lease for the length of a catch-up. Nothing was
+        # rewritten, so the next run must cover the same window again.
+        print("lake busy: the streamer holds the writer lease; state not advanced")
+    else:
+        write_state(
+            {
+                "last_run": started,
+                "last_full_sweep": started if full else last_full,
+                "literals": len(literals),
+            }
+        )
+        print(f"state {STATE}")
     print(f"finished in {time.time() - started:.1f}s")
     # A refused literal (over its file cap) is a report, not a failure of the run:
     # exit non-zero so the operator sees it, after the accepted ones were applied.
-    return scrub.returncode
+    return 75 if busy else scrub.returncode
 
 
 sys.exit(main())
