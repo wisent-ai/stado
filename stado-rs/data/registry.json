@@ -291,10 +291,10 @@
             "url": "http://127.0.0.1:8794"
           }
         },
-        "managed_service": "com.wisent.always-on.weles"
+        "managed_service": "com.wisent.weles-echo-api"
       },
       "stado-object-api": {
-        "managed_service": "com.wisent.always-on.weles",
+        "managed_service": "com.wisent.always-on.stado-object-api",
         "active_host": "charless-mac-mini",
         "endpoints": {
           "charless-mac-mini": {
