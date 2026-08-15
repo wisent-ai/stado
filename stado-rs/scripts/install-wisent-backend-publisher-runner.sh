@@ -63,7 +63,6 @@ cat > "$launcher" <<'LAUNCHER'
 set -eu
 export HOME=/Users/charles
 export PATH="$HOME/.stado/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-export ACTIONS_RUNNER_HOOK_JOB_STARTED="$HOME/.stado/actions-runner-wisent-backend-publisher/clean-work.sh"
 export ACTIONS_RUNNER_HOOK_JOB_COMPLETED="$HOME/.stado/actions-runner-wisent-backend-publisher/clean-work.sh"
 exec "$HOME/.stado/actions-runner-wisent-backend-publisher/bin/runsvc.sh"
 LAUNCHER
