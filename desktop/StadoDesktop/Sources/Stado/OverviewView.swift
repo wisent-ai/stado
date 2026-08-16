@@ -29,11 +29,11 @@ struct OverviewView: View {
                         tone: snapshot.counts.running > 0 ? .healthy : .neutral
                     )
                     MetricCard(
-                        title: "Live workers",
-                        value: snapshot.liveAgents.count.formatted(),
-                        detail: snapshot.staleAgents.isEmpty ? "No stale worker reports" : "\(snapshot.staleAgents.count) stale reports",
+                        title: "Registered workers",
+                        value: snapshot.workers.count.formatted(),
+                        detail: workerMetricDetail,
                         symbol: "server.rack",
-                        tone: snapshot.liveAgents.isEmpty ? .warning : .healthy
+                        tone: unavailableWorkerCount > 0 ? .critical : (liveWorkerCount == 0 ? .warning : .healthy)
                     )
                     MetricCard(
                         title: "Free slots",
@@ -43,6 +43,8 @@ struct OverviewView: View {
                         tone: snapshot.liveAgents.isEmpty ? .warning : (snapshot.throughput.liveTotalFreeSlots > 0 ? .healthy : .neutral)
                     )
                 }
+
+                workerAvailabilityCard
 
                 HStack(alignment: .top, spacing: StadoTheme.Space.md) {
                     capacityCard
@@ -84,17 +86,104 @@ struct OverviewView: View {
         return "\(source) · refreshed \(lastUpdated.formatted(.relative(presentation: .named)))"
     }
 
+    private var liveWorkerCount: Int {
+        snapshot.workers.count { $0.status == .live }
+    }
+
+    private var unavailableWorkerCount: Int {
+        snapshot.workers.count { $0.status == .unavailable }
+    }
+
+    private var staleWorkerCount: Int {
+        snapshot.workers.count { $0.status == .stale }
+    }
+
+    private var workerMetricDetail: String {
+        var parts = ["\(liveWorkerCount) live"]
+        if unavailableWorkerCount > 0 {
+            parts.append("\(unavailableWorkerCount) unavailable")
+        }
+        if staleWorkerCount > 0 {
+            parts.append("\(staleWorkerCount) stale")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private var availabilityIssues: [WorkerNode] {
+        snapshot.workers.filter { $0.status != .live || !$0.declared }
+    }
+
     private var operationalStatus: (label: String, tone: StatusTone) {
-        if snapshot.counts.queue > 0 && snapshot.liveAgents.isEmpty {
+        if snapshot.counts.queue > 0 && liveWorkerCount == 0 {
             return ("Queue blocked", .critical)
         }
-        if snapshot.counts.failed > 0 {
-            return ("Recent failures", .warning)
+        if unavailableWorkerCount > 0 {
+            return ("Fleet degraded", .critical)
         }
-        if snapshot.liveAgents.isEmpty {
+        if snapshot.counts.failed > 0 || staleWorkerCount > 0 {
+            return ("Attention required", .warning)
+        }
+        if liveWorkerCount == 0 {
             return ("No live workers", .warning)
         }
         return ("Fleet reporting", .healthy)
+    }
+
+    private var workerAvailabilityCard: some View {
+        StadoCard {
+            VStack(alignment: .leading, spacing: StadoTheme.Space.sm) {
+                HStack {
+                    Label("Worker availability", systemImage: "server.rack")
+                        .font(.headline)
+                    Spacer()
+                    Text("\(snapshot.workers.count) registered or observed")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if snapshot.workers.isEmpty {
+                    UnavailableNotice(
+                        title: "Worker inventory unavailable",
+                        detail: "The dashboard did not publish any registered workers or capacity identities."
+                    )
+                } else if availabilityIssues.isEmpty {
+                    Label(
+                        "Every registered worker has a current capacity report.",
+                        systemImage: "checkmark.circle.fill"
+                    )
+                    .font(.subheadline)
+                    .foregroundStyle(StatusTone.healthy.color)
+                } else {
+                    ForEach(availabilityIssues) { worker in
+                        HStack(alignment: .top, spacing: StadoTheme.Space.sm) {
+                            Image(systemName: worker.status == .unavailable ? "xmark.circle.fill" : "clock.badge.exclamationmark.fill")
+                                .foregroundStyle(worker.status == .unavailable ? StatusTone.critical.color : StatusTone.warning.color)
+                                .accessibilityHidden(true)
+                            VStack(alignment: .leading, spacing: StadoTheme.Space.xxs) {
+                                Text(worker.displayName)
+                                    .font(.subheadline.weight(.semibold))
+                                    .textSelection(.enabled)
+                                Text(worker.availabilityReason)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                if let age = worker.ageSeconds {
+                                    Text("Last capacity report: \(StadoFormat.duration(age)) ago")
+                                        .font(.caption)
+                                        .foregroundStyle(.tertiary)
+                                }
+                            }
+                            Spacer()
+                            StatusPill(
+                                label: worker.status == .unavailable ? "Unavailable" : (worker.status == .stale ? "Stale" : "Unregistered"),
+                                tone: worker.status == .unavailable ? .critical : .warning
+                            )
+                        }
+                        .accessibilityElement(children: .combine)
+                    }
+                }
+            }
+        }
     }
 
     private var capacityCard: some View {
