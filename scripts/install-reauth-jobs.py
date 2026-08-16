@@ -86,6 +86,10 @@ FALLBACK_REQUIREMENTS = {
     "kimi/login": ["display", "browser-render"],
     "codex/login": ["display", "browser-render"],
 }
+# The service that executes these trajectories, used when the declaration is not
+# on this host. It is what makes "which machine may run this" a derivation from
+# the registry rather than a list somebody maintains.
+FALLBACK_EXECUTOR = "com.wisent.always-on.weles"
 REQUIREMENTS_CANDIDATES = (
     pathlib.Path(os.environ.get("WELES_TRAJECTORY_REQUIREMENTS", "")),
     HOME / "weles" / "scripts" / "trajectories" / "requirements.json",
@@ -133,26 +137,47 @@ def self_target():
 
 
 def requirements_table():
-    """Return (source, {trajectory: [capability]}) from the declaration if present."""
+    """Return (source, {trajectory: [capability]}, executor).
+
+    `executor` is the registry service that runs these trajectories. It decides
+    WHICH hosts are candidates at all, and it belongs in the same declaration as
+    the capabilities so the two cannot drift: a machine that does not run the
+    Weles worker is not a candidate for a Weles trajectory, whatever it can
+    measure, and no exclusion list has to be kept anywhere to say so.
+    """
     for path in REQUIREMENTS_CANDIDATES:
         if not str(path) or not path.is_file():
             continue
         try:
             document = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as problem:
-            return f"{path} (unreadable: {problem}; using the built-in table)", FALLBACK_REQUIREMENTS
+            return (
+                f"{path} (unreadable: {problem}; using the built-in table)",
+                FALLBACK_REQUIREMENTS,
+                FALLBACK_EXECUTOR,
+            )
         schema = document.get("schema")
         if schema != REQUIREMENTS_SCHEMA:
             return (
                 f"{path} (declares schema {schema!r}, not {REQUIREMENTS_SCHEMA}; "
                 "using the built-in table)",
                 FALLBACK_REQUIREMENTS,
+                FALLBACK_EXECUTOR,
             )
         declared = document.get("trajectories")
         if not isinstance(declared, dict):
-            return f"{path} (declares no trajectories; using the built-in table)", FALLBACK_REQUIREMENTS
-        return str(path), declared
-    return "built-in table (weles requirements.json is not on this host)", FALLBACK_REQUIREMENTS
+            return (
+                f"{path} (declares no trajectories; using the built-in table)",
+                FALLBACK_REQUIREMENTS,
+                FALLBACK_EXECUTOR,
+            )
+        executor = document.get("executor") or FALLBACK_EXECUTOR
+        return str(path), declared, executor
+    return (
+        "built-in table (weles requirements.json is not on this host)",
+        FALLBACK_REQUIREMENTS,
+        FALLBACK_EXECUTOR,
+    )
 
 
 def placement_module():
@@ -178,9 +203,11 @@ def placement_module():
     return NONE, f"no placement matcher is installed at any of: {named}"
 
 
-def placement(module, requires, max_stale_seconds):
+def placement(module, requires, max_stale_seconds, executor=NONE):
     """Return (host, refusal lines). Any failure to ask is itself a refusal."""
     try:
+        if executor and "runs" in module.place.__code__.co_varnames:
+            return module.place(requires, max_stale_seconds, runs=executor)
         return module.place(requires, max_stale_seconds)
     except module.Unreadable as problem:
         return NONE, [f"(every candidate)  {problem}"]
@@ -395,7 +422,7 @@ def main():
     LOGS.mkdir(parents=True, exist_ok=True)
     graphical = graphical_domain_exists()
     here = self_target()
-    source, declared = requirements_table()
+    source, declared, executor = requirements_table()
     matcher, matcher_note = placement_module()
 
     declarations = {}
@@ -460,7 +487,7 @@ def main():
             print(f"   staged       {stage_agent(label, shaped(document, as_daemon=False))}")
             continue
 
-        host, refusals = placement(matcher, requires, arguments.max_stale_seconds)
+        host, refusals = placement(matcher, requires, arguments.max_stale_seconds, executor)
         if host is NONE:
             print("   refused      no host published measurements satisfying this job:")
             for line in refusals:
