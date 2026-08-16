@@ -12,11 +12,10 @@ the assessment result and do not authorize a destructive operation.
 
 **The evidence indicates that no Wisent capability needs to remain permanently in GCP.** The assessment's proposed terminal state for project `wisent-480400` is a retained administrative tombstone with billing detached and no Wisent workload, credential, public endpoint or unique data left inside it.
 
-The assessment recommends preserving three things before that state is safe:
+The assessment recommends preserving two things before that state is safe:
 
-1. **One temporary public compatibility path:** the Oko internet PTY relay currently represented by Cloud Run `swiatowid-pty-relay`, until an equivalent single-instance relay is deployed through Stado and client routing is cut over.
-2. **Legacy desktop update compatibility:** the two public Sparkle feeds, until old Oko/Swiatowid installations have a proven path to the GitHub/Stado feed.
-3. **Unique or unclassified data:** five persistent disks, selected buckets, historical billing data and the stopped Cloud SQL database, until their useful contents are exported or deliberately discarded after inspection.
+1. **Legacy desktop update compatibility:** the two public Sparkle feeds, until old Oko/Swiatowid installations have a proven path to the GitHub/Stado feed.
+2. **Unique or unclassified data:** five persistent disks, selected buckets, historical billing data and the stopped Cloud SQL database, until their useful contents are exported or deliberately discarded after inspection.
 
 The assessment classifies everything else as already replaced, an inert deployment artifact, a credential for a retired path, metadata generated around another resource, or an API/quota declaration that no workload needs.
 
@@ -24,7 +23,6 @@ The assessment classifies everything else as already replaced, an inert deployme
 
 | Proposed classification | Meaning |
 |---|---|
-| `KEEP-UNTIL-CUTOVER` | A capability is still useful and the GCP resource may be the only deployed implementation; replace it before removal. |
 | `HOLD-COMPAT` | No new system should use it, but old installed clients may still address it. |
 | `EXPORT-THEN-DELETE` | The data may matter; the GCP runtime/resource does not. Export, verify the destination and remove the source. |
 | `DEDUP-THEN-DELETE` | Likely replicated or historical data; compare with canonical storage, preserve only unique objects and remove the GCP copy. |
@@ -42,7 +40,7 @@ The assessment classifies everything else as already replaced, an inert deployme
 | Wisent Backend public API | Yes | No | Replaced on `charless-mac-mini`; all API MIG/LB/template/image assets are deletable. |
 | Echo and Weles durable worker duties | Yes | No | Replaced on `charless-mac-mini`; preserve only unexported recordings from the old disk. |
 | Weles Apple authentication | Yes | No | Replaced on `charless-mac-mini`; old VM and disk are deletable. |
-| Oko internet PTY relay | Yes | Temporarily | Current Oko code requires one Stado-managed relay instance. Cloud Run is Ready and supplies the only observed public relay implementation, but the current local Oko preference has no configured relay URL. Keep the GCP relay stack only until the Stado-managed `oko-pty-relay` endpoint and client configuration are proven. |
+| Oko internet PTY relay | Yes | No | Current Oko code defines a Stado-managed relay contract, but no configured client or Cloud Run request was observed. The GCP service cannot start because detached billing prevents its Secret Manager read, so the deployed GCP stack is not a functioning implementation and is classified `DELETE`. |
 | Wisent Backend inference | Yes | No | Target is Brama plus Stado `chat-primary`; keeping inert GCP MIG assets does not restore the missing/offline target. |
 | Wisent Backend direct image generation | Yes | No | Target is local GPU 1; keeping old GCP image assets does not close the current service-registration gap. |
 | ComfyUI / raw image workflows | Yes | No | Target is local GPU 2 and `image-video-router`; old GCP MIG/gateway assets are not needed. |
@@ -54,21 +52,21 @@ The assessment classifies everything else as already replaced, an inert deployme
 | Historical billing analytics | Historical data only | No runtime | Export the BigQuery table; no new GCP billing events will arrive while billing remains detached. |
 | Old stock, video and research experiments | Archive value only | No | Export useful results/models and retire their GCP containers. |
 
-## Temporary GCP dependency: PTY relay
+## Unused GCP PTY relay stack
 
-The GCP relay is one dependency stack, not seven separate services:
+The GCP relay is a deployed but nonfunctional stack: the Cloud Run control plane reports the revision as `Ready`, while runtime logs show repeated startup aborts on the Secret Manager read and request logs contain no requests in the last 90 days.
 
 | Resource | Necessity |
 |---|---|
-| Cloud Run `swiatowid-pty-relay` | `KEEP-UNTIL-CUTOVER` |
-| Latest revision `swiatowid-pty-relay-00007-ctx` | `KEEP-UNTIL-CUTOVER`; older six revisions are `CASCADE`/`DELETE` |
-| Latest relay image digest in `cloud-run-source-deploy` | `KEEP-UNTIL-CUTOVER`; older relay digests are `DELETE` |
-| `gs://run-sources-wisent-480400-europe-west1` relay source object | `KEEP-UNTIL-CUTOVER`; source also exists in current Oko code, so it is not a durable archive requirement |
-| Secret `swiatowid-pty-relay-token` | `KEEP-UNTIL-CUTOVER`; replacement belongs in Skarbiec with exact service/client grants |
-| Default Compute service account | `KEEP-UNTIL-CUTOVER`, scoped only because Cloud Run currently uses it; retire its user-managed key and account dependency at cutover |
-| Run, Artifact Registry, Secret Manager, IAM, logging and monitoring APIs | Needed only to operate/retire this relay |
+| Cloud Run `swiatowid-pty-relay` | `DELETE`; no observed requests and instances abort startup |
+| All seven `swiatowid-pty-relay` revisions | `DELETE`/`CASCADE` |
+| All relay image digests in `cloud-run-source-deploy` | `DELETE` |
+| `gs://run-sources-wisent-480400-europe-west1` relay source object | `DELETE`; canonical source exists in Oko |
+| Secret `swiatowid-pty-relay-token` | `DELETE`; a future Stado relay uses exact Skarbiec service/client grants |
+| Default Compute service account dependency | `DELETE`; the failed Cloud Run service is its only identified current binding |
+| Run, Artifact Registry, Secret Manager, IAM, logging and monitoring APIs | Not justified by this relay; retain only where data retirement still needs them |
 
-The replacement contract is already explicit in Oko: one long-lived Stado-managed `oko-pty-relay`, TLS, exact Skarbiec grants, and one instance because session pairing is in process memory.
+The product capability remains explicit in Oko: one long-lived Stado-managed `oko-pty-relay`, TLS, exact Skarbiec grants and one instance because session pairing is in process memory. That is a future/current product deployment concern, not a dependency on this unused GCP service.
 
 ## Compute Engine: what is needed
 
@@ -118,7 +116,7 @@ The need is for data from five disks, not for the disks or their GCP runtimes. T
 | `wisent-video-gen` | `EXPORT-THEN-DELETE` | Archive the one Civitai exact-video result if wanted as product/research evidence. |
 | `wisent-oko-updates` | `HOLD-COMPAT` | Keep only until installed copies on the historical feed can reach the GitHub/Stado appcast or fall below the supported version floor. No new release should write here. |
 | `wisent-swiatowid-updates` | `HOLD-COMPAT` | Same compatibility hold for still older installations; no new release writer. |
-| `run-sources-wisent-480400-europe-west1` | `KEEP-UNTIL-CUTOVER` | Only for the current Cloud Run relay; delete with it. |
+| `run-sources-wisent-480400-europe-west1` | `DELETE` | Source staging for the unused Cloud Run relay; canonical source exists in Oko. |
 | `wisent-480400-skarbiec-vault` | `DELETE` after current Skarbiec recovery is proven | An encrypted legacy vault copy is not an approved second source of truth and increases secret-retention surface. |
 | `wisent-480400_cloudbuild` | `DELETE` | Old build-source staging; Git repositories are canonical. |
 | `gcf-v2-sources-1080673333190-us-central1` | `DELETE` | Empty generated staging; no live Function. |
@@ -144,7 +142,7 @@ The need is for data from five disks, not for the disks or their GCP runtimes. T
 
 | Account | Proposed classification |
 |---|---|
-| `1080673333190-compute@developer.gserviceaccount.com` (Default Compute) | `KEEP-UNTIL-CUTOVER` only for the relay; remove its user-managed key now if Cloud Run does not require it, then retire the account dependency with the relay. |
+| `1080673333190-compute@developer.gserviceaccount.com` (Default Compute) | `DELETE` after confirming no Google-managed dependency beyond the unused relay; its user-managed key is unnecessary. |
 | `agent-billing` | `DELETE` after billing export; no ongoing GCP billing feed. |
 | `brama-runtime` | `DELETE`; Brama does not belong in GCP. |
 | `stado-sa`, `wisent-compute-sa`, `wisent-monitor` | `DELETE`; old GCP Stado plane. |
@@ -172,7 +170,7 @@ The twelve user-managed service-account keys are not needed as data. Revoke/dele
 
 | Secret group | Proposed classification |
 |---|---|
-| `swiatowid-pty-relay-token` | `KEEP-UNTIL-CUTOVER`, then replace with the exact `oko-pty-relay` Skarbiec service/client grants and delete both GCP versions. |
+| `swiatowid-pty-relay-token` | `DELETE`; no request consumer was observed and the Cloud Run runtime cannot fetch it with billing detached. A future Stado relay must use separate exact Skarbiec service/client grants. |
 | `account-api-env`, `wisent-api-env`, `wisent-images-env`, `wisent-images-supabase-key`, `wisent-images-supabase-service-role-key`, `wisent-images-supabase-url`, `wisent-inference-env`, `wisent-inference-env-bf16-a10080` | `DELETE` after verifying current services receive every still-valid value through Skarbiec; do not copy obsolete provider/runtime configuration forward. |
 | `hf-token`, `wisent-hf-token`, `wandb-api-key`, `vast-api-key` | `DELETE`; re-materialize only a credential that an active Stado workload explicitly requires. |
 | `asc-webhook-secret`, `github-dispatch-token` | `DELETE` with the absent bridge; rotate any external webhook/dispatch credential that remains valid. |
@@ -187,8 +185,8 @@ The 132 secret versions are history of these 19 secrets, not 132 separately need
 
 | Family | Proposed classification | Reason |
 |---|---|---|
-| Artifact Registry `cloud-run-source-deploy` | `KEEP-UNTIL-CUTOVER` only for the latest relay image; delete the old relay and backend images, then the repository. |
-| Seven Cloud Run revisions | Keep latest only until cutover; six older revisions `DELETE` | Rollback history is not canonical source. |
+| Artifact Registry `cloud-run-source-deploy` | `DELETE`; the relay is unused/nonfunctional and the backend image is historical. |
+| Seven Cloud Run revisions | `DELETE`/`CASCADE` | No request traffic was observed; runtime startup aborts on its secret read. |
 | Four log metrics and four alert policies | `DELETE` | They monitor the retired GCP Stado scheduler/worker lifecycle. |
 | Notification channel `wisent-compute-alerts-email` | `DELETE` | Only supports those retired policies. |
 | Two log buckets and two sinks | `CASCADE`/retain only as Google-required audit defaults while the project exists | Not Wisent product services. |
@@ -206,7 +204,6 @@ No enabled API is a permanent product dependency. Keep only the APIs required to
 
 | Phase | APIs still operationally needed |
 |---|---|
-| Relay remains | Run, Artifact Registry, Secret Manager, IAM, logging/monitoring and supporting Service Usage APIs. |
 | Data export remains | Storage, Compute, BigQuery, SQL Admin, Cloud Asset and IAM/service APIs needed to read/export/delete the named resources. |
 | Compatibility feeds remain | Cloud Storage serving/administration APIs. |
 | Tombstone | Only Google-required project/Service Usage/Resource Manager and administrative visibility; disable every optional product API. |
@@ -216,11 +213,10 @@ Workspace, Ads, Android Publisher, Translate, Gemini/Vertex and the many enabled
 ## Proposed retirement order encoded by dependency
 
 1. Preserve the five unique disks and export/deduplicate the named buckets, BigQuery table and Cloud SQL contents.
-2. Deploy the single-instance Oko relay through Stado with Skarbiec grants; cut clients from the Cloud Run URL and token.
-3. Preserve legacy Sparkle compatibility by moving or redirecting the two old feeds; stop all GCP release writes.
-4. Remove the relay stack, all terminated compute support assets, orphan messaging/data services and obsolete build/monitoring resources.
-5. Revoke all twelve service-account keys, retire the fourteen accounts as classified, remove WIF, API keys and GCP Secret Manager values, and disable optional APIs.
-6. Leave `wisent-480400` as a billing-detached tombstone until export checks and retention obligations pass; deletion of the whole project is optional and separate.
+2. Preserve legacy Sparkle compatibility by moving or redirecting the two old feeds; stop all GCP release writes.
+3. Remove the unused relay stack, all terminated compute support assets, orphan messaging/data services and obsolete build/monitoring resources.
+4. Revoke all twelve service-account keys, retire the fourteen accounts as classified, remove WIF, API keys and GCP Secret Manager values, and disable optional APIs.
+5. Leave `wisent-480400` as a billing-detached tombstone until export checks and retention obligations pass; deletion of the whole project is optional and separate.
 
 ## Coverage
 

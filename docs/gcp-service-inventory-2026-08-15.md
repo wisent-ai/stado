@@ -31,7 +31,7 @@ The historical compute workload and disk inventory remains in `docs/gcp-compute-
 | Echo/Weles content worker and recording host | `content-platform-vm`, 500 GB disk, content buckets | Echo, Weles and recording workflows | Durable duties moved to Echo/Weles on `charless-mac-mini`; unique recording data on the GCP disk is still retained for export. |
 | Weles Apple authentication | `weles-apple-auth-prod`, 30 GB disk | Weles Apple sign-in flow | Replaced by Weles on `charless-mac-mini`; residual VM/disk are inert. |
 | Image/video routing | `image-video-router-vm`, 20 GB disk, firewall and historical container namespace | Content Platform and approved Weles media workflows | Declared replacement is `image-video-router` on `ubuntu-server-rtx-pro-6000`; previously recorded as offline. |
-| Swiatowid PTY relay | Cloud Run `swiatowid-pty-relay`, seven revisions, five current source-deploy image records, source bucket, relay token | Legacy Swiatowid/Oko PTY access | This is the only Cloud Run service in the live asset inventory. Cloud Run reports it Ready with public ingress, min/max one instance, port 8787 and the Compute default service account. Current Oko source still implements the relay contract, but this Mac has no configured relay URL; retain the GCP stack only until the Stado-managed replacement and client cutover are proven. |
+| Swiatowid PTY relay | Cloud Run `swiatowid-pty-relay`, seven revisions, five current source-deploy image records, source bucket, relay token | No observed consumer | This is the only Cloud Run service resource in the live asset inventory. Its control-plane status is `Ready`, but request logs contain no requests in the last 90 days and runtime logs show repeated startup aborts because detached billing prevents the Secret Manager read. Current Oko source implements a Stado-managed relay contract, but this Mac has no configured relay URL; the GCP deployment is not a functioning or observed implementation. |
 | Body-horror detection | Cloud Tasks queue `bodyhorror-detector`, `bodyhorror-detector` service account and `gs://wisent-body-horror-models` | Historical image-quality/body-horror pipeline | Queue asset says RUNNING, but no Cloud Run/Function detector exists and no current source reference to the queue was found. Treat as an orphaned legacy queue, not a working service. |
 | Compute/marketplace database | Cloud SQL `wisent-compute-db`, PostgreSQL 15, 10 GB | Legacy `wisent-compute`/compute marketplace persistence; exact schema caller is not recoverable while stopped | `STOPPED`, activation policy `NEVER`, suspended for `BILLING_ISSUE`. Current Stado state is object-backed; the experimental marketplace is not operated. |
 | Billing analytics | BigQuery dataset `billing_export` and table `gcp_billing_export_v1_017364_D3B657_F207B5` | Stado billing-health and agent billing reader | Historical GCP gross cost, credits, net cost and burn history; retained as data, not a runtime dependency. |
@@ -50,7 +50,7 @@ The historical compute workload and disk inventory remains in `docs/gcp-compute-
 | `wisent-oko-updates` | Oko/Swiatowid archives and Sparkle `appcast.xml` | Historical Oko update feed; replaced by Stado/GitHub release delivery. |
 | `wisent-swiatowid-updates` | Swiatowid archives and Sparkle `appcast.xml` | Older Swiatowid update feed; retained for old clients, no new release writer. |
 | `wisent-body-horror-models` | `sapiens2_host/` model material | Historical body-horror detector. |
-| `run-sources-wisent-480400-europe-west1` | Cloud Run source bundle under `services/swiatowid-pty-relay/` | Build source for the remaining Cloud Run relay. |
+| `run-sources-wisent-480400-europe-west1` | Cloud Run source bundle under `services/swiatowid-pty-relay/` | Staging for the unused/nonfunctional relay; canonical relay source exists in Oko. |
 | `wisent-stock-context` | per-symbol AAPL/ADBE/NOK/NVDA/ORCL context | Historical stock analysis/content archive; exact current producer unproven. |
 | `wisent-compute` | legacy registry/queue, releases, agents, logs, status, schedules and run records | Legacy `wisent-compute`/Stado namespace and compute marketplace support. |
 | `gcf-v2-sources-1080673333190-us-central1` | currently empty at top level | Generated Cloud Functions v2 source staging; no live Function asset. |
@@ -67,7 +67,9 @@ The historical compute workload and disk inventory remains in `docs/gcp-compute-
 
 ### Cloud Run and Artifact Registry
 
-- Live Cloud Run service: `swiatowid-pty-relay` in `europe-west1`.
+- Deployed Cloud Run service resource: `swiatowid-pty-relay` in `europe-west1`; the control plane reports `Ready`, but this is stale with respect to runtime viability.
+- Request-log query for the last 90 days returned zero entries.
+- Runtime logs on 2026-08-11 show repeated minimum-instance starts aborting because `swiatowid-pty-relay-token` cannot be fetched while billing is detached.
 - Seven relay revisions remain; latest is `swiatowid-pty-relay-00007-ctx`.
 - Current Cloud Asset records contain six Docker images: five relay source-deploy revisions and one `wisent-backend/api-service` digest.
 - The only repository resource still returned is `europe-west1/cloud-run-source-deploy`.
@@ -115,7 +117,7 @@ No key value was read.
 | `wisent-images-sa@wisent-480400.iam.gserviceaccount.com` | Wisent Backend image service, Artifact Registry and image buckets | 1 |
 | `wisent-480400@appspot.gserviceaccount.com` | App Engine default residual identity | 1 |
 | `agent-billing@wisent-480400.iam.gserviceaccount.com` | BigQuery billing reader | 2 |
-| `1080673333190-compute@developer.gserviceaccount.com` | default VM/Cloud Run identity; current PTY relay runtime | 1 |
+| `1080673333190-compute@developer.gserviceaccount.com` | default VM/Cloud Run identity configured on the nonfunctional PTY relay | 1 |
 | `droid-441@wisent-480400.iam.gserviceaccount.com` | broad historical deployer for backend, image and relay resources; currently project Owner | 3 |
 
 Workload Identity Federation also remains:
@@ -138,7 +140,7 @@ This provider can identify workflows from Wisent repositories, but the pool alon
 | `github-dispatch-token` | 1 | ASC bridge dispatch into GitHub |
 | `hf-token` | 1 | OpenEnv/KantBench Hugging Face access |
 | `supabase-access-token` | 1 | deployment/automation access to Supabase |
-| `swiatowid-pty-relay-token` | 2 | current Cloud Run PTY relay |
+| `swiatowid-pty-relay-token` | 2 | configured on the nonfunctional Cloud Run PTY relay; runtime fetch fails with billing detached |
 | `vast-api-key` | 1 | historical external GPU marketplace/provider access |
 | `wandb-api-key` | 1 | training experiment tracking |
 | `wisent-api-env` | 92 | Wisent Backend API environment |
