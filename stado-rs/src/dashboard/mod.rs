@@ -162,6 +162,7 @@ fn initial_state(bucket: &str) -> Value {
         "by_model_state": {},
         "live_agents": [],
         "stale_agents": [],
+        "workers": [],
         "recent_failed": [],
         "completed_recent": [],
         "artifacts": [],

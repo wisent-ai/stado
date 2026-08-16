@@ -4,12 +4,20 @@ struct WorkersView: View {
     let snapshot: DashboardSnapshot
     @State private var searchText = ""
 
-    private var liveWorkers: [WorkerNode] {
-        filter(snapshot.liveAgents)
+    private var workers: [WorkerNode] {
+        filter(snapshot.workers)
+    }
+
+    private var unavailableWorkers: [WorkerNode] {
+        workers.filter { $0.status == .unavailable }
     }
 
     private var staleWorkers: [WorkerNode] {
-        filter(snapshot.staleAgents)
+        workers.filter { $0.status == .stale }
+    }
+
+    private var liveWorkers: [WorkerNode] {
+        workers.filter { $0.status == .live }
     }
 
     var body: some View {
@@ -17,29 +25,36 @@ struct WorkersView: View {
             header
                 .padding(StadoTheme.Space.lg)
 
-            if snapshot.liveAgents.isEmpty && snapshot.staleAgents.isEmpty {
+            if snapshot.workers.isEmpty {
                 ContentUnavailableView {
-                    Label("No worker reports", systemImage: "server.rack")
+                    Label("No registered workers", systemImage: "server.rack")
                 } description: {
-                    Text("No capacity beacons were discovered in the current dashboard snapshot. Start a worker capacity publisher to populate this view.")
+                    Text("The Stado registry and capacity store did not expose any workers in the current dashboard snapshot.")
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if liveWorkers.isEmpty && staleWorkers.isEmpty {
+            } else if workers.isEmpty {
                 ContentUnavailableView.search(text: searchText)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List {
-                    if !liveWorkers.isEmpty {
-                        Section("Live · \(liveWorkers.count)") {
-                            ForEach(Array(liveWorkers.enumerated()), id: \.offset) { _, worker in
-                                WorkerRow(worker: worker, isLive: true)
+                    if !unavailableWorkers.isEmpty {
+                        Section("Unavailable · \(unavailableWorkers.count)") {
+                            ForEach(unavailableWorkers) { worker in
+                                WorkerRow(worker: worker)
                             }
                         }
                     }
                     if !staleWorkers.isEmpty {
                         Section("Stale · \(staleWorkers.count)") {
-                            ForEach(Array(staleWorkers.enumerated()), id: \.offset) { _, worker in
-                                WorkerRow(worker: worker, isLive: false)
+                            ForEach(staleWorkers) { worker in
+                                WorkerRow(worker: worker)
+                            }
+                        }
+                    }
+                    if !liveWorkers.isEmpty {
+                        Section("Live · \(liveWorkers.count)") {
+                            ForEach(liveWorkers) { worker in
+                                WorkerRow(worker: worker)
                             }
                         }
                     }
@@ -47,7 +62,7 @@ struct WorkersView: View {
                 .listStyle(.inset)
             }
         }
-        .searchable(text: $searchText, prompt: "Search workers, kinds, or slot types")
+        .searchable(text: $searchText, prompt: "Search workers, hosts, GPUs, or reasons")
     }
 
     private var header: some View {
@@ -55,33 +70,50 @@ struct WorkersView: View {
             VStack(alignment: .leading, spacing: StadoTheme.Space.xxs) {
                 Text("Workers and nodes")
                     .font(.largeTitle.weight(.semibold))
-                Text("Capacity reports discovered by the Stado dashboard")
+                Text("Registered compute targets reconciled with capacity reports")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            StatusPill(
-                label: "\(snapshot.liveAgents.count) live",
-                tone: snapshot.liveAgents.isEmpty ? .warning : .healthy
-            )
+            StatusPill(label: headerStatus.label, tone: headerStatus.tone)
         }
+    }
+
+    private var headerStatus: (label: String, tone: StatusTone) {
+        let unavailable = snapshot.workers.count { $0.status == .unavailable }
+        if unavailable > 0 {
+            return ("\(unavailable) unavailable", .critical)
+        }
+        let stale = snapshot.workers.count { $0.status == .stale }
+        if stale > 0 {
+            return ("\(stale) stale", .warning)
+        }
+        let live = snapshot.workers.count { $0.status == .live }
+        return ("\(live) live", live == 0 ? .warning : .healthy)
     }
 
     private func filter(_ workers: [WorkerNode]) -> [WorkerNode] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return workers }
         return workers.filter { worker in
-            [worker.consumerID, worker.kind]
-                .compactMap { $0 }
-                .contains { $0.localizedCaseInsensitiveContains(query) }
-                || worker.freeSlots.keys.contains { $0.localizedCaseInsensitiveContains(query) }
+            [
+                worker.targetName,
+                worker.consumerID,
+                worker.kind,
+                worker.gpuType,
+                worker.role,
+                worker.availabilityReason,
+            ]
+            .compactMap { $0 }
+            .contains { $0.localizedCaseInsensitiveContains(query) }
+            || worker.hostnames.contains { $0.localizedCaseInsensitiveContains(query) }
+            || worker.freeSlots.keys.contains { $0.localizedCaseInsensitiveContains(query) }
         }
     }
 }
 
 private struct WorkerRow: View {
     let worker: WorkerNode
-    let isLive: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: StadoTheme.Space.sm) {
@@ -91,15 +123,15 @@ private struct WorkerRow: View {
                         Text(worker.displayName)
                             .font(.headline)
                             .textSelection(.enabled)
-                        StatusPill(label: isLive ? "Live" : "Stale", tone: isLive ? .healthy : .warning)
+                        StatusPill(label: statusLabel, tone: statusTone)
                     }
-                    Text(worker.kind?.humanizedIdentifier ?? "Worker kind unavailable")
+                    Text(workerDescription)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: StadoTheme.Space.xxs) {
-                    Text("\(worker.availableSlots) free slots")
+                    Text(capacityLabel)
                         .font(.subheadline.weight(.semibold))
                         .monospacedDigit()
                     Text(ageLabel)
@@ -108,11 +140,21 @@ private struct WorkerRow: View {
                 }
             }
 
-            if worker.freeSlots.isEmpty {
-                Text("Slot breakdown unavailable")
+            if worker.status != .live || !worker.declared {
+                Label(worker.availabilityReason, systemImage: statusSymbol)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
-            } else {
+                    .foregroundStyle(statusTone.color)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if !worker.hostnames.isEmpty {
+                Text("Hosts: \(worker.hostnames.joined(separator: ", "))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+
+            if worker.status != .unavailable, !worker.freeSlots.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: StadoTheme.Space.xs) {
                         ForEach(worker.freeSlots.keys.sorted(), id: \.self) { slotType in
@@ -140,14 +182,48 @@ private struct WorkerRow: View {
                         .foregroundStyle(.secondary)
                 }
                 .accessibilityElement(children: .combine)
-            } else {
-                Text("VRAM utilization unavailable")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
             }
         }
         .padding(.vertical, StadoTheme.Space.xs)
         .accessibilityElement(children: .contain)
+    }
+
+    private var statusLabel: String {
+        switch worker.status {
+        case .live: "Live"
+        case .stale: "Stale"
+        case .unavailable: "Unavailable"
+        }
+    }
+
+    private var statusTone: StatusTone {
+        switch worker.status {
+        case .live: worker.declared ? .healthy : .warning
+        case .stale: .warning
+        case .unavailable: .critical
+        }
+    }
+
+    private var statusSymbol: String {
+        switch worker.status {
+        case .live: "exclamationmark.triangle"
+        case .stale: "clock.badge.exclamationmark"
+        case .unavailable: "xmark.circle"
+        }
+    }
+
+    private var workerDescription: String {
+        let hardware = worker.gpuType?.humanizedIdentifier
+            ?? worker.kind?.humanizedIdentifier
+            ?? "Worker kind unavailable"
+        if let role = worker.role?.humanizedIdentifier {
+            return "\(hardware) · \(role)"
+        }
+        return hardware
+    }
+
+    private var capacityLabel: String {
+        worker.status == .unavailable ? "No capacity report" : "\(worker.availableSlots) free slots"
     }
 
     private var ageLabel: String {
@@ -157,7 +233,7 @@ private struct WorkerRow: View {
         if let date = StadoFormat.date(worker.publishedAt) {
             return "Reported \(date.formatted(.relative(presentation: .named)))"
         }
-        return "Report time unavailable"
+        return "Never reported"
     }
 }
 
