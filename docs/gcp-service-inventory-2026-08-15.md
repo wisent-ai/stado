@@ -15,7 +15,7 @@ A live Cloud Asset Inventory read returned **1,057 assets**:
 | Secret versions | 132 | history under 19 Secret Manager secrets; values were not read |
 | Service-account keys | 12 | keys attached to eight of the fourteen user-managed service accounts |
 
-The historical compute workload and disk inventory remains in `docs/gcp-compute-retirement-2026-08-15.json`. This document adds the rest of the project and distinguishes a deployed workload from its support records and from an API that is merely enabled. Resource-retention decisions are in [`gcp-resource-need-map-2026-08-15.md`](gcp-resource-need-map-2026-08-15.md).
+The historical compute workload and disk inventory remains in `docs/gcp-compute-retirement-2026-08-15.json`. This document adds the rest of the project and distinguishes a deployed workload from its support records and from an API that is merely enabled. The unapproved assistant assessment of resource necessity is in [`gcp-resource-need-map-2026-08-15.md`](gcp-resource-need-map-2026-08-15.md).
 
 ## Product workload map
 
