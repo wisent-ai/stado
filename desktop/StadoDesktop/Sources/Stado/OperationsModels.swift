@@ -8,6 +8,7 @@ struct DashboardSnapshot: Decodable, Sendable {
     let byModelState: [String: JobCounts]
     let liveAgents: [WorkerNode]
     let staleAgents: [WorkerNode]
+    let workers: [WorkerNode]
     let recentFailed: [FailedJob]
     let completedRecent: [CompletedJob]
     let throughput: Throughput
@@ -18,6 +19,7 @@ struct DashboardSnapshot: Decodable, Sendable {
         case byModelState
         case liveAgents
         case staleAgents
+        case workers
         case recentFailed
         case completedRecent
         case lastRefreshSeconds
@@ -32,6 +34,7 @@ struct DashboardSnapshot: Decodable, Sendable {
         byModelState = try values.decodeIfPresent([String: JobCounts].self, forKey: .byModelState) ?? [:]
         liveAgents = try values.decodeIfPresent([WorkerNode].self, forKey: .liveAgents) ?? []
         staleAgents = try values.decodeIfPresent([WorkerNode].self, forKey: .staleAgents) ?? []
+        workers = try values.decodeIfPresent([WorkerNode].self, forKey: .workers) ?? []
         recentFailed = try values.decodeIfPresent([FailedJob].self, forKey: .recentFailed) ?? []
         completedRecent = try values.decodeIfPresent([CompletedJob].self, forKey: .completedRecent) ?? []
         throughput = try values.decodeIfPresent(Throughput.self, forKey: .throughput) ?? .unavailable
@@ -67,9 +70,22 @@ struct JobCounts: Decodable, Sendable {
     }
 }
 
+enum WorkerAvailability: String, Decodable, Sendable {
+    case live
+    case stale
+    case unavailable
+}
+
 struct WorkerNode: Decodable, Identifiable, Sendable {
+    let targetName: String?
     let consumerID: String?
+    let declared: Bool
+    let status: WorkerAvailability
+    let availabilityReason: String
     let kind: String?
+    let hostnames: [String]
+    let gpuType: String?
+    let role: String?
     let freeSlots: [String: Int]
     let freeVRAMGB: Double?
     let totalVRAMGB: Double?
@@ -77,12 +93,17 @@ struct WorkerNode: Decodable, Identifiable, Sendable {
     let ageSeconds: Double?
 
     var id: String {
-        consumerID ?? "unknown-\(publishedAt ?? "worker")"
+        targetName ?? consumerID ?? "unknown-\(publishedAt ?? "worker")"
     }
 
     var displayName: String {
-        guard let consumerID, !consumerID.isEmpty else { return "Unnamed worker" }
-        return consumerID
+        if let targetName, !targetName.isEmpty {
+            return targetName
+        }
+        if let consumerID, !consumerID.isEmpty {
+            return consumerID
+        }
+        return "Unnamed worker"
     }
 
     var availableSlots: Int {
@@ -90,16 +111,24 @@ struct WorkerNode: Decodable, Identifiable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case consumerID = "consumerId"
-        case kind, freeSlots, publishedAt, ageSeconds
+        case targetName, consumerID = "consumerId", declared, status, availabilityReason
+        case kind, hostnames, gpuType, role, freeSlots, publishedAt, ageSeconds
         case freeVRAMGB = "freeVramGb"
         case totalVRAMGB = "totalVramGb"
     }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
+        targetName = try values.decodeIfPresent(String.self, forKey: .targetName)
         consumerID = try values.decodeIfPresent(String.self, forKey: .consumerID)
+        declared = try values.decodeIfPresent(Bool.self, forKey: .declared) ?? false
+        status = try values.decodeIfPresent(WorkerAvailability.self, forKey: .status) ?? .unavailable
+        availabilityReason = try values.decodeIfPresent(String.self, forKey: .availabilityReason)
+            ?? "Worker availability was not reported."
         kind = try values.decodeIfPresent(String.self, forKey: .kind)
+        hostnames = try values.decodeIfPresent([String].self, forKey: .hostnames) ?? []
+        gpuType = try values.decodeIfPresent(String.self, forKey: .gpuType)
+        role = try values.decodeIfPresent(String.self, forKey: .role)
         freeSlots = try values.decodeIfPresent([String: Int].self, forKey: .freeSlots) ?? [:]
         freeVRAMGB = try values.decodeIfPresent(Double.self, forKey: .freeVRAMGB)
         totalVRAMGB = try values.decodeIfPresent(Double.self, forKey: .totalVRAMGB)
