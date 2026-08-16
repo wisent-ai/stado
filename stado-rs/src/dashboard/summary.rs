@@ -16,6 +16,7 @@
 //! [`BlobBackend`], so capacity blobs are read for the local backend too
 //! and the local control plane's dashboard can see its in-process agent.
 
+use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 use chrono::{DateTime, Utc};
@@ -124,6 +125,175 @@ async fn read_capacity_blobs(store: &JobStorage) -> Result<Vec<Value>, StorageEr
     Ok(blobs)
 }
 
+fn capacity_age(capacity: &Value, now: DateTime<Utc>) -> Result<Option<f64>, StorageError> {
+    let published = parse_iso(capacity.get("published_at").and_then(Value::as_str))?;
+    Ok(published.map(|time| (now - time).num_microseconds().unwrap_or(0) as f64 / 1e6))
+}
+
+fn capacity_projection(
+    capacity: Option<&Value>,
+    age_seconds: Option<f64>,
+    fresh_cutoff_seconds: f64,
+) -> Map<String, Value> {
+    let (status, reason) = match capacity {
+        Some(_) if age_seconds.is_some_and(|age| age <= fresh_cutoff_seconds) => (
+            "live",
+            "Capacity report is within the freshness window.".to_string(),
+        ),
+        Some(_) => (
+            "stale",
+            format!(
+                "Capacity report is older than the {}-second freshness window.",
+                fresh_cutoff_seconds as i64
+            ),
+        ),
+        None => (
+            "unavailable",
+            "No capacity report exists for this registered worker.".to_string(),
+        ),
+    };
+    let mut projection = Map::new();
+    projection.insert("status".into(), json!(status));
+    projection.insert("availability_reason".into(), json!(reason));
+    projection.insert(
+        "consumer_id".into(),
+        capacity
+            .and_then(|value| value.get("consumer_id"))
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    projection.insert(
+        "free_slots".into(),
+        capacity
+            .and_then(|value| value.get("free_slots"))
+            .cloned()
+            .unwrap_or_else(|| json!({})),
+    );
+    projection.insert(
+        "free_vram_gb".into(),
+        capacity
+            .and_then(|value| value.get("free_vram_gb"))
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    projection.insert(
+        "total_vram_gb".into(),
+        capacity
+            .and_then(|value| value.get("total_vram_gb"))
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    projection.insert(
+        "published_at".into(),
+        capacity
+            .and_then(|value| value.get("published_at"))
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    projection.insert("age_seconds".into(), json!(age_seconds));
+    projection
+}
+
+async fn registered_workers(
+    store: &JobStorage,
+    capacity: &[Value],
+    now: DateTime<Utc>,
+    fresh_cutoff_seconds: f64,
+) -> Result<Vec<Value>, StorageError> {
+    let registry = match store.download_text(crate::targets::REGISTRY_BLOB).await? {
+        Some(text) => Some(
+            crate::targets::load_registry_from_str(&text)
+                .map_err(|error| StorageError::Other(format!("invalid registry.json: {error}")))?,
+        ),
+        None => None,
+    };
+    let mut capacity_by_target = BTreeMap::<String, usize>::new();
+    if let Some(registry) = &registry {
+        for (index, report) in capacity.iter().enumerate() {
+            if report.get("kind").and_then(Value::as_str) != Some("local") {
+                continue;
+            }
+            let Some(consumer_id) = report.get("consumer_id").and_then(Value::as_str) else {
+                continue;
+            };
+            let host = consumer_id
+                .split_once('-')
+                .map_or(consumer_id, |(_, host)| host);
+            let target = registry
+                .lookup_self(host)
+                .map_err(|error| StorageError::Other(error.to_string()))?;
+            if let Some(target) = target {
+                capacity_by_target
+                    .entry(target.name.clone())
+                    .or_insert(index);
+            }
+        }
+    }
+
+    let mut matched_capacity = vec![false; capacity.len()];
+    let mut workers = Vec::new();
+    if let Some(registry) = &registry {
+        for target in registry
+            .targets
+            .iter()
+            .filter(|target| target.kind == "local")
+        {
+            let capacity_index = capacity_by_target.get(&target.name).copied();
+            let report = capacity_index.map(|index| {
+                matched_capacity[index] = true;
+                &capacity[index]
+            });
+            let age_seconds = report
+                .map(|value| capacity_age(value, now))
+                .transpose()?
+                .flatten();
+            let mut worker = Map::new();
+            worker.insert("target_name".into(), json!(target.name));
+            worker.insert("declared".into(), json!(true));
+            worker.insert("kind".into(), json!(target.kind));
+            worker.insert("hostnames".into(), json!(target.hostnames));
+            worker.insert("gpu_type".into(), json!(target.gpu_type));
+            worker.insert("role".into(), json!(target.role));
+            worker.extend(capacity_projection(
+                report,
+                age_seconds,
+                fresh_cutoff_seconds,
+            ));
+            workers.push(Value::Object(worker));
+        }
+    }
+
+    for (index, report) in capacity.iter().enumerate() {
+        if matched_capacity[index] {
+            continue;
+        }
+        let age_seconds = capacity_age(report, now)?;
+        let mut worker = Map::new();
+        worker.insert("target_name".into(), Value::Null);
+        worker.insert("declared".into(), json!(false));
+        worker.insert(
+            "kind".into(),
+            report.get("kind").cloned().unwrap_or(Value::Null),
+        );
+        worker.insert("hostnames".into(), json!([]));
+        worker.insert("gpu_type".into(), Value::Null);
+        worker.insert("role".into(), Value::Null);
+        worker.extend(capacity_projection(
+            Some(report),
+            age_seconds,
+            fresh_cutoff_seconds,
+        ));
+        if let Some(reason) = worker.get_mut("availability_reason") {
+            let current = reason.as_str().unwrap_or_default();
+            *reason = json!(format!(
+                "{current} No registered worker matches this capacity identity."
+            ));
+        }
+        workers.push(Value::Object(worker));
+    }
+    Ok(workers)
+}
+
 /// Count blobs per state prefix without downloading job JSONs (Python
 /// `_fast_counts`). Used by the cheap-render path so /api/state.json can
 /// return SOMETHING while the full per-job summary is still building.
@@ -194,11 +364,11 @@ pub async fn summarize(store: &JobStorage) -> Result<Value, StorageError> {
     let capacity = read_capacity_blobs(store).await?;
     let now = Utc::now();
     let fresh_cutoff_seconds = config::dashboard_agent_fresh_seconds() as f64;
+    let workers = registered_workers(store, &capacity, now, fresh_cutoff_seconds).await?;
     let mut live_agents: Vec<Value> = Vec::new();
     let mut stale_agents: Vec<Value> = Vec::new();
     for c in &capacity {
-        let published = parse_iso(c.get("published_at").and_then(Value::as_str))?;
-        let age = published.map(|p| (now - p).num_microseconds().unwrap_or(0) as f64 / 1e6);
+        let age = capacity_age(c, now)?;
         let entry = json!({
             "consumer_id": c.get("consumer_id"),
             "kind": c.get("kind"),
@@ -244,6 +414,7 @@ pub async fn summarize(store: &JobStorage) -> Result<Value, StorageError> {
         "by_model_state": Value::Object(by_model_state),
         "live_agents": live_agents,
         "stale_agents": stale_agents,
+        "workers": workers,
         "recent_failed": recent_failed,
         "completed_recent": completed_recent,
         "throughput": {
