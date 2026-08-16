@@ -99,6 +99,219 @@
       "stado-rs/data/registry.json"
     ]
   },
+  "post_migration_compute_setup": {
+    "schema_version": 1,
+    "captured_at": "2026-08-15",
+    "document_role": "canonical target topology for replacing the historical GCP compute estate",
+    "deployment_status": "target_not_yet_fully_realized",
+    "placement_rules": {
+      "durable_control_and_product_services": "charless-mac-mini",
+      "interactive_operator_and_cpu_jobs": "lukasz-macbook",
+      "local_gpu_primary_and_fallback": "ubuntu-server-rtx-pro-6000",
+      "cloud_gpu_burst": "ephemeral Azure Stado agents",
+      "cloud_vm_minimum": 0,
+      "cloud_vm_lifecycle": "create per queued job and terminate after idle",
+      "cloud_provider_after_cutover": "azure",
+      "cloud_providers_disabled_after_cutover": ["gcp", "aws"]
+    },
+    "placements": [
+      {
+        "target": "charless-mac-mini",
+        "kind": "local_always_on",
+        "platform": "darwin-arm64",
+        "physical_capacity": {"cpu_worker_slots": 1, "gpu_count": 0},
+        "stado_policy": {"role": "always-on", "pinned_only": true},
+        "workloads": [
+          "Stado coordinator, dashboard, registry authority, object API, release API, machine API and managed-service API",
+          "Skarbiec",
+          "Brama",
+          "Weles worker, API, admission and Apple-auth flows",
+          "Echo/content-platform durable worker duties",
+          "wisent-backend public API",
+          "weles-keyword-planner-api",
+          "wisent-backend self-hosted release publisher"
+        ],
+        "must_not_run": [
+          "GPU inference",
+          "GPU image generation",
+          "GPU training",
+          "ephemeral cloud workers"
+        ],
+        "desired_state": "always_on",
+        "migration_mapping": [
+          "wisent-mig-api-blue-j0qh",
+          "wisent-mig-api-green-88dw",
+          "content-platform-vm",
+          "weles-apple-auth-prod"
+        ]
+      },
+      {
+        "target": "ubuntu-server-rtx-pro-6000",
+        "kind": "local_gpu_workstation",
+        "platform": "linux-amd64",
+        "physical_capacity": {
+          "gpu_count": 1,
+          "gpu_type": "nvidia-rtx-pro-6000",
+          "measured_vram_gb": 95,
+          "logical_stado_slots": 2
+        },
+        "workloads": [
+          "image-video-router",
+          "chat-primary vLLM inference using TheDrummer/Cydonia-24B-v4.3",
+          "wisent-backend image generation",
+          "ComfyUI and Z-Image generation",
+          "local image and video processing",
+          "label-model training"
+        ],
+        "gpu_scheduling": {
+          "chat_primary": "one yieldable GPU allocation; preemptible by an admitted exclusive workload",
+          "image_and_comfyui": "on demand",
+          "training": "on demand and exclusive",
+          "invariant": "two logical Stado slots do not mean two physical GPUs; GPU-heavy workloads must not be scheduled concurrently beyond measured VRAM"
+        },
+        "desired_state": "best_effort_local_capacity",
+        "migration_mapping": [
+          "wisent-mig-inference-blue-035m",
+          "wisent-mig-inference-blue-wqj9",
+          "wisent-mig-images-green-cq1d",
+          "wisent-mig-images-green-vlrb",
+          "image-gen-comfyui-mig-62fj",
+          "image-video-router-vm"
+        ]
+      },
+      {
+        "target": "lukasz-macbook",
+        "kind": "local_interactive",
+        "platform": "darwin-arm64",
+        "physical_capacity": {"cpu_worker_slots": 2, "gpu_count": 0},
+        "workloads": [
+          "interactive Stado operator commands",
+          "CPU and TUI jobs",
+          "Stado dashboard client and local service resolver",
+          "transcript-lake stream",
+          "Oko autonomy",
+          "native Weles and 2FA interaction",
+          "Probierz client work whose execution is delegated to its selected host"
+        ],
+        "must_not_run": [
+          "durable public production services",
+          "cloud GPU replacement workloads"
+        ],
+        "desired_state": "interactive_not_required_for_production"
+      }
+    ],
+    "azure_ephemeral_fleet": {
+      "subscription_id": "9ae7cfa4-93e4-44f6-8f4d-5cea670e22bd",
+      "resource_group": "wisent-compute",
+      "deployment_model": "Azure Resource Manager IaaS Virtual Machines scheduled by Stado",
+      "agent_identity": "user-assigned managed identity plus the workload-only stado-azure-workload-agent Skarbiec grant",
+      "observed_vm_count_at_capture": 0,
+      "quota_case": {
+        "name": "stado-gpu-quota-20260814",
+        "tracking_id": "2608140010002359",
+        "status_at_capture": "Open"
+      },
+      "regions": [
+        {
+          "region": "eastus",
+          "accelerator": "NVIDIA T4 16 GB",
+          "azure_family": "Standard NCASv3_T4 Family",
+          "representative_vm_size": "Standard_NC4as_T4_v3",
+          "requested_family_vcpus": 16,
+          "maximum_concurrent_vms_at_requested_quota": 4,
+          "workloads": ["low-cost inference", "media processing", "GPU queue overflow"]
+        },
+        {
+          "region": "westus2",
+          "accelerator": "NVIDIA T4 16 GB",
+          "azure_family": "Standard NCASv3_T4 Family",
+          "representative_vm_size": "Standard_NC4as_T4_v3",
+          "requested_family_vcpus": 16,
+          "maximum_concurrent_vms_at_requested_quota": 4,
+          "workloads": ["low-cost inference", "media processing", "regional overflow from eastus"]
+        },
+        {
+          "region": "westus3",
+          "accelerator": "NVIDIA A10 24 GB",
+          "azure_family": "Standard NCADSA10v4 Family",
+          "representative_vm_size": "Standard_NC8ads_A10_v4",
+          "requested_family_vcpus": 24,
+          "maximum_concurrent_vms_at_requested_quota": 3,
+          "workloads": ["image generation", "video processing", "medium-model inference"]
+        },
+        {
+          "region": "westus3",
+          "accelerator": "NVIDIA A100 80 GB",
+          "azure_family": "Standard NCADS_A100_v4 Family",
+          "representative_vm_size": "Standard_NC24ads_A100_v4",
+          "requested_family_vcpus": 120,
+          "maximum_concurrent_vms_at_requested_quota": 5,
+          "workloads": ["large-model inference", "training", "heavy image generation", "RTX workstation overflow"]
+        }
+      ],
+      "requested_capacity_summary": {
+        "maximum_concurrent_gpu_vms": 16,
+        "westus3_total_regional_vcpus": 160,
+        "always_on_gpu_vms": 0
+      },
+      "must_not_host": [
+        "Stado coordinator",
+        "canonical registry authority",
+        "Skarbiec vault",
+        "Brama gateway",
+        "durable wisent-backend public API"
+      ]
+    },
+    "workload_routes": [
+      {
+        "capability": "LLM model routing",
+        "entrypoint": "Brama on charless-mac-mini",
+        "execution": "provider route or chat-primary on ubuntu-server-rtx-pro-6000; Azure GPU agent only for an explicitly scheduled cloud workload"
+      },
+      {
+        "capability": "wisent-backend public API",
+        "execution": "charless-mac-mini"
+      },
+      {
+        "capability": "Echo, Weles and Apple authentication",
+        "execution": "charless-mac-mini"
+      },
+      {
+        "capability": "image and video routing",
+        "entrypoint": "image-video-router on ubuntu-server-rtx-pro-6000",
+        "execution": "local RTX GPU when available; Azure A10 or A100 ephemeral agent for admitted overflow"
+      },
+      {
+        "capability": "ComfyUI, Z-Image and wisent-backend image generation",
+        "execution": "ubuntu-server-rtx-pro-6000 as local primary; Azure A10 or A100 ephemeral agent for queue burst"
+      },
+      {
+        "capability": "training and historical one-off experiments",
+        "execution": "no permanent service; schedule on the RTX workstation or an Azure A100 ephemeral agent after required input data is exported"
+      },
+      {
+        "capability": "legacy Stado T4, A100 and L4 workers",
+        "execution": "replace individual GCP machines with the Azure ephemeral fleet; no one-to-one VM preservation"
+      }
+    ],
+    "state_and_storage_after_cutover": {
+      "coordinator_location": "charless-mac-mini",
+      "primary_store": "private Azure Blob container stado",
+      "disaster_recovery_store": "cross-provider S3 replica",
+      "gcp_role": "none",
+      "cutover_invariant": "one canonical writer; never run GCP and Azure coordinators concurrently"
+    },
+    "evidence": [
+      "ARCHITECTURE.md:19-29",
+      "stado-rs/data/registry.json:408-478",
+      "stado-rs/data/registry.json:480-879",
+      "deploy/azure/stado.config.json:8-35",
+      "deploy/azure/stado.config.json:263-303",
+      "deploy/azure/CUTOVER.md:197-201",
+      "Microsoft Support case stado-gpu-quota-20260814 communication dated 2026-08-15T01:49:52Z",
+      "Azure VM inventory read on 2026-08-15 returned zero VMs"
+    ]
+  },
   "instance_state": {
     "TERMINATED": 20
   },
