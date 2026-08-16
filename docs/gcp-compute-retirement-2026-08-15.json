@@ -159,32 +159,32 @@
           "post_migration_logical_stado_slots": 4
         },
         "gpu_capacity_requirement": {
-          "required_for_simultaneous_local_inference_image_generation_and_training": 3,
+          "required_for_simultaneous_chat_direct_image_comfyui_and_training": 4,
           "planned_post_migration_gpu_count": 4,
-          "unassigned_reserve_gpu_count": 1,
+          "unassigned_reserve_gpu_count_while_training_runs": 0,
           "required_to_match_historical_durable_gcp_gpu_service_concurrency": 5,
           "image_video_router_gpu_requirement": 0,
-          "guaranteed_local_concurrency_after_install": "inference, image generation and training concurrently, plus one reserve GPU allocation",
-          "overflow": "Azure A10 or A100 ephemeral agents only after four local GPU allocations are occupied",
-          "explanation": "The operator owns four RTX PRO 6000 cards: one connected and three boxed. The post-migration target installs all four in ubuntu-server-rtx-pro-6000. Three cards cover the three named GPU workload classes concurrently and the fourth provides failover, a second inference or image worker, or burst capacity."
+          "guaranteed_local_concurrency_after_install": "chat inference, direct Z-Image generation, ComfyUI workflow rendering and one training job concurrently",
+          "overflow": "Azure A10 or A100 ephemeral agents after four local GPU allocations are occupied",
+          "explanation": "The four cards have four distinct roles. Direct image generation and ComfyUI are separate runtimes: wisent-backend-images keeps a vllm-omni Z-Image model loaded for its normal generation path, while requests whose LoRA is not materialized locally and explicit workflow requests are sent to the separate ComfyUI process. GPU 3 is available for burst only while no exclusive training job is running."
         },
         "workloads": [
-          "image-video-router",
+          "image-video-router CPU routing service",
           "chat-primary vLLM inference using TheDrummer/Cydonia-24B-v4.3",
-          "wisent-backend image generation",
-          "ComfyUI and Z-Image generation",
-          "local image and video processing",
-          "label-model training"
+          "wisent-backend-images direct Z-Image generation through vllm-omni",
+          "ComfyUI rendering for LoRA and explicit workflows",
+          "local image and video post-processing",
+          "label-model training and historical one-off GPU jobs"
         ],
         "gpu_assignment_after_install": [
           {"gpu": 0, "role": "chat-primary inference", "scheduling": "dedicated baseline"},
-          {"gpu": 1, "role": "wisent-backend image generation plus ComfyUI and Z-Image", "scheduling": "dedicated baseline"},
-          {"gpu": 2, "role": "training and historical one-off experiments", "scheduling": "exclusive jobs"},
-          {"gpu": 3, "role": "local reserve", "scheduling": "second inference or image worker, failover, or admitted burst"}
+          {"gpu": 1, "role": "wisent-backend-images direct Z-Image generation", "scheduling": "dedicated vllm-omni runtime"},
+          {"gpu": 2, "role": "ComfyUI LoRA and explicit workflow rendering", "scheduling": "dedicated ComfyUI runtime"},
+          {"gpu": 3, "role": "training and batch capacity", "scheduling": "exclusive training job; second inference or image worker only while training is idle"}
         ],
         "gpu_scheduling": {
-          "image_video_router": "CPU routing service; dispatches GPU work but consumes no dedicated GPU",
-          "invariant": "one baseline heavy workload per physical GPU; GPU 3 remains dynamically assignable and Azure handles demand beyond four simultaneous local allocations"
+          "image_video_router": "CPU routing service; dispatches work but consumes no dedicated GPU",
+          "invariant": "direct vllm-omni image generation and ComfyUI do not share a baseline GPU; GPU 3 is burst capacity only when it is not occupied by training, and Azure handles demand beyond four simultaneous local allocations"
         },
         "desired_state": "four_gpu_local_primary_capacity",
         "migration_mapping": [
@@ -296,15 +296,21 @@
       {
         "capability": "image and video routing",
         "entrypoint": "image-video-router CPU service on ubuntu-server-rtx-pro-6000",
-        "execution": "GPU 1 for the baseline image pipeline; GPU 3 for a second local worker or failover; Azure A10 or A100 after local capacity is occupied"
+        "execution": "dispatch direct image requests to the GPU 1 wisent-backend-images runtime and workflow requests to the GPU 2 ComfyUI runtime; Azure handles overflow"
       },
       {
-        "capability": "ComfyUI, Z-Image and wisent-backend image generation",
-        "execution": "GPU 1 on ubuntu-server-rtx-pro-6000 as the dedicated local primary; GPU 3 for local burst and Azure A10 or A100 beyond four total local allocations"
+        "capability": "direct Z-Image generation",
+        "entrypoint": "authenticated wisent-backend-images product service",
+        "execution": "GPU 1 runs the persistent vllm-omni Z-Image model and writes generated images to the Stado object namespace"
+      },
+      {
+        "capability": "ComfyUI LoRA and explicit workflow rendering",
+        "entrypoint": "authenticated ComfyUI proxy in wisent-backend-images",
+        "execution": "GPU 2 runs the loopback ComfyUI process; the product service routes missing-local-LoRA and explicit workflow requests to it"
       },
       {
         "capability": "training and historical one-off experiments",
-        "execution": "GPU 2 on ubuntu-server-rtx-pro-6000 as the exclusive local training card; Azure A100 for additional concurrent jobs after required input data is exported"
+        "execution": "GPU 3 runs one exclusive local training or batch job; Azure A100 handles additional concurrent jobs after required input data is exported"
       },
       {
         "capability": "legacy Stado T4, A100 and L4 workers",
@@ -327,6 +333,8 @@
       "deploy/azure/CUTOVER.md:197-201",
       "Microsoft Support case stado-gpu-quota-20260814 communication dated 2026-08-15T01:49:52Z",
       "Operator-provided hardware inventory on 2026-08-15: four RTX PRO 6000 cards owned, one connected and three boxed; all four are available for the post-migration target",
+      "wisent-backend-images/app/main.py:29-33,82-86",
+      "wisent-backend-images/app/routers/image_generate.py:215-252",
       "Azure VM inventory read on 2026-08-15 returned zero VMs"
     ]
   },
