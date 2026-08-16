@@ -186,6 +186,37 @@
           "image_video_router": "CPU routing service; dispatches work but consumes no dedicated GPU",
           "invariant": "direct vllm-omni image generation and ComfyUI do not share a baseline GPU; GPU 3 is burst capacity only when it is not occupied by training, and Azure handles demand beyond four simultaneous local allocations"
         },
+        "image_runtime_consumers": {
+          "gpu_1_direct_z_image": {
+            "runtime": "wisent-backend-images vllm-omni service",
+            "intended_upstream_products": ["wisent-backend"],
+            "feature_callers": [
+              "character auto-generation",
+              "companion and entertainment scene images",
+              "NeedHer pose and custom-picture generation",
+              "chat image tools"
+            ],
+            "direct_external_clients": [],
+            "boundary": "product features call the wisent-backend API; they do not call the GPU service directly"
+          },
+          "gpu_2_comfyui": {
+            "runtime": "ComfyUI loopback service",
+            "internal_callers": [
+              "wisent-backend-images for a missing local LoRA or an explicit workflow",
+              "image-video-router for caller-built raw workflows"
+            ],
+            "upstream_products": [
+              "wisent-backend",
+              "Content Platform",
+              "Weles approved media workflows"
+            ]
+          },
+          "current_contract_gap": {
+            "status": "not_wired_end_to_end",
+            "detail": "wisent-backend sends high-level /image requests through STADO_MEDIA_ROUTER_URL, while the registered image-video-router accepts only caller-built raw_workflow image requests and its Stado consumer list contains Content Platform and Weles but not wisent-backend. The canonical Stado registry has no wisent-backend-images service or endpoint.",
+            "consequence": "GPU 1 has an intended product consumer but no canonical deployed route in the current registry; the compute placement is a target, not evidence that direct Z-Image requests currently reach it."
+          }
+        },
         "desired_state": "four_gpu_local_primary_capacity",
         "migration_mapping": [
           "wisent-mig-inference-blue-035m",
@@ -296,7 +327,7 @@
       {
         "capability": "image and video routing",
         "entrypoint": "image-video-router CPU service on ubuntu-server-rtx-pro-6000",
-        "execution": "dispatch direct image requests to the GPU 1 wisent-backend-images runtime and workflow requests to the GPU 2 ComfyUI runtime; Azure handles overflow"
+        "execution": "accept caller-built raw ComfyUI workflows from Content Platform and approved Weles workflows and dispatch them to GPU 2; it does not route high-level direct Z-Image requests to GPU 1"
       },
       {
         "capability": "direct Z-Image generation",
@@ -335,6 +366,10 @@
       "Operator-provided hardware inventory on 2026-08-15: four RTX PRO 6000 cards owned, one connected and three boxed; all four are available for the post-migration target",
       "wisent-backend-images/app/main.py:29-33,82-86",
       "wisent-backend-images/app/routers/image_generate.py:215-252",
+      "backends/wisent-backend/ARCHITECTURE.md:17-18",
+      "backends/wisent-backend/api_service/api_layer/services/content/media/wisent_image_service.py:51-102",
+      "backends/wisent-backend/api_service/api_layer/services/content/media/stado_media_router.py:109-171",
+      "image-video-router/README.md:27-36,51-59,73-94",
       "Azure VM inventory read on 2026-08-15 returned zero VMs"
     ]
   },
