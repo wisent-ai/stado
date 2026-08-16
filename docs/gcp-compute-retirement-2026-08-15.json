@@ -155,6 +155,17 @@
           "measured_vram_gb": 95,
           "logical_stado_slots": 2
         },
+        "gpu_capacity_requirement": {
+          "installed_physical_gpus": 1,
+          "installed_logical_stado_slots": 2,
+          "required_for_declared_design_with_serialization_and_azure_burst": 1,
+          "required_for_simultaneous_local_inference_image_generation_and_training": 3,
+          "required_to_match_historical_durable_gcp_gpu_service_concurrency": 5,
+          "image_video_router_gpu_requirement": 0,
+          "guaranteed_local_concurrency": "one GPU-heavy workload class at a time",
+          "overflow": "Azure A10 or A100 ephemeral agents",
+          "explanation": "The installed workstation has one physical GPU. The two Stado slots are scheduler concurrency, not two GPUs. One GPU is sufficient only because inference is yieldable, image generation and training are admitted on demand, and concurrent overflow is assigned to Azure."
+        },
         "workloads": [
           "image-video-router",
           "chat-primary vLLM inference using TheDrummer/Cydonia-24B-v4.3",
