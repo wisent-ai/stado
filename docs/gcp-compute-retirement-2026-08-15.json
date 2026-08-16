@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "captured_at": "2026-08-15T16:35:00Z",
   "project_id": "wisent-480400",
   "project_number": "1080673333190",
@@ -30,6 +30,74 @@
     "target_http_proxies": 1,
     "target_https_proxies": 1,
     "url_maps": 2
+  },
+  "historical_instance_inventory": {
+    "observed_instance_count": 28,
+    "gcp_instances_required_after_migration": 0,
+    "classification_counts": {
+      "durable_service_instances": 10,
+      "ephemeral_compute_workers": 14,
+      "experiments_or_one_off": 4
+    },
+    "durable_capabilities": {
+      "count": 7,
+      "fully_replaced": [
+        "wisent-backend public API",
+        "Echo/Weles content platform",
+        "Weles Apple authentication"
+      ],
+      "replacement_declared_but_offline": [
+        "wisent-backend inference",
+        "image-video-router"
+      ],
+      "replacement_gap": [
+        "wisent-backend image service",
+        "ComfyUI/Z-Image generation"
+      ]
+    },
+    "migration_status_by_instance_count": {
+      "durable_fully_replaced": 4,
+      "durable_replacement_declared_but_offline": 3,
+      "durable_replacement_gap": 3,
+      "ephemeral_not_individually_required": 14,
+      "experiment_runtime_unconfirmed_data_retained": 4
+    },
+    "instances": [
+      {"name":"wisent-mig-api-blue-j0qh","zone":"us-central1-b","historical_role":"wisent-backend public API blue","classification":"durable_service","gcp_instance_needed_after_migration":false,"capability_needed_after_migration":"yes","migration_status":"fully_replaced","replacement":"wisent-backend on charless-mac-mini","current_gcp_presence":"absent"},
+      {"name":"wisent-mig-api-green-88dw","zone":"us-central1-b","historical_role":"wisent-backend public API green","classification":"durable_service","gcp_instance_needed_after_migration":false,"capability_needed_after_migration":"yes","migration_status":"fully_replaced","replacement":"wisent-backend on charless-mac-mini","current_gcp_presence":"absent"},
+      {"name":"wisent-mig-images-green-cq1d","zone":"us-central1-b","historical_role":"wisent-backend GPU image service","classification":"durable_service","gcp_instance_needed_after_migration":false,"capability_needed_after_migration":"yes","migration_status":"replacement_gap","replacement":"","current_gcp_presence":"absent"},
+      {"name":"wisent-mig-images-green-vlrb","zone":"us-central1-b","historical_role":"wisent-backend GPU image service","classification":"durable_service","gcp_instance_needed_after_migration":false,"capability_needed_after_migration":"yes","migration_status":"replacement_gap","replacement":"","current_gcp_presence":"absent"},
+      {"name":"wisent-mig-inference-blue-035m","zone":"us-central1-b","historical_role":"wisent-backend GPU inference","classification":"durable_service","gcp_instance_needed_after_migration":false,"capability_needed_after_migration":"yes","migration_status":"replacement_declared_but_offline","replacement":"Stado chat-primary on ubuntu-server-rtx-pro-6000","current_gcp_presence":"absent"},
+      {"name":"wisent-mig-inference-blue-wqj9","zone":"us-central1-a","historical_role":"wisent-backend GPU inference","classification":"durable_service","gcp_instance_needed_after_migration":false,"capability_needed_after_migration":"yes","migration_status":"replacement_declared_but_offline","replacement":"Stado chat-primary on ubuntu-server-rtx-pro-6000","current_gcp_presence":"absent"},
+      {"name":"image-gen-comfyui-mig-62fj","zone":"us-central1-a","historical_role":"ComfyUI/Z-Image gateway and fallback generation","classification":"durable_service","gcp_instance_needed_after_migration":false,"capability_needed_after_migration":"yes","migration_status":"replacement_gap","replacement":"","current_gcp_presence":"absent"},
+      {"name":"content-platform-vm","zone":"us-west1-b","historical_role":"Echo/Weles worker and recordings host","classification":"durable_service","gcp_instance_needed_after_migration":false,"capability_needed_after_migration":"yes","migration_status":"fully_replaced_runtime_unique_data_retained","replacement":"Echo plus Weles on charless-mac-mini","current_gcp_presence":"TERMINATED"},
+      {"name":"image-video-router-vm","zone":"us-west1-b","historical_role":"image and video routing service","classification":"durable_service","gcp_instance_needed_after_migration":false,"capability_needed_after_migration":"yes","migration_status":"replacement_declared_but_offline","replacement":"image-video-router on ubuntu-server-rtx-pro-6000","current_gcp_presence":"TERMINATED"},
+      {"name":"weles-apple-auth-prod","zone":"us-west1-b","historical_role":"Weles Apple authentication worker","classification":"durable_service","gcp_instance_needed_after_migration":false,"capability_needed_after_migration":"yes","migration_status":"fully_replaced","replacement":"Weles on charless-mac-mini","current_gcp_presence":"TERMINATED"},
+      {"name":"wisent-agent-80gb-1777754741-3","zone":"us-central1-a","historical_role":"ephemeral Stado A100 80 GB queue worker","classification":"ephemeral_compute_worker","gcp_instance_needed_after_migration":false,"capability_needed_after_migration":"no","migration_status":"individual_instance_not_required_capacity_managed_by_stado","replacement":"Stado-managed compute capacity","current_gcp_presence":"TERMINATED"},
+      {"name":"wisent-agent-a100-1777737822-27","zone":"us-east1-b","historical_role":"ephemeral Stado A100 40 GB queue worker","classification":"ephemeral_compute_worker","gcp_instance_needed_after_migration":false,"capability_needed_after_migration":"no","migration_status":"individual_instance_not_required_capacity_managed_by_stado","replacement":"Stado-managed compute capacity","current_gcp_presence":"TERMINATED"},
+      {"name":"wisent-agent-l4-1783938808-1","zone":"us-east4-a","historical_role":"ephemeral Stado L4 queue worker","classification":"ephemeral_compute_worker","gcp_instance_needed_after_migration":false,"capability_needed_after_migration":"no","migration_status":"individual_instance_not_required_capacity_managed_by_stado","replacement":"Stado-managed compute capacity","current_gcp_presence":"absent"},
+      {"name":"wisent-1333bd59","zone":"us-central1-b","historical_role":"legacy ephemeral T4 queue worker","classification":"ephemeral_compute_worker","gcp_instance_needed_after_migration":false,"capability_needed_after_migration":"no","migration_status":"individual_instance_not_required_capacity_managed_by_stado","replacement":"Stado-managed compute capacity","current_gcp_presence":"TERMINATED"},
+      {"name":"wisent-25757579","zone":"us-central1-b","historical_role":"legacy ephemeral T4 queue worker","classification":"ephemeral_compute_worker","gcp_instance_needed_after_migration":false,"capability_needed_after_migration":"no","migration_status":"individual_instance_not_required_capacity_managed_by_stado","replacement":"Stado-managed compute capacity","current_gcp_presence":"TERMINATED"},
+      {"name":"wisent-5c56e71c","zone":"us-central1-b","historical_role":"legacy ephemeral T4 queue worker","classification":"ephemeral_compute_worker","gcp_instance_needed_after_migration":false,"capability_needed_after_migration":"no","migration_status":"individual_instance_not_required_capacity_managed_by_stado","replacement":"Stado-managed compute capacity","current_gcp_presence":"TERMINATED"},
+      {"name":"wisent-6fd1aaad","zone":"us-central1-b","historical_role":"legacy ephemeral T4 queue worker","classification":"ephemeral_compute_worker","gcp_instance_needed_after_migration":false,"capability_needed_after_migration":"no","migration_status":"individual_instance_not_required_capacity_managed_by_stado","replacement":"Stado-managed compute capacity","current_gcp_presence":"TERMINATED"},
+      {"name":"wisent-72c5dfcd","zone":"us-central1-b","historical_role":"legacy ephemeral T4 queue worker","classification":"ephemeral_compute_worker","gcp_instance_needed_after_migration":false,"capability_needed_after_migration":"no","migration_status":"individual_instance_not_required_capacity_managed_by_stado","replacement":"Stado-managed compute capacity","current_gcp_presence":"TERMINATED"},
+      {"name":"wisent-7c82d36c","zone":"us-central1-b","historical_role":"legacy ephemeral T4 queue worker","classification":"ephemeral_compute_worker","gcp_instance_needed_after_migration":false,"capability_needed_after_migration":"no","migration_status":"individual_instance_not_required_capacity_managed_by_stado","replacement":"Stado-managed compute capacity","current_gcp_presence":"TERMINATED"},
+      {"name":"wisent-82f03ff4","zone":"us-central1-b","historical_role":"legacy ephemeral T4 queue worker","classification":"ephemeral_compute_worker","gcp_instance_needed_after_migration":false,"capability_needed_after_migration":"no","migration_status":"individual_instance_not_required_capacity_managed_by_stado","replacement":"Stado-managed compute capacity","current_gcp_presence":"TERMINATED"},
+      {"name":"wisent-88eaf01f","zone":"us-central1-b","historical_role":"legacy ephemeral T4 queue worker","classification":"ephemeral_compute_worker","gcp_instance_needed_after_migration":false,"capability_needed_after_migration":"no","migration_status":"individual_instance_not_required_capacity_managed_by_stado","replacement":"Stado-managed compute capacity","current_gcp_presence":"TERMINATED"},
+      {"name":"wisent-b5d3e0ee","zone":"us-central1-f","historical_role":"legacy ephemeral T4 queue worker","classification":"ephemeral_compute_worker","gcp_instance_needed_after_migration":false,"capability_needed_after_migration":"no","migration_status":"individual_instance_not_required_capacity_managed_by_stado","replacement":"Stado-managed compute capacity","current_gcp_presence":"TERMINATED"},
+      {"name":"wisent-bc5a7895","zone":"us-central1-b","historical_role":"legacy ephemeral T4 queue worker","classification":"ephemeral_compute_worker","gcp_instance_needed_after_migration":false,"capability_needed_after_migration":"no","migration_status":"individual_instance_not_required_capacity_managed_by_stado","replacement":"Stado-managed compute capacity","current_gcp_presence":"TERMINATED"},
+      {"name":"wisent-ed259745","zone":"us-central1-b","historical_role":"legacy ephemeral T4 queue worker","classification":"ephemeral_compute_worker","gcp_instance_needed_after_migration":false,"capability_needed_after_migration":"no","migration_status":"individual_instance_not_required_capacity_managed_by_stado","replacement":"Stado-managed compute capacity","current_gcp_presence":"TERMINATED"},
+      {"name":"vatt-a100","zone":"us-central1-a","historical_role":"VATT A100 experiment","classification":"experiment_or_one_off","gcp_instance_needed_after_migration":false,"capability_needed_after_migration":"unconfirmed","migration_status":"runtime_not_required_unique_data_export_required","replacement":"","current_gcp_presence":"TERMINATED"},
+      {"name":"wisent-zimage-interp-jt","zone":"us-central1-b","historical_role":"Z-Image interpolation experiment","classification":"experiment_or_one_off","gcp_instance_needed_after_migration":false,"capability_needed_after_migration":"unconfirmed","migration_status":"runtime_not_required_unique_data_export_required","replacement":"","current_gcp_presence":"TERMINATED"},
+      {"name":"needher-watermark-a100-80gb-20260622","zone":"us-central1-c","historical_role":"Needher watermark and content pipeline","classification":"experiment_or_one_off","gcp_instance_needed_after_migration":false,"capability_needed_after_migration":"unconfirmed","migration_status":"runtime_not_required_unique_data_export_required","replacement":"","current_gcp_presence":"TERMINATED"},
+      {"name":"sapiens2-bodyhorror","zone":"us-central1-c","historical_role":"Sapiens2/Needher experiment","classification":"experiment_or_one_off","gcp_instance_needed_after_migration":false,"capability_needed_after_migration":"unconfirmed","migration_status":"runtime_not_required_unique_data_export_required","replacement":"","current_gcp_presence":"TERMINATED"}
+    ],
+    "evidence": [
+      "docs/incidents/2026-07-27-gcp-billing-outage.md:139-214",
+      ".transcript-lake/events/runtime=omp/date=2026-07-28/part-459280cdc004.ndjson:224-232",
+      ".transcript-lake/events/runtime=claude/date=2026-04-22/part-96a2eadf91c4.ndjson:533-546",
+      "stado-rs/data/registry.json"
+    ]
   },
   "instance_state": {
     "TERMINATED": 20
