@@ -1,20 +1,28 @@
 # GCP resource necessity map — 2026-08-15
 
-## Decision
+## Approval status
 
-**No Wisent capability needs to remain permanently in GCP.** The intended terminal state for project `wisent-480400` is a retained administrative tombstone with billing detached and no Wisent workload, credential, public endpoint or unique data left inside it.
+**No user approved these classifications.** The user requested a map of what
+appears necessary; the classifications below are an assistant-authored
+assessment based on repository and live-inventory evidence, not an
+operator-approved retention or deletion plan. Labels such as `DELETE` describe
+the assessment result and do not authorize a destructive operation.
 
-Three things still require preservation before that state is safe:
+## Assessment conclusion
+
+**The evidence indicates that no Wisent capability needs to remain permanently in GCP.** The assessment's proposed terminal state for project `wisent-480400` is a retained administrative tombstone with billing detached and no Wisent workload, credential, public endpoint or unique data left inside it.
+
+The assessment recommends preserving three things before that state is safe:
 
 1. **One temporary public compatibility path:** the Oko internet PTY relay currently represented by Cloud Run `swiatowid-pty-relay`, until an equivalent single-instance relay is deployed through Stado and client routing is cut over.
 2. **Legacy desktop update compatibility:** the two public Sparkle feeds, until old Oko/Swiatowid installations have a proven path to the GitHub/Stado feed.
 3. **Unique or unclassified data:** five persistent disks, selected buckets, historical billing data and the stopped Cloud SQL database, until their useful contents are exported or deliberately discarded after inspection.
 
-Everything else is either already replaced, an inert deployment artifact, a credential for a retired path, metadata generated around another resource, or an API/quota declaration that no workload needs.
+The assessment classifies everything else as already replaced, an inert deployment artifact, a credential for a retired path, metadata generated around another resource, or an API/quota declaration that no workload needs.
 
-## Meaning of the decisions
+## Meaning of the proposed classifications
 
-| Decision | Meaning |
+| Proposed classification | Meaning |
 |---|---|
 | `KEEP-UNTIL-CUTOVER` | A capability is still useful and the GCP resource may be the only deployed implementation; replace it before removal. |
 | `HOLD-COMPAT` | No new system should use it, but old installed clients may still address it. |
@@ -23,11 +31,11 @@ Everything else is either already replaced, an inert deployment artifact, a cred
 | `DELETE` | No current capability or unique-data requirement justifies retention. |
 | `CASCADE` | Google-generated metadata/support object; let deletion of its parent remove it or remove it after the parent. |
 
-`DELETE` is a necessity decision, not evidence that the current detached-billing control plane will accept the deletion command.
+`DELETE` is a necessity assessment, not user approval and not evidence that the current detached-billing control plane will accept the deletion command.
 
 ## Capability-level map
 
-| Capability | Needed by Wisent | Needed in GCP | Decision |
+| Capability | Evidence of Wisent need | Evidence of GCP need | Proposed classification |
 |---|---|---|---|
 | Stado coordinator, queue, object and release APIs | Yes | No | Already placed on `charless-mac-mini` with Azure Blob primary storage and S3 DR; GCP copies are migration/history data only. |
 | Brama model routing | Yes | No | Brama owns model access; old GCP identities, Vertex configuration and direct Gemini keys are not a valid route. |
@@ -70,7 +78,7 @@ All 20 residual instances are `TERMINATED`; **zero GCP instances are needed**. T
 
 ### Disks
 
-| Decision | Disks | Why |
+| Proposed classification | Disks | Why |
 |---|---|---|
 | `EXPORT-THEN-DELETE` | `content-platform-vm` | 500 GB recordings host; no proof that `~/weles/recordings` was copied. |
 | `EXPORT-THEN-DELETE` | `needher-watermark-a100-80gb-20260622` | Possible unique NeedHer pipeline results/checkpoints. |
@@ -84,7 +92,7 @@ The need is for data from five disks, not for the disks or their GCP runtimes. T
 
 ### All other compute assets
 
-| Family | Decision | Reason |
+| Family | Proposed classification | Reason |
 |---|---|---|
 | 13 instance groups and 13 managers | `DELETE` | No live member instance and no GCP service remains. |
 | 165 instance templates and 38 instance settings | `DELETE` | Generated deployment history; source/configuration belongs in repositories and Stado. |
@@ -95,9 +103,9 @@ The need is for data from five disks, not for the disks or their GCP runtimes. T
 | 25 firewall rules | `DELETE` except Google-required defaults while the network exists | Old API, image, inference, ComfyUI, proxy, VNC, SSH/RDP and development access. |
 | Two networks, 43 subnetworks, 45 routes and one router | `DELETE` after dependent resources | No Wisent GCP runtime remains; most subnets/routes are generated regional defaults. |
 
-## Cloud Storage: all 17 decisions
+## Cloud Storage: all 17 proposed classifications
 
-| Bucket | Decision | Required content / criterion |
+| Bucket | Proposed classification | Required content / criterion |
 |---|---|---|
 | `stado` | `DEDUP-THEN-DELETE` | Compare registry, releases, artifacts, queue history and Probierz records against Azure primary and S3 DR; export the two-object mismatch recorded during migration plus any later unique objects. |
 | `wisent-compute` | `DEDUP-THEN-DELETE` | Preserve unique legacy registry, release, agent, schedule, log and run records; no current writer should remain. |
@@ -119,7 +127,7 @@ The need is for data from five disks, not for the disks or their GCP runtimes. T
 
 ## Data services and messaging
 
-| Resource | Decision | Required preservation |
+| Resource | Proposed classification | Required preservation |
 |---|---|---|
 | BigQuery `billing_export.gcp_billing_export_v1_017364_D3B657_F207B5` | `EXPORT-THEN-DELETE` | Historical gross cost, credits, net cost and burn history as a portable table/archive. |
 | Cloud SQL `wisent-compute-db` | `EXPORT-THEN-DELETE` | Schema and data once, unless inspection proves the database empty/disposable; never restart it merely to preserve the old runtime. |
@@ -134,7 +142,7 @@ The need is for data from five disks, not for the disks or their GCP runtimes. T
 
 ### Service accounts
 
-| Account | Decision |
+| Account | Proposed classification |
 |---|---|
 | `1080673333190-compute@developer.gserviceaccount.com` (Default Compute) | `KEEP-UNTIL-CUTOVER` only for the relay; remove its user-managed key now if Cloud Run does not require it, then retire the account dependency with the relay. |
 | `agent-billing` | `DELETE` after billing export; no ongoing GCP billing feed. |
@@ -162,7 +170,7 @@ The twelve user-managed service-account keys are not needed as data. Revoke/dele
 
 ### Secret Manager
 
-| Secret group | Decision |
+| Secret group | Proposed classification |
 |---|---|
 | `swiatowid-pty-relay-token` | `KEEP-UNTIL-CUTOVER`, then replace with the exact `oko-pty-relay` Skarbiec service/client grants and delete both GCP versions. |
 | `account-api-env`, `wisent-api-env`, `wisent-images-env`, `wisent-images-supabase-key`, `wisent-images-supabase-service-role-key`, `wisent-images-supabase-url`, `wisent-inference-env`, `wisent-inference-env-bf16-a10080` | `DELETE` after verifying current services receive every still-valid value through Skarbiec; do not copy obsolete provider/runtime configuration forward. |
@@ -177,7 +185,7 @@ The 132 secret versions are history of these 19 secrets, not 132 separately need
 
 ## Build, monitoring and administrative resources
 
-| Family | Decision | Reason |
+| Family | Proposed classification | Reason |
 |---|---|---|
 | Artifact Registry `cloud-run-source-deploy` | `KEEP-UNTIL-CUTOVER` only for the latest relay image; delete the old relay and backend images, then the repository. |
 | Seven Cloud Run revisions | Keep latest only until cutover; six older revisions `DELETE` | Rollback history is not canonical source. |
@@ -205,7 +213,7 @@ No enabled API is a permanent product dependency. Keep only the APIs required to
 
 Workspace, Ads, Android Publisher, Translate, Gemini/Vertex and the many enabled platform/catalog APIs are not evidence of GCP-hosted workloads and do not justify retaining GCP resources.
 
-## Retirement order encoded by dependency
+## Proposed retirement order encoded by dependency
 
 1. Preserve the five unique disks and export/deduplicate the named buckets, BigQuery table and Cloud SQL contents.
 2. Deploy the single-instance Oko relay through Stado with Skarbiec grants; cut clients from the Cloud Run URL and token.
@@ -216,7 +224,7 @@ Workspace, Ads, Android Publisher, Translate, Gemini/Vertex and the many enabled
 
 ## Coverage
 
-This decision map classifies every family in the 1,057-asset inventory:
+This assessment classifies every family in the 1,057-asset inventory:
 
 - all 599 Compute Engine assets;
 - all 109 non-compute logical/support resources across 27 asset families;
