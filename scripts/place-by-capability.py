@@ -177,6 +177,54 @@ def registry_declarations():
     return declared
 
 
+def declared_service(entry, service):
+    """The registry service entry a host runs under this name, or NONE.
+
+    A service is named twice in the registry -- `name` is what the fleet calls
+    it and `label` is what launchd or systemd loads -- and callers know only the
+    first. Both are matched so a rename on one side does not silently make a
+    host stop being a candidate.
+    """
+    for candidate in entry.get("services") or []:
+        if service in (candidate.get("name"), candidate.get("label"), candidate.get("unit")):
+            return candidate
+    return NONE
+
+
+def runs_service(settings, target, entry, service):
+    """Why this host cannot execute a job that needs `service`, or NONE.
+
+    This is what replaced a hand-written exclusion list on each target. Which
+    machine may run a Weles trajectory is not an opinion to be maintained in
+    three places: the registry already says which hosts run the Weles worker,
+    and the beacon already says whether it is actually loaded there. A host that
+    does not declare the service is not a candidate, and a host that declares it
+    without running it is a divergence, not a placement. Nothing to keep in
+    sync, and an edit in Stado moves the answer by itself.
+    """
+    entry_service = declared_service(entry, service)
+    if entry_service is NONE:
+        return f"does not run {service}: the registry declares no such service on this host"
+    label = entry_service.get("label") or entry_service.get("name")
+    uri = f"stado://{settings['namespace']}/host_health/{entry.get('health_object') or target}.json"
+    try:
+        health = json.loads(read_object(settings, uri))
+    except (Unreadable, ValueError):
+        # The health object is named per host and some hosts publish under a
+        # different stem; a declaration the beacon cannot confirm is reported by
+        # `registry doctor`, and placement should not invent a second verdict.
+        return NONE
+    units = health.get("units") or {}
+    state = (units.get(label) or units.get(entry_service.get("name")) or {}).get("state")
+    if state == "active":
+        return NONE
+    return (
+        f"declares {service} but its own beacon reports that unit "
+        + (f"{state}" if state else "absent")
+        + ": a declaration the host contradicts is not a placement"
+    )
+
+
 def parse_measured_at(text):
     if not isinstance(text, str) or not text:
         return NONE
@@ -262,11 +310,17 @@ def policy_refusal(policy, requires):
     )
 
 
-def place(requires, max_stale_seconds, candidates=NONE):
+def place(requires, max_stale_seconds, candidates=NONE, runs=NONE):
     """Return (host, refusals). `host` is NONE when no candidate qualifies.
 
     Importable so the installer asks the same question the operator does; a
     second copy of this matching is a second answer waiting to disagree.
+
+    `runs` names the service that executes the work. It is the structural half
+    of the question and it comes before every measurement: a machine that does
+    not run the Weles worker is not a slow or unmeasured candidate for a Weles
+    trajectory, it is not a candidate at all, and no exclusion list has to be
+    maintained to say so.
     """
     settings = storage_settings()
     declared = registry_declarations()
@@ -275,10 +329,16 @@ def place(requires, max_stale_seconds, candidates=NONE):
     qualified = []
     refusals = []
     for target in sorted(names):
+        entry = declared.get(target, {})
+        if runs:
+            wrong_host = runs_service(settings, target, entry, runs)
+            if wrong_host:
+                refusals.append(f"{target}  {wrong_host}")
+                continue
         # Policy first: a forbidden host is forbidden whether or not anything
         # measured it, and reading its measurement would only invite the reader
         # to argue with a capability that was never the objection.
-        forbidden = policy_refusal(declared.get(target, {}).get(POLICY_KEY), requires)
+        forbidden = policy_refusal(entry.get(POLICY_KEY), requires)
         if forbidden:
             refusals.append(f"{target}  {forbidden}")
             continue
@@ -322,6 +382,15 @@ def main():
         help="a measurement older than this satisfies nothing",
     )
     parser.add_argument(
+        "--runs",
+        default="",
+        help=(
+            "registry service name that executes the work, for example "
+            "com.wisent.always-on.weles; only hosts declaring it and reporting it "
+            "active are candidates"
+        ),
+    )
+    parser.add_argument(
         "--candidates",
         default="",
         help="comma-separated registry target names to consider; default is every registry target",
@@ -337,7 +406,12 @@ def main():
 
     candidates = [item.strip() for item in arguments.candidates.split(",") if item.strip()]
     try:
-        host, refusals = place(requires, arguments.max_stale_seconds, candidates or NONE)
+        host, refusals = place(
+            requires,
+            arguments.max_stale_seconds,
+            candidates or NONE,
+            runs=arguments.runs.strip() or NONE,
+        )
     except Unreadable as problem:
         print(str(problem), file=sys.stderr)
         return EXIT_UNREADABLE
