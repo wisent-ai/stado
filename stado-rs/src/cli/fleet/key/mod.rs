@@ -58,6 +58,94 @@ pub(crate) fn configured_client() -> Result<Client, String> {
     .map_err(|exc| exc.to_string())
 }
 
+/// Fields of a key-pair item the SSH channel's reader must be able to read.
+/// Grants are per item, so these are exactly the capabilities a freshly minted
+/// key is missing.
+const CHANNEL_FIELDS: [&str; 2] = ["private_key", "public_key"];
+
+/// Finish a key write: make the item readable by the consumer the SSH channel
+/// reads it through, then prove it through that same consumer.
+///
+/// Two distinct stores are in play. An owner write reaches a vault FILE; the
+/// channel reaches a BROKER, authenticating as the administrative consumer of
+/// [`crate::credential_store::admin_credentials`]. Skarbiec authorizes reads per
+/// item, so the write leaves the item invisible to that consumer until its grant
+/// is widened — which is why every freshly minted key used to be dead on
+/// arrival. And on a host whose broker forwards to another machine's vault, the
+/// two stores are not the same store at all, so a key that looks written is
+/// invisible to the fleet. Neither condition is detectable later from anywhere
+/// nearer than the failing host, so the write is not finished until the reader
+/// can see what was written.
+///
+/// `verify` names the fields read back and the values they must carry. Values
+/// are compared, never printed.
+pub(crate) async fn settle_readable(
+    client: &Client,
+    id: &str,
+    verify: &[(&str, &str)],
+) -> Result<(), String> {
+    // A file store answers its owner directly and has no grants to widen; the
+    // read-back there goes through the store, not through a broker that may not
+    // exist on that deployment.
+    let brokered = crate::credential_store::skarbiec_url().is_some();
+    if brokered {
+        let credentials =
+            crate::credential_store::admin_credentials().map_err(|exc| exc.to_string())?;
+        let outcome = crate::credential_store::grant::grant_field_reads(
+            &credentials.consumer,
+            std::path::Path::new(&credentials.token_file),
+            id,
+            &CHANNEL_FIELDS,
+        )
+        .map_err(|exc| {
+            format!("cannot make {id} readable by {}: {exc}", credentials.consumer)
+        })?;
+        if outcome.wrote() {
+            println!(
+                "granted {} read on {} ({} capabilities held, was {})",
+                credentials.consumer,
+                outcome.added.join(", "),
+                outcome.held_after,
+                outcome.held_before
+            );
+        }
+    }
+    for (field, expected) in verify {
+        let read = if brokered {
+            client
+                .read_field(id, field)
+                .await
+                .map(|value| value.as_str().map(str::to_string))
+        } else {
+            client.read_string(id, field).await
+        };
+        // Every way this can end badly says the same thing. The item was
+        // written and its fields were granted a moment ago, so a reader that
+        // refuses them, or answers with something else, is not reading the
+        // vault this write reached — nothing the caller can fix by retrying or
+        // by granting more.
+        let reason = match read {
+            Ok(stored) if stored.as_deref().map(str::trim) == Some(expected.trim()) => continue,
+            Ok(Some(_)) => "a different value".to_string(),
+            Ok(None) => "nothing".to_string(),
+            Err(crate::skarbiec::SkarbiecError::Response { status, detail })
+                if status == reqwest::StatusCode::FORBIDDEN.as_u16()
+                    || status == reqwest::StatusCode::NOT_FOUND.as_u16() =>
+            {
+                format!("HTTP {status}: {}", detail.trim())
+            }
+            Err(error) => return Err(error.to_string()),
+        };
+        return Err(format!(
+            "wrote {id} and granted its fields, but the reader that opens the channel serves \
+             {reason} for {field}. This machine's vault is not the one the fleet reads: mint on \
+             the host that holds it (`stado host vaults` names them), or point \
+             SKARBIEC_VAULT_FILE at that vault"
+        ));
+    }
+    Ok(())
+}
+
 /// `key add TARGET --from PATH` — move an existing private key into the
 /// selected store. The source file is removed only after a read-back verifies
 /// the stored material; private content is never printed.
@@ -120,21 +208,25 @@ pub async fn add(runner: &Runner, target: &str, from: &str) -> Result<bool, Stri
         )
         .await
         .map_err(|exc| exc.to_string())?;
-    // Read back the three fields by name: a broker that requires a named
-    // field refuses the whole-item form, and this verification is the only
-    // thing standing between a half-written key and a deleted source file.
-    let read_back = |field: &'static str| {
-        let client = &client;
-        let id = id.clone();
-        async move { client.read_string(&id, field).await.ok().flatten() }
-    };
-    let verified = read_back("private_key").await.as_deref() == Some(private_key.trim())
-        && read_back("public_key").await.as_deref() == Some(public_key.trim())
-        && read_back("fingerprint").await.as_deref() == Some(fingerprint.as_str());
-    if !verified {
+    // The source file is about to be deleted, so the read-back is the only
+    // thing standing between a half-written key and a key that exists nowhere.
+    // It reads the material by name through the consumer the channel uses:
+    // `fingerprint` is schema context rather than a field, carries no grant,
+    // and proves nothing about whether this key can open a connection.
+    if let Err(error) = settle_readable(
+        &client,
+        &id,
+        &[
+            ("private_key", private_key.trim()),
+            ("public_key", public_key.trim()),
+        ],
+    )
+    .await
+    {
         let _ = client.delete_item(&id).await;
         return Err(format!(
-            "credential item {id} failed read-back verification; the source file was preserved"
+            "credential item {id} failed read-back verification: {error}. The source file was \
+             preserved"
         ));
     }
     if let Err(error) = std::fs::remove_file(from) {
