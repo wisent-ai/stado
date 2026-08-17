@@ -14,22 +14,22 @@ The first approved critical scope is `wisent-images-bucket`. It is active Wisent
 
 The Azure subscription `Wisent Production` (`9ae7cfa4-93e4-44f6-8f4d-5cea670e22bd`) is enabled. It currently contains the three regional VNets and NSGs, two user-assigned managed identities (`stado-control-plane`, `stado-agent`), and Network Watchers. It contains **no Azure Storage account** and no deployed compute workload.
 
-`deploy/azure/stado.config.json` is still a fenced template: Azure is in `providers_disabled`, the storage account and container are placeholders, and the identity/network/quota gates must pass before Azure can be enabled. The spending-limit and GPU-quota support tickets remain open. Therefore the subscription is administratively available but is not yet a migration destination.
+`deploy/azure/stado.config.json` is still a fenced template: Azure is in `providers_disabled`, the storage account and container are placeholders, and the identity/network/quota gates must pass before Azure can be enabled. Azure currently reports `billingProfileSpendingLimit=Off` and contains no Storage account. SR `2608140010002365` remains open; the 2026-08-17 response explicitly requested restoration of an enforceable hard cutoff or a supported equivalent because budgets and alerts do not prevent paid overage. Therefore the subscription is administratively available but is not yet a safe migration destination.
 
 ### Critical live media
 
-The live Wisent app database contains **2,362 direct GCS locators** for `wisent-images-bucket`:
+The 2026-08-17 live-database export contains **2,674 direct GCS locators** for `wisent-images-bucket`:
 
 | Live field | GCS locator count | Current consequence |
 |---|---:|---|
-| `Character.imageUrl` | 1,453 | Most character cards and portraits depend on GCS. |
-| `Character.videoUrl` | 888 | Every populated character video depends on GCS. |
-| `ProfilePublic.imageUrl` | 21 | 21 of 22 populated profile images depend on GCS. |
-| `Room.imageUrl` | 0 | No current room image locator needs migration. |
+| `Character.imageUrl` | 1,664 | Most character cards and portraits depend on GCS. |
+| `Character.videoUrl` | 927 | Every populated character video depends on GCS. |
+| `ProfilePublic.imageUrl` | 21 | 21 populated profile images depend on GCS. |
+| `Room.imageUrl` | 62 | Populated room media also depends on GCS. |
 
-A representative object returns HTTP 403 both anonymously and through the project's service account because GCP billing is detached. The prior migration record says these objects were copied from the now-retired CloudFront/S3 location into GCS, but the application database was left with provider URLs. The bounded Stado host inventory found no `wisent-backend/images/characters` copy in either the active or backup local store on `charless-mac-mini`.
+All 2,674 referenced object names are present in GCS and their list metadata is readable: together they contain 3,233,160,110 bytes (3.011 GiB), with generation, size, MD5, CRC32C and content type captured in the deterministic migration manifest. Object bodies still return HTTP 403 because GCP billing is detached. The prior migration record says these objects were copied from the now-retired CloudFront/S3 location into GCS, and the bounded Stado host inventory found no replacement copy on `charless-mac-mini`.
 
-This makes **source recovery** the first gate: there is currently no proven readable source copy from which to populate Azure.
+This makes **source-body recovery** the first gate: the canonical objects are identified and complete at metadata level, but no readable body source is currently available.
 
 ### Non-storage use: direct conclusion
 
@@ -122,7 +122,7 @@ No source deletion, database rewrite or DNS change occurs in this wave.
 
 ### Wave 2 — recover and cut over P0 media
 
-1. Search the former S3/CloudFront source, GCS mirror buckets, retained disks, release artifacts and other backups for each of the 2,362 references.
+1. Recover the 2,674 manifest-bound object bodies; their source names, database references and GCS metadata are already sealed.
 2. If no alternate copy exists, pursue a supported GCP data export that does not relink billing; detached billing remains unchanged.
 3. Copy recovered objects into Azure while preserving keys and metadata.
 4. Compare destination objects against the manifest; quarantine mismatches and missing references.
