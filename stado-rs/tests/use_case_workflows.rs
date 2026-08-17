@@ -336,6 +336,7 @@ async fn researcher_submits_executes_verifies_and_downloads_local_training_resul
         "researcher-workstation",
         &mut logger,
         "local",
+        None,
     )
     .await
     .expect("agent starts submitted job")
@@ -620,7 +621,7 @@ async fn ai_agent_request_materializes_pinned_input_and_scoped_secret_without_le
     let store = local_store(&storage);
     let mut agent_log = Vec::new();
     let mut logger = |line: &str| agent_log.push(line.to_string());
-    let slot = slots::start_slot(&store, queued, "automation-worker", &mut logger, "local")
+    let slot = slots::start_slot(&store, queued, "automation-worker", &mut logger, "local", None)
         .await
         .expect("trusted agent starts machine job");
     let slot = match slot {
@@ -712,7 +713,7 @@ async fn workload_process_cannot_inherit_control_plane_credentials() {
 
     let mut agent_log = Vec::new();
     let mut logger = |line: &str| agent_log.push(line.to_string());
-    let slot = slots::start_slot(&store, job, "privacy-worker", &mut logger, "local")
+    let slot = slots::start_slot(&store, job, "privacy-worker", &mut logger, "local", None)
         .await
         .unwrap()
         .expect("privacy workload is admitted");
@@ -804,7 +805,7 @@ async fn failed_workload_does_not_block_the_next_queued_job() {
         .await
         .unwrap()
         .expect("failing workload is queued");
-    let failed_slot = slots::start_slot(&store, failed_job, "recovery-agent", &mut logger, "local")
+    let failed_slot = slots::start_slot(&store, failed_job, "recovery-agent", &mut logger, "local", None)
         .await
         .unwrap()
         .expect("failing workload is admitted");
@@ -834,6 +835,7 @@ async fn failed_workload_does_not_block_the_next_queued_job() {
         "recovery-agent",
         &mut logger,
         "local",
+        None,
     )
     .await
     .unwrap()
