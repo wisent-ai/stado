@@ -912,9 +912,23 @@ async fn stat(args: &StorageStatArgs) -> Result<(), CmdError> {
     // so asking it reports `absent` for every release ever published -- an answer
     // indistinguishable from a real absence. Only the witness differs here: one
     // rendering below reports whichever answered, so the two cannot drift.
-    let release = match crate::object_store::ObjectRef::parse(&args.path) {
+    let parsed = crate::object_store::ObjectRef::parse(&args.path);
+    let release = match &parsed {
         Ok(object) if object.namespace() == "releases" => {
             RemoteObjectApi::configured_release_reader()?.map(|remote| (remote, object.to_string()))
+        }
+        _ => None,
+    };
+
+    // An object outside the queue namespace is not in the queue store and never
+    // can be: `StadoObjectBackend` builds `ObjectRef::new(&self.namespace, path)`,
+    // so every probe is re-prefixed with the queue namespace. Asking it about
+    // `stado://sources/...` reported `absent` for objects that exist, and I
+    // believed that answer twice tonight -- once far enough to publish a source
+    // snapshot and repoint a recipe around a file that was never missing.
+    let object_api = match (&parsed, &release) {
+        (Ok(object), None) if object.namespace() != crate::config::wc_stado_storage_namespace() => {
+            RemoteObjectApi::configured()?.map(|remote| (remote, object.clone()))
         }
         _ => None,
     };
@@ -932,6 +946,62 @@ async fn stat(args: &StorageStatArgs) -> Result<(), CmdError> {
                 "release-channel".to_string(),
                 BTreeMap::new(),
                 None,
+                None,
+            )
+        }
+        None if object_api.is_some() => {
+            let (remote, object) = object_api.expect("checked by the guard above");
+            // The list route is the one surface proven to answer for these
+            // namespaces, and it carries the bookkeeping the queue listing would
+            // have supplied, so nothing is reported as empty that is known.
+            let entries = remote.list(object.namespace(), object.key()).await?;
+            let uri = object.to_string();
+            let entry = entries.into_iter().find(|value| {
+                value.get("uri").and_then(Value::as_str) == Some(uri.as_str())
+            });
+            let (presence, metadata, updated) = match entry {
+                Some(value) => (
+                    Presence::Present {
+                        size: usize::try_from(
+                            value
+                                .get("size")
+                                .or_else(|| value.get("bytes"))
+                                .and_then(Value::as_u64)
+                                .unwrap_or_default(),
+                        )
+                        .unwrap_or(usize::MAX),
+                        version: None,
+                        detail: Some(
+                            "the list route reports size and metadata; it carries no CAS version"
+                                .to_string(),
+                        ),
+                    },
+                    value
+                        .get("metadata")
+                        .and_then(Value::as_object)
+                        .map(|fields| {
+                            fields
+                                .iter()
+                                .filter_map(|(name, item)| {
+                                    item.as_str().map(|text| (name.clone(), text.to_string()))
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    value
+                        .get("updated_at")
+                        .and_then(Value::as_str)
+                        .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
+                        .map(|stamp| stamp.with_timezone(&Utc)),
+                ),
+                None => (Presence::Absent, BTreeMap::new(), None),
+            };
+            (
+                presence,
+                remote.base_url.to_string(),
+                "object-api".to_string(),
+                metadata,
+                updated,
                 None,
             )
         }

@@ -403,11 +403,37 @@ async fn enqueue(
     let mut inputs = BTreeMap::new();
     for (name, v) in &m.inputs {
         let path = format!("input-archives/{name}.tar.gz");
-        resolved.insert(format!("input-{name}"), input(&v.uri, &path, &v.sha256));
+        // Stage every declared input inside the queue namespace, which is where
+        // the worker resolves objects, exactly as the source archive, manifest
+        // and request are already staged.
+        //
+        // A cross-namespace pin such as `stado://sources/skarbiec/<sha>/...`
+        // cannot be read by the worker at all: `StadoObjectBackend` builds
+        // `ObjectRef::new(&self.namespace, path)`, so every read is re-prefixed
+        // with the queue namespace, while `materialize_stado_inputs` hands it
+        // `ecosystem/sources/...`. Publisher and worker computed different keys
+        // for one object, and the build failed with `input input-skarbiec is
+        // absent` naming an object that was on the store's disk the whole time.
+        let bytes = super::storage::fetch_object(&v.uri).await?;
+        let staged_sha = release_control::sha256_bytes(&bytes);
+        if staged_sha != v.sha256 {
+            return Err(CmdError::click(format!(
+                "input {name} at {} hashes to {staged_sha}, recipe declares {}",
+                v.uri, v.sha256
+            )));
+        }
+        let leaf = format!("inputs/{name}.tar.gz");
+        let staged_path = run_path(&m.product, id, &leaf);
+        let staged_uri = run_uri(&m.product, id, &leaf);
+        queue_immutable(&staged_path, &bytes).await?;
+        resolved.insert(
+            format!("input-{name}"),
+            input(&staged_uri, &path, &v.sha256),
+        );
         inputs.insert(
             name.clone(),
             WorkerInput {
-                uri: v.uri.clone(),
+                uri: staged_uri,
                 sha256: v.sha256.clone(),
                 archive_path: path,
                 mount: v.mount.clone(),
@@ -994,7 +1020,16 @@ fn execute(
 }
 fn collect(root: &Path, relative: &Path, out: &mut Vec<PathBuf>) -> Result<(), CmdError> {
     let path = root.join(relative);
-    let metadata = std::fs::symlink_metadata(&path)?;
+    // The recipe's stage map is a declaration about what the build produces, and
+    // this is where the two are compared. A bare `?` here reported only
+    // `No such file or directory (os error 2)`, so a stage entry whose producer
+    // had been deleted looked identical to a broken builder.
+    let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
+        CmdError::click(format!(
+            "staged path {} declared by the recipe is not there: {error}",
+            path.display()
+        ))
+    })?;
     if metadata.file_type().is_symlink() {
         return Err(CmdError::click(format!(
             "staged path is a symlink: {}",
@@ -1058,8 +1093,19 @@ fn write_receipt(receipt: &BuildReceipt) -> Result<(), CmdError> {
 }
 
 pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
-    let request: WorkerRequest = serde_json::from_slice(&std::fs::read(&args.request)?)?;
-    let manifest_bytes = std::fs::read(&request.manifest_path)?;
+    // Name the file. Each of these was a bare `?`, so a missing one surfaced as
+    // `Error: No such file or directory (os error 2)` with no path at all, on a
+    // builder whose log ended with a successful compile -- and the operator's
+    // only recourse was to guess which of four paths it meant.
+    let read_named = |path: &dyn AsRef<Path>, what: &str| -> Result<Vec<u8>, CmdError> {
+        let path = path.as_ref();
+        std::fs::read(path).map_err(|error| {
+            CmdError::click(format!("cannot read {what} {}: {error}", path.display()))
+        })
+    };
+    let request_bytes = read_named(&args.request, "the worker request")?;
+    let request: WorkerRequest = serde_json::from_slice(&request_bytes)?;
+    let manifest_bytes = read_named(&request.manifest_path, "the release manifest")?;
     if request.schema_version != 1
         || release_control::sha256_bytes(&manifest_bytes) != request.manifest_sha256
     {
@@ -1073,7 +1119,7 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     if manifest.product != request.product || !manifest.platforms.contains_key(&request.platform) {
         return Err(CmdError::click("worker request disagrees with manifest"));
     }
-    let source_bytes = std::fs::read(&request.source_archive)?;
+    let source_bytes = read_named(&request.source_archive, "the source archive")?;
     if release_control::sha256_bytes(&source_bytes) != request.source_sha256 {
         return Err(CmdError::click("worker source digest mismatch"));
     }
@@ -1084,7 +1130,7 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
     std::fs::create_dir_all(&inputs_root)?;
     let mut receipt_inputs = BTreeMap::new();
     for (name, input) in &request.inputs {
-        let bytes = std::fs::read(&input.archive_path)?;
+        let bytes = read_named(&input.archive_path, &format!("input {name}"))?;
         if release_control::sha256_bytes(&bytes) != input.sha256 {
             return Err(CmdError::click(format!("input {name} digest mismatch")));
         }
