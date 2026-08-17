@@ -66,6 +66,12 @@ for attempt in 1 2 3 4 5 6; do
     sleep 10
 done
 
+# One readable object is not the whole fleet of Cloud Storage frontends: a
+# short window once copied two objects and then took `403 accountDisabled` on
+# the third while billing was demonstrably attached. Let the activation settle
+# before spending the window on failures.
+sleep 20
+
 status=0
 run_pass() {
     container=$1
