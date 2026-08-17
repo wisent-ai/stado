@@ -31,6 +31,14 @@ A representative object returns HTTP 403 both anonymously and through the projec
 
 This makes **source recovery** the first gate: there is currently no proven readable source copy from which to populate Azure.
 
+### Non-storage use: direct conclusion
+
+Inside GCP project `wisent-480400`, **no non-storage Wisent runtime currently consumes a GCP service**. The audited 24-hour window contains only Google's own billing-export writer; all Compute Engine instances are terminated or absent, the only Cloud Run service has no requests in 90 days and cannot start, the Pub/Sub topics have no subscriptions, Cloud SQL is stopped, the Cloud Tasks consumer is absent, and active Stado billing configuration selects only Azure.
+
+Outside that project, current Wisent iOS source actively uses three Firebase contracts from the separate `wisent-57937` configuration: Remote Config, Analytics and Crashlytics. Those contracts require replacement if the objective is to remove Google's application control plane. Google Sign-In and FCM/Google Play are external product-provider edges rather than GCP-hosted Wisent infrastructure; retain or remove them according to the product feature, not as part of the `wisent-480400` migration.
+
+Therefore, beyond object/data storage, the required migration list is exactly the three Firebase contracts below. Image generation, inference and image/video routing still need working deployments, but that is a deployment from current source to their declared Stado/local/Azure placements—not migration of a live GCP service.
+
 ## What must move
 
 ### P0 — active product data and its delivery contract
