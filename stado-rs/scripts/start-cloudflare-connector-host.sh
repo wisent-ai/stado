@@ -68,9 +68,21 @@ PLIST_EOF
 /bin/chmod 0644 "$PLIST"
 
 uid=$(/usr/bin/id -u)
-/bin/launchctl bootout "gui/$uid/$LABEL" >/dev/null 2>&1 || true
-/bin/launchctl bootstrap "gui/$uid" "$PLIST"
-/bin/launchctl kickstart -k "gui/$uid/$LABEL"
+# A helper runs without an Aqua session, where `gui/<uid>` answers
+# "Domain does not support specified action" (125). The per-user domain is the
+# one that exists headless, so try it first and keep `gui` as the fallback for
+# an interactive operator session.
+domain=""
+for candidate in "user/$uid" "gui/$uid"; do
+    /bin/launchctl bootout "$candidate/$LABEL" >/dev/null 2>&1 || true
+    if /bin/launchctl bootstrap "$candidate" "$PLIST" >/dev/null 2>&1; then
+        domain="$candidate"
+        break
+    fi
+done
+[ -n "$domain" ] || { printf '%s\n' "no launchd domain accepted $PLIST" >&2; exit 1; }
+/bin/launchctl kickstart -k "$domain/$LABEL" >/dev/null 2>&1 || true
+printf 'launchd_domain=%s\n' "$domain"
 
 # Readiness is an attached connector, not a created process.
 attached=no
