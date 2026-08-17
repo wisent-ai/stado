@@ -40,7 +40,7 @@ The assessment classifies everything else as already replaced, an inert deployme
 | Wisent Backend public API | Yes | No | Replaced on `charless-mac-mini`; all API MIG/LB/template/image assets are deletable. |
 | Echo and Weles durable worker duties | Yes | No | Replaced on `charless-mac-mini`; preserve only unexported recordings from the old disk. |
 | Weles Apple authentication | Yes | No | Replaced on `charless-mac-mini`; old VM and disk are deletable. |
-| Oko internet PTY relay | Yes | No | Current Oko code defines a Stado-managed relay contract, but no configured client or Cloud Run request was observed. The GCP service cannot start because detached billing prevents its Secret Manager read, so the deployed GCP stack is not a functioning implementation and is classified `DELETE`. |
+| Oko internet PTY relay | Yes | No | Current Oko code defines generic publisher, viewer and control clients, but no current source/configuration binds them to the GCP endpoint. This Mac's publisher URL is empty; a viewer can instead receive a dynamic relay URL from an active `oko_live_sessions` row. Cloud Run recorded no requests and cannot start because detached billing prevents its Secret Manager read, so this GCP deployment is classified `DELETE`. |
 | Wisent Backend inference | Yes | No | Target is Brama plus Stado `chat-primary`; keeping inert GCP MIG assets does not restore the missing/offline target. |
 | Wisent Backend direct image generation | Yes | No | Target is local GPU 1; keeping old GCP image assets does not close the current service-registration gap. |
 | ComfyUI / raw image workflows | Yes | No | Target is local GPU 2 and `image-video-router`; old GCP MIG/gateway assets are not needed. |
@@ -67,6 +67,35 @@ The GCP relay is a deployed but nonfunctional stack: the Cloud Run control plane
 | Run, Artifact Registry, Secret Manager, IAM, logging and monitoring APIs | Not justified by this relay; retain only where data retirement still needs them |
 
 The product capability remains explicit in Oko: one long-lived Stado-managed `oko-pty-relay`, TLS, exact Skarbiec grants and one instance because session pairing is in process memory. That is a future/current product deployment concern, not a dependency on this unused GCP service.
+
+### Source consumer trace
+
+The current code has consumers for the **relay protocol**, but not a binding to
+this GCP service:
+
+1. Oko Desktop calls `reclaimBrokerSessions()` at startup and every 60 seconds.
+2. Publisher activation flows from
+   `Settings.resolvedPTYRelayURL` and `resolvedPTYRelayToken` into
+   `Workspace.reclaimBrokerSessions`.
+3. `Workspace+TeamShared.swift` returns without publishing when the URL is
+   empty, the token is empty, or the URL is not a normalized WebSocket URL.
+4. When configured, `PTYRelayBridge.publish` connects as `role=publisher`;
+   Oko Desktop control actions connect as `role=control`.
+5. A viewer can also obtain a relay URL dynamically from an active
+   `oko_live_sessions.ssh_url` row and invoke `oko-cli pty relay-attach`, which
+   connects as `role=viewer`.
+6. No current Oko, Oko Desktop, Stado or Wisent Backend source/configuration
+   contains either deployed Cloud Run URL. The only committed
+   `STADO_PTY_RELAY_URL` value is empty/example configuration.
+
+The current server contract also differs from the deployed artifact. Current
+`oko/relay/pty-relay.ts` ignores `SWIATOWID_PTY_RELAY_TOKEN`; it launches the
+local Stado CLI and resolves `oko-pty-relay/token` from Skarbiec as consumer
+`oko-pty-relay-service`. The Cloud Run revision instead injects
+`SWIATOWID_PTY_RELAY_TOKEN` from GCP Secret Manager and uses the default Compute
+service account. Therefore the repository contains a possible Oko relay client
+and a newer Stado-managed relay server, but no code/configuration evidence that
+selects the deployed GCP service.
 
 ## Compute Engine: what is needed
 
