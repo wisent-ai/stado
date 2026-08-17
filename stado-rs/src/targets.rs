@@ -556,6 +556,26 @@ pub fn validate_registry(data: &Value) -> Result<(), RegistryValidationError> {
                 &format!("must be one of {}", py_list_repr(&valid_kinds)),
             ));
         }
+        if let Some(value) = target.get("gpu_power_limit_watts") {
+            let watts = value.as_u64().filter(|watts| *watts > 0).ok_or_else(|| {
+                verr(
+                    &format!("{location}.gpu_power_limit_watts"),
+                    "must be a positive integer",
+                )
+            })?;
+            if u32::try_from(watts).is_err() {
+                return Err(verr(
+                    &format!("{location}.gpu_power_limit_watts"),
+                    "must fit in an unsigned 32-bit integer",
+                ));
+            }
+            if !crate::capabilities::ProviderId::Local.matches(kind) {
+                return Err(verr(
+                    &format!("{location}.gpu_power_limit_watts"),
+                    "is allowed only for kind='local'",
+                ));
+            }
+        }
         let platform_location = format!("{location}.release_platform");
         let platform = target
             .get("release_platform")
@@ -1110,6 +1130,17 @@ impl ComputeTarget {
     /// this host, or `None` when it declares none.
     pub fn declared_version(&self, binary: &str) -> Option<&str> {
         self.managed_versions.get(binary).map(String::as_str)
+    }
+
+    /// Desired NVIDIA board power cap for this host. The field remains in
+    /// `extra` so older Stado binaries preserve it during registry rewrites;
+    /// validation above guarantees the accessor cannot observe zero, a
+    /// negative value, or an integer wider than the driver accepts.
+    pub fn gpu_power_limit_watts(&self) -> Option<u32> {
+        self.extra
+            .get("gpu_power_limit_watts")
+            .and_then(Value::as_u64)
+            .and_then(|watts| u32::try_from(watts).ok())
     }
 }
 
