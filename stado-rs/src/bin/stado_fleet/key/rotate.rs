@@ -111,10 +111,12 @@ async fn store_pair(
         )
         .await
         .map_err(|exc| exc.to_string())?;
-    // Two different failures wear one 403/None here, and they need different
-    // actions: a fresh item carries no grant yet, while a vault the broker does
-    // not serve is a machine mismatch. Naming which one arrived is the whole
-    // value of reading back.
+    // Three outcomes, and only one of them is a failure. A value that comes back
+    // different means the broker serves a vault this write did not reach. A
+    // refusal means the item is there and nothing may read it yet, which is the
+    // normal state of a key one second old: grants are per item, so a fresh key
+    // is always ungranted, and failing here would throw away the public half the
+    // caller needs to put on the new machine.
     match client.read_string(&id, "public_key").await {
         Ok(stored) if stored.as_deref().map(str::trim) == Some(pair.public_key.trim()) => {}
         Ok(_) => {
@@ -130,13 +132,12 @@ async fn store_pair(
                 .to_string()
                 .contains("not authorized to read item field") =>
         {
-            return Err(format!(
-                "stored {id}, but no consumer may read it yet: the grant is per item, so a fresh \
-                 key is unreadable until one is added. Run \
-                 `scripts/grant-consumer-field-read.py local-operator {id} private_key` \
-                 (and once more for public_key) on the host holding the vault, then \
-                 `stado_fleet key check` proves the channel"
-            ))
+            println!(
+                "note: {id} is stored and not yet readable — grants are per item. Add them with\n\
+                 \x20 scripts/grant-consumer-field-read.py local-operator {id} private_key\n\
+                 \x20 scripts/grant-consumer-field-read.py local-operator {id} public_key\n\
+                 then `stado_fleet key check {target}` proves the channel."
+            );
         }
         Err(error) => return Err(error.to_string()),
     }
