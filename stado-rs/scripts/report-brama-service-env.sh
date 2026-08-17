@@ -9,6 +9,15 @@
 set -eu
 
 env_file=${BRAMA_SERVICE_ENV_FILE:-$HOME/.config/brama/service.env}
+error_log=${BRAMA_SERVICE_ERROR_LOG:-$HOME/.stado/logs/brama-always-on.err}
+if [ -r "$error_log" ]; then
+    printf 'recent service errors from %s\n' "$error_log"
+    /usr/bin/tail -n 80 "$error_log" \
+        | /usr/bin/grep -E 'ERROR|Server error|panicked|failed|unsupported|required|route' \
+        | /usr/bin/tail -n 3
+else
+    printf 'no readable service error log at %s\n' "$error_log"
+fi
 
 if [ ! -r "$env_file" ]; then
     printf 'no readable service env at %s\n' "$env_file"
@@ -43,4 +52,5 @@ else
     else
         printf 'inference routes are not declared\n'
     fi
+
 fi

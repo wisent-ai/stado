@@ -24,7 +24,7 @@ fi
 PATH="$(dirname "$cargo_bin"):/usr/local/bin:/usr/bin:/bin"
 export PATH
 
-archive="$HOME/.stado/stado-native-source.tar.gz"
+archive="$HOME/.stado/files/stado-native-source.tar.gz"
 work="$HOME/.stado/build-native-stado"
 next="$HOME/.stado/bin/stado.next"
 
