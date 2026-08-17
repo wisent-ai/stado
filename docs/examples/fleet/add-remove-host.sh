@@ -9,7 +9,7 @@ DEST=$2
 PLATFORM=$3
 
 # onboard into the canonical registry (validated on write). This is the
-# declaration on its own: `stado_fleet enroll` is the path that probes the
+# declaration on its own: `stado fleet enroll` is the path that probes the
 # machine for its hostname and platform before writing them.
 stado registry host add "$HOST" --ssh "$DEST" --release-platform "$PLATFORM"
 
