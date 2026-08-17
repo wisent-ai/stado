@@ -1,5 +1,6 @@
-import Foundation
 import Combine
+import Foundation
+import WisentDesignSystem
 
 @MainActor
 final class CleanupStore: ObservableObject {
@@ -9,6 +10,9 @@ final class CleanupStore: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var lastUpdated: Date?
     @Published private(set) var dashboardURLString: String
+    /// The outcome of the pass the operator asked for, in the service's own
+    /// words. A pass that failed stays on screen until it is dismissed.
+    @Published private(set) var mutation: WisentMutationOutcome = .idle
 
     private let client: CleanupClient
     private let defaults: UserDefaults
@@ -83,12 +87,15 @@ final class CleanupStore: ObservableObject {
     func runCleanup() async {
         guard !isRunningCleanup, !isRefreshing else { return }
         guard let address = dashboardAddress else {
-            errorMessage = CleanupClientError.invalidDashboardURL.localizedDescription
+            let message = CleanupClientError.invalidDashboardURL.localizedDescription
+            errorMessage = message
+            mutation = .failed(message)
             return
         }
         let generation = requestGeneration
 
         isRunningCleanup = true
+        mutation = .working("Running one registry-controlled cleanup pass.")
         defer {
             if requestGeneration == generation {
                 isRunningCleanup = false
@@ -101,10 +108,29 @@ final class CleanupStore: ObservableObject {
             )
             guard requestGeneration == generation else { return }
             apply(response)
+            mutation = Self.outcome(of: response)
         } catch {
             guard requestGeneration == generation else { return }
-            errorMessage = Self.displayMessage(for: error)
+            let message = Self.displayMessage(for: error)
+            errorMessage = message
+            mutation = .failed(message)
         }
+    }
+
+    func clearMutation() {
+        mutation = .idle
+    }
+
+    /// The service answers a report even when it refuses, so the outcome code
+    /// and its sanitized errors are what the operator is shown.
+    private static func outcome(of response: CleanupResponse) -> WisentMutationOutcome {
+        let report = response.report
+        let errors = report.errors.joined(separator: " · ")
+        let reclaimed = DisplayFormat.bytes(report.reclaimedBytes)
+        if !response.ok || response.service == "error" || !report.errors.isEmpty {
+            return .failed(errors.isEmpty ? "outcome: \(report.outcome)" : "outcome: \(report.outcome) — \(errors)")
+        }
+        return .succeeded("outcome: \(report.outcome) — reclaimed \(reclaimed) in \(DisplayFormat.duration(milliseconds: report.durationMs))")
     }
 
     func clearDashboardURL() {

@@ -7,7 +7,9 @@ struct StadoApp: App {
     @StateObject private var operationsStore = OperationsStore()
     @StateObject private var cleanupStore = CleanupStore()
     @StateObject private var deploymentStore = DeploymentStore()
+    @StateObject private var fleetStore = FleetControlStore()
     @StateObject private var auth = WisentAuthStore(productName: "Stado")
+    @StateObject private var router = ConsoleRouter()
 
     var body: some Scene {
         WindowGroup("Stado Operations Console", id: "operations-console") {
@@ -15,17 +17,19 @@ struct StadoApp: App {
                 operationsStore: operationsStore,
                 cleanupStore: cleanupStore,
                 deploymentStore: deploymentStore,
-                auth: auth
+                fleetStore: fleetStore,
+                auth: auth,
+                router: router
             )
         }
         .defaultSize(
-            width: WisentDesign.Layout.minimumDesktopWidth,
-            height: WisentDesign.Layout.minimumDesktopHeight
+            width: WisentAppLayout.minimumWindowWidth,
+            height: WisentAppLayout.minimumWindowHeight
         )
         .windowResizability(.contentMinSize)
 
         MenuBarExtra {
-            CleanupMenuView(store: cleanupStore)
+            CleanupMenuView(store: cleanupStore, router: router)
         } label: {
             Label("Stado", systemImage: menuBarSymbol)
         }
@@ -51,5 +55,4 @@ struct StadoApp: App {
             return "externaldrive.fill.badge.exclamationmark"
         }
     }
-
 }

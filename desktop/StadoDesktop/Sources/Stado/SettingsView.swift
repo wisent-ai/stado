@@ -1,4 +1,5 @@
 import SwiftUI
+import WisentDesignSystem
 
 struct SettingsView: View {
     @ObservedObject var deploymentStore: DeploymentStore
@@ -28,8 +29,8 @@ struct SettingsView: View {
                     "The local CLI dashboard is used by default. Remote deployment endpoints and team access are managed by the Wisent deployment registry; credentials remain in their native keychains and CLIs.",
                     systemImage: "lock.shield"
                 )
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(WisentTypeScale.caption())
+                .foregroundStyle(WisentDesign.secondary)
             }
         }
         .formStyle(.grouped)
@@ -46,7 +47,7 @@ struct SettingsView: View {
     private func endpointRow(_ endpoint: String) -> some View {
         LabeledContent("Endpoint") {
             Text(endpoint)
-                .font(.caption.monospaced())
+                .font(WisentTypeScale.identifier())
                 .textSelection(.enabled)
         }
     }
