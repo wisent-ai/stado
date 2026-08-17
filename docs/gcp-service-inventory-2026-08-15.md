@@ -21,7 +21,13 @@ The historical compute workload and disk inventory remains in `docs/gcp-compute-
 
 The last 24 hours of available Cloud Audit logs contain only Google-managed billing-export work: 28 BigQuery `InsertJob`, 14 `jobservice.insert`, and 14 `jobservice.getqueryresults` events, all under `billing-export-bigquery@system.gserviceaccount.com`. No Wisent service account or application principal appears in that window. The `swiatowid-pty-relay` Cloud Run request log remains empty across 90 days.
 
-This is strong evidence that no current Wisent application runtime uses the project's audited control plane or BigQuery. It is not a complete GCS request census because project IAM does not enable Data Access audit logs for Cloud Storage; the GCS conclusion additionally relies on the active provider/storage configuration and current source bindings.
+This is strong evidence that no current Wisent application runtime uses the project's audited control plane or BigQuery. It does not establish that application data is independent of GCS: project IAM does not enable Cloud Storage Data Access audit logs, and the live application database still contains direct GCS locators.
+
+### Wisent app media dependency
+
+The live public `Character` projection contains 1,476 rows with an `imageUrl`; 1,453 of them point directly at `https://storage.googleapis.com/wisent-images-bucket/` (98.4%). A representative object, `images/characters/8808.webp`, returns HTTP 403 with the project billing account absent, both anonymously and through the project's authenticated service account. These are active application data references, not inert archive metadata, so detached GCP currently breaks most character images in Wisent app.
+
+The iOS `GoogleService-Info.plist` also names `wisent-57937.firebasestorage.app`, but the app target does not link `FirebaseStorage` and current source contains no Firebase Storage client call. Image uploads instead request a signed URL from Wisent Backend; the backend stores new media under `stado://wisent-backend/images/...`. A bounded Stado host probe found no `wisent-backend/images/characters` namespace in either the active or backup local store on `charless-mac-mini`, so the 1,453 legacy objects are not proven migrated and cannot currently be recovered from that Stado host.
 
 ## Product workload map
 
