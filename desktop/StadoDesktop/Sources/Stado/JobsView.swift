@@ -1,4 +1,5 @@
 import SwiftUI
+import WisentDesignSystem
 
 struct JobsView: View {
     let snapshot: DashboardSnapshot
@@ -32,7 +33,7 @@ struct JobsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-                .padding(StadoTheme.Space.lg)
+                .padding(WisentDesign.Space.x6)
 
             if !searchText.isEmpty && !hasSearchResults {
                 ContentUnavailableView.search(text: searchText)
@@ -87,7 +88,7 @@ struct JobsView: View {
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: StadoTheme.Space.xxs) {
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
                 Text("Jobs")
                     .font(.largeTitle.weight(.semibold))
                 Text("Current model-level work and recent queue outcomes")
@@ -95,9 +96,9 @@ struct JobsView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            HStack(spacing: StadoTheme.Space.xs) {
-                StatusPill(label: "\(snapshot.counts.running) running", tone: snapshot.counts.running > 0 ? .healthy : .neutral)
-                StatusPill(label: "\(snapshot.counts.queue) queued", tone: snapshot.counts.queue > 0 ? .warning : .neutral)
+            HStack(spacing: WisentDesign.Space.x2) {
+                WisentBadge("\(snapshot.counts.running) running", tone: snapshot.counts.running > 0 ? .success : .neutral)
+                WisentBadge("\(snapshot.counts.queue) queued", tone: snapshot.counts.queue > 0 ? .warning : .neutral)
             }
         }
     }
@@ -114,11 +115,11 @@ private struct CurrentWorkRow: View {
     let counts: JobCounts
 
     var body: some View {
-        HStack(spacing: StadoTheme.Space.md) {
+        HStack(spacing: WisentDesign.Space.x4) {
             Image(systemName: "shippingbox")
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: StadoTheme.Space.xxs) {
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
                 Text(displayModel)
                     .font(.subheadline.weight(.medium))
                     .textSelection(.enabled)
@@ -127,10 +128,10 @@ private struct CurrentWorkRow: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            LabeledCount(label: "Running", value: counts.running, tone: .healthy)
+            LabeledCount(label: "Running", value: counts.running, tone: .success)
             LabeledCount(label: "Queued", value: counts.queue, tone: .warning)
         }
-        .padding(.vertical, StadoTheme.Space.xs)
+        .padding(.vertical, WisentDesign.Space.x2)
         .accessibilityElement(children: .combine)
     }
 
@@ -142,10 +143,10 @@ private struct CurrentWorkRow: View {
 private struct LabeledCount: View {
     let label: String
     let value: Int
-    let tone: StatusTone
+    let tone: WisentTone
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: StadoTheme.Space.xxs) {
+        VStack(alignment: .trailing, spacing: WisentDesign.Space.x1) {
             Text(value.formatted())
                 .font(.subheadline.weight(.semibold))
                 .monospacedDigit()
@@ -162,13 +163,13 @@ private struct CompletedJobRow: View {
     let job: CompletedJob
 
     var body: some View {
-        HStack(spacing: StadoTheme.Space.md) {
+        HStack(spacing: WisentDesign.Space.x4) {
             Image(systemName: "checkmark.circle.fill")
                 .foregroundStyle(.green)
                 .accessibilityHidden(true)
             JobIdentity(jobID: job.jobID, model: job.model, task: job.task)
             Spacer()
-            VStack(alignment: .trailing, spacing: StadoTheme.Space.xxs) {
+            VStack(alignment: .trailing, spacing: WisentDesign.Space.x1) {
                 Text(StadoFormat.duration(job.wallSeconds))
                     .font(.caption.monospacedDigit())
                 if let date = StadoFormat.date(job.completedAt) {
@@ -182,7 +183,7 @@ private struct CompletedJobRow: View {
                 }
             }
         }
-        .padding(.vertical, StadoTheme.Space.xs)
+        .padding(.vertical, WisentDesign.Space.x2)
         .accessibilityElement(children: .contain)
     }
 }
@@ -191,7 +192,7 @@ private struct FailedJobRow: View {
     let job: FailedJob
 
     var body: some View {
-        HStack(alignment: .top, spacing: StadoTheme.Space.md) {
+        HStack(alignment: .top, spacing: WisentDesign.Space.x4) {
             Image(systemName: "xmark.circle.fill")
                 .foregroundStyle(.red)
                 .accessibilityHidden(true)
@@ -204,7 +205,7 @@ private struct FailedJobRow: View {
                 .frame(maxWidth: 360, alignment: .leading)
                 .textSelection(.enabled)
         }
-        .padding(.vertical, StadoTheme.Space.xs)
+        .padding(.vertical, WisentDesign.Space.x2)
         .accessibilityElement(children: .contain)
     }
 }
@@ -215,7 +216,7 @@ private struct JobIdentity: View {
     let task: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: StadoTheme.Space.xxs) {
+        VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
             Text(jobID)
                 .font(.subheadline.weight(.semibold).monospaced())
                 .textSelection(.enabled)
@@ -232,14 +233,14 @@ struct EmptyListRow: View {
     let detail: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: StadoTheme.Space.xxs) {
+        VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
             Text(title)
                 .font(.subheadline.weight(.medium))
             Text(detail)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-        .padding(.vertical, StadoTheme.Space.xs)
+        .padding(.vertical, WisentDesign.Space.x2)
         .accessibilityElement(children: .combine)
     }
 }
