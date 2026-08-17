@@ -1222,12 +1222,70 @@ impl RemoteObjectApi {
     }
 
     fn request(&self, method: reqwest::Method, endpoint: url::Url) -> reqwest::RequestBuilder {
+        self.request_as(method, endpoint, None)
+    }
+
+    /// Sign with an explicitly resolved credential, falling back to the
+    /// coordinator storage token. This is separate from `request` so that a
+    /// caller which has resolved a credential cannot silently drop it.
+    fn request_as(
+        &self,
+        method: reqwest::Method,
+        endpoint: url::Url,
+        bearer: Option<&str>,
+    ) -> reqwest::RequestBuilder {
         let request = self.http.request(method, endpoint);
-        if self.token.is_empty() {
-            request
-        } else {
-            request.bearer_auth(&self.token)
+        match bearer.filter(|token| !token.is_empty()) {
+            Some(token) => request.bearer_auth(token),
+            None if self.token.is_empty() => request,
+            None => request.bearer_auth(&self.token),
         }
+    }
+
+    /// The credential a write to `uri` must present.
+    ///
+    /// Resolved from `release_api.publishers` -- the same table the server
+    /// compares against in `authorize_release` -- so both ends of one
+    /// authorization check read one declaration and cannot disagree. The
+    /// coordinator storage token is not a release credential, and presenting it
+    /// returned a `401` that named neither the table nor the item it wanted.
+    async fn release_bearer(&self, uri: &str) -> Result<Option<String>, CmdError> {
+        let object = crate::object_store::ObjectRef::parse(uri)?;
+        self.release_bearer_for(object.namespace(), object.key())
+            .await
+    }
+
+    /// The same resolution for a namespace and key or prefix, which is how the
+    /// list route addresses objects.
+    async fn release_bearer_for(
+        &self,
+        namespace: &str,
+        key_or_prefix: &str,
+    ) -> Result<Option<String>, CmdError> {
+        let Some(policy_key) = crate::object_store::release_policy_key(namespace, key_or_prefix)
+        else {
+            return Ok(None);
+        };
+        let publisher = crate::config::release_publisher_for_key(&policy_key).ok_or_else(|| {
+            CmdError::click(format!(
+                "release_api.publishers declares no publisher for {policy_key}"
+            ))
+        })?;
+        let token = crate::skarbiec::read_release_token(publisher.item(), "token")
+            .await
+            .map_err(|error| {
+                CmdError::click(format!(
+                    "cannot read release publisher item {}: {error}",
+                    publisher.item()
+                ))
+            })?
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "release publisher item {} carries no token field",
+                    publisher.item()
+                ))
+            })?;
+        Ok(Some(token))
     }
 
     async fn put_with_metadata(
@@ -1240,8 +1298,9 @@ impl RemoteObjectApi {
     ) -> Result<(), CmdError> {
         let if_absent = if if_absent { "true" } else { "false" };
         let endpoint = self.endpoint("/api/object", &[("uri", uri), ("if_absent", if_absent)])?;
+        let bearer = self.release_bearer(uri).await?;
         let response = self
-            .request(reqwest::Method::PUT, endpoint)
+            .request_as(reqwest::Method::PUT, endpoint, bearer.as_deref())
             .header(reqwest::header::CONTENT_TYPE, content_type)
             .header("x-stado-object-metadata", serde_json::to_string(metadata)?)
             .body(bytes)
@@ -1258,14 +1317,22 @@ impl RemoteObjectApi {
 
     async fn get(&self, uri: &str) -> Result<Vec<u8>, CmdError> {
         let endpoint = self.endpoint("/api/object", &[("uri", uri)])?;
-        let response = self.request(reqwest::Method::GET, endpoint).send().await?;
+        let bearer = self.release_bearer(uri).await?;
+        let response = self
+            .request_as(reqwest::Method::GET, endpoint, bearer.as_deref())
+            .send()
+            .await?;
         self.success_body(response, max_object_api_download_body(), "object GET")
             .await
     }
 
     async fn get_versioned(&self, uri: &str) -> Result<Option<(Vec<u8>, String)>, CmdError> {
         let endpoint = self.endpoint("/api/object", &[("uri", uri), ("versioned", "true")])?;
-        let response = self.request(reqwest::Method::GET, endpoint).send().await?;
+        let bearer = self.release_bearer(uri).await?;
+        let response = self
+            .request_as(reqwest::Method::GET, endpoint, bearer.as_deref())
+            .send()
+            .await?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -1372,7 +1439,11 @@ impl RemoteObjectApi {
             "/api/object/list",
             &[("namespace", namespace), ("prefix", prefix)],
         )?;
-        let response = self.request(reqwest::Method::GET, endpoint).send().await?;
+        let bearer = self.release_bearer_for(namespace, prefix).await?;
+        let response = self
+            .request_as(reqwest::Method::GET, endpoint, bearer.as_deref())
+            .send()
+            .await?;
         let payload: RemoteObjectListResponse = self.response_json(response, "object list").await?;
         let mut values = Vec::with_capacity(payload.objects.len());
         for item in payload.objects {
