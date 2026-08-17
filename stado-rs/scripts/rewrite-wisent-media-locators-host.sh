@@ -17,7 +17,11 @@ SKARBIEC_URL=${WISENT_BACKEND_SKARBIEC_URL:-http://127.0.0.1:8895}
 CONSUMER=${WISENT_BACKEND_SKARBIEC_CONSUMER:-wisent-backend-api-service-deployer}
 MODE=${MODE:-dry-run}
 SOURCE_PREFIX=${SOURCE_PREFIX:-https://storage.googleapis.com/wisent-images-bucket/}
-TARGET_PREFIX=${TARGET_PREFIX:?TARGET_PREFIX is required}
+# `stado host run-helper` passes no operator environment on purpose, so the
+# destination lives in this checked-in file rather than in an invocation. The
+# migrated objects are anonymously readable under this exact prefix; when a
+# Wisent-fronted media host is serving again, change this line and re-run.
+TARGET_PREFIX=${TARGET_PREFIX:-https://wisentprodstado.blob.core.windows.net/media-public/}
 BEFORE_IMAGE=${BEFORE_IMAGE:-$HOME/.stado/wisent-media-locators-before.json}
 [ -s "$TOKEN_FILE" ]
 
