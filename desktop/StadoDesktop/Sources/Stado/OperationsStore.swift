@@ -3,6 +3,10 @@ import Foundation
 
 enum DashboardEndpointPreference {
     static let key = "dashboardBaseURL"
+    /// The address this app adopted on its own. Storing it distinguishes "the
+    /// operator typed this" from "we defaulted to this once", which is the
+    /// difference between a setting and a leftover.
+    static let chosenKey = "dashboardBaseURLAdopted"
     /// Last resort only. `127.0.0.1:8765` is this machine's own host-health
     /// API, which answers from the local copy of the store: on an operator
     /// laptop that copy is days behind, so the app showed "no capacity report
@@ -65,6 +69,30 @@ final class OperationsStore: ObservableObject {
         self.defaults = defaults
         self.client = client
         dashboardURLString = DashboardEndpointPreference.load(from: defaults)
+        adoptFleetAddressIfUnchosen()
+    }
+
+    /// Follow the fleet address without anybody retyping it.
+    ///
+    /// The address was stored once, years of restarts ago, and then pinned:
+    /// when the fleet's store moved, this app kept reading the old one and
+    /// showed every worker as unavailable until a human noticed and edited a
+    /// setting. A value the operator never chose is not a choice, so a stored
+    /// address that is merely a previous default gives way to what
+    /// `~/.config/stado/config.json` names today. An address the operator typed
+    /// is left alone -- that one IS a choice.
+    func adoptFleetAddressIfUnchosen() {
+        guard let fleet = DashboardEndpointPreference.fleetURLFromConfig() else { return }
+        let chosen = defaults.string(forKey: DashboardEndpointPreference.chosenKey)
+        let current = dashboardURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+        let inherited = current.isEmpty
+            || current == DashboardEndpointPreference.fallbackURL
+            || (chosen != nil && chosen != current)
+        guard inherited, current != fleet else { return }
+        dashboardURLString = fleet
+        DashboardEndpointPreference.save(fleet, to: defaults)
+        defaults.set(fleet, forKey: DashboardEndpointPreference.chosenKey)
+        requestGeneration &+= 1
     }
 
     var dashboardAddress: OperationsDashboardAddress? {
@@ -85,6 +113,10 @@ final class OperationsStore: ObservableObject {
 
     func refresh() async {
         guard !isRefreshing else { return }
+        // Configuration can move while the app is open, and an operator should
+        // not have to relaunch a viewer to see the fleet it points at. Adopt
+        // before reading the address, or this tick would still use the old one.
+        adoptFleetAddressIfUnchosen()
         guard let address = dashboardAddress else {
             errorMessage = nil
             return
