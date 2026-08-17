@@ -10,3 +10,4 @@ wisent_compute/targets/registry.json
 .alert-watcher-*
 stado-rs/target/
 stado-rs/target-*/
+migration/
