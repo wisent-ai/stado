@@ -16,13 +16,20 @@ TOKEN_FILE=${WISENT_BACKEND_SKARBIEC_TOKEN_FILE:-$HOME/.stado/wisent-backend-api
 SKARBIEC_URL=${WISENT_BACKEND_SKARBIEC_URL:-http://127.0.0.1:8895}
 CONSUMER=${WISENT_BACKEND_SKARBIEC_CONSUMER:-wisent-backend-api-service-deployer}
 MODE=${MODE:-dry-run}
-SOURCE_PREFIX=${SOURCE_PREFIX:-https://storage.googleapis.com/wisent-images-bucket/}
-# `stado host run-helper` passes no operator environment on purpose, so the
-# destination lives in this checked-in file rather than in an invocation. The
-# migrated objects are anonymously readable under this exact prefix; when a
-# Wisent-fronted media host is serving again, change this line and re-run.
-TARGET_PREFIX=${TARGET_PREFIX:-https://wisentprodstado.blob.core.windows.net/media-public/}
-BEFORE_IMAGE=${BEFORE_IMAGE:-$HOME/.stado/wisent-media-locators-before.json}
+# `stado host run-helper` passes no operator environment on purpose, so both
+# ends of the rewrite live in this checked-in file rather than in an invocation.
+#
+# Pass 1 (2026-08-17) moved rows off the dead Cloud Storage host onto the Azure
+# account directly, because no Wisent-fronted media host was serving. Pass 2
+# takes the provider host back out of the database now that `bobloo.com` serves
+# `/images/*` and `/profiles/*` from that account through the tunnel origin.
+# The database names a Wisent host; the storage account, container and cloud can
+# now change at the gateway without touching a row.
+SOURCE_PREFIX=${SOURCE_PREFIX:-https://wisentprodstado.blob.core.windows.net/media-public/}
+TARGET_PREFIX=${TARGET_PREFIX:-https://bobloo.com/}
+# Each pass keeps its own reversal file; one fixed name would have let pass 2
+# overwrite the only record of what pass 1 changed.
+BEFORE_IMAGE=${BEFORE_IMAGE:-$HOME/.stado/wisent-media-locators-before-$(/bin/date -u +%Y%m%dT%H%M%SZ).json}
 [ -s "$TOKEN_FILE" ]
 
 TOKEN_FILE=$TOKEN_FILE SKARBIEC_URL=$SKARBIEC_URL CONSUMER=$CONSUMER MODE=$MODE \
