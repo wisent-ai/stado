@@ -1306,6 +1306,27 @@ impl RemoteObjectApi {
             .body(bytes)
             .send()
             .await?;
+        // Name the object and the credential that was presented. The bare
+        // `401 unauthorized or non-immutable release write` named neither, and
+        // reading it cost a day: the same sentence covers a missing bearer, a
+        // wrong bearer, and a create-only rewrite, which need opposite fixes.
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            let presented = match crate::object_store::ObjectRef::parse(uri)
+                .ok()
+                .and_then(|object| {
+                    crate::object_store::release_policy_key(object.namespace(), object.key())
+                })
+                .and_then(|key| crate::config::release_publisher_for_key(&key))
+            {
+                Some(publisher) => format!("publisher item {}", publisher.item()),
+                None if bearer.is_some() => "a resolved release credential".to_string(),
+                None => "the coordinator storage token".to_string(),
+            };
+            let refusal = self.response_error(response).await;
+            return Err(CmdError::click(format!(
+                "{refusal}; PUT {uri} with if_absent={if_absent} presented {presented}"
+            )));
+        }
         let payload: RemotePutResponse = self.response_json(response, "object PUT").await?;
         if payload.state != "stored" || payload.uri != uri || payload.content_type != content_type {
             return Err(CmdError::click(
@@ -1367,8 +1388,9 @@ impl RemoteObjectApi {
             "/api/object",
             &[("uri", uri), ("if_version", expected_version)],
         )?;
+        let bearer = self.release_bearer(uri).await?;
         let response = self
-            .request(reqwest::Method::PUT, endpoint)
+            .request_as(reqwest::Method::PUT, endpoint, bearer.as_deref())
             .header(reqwest::header::CONTENT_TYPE, content_type)
             .body(bytes)
             .send()
