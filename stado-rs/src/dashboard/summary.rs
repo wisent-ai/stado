@@ -87,12 +87,30 @@ fn py_int(value: &Value) -> Result<i64, StorageError> {
     }
 }
 
+/// Where capacity reports live for this deployment.
+///
+/// Writers publish them through the object API, which stores product objects
+/// under `ecosystem/<namespace>/`. This reader kept listing the bare `capacity/`
+/// prefix from before namespacing, so it found only blobs abandoned by the
+/// migration -- days old on every host -- and the operator's screen reported a
+/// dead fleet ("No capacity report exists for this registered worker") while
+/// every worker was publishing on schedule. `beacon_object_path` already
+/// resolves the same way for host health; this is the same rule for capacity,
+/// so writer and reader cannot drift apart again.
+fn capacity_prefix() -> String {
+    let namespace = crate::config::wc_stado_storage_namespace();
+    if namespace.trim().is_empty() {
+        return "capacity/".to_string();
+    }
+    format!("{}{namespace}/capacity/", crate::object_store::ROOT_PREFIX)
+}
+
 /// Return parsed capacity/<consumer>.json blobs, most recent first
 /// (Python `_read_capacity_blobs`; see the module doc for the backend
 /// deviation).
 async fn read_capacity_blobs(store: &JobStorage) -> Result<Vec<Value>, StorageError> {
-    let mut blobs: Vec<Value> = Vec::new();
-    for info in store.list_blobs_with_meta("capacity/").await? {
+    let mut blobs = Vec::new();
+    for info in store.list_blobs_with_meta(&capacity_prefix()).await? {
         if !info.name.ends_with(".json") {
             continue;
         }

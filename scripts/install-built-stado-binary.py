@@ -27,8 +27,15 @@ NONE = None
 ZERO = len([])
 HOME = pathlib.Path(os.path.expanduser("~"))
 INSTALLED = HOME / ".stado" / "bin" / "stado"
-BUILT = pathlib.Path(os.environ.get("STADO_BUILT_BINARY", HOME / ".cache" / "stado-build" / "debug" / "stado"))
-AGREEMENT = (("--version",), ("registry", "pull"), ("registry", "self"))
+# Where the candidate comes from: an explicit override, this host's own build,
+# or an artifact delivered by `stado host install-file`. A host with no Rust
+# toolchain still has to be able to receive a checked binary.
+CANDIDATES = (
+    pathlib.Path(os.environ.get("STADO_BUILT_BINARY", "")),
+    HOME / ".cache" / "stado-build" / "debug" / "stado",
+    HOME / ".stado" / "files" / "stado-incoming",
+)
+BUILT = next((path for path in CANDIDATES if str(path) and path.is_file()), CANDIDATES[len("a")])
 TIMEOUT = 300
 
 # The two commands whose ANSWERS must match: both traverse the whole control
@@ -76,10 +83,18 @@ def main():
         raise SystemExit(f"no built binary at {BUILT}")
     if not INSTALLED.is_file():
         raise SystemExit(f"no installed binary at {INSTALLED}")
+    # A binary delivered by `stado host install-file` lands owner-read-only,
+    # which is right for a secret and wrong for something that has to answer
+    # questions before it is trusted. Stage an executable copy first and probe
+    # that: the candidate is never run from the delivery path, and the delivery
+    # path is never made executable in place.
+    staged = INSTALLED.with_name(f"stado.incoming-{os.getpid()}")
+    shutil.copy2(BUILT, staged)
+    os.chmod(staged, 0o755)
     running = version_of(INSTALLED)
-    incoming = version_of(BUILT)
+    incoming = version_of(staged)
     print(f"installed  {INSTALLED} {running} sha256 {digest(INSTALLED)}")
-    print(f"built      {BUILT} {incoming} sha256 {digest(BUILT)}")
+    print(f"candidate  {BUILT} {incoming} sha256 {digest(staged)}")
     if ordered(incoming) < ordered(running):
         # The source tree can lag what production runs; installing then quietly
         # removes whatever the newer line carried. Bump the source version
@@ -90,7 +105,7 @@ def main():
     disagreed = []
     for argv in AGREEMENT:
         old = answer(INSTALLED, argv)
-        new = answer(BUILT, argv)
+        new = answer(staged, argv)
         verdict = "agree" if old == new else "DISAGREE"
         print(f"  {' '.join(argv):16} old exit {old[ZERO]} {old[1]}  new exit {new[ZERO]} {new[1]}  {verdict}")
         if old != new:
@@ -102,9 +117,6 @@ def main():
     if not backup.exists():
         shutil.copy2(INSTALLED, backup)
     print(f"backup     {backup} sha256 {digest(backup)}")
-    staged = INSTALLED.with_name(f"stado.incoming-{os.getpid()}")
-    shutil.copy2(BUILT, staged)
-    os.chmod(staged, 0o755)
     os.replace(staged, INSTALLED)
     print(f"installed  {INSTALLED} sha256 {digest(INSTALLED)}")
     print("restore    cp " + str(backup) + " " + str(INSTALLED))
