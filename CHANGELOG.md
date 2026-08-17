@@ -107,6 +107,27 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   accepts a repair: where the running binary fails a read-only probe the
   candidate passes, agreement with the broken binary is not required.
 
+### Credentials
+
+- Restored every write into a Skarbiec-backed credential store. `PUT /v1/items`
+  became the Weles acquisition route when the vault contracts were rebuilt, and
+  it requires `id`, `field` and `operation_id` and refuses an item it does not
+  control; Stado still sent whole items, so `stado credentials put`,
+  `stado_fleet key generate|add|rotate` and the Azure operator credential all
+  answered `400 {"error":"field required"}`. The fleet could read credentials and
+  could not mint one, so no new host could be enrolled. Writes and deletes now go
+  through the vault's owner, in one place inside `credential_store`, instead of
+  one command knowing the contract and the rest guessing.
+- Named Skarbiec's canonical kinds and its field/context split where Stado writes
+  them: a host key is a `key-pair` with the two halves as fields and its
+  fingerprint and key type as context, and the Azure operator session is a
+  `stado-secret` rather than an `oauth-client` that allows only two fields.
+  `stado_fleet key ls` reads that context instead of printing two blank columns,
+  and `key generate` reads the new item back through the same client the SSH
+  channel uses — an owner write reaches a vault file while every consumer reaches
+  a broker, and on a host whose broker forwards to another machine's vault those
+  are different stores.
+
 ### Core behavior
 
 - Added durable cancelled records and canonical lifecycle reconciliation.
