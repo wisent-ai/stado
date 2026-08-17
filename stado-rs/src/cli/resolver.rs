@@ -358,7 +358,38 @@ impl ResolverState {
     }
 }
 
+/// Drop the SSH control sockets this resolver left behind.
+///
+/// Multiplexing keeps a master alive for `ControlPersist` after the resolver
+/// that opened it is gone. The next instance then attaches to a master whose
+/// connection has already died, every proxied request fails with `Broken pipe`,
+/// and the adapter answers nothing while looking perfectly healthy -- the same
+/// failure the fleet had this morning from an orphaned port forward. Removing
+/// the socket file costs nothing: live sessions keep their descriptor, and the
+/// next connection opens a fresh master.
+fn drop_stale_ssh_sockets() {
+    let Ok(home) = std::env::var("HOME") else {
+        return;
+    };
+    let directory = std::path::Path::new(&home).join(".stado");
+    let Ok(entries) = std::fs::read_dir(&directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !name.starts_with("resolver-ssh-") {
+            continue;
+        }
+        match std::fs::remove_file(entry.path()) {
+            Ok(()) => eprintln!("stado resolver dropped stale ssh control socket {name}"),
+            Err(error) => eprintln!("stado resolver could not drop {name}: {error}"),
+        }
+    }
+}
+
 pub async fn serve(target: &str) -> Result<(), CmdError> {
+    drop_stale_ssh_sockets();
     let local_store = Arc::new(RegistryStore::open().await?);
     let (bootstrap, _, _) = read_local_snapshot(&local_store)
         .await
