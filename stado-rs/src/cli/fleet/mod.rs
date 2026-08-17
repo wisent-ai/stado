@@ -1,0 +1,211 @@
+//! `stado fleet` — enrollment, fleet membership, SSH-key custody and worker
+//! diagnosis for the registered Stado hosts.
+//!
+//! This is the whole implementation, not a wrapper: the `stado_fleet` binary
+//! parses the same [`FleetCommands`] and calls the same [`run`]. Adding a
+//! machine used to live only in that separate binary, which meant the one
+//! command an operator needs first was invisible to `stado --help`, to the
+//! dashboard's operator console (it executes `stado`, and only `stado`), and
+//! to anything else built on the main CLI. One implementation behind two
+//! entry points is the fix; a second copy of the enrollment logic would
+//! reintroduce exactly the drift that made the `stado_fleet` binary two minor
+//! versions stale while nobody noticed.
+//!
+//! The fleet's blind spot before `doctor` existed: a worker could sit in a
+//! crash loop with no command able to say why. `doctor` closes that — it
+//! verifies the agent credential grant against the configured allowlist,
+//! probe-reads every declared secret field without printing values, and
+//! reports per-target beacon and capacity presence, all through Stado's own
+//! reads.
+
+use clap::Subcommand;
+
+use super::{CmdError, CLICK_ERROR_CODE};
+
+pub mod doctor;
+pub mod enroll;
+pub mod fleets;
+pub mod key;
+pub mod ops;
+#[cfg(test)]
+mod tests;
+
+/// Fleet management for registered Stado hosts.
+#[derive(Subcommand)]
+pub enum FleetCommands {
+    /// Diagnose worker health: agent grant, secret probes, beacons, capacity.
+    Doctor {
+        /// Emit the machine-readable report instead of the table.
+        #[arg(long)]
+        json: bool,
+        /// Scope the fleet section to one named fleet.
+        #[arg(long)]
+        fleet: Option<String>,
+    },
+    /// List the fleets declared in the registry with their members.
+    List {
+        /// Emit the machine-readable document instead of the table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show live state for the members of one named fleet.
+    Status {
+        /// Fleet name as declared in the registry `fleets` section.
+        name: String,
+    },
+    /// Declare a new fleet in the canonical registry.
+    Create {
+        /// Fleet name: a lowercase identifier.
+        name: String,
+        /// Free-form description of what this fleet is for.
+        #[arg(long, default_value = "")]
+        notes: String,
+    },
+    /// Add a registered machine to a declared fleet.
+    Assign {
+        /// Registry target name (the machine).
+        target: String,
+        /// Declared fleet name.
+        fleet: String,
+    },
+    /// One-command onboarding: register a machine, optionally fleet it,
+    /// optionally install the agent.
+    Enroll {
+        /// Machine name (a lowercase target identifier).
+        name: String,
+        /// SSH destination of the machine (user@host) — the verification
+        /// channel; the machine is probed before anything is written.
+        #[arg(long)]
+        ssh: String,
+        /// Target kind.
+        #[arg(long, default_value = "local")]
+        kind: String,
+        /// Fleet to place the machine in right away.
+        #[arg(long)]
+        fleet: Option<String>,
+        /// Install the agent on the machine after registering it.
+        #[arg(long)]
+        bootstrap: bool,
+    },
+    /// Announce this machine to the fleet (run on the machine being added).
+    Join,
+    /// List unanswered join requests.
+    Pending,
+    /// Turn a pending join request into a registered target.
+    Approve {
+        /// Hostname from the join request.
+        hostname: String,
+        /// Fleet to place the machine in right away.
+        #[arg(long)]
+        fleet: Option<String>,
+    },
+    /// Drop a pending join request.
+    Reject {
+        /// Hostname from the join request.
+        hostname: String,
+    },
+    /// Print the central enrollment and communication catalog.
+    Catalog {
+        /// Emit the machine-readable document instead of the table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// SSH host keys in the globally selected credential store.
+    #[command(subcommand)]
+    Key(KeyCommands),
+}
+
+#[derive(Subcommand)]
+pub enum KeyCommands {
+    /// Move an existing private key into the credential store (never printed).
+    Add {
+        /// Registry target the key belongs to.
+        target: String,
+        /// Private key file removed after verified storage.
+        #[arg(long)]
+        from: String,
+    },
+    /// List stored SSH host keys (metadata only).
+    Ls,
+    /// Remove a target's SSH key from the credential store.
+    Rm {
+        /// Registry target.
+        target: String,
+    },
+    /// Install the stored public key into the target's authorized_keys.
+    Install {
+        /// Registry target.
+        target: String,
+    },
+    /// Verify the stored key opens the channel to the target.
+    Check {
+        /// Registry target.
+        target: String,
+    },
+    /// Generate a fresh ed25519 pair for the target into the credential store.
+    Generate {
+        /// Registry target.
+        target: String,
+    },
+    /// Rotate the target's key end to end, with rollback on failure.
+    Rotate {
+        /// Registry target.
+        target: String,
+    },
+}
+
+/// Run one fleet command.
+///
+/// The commands report in the fleet's own vocabulary — `Ok(true)` is "done",
+/// `Ok(false)` is "ran, and the fleet is not healthy" (only `doctor` says
+/// that), `Err` is a failure with a sentence for the operator. The exit
+/// contract is the CLI's: a verdict of `false` exits non-zero in silence,
+/// because `doctor` already printed the failing rows and a second, classified
+/// diagnosis line would contradict a command that deliberately said its own
+/// last word.
+pub async fn run(command: FleetCommands) -> Result<(), CmdError> {
+    let outcome = execute(command).await;
+    match outcome {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(CmdError::silent(CLICK_ERROR_CODE)),
+        Err(message) => Err(CmdError::click(message)),
+    }
+}
+
+/// Dispatch to the implementation of one command, keeping the fleet's
+/// `Result<bool, String>` verdict intact for [`run`] to translate.
+async fn execute(command: FleetCommands) -> Result<bool, String> {
+    match command {
+        FleetCommands::Doctor { json, fleet } => doctor::run(json, fleet.as_deref()).await,
+        FleetCommands::List { json } => fleets::list(json).await,
+        FleetCommands::Status { name } => fleets::status(&name).await,
+        FleetCommands::Create { name, notes } => ops::create(&name, &notes).await,
+        FleetCommands::Assign { target, fleet } => ops::assign(&target, &fleet).await,
+        FleetCommands::Enroll {
+            name,
+            ssh,
+            kind,
+            fleet,
+            bootstrap,
+        } => ops::enroll(&name, Some(&ssh), &kind, fleet.as_deref(), bootstrap).await,
+        FleetCommands::Join => enroll::join().await,
+        FleetCommands::Pending => enroll::pending().await,
+        FleetCommands::Approve { hostname, fleet } => {
+            enroll::approve(&hostname, fleet.as_deref()).await
+        }
+        FleetCommands::Reject { hostname } => enroll::reject(&hostname).await,
+        FleetCommands::Catalog { json } => enroll::catalog::catalog(json).await,
+        FleetCommands::Key(sub) => {
+            let runner = crate::deploy::production_runner();
+            match sub {
+                KeyCommands::Add { target, from } => key::add(&runner, &target, &from).await,
+                KeyCommands::Ls => key::ls().await,
+                KeyCommands::Rm { target } => key::rm(&target).await,
+                KeyCommands::Install { target } => key::install(&runner, &target).await,
+                KeyCommands::Check { target } => key::check(&runner, &target).await,
+                KeyCommands::Generate { target } => key::rotate::generate(&runner, &target).await,
+                KeyCommands::Rotate { target } => key::rotate::rotate(&runner, &target).await,
+            }
+        }
+    }
+}

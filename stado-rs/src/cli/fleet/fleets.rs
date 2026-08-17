@@ -103,10 +103,10 @@ pub fn find_fleet<'a>(fleets: &'a [Fleet], name: &str) -> Option<&'a Fleet> {
     fleets.iter().find(|fleet| fleet.name == name)
 }
 
-/// `stado_fleet list` — every declared fleet with its members, from the
+/// `stado fleet list` — every declared fleet with its members, from the
 /// canonical registry document.
 pub async fn list(as_json: bool) -> Result<bool, String> {
-    let document = stado::cli::registry::fetch_document()
+    let document = crate::cli::registry::fetch_document()
         .await
         .map_err(|exc| exc.to_string())?;
     let fleets = parse_fleets(&document)?;
@@ -140,19 +140,19 @@ pub async fn list(as_json: bool) -> Result<bool, String> {
     Ok(true)
 }
 
-/// `stado_fleet status NAME` — live state of one fleet's members: health
+/// `stado fleet status NAME` — live state of one fleet's members: health
 /// beacons and capacity broadcasts from the store, nothing else.
 pub async fn status(name: &str) -> Result<bool, String> {
-    let document = stado::cli::registry::fetch_document()
+    let document = crate::cli::registry::fetch_document()
         .await
         .map_err(|exc| exc.to_string())?;
     let fleets = parse_fleets(&document)?;
     let fleet = find_fleet(&fleets, name)
         .ok_or_else(|| format!("fleet '{name}' is not declared in the registry"))?;
-    let store = stado::queue::JobStorage::new()
+    let store = crate::queue::JobStorage::new()
         .await
         .map_err(|exc| exc.to_string())?;
-    let consumers = stado::queue::capacity::read_consumer_capacity(&store)
+    let consumers = crate::queue::capacity::read_consumer_capacity(&store)
         .await
         .map_err(|exc| exc.to_string())?;
     let broadcasting: Vec<String> = consumers.keys().cloned().collect();
@@ -161,7 +161,7 @@ pub async fn status(name: &str) -> Result<bool, String> {
         println!("  (no members)");
     }
     for member in &fleet.members {
-        match stado::monitor::host_health::load_host_health(&store, member).await {
+        match crate::monitor::host_health::load_host_health(&store, member).await {
             Ok(report) => {
                 let reported_at = report
                     .beacon

@@ -70,3 +70,19 @@ path = "src/bin/stado_watchdog.rs"
 [[bin]]
 name = "stado-mcp"
 path = "src/bin/stado_mcp.rs"
+
+# Declared, not discovered. Cargo would find these two by their directories
+# anyway, and that is precisely how `stado_fleet` — the program that holds
+# enrollment and SSH-key custody — sat two minor versions behind the library
+# it shares with `stado` for weeks: nothing named it, so nothing built it, so
+# nobody could see the gap. A program the fleet installs is part of this
+# manifest. The underscore in the name is load-bearing: the installed
+# binaries, `scripts/build-stado-binary.py` and `scripts/install-built-stado-
+# binary.py` all address them as `stado_fleet` and `stado_migrate`.
+[[bin]]
+name = "stado_fleet"
+path = "src/bin/stado_fleet/main.rs"
+
+[[bin]]
+name = "stado_migrate"
+path = "src/bin/stado_migrate/main.rs"
