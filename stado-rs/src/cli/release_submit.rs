@@ -462,9 +462,14 @@ async fn signing(product: &str) -> Result<(String, Vec<u8>), CmdError> {
         .map(|value| value.signing_key_id.clone())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(crate::config::release_signing_key_id);
-    let encoded = crate::credential_store::read_string(&item, "private_key")
+    let encoded = crate::skarbiec::read_release_signing_key(&item)
         .await
-        .map_err(|error| CmdError::click(error.to_string()))?
+        .map_err(|error| {
+            CmdError::click(format!(
+                "cannot read signing key {item:?} as {}: {error}",
+                crate::config::release_signing_skarbiec_consumer()
+            ))
+        })?
         .ok_or_else(|| {
             CmdError::click(format!(
                 "Skarbiec item {item:?} field private_key is required"
