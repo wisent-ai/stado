@@ -1,4 +1,5 @@
 import SwiftUI
+import WisentDesignSystem
 
 struct WorkersView: View {
     let snapshot: DashboardSnapshot
@@ -23,7 +24,7 @@ struct WorkersView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-                .padding(StadoTheme.Space.lg)
+                .padding(WisentDesign.Space.x6)
 
             if snapshot.workers.isEmpty {
                 ContentUnavailableView {
@@ -67,7 +68,7 @@ struct WorkersView: View {
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: StadoTheme.Space.xxs) {
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
                 Text("Workers and nodes")
                     .font(.largeTitle.weight(.semibold))
                 Text("Registered compute targets reconciled with capacity reports")
@@ -75,21 +76,21 @@ struct WorkersView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            StatusPill(label: headerStatus.label, tone: headerStatus.tone)
+            WisentBadge(headerStatus.label, tone: headerStatus.tone)
         }
     }
 
-    private var headerStatus: (label: String, tone: StatusTone) {
+    private var headerStatus: (label: String, tone: WisentTone) {
         let unavailable = snapshot.workers.count { $0.status == .unavailable }
         if unavailable > 0 {
-            return ("\(unavailable) unavailable", .critical)
+            return ("\(unavailable) unavailable", .danger)
         }
         let stale = snapshot.workers.count { $0.status == .stale }
         if stale > 0 {
             return ("\(stale) stale", .warning)
         }
         let live = snapshot.workers.count { $0.status == .live }
-        return ("\(live) live", live == 0 ? .warning : .healthy)
+        return ("\(live) live", live == 0 ? .warning : .success)
     }
 
     private func filter(_ workers: [WorkerNode]) -> [WorkerNode] {
@@ -116,21 +117,21 @@ private struct WorkerRow: View {
     let worker: WorkerNode
 
     var body: some View {
-        VStack(alignment: .leading, spacing: StadoTheme.Space.sm) {
+        VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
             HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: StadoTheme.Space.xxs) {
-                    HStack(spacing: StadoTheme.Space.xs) {
+                VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
+                    HStack(spacing: WisentDesign.Space.x2) {
                         Text(worker.displayName)
                             .font(.headline)
                             .textSelection(.enabled)
-                        StatusPill(label: statusLabel, tone: statusTone)
+                        WisentBadge(statusLabel, tone: statusTone)
                     }
                     Text(workerDescription)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                VStack(alignment: .trailing, spacing: StadoTheme.Space.xxs) {
+                VStack(alignment: .trailing, spacing: WisentDesign.Space.x1) {
                     Text(capacityLabel)
                         .font(.subheadline.weight(.semibold))
                         .monospacedDigit()
@@ -156,12 +157,12 @@ private struct WorkerRow: View {
 
             if worker.status != .unavailable, !worker.freeSlots.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: StadoTheme.Space.xs) {
+                    HStack(spacing: WisentDesign.Space.x2) {
                         ForEach(worker.freeSlots.keys.sorted(), id: \.self) { slotType in
                             Text("\(slotType): \(worker.freeSlots[slotType, default: 0])")
                                 .font(.caption.monospacedDigit())
-                                .padding(.horizontal, StadoTheme.Space.xs)
-                                .padding(.vertical, StadoTheme.Space.xxs)
+                                .padding(.horizontal, WisentDesign.Space.x2)
+                                .padding(.vertical, WisentDesign.Space.x1)
                                 .background(.quaternary, in: Capsule())
                         }
                     }
@@ -174,9 +175,9 @@ private struct WorkerRow: View {
                total > 0,
                free >= 0 {
                 let used = max(0, total - min(free, total))
-                HStack(spacing: StadoTheme.Space.sm) {
+                HStack(spacing: WisentDesign.Space.x3) {
                     ProgressView(value: used, total: total)
-                        .frame(width: StadoTheme.Layout.progressWidth)
+                        .frame(width: StadoLayout.progressWidth)
                     Text("\(StadoFormat.decimal(used)) of \(StadoFormat.decimal(total)) GB VRAM allocated")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -184,7 +185,7 @@ private struct WorkerRow: View {
                 .accessibilityElement(children: .combine)
             }
         }
-        .padding(.vertical, StadoTheme.Space.xs)
+        .padding(.vertical, WisentDesign.Space.x2)
         .accessibilityElement(children: .contain)
     }
 
@@ -196,11 +197,11 @@ private struct WorkerRow: View {
         }
     }
 
-    private var statusTone: StatusTone {
+    private var statusTone: WisentTone {
         switch worker.status {
-        case .live: worker.declared ? .healthy : .warning
+        case .live: worker.declared ? .success : .warning
         case .stale: .warning
-        case .unavailable: .critical
+        case .unavailable: .danger
         }
     }
 
