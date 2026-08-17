@@ -51,6 +51,31 @@ impl Client {
         )
     }
 
+    /// Dedicated reader for the release authority's private key.
+    ///
+    /// `release submit` read it through the coordinator grant, exactly as alerts
+    /// once read the resend key, and the vault refused with `403 consumer not
+    /// authorized to read item field`. The fleet had already provisioned a
+    /// least-privilege consumer holding one capability --
+    /// `read:stado-release-signing#private_key` -- so the policy was right and
+    /// the caller was reaching for the wrong identity. Signing material is the
+    /// last thing that should travel on a broad grant.
+    pub fn release_signing_reader() -> Result<Self, SkarbiecError> {
+        if crate::config::release_signing_skarbiec_token_file()
+            == crate::config::skarbiec_token_file()
+        {
+            return Err(SkarbiecError::Deployment(
+                "release signing reader token file must be distinct from the coordinator grant"
+                    .to_string(),
+            ));
+        }
+        Self::direct(
+            crate::config::skarbiec_url(),
+            crate::config::release_signing_skarbiec_consumer(),
+            crate::config::release_signing_skarbiec_token_file(),
+        )
+    }
+
     /// Dedicated verifier for immutable authenticated release publication.
     pub fn release_verifier() -> Result<Self, SkarbiecError> {
         if crate::config::release_skarbiec_consumer()
