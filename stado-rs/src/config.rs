@@ -1808,6 +1808,43 @@ static RELEASE_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
     .into_owned()
 });
 
+/// The consumer the vault already authorizes to read the release authority's
+/// private key, and nothing else: its single minted capability is
+/// `read:stado-release-signing#private_key`.
+///
+/// `release submit` read that key through `secrets.skarbiec.consumer`, the broad
+/// control-plane grant, which the vault correctly refuses. The refusal arrived as
+/// a bare `403 consumer not authorized to read item field` naming neither the
+/// consumer it wanted nor the one it got, and the vault's own policy had the
+/// answer the whole time.
+pub const RELEASE_SIGNING_CONSUMER: &str = "stado-release-coordinator";
+
+static RELEASE_SIGNING_SKARBIEC_CONSUMER: LazyLock<String> = LazyLock::new(|| {
+    cfg(
+        "WC_RELEASE_SIGNING_SKARBIEC_CONSUMER",
+        "release.signing_skarbiec.consumer",
+        RELEASE_SIGNING_CONSUMER,
+    )
+});
+static RELEASE_SIGNING_SKARBIEC_TOKEN_FILE: LazyLock<String> = LazyLock::new(|| {
+    let default = std::env::var("HOME")
+        .map(|home| {
+            std::path::Path::new(&home)
+                .join(".stado")
+                .join("stado-release-coordinator-skarbiec-token")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .unwrap_or_default();
+    expand_tilde(&cfg(
+        "WC_RELEASE_SIGNING_SKARBIEC_TOKEN_FILE",
+        "release.signing_skarbiec.token_file",
+        &default,
+    ))
+    .to_string_lossy()
+    .into_owned()
+});
+
 pub const MACHINE_API_VERIFIER_CONSUMER: &str = "stado-machine-api-verifier";
 pub const MACHINE_API_ACTIONS: &[&str] = &["cancel", "status", "submit"];
 
@@ -2772,6 +2809,14 @@ pub fn release_skarbiec_consumer() -> &'static str {
 
 pub fn release_skarbiec_token_file() -> &'static str {
     RELEASE_SKARBIEC_TOKEN_FILE.as_str()
+}
+
+pub fn release_signing_skarbiec_consumer() -> &'static str {
+    RELEASE_SIGNING_SKARBIEC_CONSUMER.as_str()
+}
+
+pub fn release_signing_skarbiec_token_file() -> &'static str {
+    RELEASE_SIGNING_SKARBIEC_TOKEN_FILE.as_str()
 }
 
 pub fn machine_api_clients(

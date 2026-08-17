@@ -1,17 +1,25 @@
 #!/usr/bin/env bash
-# Report which release signing keys this host's Skarbiec actually holds.
+# Report which release signing keys this host's Skarbiec actually holds, and who
+# is authorized to read them.
 #
-# The registry's `release_control.trusted_keys` names a public key per product,
-# so a keypair was generated once. `release submit` from an operator machine then
-# failed with `Skarbiec returned HTTP 403: consumer not authorized to read item
-# field` while reading the signing key's `private_key`.
+# The 403 was never about a missing key. `stado-release-signing` exists with
+# `kind=key-pair` and field `private_key`, and the vault authorizes exactly one
+# consumer to read it: `stado-release-coordinator`, holding the single capability
+# `read:stado-release-signing#private_key`. `release submit` asked as
+# `stado-control-plane`, the broad grant, so the vault refused -- correctly.
 #
-# That 403 came from the Skarbiec service, so the service is what must be asked.
-# An earlier version of this probe parsed the on-disk vault file instead and was
-# about to support the much stronger claim that no signer exists anywhere -- the
-# same mistake as reading a PATH-less shell and calling a toolchain missing.
+# Two earlier versions of this probe reported the opposite, and the second one's
+# conclusion reached a commit message and an architecture note before it was
+# checked: that no release signer existed in any reachable vault. It came from a
+# list truncated at ten rows, where `stado-release-signing` sorts eleventh. The
+# same failure as calling a toolchain missing from a PATH-less shell, and as
+# reading a store's `capacity/` prefix on a host whose queue store is a private
+# loopback resolver while the fleet publishes to a tailnet address.
 #
-# Read-only: item ids and field names only, never a secret value.
+# So this reports authorization next to existence: an item nobody may read and an
+# item that is absent are different failures with identical symptoms.
+#
+# Read-only: item ids, field names, and consumer names, never a secret value.
 set -euo pipefail
 
 cli="${SKARBIEC_BIN:-$HOME/.stado/bin/skarbiec}"
@@ -70,3 +78,39 @@ PY
 else
   printf 'vault file unreadable %s\n' "$vault"
 fi
+
+# Who may read each signing item. Existence without a reader looks exactly like
+# absence from the caller's side, and that pair of symptoms is what sent two
+# earlier readings of this vault the wrong way.
+printf -- '--- authorized readers ---\n'
+SKARBIEC_VAULT_FILE="$vault" "$cli" tokens 2>&1 | /usr/bin/python3 -c '
+import json, sys
+
+raw = sys.stdin.read()
+try:
+    tokens = json.loads(raw)
+except json.JSONDecodeError:
+    print(f"tokens unparsed: {raw.strip()[:120]}")
+    raise SystemExit
+
+readers = 0
+for token in tokens if isinstance(tokens, list) else []:
+    grants = [
+        capability
+        for capability in token.get("capabilities") or []
+        if "sign" in str(capability.get("item") or "")
+    ]
+    if not grants:
+        continue
+    readers += 1
+    parts = []
+    for grant in grants:
+        action = grant.get("action")
+        item = grant.get("item")
+        field = grant.get("field")
+        parts.append(f"{action}:{item}#{field}")
+    consumer = token.get("consumer")
+    detail = ", ".join(parts)
+    print(f"reader {consumer} -> {detail}")
+print(f"signing_readers {readers}")
+'
