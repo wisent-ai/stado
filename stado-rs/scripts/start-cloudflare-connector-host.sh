@@ -47,15 +47,21 @@ fi
 /bin/mkdir -p "$LOGS" "$HOME/.stado/bin"
 
 # The runner keeps the token out of argv and out of the unit file.
+#
+# Backticks are forbidden in the body below: this heredoc is unquoted so the
+# host expands it, and a backticked word in a comment is executed as a command
+# there. An earlier version explained the transport choice that way and the
+# helper reported three "command not found" lines while still writing a correct
+# runner, which is the worst combination to debug.
 /bin/cat > "$RUNNER" <<RUNNER_EOF
 #!/bin/sh
 set -eu
 TUNNEL_TOKEN=\$(/bin/cat "$TOKEN_FILE")
 export TUNNEL_TOKEN
-# `--protocol http2` on purpose. With the default QUIC transport this host logs
-# `failed to dial to edge with quic: sendmsg: network is unreachable` and
-# `no route to host` on UDP/7844, so tunnel connections flap and roughly half of
-# the concurrent public requests answer 502 while the origin itself is healthy.
+# Transport is pinned to http2 on purpose. With the default QUIC transport this
+# host logs "failed to dial to edge with quic: sendmsg: network is unreachable"
+# and "no route to host" on UDP/7844, so tunnel connections flap and about half
+# of the concurrent public requests answer 502 while the origin is healthy.
 # HTTP/2 carries the tunnel over TCP/443, which this network does pass.
 exec "$BIN" tunnel --no-autoupdate --protocol http2 --metrics $METRICS run
 RUNNER_EOF
