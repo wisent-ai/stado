@@ -16,85 +16,88 @@ struct DeploymentAccessView: View {
     @State private var canOperate = false
     @State private var canAdminister = false
     @State private var isSaving = false
-    @State private var errorMessage: String?
+    @State private var mutation: WisentMutationOutcome = .idle
+    @State private var revocation: DeploymentGrant?
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
-                    Text("Access to \(deployment.name)")
-                        .font(.title2.weight(.semibold))
-                    Text("Grant only the capabilities each person or team needs.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button("Done") { dismiss() }
-                    .keyboardShortcut(.defaultAction)
-            }
-            .padding(WisentDesign.Space.x6)
-
+        VStack(alignment: .leading, spacing: 0) {
+            header
             Divider()
-
             ScrollView {
                 VStack(alignment: .leading, spacing: WisentDesign.Space.x6) {
-                    WisentPanel {
-                        VStack(alignment: .leading, spacing: WisentDesign.Space.x4) {
-                            Text("Share deployment")
-                                .font(.headline)
-                            Picker("Share with", selection: $subject) {
-                                ForEach(AccessSubject.allCases) { value in
-                                    Text(value.title).tag(value)
+                    WisentMutationBar(outcome: mutation) { mutation = .idle }
+
+                    WisentSectionBox(
+                        title: "Grant access",
+                        detail: "Grant only the capabilities each person or team needs. Operate covers cleanup passes and policy writes."
+                    ) {
+                        WisentPanel {
+                            VStack(alignment: .leading, spacing: WisentDesign.Space.x4) {
+                                Picker("Share with", selection: $subject) {
+                                    ForEach(AccessSubject.allCases) { value in
+                                        Text(value.title).tag(value)
+                                    }
                                 }
-                            }
-                            .pickerStyle(.segmented)
+                                .pickerStyle(.segmented)
+                                .labelsHidden()
 
-                            subjectFields
+                                subjectFields
 
-                            VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
-                                Text("Permissions")
-                                    .font(.subheadline.weight(.semibold))
-                                Toggle("View fleet and jobs", isOn: $canView)
-                                Toggle("Submit jobs", isOn: $canSubmit)
-                                Toggle("Operate workers and maintenance", isOn: $canOperate)
-                                Toggle("Manage deployment and access", isOn: $canAdminister)
-                            }
-
-                            if let errorMessage {
-                                Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
-                                    .font(.caption)
-                                    .foregroundStyle(.red)
-                            }
-
-                            HStack {
-                                Spacer()
-                                Button("Grant Access") {
-                                    Task { await grantAccess() }
+                                VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
+                                    Text("Permissions")
+                                        .font(WisentTypeScale.panelTitle())
+                                        .foregroundStyle(WisentDesign.ink)
+                                    Toggle("View fleet, jobs, and policy", isOn: $canView)
+                                    Toggle("Submit jobs", isOn: $canSubmit)
+                                    Toggle("Operate cleanup and policy", isOn: $canOperate)
+                                    Toggle("Manage deployment and access", isOn: $canAdminister)
                                 }
-                                .buttonStyle(.borderedProminent)
-                                .disabled(isSaving || !canSubmitGrant)
+                                .font(WisentTypeScale.body())
+
+                                HStack {
+                                    Spacer(minLength: 0)
+                                    WisentActionButton(
+                                        action: WisentAction(
+                                            "Grant access",
+                                            symbol: "person.badge.plus",
+                                            kind: .primary,
+                                            isEnabled: !isSaving && canSubmitGrant
+                                        ) {
+                                            Task { await grantAccess() }
+                                        }
+                                    )
+                                }
                             }
                         }
                     }
 
-                    VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
-                        Text("Current access")
-                            .font(.headline)
+                    WisentSectionBox(
+                        title: "Current access",
+                        trailing: store.grants[deployment.id].map { "\($0.count.formatted(.number)) grants" }
+                    ) {
                         if store.grants[deployment.id] == nil {
-                            HStack(spacing: WisentDesign.Space.x3) {
-                                ProgressView()
-                                Text("Loading grants…")
-                                    .foregroundStyle(.secondary)
-                            }
+                            WisentLoadingPanel(
+                                title: "Reading grants",
+                                detail: "Who else may read or operate this deployment."
+                            )
                         } else if store.grants[deployment.id]?.isEmpty == true {
-                            UnavailableNotice(
+                            WisentEmptyPanel(
                                 title: "Private deployment",
-                                detail: "Only the creator has access.",
+                                detail: "Only the creator has access. No grant exists for this deployment.",
                                 symbol: "lock"
                             )
                         } else {
-                            ForEach(store.grants[deployment.id] ?? []) { grant in
-                                grantRow(grant)
+                            WisentTableFrame {
+                                VStack(spacing: 0) {
+                                    ConsoleTableHead(cells: [
+                                        ConsoleHeaderCell("Subject", width: 220),
+                                        ConsoleHeaderCell("Permissions"),
+                                        ConsoleHeaderCell("Revoke", width: 92, trailing: true),
+                                    ])
+                                    ForEach(store.grants[deployment.id] ?? []) { grant in
+                                        grantRow(grant)
+                                    }
+                                }
                             }
                         }
                     }
@@ -105,20 +108,47 @@ struct DeploymentAccessView: View {
             }
         }
         .frame(minWidth: 700, minHeight: 620)
+        .background(WisentDesign.canvas)
         .task { await store.loadGrants(for: deployment) }
+        .sheet(item: $revocation) { grant in
+            revocationDialog(grant)
+        }
+    }
+
+    private var header: some View {
+        HStack(alignment: .top, spacing: WisentDesign.Space.x4) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("ACCESS")
+                    .font(WisentTypeScale.eyebrow())
+                    .tracking(0.8)
+                    .foregroundStyle(WisentDesign.muted)
+                Text(deployment.name)
+                    .font(WisentTypography.heading(17))
+                    .foregroundStyle(WisentDesign.ink)
+                Text(deployment.endpoint ?? "No endpoint published yet")
+                    .font(WisentTypeScale.identifierSmall())
+                    .foregroundStyle(WisentDesign.secondary)
+            }
+            Spacer(minLength: 0)
+            WisentActionButton(action: WisentAction("Done", kind: .secondary) { dismiss() })
+        }
+        .padding(WisentDesign.Space.x6)
     }
 
     @ViewBuilder
     private var subjectFields: some View {
         switch subject {
         case .organization:
-            LabeledContent("Organization") {
-                Text(homeOrganization?.name ?? "No organization selected")
-                    .foregroundStyle(homeOrganization == nil ? .secondary : .primary)
-            }
+            WisentField(
+                label: "Organization",
+                value: homeOrganization?.name ?? "No organization selected",
+                tone: homeOrganization == nil ? .warning : .neutral
+            )
         case .role:
             HStack {
                 Text("Organization role")
+                    .font(WisentTypeScale.body())
+                    .foregroundStyle(WisentDesign.secondary)
                 Spacer()
                 Picker("Organization role", selection: $organizationRole) {
                     Text("Owner").tag("owner")
@@ -132,42 +162,65 @@ struct DeploymentAccessView: View {
             VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
                 TextField("Wisent user ID", text: $userID)
                     .textFieldStyle(.roundedBorder)
+                    .font(WisentTypeScale.identifier())
                 Text("The user ID is shown in the teammate's Wisent account profile.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(WisentTypeScale.caption())
+                    .foregroundStyle(WisentDesign.secondary)
             }
         }
     }
 
     private func grantRow(_ grant: DeploymentGrant) -> some View {
-        HStack(spacing: WisentDesign.Space.x4) {
-            Image(systemName: subjectSymbol(grant.subjectKind))
-                .foregroundStyle(.secondary)
-                .frame(width: 24)
-            VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
-                Text(subjectLabel(grant))
-                    .font(.body.weight(.medium))
-                Text(grant.permissions.map(\.title).joined(separator: " · "))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            Button(role: .destructive) {
-                Task {
-                    do {
-                        try await store.revoke(grant)
-                    } catch {
-                        errorMessage = Self.describe(error)
+        ConsoleTableRow {
+            ConsoleCell(text: subjectLabel(grant), width: 220, strong: true)
+            ConsoleCell(text: grant.permissions.map(\.title).joined(separator: " · "))
+            HStack {
+                Spacer(minLength: 0)
+                WisentActionButton(
+                    action: WisentAction("Revoke…", kind: .plain, isEnabled: !mutation.isWorking) {
+                        revocation = grant
                     }
-                }
-            } label: {
-                Image(systemName: "trash")
+                )
             }
-            .buttonStyle(.borderless)
-            .help("Revoke access")
+            .frame(width: 92)
         }
-        .padding(WisentDesign.Space.x3)
-        .background(WisentDesign.surface, in: RoundedRectangle(cornerRadius: WisentDesign.Radius.medium))
+    }
+
+    // MARK: Irreversible decision
+
+    private func revocationDialog(_ grant: DeploymentGrant) -> some View {
+        WisentDecisionDialog(
+            tone: .danger,
+            title: "Revoke \(subjectLabel(grant))'s access to \(deployment.name)?",
+            lines: [
+                "The subject immediately loses every permission listed below, including any queue submission or cleanup authority it was granted.",
+                "Revoking does not stop work this subject already submitted, and the grant cannot be restored from this dialog.",
+            ],
+            reasonCode: grant.subjectKind,
+            listing: [
+                "subject: \(grant.subjectID)",
+                "permissions: \(grant.permissions.map(\.rawValue).joined(separator: ", "))",
+                "granted by: \(grant.createdBy)",
+            ],
+            footnote: "Granted \(StadoFormat.date(grant.createdAt).map { $0.formatted(date: .abbreviated, time: .shortened) } ?? grant.createdAt).",
+            actions: [
+                WisentAction("Keep the grant", kind: .primary) { revocation = nil },
+                WisentAction("Revoke access", kind: .destructive) {
+                    revocation = nil
+                    Task { await revoke(grant) }
+                },
+            ]
+        )
+    }
+
+    private func revoke(_ grant: DeploymentGrant) async {
+        mutation = .working("Revoking access for \(subjectLabel(grant)).")
+        do {
+            try await store.revoke(grant)
+            mutation = .succeeded("Access revoked for \(subjectLabel(grant)).")
+        } catch {
+            mutation = .failed(Self.describe(error))
+        }
     }
 
     private var canSubmitGrant: Bool {
@@ -188,7 +241,7 @@ struct DeploymentAccessView: View {
     private func grantAccess() async {
         guard canSubmitGrant else { return }
         isSaving = true
-        errorMessage = nil
+        mutation = .working("Granting access to \(subject.title.lowercased()).")
         defer { isSaving = false }
         do {
             let organizationID = homeOrganization?.id ?? ""
@@ -199,9 +252,10 @@ struct DeploymentAccessView: View {
                 subjectRole: subject == .role ? organizationRole : nil,
                 permissions: permissions
             )
+            mutation = .succeeded("Access granted: \(permissions.map(\.rawValue).joined(separator: ", ")).")
             if subject == .user { userID = "" }
         } catch {
-            errorMessage = Self.describe(error)
+            mutation = .failed(Self.describe(error))
         }
     }
 
@@ -210,14 +264,6 @@ struct DeploymentAccessView: View {
         case "organization": homeOrganization?.name ?? grant.subjectID
         case "organization_role": "\(homeOrganization?.name ?? "Organization") · \((grant.subjectRole ?? "member").capitalized)"
         default: grant.subjectID
-        }
-    }
-
-    private func subjectSymbol(_ kind: String) -> String {
-        switch kind {
-        case "organization": "building.2"
-        case "organization_role": "person.3"
-        default: "person"
         }
     }
 

@@ -1,346 +1,116 @@
 import AppKit
 import SwiftUI
+import WisentDesignSystem
 
+/// The menu bar states disk posture and hands the decision to the console.
+///
+/// Running an irreversible pass from a popover meant the operator never saw
+/// what the pass would delete, and a refusal disappeared with the popover. The
+/// decision, its dialog, and the service's verbatim answer now live on one
+/// screen instead of two surfaces.
 struct CleanupMenuView: View {
     @Environment(\.openWindow) private var openWindow
     @ObservedObject var store: CleanupStore
+    @ObservedObject var router: ConsoleRouter
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: WisentDesign.Space.x4) {
             header
-            Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    if let errorMessage = store.errorMessage {
-                        ErrorBanner(message: errorMessage)
-                    }
 
-                    if let report = store.report {
-                        ReportContent(report: report)
-                    } else if store.isRefreshing {
-                        LoadingView()
-                    } else {
-                        EmptyViewContent()
-                    }
-                }
-                .padding(16)
+            if let message = store.errorMessage {
+                WisentAlertPanel(
+                    tone: .danger,
+                    title: "Cleanup state unavailable",
+                    detail: message
+                )
             }
-            Divider()
+
+            if let report = store.report {
+                WisentSignalStrip(signals: signals(report))
+                if report.outcomePresentation.severity == .critical || report.outcomePresentation.severity == .warning {
+                    WisentAlertPanel(
+                        tone: report.outcomePresentation.severity == .critical ? .danger : .warning,
+                        title: report.outcomePresentation.title,
+                        detail: report.errors.first ?? report.outcomePresentation.detail
+                    )
+                }
+            } else if store.isRefreshing {
+                WisentLoadingPanel(
+                    title: "Reading the cleanup report",
+                    detail: "Disk pressure and the outcome of the last registry-controlled pass."
+                )
+            } else {
+                WisentEmptyPanel(
+                    title: "No cleanup report",
+                    detail: "The Stado dashboard has not answered the cleanup interface yet.",
+                    symbol: "externaldrive.badge.questionmark"
+                )
+            }
+
             footer
         }
-        .frame(width: 390, height: 590)
+        .padding(WisentDesign.Space.x5)
+        .frame(width: 380)
+        .background(WisentDesign.canvas)
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "externaldrive.fill.badge.checkmark")
-                .font(.title2)
-                .foregroundStyle(.tint)
+        HStack(spacing: WisentDesign.Space.x3) {
             VStack(alignment: .leading, spacing: 1) {
-                Text("Stado")
-                    .font(.headline)
-                if let updated = store.lastUpdated {
-                    Text("Updated \(updated, style: .relative)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("Disk cleanup operator")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                Text("STADO · DISK")
+                    .font(WisentTypeScale.eyebrow())
+                    .tracking(0.8)
+                    .foregroundStyle(WisentDesign.muted)
+                Text(store.report?.outcomePresentation.title ?? "Disk cleanup")
+                    .font(WisentTypeScale.screenTitle())
+                    .foregroundStyle(WisentDesign.ink)
             }
-            Spacer()
-            Button {
-                Task { await store.refresh() }
-            } label: {
-                if store.isRefreshing {
-                    ProgressView()
-                        .controlSize(.small)
-                } else {
-                    Image(systemName: "arrow.clockwise")
-                }
-            }
-            .buttonStyle(.borderless)
-            .help("Refresh cleanup status")
-            .disabled(store.isRefreshing || store.isRunningCleanup)
+            Spacer(minLength: 0)
+            Text("Read \(ConsoleFormat.relative(store.lastUpdated))")
+                .font(WisentTypeScale.identifierSmall())
+                .foregroundStyle(WisentDesign.muted)
         }
-        .padding(14)
     }
 
     private var footer: some View {
-        VStack(spacing: 10) {
-            Button {
-                Task { await store.runCleanup() }
-            } label: {
-                HStack {
-                    if store.isRunningCleanup {
-                        ProgressView()
-                            .controlSize(.small)
-                        Text("Running registry-controlled pass…")
-                    } else if store.report?.lockBusy == true {
-                        Image(systemName: "hourglass")
-                        Text("Cleanup Already Running")
-                    } else {
-                        Image(systemName: "sparkles")
-                        Text("Run Cleanup Pass")
-                    }
-                }
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(store.isRefreshing || store.isRunningCleanup || store.report?.lockBusy == true || store.dashboardAddress == nil)
-
-            HStack {
-                Button("Open Operations Console", systemImage: "rectangle.3.group") {
+        HStack(spacing: WisentDesign.Space.x2) {
+            WisentActionButton(
+                action: WisentAction("Open Disk", symbol: "externaldrive", kind: .primary) {
+                    router.destination = .disk
                     openWindow(id: "operations-console")
                 }
-
-                Spacer()
-
-                SettingsLink {
-                    Label("Settings", systemImage: "gearshape")
+            )
+            WisentActionButton(
+                action: WisentAction("Refresh", symbol: "arrow.clockwise", isEnabled: !store.isRefreshing) {
+                    Task { await store.refresh() }
                 }
-                Button("Quit", systemImage: "power") {
+            )
+            Spacer(minLength: 0)
+            WisentActionButton(
+                action: WisentAction("Quit", kind: .plain) {
                     NSApplication.shared.terminate(nil)
                 }
-            }
-            .buttonStyle(.borderless)
-            .font(.caption)
-        }
-        .padding(14)
-    }
-}
-
-private struct ReportContent: View {
-    let report: CleanupReport
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            OutcomeCard(report: report)
-            PressureCard(report: report)
-            CleanerSummary(report: report)
-
-            if !report.caps.activeLabels.isEmpty {
-                Label("Pass bounded by \(report.caps.activeLabels.joined(separator: ", "))", systemImage: "gauge.with.dots.needle.67percent")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
-
-            if !report.errors.isEmpty {
-                VStack(alignment: .leading, spacing: 5) {
-                    Label("Sanitized errors", systemImage: "exclamationmark.triangle.fill")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.red)
-                    ForEach(report.errors, id: \.self) { error in
-                        Text(error)
-                            .font(.caption.monospaced())
-                            .textSelection(.enabled)
-                    }
-                }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-            }
-
-            HStack {
-                Label("\(report.activeSlotCount) active \(report.activeSlotCount == 1 ? "slot" : "slots")", systemImage: "cpu")
-                Spacer()
-                Text(DisplayFormat.duration(milliseconds: report.durationMs))
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
-    }
-}
-
-private struct OutcomeCard: View {
-    let report: CleanupReport
-
-    private var presentation: OutcomePresentation { report.outcomePresentation }
-
-    private var color: Color {
-        switch presentation.severity {
-        case .healthy: .green
-        case .neutral: .blue
-        case .warning: .orange
-        case .critical: .red
+            )
         }
     }
 
-    var body: some View {
-        HStack(alignment: .top, spacing: 11) {
-            Image(systemName: presentation.symbol)
-                .font(.title2)
-                .foregroundStyle(color)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(presentation.title)
-                    .font(.headline)
-                Text(presentation.detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(color.opacity(0.09), in: RoundedRectangle(cornerRadius: 10))
-    }
-}
-
-private struct PressureCard: View {
-    let report: CleanupReport
-
-    private var pressureLabel: String {
-        switch report.pressureActive {
-        case true: "Pressure active"
-        case false: "Storage healthy"
-        case nil: "Pressure unknown"
-        }
-    }
-
-    private var pressureColor: Color {
-        switch report.pressureActive {
-        case true: .orange
-        case false: .green
-        case nil: .secondary
-        }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Label(pressureLabel, systemImage: report.pressureActive == true ? "externaldrive.fill.badge.exclamationmark" : "externaldrive.fill.badge.checkmark")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(pressureColor)
-                Spacer()
-                if let mode = report.mode {
-                    Text(mode.humanizedIdentifier)
-                        .font(.caption.weight(.medium))
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(.quaternary, in: Capsule())
-                }
-            }
-
-            HStack(spacing: 0) {
-                Metric(title: "Free", value: DisplayFormat.bytes(report.freeBytesAfter))
-                Divider().frame(height: 34)
-                Metric(title: "Low threshold", value: DisplayFormat.bytes(report.lowBytes))
-                Divider().frame(height: 34)
-                Metric(title: "Target", value: DisplayFormat.bytes(report.targetBytes))
-                Divider().frame(height: 34)
-                Metric(title: "Reclaimed", value: DisplayFormat.bytes(report.reclaimedBytes))
-            }
-
-            if let started = DisplayFormat.date(report.startedAt) {
-                Text("Pass started \(started, style: .relative)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            if let success = DisplayFormat.date(report.lastSuccessAt) {
-                Text("Last successful pass \(success, style: .relative)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(12)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
-    }
-}
-
-private struct Metric: View {
-    let title: String
-    let value: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.caption.weight(.semibold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 8)
-    }
-}
-
-private struct CleanerSummary: View {
-    let report: CleanupReport
-
-    private var cleaners: [(String, CleanerReport)] {
-        report.cleaners.namedReports
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Cleaners")
-                .font(.subheadline.weight(.semibold))
-            ForEach(cleaners, id: \.0) { item in
-                let (name, cleaner) = item
-                HStack {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(name)
-                            .font(.caption.weight(.medium))
-                        Text("\(cleaner.scannedItems) scanned · \(cleaner.eligibleItems) eligible")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    VStack(alignment: .trailing, spacing: 1) {
-                        Text("\(cleaner.deletedItems) deleted")
-                            .font(.caption.weight(.medium))
-                        Text(DisplayFormat.bytes(cleaner.actualFreeDeltaBytes))
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-        }
-    }
-}
-
-private struct ErrorBanner: View {
-    let message: String
-
-    var body: some View {
-        Label {
-            Text(message)
-                .fixedSize(horizontal: false, vertical: true)
-        } icon: {
-            Image(systemName: "wifi.exclamationmark")
-        }
-        .font(.caption)
-        .foregroundStyle(.red)
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 9))
-    }
-}
-
-private struct LoadingView: View {
-    var body: some View {
-        VStack(spacing: 10) {
-            ProgressView()
-            Text("Loading cleanup status…")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 60)
-    }
-}
-
-private struct EmptyViewContent: View {
-    var body: some View {
-        ContentUnavailableView(
-            "No Cleanup Report",
-            systemImage: "externaldrive.badge.questionmark",
-            description: Text("Refresh after the Stado dashboard is available.")
-        )
-        .padding(.vertical, 35)
+    private func signals(_ report: CleanupReport) -> [WisentSignal] {
+        [
+            WisentSignal(
+                "Free",
+                value: DisplayFormat.bytes(report.freeBytesAfter),
+                tone: report.pressureActive == true ? .warning : .success
+            ),
+            WisentSignal(
+                "Mode",
+                value: report.mode?.capitalized ?? "Not configured",
+                tone: .neutral
+            ),
+            WisentSignal(
+                "Reclaimed",
+                value: DisplayFormat.bytes(report.reclaimedBytes),
+                tone: .neutral
+            ),
+        ]
     }
 }
