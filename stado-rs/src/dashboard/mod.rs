@@ -584,8 +584,7 @@ impl Dashboard {
                 .boundaries
                 .read()
                 .expect("dashboard boundary state lock");
-            if crate::object_store::release_policy_key(object.namespace(), object.key()).is_some()
-            {
+            if crate::object_store::release_policy_key(object.namespace(), object.key()).is_some() {
                 boundaries.release
             } else {
                 boundaries.object
@@ -687,8 +686,7 @@ impl Dashboard {
                     .boundaries
                     .read()
                     .expect("dashboard boundary state lock");
-                if crate::object_store::release_policy_key(&namespace, &key_or_prefix).is_some()
-                {
+                if crate::object_store::release_policy_key(&namespace, &key_or_prefix).is_some() {
                     boundaries.release
                 } else {
                     boundaries.object
@@ -1593,8 +1591,7 @@ impl Dashboard {
                 .boundaries
                 .read()
                 .expect("dashboard boundary state lock");
-            if crate::object_store::release_policy_key(object.namespace(), object.key()).is_some()
-            {
+            if crate::object_store::release_policy_key(object.namespace(), object.key()).is_some() {
                 boundaries.release
             } else {
                 boundaries.object
