@@ -36,7 +36,14 @@ pub async fn run(as_json: bool) -> Result<(), CmdError> {
         Ok(summary) => serde_json::to_value(summary)?,
         Err(err) => json!({"status": "error", "detail": err.to_string()}),
     };
-    let fleet = fleet_snapshot(&registry, &consumers);
+    // What each host CAN do, beside the fact that it is alive. An overview that
+    // reports only liveness reads as a healthy fleet while the work it exists
+    // for cannot run anywhere -- which is exactly how a browser login stayed
+    // impossible for weeks behind three green workers.
+    let measurements = crate::cli::registry::load_capability_measurements(&store)
+        .await
+        .unwrap_or_default();
+    let fleet = fleet_snapshot(&registry, &consumers, &measurements);
     let document = json!({
         "generated_at": Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false),
         "jobs": jobs,
@@ -113,6 +120,7 @@ fn target_for_consumer<'a>(
 fn fleet_snapshot(
     registry: &Registry,
     consumers: &std::collections::BTreeMap<String, Value>,
+    measurements: &std::collections::BTreeMap<String, crate::cli::registry::Measurement>,
 ) -> Value {
     let mut active_targets = HashSet::new();
     let workers: Vec<Value> = consumers
@@ -146,6 +154,22 @@ fn fleet_snapshot(
             let active_worker = target
                 .is_provider(crate::capabilities::ProviderId::Local)
                 .then(|| active_targets.contains(&target.name));
+            let measured = measurements.get(&target.name).map(|measurement| {
+                let values: serde_json::Map<String, Value> = measurement
+                    .capabilities
+                    .iter()
+                    .map(|(id, capability)| {
+                        (
+                            id.clone(),
+                            json!({"value": capability.value, "detail": capability.detail}),
+                        )
+                    })
+                    .collect();
+                json!({
+                    "measured_at": measurement.measured_at.map(|stamp| stamp.to_rfc3339()),
+                    "capabilities": Value::Object(values),
+                })
+            });
             json!({
                 "name": target.name,
                 "kind": target.kind,
@@ -154,6 +178,9 @@ fn fleet_snapshot(
                 "slots": target.slots,
                 "max_concurrent": target.max_concurrent,
                 "pinned_only": target.pinned_only,
+                // Absent means nothing has measured this host, which is a
+                // different statement from a capability measured false.
+                "measurement": measured,
             })
         })
         .collect();
@@ -295,6 +322,41 @@ fn print_human(document: &Value) {
                 .and_then(Value::as_str)
                 .unwrap_or("unknown");
             println!("  worker: {target} [{kind}] stado={version}");
+        }
+    }
+    if let Some(targets) = fleet.get("targets").and_then(Value::as_array) {
+        for target in targets {
+            let name = target
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("unnamed");
+            let Some(measurement) = target.get("measurement") else {
+                continue;
+            };
+            if measurement.is_null() {
+                println!("  can do: {name} nothing has measured this host");
+                continue;
+            }
+            let capabilities = measurement
+                .get("capabilities")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            let rendered: Vec<String> = capabilities
+                .iter()
+                .map(|(id, entry)| {
+                    let value = entry.get("value").and_then(Value::as_bool).unwrap_or(false);
+                    format!("{id}={value}")
+                })
+                .collect();
+            let measured_at = measurement
+                .get("measured_at")
+                .and_then(Value::as_str)
+                .unwrap_or("unstamped");
+            println!(
+                "  can do: {name} {} (measured {measured_at})",
+                rendered.join(" ")
+            );
         }
     }
     if let Some(targets) = fleet.get("targets").and_then(Value::as_array) {
