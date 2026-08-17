@@ -122,7 +122,7 @@ def fetch_rows(table, columns):
 
 contracts = (
     ("Character", ("id", "imageUrl", "videoUrl"), "id"),
-    ("ProfilePublic", ("userId", "imageUrl"), "userId"),
+    ("ProfilePublic", ("id", "imageUrl"), "id"),
     ("Room", ("id", "imageUrl"), "id"),
 )
 entries = {}
