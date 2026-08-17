@@ -198,4 +198,24 @@ GCS object bodies remain unreadable: `403 accountDisabled`. Requester Pays is no
 | Temporary GCP billing window | The only route to the GCS bodies themselves. | Project holds **18.975 TiB across 1,696,460 objects**; us-central1 Standard at $0.02/GiB-month is about $389/month, $12.80/day, **$0.53/hour** while billing is attached, plus $0.12/GiB egress = **$0.37** for the P0 media. A two-hour P0 window is therefore about **$1.40**. |
 | Google support-assisted export | Requires a paid support plan; the API channel is refused today. | $29/month minimum, slower than either route above. |
 
-The remaining blocker is therefore not Azure, not the manifest and not the copy tooling. It is source-body access alone. The cheapest unblock is the AWS grant, because it needs no GCP billing change at all; the GCS route cannot be opened without attaching a billing account to `wisent-480400`, which stays the operator's cost decision and is deliberately not performed here.
+The remaining blocker is therefore not Azure, not the manifest and not the copy tooling. It is source-body access alone. With the AWS account banned, a temporary attached-billing window on `wisent-480400` is the only remaining route, and its measured price is below.
+
+### What an attached billing window would actually cost — measured 2026-08-17
+
+Two earlier statements were wrong and are corrected here. The `$0.53/hour` figure counted only Cloud Storage. And a live compute read appeared to show an empty project, which it did not: with billing detached, `gcloud compute instances list`, `disks list`, `images list` and `instance-templates list` all **exit 0 and print `[]`** while the API is refusing with `BILLING_DISABLED` on stderr. A silent empty list from those commands is not evidence of absence. Cloud Asset Inventory answers correctly without billing and is the authority used below.
+
+Nothing would boot. All 20 Compute Engine instances are `TERMINATED`, all 13 instance-group managers report `targetSize: 0`, and the project has no autoscaler, so no managed group can scale off zero. Terminated instances accrue no vCPU or RAM charge; only their storage does.
+
+| Billable asset while billing is attached | Measured quantity | List rate | Monthly | Hourly |
+|---|---:|---|---:|---:|
+| Cloud Storage | 18.975 TiB (19,430 GiB), 1,696,460 objects | $0.020/GiB-mo (us-central1 Standard) | $388.61 | $0.53 |
+| Custom images | 184 images, 5,132.4 GiB archive | $0.050/GiB-mo | $256.62 | $0.35 |
+| Persistent disks, pd-ssd | 1,300 GiB | $0.170/GiB-mo | $221.00 | $0.30 |
+| Persistent disks, pd-standard | 2,600 GiB | $0.040/GiB-mo | $104.00 | $0.14 |
+| Persistent disks, pd-balanced | 250 GiB | $0.100/GiB-mo | $25.00 | $0.03 |
+| Reserved unused static IPs | 2 of 3 addresses | $0.0072/hour each | $10.51 | $0.01 |
+| **Total standing rate** | | | **$1,005.74** | **$1.40** |
+
+Storage and disks are prorated to the sub-second, so the cost of a window is its duration times $1.40 per hour, plus $0.12/GiB egress = **$0.37** for the 3.011 GiB P0 copy. The copy itself is minutes of work: 2,674 objects at eight-way concurrency. A thirty-minute window is therefore about **$1.07**, and an hour about **$1.77**. The exposure is one-off dollars, not compute-instance rates — but it is real spend on an account with no credits, so attaching billing stays the operator's decision.
+
+The AWS route is closed: the account is banned, so `s3://wisent-bucket` is unreachable regardless of any Skarbiec grant.
