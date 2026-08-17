@@ -11,7 +11,8 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{
-    authorized_keys_line, channel_argv, configured_client, item_id, run_checked, ITEM_TYPE,
+    authorized_keys_line, channel_argv, configured_client, item_id, run_checked, settle_readable,
+    ITEM_TYPE,
 };
 
 struct KeyPair {
@@ -80,15 +81,15 @@ async fn generate_pair(runner: &Runner, comment: &str) -> Result<KeyPair, String
     })
 }
 
-/// Store the pair, then read it back through the same client the SSH channel
-/// reads it through.
+/// Store the pair, grant the channel's reader, and read the public half back
+/// through that same reader.
 ///
-/// An owner write reaches a vault FILE; every consumer of this key reaches a
-/// BROKER. On a host where the configured broker is a forward to another
-/// machine's vault, those are two different stores, and a key written to the
-/// local one is invisible to the fleet while looking stored. So the write is not
-/// finished until the reader can see it: the alternative is an enrolled host
-/// whose channel cannot open, diagnosed later and from further away.
+/// A stored key is not a usable key. Skarbiec authorizes reads per item, so the
+/// item this just wrote is readable by nobody until the channel's consumer is
+/// granted its fields — a mint that stopped at the write handed the operator a
+/// public key to install and a host that could never be reached. Granting is
+/// therefore part of minting, and the read-back through the channel's own
+/// consumer is what says so.
 async fn store_pair(
     client: &crate::skarbiec::Client,
     target: &str,
@@ -111,37 +112,10 @@ async fn store_pair(
         )
         .await
         .map_err(|exc| exc.to_string())?;
-    // Three outcomes, and only one of them is a failure. A value that comes back
-    // different means the broker serves a vault this write did not reach. A
-    // refusal means the item is there and nothing may read it yet, which is the
-    // normal state of a key one second old: grants are per item, so a fresh key
-    // is always ungranted, and failing here would throw away the public half the
-    // caller needs to put on the new machine.
-    match client.read_string(&id, "public_key").await {
-        Ok(stored) if stored.as_deref().map(str::trim) == Some(pair.public_key.trim()) => {}
-        Ok(_) => {
-            return Err(format!(
-                "wrote {id} to the owner vault, but the configured broker serves a different \
-                 value back. This machine's vault is not the one the fleet reads: mint on the \
-                 host that holds it (`stado host vaults` names them), or point \
-                 SKARBIEC_VAULT_FILE at that vault"
-            ))
-        }
-        Err(error)
-            if error
-                .to_string()
-                .contains("not authorized to read item field") =>
-        {
-            println!(
-                "note: {id} is stored and not yet readable — grants are per item. Add them with\n\
-                 \x20 scripts/grant-consumer-field-read.py local-operator {id} private_key\n\
-                 \x20 scripts/grant-consumer-field-read.py local-operator {id} public_key\n\
-                 then `stado_fleet key check {target}` proves the channel."
-            );
-        }
-        Err(error) => return Err(error.to_string()),
-    }
-    Ok(())
+    // Only the public half is verified here: it is the value the caller is about
+    // to install on the new machine, it travels through the same grant the
+    // private half does, and reading a private key to compare it earns nothing.
+    settle_readable(client, &id, &[("public_key", pair.public_key.trim())]).await
 }
 
 /// `key generate TARGET` — store a fresh pair and print only the public key.
