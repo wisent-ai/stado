@@ -58,14 +58,14 @@ fi
 set -eu
 TUNNEL_TOKEN=\$(/bin/cat "$TOKEN_FILE")
 export TUNNEL_TOKEN
-# Transport is left at the connector's own default. Pinning http2 registered
-# four connections and reported zero errors, yet edge requests stopped arriving
-# at all: a cache-busted request returned 502 while the connector log recorded
-# no request for it and the origin answered 200 over both loopback families.
-# QUIC flaps on this network - the log shows "sendmsg: network is unreachable"
-# on UDP/7844 - but it is the transport that actually receives traffic here,
-# and cloudflared re-dials on its own.
-exec "$BIN" tunnel --no-autoupdate --metrics $METRICS run
+# Transport stays at the connector's default, but the edge address family does
+# not: this host has no working IPv6 path. The connector log shows
+# "sendmsg: no route to host" against every 2606:4700 edge address, and while it
+# still reported four ready connections, cache-busted public requests answered
+# 502 and the connector recorded no request for them at all - the edge was
+# holding connections it could not use. Pinning IPv4 keeps every registration on
+# a path that works.
+exec "$BIN" tunnel --no-autoupdate --edge-ip-version 4 --metrics $METRICS run
 RUNNER_EOF
 /bin/chmod 0700 "$RUNNER"
 
