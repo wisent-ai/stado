@@ -1245,7 +1245,13 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
         write_receipt(&receipt)?;
         return Err(CmdError::click("release build command failed"));
     }
-    let bytes = package(&source, &recipe.stage)?;
+    // The stage map is relative to `WISENT_OUTPUT_DIR`, which is what every
+    // recipe's build script writes into -- brama and skarbiec both install to
+    // `$WISENT_OUTPUT_DIR/stage/...`. Packaging resolved it against the source
+    // tree instead, so the first entry always reported
+    // `staged path .../source/stage/LICENSE ... is not there` and no release
+    // carrying a stage mapping could ever be packaged through this path.
+    let bytes = package(&output, &recipe.stage)?;
     std::fs::create_dir_all("output")?;
     std::fs::write("output/release.tar.gz", &bytes)?;
     let receipt = BuildReceipt {
