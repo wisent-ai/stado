@@ -6,21 +6,28 @@
 # since the GCP estate went away. The connector token is already installed
 # here, owner-only, so nothing secret needs to travel to run this.
 #
+# Installed as a LaunchDaemon, which is what durable services on this host use
+# (`com.wisent.compute.service.wisent-backend-api` is one). The per-user domain
+# rejected a LaunchAgent with `5: Input/output error` and `gui/<uid>` does not
+# exist in a headless session, so `system` is the only domain that both accepts
+# a bootstrap here and survives a reboot.
+#
 # The token is passed through the process environment, never through `argv`:
 # a token on a command line is published to every `ps` reader on the host.
 #
-# Additive by design: it installs a connector and a LaunchAgent, and touches no
+# Additive by design: it installs a connector and one new unit, and touches no
 # existing service. Reverse it with
-#   launchctl bootout gui/$(id -u)/com.wisent.cloudflared
-#   rm ~/Library/LaunchAgents/com.wisent.cloudflared.plist
+#   sudo launchctl bootout system/com.wisent.cloudflared
+#   sudo rm /Library/LaunchDaemons/com.wisent.cloudflared.plist
 set -eu
 
 LABEL=com.wisent.cloudflared
 TOKEN_FILE="$HOME/.stado/cloudflared-token"
-PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+PLIST="/Library/LaunchDaemons/$LABEL.plist"
 RUNNER="$HOME/.stado/bin/cloudflared-run"
 LOGS="$HOME/.stado/logs"
 BREW=/opt/homebrew/bin/brew
+METRICS=127.0.0.1:20241
 
 [ -s "$TOKEN_FILE" ] || { printf '%s\n' "missing connector token: $TOKEN_FILE" >&2; exit 1; }
 
@@ -37,24 +44,27 @@ if [ -z "$BIN" ]; then
 fi
 [ -n "$BIN" ] || { printf '%s\n' "cloudflared install failed" >&2; exit 1; }
 
-/bin/mkdir -p "$LOGS" "$HOME/.stado/bin" "$HOME/Library/LaunchAgents"
+/bin/mkdir -p "$LOGS" "$HOME/.stado/bin"
 
-# The runner keeps the token out of argv and out of the plist.
+# The runner keeps the token out of argv and out of the unit file.
 /bin/cat > "$RUNNER" <<RUNNER_EOF
 #!/bin/sh
 set -eu
 TUNNEL_TOKEN=\$(/bin/cat "$TOKEN_FILE")
 export TUNNEL_TOKEN
-exec "$BIN" tunnel --no-autoupdate --metrics 127.0.0.1:20241 run
+exec "$BIN" tunnel --no-autoupdate --metrics $METRICS run
 RUNNER_EOF
 /bin/chmod 0700 "$RUNNER"
 
-/bin/cat > "$PLIST" <<PLIST_EOF
+owner=$(/usr/bin/id -un)
+tmp_plist=$(/usr/bin/mktemp /tmp/cloudflared-plist.XXXXXX)
+/bin/cat > "$tmp_plist" <<PLIST_EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key><string>$LABEL</string>
+    <key>UserName</key><string>$owner</string>
     <key>ProgramArguments</key>
     <array><string>$RUNNER</string></array>
     <key>RunAtLoad</key><true/>
@@ -65,36 +75,28 @@ RUNNER_EOF
 </dict>
 </plist>
 PLIST_EOF
-/bin/chmod 0644 "$PLIST"
+/usr/bin/plutil -lint "$tmp_plist" >/dev/null
+/usr/bin/sudo -n /usr/bin/install -o root -g wheel -m 0644 "$tmp_plist" "$PLIST"
+/bin/rm -f "$tmp_plist"
 
-uid=$(/usr/bin/id -u)
-# A helper runs without an Aqua session, where `gui/<uid>` answers
-# "Domain does not support specified action" (125). The per-user domain is the
-# one that exists headless, so try it first and keep `gui` as the fallback for
-# an interactive operator session.
-# Never swallow the reason: the first version discarded launchctl's stderr and
-# reported only "no domain accepted", which says nothing about why.
-domain=""
-for candidate in "user/$uid" "gui/$uid"; do
-    /bin/launchctl bootout "$candidate/$LABEL" >/dev/null 2>&1 || true
-    err=$(/bin/launchctl bootstrap "$candidate" "$PLIST" 2>&1) && domain="$candidate" && break
-    printf 'bootstrap %s -> %s\n' "$candidate" "$err" >&2
-done
-[ -n "$domain" ] || { printf '%s\n' "no launchd domain accepted $PLIST" >&2; exit 1; }
-/bin/launchctl kickstart -k "$domain/$LABEL" >/dev/null 2>&1 || true
-printf 'launchd_domain=%s\n' "$domain"
+/usr/bin/sudo -n /bin/launchctl bootout "system/$LABEL" >/dev/null 2>&1 || true
+err=$(/usr/bin/sudo -n /bin/launchctl bootstrap system "$PLIST" 2>&1) || {
+    printf 'bootstrap system -> %s\n' "$err" >&2
+    exit 1
+}
+/usr/bin/sudo -n /bin/launchctl kickstart -k "system/$LABEL" >/dev/null 2>&1 || true
 
 # Readiness is an attached connector, not a created process.
 attached=no
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
     /bin/sleep 5
-    if /usr/bin/curl -fsS --max-time 5 http://127.0.0.1:20241/ready >/dev/null 2>&1; then
+    if /usr/bin/curl -fsS --max-time 5 "http://$METRICS/ready" >/dev/null 2>&1; then
         attached=yes
         break
     fi
 done
-printf 'cloudflared=%s connector_ready=%s\n' "$BIN" "$attached"
-/usr/bin/curl -fsS --max-time 5 http://127.0.0.1:20241/ready 2>/dev/null || true
+printf 'cloudflared=%s unit=%s connector_ready=%s\n' "$BIN" "$PLIST" "$attached"
+/usr/bin/curl -fsS --max-time 5 "http://$METRICS/ready" 2>/dev/null || true
 printf '\n'
-/usr/bin/tail -5 "$LOGS/cloudflared.log" 2>/dev/null || true
+/usr/bin/tail -6 "$LOGS/cloudflared.log" 2>/dev/null || true
 [ "$attached" = yes ]
