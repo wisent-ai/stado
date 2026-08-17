@@ -195,7 +195,11 @@ def copy_object(
         "Content-Type": content_type,
         "Content-Length": str(len(body)),
         "x-ms-blob-content-md5": digest,
-        "x-ms-meta-sourceuri": entry.get("source_uri", ""),
+        # Azure blob metadata travels in HTTP headers and rejects anything
+        # outside US-ASCII with `InvalidMetadata`. Three seed characters carry
+        # accented names, so the source URI is percent-encoded and stays
+        # reversible with a single unquote.
+        "x-ms-meta-sourceuri": urllib.parse.quote(entry.get("source_uri", ""), safe=":/-_.~"),
         "x-ms-meta-sourcegeneration": str(source.get("generation") or ""),
     }
     if source.get("cache_control"):
