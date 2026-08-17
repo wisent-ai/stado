@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import WisentAuth
 import WisentOnboarding
+import WisentDesignSystem
 
 @MainActor
 final class StadoFirstUseJourney: ObservableObject {
@@ -108,28 +109,31 @@ struct StadoFirstUseRoot: View {
     @ObservedObject var operationsStore: OperationsStore
     @ObservedObject var cleanupStore: CleanupStore
     @ObservedObject var deploymentStore: DeploymentStore
+    @ObservedObject var fleetStore: FleetControlStore
     @ObservedObject var auth: WisentAuthStore
+    @ObservedObject var router: ConsoleRouter
     @StateObject private var journey = StadoFirstUseJourney()
 
     var body: some View {
         Group {
             if journey.isLoading {
-                ProgressView("Loading Stado…")
-                    .controlSize(.large)
+                WisentLoadingPanel(
+                    title: "Loading Stado",
+                    detail: "Reading the published first-use journey before any fleet state is shown."
+                )
+                .padding(WisentDesign.Space.x10)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(WisentCanvasBackground())
             } else if journey.isAtConsole {
                 ConsoleView(
                     store: operationsStore,
                     cleanupStore: cleanupStore,
                     deploymentStore: deploymentStore,
-                    auth: auth
+                    fleetStore: fleetStore,
+                    auth: auth,
+                    router: router,
+                    firstRunNotice: journey.isCompleted ? nil : firstRunNotice
                 )
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    if !journey.isCompleted {
-                        firstSuccessCoach
-                            .padding(.horizontal)
-                            .padding(.bottom, 8)
-                    }
-                }
             } else {
                 StadoOnboardingView(journey: journey)
             }
@@ -148,35 +152,16 @@ struct StadoFirstUseRoot: View {
         }
     }
 
-    private var firstSuccessCoach: some View {
-        HStack(spacing: 12) {
-            Image(systemName: queueIsBlocked ? "exclamationmark.triangle.fill" : "clock")
-                .font(.title2)
-                .foregroundStyle(queueIsBlocked ? Color.orange : Color.secondary)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(queueIsBlocked ? "First job is waiting for a worker" : "Waiting for the first completed job")
-                    .font(.headline)
-                Text(firstSuccessDetail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+    /// One line in the posture signal strip. It used to be a shadowed card
+    /// floating over the shell, competing with the context bar for the same
+    /// strip of window.
+    private var firstRunNotice: String {
+        guard let snapshot = operationsStore.snapshot else {
+            return "Waiting for the first completed job"
         }
-        .padding(14)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .shadow(radius: 8)
-        .accessibilityElement(children: .combine)
-    }
-
-    private var queueIsBlocked: Bool {
-        guard let snapshot = operationsStore.snapshot else { return false }
         return snapshot.counts.queue > 0 && snapshot.liveAgents.isEmpty
-    }
-
-    private var firstSuccessDetail: String {
-        if queueIsBlocked {
-            return "Jobs are queued, but no worker is live. This guide completes after one authorized job finishes."
-        }
-        return "This guide completes after the dashboard reports one authorized job completion."
+            ? "First job is queued with no live host"
+            : "Waiting for the first completed job"
     }
 }
 
@@ -184,32 +169,33 @@ private struct StadoOnboardingView: View {
     @ObservedObject var journey: StadoFirstUseJourney
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            Spacer()
-            Image(systemName: "server.rack")
-                .font(.system(size: 42, weight: .semibold))
-            Text(journey.currentScreen?.presentation.text("title") ?? "Welcome to Stado")
-                .font(.largeTitle.bold())
-            Text(journey.currentScreen?.presentation.text("body") ?? "See the real state of your compute fleet.")
-                .font(.title3)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer()
-            HStack {
-                Button("Skip explanation") {
-                    Task { await journey.skipExplanation() }
-                }
-                .buttonStyle(.borderless)
-                Spacer()
-                Button("Continue") {
-                    Task { await journey.advance() }
-                }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
+        VStack(alignment: .leading, spacing: WisentDesign.Space.x8) {
+            Spacer(minLength: 0)
+            WisentPageHeader(
+                eyebrow: "First run",
+                title: journey.currentScreen?.presentation.text("title") ?? "Welcome to Stado",
+                detail: journey.currentScreen?.presentation.text("body")
+                    ?? "See the real state of your compute fleet.",
+                symbol: "server.rack"
+            )
+            Spacer(minLength: 0)
+            HStack(spacing: WisentDesign.Space.x3) {
+                WisentActionButton(
+                    action: WisentAction("Skip explanation", kind: .plain) {
+                        Task { await journey.skipExplanation() }
+                    }
+                )
+                Spacer(minLength: 0)
+                WisentActionButton(
+                    action: WisentAction("Continue", kind: .primary) {
+                        Task { await journey.advance() }
+                    }
+                )
             }
         }
-        .frame(maxWidth: 720, maxHeight: 540)
-        .padding(40)
+        .padding(WisentDesign.Space.x10)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(WisentCanvasBackground())
         .task(id: journey.currentScreen?.screenId) {
             await journey.expose()
         }
