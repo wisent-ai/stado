@@ -9,9 +9,12 @@
 //! - Blob:    scope `https://storage.azure.com/.default`,
 //!   resource `https://storage.azure.com`
 //!
-//! The sole credential source is Azure IMDS managed identity. Static service
-//! principals, process-environment secrets, local credential files, and Azure
-//! CLI sessions are not credential sources.
+//! A managed identity is preferred: on an Azure VM, IMDS answers and no secret
+//! exists anywhere. Off Azure — which is where this control plane actually runs
+//! — IMDS answers nothing, so the chain falls through to a scoped Skarbiec
+//! service principal (`{tenant_id, client_id, client_secret}`, item selected by
+//! `WC_AZURE_SECRET`). Process-environment secrets, local credential files and
+//! Azure CLI sessions remain unsupported credential sources.
 //! Tokens are cached per scope with their expiry and refreshed early.
 
 use std::collections::HashMap;
@@ -138,19 +141,80 @@ fn az_cli_expires_in(expires_on: &str, now_unix: i64) -> Option<i64> {
     Some(local.timestamp() - now_unix)
 }
 
-/// Azure access is available only through the adapter host's managed identity.
-/// Static service-principal keys, Azure CLI sessions, and workload-agent grants
-/// are deliberately unsupported provider credential sources.
+/// One client-credentials token from the scoped Skarbiec service principal.
+///
+/// Read field by field: the broker requires a named field and refuses a
+/// whole-item read.
+async fn skarbiec_sp_token(http: &reqwest::Client, scope: &str) -> Result<TokenGrant, TokenError> {
+    let item = crate::config::azure_provider_secret();
+    let mut resolved = Vec::with_capacity(3);
+    for field in ["tenant_id", "client_id", "client_secret"] {
+        let value = crate::skarbiec::read_string(item, field)
+            .await
+            .map_err(|error| TokenError::Auth(format!("{item}#{field}: {error}")))?
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| TokenError::Auth(format!("{item}#{field} is absent or empty")))?;
+        resolved.push(value);
+    }
+    let response = http
+        .post(format!(
+            "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
+            resolved[0].trim()
+        ))
+        .form(&[
+            ("client_id", resolved[1].trim()),
+            ("client_secret", resolved[2].trim()),
+            ("scope", scope),
+            ("grant_type", "client_credentials"),
+        ])
+        .timeout(Duration::from_secs(20))
+        .send()
+        .await?;
+    if !response.status().is_success() {
+        let status = response.status().as_u16();
+        let text = response.text().await.unwrap_or_default();
+        return Err(TokenError::Auth(format!(
+            "{item} client-credentials -> HTTP {status}: {}",
+            text.chars().take(280).collect::<String>()
+        )));
+    }
+    let body: Value = response.json().await.unwrap_or(Value::Null);
+    let access_token = body
+        .get("access_token")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    if access_token.is_empty() {
+        return Err(TokenError::Auth(format!(
+            "{item} client-credentials response has no access_token"
+        )));
+    }
+    Ok(TokenGrant {
+        access_token,
+        expires_in: json_i64(body.get("expires_in")).unwrap_or(3600),
+    })
+}
+
+/// Managed identity first, then the scoped Skarbiec service principal.
+///
+/// Both failures are reported together: a chain that hides the reason the
+/// second source refused sends the reader to the wrong host.
 async fn fetch_token(
     http: &reqwest::Client,
-    _scope: &str,
+    scope: &str,
     resource: &str,
 ) -> Result<TokenGrant, TokenError> {
-    imds_token(http, resource).await.map_err(|error| {
-        TokenError::Auth(format!(
-            "Azure adapter managed identity is unavailable: {error}"
-        ))
-    })
+    let imds = match imds_token(http, resource).await {
+        Ok(grant) => return Ok(grant),
+        Err(error) => error,
+    };
+    match skarbiec_sp_token(http, scope).await {
+        Ok(grant) => Ok(grant),
+        Err(error) => Err(TokenError::Auth(format!(
+            "no Azure credential: managed identity unavailable ({imds}); \
+             scoped service principal unavailable ({error})"
+        ))),
+    }
 }
 
 /// Fresh bearer token for `scope` (OAuth) / `resource` (IMDS naming for the

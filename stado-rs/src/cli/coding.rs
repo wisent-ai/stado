@@ -1,9 +1,10 @@
 //! Stado-placed interactive Jeden sessions for native clients.
 //!
 //! This is deliberately narrower than `host exec`: the remote program is
-//! always Stado's owner-only `~/.stado/bin/jeden rpc`, the working directory
-//! is one validated repository name under the Wisent checkout root, and
-//! the canonical Jeden RPC stream reaches the desktop without a second protocol.
+//! always Stado's owner-only Jeden credential launcher and managed runtime,
+//! the working directory is either the host home or one validated repository
+//! name under the Wisent checkout root, and the canonical Jeden RPC stream
+//! reaches the desktop without a second protocol.
 
 use std::process::Stdio;
 
@@ -17,6 +18,7 @@ const CHECKOUT_ROOT: &str = "Documents/CodingProjects/Wisent";
 const HOME_WORKSPACE: &str = "__home__";
 const MANAGED_JEDEN: &str = ".stado/bin/jeden";
 const MANAGED_JEDEN_LAUNCHER: &str = ".stado/bin/jeden-run-with-stado";
+const MANAGED_SANDBOX_HELPER: &str = ".stado/bin/jeden-sandbox-helper";
 const MANAGED_STADO: &str = ".stado/bin/stado";
 const PLACEMENT_PREFIX: &str = "STADO_JEDEN_PLACEMENT ";
 
@@ -86,7 +88,7 @@ pub async fn connect_jeden(
             .map(|session| format!("test -d \"$HOME\"/.jeden/sessions/{session}\n"))
             .unwrap_or_default();
         let probe = format!(
-            "set -e\ntest -d \"$HOME\"/{checkout}\n{resume_probe}test -x \"$HOME\"/{MANAGED_JEDEN}\ntest -x \"$HOME\"/{MANAGED_JEDEN_LAUNCHER}\ntest -x \"$HOME\"/{MANAGED_STADO}\nprintf ready\n",
+            "set -e\ntest -d \"$HOME\"/{checkout}\n{resume_probe}test -x \"$HOME\"/{MANAGED_JEDEN}\ntest -x \"$HOME\"/{MANAGED_JEDEN_LAUNCHER}\ntest -x \"$HOME\"/{MANAGED_SANDBOX_HELPER}\ntest -x \"$HOME\"/{MANAGED_STADO}\nprintf ready\n",
         );
         match host_channel::run_script(&target, &probe, &runner).await {
             Ok(output) if output.ok() && output.stdout.trim() == "ready" => {
@@ -97,7 +99,7 @@ pub async fn connect_jeden(
                 target.name,
                 host_channel::last_error_line(
                     &output,
-                    "workspace or managed Jeden executable unavailable"
+                    "workspace or managed Jeden runtime unavailable"
                 )
             )),
             Err(error) => refusals.push(format!("{}: {error}", target.name)),
