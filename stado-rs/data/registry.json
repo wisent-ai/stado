@@ -739,7 +739,7 @@
         "kinds": [
           "label-model"
         ],
-        "models_dir": "/mnt/wd16tb/stado/training"
+        "models_dir": "/mnt/wisent-training/stado/training"
       },
       "managed_versions": {
         "skarbiec": "0.1.3",
