@@ -8,6 +8,10 @@ struct StadoApp: App {
     @StateObject private var cleanupStore = CleanupStore()
     @StateObject private var deploymentStore = DeploymentStore()
     @StateObject private var fleetStore = FleetControlStore()
+    /// Adding a machine spans a walk to another computer, so its progress
+    /// belongs to the application rather than to a window that may be closed
+    /// in the middle of it.
+    @StateObject private var enrollmentStore = MachineEnrollmentStore()
     @StateObject private var auth = WisentAuthStore(productName: "Stado")
     @StateObject private var router = ConsoleRouter()
 
@@ -18,6 +22,7 @@ struct StadoApp: App {
                 cleanupStore: cleanupStore,
                 deploymentStore: deploymentStore,
                 fleetStore: fleetStore,
+                enrollmentStore: enrollmentStore,
                 auth: auth,
                 router: router
             )

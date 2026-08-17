@@ -253,7 +253,7 @@ struct ConsoleBoundaryFooter: View {
                 }
                 Spacer(minLength: 0)
             }
-            Text("Reads the dashboard state, cleanup, and canonical policy interfaces over HTTP. Writes only a whitelisted policy patch, a cleanup pass, and a recorded job rerun. Never opens an SSH session and never reads secret values.")
+            Text("Reads the dashboard state, cleanup, and canonical policy interfaces over HTTP. Writes only a whitelisted policy patch, a cleanup pass, a recorded job rerun, and the allowlisted fleet commands that add a machine. This Mac never opens an SSH session and never reads a private key.")
                 .font(WisentTypography.body(10))
                 .foregroundStyle(WisentDesign.muted)
                 .fixedSize(horizontal: false, vertical: true)
