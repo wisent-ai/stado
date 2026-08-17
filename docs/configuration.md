@@ -99,7 +99,7 @@ Normal reads and writes remain blocked while the environment and committed
 selectors differ.
 
 All `stado secrets` CRUD, provider reads, scoped verifier reads, and
-`stado_fleet key` operations use this selector. There is no OpenSSH-file
+`stado fleet key` operations use this selector. There is no OpenSSH-file
 fallback for host channels. Only a backend's own bootstrap credential remains
 outside the selected store: putting the grant needed to unlock a manager inside
 that same manager would be circular. For Skarbiec, this is the owner-only admin
@@ -154,12 +154,12 @@ A coordinator entry pins the scheduling-tick driver:
 
 A registry document may also carry the fleet's central enrollment and
 communication catalog. `enrollment` declares which registration paths are
-allowed — `allow_join` for machine-initiated `stado_fleet join`/`approve`,
-`allow_enroll` for control-plane `stado_fleet enroll`, and
+allowed — `allow_join` for machine-initiated `stado fleet join`/`approve`,
+`allow_enroll` for control-plane `stado fleet enroll`, and
 `require_verified_hostname` for the verified-identity contract.
 `channels` declares how machines reach the control plane. Both sections
 are additive: a document without them is unrestricted, which
-`stado_fleet catalog` reports explicitly. The `stado_fleet` commands
+`stado fleet catalog` reports explicitly. The `stado fleet` commands
 enforce the catalog in their preflights, before any write.
 
 ```jsonc
