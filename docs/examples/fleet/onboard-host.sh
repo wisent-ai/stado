@@ -2,6 +2,7 @@
 # onboard-host.sh — bring a new device to reporting life in the fleet, over a
 # channel that already exists.
 #
+<<<<<<< HEAD
 # This is the sequence after the machine already trusts the fleet's public key.
 # Getting it there is a choice of method (`stado fleet methods` lists all four):
 #   * adopt  — `stado fleet enroll <host> --ssh <dest> --install-key`, when a
@@ -22,6 +23,15 @@
 # both work), Remote Login is enabled, and the fleet's public key is in its
 # ~/.ssh/authorized_keys. Enrollment probes the machine over that key before it
 # writes anything. Here: a reachable `skarbiec serve`, and SKARBIEC_VAULT_FILE
+=======
+# Prerequisites, all on the target and all before this script: it is reachable
+# at <ssh-destination> (any destination that opens — a .local name on the same
+# network or a tailnet name both work), Remote Login is enabled, and the public
+# key printed by `stado fleet key generate <host>` is in its
+# ~/.ssh/authorized_keys. Enrollment probes the machine over that key before it
+# writes anything, so there is no order in which this script can create the
+# channel it needs. Here: a reachable `skarbiec serve`, and SKARBIEC_VAULT_FILE
+>>>>>>> f402741b (docs: correct and complete machine onboarding)
 # pointing at the operator vault.
 #
 # Usage: sh onboard-host.sh <host> <ssh-destination>
