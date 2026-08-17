@@ -5,7 +5,7 @@
 //! route now requires `id`, `field` and `operation_id`, and outside
 //! `mode=acquire` it refuses anything that is not controlled by the exact Weles
 //! writer presenting the grant. Stado's client still sent the whole item, so the
-//! broker answered every write — `stado credentials put`, `stado_fleet key
+//! broker answered every write — `stado credentials put`, `stado fleet key
 //! generate`, `key add`, `key rotate`, the Azure operator credential — with a
 //! bare `400 {"error":"field required"}`. The fleet could read its credentials
 //! and could not mint one, which is why a new host could not be enrolled at all.

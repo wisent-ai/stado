@@ -37,13 +37,13 @@ fn item_id(target: &str) -> String {
 fn missing_key(id: &str, error: SkarbiecError) -> DeployError {
     match error {
         SkarbiecError::MissingValue(_) => DeployError(format!(
-            "credential store has no SSH key item {id:?}; run `stado_fleet key add` or `key generate`"
+            "credential store has no SSH key item {id:?}; run `stado fleet key add` or `key generate`"
         )),
         SkarbiecError::Response { status, .. }
             if status == reqwest::StatusCode::NOT_FOUND.as_u16() =>
         {
             DeployError(format!(
-                "credential store has no SSH key item {id:?}; run `stado_fleet key add` or `key generate`"
+                "credential store has no SSH key item {id:?}; run `stado fleet key add` or `key generate`"
             ))
         }
         other => DeployError(other.to_string()),

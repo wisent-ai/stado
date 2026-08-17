@@ -1,7 +1,7 @@
 //! Machine-initiated enrollment: `join`, `pending`, `approve`, `reject`.
 //!
 //! The machine being added knows everything about itself, so the flow
-//! starts there: `stado_fleet join` announces the machine's real hostname,
+//! starts there: `stado fleet join` announces the machine's real hostname,
 //! OS and architecture as an `enrollments/<hostname>.json` request in the
 //! configured store (and prints it, for setups where the store is not
 //! shared and the request travels by any channel). The operator lists
@@ -18,11 +18,11 @@ pub mod catalog;
 pub mod legacy;
 
 use serde_json::{json, Value};
-use stado::cli::registry::{fetch_document, push_document};
-use stado::queue::JobStorage;
-use stado::targets::normalize_hostname;
+use crate::cli::registry::{fetch_document, push_document};
+use crate::queue::JobStorage;
+use crate::targets::normalize_hostname;
 
-use crate::ops::register_target;
+use crate::cli::fleet::ops::register_target;
 
 /// Store prefix every enrollment request lives under.
 const REQUESTS_PREFIX: &str = "enrollments/";
@@ -84,10 +84,10 @@ pub fn pending_request(document: &Value) -> Result<&str, String> {
         .ok_or_else(|| "request has no hostname".to_string())
 }
 
-/// `stado_fleet join` — run on the machine being added. Announces itself
+/// `stado fleet join` — run on the machine being added. Announces itself
 /// in the store and prints the request for carry-over setups.
 pub async fn join() -> Result<bool, String> {
-    let hostname = normalize_hostname(&stado::providers::vast::system_hostname());
+    let hostname = normalize_hostname(&crate::providers::vast::system_hostname());
     // The catalog gates join wherever the registry is readable from here;
     // on carry-over setups the control plane gates at approve instead.
     match fetch_document().await {
@@ -114,13 +114,13 @@ pub async fn join() -> Result<bool, String> {
         serde_json::to_string_pretty(&request).map_err(|exc| exc.to_string())?
     );
     println!(
-        "next step, on the control plane: stado_fleet approve '{}'",
+        "next step, on the control plane: stado fleet approve '{}'",
         target_name_for(&hostname)
     );
     Ok(true)
 }
 
-/// `stado_fleet pending` — every unanswered join request in the store.
+/// `stado fleet pending` — every unanswered join request in the store.
 pub async fn pending() -> Result<bool, String> {
     let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
     let blobs = store
@@ -153,7 +153,7 @@ pub async fn pending() -> Result<bool, String> {
     Ok(true)
 }
 
-/// `stado_fleet approve HOSTNAME [--fleet FLEET]` — convert a pending
+/// `stado fleet approve HOSTNAME [--fleet FLEET]` — convert a pending
 /// request into a registered target, optionally in one fleet.
 pub async fn approve(hostname: &str, fleet_name: Option<&str>) -> Result<bool, String> {
     let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
@@ -191,7 +191,7 @@ pub async fn approve(hostname: &str, fleet_name: Option<&str>) -> Result<bool, S
     let generation = push_document(&next).await.map_err(|exc| exc.to_string())?;
     println!("approved '{request_hostname}' as target '{name}' (generation {generation})");
     if let Some(fleet) = fleet_name {
-        crate::ops::assign(&name, fleet).await?;
+        crate::cli::fleet::ops::assign(&name, fleet).await?;
     }
     let mut decided = request;
     decided["status"] = Value::String(STATUS_APPROVED.to_string());
@@ -206,7 +206,7 @@ pub async fn approve(hostname: &str, fleet_name: Option<&str>) -> Result<bool, S
     Ok(true)
 }
 
-/// `stado_fleet reject HOSTNAME` — drop a pending join request.
+/// `stado fleet reject HOSTNAME` — drop a pending join request.
 pub async fn reject(hostname: &str) -> Result<bool, String> {
     let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
     store

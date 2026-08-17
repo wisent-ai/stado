@@ -1,7 +1,7 @@
-//! Unit tests for the stado_fleet doctor pure logic: grant drift and
+//! Unit tests for the stado fleet doctor pure logic: grant drift and
 //! allowlist-entry parsing. Hermetic — string slices only.
 
-use crate::doctor::{grant_drift, parse_secret_field};
+use crate::cli::fleet::doctor::{grant_drift, parse_secret_field};
 
 fn strings(items: &[&str]) -> Vec<String> {
     items.iter().map(|item| item.to_string()).collect()
@@ -73,7 +73,7 @@ fn field_may_contain_further_hashes() {
 mod fleets {
     use serde_json::json;
 
-    use crate::fleet::{find_fleet, parse_fleets};
+    use crate::cli::fleet::fleets::{find_fleet, parse_fleets};
 
     #[test]
     fn document_without_section_has_no_fleets() {
@@ -157,8 +157,8 @@ mod fleets {
 mod ops {
     use serde_json::json;
 
-    use crate::fleet::{find_fleet, parse_fleets};
-    use crate::ops::{
+    use crate::cli::fleet::fleets::{find_fleet, parse_fleets};
+    use crate::cli::fleet::ops::{
         assign_target, create_fleet, preflight_enroll, register_target, remove_target,
     };
 
@@ -253,7 +253,8 @@ mod ops {
     #[test]
     fn register_target_adds_ssh_null_entry() {
         let hostnames = vec!["new-box.local".to_string()];
-        let next = register_target(&base(), "new-box", "local", &hostnames).expect("register");
+        let next = register_target(&base(), "new-box", "local", &hostnames, "darwin-arm64")
+            .expect("register");
         let targets = next
             .get("targets")
             .and_then(serde_json::Value::as_array)
@@ -279,7 +280,7 @@ mod ops {
 
     #[test]
     fn register_target_refuses_duplicate() {
-        let err = register_target(&base(), "mini", "local", &[]).unwrap_err();
+        let err = register_target(&base(), "mini", "local", &[], "darwin-arm64").unwrap_err();
         assert!(
             err.contains("already registered"),
             "unexpected error: {err}"
