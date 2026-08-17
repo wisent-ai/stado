@@ -6,9 +6,14 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 
 PRODUCT="Stado"
-BUNDLE="$ROOT/.build/Stado.app"
+# macOS protects ~/Documents from processes without Full Disk Access, and this
+# package lives there, so a build started by an automation agent or a job dies
+# writing its own `.build`. The checkout stays put and only the build output
+# moves when STADO_BUILD_DIR says so.
+BUILD_DIR="${STADO_BUILD_DIR:-$ROOT/.build}"
+BUNDLE="$BUILD_DIR/Stado.app"
 INSTALLED_BUNDLE="${STADO_INSTALL_APP_PATH:-$HOME/Applications/Stado.app}"
-EXECUTABLE="$ROOT/.build/release/$PRODUCT"
+EXECUTABLE="$BUILD_DIR/release/$PRODUCT"
 LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 
 unregister_bundle() {
@@ -23,7 +28,7 @@ unregister_bundle() {
 }
 
 print "→ building release"
-swift build -c release --product "$PRODUCT"
+swift build -c release --product "$PRODUCT" --scratch-path "$BUILD_DIR"
 
 if [[ ! -x "$EXECUTABLE" ]]; then
     print -u2 "build did not produce $EXECUTABLE"
