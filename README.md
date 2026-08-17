@@ -87,6 +87,8 @@ decides where and when to run it, then records what happened.
   runtimes.
 - The Swift desktop application is not a required 0.5 operations interface.
   The CLI, machine API, dashboard, and MCP contracts are canonical.
+  Its visual tokens and reusable SwiftUI primitives come from
+  `wisent-ai/wisent-components` through `WisentDesignSystem`.
 - Stado does not make an optional provider, alert channel, dashboard identity
   provider, or artifact service mandatory for local execution.
 
