@@ -58,16 +58,16 @@ fi
 set -eu
 TUNNEL_TOKEN=\$(/bin/cat "$TOKEN_FILE")
 export TUNNEL_TOKEN
-# Two independent faults on this uplink had to be pinned together, and fixing
-# only one made things look worse:
-#   * QUIC over UDP/7844 flaps here ("sendmsg: network is unreachable"), which
-#     is why concurrent public requests answered 502 while the origin was fine;
-#   * this host has no usable IPv6 path, so connections registered against
-#     2606:4700 edge addresses are held by the edge and never deliver a request.
-# http2 alone kept the broken IPv6 registrations and traffic stopped entirely;
-# IPv4 alone kept flapping UDP. Both together put every connection on TCP/443
-# over a family that works.
-exec "$BIN" tunnel --no-autoupdate --protocol http2 --edge-ip-version 4 --metrics $METRICS run
+# Measured on this host, cache-busted public requests, sequential:
+#   * default transport (QUIC, both families): about 6 of 20 succeed;
+#   * http2, IPv6 allowed: connections register, zero requests ever arrive;
+#   * http2 + IPv4 edge: 0 of 20.
+# So the default is the only setting that delivers anything here, and the losses
+# come from this residential uplink dropping UDP/7844 rather than from the
+# connector's configuration. Leave the flags alone until the edge is reachable
+# over a stable path; a partially working tunnel must not be the delivery
+# contract the product database names.
+exec "$BIN" tunnel --no-autoupdate --metrics $METRICS run
 RUNNER_EOF
 /bin/chmod 0700 "$RUNNER"
 

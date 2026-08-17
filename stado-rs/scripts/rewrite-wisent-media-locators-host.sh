@@ -19,16 +19,19 @@ MODE=${MODE:-dry-run}
 # `stado host run-helper` passes no operator environment on purpose, so both
 # ends of the rewrite live in this checked-in file rather than in an invocation.
 #
-# Pass 1 (2026-08-17) moved rows off the dead Cloud Storage host onto the Azure
-# account directly, because no Wisent-fronted media host was serving. Pass 2
-# takes the provider host back out of the database now that `bobloo.com` serves
-# `/images/*` and `/profiles/*` from that account through the tunnel origin.
-# The database names a Wisent host; the storage account, container and cloud can
-# now change at the gateway without touching a row.
-SOURCE_PREFIX=${SOURCE_PREFIX:-https://wisentprodstado.blob.core.windows.net/media-public/}
-TARGET_PREFIX=${TARGET_PREFIX:-https://bobloo.com/}
-# Each pass keeps its own reversal file; one fixed name would have let pass 2
-# overwrite the only record of what pass 1 changed.
+# Pass 1 moved rows off the dead Cloud Storage host onto the Azure account.
+# Pass 2 moved them onto `bobloo.com` once the tunnel served media, which is the
+# shape this repository wants: no provider host in the database.
+# Pass 3, here, moves them back to the Azure account, because the tunnel is only
+# about 30% reliable on this uplink - QUIC over UDP/7844 keeps dropping - while
+# the Azure host measured 2,674 of 2,674 objects reachable. A delivery contract
+# that fails two requests in three is worse for users than a provider host in
+# the database, so correctness of the invariant yields to the product until the
+# edge is stable. Swap these two lines back when it is.
+SOURCE_PREFIX=${SOURCE_PREFIX:-https://bobloo.com/}
+TARGET_PREFIX=${TARGET_PREFIX:-https://wisentprodstado.blob.core.windows.net/media-public/}
+# Each pass keeps its own reversal file; one fixed name would have let a later
+# pass overwrite the only record of what an earlier one changed.
 BEFORE_IMAGE=${BEFORE_IMAGE:-$HOME/.stado/wisent-media-locators-before-$(/bin/date -u +%Y%m%dT%H%M%SZ).json}
 [ -s "$TOKEN_FILE" ]
 
