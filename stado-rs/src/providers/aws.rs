@@ -18,7 +18,6 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use base64::Engine as _;
-use serde_json::Value;
 use tokio::sync::OnceCell;
 
 use aws_sdk_ec2::types::{
@@ -125,6 +124,32 @@ impl Ec2Client {
     }
 }
 
+/// One `stado-aws` field, tried under each accepted name.
+///
+/// The broker requires a named field on `/v1/items/read`; a whole-item read
+/// answers `HTTP 400 {"error":"field required"}`. That refusal used to reach
+/// the operator as an AWS-credential failure while the item was readable.
+///
+/// A refusal on one candidate name does not end the search: the grant may
+/// name `aws_access_key_id` where the first attempt asked for
+/// `access_key_id`. The last refusal is returned only when no name resolved,
+/// so an unauthorized grant still surfaces its own error rather than a
+/// misleading "missing value".
+async fn stado_aws_field(names: &[&str]) -> Result<Option<String>, crate::skarbiec::SkarbiecError> {
+    let mut refusal = None;
+    for name in names {
+        match crate::skarbiec::read_string("stado-aws", name).await {
+            Ok(Some(value)) if !value.trim().is_empty() => return Ok(Some(value)),
+            Ok(_) => {}
+            Err(error) => refusal = Some(error),
+        }
+    }
+    match refusal {
+        Some(error) => Err(error),
+        None => Ok(None),
+    }
+}
+
 /// AWS SDK configuration from either the coordinator's scoped `stado-aws`
 /// Skarbiec item or, on adapter hosts without a grant, the host's IMDSv2
 /// workload identity. Process-environment and shared-profile credential
@@ -139,31 +164,19 @@ pub(crate) async fn sdk_config(
     if !crate::config::skarbiec_consumer().trim().is_empty()
         && !crate::config::skarbiec_token_file().trim().is_empty()
     {
-        let value = crate::skarbiec::Client::configured_item("stado-aws").await?;
-        let access_key = value
-            .get("access_key_id")
-            .and_then(Value::as_str)
-            .or_else(|| value.get("aws_access_key_id").and_then(Value::as_str))
-            .filter(|value| !value.trim().is_empty())
+        let access_key = stado_aws_field(&["access_key_id", "aws_access_key_id"])
+            .await?
             .ok_or_else(|| {
                 crate::skarbiec::SkarbiecError::MissingValue("stado-aws.access_key_id".to_string())
             })?;
-        let secret_key = value
-            .get("secret_access_key")
-            .and_then(Value::as_str)
-            .or_else(|| value.get("aws_secret_access_key").and_then(Value::as_str))
-            .filter(|value| !value.trim().is_empty())
+        let secret_key = stado_aws_field(&["secret_access_key", "aws_secret_access_key"])
+            .await?
             .ok_or_else(|| {
                 crate::skarbiec::SkarbiecError::MissingValue(
                     "stado-aws.secret_access_key".to_string(),
                 )
             })?;
-        let session_token = value
-            .get("session_token")
-            .and_then(Value::as_str)
-            .or_else(|| value.get("aws_session_token").and_then(Value::as_str))
-            .filter(|value| !value.trim().is_empty())
-            .map(str::to_string);
+        let session_token = stado_aws_field(&["session_token", "aws_session_token"]).await?;
         let credentials = aws_sdk_ec2::config::Credentials::new(
             access_key,
             secret_key,
