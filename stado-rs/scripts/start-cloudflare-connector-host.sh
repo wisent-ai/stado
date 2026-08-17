@@ -58,14 +58,16 @@ fi
 set -eu
 TUNNEL_TOKEN=\$(/bin/cat "$TOKEN_FILE")
 export TUNNEL_TOKEN
-# Transport stays at the connector's default, but the edge address family does
-# not: this host has no working IPv6 path. The connector log shows
-# "sendmsg: no route to host" against every 2606:4700 edge address, and while it
-# still reported four ready connections, cache-busted public requests answered
-# 502 and the connector recorded no request for them at all - the edge was
-# holding connections it could not use. Pinning IPv4 keeps every registration on
-# a path that works.
-exec "$BIN" tunnel --no-autoupdate --edge-ip-version 4 --metrics $METRICS run
+# Two independent faults on this uplink had to be pinned together, and fixing
+# only one made things look worse:
+#   * QUIC over UDP/7844 flaps here ("sendmsg: network is unreachable"), which
+#     is why concurrent public requests answered 502 while the origin was fine;
+#   * this host has no usable IPv6 path, so connections registered against
+#     2606:4700 edge addresses are held by the edge and never deliver a request.
+# http2 alone kept the broken IPv6 registrations and traffic stopped entirely;
+# IPv4 alone kept flapping UDP. Both together put every connection on TCP/443
+# over a family that works.
+exec "$BIN" tunnel --no-autoupdate --protocol http2 --edge-ip-version 4 --metrics $METRICS run
 RUNNER_EOF
 /bin/chmod 0700 "$RUNNER"
 
