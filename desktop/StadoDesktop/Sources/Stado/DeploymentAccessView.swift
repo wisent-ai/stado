@@ -1,5 +1,6 @@
 import SwiftUI
 import WisentAuth
+import WisentDesignSystem
 
 struct DeploymentAccessView: View {
     let deployment: StadoDeployment
@@ -20,7 +21,7 @@ struct DeploymentAccessView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                VStack(alignment: .leading, spacing: StadoTheme.Space.xxs) {
+                VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
                     Text("Access to \(deployment.name)")
                         .font(.title2.weight(.semibold))
                     Text("Grant only the capabilities each person or team needs.")
@@ -31,14 +32,14 @@ struct DeploymentAccessView: View {
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.defaultAction)
             }
-            .padding(StadoTheme.Space.lg)
+            .padding(WisentDesign.Space.x6)
 
             Divider()
 
             ScrollView {
-                VStack(alignment: .leading, spacing: StadoTheme.Space.lg) {
-                    StadoCard {
-                        VStack(alignment: .leading, spacing: StadoTheme.Space.md) {
+                VStack(alignment: .leading, spacing: WisentDesign.Space.x6) {
+                    WisentPanel {
+                        VStack(alignment: .leading, spacing: WisentDesign.Space.x4) {
                             Text("Share deployment")
                                 .font(.headline)
                             Picker("Share with", selection: $subject) {
@@ -50,7 +51,7 @@ struct DeploymentAccessView: View {
 
                             subjectFields
 
-                            VStack(alignment: .leading, spacing: StadoTheme.Space.sm) {
+                            VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
                                 Text("Permissions")
                                     .font(.subheadline.weight(.semibold))
                                 Toggle("View fleet and jobs", isOn: $canView)
@@ -76,11 +77,11 @@ struct DeploymentAccessView: View {
                         }
                     }
 
-                    VStack(alignment: .leading, spacing: StadoTheme.Space.sm) {
+                    VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
                         Text("Current access")
                             .font(.headline)
                         if store.grants[deployment.id] == nil {
-                            HStack(spacing: StadoTheme.Space.sm) {
+                            HStack(spacing: WisentDesign.Space.x3) {
                                 ProgressView()
                                 Text("Loading grants…")
                                     .foregroundStyle(.secondary)
@@ -98,7 +99,7 @@ struct DeploymentAccessView: View {
                         }
                     }
                 }
-                .padding(StadoTheme.Space.lg)
+                .padding(WisentDesign.Space.x6)
                 .frame(maxWidth: 720)
                 .frame(maxWidth: .infinity)
             }
@@ -128,7 +129,7 @@ struct DeploymentAccessView: View {
                 .frame(width: 160)
             }
         case .user:
-            VStack(alignment: .leading, spacing: StadoTheme.Space.xs) {
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
                 TextField("Wisent user ID", text: $userID)
                     .textFieldStyle(.roundedBorder)
                 Text("The user ID is shown in the teammate's Wisent account profile.")
@@ -139,11 +140,11 @@ struct DeploymentAccessView: View {
     }
 
     private func grantRow(_ grant: DeploymentGrant) -> some View {
-        HStack(spacing: StadoTheme.Space.md) {
+        HStack(spacing: WisentDesign.Space.x4) {
             Image(systemName: subjectSymbol(grant.subjectKind))
                 .foregroundStyle(.secondary)
                 .frame(width: 24)
-            VStack(alignment: .leading, spacing: StadoTheme.Space.xxs) {
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
                 Text(subjectLabel(grant))
                     .font(.body.weight(.medium))
                 Text(grant.permissions.map(\.title).joined(separator: " · "))
@@ -165,8 +166,8 @@ struct DeploymentAccessView: View {
             .buttonStyle(.borderless)
             .help("Revoke access")
         }
-        .padding(StadoTheme.Space.sm)
-        .background(StadoTheme.panel, in: RoundedRectangle(cornerRadius: StadoTheme.Radius.medium))
+        .padding(WisentDesign.Space.x3)
+        .background(WisentDesign.surface, in: RoundedRectangle(cornerRadius: WisentDesign.Radius.medium))
     }
 
     private var canSubmitGrant: Bool {
