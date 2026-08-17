@@ -591,20 +591,20 @@ const CAPABILITIES_PREFIX: &str = "host_capabilities";
 const CAPABILITIES_SCHEMA: &str = "wisent.host-capabilities.v1";
 
 /// One measured capability: the answer, and the measurement that produced it.
-struct MeasuredCapability {
-    value: bool,
-    detail: String,
+pub(crate) struct MeasuredCapability {
+    pub(crate) value: bool,
+    pub(crate) detail: String,
 }
 
 /// One `host_capabilities/<target>.json` object.
-struct Measurement {
+pub(crate) struct Measurement {
     /// Store-relative object name, so a finding names what to go and read.
     path: String,
     schema: String,
     /// The host's own stamp, falling back to the object mtime the same way
     /// [`Beacon::observed_at`] does.
-    measured_at: Option<DateTime<Utc>>,
-    capabilities: BTreeMap<String, MeasuredCapability>,
+    pub(crate) measured_at: Option<DateTime<Utc>>,
+    pub(crate) capabilities: BTreeMap<String, MeasuredCapability>,
 }
 
 /// Every capability measurement in the store, keyed by the registry target name
@@ -612,7 +612,7 @@ struct Measurement {
 ///
 /// One prefix listing plus the bodies it finds, exactly like [`load_beacons`]:
 /// the two signals are published the same way and are read the same way.
-async fn load_capability_measurements(
+pub(crate) async fn load_capability_measurements(
     store: &JobStorage,
 ) -> Result<BTreeMap<String, Measurement>, crate::queue::StorageError> {
     let prefix = format!("{CAPABILITIES_PREFIX}/");
