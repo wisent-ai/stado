@@ -95,6 +95,13 @@ CATALOG = [
         "when": NONE,
     },
     {
+        "surface": REGISTRY_TARGET,
+        "path": "gpu_power_limit_watts",
+        "consumer": "fleet",
+        "reader": "providers::local::agent::reconcile_gpu_power_limit",
+        "when": NONE,
+    },
+    {
         # An excluded capability is a policy answer ("may not run here") and not a
         # measurement, so the matcher that reads this reports it as its own kind of
         # refusal. The reader is Python today; a reader is named, not typed.
@@ -102,6 +109,23 @@ CATALOG = [
         "path": "placement",
         "consumer": "fleet",
         "reader": "scripts/place-by-capability.py",
+        "when": NONE,
+    },
+    {
+        # Read by another repository's binary (`transcript-label-trainer`), which
+        # is as much a reader as a script is. Uncatalogued, both keys read as
+        # unread while a trainer honoured them.
+        "surface": REGISTRY_TARGET,
+        "path": "training",
+        "consumer": "fleet",
+        "reader": "transcript-label-trainer placement::declared_training",
+        "when": NONE,
+    },
+    {
+        "surface": REGISTRY_TARGET,
+        "path": "transcript_lake",
+        "consumer": "fleet",
+        "reader": "transcript-label-trainer placement::declared_lake_root",
         "when": NONE,
     },
     {
@@ -337,7 +361,12 @@ def object_api(config):
             if error.code == NOT_FOUND:
                 return NONE, NONE
             return NONE, f"{url} answered HTTP {error.code}"
-        except (urllib.error.URLError, TimeoutError, ValueError) as error:
+        except (OSError, ValueError) as error:
+            # OSError, not URLError: a reset mid-response (`ConnectionResetError`
+            # from the object API's own socket) escapes urllib unwrapped, and it
+            # took this whole audit down with a traceback while every finding it
+            # had already computed was thrown away. A read that failed is a fact
+            # this command reports, never a crash.
             return NONE, f"{url} could not be read: {error}"
 
     def read(key):

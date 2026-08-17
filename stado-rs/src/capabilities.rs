@@ -1417,6 +1417,23 @@ pub const DECLARED_FIELDS: &[DeclaredField] = &[
         DeclarationSurface::RegistryTarget,
         "scripts/place-by-capability.py",
     ),
+    // Label-model training placement. The reader is another repository's binary
+    // -- `transcript-label-trainer`, `placement::declared_training` and
+    // `placement::declared_lake_root` -- which is as much a reader as a Python
+    // script is: `Fleet` asks for the reader's name, not for its language or its
+    // checkout. Uncatalogued, both keys read as unread while a trainer honoured
+    // them, and `training.models_dir` sat pointing at a disk that had been
+    // removed from the host.
+    DeclaredField::read(
+        "training",
+        DeclarationSurface::RegistryTarget,
+        "transcript-label-trainer placement::declared_training",
+    ),
+    DeclaredField::read(
+        "transcript_lake",
+        DeclarationSurface::RegistryTarget,
+        "transcript-label-trainer placement::declared_lake_root",
+    ),
     // Known offenders. `weles.actions` is modelled (`WelesPolicy::actions`) and
     // still reaches no host by itself: the worker reads its own
     // `placement-policy.json`, and `stado placement weles-policy` is what
