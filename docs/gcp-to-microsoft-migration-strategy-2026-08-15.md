@@ -177,4 +177,23 @@ The migration order is not “copy all 1,057 GCP assets.” It is:
 5. move active Firebase configuration/telemetry contracts;
 6. retire only the GCP support estate that no longer owns data or compatibility.
 
-The current hard blocker is not Azure subscription status. It is the absence of an Azure Storage destination and, more importantly, the absence of a proven readable source copy for the live GCS media while GCP billing remains intentionally detached.
+## Execution status — 2026-08-17
+
+### Done
+
+- **Destination exists.** Azure Storage account `wisentprodstado` in `wisent-compute`/`eastus`: StorageV2, Standard_LRS, public blob access disabled, shared-key access disabled, TLS 1.2 minimum, blob versioning on, blob and container soft delete 14 days. Containers `stado`, `media-public`, `media-private`, `models`, `archive`, all `publicAccess=None`. `Storage Blob Data Contributor` granted to the `stado-control-plane` and `stado-agent` managed identities. Holding the 3.011 GiB P0 set costs about $0.06 per month against the active sponsorship credit. One command undoes it: `az storage account delete -n wisentprodstado -g wisent-compute`.
+- **Cost fence narrowed, not deleted.** The `deny-charge-bearing-resources-until-spending-limit` assignment now additionally allows `Microsoft.Storage/storageAccounts`; VMs, GPUs and every other charge-bearing type stay denied while `billingProfileSpendingLimit=Off`.
+- **Manifest sealed.** 2,674 objects, 3,233,160,110 bytes, with per-object size, MD5, CRC32C, content type, generation and every database reference.
+- **AWS credential defect fixed.** `providers::aws::sdk_config` read the whole `stado-aws` item, which the current broker refuses with `HTTP 400 {"error":"field required"}`; the operator saw that as an AWS-credential failure. It now reads named fields and tries each accepted name before reporting the real refusal.
+
+### Source routes, measured and priced
+
+GCS object bodies remain unreadable: `403 accountDisabled`. Requester Pays is not an escape — enabling it is itself a bucket write and returns the same `403`. `cloudsupport.googleapis.com` refuses case creation with `FAILED_PRECONDITION: not eligible to create a case with this channel`.
+
+| Route | Status | Cost |
+|---|---|---|
+| Legacy S3 origin `s3://wisent-bucket` | The bucket **exists**: anonymous list returns `403`, while a nonexistent name returns `404`. Our own 2026-02 migration SQL names this host, so it is the original media origin. Reading it needs a Skarbiec token scoped `read:stado-aws`; the current `stado-control-plane` grant returns `403` for every field name. | About $0.27 of S3 egress for 3.011 GiB, billed to the AWS account. No GCP charge. |
+| Temporary GCP billing window | The only route to the GCS bodies themselves. | Project holds **18.975 TiB across 1,696,460 objects**; us-central1 Standard at $0.02/GiB-month is about $389/month, $12.80/day, **$0.53/hour** while billing is attached, plus $0.12/GiB egress = **$0.37** for the P0 media. A two-hour P0 window is therefore about **$1.40**. |
+| Google support-assisted export | Requires a paid support plan; the API channel is refused today. | $29/month minimum, slower than either route above. |
+
+The remaining blocker is therefore not Azure and not the manifest. It is source-body access, and the cheapest unblock is the AWS grant, because it needs no GCP billing change at all.
