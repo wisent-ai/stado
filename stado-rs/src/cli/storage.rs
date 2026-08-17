@@ -956,9 +956,9 @@ async fn stat(args: &StorageStatArgs) -> Result<(), CmdError> {
             // have supplied, so nothing is reported as empty that is known.
             let entries = remote.list(object.namespace(), object.key()).await?;
             let uri = object.to_string();
-            let entry = entries.into_iter().find(|value| {
-                value.get("uri").and_then(Value::as_str) == Some(uri.as_str())
-            });
+            let entry = entries
+                .into_iter()
+                .find(|value| value.get("uri").and_then(Value::as_str) == Some(uri.as_str()));
             let (presence, metadata, updated) = match entry {
                 Some(value) => (
                     Presence::Present {

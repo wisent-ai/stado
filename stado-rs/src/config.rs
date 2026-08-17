@@ -1033,6 +1033,9 @@ static AZURE_BILLING_SECRET: LazyLock<String> = LazyLock::new(|| {
     std::env::var("WC_AZURE_BILLING_SECRET")
         .unwrap_or_else(|_| "wisent-azure-billing-sp".to_string())
 });
+static AZURE_PROVIDER_SECRET: LazyLock<String> = LazyLock::new(|| {
+    std::env::var("WC_AZURE_SECRET").unwrap_or_else(|_| "stado-azure".to_string())
+});
 static SKARBIEC_URL: LazyLock<String> = LazyLock::new(|| {
     cfg(
         "WC_SKARBIEC_URL",
@@ -2726,6 +2729,17 @@ pub fn billing_net_alert_usd() -> f64 {
 /// by `WC_AZURE_BILLING_SECRET`; its value has no alternative source.
 pub fn azure_billing_secret() -> &'static str {
     AZURE_BILLING_SECRET.as_str()
+}
+
+/// Skarbiec item holding the Azure provider service principal as
+/// `{"tenant_id","client_id","client_secret"}`, used by hosts that have no
+/// Azure managed identity. The item name is selected by `WC_AZURE_SECRET`.
+///
+/// A managed identity is still preferred and tried first; this exists because
+/// the control plane runs on hardware outside Azure, where IMDS answers
+/// nothing and Azure Blob would otherwise be unreachable.
+pub fn azure_provider_secret() -> &'static str {
+    AZURE_PROVIDER_SECRET.as_str()
 }
 
 /// Loopback URL of the separate Skarbiec service.
