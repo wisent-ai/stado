@@ -56,46 +56,41 @@ pub(crate) async fn read_item_at(
 
 pub(crate) async fn write_item_at(
     backend: &Backend,
-    url: &str,
-    consumer: &str,
-    token_file: &str,
     id: &str,
     item_type: &str,
-    value: &Value,
+    fields: &Value,
+    context: &Value,
 ) -> Result<(), SkarbiecError> {
     match backend {
-        Backend::Skarbiec { .. } => {
-            direct_client(backend, url, consumer, token_file)?
-                .write_item(id, item_type, value)
-                .await
-        }
+        // The broker's item route belongs to Weles acquisitions; an operator
+        // item is written by its owner. See `super::owner`.
+        Backend::Skarbiec { .. } => super::owner::write_item(id, item_type, fields, context),
         Backend::File { path } => {
             if id == TYPE_METADATA {
                 return Err(SkarbiecError::Deployment(format!(
                     "credential item id {TYPE_METADATA:?} is reserved"
                 )));
             }
+            // One flat object per item here, so the canonical split has nowhere
+            // to live: the descriptive keys join the rest rather than being
+            // dropped on the way in.
             let mut document = super::file::file_load(path)?;
-            document[id] = value.clone();
+            let mut stored = fields.clone();
+            if let (Some(target), Some(described)) = (stored.as_object_mut(), context.as_object()) {
+                for (name, value) in described {
+                    target.insert(name.clone(), value.clone());
+                }
+            }
+            document[id] = stored;
             set_type(&mut document, id, item_type);
             super::file::file_store(path, &document)
         }
     }
 }
 
-pub(crate) async fn delete_item_at(
-    backend: &Backend,
-    url: &str,
-    consumer: &str,
-    token_file: &str,
-    id: &str,
-) -> Result<(), SkarbiecError> {
+pub(crate) async fn delete_item_at(backend: &Backend, id: &str) -> Result<(), SkarbiecError> {
     match backend {
-        Backend::Skarbiec { .. } => {
-            direct_client(backend, url, consumer, token_file)?
-                .delete_item(id)
-                .await
-        }
+        Backend::Skarbiec { .. } => super::owner::delete_item(id),
         Backend::File { path } => {
             let mut document = super::file::file_load(path)?;
             if let Some(items) = document.as_object_mut() {
@@ -151,32 +146,16 @@ pub(crate) async fn list_items_at(
 }
 
 pub async fn write_item_with(
-    url: &str,
-    consumer: &str,
-    token_file: &str,
     id: &str,
     item_type: &str,
-    value: &Value,
+    fields: &Value,
+    context: &Value,
 ) -> Result<(), SkarbiecError> {
-    write_item_at(
-        &selected()?,
-        url,
-        consumer,
-        token_file,
-        id,
-        item_type,
-        value,
-    )
-    .await
+    write_item_at(&selected()?, id, item_type, fields, context).await
 }
 
-pub async fn delete_item_with(
-    url: &str,
-    consumer: &str,
-    token_file: &str,
-    id: &str,
-) -> Result<(), SkarbiecError> {
-    delete_item_at(&selected()?, url, consumer, token_file, id).await
+pub async fn delete_item_with(id: &str) -> Result<(), SkarbiecError> {
+    delete_item_at(&selected()?, id).await
 }
 
 pub async fn list_items_with(
@@ -222,23 +201,14 @@ mod tests {
         .expect("write config");
         std::env::set_var("STADO_CONFIG", config);
         std::env::set_var(ENV_STORE, selector);
-        write_item_with(
-            "unused",
-            "unused",
-            "unused",
-            "alpha",
-            "token",
-            &serde_json::json!({"token": "v"}),
-        )
-        .await
-        .expect("write");
+        write_item_with("alpha", "token", &serde_json::json!({"token": "v"}))
+            .await
+            .expect("write");
         let ids = list_ids_with("unused", "unused", "unused")
             .await
             .expect("list");
         assert_eq!(ids, vec!["alpha".to_string()]);
-        delete_item_with("unused", "unused", "unused", "alpha")
-            .await
-            .expect("delete");
+        delete_item_with("alpha").await.expect("delete");
         let ids = list_ids_with("unused", "unused", "unused")
             .await
             .expect("list");

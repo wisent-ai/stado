@@ -181,30 +181,32 @@ impl Client {
             .ok_or_else(|| SkarbiecError::MissingValue(format!("{id}.{field}")))
     }
 
+    /// Write one item whose every key is a field of its kind.
     pub async fn write_item(
         &self,
         id: &str,
         item_type: &str,
         value: &Value,
     ) -> Result<(), SkarbiecError> {
-        if self.route_store {
-            return Box::pin(crate::credential_store::write::write_item_with(
-                &self.base_url,
-                &self.consumer,
-                &self.token_file,
-                id,
-                item_type,
-                value,
-            ))
-            .await;
-        }
-        let response = self
-            .request(reqwest::Method::PUT, "/v1/items")?
-            .json(&json!({"id": id, "type": item_type, "value": value}))
-            .send()
-            .await?;
-        Self::response_json(response).await?;
-        Ok(())
+        self.write_described(id, item_type, value, &json!({})).await
+    }
+
+    /// Write one item that also carries schema context — the descriptive keys a
+    /// kind keeps beside its fields, such as a key pair's fingerprint.
+    /// A write always goes to the store, never to `PUT /v1/items`: that route is
+    /// the Weles acquisition path and refuses an operator item outright, so a
+    /// direct client had no working write either.
+    pub async fn write_described(
+        &self,
+        id: &str,
+        item_type: &str,
+        fields: &Value,
+        context: &Value,
+    ) -> Result<(), SkarbiecError> {
+        Box::pin(crate::credential_store::write::write_item_with(
+            id, item_type, fields, context,
+        ))
+        .await
     }
 
     pub async fn list_items(&self) -> Result<Vec<ItemInfo>, SkarbiecError> {
@@ -228,23 +230,9 @@ impl Client {
         })
     }
 
+    /// Deletion is an owner act for the same reason a write is.
     pub async fn delete_item(&self, id: &str) -> Result<(), SkarbiecError> {
-        if self.route_store {
-            return Box::pin(crate::credential_store::write::delete_item_with(
-                &self.base_url,
-                &self.consumer,
-                &self.token_file,
-                id,
-            ))
-            .await;
-        }
-        let response = self
-            .request(reqwest::Method::DELETE, "/v1/items")?
-            .json(&json!({"id": id}))
-            .send()
-            .await?;
-        Self::response_json(response).await?;
-        Ok(())
+        Box::pin(crate::credential_store::write::delete_item_with(id)).await
     }
 
     /// Resolve one optional string field through this client's scoped grant.

@@ -17,7 +17,11 @@ use stado::skarbiec::Client;
 
 /// Credential item id prefix for host keys; the target name follows it.
 const ITEM_PREFIX: &str = "stado-ssh-";
-const ITEM_TYPE: &str = "ssh-key";
+/// Skarbiec's canonical kind for a private/public pair. `ssh-key` is an input
+/// spelling, not a kind: the vault stores `private_key` and `public_key` as the
+/// pair's fields and keeps the fingerprint and key type as context, and it
+/// refuses a payload that claims any other kind.
+const ITEM_TYPE: &str = "key-pair";
 
 /// Credential item id for one target's host key.
 pub fn item_id(target: &str) -> String {
@@ -101,12 +105,14 @@ pub async fn add(runner: &Runner, target: &str, from: &str) -> Result<bool, Stri
     let id = item_id(target);
     let client = configured_client()?;
     client
-        .write_item(
+        .write_described(
             &id,
             ITEM_TYPE,
             &json!({
                 "private_key": private_key.trim(),
                 "public_key": public_key.trim(),
+            }),
+            &json!({
                 "key_type": key_type,
                 "fingerprint": fingerprint,
                 "added_at": chrono::Utc::now().to_rfc3339(),
@@ -156,17 +162,28 @@ pub async fn ls() -> Result<bool, String> {
         if !item.id.starts_with(ITEM_PREFIX) {
             continue;
         }
-        // Two named fields, never the private one: a broker that requires a
-        // named field refuses the whole-item form, and `ls` must not pull a
-        // private key into memory to print a fingerprint.
-        let field = |name: &'static str| {
-            let client = &client;
-            let id = item.id.clone();
-            async move { client.read_string(&id, name).await.ok().flatten() }
+        // `fingerprint` and `key_type` are schema CONTEXT on a `key-pair`, not
+        // fields: Skarbiec's canonical form keeps the two halves of the key as
+        // fields and everything descriptive beside them. Asking for them as
+        // fields is refused, and the refusal used to arrive here as two blank
+        // columns, which reads as a key with no fingerprint rather than as a
+        // read of the wrong place. The private field is never asked for.
+        let context = client
+            .read_field(&item.id, "context")
+            .await
+            .unwrap_or_else(|_| json!({}));
+        let described = |name: &str| {
+            context
+                .get(name)
+                .and_then(|value| value.as_str().map(str::to_string))
+                .unwrap_or_default()
         };
-        let fingerprint = field("fingerprint").await.unwrap_or_default();
-        let key_type = field("key_type").await.unwrap_or_default();
-        shown.push(format!("{}\t{}\t{}", item.id, key_type, fingerprint));
+        shown.push(format!(
+            "{}\t{}\t{}",
+            item.id,
+            described("key_type"),
+            described("fingerprint")
+        ));
     }
     if shown.is_empty() {
         println!("no SSH host keys in the credential store");

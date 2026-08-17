@@ -631,12 +631,22 @@ pub(crate) async fn bucket_jobs(
         }
         // Caller-pinned overrides — fall back to catalog if either is
         // empty.
+        //
+        // A pin only wins for the provider whose naming it uses. Every CPU job
+        // carries `e2-standard-8` from `queue::submit`, a GCE name; honouring
+        // it while dispatching to Azure produced `hardwareProfile.vmSize:
+        // e2-standard-8`, which Azure rejects. A pin aimed at another cloud is
+        // therefore not a preference to respect, it is a stale artifact of the
+        // cloud the job was submitted under.
         let mt = {
             let pinned = j.machine_type.trim();
-            if pinned.is_empty() {
-                default_mt
-            } else {
+            let pin_provider = crate::catalog::machine_type_provider(pinned);
+            let usable_pin =
+                !pinned.is_empty() && pin_provider.is_none_or(|owner| owner == provider_name);
+            if usable_pin {
                 pinned
+            } else {
+                default_mt
             }
         };
         let accel = {
