@@ -315,3 +315,25 @@ The 502 was a missing connector, not a missing route. Cloudflare still held the 
 Verified publicly: `https://bobloo.com/images/characters/8808.webp` returns 200 with `image/webp` (59,686 bytes), a character video returns 200 with `video/webm` (3,777,332 bytes), an accented seed path returns 200, a profile image returns 200, and `https://bobloo.com/health` returns 200 JSON — so the product API is publicly reachable again as well.
 
 A second locator pass then rewrote all **2,674 rows** from `wisentprodstado.blob.core.windows.net` to `https://bobloo.com/`, zero failures, and a re-read plans 0 further changes. The provider host is no longer in the product database, which was the invariant the first pass had to break. Each pass wrote its own timestamped before-image on the host, so neither reversal record overwrote the other.
+
+### Correction: the Wisent-fronted media host is not stable, and the rows are back on Azure — 2026-08-17
+
+The section above was written from measurements taken inside a window where the tunnel happened to be delivering. Held under scrutiny, it does not survive, so here is the corrected state.
+
+What is true and verified: the connector attaches, reports four ready connections, and the origin is healthy — Caddy answers 200 on `127.0.0.1:3000` and `[::1]:3000`, for both a media path and the API. What is also true: **cache-busted public requests mostly fail.**
+
+Measured on cache-busted, sequential requests through `bobloo.com`:
+
+| Connector setting | Result |
+|---|---|
+| default transport, both address families | about 6 of 20 succeed |
+| `--protocol http2`, IPv6 permitted | connections register, **zero** requests ever arrive |
+| `--protocol http2 --edge-ip-version 4` | 0 of 20 |
+
+The connector log names the cause on the network, not in the configuration: `sendmsg: network is unreachable` and `no route to host` against every `2606:4700` edge address on UDP/7844. This uplink drops the tunnel's UDP and has no usable IPv6 path. Left at its default the tunnel delivers intermittently; pinned to TCP it registers connections the edge never uses. Diagnosing further needs the Cloudflare dashboard or a scoped API token, and `cloudflared tunnel cleanup` needs an origin certificate that is not on this host.
+
+Consequence for the product: a delivery contract that fails two requests in three is worse for users than a provider host in the database. The 2,674 rows were therefore **reverted to `https://wisentprodstado.blob.core.windows.net/media-public/`**, which measured 60 of 60 and, earlier, 2,674 of 2,674 objects reachable. The revert used the pass-2 before-image row by row, not a prefix match, because a prefix rewrite off `bobloo.com` matches **4,833** rows: 2,159 of them named that host long before this migration and their objects are not in the Azure container, so a prefix rewrite would have broken rows this work never touched.
+
+Also honest about self-inflicted damage: restarting the connector with `bootout` followed immediately by `bootstrap` raced a terminating job, failed with `5: Input/output error`, and left the public hostname down until the next run. The helper now restarts in place. Two comment blocks I added inside an unquoted heredoc contained backticks, which the host executed as commands; the helper reported "command not found" three times while still writing a correct runner.
+
+Standing state: `com.wisent.cloudflared` and `com.wisent.bobloo-gateway` remain installed, registry-adopted and running, so the moment the uplink or the Cloudflare configuration is fixed, the rows move back with one helper run. Media and the product API are reachable today only through the storage host and the tunnel's intermittent path respectively; the API has no second route.
