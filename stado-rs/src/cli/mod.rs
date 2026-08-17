@@ -1074,7 +1074,12 @@ enum HostCommands {
         source: String,
     },
     /// Recover a registry-managed macOS host through its approved channel.
-    Recover { target: String },
+    Recover {
+        target: String,
+        /// Use the bundled registry snapshot when the canonical registry cannot be read.
+        #[arg(long)]
+        bundled_registry: bool,
+    },
     /// Request a graceful reboot of TARGET through its approved channel.
     Reboot { target: String },
     /// Manage local macOS and Linux user accounts.
@@ -1086,6 +1091,15 @@ enum HostCommands {
     /// Point TARGET's Weles recordings store at PATH.
     #[command(name = "weles-recordings-dir")]
     WelesRecordingsDir { target: String, path: String },
+    /// Persist and immediately reconcile TARGET's NVIDIA board power cap.
+    #[command(name = "gpu-power-limit")]
+    GpuPowerLimit {
+        target: String,
+        watts: u32,
+        /// Emit the registry generation and driver report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Publish TARGET's registry `weles` declaration as its placement policy.
     ///
     /// The worker decides what it may claim from a file on its own disk, not
@@ -1220,6 +1234,9 @@ enum HostCommands {
         /// helper that takes operator words is a remote shell.
         #[arg(long = "uuid")]
         uuid: Vec<String>,
+        /// Use the bundled registry snapshot when the canonical registry cannot be read.
+        #[arg(long)]
+        bundled_registry: bool,
         /// Emit the execution report as JSON.
         #[arg(long)]
         json: bool,
@@ -1758,7 +1775,10 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Host(sub) => match sub {
             HostCommands::Health { target, json } => host::health(&target, json).await,
             HostCommands::PublishBeacon { source } => host::publish_beacon(&source).await,
-            HostCommands::Recover { target } => host::recover(&target).await,
+            HostCommands::Recover {
+                target,
+                bundled_registry,
+            } => host::recover(&target, bundled_registry).await,
             HostCommands::Reboot { target } => host::reboot(&target).await,
             HostCommands::User(HostUserCommands::Create {
                 username,
@@ -1792,6 +1812,11 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::WelesRecordingsDir { target, path } => {
                 host::weles_recordings_dir(&target, &path).await
             }
+            HostCommands::GpuPowerLimit {
+                target,
+                watts,
+                json,
+            } => host::gpu_power_limit(&target, watts, json).await,
             HostCommands::PublishPlacementPolicy { target, json } => {
                 placement::publish_placement_policy(&target, json).await
             }
@@ -1879,8 +1904,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 target,
                 name,
                 uuid,
+                bundled_registry,
                 json,
-            } => host::run_helper(&target, &name, &uuid, json).await,
+            } => host::run_helper(&target, &name, &uuid, bundled_registry, json).await,
             HostCommands::RemoveHelper { target, name, json } => {
                 host::remove_helper(&target, &name, json).await
             }

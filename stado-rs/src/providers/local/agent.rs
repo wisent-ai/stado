@@ -218,6 +218,83 @@ pub fn cuda_probe_result(rc: i32, stdout: &str, stderr: &str) -> (bool, String) 
     (rc == 0, detail)
 }
 
+const GPU_POWER_RECONCILE_INTERVAL_S: u64 = 300;
+
+struct GpuPowerLimitState {
+    desired_watts: u32,
+    checked_at: Instant,
+    checked_at_utc: String,
+    ok: bool,
+    detail: String,
+}
+
+async fn read_gpu_power_limits() -> Result<Vec<f64>, String> {
+    let output = tokio::time::timeout(
+        Duration::from_secs(30),
+        tokio::process::Command::new("nvidia-smi")
+            .args(["--query-gpu=power.limit", "--format=csv,noheader,nounits"])
+            .output(),
+    )
+    .await
+    .map_err(|_| "nvidia-smi power query timed out after 30s".to_string())?
+    .map_err(|error| format!("nvidia-smi power query failed: {error}"))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "nvidia-smi power query exited {}: {}",
+            output.status.code().unwrap_or(-1),
+            detail.trim()
+        ));
+    }
+    let limits = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            line.parse::<f64>()
+                .map_err(|error| format!("invalid nvidia-smi power limit {line:?}: {error}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if limits.is_empty() {
+        return Err("nvidia-smi power query returned no GPUs".to_string());
+    }
+    Ok(limits)
+}
+
+/// Reconcile the host-level NVIDIA board power cap declared in the registry.
+/// Existing jobs keep running on failure, but the caller publishes zero free
+/// capacity until the driver accepts and reports the declared limit.
+pub async fn reconcile_gpu_power_limit(watts: u32) -> Result<String, String> {
+    let desired = f64::from(watts);
+    let current = read_gpu_power_limits().await?;
+    if !current.iter().all(|actual| (actual - desired).abs() < 0.5) {
+        let output = tokio::time::timeout(
+            Duration::from_secs(30),
+            tokio::process::Command::new("nvidia-smi")
+                .arg(format!("--power-limit={watts}"))
+                .output(),
+        )
+        .await
+        .map_err(|_| "nvidia-smi power-limit update timed out after 30s".to_string())?
+        .map_err(|error| format!("nvidia-smi power-limit update failed: {error}"))?;
+        if !output.status.success() {
+            let detail = String::from_utf8_lossy(&output.stderr);
+            return Err(format!(
+                "nvidia-smi power-limit update exited {}: {}",
+                output.status.code().unwrap_or(-1),
+                detail.trim()
+            ));
+        }
+    }
+    let actual = read_gpu_power_limits().await?;
+    if !actual.iter().all(|value| (*value - desired).abs() < 0.5) {
+        return Err(format!(
+            "driver reported power limits {actual:?} W after requesting {watts} W"
+        ));
+    }
+    Ok(format!("{actual:?} W"))
+}
+
 // ---------------------------------------------------------------------------
 // cooperative priority yield
 // ---------------------------------------------------------------------------
@@ -565,6 +642,7 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
     let mut last_fleet_flush = Instant::now();
 
     let mut last_cap: Option<LastCap> = None;
+    let mut gpu_power_limit_state: Option<GpuPowerLimitState> = None;
     let mut pinned_only = false; // registry ComputeTarget.pinned_only, refreshed per poll
                                  // Python `disk_low_bytes = _persisted_disk_low_bytes()`: reuse the last
                                  // canonical low watermark from the janitor's owner-controlled state
@@ -672,6 +750,7 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
             }
             last_fleet_flush = Instant::now();
         }
+        let mut gpu_power_policy_ok = true;
         if let Some(t) = lookup_self_auto(&hostname).await? {
             if t.is_provider(crate::capabilities::ProviderId::Local) {
                 // Env overrides are now owned by systemd (/etc/wisent/wisent-agent.env).
@@ -700,7 +779,73 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
                 if pinned_only {
                     agent_diag.insert("pinned_only".into(), Value::from(true));
                 }
+                if let Some(watts) = t.gpu_power_limit_watts() {
+                    let reconcile_due = gpu_power_limit_state.as_ref().is_none_or(|state| {
+                        state.desired_watts != watts
+                            || !state.ok
+                            || state.checked_at.elapsed()
+                                >= Duration::from_secs(GPU_POWER_RECONCILE_INTERVAL_S)
+                    });
+                    if reconcile_due {
+                        let checked_at_utc = isoformat_utc(Utc::now());
+                        let result = reconcile_gpu_power_limit(watts).await;
+                        let (ok, detail) = match result {
+                            Ok(detail) => (true, detail),
+                            Err(detail) => {
+                                log_fn(&format!("GPU power-limit reconciliation failed: {detail}"));
+                                (false, detail)
+                            }
+                        };
+                        gpu_power_limit_state = Some(GpuPowerLimitState {
+                            desired_watts: watts,
+                            checked_at: Instant::now(),
+                            checked_at_utc,
+                            ok,
+                            detail,
+                        });
+                    }
+                    if let Some(state) = &gpu_power_limit_state {
+                        gpu_power_policy_ok = state.ok;
+                        agent_diag.insert(
+                            "gpu_power_limit_watts".into(),
+                            Value::from(state.desired_watts),
+                        );
+                        agent_diag.insert("gpu_power_limit_ok".into(), Value::from(state.ok));
+                        agent_diag.insert(
+                            "gpu_power_limit_checked_at".into(),
+                            Value::from(state.checked_at_utc.clone()),
+                        );
+                        agent_diag.insert(
+                            "gpu_power_limit_detail".into(),
+                            Value::from(state.detail.clone()),
+                        );
+                    }
+                } else {
+                    gpu_power_limit_state = None;
+                    for key in [
+                        "gpu_power_limit_watts",
+                        "gpu_power_limit_ok",
+                        "gpu_power_limit_checked_at",
+                        "gpu_power_limit_detail",
+                    ] {
+                        agent_diag.remove(key);
+                    }
+                }
             }
+        }
+        if !gpu_power_policy_ok {
+            publish_capacity(
+                &store,
+                &consumer_id,
+                kind,
+                &BTreeMap::new(),
+                Some(0),
+                Some(total_vram_gb),
+                Some(agent_diag.clone()),
+            )
+            .await?;
+            tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
+            continue;
         }
         // Cleanup already ran before the immutable release check. This gate is
         // admission/diagnostics-only and has no destructive side effects.
