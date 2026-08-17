@@ -120,6 +120,31 @@ pub fn metadata(object: &ObjectRef, content_type: &str) -> BTreeMap<String, Stri
     ])
 }
 
+/// The release policy key this object is authorized against, or `None` when the
+/// object is not release-governed.
+///
+/// The server's authorization and the client's credential resolution both read
+/// this one function, so a route cannot be governed on one end and unsigned on
+/// the other. That split is exactly how an immutable release write left the CLI
+/// carrying the coordinator storage token and came back as a `401` naming
+/// neither the policy table nor the item it wanted.
+pub fn release_policy_key(namespace: &str, key: &str) -> Option<String> {
+    match namespace {
+        "releases" | "sources" => Some(key.to_string()),
+        "system" => {
+            let product = key
+                .strip_prefix("release-catalog/")?
+                .strip_suffix(".json")?;
+            if product.is_empty() || product.contains('/') {
+                None
+            } else {
+                Some(format!("{product}/catalog.json"))
+            }
+        }
+        _ => None,
+    }
+}
+
 impl fmt::Display for ObjectRef {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "stado://{}/{}", self.namespace, self.key)
