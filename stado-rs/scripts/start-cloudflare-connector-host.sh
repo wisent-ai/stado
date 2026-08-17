@@ -72,13 +72,13 @@ uid=$(/usr/bin/id -u)
 # "Domain does not support specified action" (125). The per-user domain is the
 # one that exists headless, so try it first and keep `gui` as the fallback for
 # an interactive operator session.
+# Never swallow the reason: the first version discarded launchctl's stderr and
+# reported only "no domain accepted", which says nothing about why.
 domain=""
 for candidate in "user/$uid" "gui/$uid"; do
     /bin/launchctl bootout "$candidate/$LABEL" >/dev/null 2>&1 || true
-    if /bin/launchctl bootstrap "$candidate" "$PLIST" >/dev/null 2>&1; then
-        domain="$candidate"
-        break
-    fi
+    err=$(/bin/launchctl bootstrap "$candidate" "$PLIST" 2>&1) && domain="$candidate" && break
+    printf 'bootstrap %s -> %s\n' "$candidate" "$err" >&2
 done
 [ -n "$domain" ] || { printf '%s\n' "no launchd domain accepted $PLIST" >&2; exit 1; }
 /bin/launchctl kickstart -k "$domain/$LABEL" >/dev/null 2>&1 || true
