@@ -1,5 +1,6 @@
 import SwiftUI
 import WisentAuth
+import WisentDesignSystem
 
 enum ConsoleSection: String, CaseIterable, Identifiable {
     case overview
@@ -51,9 +52,9 @@ struct ConsoleView: View {
                 sourceFooter
             }
             .navigationSplitViewColumnWidth(
-                min: StadoTheme.Layout.sidebarMinimum,
-                ideal: StadoTheme.Layout.sidebarIdeal,
-                max: StadoTheme.Layout.sidebarMaximum
+                min: WisentDesign.Layout.sidebarMinimumWidth,
+                ideal: WisentDesign.Layout.sidebarIdealWidth,
+                max: StadoLayout.sidebarMaximumWidth
             )
         } detail: {
             detail
@@ -99,8 +100,8 @@ struct ConsoleView: View {
                 }
         }
         .frame(
-            minWidth: StadoTheme.Layout.windowMinimumWidth,
-            minHeight: StadoTheme.Layout.windowMinimumHeight
+            minWidth: WisentDesign.Layout.minimumDesktopWidth,
+            minHeight: WisentDesign.Layout.minimumDesktopHeight
         )
         .task(id: auth.identity?.organization.id) {
             configureAuthorization()
@@ -152,7 +153,7 @@ struct ConsoleView: View {
         }
         .sheet(isPresented: $showsAccountConnection) {
             WisentAuthGate(store: auth) {
-                VStack(spacing: StadoTheme.Space.md) {
+                VStack(spacing: WisentDesign.Space.x4) {
                     Image(systemName: "person.crop.circle.badge.checkmark")
                         .font(.system(size: 36))
                         .foregroundStyle(.green)
@@ -167,7 +168,7 @@ struct ConsoleView: View {
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
                 }
-                .padding(StadoTheme.Space.xl)
+                .padding(WisentDesign.Space.x8)
                 .frame(minWidth: 460, minHeight: 280)
             }
         }
@@ -208,12 +209,12 @@ struct ConsoleView: View {
                 } description: {
                     Text("Choose the backend that provides fleet-wide workers, jobs, events, and cleanup state.")
                 }
-                .frame(minHeight: StadoTheme.Layout.emptyStateMinimumHeight)
+                .frame(minHeight: StadoLayout.emptyStateMinimumHeight)
             } else {
                 if let error = store.errorMessage {
                     ErrorBanner(message: error, isStale: store.isShowingStaleSnapshot)
-                        .padding(.horizontal, StadoTheme.Space.lg)
-                        .padding(.top, StadoTheme.Space.md)
+                        .padding(.horizontal, WisentDesign.Space.x6)
+                        .padding(.top, WisentDesign.Space.x4)
                 }
 
                 if let snapshot = store.snapshot {
@@ -225,10 +226,10 @@ struct ConsoleView: View {
                         } description: {
                             Text("The endpoint is reachable, but its first queue snapshot is not ready yet. Refresh after the dashboard completes its background scan.")
                         }
-                        .frame(minHeight: StadoTheme.Layout.emptyStateMinimumHeight)
+                        .frame(minHeight: StadoLayout.emptyStateMinimumHeight)
                     }
                 } else if store.isRefreshing {
-                    VStack(spacing: StadoTheme.Space.sm) {
+                    VStack(spacing: WisentDesign.Space.x3) {
                         ProgressView()
                             .controlSize(.large)
                         Text("Loading Stado state…")
@@ -246,7 +247,7 @@ struct ConsoleView: View {
                             Task { await store.refresh() }
                         }
                     }
-                    .frame(minHeight: StadoTheme.Layout.emptyStateMinimumHeight)
+                    .frame(minHeight: StadoLayout.emptyStateMinimumHeight)
                 }
             }
         }
@@ -267,12 +268,12 @@ struct ConsoleView: View {
     }
 
     private var sourceFooter: some View {
-        VStack(alignment: .leading, spacing: StadoTheme.Space.xs) {
+        VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
             Divider()
-            HStack(spacing: StadoTheme.Space.xs) {
+            HStack(spacing: WisentDesign.Space.x2) {
                 Circle()
                     .fill(sourceTone.color)
-                    .frame(width: StadoTheme.Layout.statusDot, height: StadoTheme.Layout.statusDot)
+                    .frame(width: WisentDesign.Space.x2, height: WisentDesign.Space.x2)
                     .accessibilityHidden(true)
                 Menu {
                     Button {
@@ -315,7 +316,7 @@ struct ConsoleView: View {
                     }
                     .disabled(deploymentStore.selectedDeployment == nil)
                 } label: {
-                    VStack(alignment: .leading, spacing: StadoTheme.Space.xxs) {
+                    VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
                         Text(deploymentStore.selectedDeployment?.name ?? "Local Stado")
                             .font(.caption.weight(.semibold))
                         Text(sourceLabel)
@@ -329,7 +330,7 @@ struct ConsoleView: View {
             }
             .accessibilityElement(children: .contain)
         }
-        .padding(StadoTheme.Space.sm)
+        .padding(WisentDesign.Space.x3)
         .background(.bar)
     }
 
@@ -349,9 +350,9 @@ struct ConsoleView: View {
         }
     }
 
-    private var sourceTone: StatusTone {
-        if store.errorMessage != nil { return .critical }
-        if store.snapshot?.ready == true { return .healthy }
+    private var sourceTone: WisentTone {
+        if store.errorMessage != nil { return .danger }
+        if store.snapshot?.ready == true { return .success }
         return .neutral
     }
 
@@ -369,11 +370,11 @@ private struct ErrorBanner: View {
     let isStale: Bool
 
     var body: some View {
-        HStack(alignment: .top, spacing: StadoTheme.Space.sm) {
+        HStack(alignment: .top, spacing: WisentDesign.Space.x3) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.red)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: StadoTheme.Space.xxs) {
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
                 Text(isStale ? "Refresh failed — showing the last snapshot" : "State unavailable")
                     .font(.subheadline.weight(.semibold))
                 Text(message)
@@ -382,10 +383,10 @@ private struct ErrorBanner: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(StadoTheme.Space.sm)
-        .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: StadoTheme.Radius.small))
+        .padding(WisentDesign.Space.x3)
+        .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: WisentDesign.Radius.small))
         .overlay {
-            RoundedRectangle(cornerRadius: StadoTheme.Radius.small)
+            RoundedRectangle(cornerRadius: WisentDesign.Radius.small)
                 .stroke(Color.red.opacity(0.25), lineWidth: 1)
         }
         .accessibilityElement(children: .combine)

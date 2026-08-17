@@ -1,4 +1,5 @@
 import SwiftUI
+import WisentDesignSystem
 
 struct EventsView: View {
     let snapshot: DashboardSnapshot
@@ -19,7 +20,7 @@ struct EventsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-                .padding(StadoTheme.Space.lg)
+                .padding(WisentDesign.Space.x6)
 
             if !searchText.isEmpty && !hasSearchResults {
                 ContentUnavailableView.search(text: searchText)
@@ -44,7 +45,7 @@ struct EventsView: View {
                             ForEach(Array(failed.enumerated()), id: \.offset) { _, job in
                                 EventRow(
                                     symbol: "exclamationmark.triangle.fill",
-                                    tone: .critical,
+                                    tone: .danger,
                                     title: "Job \(job.jobID) failed",
                                     context: [job.task, job.model].compactMap { $0 }.joined(separator: " · "),
                                     message: job.error,
@@ -64,7 +65,7 @@ struct EventsView: View {
                             ForEach(Array(completed.enumerated()), id: \.offset) { _, job in
                                 EventRow(
                                     symbol: "checkmark.circle.fill",
-                                    tone: .healthy,
+                                    tone: .success,
                                     title: "Job \(job.jobID) completed",
                                     context: [job.task, job.model].compactMap { $0 }.joined(separator: " · "),
                                     message: job.wallSeconds.map { "Wall time: \(StadoFormat.duration($0))" },
@@ -82,7 +83,7 @@ struct EventsView: View {
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: StadoTheme.Space.xxs) {
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
                 Text("Operational events")
                     .font(.largeTitle.weight(.semibold))
                 Text("Recent queue outcomes exposed by the dashboard state interface")
@@ -90,8 +91,8 @@ struct EventsView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            StatusPill(
-                label: "\(snapshot.completedRecent.count + snapshot.recentFailed.count) outcomes",
+            WisentBadge(
+                "\(snapshot.completedRecent.count + snapshot.recentFailed.count) outcomes",
                 tone: snapshot.recentFailed.isEmpty ? .neutral : .warning
             )
         }
@@ -106,18 +107,18 @@ struct EventsView: View {
 
 private struct EventRow: View {
     let symbol: String
-    let tone: StatusTone
+    let tone: WisentTone
     let title: String
     let context: String
     let message: String?
     let date: Date?
 
     var body: some View {
-        HStack(alignment: .top, spacing: StadoTheme.Space.md) {
+        HStack(alignment: .top, spacing: WisentDesign.Space.x4) {
             Image(systemName: symbol)
                 .foregroundStyle(tone.color)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: StadoTheme.Space.xxs) {
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
                 Text(title)
                     .font(.subheadline.weight(.semibold))
                     .textSelection(.enabled)
@@ -127,9 +128,9 @@ private struct EventRow: View {
                 if let message, !message.isEmpty {
                     Text(message)
                         .font(.caption.monospaced())
-                        .foregroundStyle(tone == .critical ? .red : .secondary)
+                        .foregroundStyle(tone == .danger ? .red : .secondary)
                         .textSelection(.enabled)
-                } else if tone == .critical {
+                } else if tone == .danger {
                     Text("Sanitized error unavailable")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
@@ -146,7 +147,7 @@ private struct EventRow: View {
                     .foregroundStyle(.tertiary)
             }
         }
-        .padding(.vertical, StadoTheme.Space.xs)
+        .padding(.vertical, WisentDesign.Space.x2)
         .accessibilityElement(children: .contain)
     }
 }
