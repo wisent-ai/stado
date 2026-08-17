@@ -2,123 +2,71 @@ import SwiftUI
 import WisentAuth
 import WisentDesignSystem
 
-enum ConsoleSection: String, CaseIterable, Identifiable {
-    case overview
-    case workers
-    case jobs
-    case events
-
-    var id: Self { self }
-
-    var title: String {
-        switch self {
-        case .overview: "Overview"
-        case .workers: "Workers"
-        case .jobs: "Jobs"
-        case .events: "Events"
-        }
-    }
-
-    var symbol: String {
-        switch self {
-        case .overview: "rectangle.3.group"
-        case .workers: "server.rack"
-        case .jobs: "list.bullet.rectangle"
-        case .events: "waveform.path.ecg"
-        }
-    }
-}
-
 struct ConsoleView: View {
     @ObservedObject var store: OperationsStore
     @ObservedObject var cleanupStore: CleanupStore
     @ObservedObject var deploymentStore: DeploymentStore
+    @ObservedObject var fleetStore: FleetControlStore
     @ObservedObject var auth: WisentAuthStore
-    @State private var selection: ConsoleSection? = .overview
+    @ObservedObject var router: ConsoleRouter
+    /// Present only until the published journey records one authorized job
+    /// completion. It is a line in the posture signal strip, not a floating
+    /// card over the shell.
+    let firstRunNotice: String?
+
     @State private var showsDeploymentSetup = false
     @State private var showsDeploymentAccess = false
     @State private var showsAccountConnection = false
+    @State private var sourceProblem: String?
 
     var body: some View {
-        NavigationSplitView {
-            List(ConsoleSection.allCases, selection: $selection) { section in
-                NavigationLink(value: section) {
-                    Label(section.title, systemImage: section.symbol)
-                }
-                .accessibilityLabel(section.title)
-            }
-            .navigationTitle("Stado")
-            .safeAreaInset(edge: .bottom) {
-                sourceFooter
-            }
-            .navigationSplitViewColumnWidth(
-                min: WisentDesign.Layout.sidebarMinimumWidth,
-                ideal: WisentDesign.Layout.sidebarIdealWidth,
-                max: StadoLayout.sidebarMaximumWidth
-            )
-        } detail: {
-            detail
-                .navigationTitle((selection ?? .overview).title)
-                .toolbar {
-                    ToolbarItemGroup(placement: .primaryAction) {
-                        Button {
-                            showsAccountConnection = true
-                        } label: {
-                            Label(
-                                auth.identity == nil ? "Sign in to Wisent" : "Wisent account",
-                                systemImage: auth.identity == nil
-                                    ? "person.crop.circle"
-                                    : "person.crop.circle.badge.checkmark"
-                            )
-                        }
-                        .help(
-                            auth.identity == nil
-                                ? "Sign in to manage remote Stado deployments"
-                                : "Manage the Wisent account used for remote deployments"
-                        )
-
-                        SettingsLink {
-                            Label("Settings", systemImage: "gearshape")
-                        }
-                        .help("Configure the Stado dashboard endpoint")
-
-                        Button {
-                            Task { await store.refresh() }
-                        } label: {
-                            if store.isRefreshing {
-                                ProgressView()
-                                    .controlSize(.small)
-                                    .accessibilityLabel("Refreshing Stado state")
-                            } else {
-                                Label("Refresh", systemImage: "arrow.clockwise")
-                            }
-                        }
-                        .help("Refresh Stado state")
-                        .keyboardShortcut("r", modifiers: .command)
-                        .disabled(store.isRefreshing || !store.isConfigured)
-                    }
-                }
+        HStack(spacing: 0) {
+            sidebar
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(
-            minWidth: WisentDesign.Layout.minimumDesktopWidth,
-            minHeight: WisentDesign.Layout.minimumDesktopHeight
+            minWidth: WisentAppLayout.minimumWindowWidth,
+            minHeight: WisentAppLayout.minimumWindowHeight
         )
+        .background(WisentCanvasBackground())
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    showsAccountConnection = true
+                } label: {
+                    Label(
+                        auth.identity == nil ? "Sign in to Wisent" : "Wisent account",
+                        systemImage: auth.identity == nil
+                            ? "person.crop.circle"
+                            : "person.crop.circle.badge.checkmark"
+                    )
+                }
+                .help(
+                    auth.identity == nil
+                        ? "Sign in to manage remote Stado deployments"
+                        : "Manage the Wisent account used for remote deployments"
+                )
+
+                SettingsLink {
+                    Label("Settings", systemImage: "gearshape")
+                }
+                .help("Configure the Stado dashboard endpoint")
+            }
+        }
         .task(id: auth.identity?.organization.id) {
             configureAuthorization()
             await deploymentStore.load(identity: auth.identity)
             configureSelectedSource()
-            await store.refresh()
-            await cleanupStore.refresh()
+            await refreshAll()
         }
         .onChange(of: auth.session?.accessToken) { _, _ in
             configureAuthorization()
-            Task {
-                await store.refresh()
-                await cleanupStore.refresh()
-            }
+            Task { await refreshAll() }
         }
         .onChange(of: deploymentStore.selectedDeploymentID) { _, _ in
             configureSelectedSource()
+            Task { await refreshAll() }
         }
         .sheet(
             isPresented: Binding(
@@ -137,6 +85,7 @@ struct ConsoleView: View {
                 operationsStore: store,
                 cleanupStore: cleanupStore,
                 deploymentStore: deploymentStore,
+                fleetStore: fleetStore,
                 identity: auth.identity,
                 onComplete: { showsDeploymentSetup = false }
             )
@@ -153,38 +102,305 @@ struct ConsoleView: View {
         }
         .sheet(isPresented: $showsAccountConnection) {
             WisentAuthGate(store: auth) {
-                VStack(spacing: WisentDesign.Space.x4) {
-                    Image(systemName: "person.crop.circle.badge.checkmark")
-                        .font(.system(size: 36))
-                        .foregroundStyle(.green)
-                    Text("Wisent account connected")
-                        .font(.title2.weight(.semibold))
-                    Text("Remote deployment management is available. Local Stado remains connected directly on this Mac.")
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(.secondary)
-                    Button("Done") {
-                        showsAccountConnection = false
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.defaultAction)
-                }
-                .padding(WisentDesign.Space.x8)
-                .frame(minWidth: 460, minHeight: 280)
+                accountConnected
             }
         }
     }
+
+    // MARK: Sidebar
+
+    private var sidebar: some View {
+        VStack(spacing: 0) {
+            scopeSelector
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: WisentDesign.Space.x4) {
+                    ForEach(ConsoleGroup.allCases) { group in
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(group.rawValue.uppercased())
+                                .font(WisentTypeScale.eyebrow())
+                                .tracking(0.8)
+                                .foregroundStyle(WisentDesign.muted)
+                                .padding(.horizontal, WisentDesign.Space.x4)
+                                .padding(.bottom, WisentDesign.Space.x1)
+                            ForEach(ConsoleDestination.members(of: group)) { destination in
+                                destinationButton(destination)
+                            }
+                        }
+                    }
+                }
+                .padding(.vertical, WisentDesign.Space.x4)
+            }
+            Spacer(minLength: 0)
+            ConsoleBoundaryFooter(
+                sourceName: scopeName,
+                sourceDetail: sourceLabel,
+                tone: sourceTone
+            )
+        }
+        .frame(width: WisentAppLayout.sidebarWidth)
+        .background(WisentDesign.canvas)
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(WisentDesign.border)
+                .frame(width: WisentDesign.hairline)
+        }
+    }
+
+    /// Scope is a selector in the sidebar header, not a destination: reading a
+    /// different fleet is not a different question, it is the same question
+    /// asked somewhere else.
+    private var scopeSelector: some View {
+        Menu {
+            Button {
+                deploymentStore.selectLocal()
+            } label: {
+                Label(
+                    "Local Stado",
+                    systemImage: deploymentStore.selectedDeploymentID == nil ? "checkmark" : "desktopcomputer"
+                )
+            }
+            if !deploymentStore.deployments.isEmpty {
+                Divider()
+                ForEach(deploymentStore.deployments) { deployment in
+                    Button {
+                        deploymentStore.select(deployment)
+                    } label: {
+                        Label(
+                            deployment.name,
+                            systemImage: deployment.id == deploymentStore.selectedDeploymentID
+                                ? "checkmark"
+                                : deployment.provider.symbol
+                        )
+                    }
+                }
+            }
+            Divider()
+            Button {
+                presentDeploymentSetup()
+            } label: {
+                Label("New Deployment…", systemImage: "plus")
+            }
+            Button {
+                presentDeploymentAccess()
+            } label: {
+                Label("Manage Access…", systemImage: "person.2")
+            }
+            .disabled(deploymentStore.selectedDeployment == nil)
+        } label: {
+            HStack(spacing: WisentDesign.Space.x2) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("SCOPE")
+                        .font(WisentTypeScale.eyebrow())
+                        .tracking(0.8)
+                        .foregroundStyle(WisentDesign.muted)
+                    Text(scopeName)
+                        .font(WisentTypeScale.screenTitle())
+                        .foregroundStyle(WisentDesign.ink)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(WisentDesign.muted)
+            }
+            .padding(.horizontal, WisentDesign.Space.x4)
+            .frame(height: 56)
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .accessibilityLabel("Stado source: \(scopeName)")
+    }
+
+    private func destinationButton(_ destination: ConsoleDestination) -> some View {
+        let isSelected = router.destination == destination
+        let attention = attentionCount(for: destination)
+        return Button {
+            router.destination = destination
+        } label: {
+            HStack(spacing: WisentDesign.Space.x2) {
+                Image(systemName: destination.symbol)
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(width: 16)
+                    .foregroundStyle(isSelected ? WisentDesign.brand : WisentDesign.muted)
+                Text(destination.title)
+                    .font(isSelected ? WisentTypography.bodyMedium(12) : WisentTypography.body(12))
+                    .foregroundStyle(isSelected ? WisentDesign.ink : WisentDesign.secondary)
+                Spacer(minLength: WisentDesign.Space.x2)
+                if let attention {
+                    Text(attention.count.formatted(.number))
+                        .font(WisentTypeScale.identifierSmall())
+                        .monospacedDigit()
+                        .foregroundStyle(attention.tone.color)
+                }
+            }
+            .padding(.horizontal, WisentDesign.Space.x3)
+            .padding(.vertical, WisentDesign.Space.x1 + 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: WisentDesign.Radius.small)
+                        .fill(WisentDesign.surface)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: WisentDesign.Radius.small)
+                                .stroke(WisentDesign.border, lineWidth: WisentDesign.hairline)
+                        }
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, WisentDesign.Space.x2)
+        .help(destination.purpose)
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+    }
+
+    /// A count beside a destination only when something there is waiting; a
+    /// zero next to every row teaches the operator to ignore the column.
+    private func attentionCount(for destination: ConsoleDestination) -> (count: Int, tone: WisentTone)? {
+        guard let snapshot = store.snapshot else { return nil }
+        switch destination {
+        case .posture:
+            let count = FleetPosture(snapshot: snapshot, report: cleanupStore.report).decisionCount
+            return count > 0 ? (count, .warning) : nil
+        case .queue:
+            let failed = snapshot.recentFailed.count
+            return failed > 0 ? (failed, .danger) : nil
+        case .hosts:
+            let unavailable = snapshot.workers.count { $0.status == .unavailable }
+            if unavailable > 0 { return (unavailable, .danger) }
+            let stale = snapshot.workers.count { $0.status == .stale }
+            return stale > 0 ? (stale, .warning) : nil
+        case .disk:
+            guard let report = cleanupStore.report else { return nil }
+            switch report.outcomePresentation.severity {
+            case .critical: return (1, .danger)
+            case .warning: return (1, .warning)
+            case .healthy, .neutral: return nil
+            }
+        case .registry, .deployments:
+            return nil
+        }
+    }
+
+    // MARK: Content
+
+    @ViewBuilder
+    private var content: some View {
+        if store.isConfigured {
+            switch router.destination {
+            case .posture:
+                PostureView(
+                    store: store,
+                    cleanupStore: cleanupStore,
+                    fleetStore: fleetStore,
+                    scope: scopeName,
+                    firstRunNotice: firstRunNotice,
+                    route: { router.destination = $0 },
+                    refresh: { await refreshAll() }
+                )
+            case .queue:
+                QueueView(store: store, fleetStore: fleetStore, scope: scopeName)
+            case .hosts:
+                HostsView(
+                    store: store,
+                    fleetStore: fleetStore,
+                    scope: scopeName,
+                    route: { router.destination = $0 }
+                )
+            case .disk:
+                DiskView(store: store, cleanupStore: cleanupStore, scope: scopeName)
+            case .registry:
+                RegistryView(fleetStore: fleetStore, scope: scopeName)
+            case .deployments:
+                DeploymentsView(
+                    deploymentStore: deploymentStore,
+                    operationsStore: store,
+                    auth: auth,
+                    scope: scopeName,
+                    presentSetup: { presentDeploymentSetup() },
+                    presentAccess: { presentDeploymentAccess() }
+                )
+            }
+        } else {
+            firstRun
+        }
+    }
+
+    /// The one place a 34 pt display type survives: there is no data yet, so
+    /// the window has nothing denser to spend itself on.
+    private var firstRun: some View {
+        VStack(alignment: .leading, spacing: WisentDesign.Space.x6) {
+            if let sourceProblem {
+                WisentAlertPanel(
+                    tone: .danger,
+                    title: "This source cannot be read",
+                    detail: sourceProblem
+                )
+            }
+            WisentPageHeader(
+                eyebrow: "First run",
+                title: "Connect to Stado",
+                detail: "Choose the backend that publishes fleet state, jobs, hosts, cleanup, and canonical policy. Nothing on these screens is generated locally.",
+                symbol: "server.rack"
+            )
+            HStack(spacing: WisentDesign.Space.x3) {
+                WisentActionButton(
+                    action: WisentAction("Choose a Deployment", symbol: "plus", kind: .primary) {
+                        presentDeploymentSetup()
+                    }
+                )
+                SettingsLink {
+                    Text("Set the endpoint")
+                }
+                .buttonStyle(WisentSecondaryButtonStyle())
+            }
+        }
+        .padding(WisentDesign.Space.x10)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+    }
+
+    private var accountConnected: some View {
+        VStack(spacing: WisentDesign.Space.x4) {
+            Image(systemName: "person.crop.circle.badge.checkmark")
+                .font(.system(size: 32, weight: .semibold))
+                .foregroundStyle(WisentDesign.success)
+            Text("Wisent account connected")
+                .font(WisentTypography.heading(17))
+                .foregroundStyle(WisentDesign.ink)
+            Text("Remote deployment management is available. Local Stado remains connected directly on this Mac.")
+                .font(WisentTypeScale.body())
+                .foregroundStyle(WisentDesign.secondary)
+                .multilineTextAlignment(.center)
+            WisentActionButton(
+                action: WisentAction("Done", kind: .primary) { showsAccountConnection = false }
+            )
+        }
+        .padding(WisentDesign.Space.x8)
+        .frame(minWidth: 460, minHeight: 280)
+        .background(WisentDesign.canvas)
+    }
+
+    // MARK: Wiring
+
     private func configureAuthorization() {
         store.configureAuthorization(token: auth.session?.accessToken)
         cleanupStore.configureAuthorization(token: auth.session?.accessToken)
+        fleetStore.configureAuthorization(token: auth.session?.accessToken)
     }
 
-
+    /// A source that cannot be read says why. Clearing the endpoint and
+    /// showing "not configured" hid a rejected address behind a state that
+    /// looks like the operator never chose one.
     private func configureSelectedSource() {
         let endpoint: String
         if let deployment = deploymentStore.selectedDeployment {
             guard let selectedEndpoint = deployment.endpoint else {
                 store.clearDashboardURL()
                 cleanupStore.clearDashboardURL()
+                fleetStore.configureEndpoint(nil)
+                sourceProblem = "\(deployment.name) has not published an endpoint yet, so there is nothing for the console to read."
                 return
             }
             endpoint = selectedEndpoint
@@ -194,144 +410,20 @@ struct ConsoleView: View {
         do {
             try store.saveDashboardURL(endpoint)
             try cleanupStore.saveDashboardURL(endpoint)
+            fleetStore.configureEndpoint(endpoint)
+            sourceProblem = nil
         } catch {
             store.clearDashboardURL()
             cleanupStore.clearDashboardURL()
+            fleetStore.configureEndpoint(nil)
+            sourceProblem = "\(endpoint) was rejected: \((error as? LocalizedError)?.errorDescription ?? "the address is not a supported Stado endpoint.")"
         }
     }
 
-    @ViewBuilder
-    private var detail: some View {
-        VStack(spacing: 0) {
-            if !store.isConfigured {
-                ContentUnavailableView {
-                    Label("Connect to Stado", systemImage: "network")
-                } description: {
-                    Text("Choose the backend that provides fleet-wide workers, jobs, events, and cleanup state.")
-                }
-                .frame(minHeight: StadoLayout.emptyStateMinimumHeight)
-            } else {
-                if let error = store.errorMessage {
-                    ErrorBanner(message: error, isStale: store.isShowingStaleSnapshot)
-                        .padding(.horizontal, WisentDesign.Space.x6)
-                        .padding(.top, WisentDesign.Space.x4)
-                }
-
-                if let snapshot = store.snapshot {
-                    if snapshot.ready {
-                        selectedContent(snapshot)
-                    } else {
-                        ContentUnavailableView {
-                            Label("Dashboard is preparing state", systemImage: "hourglass")
-                        } description: {
-                            Text("The endpoint is reachable, but its first queue snapshot is not ready yet. Refresh after the dashboard completes its background scan.")
-                        }
-                        .frame(minHeight: StadoLayout.emptyStateMinimumHeight)
-                    }
-                } else if store.isRefreshing {
-                    VStack(spacing: WisentDesign.Space.x3) {
-                        ProgressView()
-                            .controlSize(.large)
-                        Text("Loading Stado state…")
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .accessibilityElement(children: .combine)
-                } else {
-                    ContentUnavailableView {
-                        Label("Stado state unavailable", systemImage: "network.slash")
-                    } description: {
-                        Text("Check the configured endpoint in Settings. No operational data is fabricated while the source is unavailable.")
-                    } actions: {
-                        Button("Refresh") {
-                            Task { await store.refresh() }
-                        }
-                    }
-                    .frame(minHeight: StadoLayout.emptyStateMinimumHeight)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func selectedContent(_ snapshot: DashboardSnapshot) -> some View {
-        switch selection ?? .overview {
-        case .overview:
-            OverviewView(snapshot: snapshot, lastUpdated: store.lastUpdated)
-        case .workers:
-            WorkersView(snapshot: snapshot)
-        case .jobs:
-            JobsView(snapshot: snapshot)
-        case .events:
-            EventsView(snapshot: snapshot)
-        }
-    }
-
-    private var sourceFooter: some View {
-        VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
-            Divider()
-            HStack(spacing: WisentDesign.Space.x2) {
-                Circle()
-                    .fill(sourceTone.color)
-                    .frame(width: WisentDesign.Space.x2, height: WisentDesign.Space.x2)
-                    .accessibilityHidden(true)
-                Menu {
-                    Button {
-                        deploymentStore.selectLocal()
-                    } label: {
-                        Label(
-                            "Local Stado",
-                            systemImage: deploymentStore.selectedDeploymentID == nil
-                                ? "checkmark"
-                                : "desktopcomputer"
-                        )
-                    }
-                    if !deploymentStore.deployments.isEmpty {
-                        Divider()
-                    }
-                    ForEach(deploymentStore.deployments) { deployment in
-                        Button {
-                            deploymentStore.select(deployment)
-                        } label: {
-                            Label(
-                                deployment.name,
-                                systemImage: deployment.id == deploymentStore.selectedDeploymentID
-                                    ? "checkmark"
-                                    : deployment.provider.symbol
-                            )
-                        }
-                    }
-                    if !deploymentStore.deployments.isEmpty {
-                        Divider()
-                    }
-                    Button {
-                        presentDeploymentSetup()
-                    } label: {
-                        Label("New Deployment…", systemImage: "plus")
-                    }
-                    Button {
-                        presentDeploymentAccess()
-                    } label: {
-                        Label("Manage Access…", systemImage: "person.2")
-                    }
-                    .disabled(deploymentStore.selectedDeployment == nil)
-                } label: {
-                    VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
-                        Text(deploymentStore.selectedDeployment?.name ?? "Local Stado")
-                            .font(.caption.weight(.semibold))
-                        Text(sourceLabel)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .menuStyle(.borderlessButton)
-            }
-            .accessibilityElement(children: .contain)
-        }
-        .padding(WisentDesign.Space.x3)
-        .background(.bar)
+    private func refreshAll() async {
+        await store.refresh()
+        await cleanupStore.refresh()
+        await fleetStore.refresh()
     }
 
     private func presentDeploymentSetup() {
@@ -350,6 +442,10 @@ struct ConsoleView: View {
         }
     }
 
+    private var scopeName: String {
+        deploymentStore.selectedDeployment?.name ?? "Local Stado"
+    }
+
     private var sourceTone: WisentTone {
         if store.errorMessage != nil { return .danger }
         if store.snapshot?.ready == true { return .success }
@@ -361,34 +457,5 @@ struct ConsoleView: View {
         if store.errorMessage != nil { return store.snapshot == nil ? "Disconnected" : "Refresh failed" }
         if store.snapshot?.ready == true { return "Dashboard connected" }
         return "Waiting for dashboard"
-    }
-}
-
-
-private struct ErrorBanner: View {
-    let message: String
-    let isStale: Bool
-
-    var body: some View {
-        HStack(alignment: .top, spacing: WisentDesign.Space.x3) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.red)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
-                Text(isStale ? "Refresh failed — showing the last snapshot" : "State unavailable")
-                    .font(.subheadline.weight(.semibold))
-                Text(message)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(WisentDesign.Space.x3)
-        .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: WisentDesign.Radius.small))
-        .overlay {
-            RoundedRectangle(cornerRadius: WisentDesign.Radius.small)
-                .stroke(Color.red.opacity(0.25), lineWidth: 1)
-        }
-        .accessibilityElement(children: .combine)
     }
 }

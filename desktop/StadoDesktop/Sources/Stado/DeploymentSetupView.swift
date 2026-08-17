@@ -6,6 +6,7 @@ struct DeploymentSetupView: View {
     @ObservedObject var operationsStore: OperationsStore
     @ObservedObject var cleanupStore: CleanupStore
     @ObservedObject var deploymentStore: DeploymentStore
+    @ObservedObject var fleetStore: FleetControlStore
     let identity: WisentIdentity?
     let onComplete: () -> Void
 
@@ -15,37 +16,43 @@ struct DeploymentSetupView: View {
     @State private var update: ProvisioningUpdate?
     @State private var errorMessage: String?
     @State private var isProvisioning = false
+    @State private var showsCreateDecision = false
 
     private let provisioner = BackendProvisioner()
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
             header
             Divider()
             ScrollView {
                 Group {
                     if deploymentStore.isLoading {
-                        VStack(spacing: WisentDesign.Space.x3) {
-                            ProgressView()
-                            Text("Loading your Stado deployments…")
-                                .foregroundStyle(.secondary)
-                        }
-                        .frame(maxWidth: .infinity, minHeight: 300)
+                        WisentLoadingPanel(
+                            title: "Reading the deployment registry",
+                            detail: "The Stado deployments this account may create, read, or share."
+                        )
                     } else if let registryError = deploymentStore.errorMessage,
                               deploymentStore.deployments.isEmpty {
-                        registryUnavailable(registryError)
+                        WisentErrorBanner(
+                            title: "Deployment registry unavailable",
+                            detail: registryError,
+                            action: WisentAction("Retry", symbol: "arrow.clockwise") {
+                                Task { await deploymentStore.load(identity: identity) }
+                            }
+                        )
                     } else if isProvisioning || update != nil {
                         provisioningContent
                     } else {
                         targetContent
                     }
                 }
-                .padding(WisentDesign.Space.x8)
+                .padding(WisentDesign.Space.x6)
                 .frame(maxWidth: 760)
                 .frame(maxWidth: .infinity)
             }
         }
         .frame(minWidth: 760, minHeight: 620)
+        .background(WisentDesign.canvas)
         .task {
             chooseInitialTarget()
             if let deployment = deploymentStore.selectedDeployment,
@@ -57,34 +64,36 @@ struct DeploymentSetupView: View {
         .onChange(of: deploymentStore.infrastructureTargets) { _, _ in
             chooseInitialTarget()
         }
+        .sheet(isPresented: $showsCreateDecision) {
+            if let target = selectedTarget {
+                createDecision(target)
+            }
+        }
     }
 
     private var header: some View {
-        HStack(spacing: WisentDesign.Space.x4) {
-            ZStack {
-                RoundedRectangle(cornerRadius: WisentDesign.Radius.medium)
-                    .fill(Color.accentColor.opacity(0.12))
-                Image(systemName: "point.3.connected.trianglepath.dotted")
-                    .font(.title2.weight(.semibold))
-                    .foregroundStyle(Color.accentColor)
-            }
-            .frame(width: 48, height: 48)
-
+        HStack(alignment: .top, spacing: WisentDesign.Space.x4) {
             VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
-                Text("Set up Stado")
-                    .font(.title2.weight(.semibold))
-                Text("Choose where this deployment's control plane and queue will run.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                Text("NEW DEPLOYMENT")
+                    .font(WisentTypeScale.eyebrow())
+                    .tracking(0.8)
+                    .foregroundStyle(WisentDesign.muted)
+                Text("Choose where this Stado control plane runs")
+                    .font(WisentTypography.heading(17))
+                    .foregroundStyle(WisentDesign.ink)
+                Text("The queue, the host registry, and the cleanup service all live wherever this deployment runs.")
+                    .font(WisentTypeScale.body())
+                    .foregroundStyle(WisentDesign.secondary)
             }
-            Spacer()
+            Spacer(minLength: 0)
             if let identity {
-                VStack(alignment: .trailing, spacing: WisentDesign.Space.x1) {
+                VStack(alignment: .trailing, spacing: 1) {
                     Text(identity.organization.name)
-                        .font(.subheadline.weight(.semibold))
+                        .font(WisentTypeScale.bodyStrong())
+                        .foregroundStyle(WisentDesign.ink)
                     Text(identity.email)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(WisentTypeScale.identifierSmall())
+                        .foregroundStyle(WisentDesign.secondary)
                 }
             }
         }
@@ -93,105 +102,106 @@ struct DeploymentSetupView: View {
 
     private var targetContent: some View {
         VStack(alignment: .leading, spacing: WisentDesign.Space.x6) {
-            VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
-                Text("Name this deployment")
-                    .font(.headline)
+            WisentSectionBox(title: "Name", detail: "Shown in the source selector and in the deployment registry.") {
                 TextField("My Stado", text: $name)
                     .textFieldStyle(.roundedBorder)
+                    .font(WisentTypeScale.body())
             }
 
-            VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
-                Text("Run the backend on")
-                    .font(.headline)
+            WisentSectionBox(
+                title: "Run the backend on",
+                detail: "Infrastructure accounts come from Skarbiec, which shares account identifiers and never credentials.",
+                trailing: "\(deploymentStore.infrastructureTargets.count.formatted(.number)) discovered"
+            ) {
                 if deploymentStore.infrastructureTargets.isEmpty {
-                    ContentUnavailableView(
-                        "No Infrastructure Discovered",
-                        systemImage: "network.slash",
-                        description: Text("Open Skarbiec, refresh Infrastructure, then retry. Skarbiec shares account identifiers—not credentials—with Stado.")
+                    WisentEmptyPanel(
+                        title: "No infrastructure discovered",
+                        detail: "Open Skarbiec, refresh Infrastructure, then retry. Stado never enumerates cloud accounts on its own.",
+                        symbol: "network.slash",
+                        action: WisentAction("Refresh infrastructure", symbol: "arrow.clockwise", kind: .primary) {
+                            Task { await deploymentStore.load(identity: identity) }
+                        }
                     )
-                    .frame(maxWidth: .infinity, minHeight: 220)
                 } else {
-                    ForEach(deploymentStore.infrastructureTargets) { target in
-                        targetButton(target)
+                    VStack(spacing: WisentDesign.Space.x2) {
+                        ForEach(deploymentStore.infrastructureTargets) { target in
+                            targetButton(target)
+                        }
                     }
                 }
             }
 
             if identity != nil {
-                Toggle(isOn: $shareWithOrganization) {
-                    VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
-                        Text("Share with \(identity?.organization.name ?? "organization")")
-                            .font(.body.weight(.medium))
-                        Text("Members receive view and submit access. You remain the owner and can change access later.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                WisentSectionBox(title: "Sharing") {
+                    Toggle(isOn: $shareWithOrganization) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Share with \(identity?.organization.name ?? "organization")")
+                                .font(WisentTypeScale.bodyStrong())
+                                .foregroundStyle(WisentDesign.ink)
+                            Text("Members receive view and submit access. You remain the owner and can change access later.")
+                                .font(WisentTypeScale.caption())
+                                .foregroundStyle(WisentDesign.secondary)
+                        }
                     }
                 }
             }
 
             if let errorMessage {
-                DeploymentErrorBanner(message: errorMessage)
+                WisentErrorBanner(title: "Deployment could not be created", detail: errorMessage)
             }
 
-            HStack {
-                Button("Refresh Infrastructure") {
-                    Task { await deploymentStore.load(identity: identity) }
-                }
-                Spacer()
-                Button("Create and Start Stado") {
-                    Task { await beginProvisioning() }
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .disabled(selectedTarget == nil || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            HStack(spacing: WisentDesign.Space.x2) {
+                WisentActionButton(
+                    action: WisentAction("Refresh infrastructure", symbol: "arrow.clockwise") {
+                        Task { await deploymentStore.load(identity: identity) }
+                    }
+                )
+                Spacer(minLength: 0)
+                WisentActionButton(
+                    action: WisentAction(
+                        "Create and start Stado…",
+                        symbol: "bolt.horizontal",
+                        kind: .primary,
+                        isEnabled: selectedTarget != nil && !trimmedName.isEmpty
+                    ) {
+                        showsCreateDecision = true
+                    }
+                )
             }
         }
     }
 
     private var provisioningContent: some View {
-        VStack(alignment: .leading, spacing: WisentDesign.Space.x6) {
-            Label("Creating \(name)", systemImage: "server.rack")
-                .font(.title2.weight(.semibold))
-            if let update {
-                VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
-                    ProgressView(value: update.fraction)
-                    Text(update.phase)
-                        .font(.headline)
-                    Text(update.detail)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: WisentDesign.Space.x5) {
+            WisentSectionBox(
+                title: "Creating \(name)",
+                detail: "Stado verifies the health endpoint before the console reads anything from it.",
+                trailing: update.map { "\(Int($0.fraction * 100))%" }
+            ) {
+                WisentPanel {
+                    VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
+                        ProgressView(value: update?.fraction ?? 0)
+                        Text(update?.phase ?? "Starting")
+                            .font(WisentTypeScale.bodyStrong())
+                            .foregroundStyle(WisentDesign.ink)
+                        Text(update?.detail ?? "Waiting for the first provisioning step to report.")
+                            .font(WisentTypeScale.body())
+                            .foregroundStyle(WisentDesign.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-            } else {
-                ProgressView()
-                    .controlSize(.large)
             }
-            Text("You can keep this window open. Stado verifies the health endpoint before connecting the console.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+
             if let errorMessage {
-                DeploymentErrorBanner(message: errorMessage)
-                HStack {
-                    Spacer()
-                    Button("Try Again") {
+                WisentErrorBanner(
+                    title: "Provisioning stopped",
+                    detail: errorMessage,
+                    action: WisentAction("Try again", symbol: "arrow.clockwise", kind: .primary) {
                         update = nil
                         self.errorMessage = nil
                         Task { await resumeProvisioning() }
                     }
-                    .buttonStyle(.borderedProminent)
-                }
-            }
-        }
-        .frame(maxWidth: 620)
-    }
-
-    private func registryUnavailable(_ message: String) -> some View {
-        ContentUnavailableView {
-            Label("Deployment Registry Unavailable", systemImage: "exclamationmark.icloud")
-        } description: {
-            Text(message)
-        } actions: {
-            Button("Try Again") {
-                Task { await deploymentStore.load(identity: identity) }
+                )
             }
         }
     }
@@ -201,38 +211,108 @@ struct DeploymentSetupView: View {
         return Button {
             selectedTargetID = target.id
         } label: {
-            HStack(spacing: WisentDesign.Space.x4) {
+            HStack(spacing: WisentDesign.Space.x3) {
                 Image(systemName: target.provider.symbol)
-                    .font(.title3)
-                    .foregroundStyle(selected ? Color.accentColor : .secondary)
-                    .frame(width: 30)
-                VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(selected ? WisentDesign.brand : WisentDesign.muted)
+                    .frame(width: 24)
+                VStack(alignment: .leading, spacing: 1) {
                     Text(target.displayName)
-                        .font(.body.weight(.semibold))
+                        .font(WisentTypeScale.bodyStrong())
+                        .foregroundStyle(WisentDesign.ink)
                     Text(targetDetail(target))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(WisentTypeScale.identifierSmall())
+                        .foregroundStyle(WisentDesign.secondary)
                         .lineLimit(2)
                 }
-                Spacer()
+                Spacer(minLength: 0)
                 if target.provider == .local {
                     WisentBadge("This device", tone: .neutral)
                 }
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+                    .foregroundStyle(selected ? WisentDesign.brand : WisentDesign.muted)
             }
-            .padding(WisentDesign.Space.x4)
+            .padding(WisentDesign.Space.x3)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: WisentDesign.Radius.medium)
-                    .fill(selected ? Color.accentColor.opacity(0.08) : Color.secondary.opacity(0.05))
+                selected ? WisentDesign.brandSoft : WisentDesign.surface,
+                in: RoundedRectangle(cornerRadius: WisentDesign.Radius.medium)
             )
             .overlay {
                 RoundedRectangle(cornerRadius: WisentDesign.Radius.medium)
-                    .stroke(selected ? Color.accentColor.opacity(0.7) : Color.secondary.opacity(0.15), lineWidth: selected ? 2 : 1)
+                    .stroke(selected ? WisentDesign.brand : WisentDesign.border, lineWidth: WisentDesign.hairline)
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    // MARK: Costly decision
+
+    /// Creating a cloud deployment bills the operator's own account from the
+    /// first step. The dialog names every resource before the first API call,
+    /// and the destructive verb is the one that spends money.
+    private func createDecision(_ target: InfrastructureTarget) -> some View {
+        WisentDecisionDialog(
+            tone: target.provider == .local ? .warning : .danger,
+            title: "Create \(trimmedName) on \(target.displayName)?",
+            lines: decisionLines(target),
+            reasonCode: nil,
+            listing: decisionListing(target),
+            footnote: shareWithOrganization && identity != nil
+                ? "\(identity?.organization.name ?? "Your organization") receives view and submit access as soon as the deployment record exists."
+                : "Only you will have access until you grant it to someone else.",
+            actions: [
+                WisentAction("Do not create it", kind: .primary) { showsCreateDecision = false },
+                WisentAction(
+                    target.provider == .local ? "Install locally" : "Create and bill this account",
+                    kind: .destructive
+                ) {
+                    showsCreateDecision = false
+                    Task { await beginProvisioning() }
+                },
+            ]
+        )
+    }
+
+    private func decisionLines(_ target: InfrastructureTarget) -> [String] {
+        switch target.provider {
+        case .local:
+            return [
+                "Stado installs a control plane on this Mac and registers a launch agent that keeps it running after logout.",
+                "Storage stays on this device. Removing the deployment later is a separate manual step.",
+            ]
+        case .gcp:
+            return [
+                "Stado enables Cloud Run, Cloud Build, Artifact Registry, and storage APIs in \(target.externalID), then builds an image and deploys a service.",
+                "Every resource it creates bills that Google Cloud account until it is deleted, and this console cannot delete them.",
+            ]
+        case .aws:
+            return [
+                "Stado creates the storage, identity, and container resources this control plane needs in AWS account \(target.externalID), then starts the service.",
+                "Every resource it creates bills that AWS account until it is deleted, and this console cannot delete them.",
+            ]
+        case .azure:
+            return [
+                "Stado creates the resource group, registry, storage, and container app this control plane needs in Azure subscription \(target.externalID).",
+                "Every resource it creates bills that subscription until it is deleted, and this console cannot delete them.",
+            ]
+        }
+    }
+
+    private func decisionListing(_ target: InfrastructureTarget) -> [String] {
+        [
+            "provider: \(target.provider.rawValue)",
+            "account: \(target.externalID)",
+            "deployment name: \(trimmedName)",
+            "shared with organization: \(shareWithOrganization && identity != nil)",
+        ]
+    }
+
+    // MARK: Provisioning
+
+    private var trimmedName: String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private var selectedTarget: InfrastructureTarget? {
@@ -250,7 +330,7 @@ struct DeploymentSetupView: View {
         errorMessage = nil
         do {
             let deployment = try await deploymentStore.createDeployment(
-                name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+                name: trimmedName,
                 target: target,
                 shareWithHomeOrganization: shareWithOrganization
             )
@@ -287,7 +367,9 @@ struct DeploymentSetupView: View {
         onComplete()
         try operationsStore.saveDashboardURL(backend.endpoint)
         try cleanupStore.saveDashboardURL(backend.endpoint)
+        fleetStore.configureEndpoint(backend.endpoint)
         await operationsStore.refresh()
+        await fleetStore.refresh()
     }
 
     private func provisionSafely(deployment: StadoDeployment, target: InfrastructureTarget) async {
@@ -315,18 +397,5 @@ struct DeploymentSetupView: View {
 
     private static func describe(_ error: Error) -> String {
         (error as? LocalizedError)?.errorDescription ?? "Stado could not create this deployment."
-    }
-}
-
-private struct DeploymentErrorBanner: View {
-    let message: String
-
-    var body: some View {
-        Label(message, systemImage: "exclamationmark.triangle.fill")
-            .font(.subheadline)
-            .foregroundStyle(.red)
-            .padding(WisentDesign.Space.x3)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: WisentDesign.Radius.small))
     }
 }
