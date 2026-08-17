@@ -14,11 +14,14 @@ private enum HostFacet: String, Hashable {
 struct HostsView: View {
     @ObservedObject var store: OperationsStore
     @ObservedObject var fleetStore: FleetControlStore
+    @ObservedObject var enrollmentStore: MachineEnrollmentStore
     let scope: String
     let route: (ConsoleDestination) -> Void
+    let refresh: () async -> Void
 
     @State private var facet: HostFacet = .all
     @State private var selection: String?
+    @State private var showsEnrollment = false
 
     var body: some View {
         WisentScreen(
@@ -31,7 +34,8 @@ struct HostsView: View {
                         await store.refresh()
                         await fleetStore.refresh()
                     }
-                }
+                },
+                addMachineAction(kind: .primary),
             ],
             scrolls: false,
             constrainsWidth: false
@@ -59,6 +63,39 @@ struct HostsView: View {
                 }
             }
         }
+        .sheet(isPresented: $showsEnrollment) {
+            MachineEnrollmentView(
+                store: enrollmentStore,
+                existingNames: knownNames,
+                refresh: refresh
+            )
+        }
+    }
+
+    /// A fleet with no hosts in it is exactly the fleet that needs this verb,
+    /// so it lives in the context bar rather than only beside a populated
+    /// table. The unfinished draft is named on the button: enrollment spans a
+    /// walk to another machine, and coming back to a button that says nothing
+    /// about the key already minted is how the walk gets repeated.
+    private func addMachineAction(kind: WisentAction.Kind) -> WisentAction {
+        let resuming = !enrollmentStore.draft.isEmpty
+        return WisentAction(
+            resuming ? "Resume adding \(enrollmentStore.draft.machineName)" : "Add a Machine",
+            symbol: resuming ? "arrow.uturn.forward" : "plus",
+            kind: kind
+        ) {
+            showsEnrollment = true
+        }
+    }
+
+    /// Every name enrollment would collide with: declared registry targets and
+    /// hosts publishing capacity under a target name.
+    private var knownNames: Set<String> {
+        var names = Set(fleetStore.targets.map(\.name))
+        for host in store.snapshot?.workers ?? [] {
+            if let target = host.targetName { names.insert(target) }
+        }
+        return names
     }
 
     @ViewBuilder
@@ -155,8 +192,9 @@ struct HostsView: View {
                 if facet == .all {
                     WisentEmptyPanel(
                         title: "No registered hosts",
-                        detail: "The Stado registry and capacity store exposed no host in this snapshot.",
-                        symbol: "server.rack"
+                        detail: "The Stado registry and capacity store exposed no host in this snapshot. A fleet starts with one machine: name it, put a minted key on it, and enroll it.",
+                        symbol: "server.rack",
+                        action: addMachineAction(kind: .primary)
                     )
                 } else {
                     WisentEmptyPanel(
