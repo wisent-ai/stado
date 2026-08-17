@@ -51,6 +51,10 @@ fi
 }
 
 :$PORT {
+	# The connector reaches this origin over loopback, so nothing else should.
+	# A bare `:$PORT` listened on every interface, publishing the unauthenticated
+	# origin to the LAN and the tailnet.
+	bind 127.0.0.1
 	@media path /images/* /profiles/*
 	handle @media {
 		rewrite * /$CONTAINER{uri}
