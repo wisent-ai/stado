@@ -1,67 +1,68 @@
 import SwiftUI
+import WisentDesignSystem
 
 struct OverviewView: View {
     let snapshot: DashboardSnapshot
     let lastUpdated: Date?
 
     private let metricColumns = [
-        GridItem(.adaptive(minimum: StadoTheme.Layout.metricMinimumWidth), spacing: StadoTheme.Space.sm),
+        GridItem(.adaptive(minimum: StadoLayout.metricMinimumWidth), spacing: WisentDesign.Space.x3),
     ]
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: StadoTheme.Space.lg) {
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x6) {
                 header
 
-                LazyVGrid(columns: metricColumns, alignment: .leading, spacing: StadoTheme.Space.sm) {
-                    MetricCard(
+                LazyVGrid(columns: metricColumns, alignment: .leading, spacing: WisentDesign.Space.x3) {
+                    WisentMetricCard(
                         title: "Queued",
                         value: snapshot.counts.queue.formatted(),
                         detail: "Jobs waiting for capacity",
                         symbol: "clock",
                         tone: snapshot.counts.queue > 0 ? .warning : .neutral
                     )
-                    MetricCard(
+                    WisentMetricCard(
                         title: "Running",
                         value: snapshot.counts.running.formatted(),
                         detail: "Jobs currently executing",
                         symbol: "play.circle.fill",
-                        tone: snapshot.counts.running > 0 ? .healthy : .neutral
+                        tone: snapshot.counts.running > 0 ? .success : .neutral
                     )
-                    MetricCard(
+                    WisentMetricCard(
                         title: "Registered workers",
                         value: snapshot.workers.count.formatted(),
                         detail: workerMetricDetail,
                         symbol: "server.rack",
-                        tone: unavailableWorkerCount > 0 ? .critical : (liveWorkerCount == 0 ? .warning : .healthy)
+                        tone: unavailableWorkerCount > 0 ? .danger : (liveWorkerCount == 0 ? .warning : .success)
                     )
-                    MetricCard(
+                    WisentMetricCard(
                         title: "Free slots",
                         value: snapshot.throughput.liveTotalFreeSlots.formatted(),
                         detail: snapshot.liveAgents.isEmpty ? "No live worker reports" : "Reported by live workers",
                         symbol: "gauge.with.dots.needle.50percent",
-                        tone: snapshot.liveAgents.isEmpty ? .warning : (snapshot.throughput.liveTotalFreeSlots > 0 ? .healthy : .neutral)
+                        tone: snapshot.liveAgents.isEmpty ? .warning : (snapshot.throughput.liveTotalFreeSlots > 0 ? .success : .neutral)
                     )
                 }
 
                 workerAvailabilityCard
 
-                HStack(alignment: .top, spacing: StadoTheme.Space.md) {
+                HStack(alignment: .top, spacing: WisentDesign.Space.x4) {
                     capacityCard
                     throughputCard
                 }
 
                 recentActivity
             }
-            .frame(maxWidth: StadoTheme.Layout.contentMaximumWidth, alignment: .leading)
+            .frame(maxWidth: WisentDesign.Layout.contentMaximumWidth, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .topLeading)
-            .padding(StadoTheme.Space.lg)
+            .padding(WisentDesign.Space.x6)
         }
     }
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: StadoTheme.Space.xxs) {
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
                 Text("Operations overview")
                     .font(.largeTitle.weight(.semibold))
                 Text(sourceDescription)
@@ -69,7 +70,7 @@ struct OverviewView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            StatusPill(label: operationalStatus.label, tone: operationalStatus.tone)
+            WisentBadge(operationalStatus.label, tone: operationalStatus.tone)
         }
     }
 
@@ -113,12 +114,12 @@ struct OverviewView: View {
         snapshot.workers.filter { $0.status != .live || !$0.declared }
     }
 
-    private var operationalStatus: (label: String, tone: StatusTone) {
+    private var operationalStatus: (label: String, tone: WisentTone) {
         if snapshot.counts.queue > 0 && liveWorkerCount == 0 {
-            return ("Queue blocked", .critical)
+            return ("Queue blocked", .danger)
         }
         if unavailableWorkerCount > 0 {
-            return ("Fleet degraded", .critical)
+            return ("Fleet degraded", .danger)
         }
         if snapshot.counts.failed > 0 || staleWorkerCount > 0 {
             return ("Attention required", .warning)
@@ -126,12 +127,12 @@ struct OverviewView: View {
         if liveWorkerCount == 0 {
             return ("No live workers", .warning)
         }
-        return ("Fleet reporting", .healthy)
+        return ("Fleet reporting", .success)
     }
 
     private var workerAvailabilityCard: some View {
-        StadoCard {
-            VStack(alignment: .leading, spacing: StadoTheme.Space.sm) {
+        WisentPanel {
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
                 HStack {
                     Label("Worker availability", systemImage: "server.rack")
                         .font(.headline)
@@ -152,14 +153,14 @@ struct OverviewView: View {
                         systemImage: "checkmark.circle.fill"
                     )
                     .font(.subheadline)
-                    .foregroundStyle(StatusTone.healthy.color)
+                    .foregroundStyle(WisentTone.success.color)
                 } else {
                     ForEach(availabilityIssues) { worker in
-                        HStack(alignment: .top, spacing: StadoTheme.Space.sm) {
+                        HStack(alignment: .top, spacing: WisentDesign.Space.x3) {
                             Image(systemName: worker.status == .unavailable ? "xmark.circle.fill" : "clock.badge.exclamationmark.fill")
-                                .foregroundStyle(worker.status == .unavailable ? StatusTone.critical.color : StatusTone.warning.color)
+                                .foregroundStyle(worker.status == .unavailable ? WisentTone.danger.color : WisentTone.warning.color)
                                 .accessibilityHidden(true)
-                            VStack(alignment: .leading, spacing: StadoTheme.Space.xxs) {
+                            VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
                                 Text(worker.displayName)
                                     .font(.subheadline.weight(.semibold))
                                     .textSelection(.enabled)
@@ -174,9 +175,9 @@ struct OverviewView: View {
                                 }
                             }
                             Spacer()
-                            StatusPill(
-                                label: worker.status == .unavailable ? "Unavailable" : (worker.status == .stale ? "Stale" : "Unregistered"),
-                                tone: worker.status == .unavailable ? .critical : .warning
+                            WisentBadge(
+                                worker.status == .unavailable ? "Unavailable" : (worker.status == .stale ? "Stale" : "Unregistered"),
+                                tone: worker.status == .unavailable ? .danger : .warning
                             )
                         }
                         .accessibilityElement(children: .combine)
@@ -187,8 +188,8 @@ struct OverviewView: View {
     }
 
     private var capacityCard: some View {
-        StadoCard {
-            VStack(alignment: .leading, spacing: StadoTheme.Space.sm) {
+        WisentPanel {
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
                 Label("Capacity", systemImage: "memorychip")
                     .font(.headline)
 
@@ -219,8 +220,8 @@ struct OverviewView: View {
     }
 
     private var throughputCard: some View {
-        StadoCard {
-            VStack(alignment: .leading, spacing: StadoTheme.Space.sm) {
+        WisentPanel {
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
                 Label("Throughput", systemImage: "chart.line.uptrend.xyaxis")
                     .font(.headline)
 
@@ -244,8 +245,8 @@ struct OverviewView: View {
     }
 
     private var recentActivity: some View {
-        StadoCard {
-            VStack(alignment: .leading, spacing: StadoTheme.Space.sm) {
+        WisentPanel {
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
                 HStack {
                     Label("Recent outcomes", systemImage: "clock.arrow.circlepath")
                         .font(.headline)
@@ -264,7 +265,7 @@ struct OverviewView: View {
                     ForEach(Array(snapshot.recentFailed.prefix(3).enumerated()), id: \.offset) { _, job in
                         OutcomeRow(
                             symbol: "xmark.circle.fill",
-                            tone: .critical,
+                            tone: .danger,
                             title: "Job \(job.jobID) failed",
                             detail: job.task ?? job.model ?? "Task details unavailable",
                             date: nil
@@ -273,7 +274,7 @@ struct OverviewView: View {
                     ForEach(Array(snapshot.completedRecent.prefix(3).enumerated()), id: \.offset) { _, job in
                         OutcomeRow(
                             symbol: "checkmark.circle.fill",
-                            tone: .healthy,
+                            tone: .success,
                             title: "Job \(job.jobID) completed",
                             detail: job.task ?? job.model ?? "Task details unavailable",
                             date: StadoFormat.date(job.completedAt)
@@ -303,17 +304,17 @@ struct OverviewView: View {
 
 private struct OutcomeRow: View {
     let symbol: String
-    let tone: StatusTone
+    let tone: WisentTone
     let title: String
     let detail: String
     let date: Date?
 
     var body: some View {
-        HStack(spacing: StadoTheme.Space.sm) {
+        HStack(spacing: WisentDesign.Space.x3) {
             Image(systemName: symbol)
                 .foregroundStyle(tone.color)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: StadoTheme.Space.xxs) {
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
                 Text(title)
                     .font(.subheadline.weight(.medium))
                 Text(detail)
