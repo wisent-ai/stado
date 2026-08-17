@@ -90,12 +90,28 @@ PLIST_EOF
 /usr/bin/sudo -n /usr/bin/install -o root -g wheel -m 0644 "$tmp_plist" "$PLIST"
 /bin/rm -f "$tmp_plist"
 
-/usr/bin/sudo -n /bin/launchctl bootout "system/$LABEL" >/dev/null 2>&1 || true
-err=$(/usr/bin/sudo -n /bin/launchctl bootstrap system "$PLIST" 2>&1) || {
-    printf 'bootstrap system -> %s\n' "$err" >&2
-    exit 1
-}
-/usr/bin/sudo -n /bin/launchctl kickstart -k "system/$LABEL" >/dev/null 2>&1 || true
+# Restart in place when the unit is already loaded. `bootout` followed
+# immediately by `bootstrap` raced a still-terminating job and answered
+# `5: Input/output error`, which left the connector unloaded and the public
+# hostname serving 502 — an unload that fails halfway leaves nothing running.
+# `kickstart -k` restarts a loaded job with no window in which it does not
+# exist, so it is the first choice and bootstrap is only for a cold start.
+if /usr/bin/sudo -n /bin/launchctl print "system/$LABEL" >/dev/null 2>&1; then
+    /usr/bin/sudo -n /bin/launchctl kickstart -k "system/$LABEL" >/dev/null
+else
+    bootstrapped=no
+    for _ in 1 2 3 4 5 6; do
+        if err=$(/usr/bin/sudo -n /bin/launchctl bootstrap system "$PLIST" 2>&1); then
+            bootstrapped=yes
+            break
+        fi
+        /bin/sleep 5
+    done
+    [ "$bootstrapped" = yes ] || {
+        printf 'bootstrap system -> %s\n' "$err" >&2
+        exit 1
+    }
+fi
 
 # Readiness is an attached connector, not a created process.
 attached=no
