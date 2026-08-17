@@ -283,3 +283,35 @@ How the delivery contract was decided, and where it deviates from this document'
 Rollback: the before-image of all 2,674 rows, with old and new values per row and column, is retained on `charless-mac-mini` at `~/.stado/wisent-media-locators-before.json`. The Cloud Storage objects were never modified or deleted, so the original source still exists behind detached billing.
 
 Remaining, in order: restore a Wisent-fronted media host (start `cloudflared` for the existing `bobloo` tunnel against the running API), repoint the rows off the provider host, then retire the GCP media bucket.
+
+### Compute: what ran on GCP, and what had to change — 2026-08-17
+
+Read from the queue records themselves, not from the capability map.
+
+| Job family | Evidence | Replacement |
+|---|---|---|
+| Release workers | two jobs still `queued` from 2026-08-09, `stado release worker --request release-request.json` | self-hosted release publisher on `charless-mac-mini` |
+| Weles browser automation | GitHub health trajectories, a read-only GCP console inventory, `com.wisent.weles-api` restarts | Weles on `charless-mac-mini` |
+| Jeden goal-model training | three `failed` and four `cancelled` on 2026-08-10, `run_pipeline.sh` and `train_student_mlx.sh` | local GPU host, MLX student path |
+| MIG service families | `api`, `inference`, `training`, `images` blue/green, `image-gen-comfyui-mig`, `wisent-images-regional-mig` — all `targetSize: 0`, 20 instances `TERMINATED` | local hosts per the post-migration topology |
+| One-off GPU research | NeedHer watermark A100, VATT, Z-Image interpolation, Sapiens2 body-horror | not services; unique outputs pending export |
+
+**The change that was actually required:** every queued job carries provider-specific descriptors — `machine_type: e2-standard-8`, `image: pytorch-2-9-cu129-…`, `image_project: deeplearning-platform-release`. The dispatcher honoured a pinned `machine_type` unconditionally, and the Azure provider passes that string straight into `hardwareProfile.vmSize`, so a job submitted under GCP would fail at VM creation on Azure rather than at submit. `catalog::machine_type_provider` now recognizes the naming shape of each cloud (`Standard_*`, a dotted AWS type, a lowercase dashed GCE family) and `scheduler::dispatch::agent` honours a pin only for the cloud that names sizes that way, falling back to the catalog otherwise.
+
+Two gaps stay named rather than silently fixed: job-level `image`/`image_project` are ignored on Azure, where the account-wide `azure.image_urn` applies, so a pinned GCP image quietly changes meaning; and CPU jobs have no cloud VM shape of their own, so they ride GPU tiers or a local pin.
+
+GPU sizing needed no change: `catalog.rs` already maps each VRAM tier per provider (A10 → `Standard_NC8ads_A10_v4`, A100 → `Standard_NC24ads_A100_v4`, H100 → `Standard_NC40ads_H100_v5`) and the quota requests for those families are filed.
+
+### `bobloo.com` restored, and the provider host removed from the database — 2026-08-17
+
+An earlier note here claimed Cloudflare could not be driven without dashboard access. That was wrong: `stado cloudflare route-tunnel` exists, and the tunnel needed no API call at all.
+
+The 502 was a missing connector, not a missing route. Cloudflare still held the public hostname, and the connector token was already installed owner-only on `charless-mac-mini`; nothing had been attached since the GCP estate went away. Attaching it revealed the remote ingress: `bobloo.com` → `http://localhost:3000`, a port with nothing behind it.
+
+- `com.wisent.cloudflared` runs the connector as a LaunchDaemon, token supplied through the process environment so it never appears in `argv`. The per-user domain refused a LaunchAgent with `5: Input/output error` and `gui/<uid>` does not exist headless, so `system` is the domain that works and survives reboot.
+- `com.wisent.bobloo-gateway` runs Caddy on loopback `127.0.0.1:3000`: `/images/*` and `/profiles/*` are rewritten into the `media-public` container and proxied to Azure with a 24-hour cache header, everything else goes to the Wisent API on `127.0.0.1:8000`. The connector cannot rewrite paths, so this mapping is what lets the database name a Wisent host while the container, account or cloud changes behind it.
+- Both units are adopted into the registry. The abandoned LaunchAgent plist from the first attempt was deleted, and the registry record was re-adopted so it names the daemon that actually runs rather than a file that no longer exists.
+
+Verified publicly: `https://bobloo.com/images/characters/8808.webp` returns 200 with `image/webp` (59,686 bytes), a character video returns 200 with `video/webm` (3,777,332 bytes), an accented seed path returns 200, a profile image returns 200, and `https://bobloo.com/health` returns 200 JSON — so the product API is publicly reachable again as well.
+
+A second locator pass then rewrote all **2,674 rows** from `wisentprodstado.blob.core.windows.net` to `https://bobloo.com/`, zero failures, and a re-read plans 0 further changes. The provider host is no longer in the product database, which was the invariant the first pass had to break. Each pass wrote its own timestamped before-image on the host, so neither reversal record overwrote the other.
