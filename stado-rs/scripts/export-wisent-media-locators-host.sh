@@ -106,8 +106,12 @@ def fetch_rows(table, columns):
                 "Range-Unit": "items",
             },
         )
-        with urllib.request.urlopen(request, timeout=60) as response:
-            page = json.load(response)
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                page = json.load(response)
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode(errors="replace")[:1000]
+            raise SystemExit(f"{table} query failed with HTTP {error.code}: {detail}") from None
         if not isinstance(page, list):
             raise SystemExit(f"{table} did not return a row list")
         rows.extend(page)
