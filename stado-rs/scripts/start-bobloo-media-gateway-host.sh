@@ -53,8 +53,10 @@ fi
 :$PORT {
 	# The connector reaches this origin over loopback, so nothing else should.
 	# A bare `:$PORT` listened on every interface, publishing the unauthenticated
-	# origin to the LAN and the tailnet.
-	bind 127.0.0.1
+	# origin to the LAN and the tailnet. Both loopback families are required:
+	# the connector dials `http://localhost:3000`, which resolves to `::1` first,
+	# so an IPv4-only bind turned every public request into a 502.
+	bind 127.0.0.1 ::1
 	@media path /images/* /profiles/*
 	handle @media {
 		rewrite * /$CONTAINER{uri}
