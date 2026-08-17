@@ -254,8 +254,10 @@ a cloud account, cloud credential, Skarbiec, GPU, or Python.
 - the runtime required by the workload itself.
 
 Install an exact verified release before following the
-[complete onboarding path](docs/onboarding.md). For source development only,
-install Rust and Cargo and build from `stado-rs/`.
+[complete onboarding path](docs/onboarding.md); if you are attaching your own
+computer to a fleet someone else operates, read
+[Add your own machine](docs/add-your-machine.md) instead. For source
+development only, install Rust and Cargo and build from `stado-rs/`.
 
 ### 1. Create the minimal local configuration
 
@@ -436,6 +438,7 @@ Documentation:
 - [Release and compatibility](docs/release.md)
 - [Changelog](CHANGELOG.md)
 - [Onboarding](docs/onboarding.md)
+- [Add your own machine](docs/add-your-machine.md)
 - [Architecture](docs/architecture.md)
 - [Integration contracts and lifecycle](docs/integrations.md)
 - [CLI reference](docs/cli.md)

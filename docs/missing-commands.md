@@ -149,8 +149,9 @@ can print a value.
 
 15. **registry doctor** — diff registry declarations against live host state:
     unmanaged agents, missing plists, stale beacons, hosts with no heartbeat.
-16. **registry host add HOST --ssh DEST** — onboard a new machine into the
-    canonical registry (validated).
+16. **registry host add HOST --ssh DEST --release-platform PLATFORM** — onboard
+    a new machine into the canonical registry (validated). Both flags are
+    required; `stado fleet enroll` is the path that probes the machine for them.
 17. **registry beacon-age** — one table: every host and its last beacon
     timestamp (the "hasn't reported in 5 days" detector).
 

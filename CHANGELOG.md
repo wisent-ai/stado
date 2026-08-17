@@ -39,6 +39,25 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   a real authorized job result rather than deployment or setup navigation.
 - Replaced the Oko-specific onboarding relay with the same closed,
   least-privilege operation contract used by every registered product client.
+- Corrected and completed the machine-onboarding documentation. Every
+  documented `stado registry host add` invocation now carries the required
+  `--release-platform` alongside `--ssh`; the previously published form failed
+  on use.
+- Documented enrollment as the verified path it is: `stado fleet key generate`
+  prints the public key that first contact needs, `stado fleet key install`
+  travels through the existing channel and is therefore rotation rather than
+  first contact, and `stado fleet enroll` probes `hostname` and `uname` before
+  it writes and rolls the entry back when bootstrap fails. Added the
+  `stado fleet` family to the CLI reference and recorded Stado Desktop's
+  equivalent Add-a-Machine surface; `stado_fleet` is documented only as a
+  compatibility binary.
+- Documented that the SSH destination may be any reachable target — a `.local`
+  name on the local network is as valid as a tailnet name — and what a `.local`
+  destination costs: channel-opening commands then require the same network,
+  while the outward health beacon keeps `stado registry beacon-age` reporting.
+- Added [Add your own machine](docs/add-your-machine.md) for the owner of a
+  machine joining someone else's fleet, linked from the README next to the
+  operator onboarding path.
 
 ### Coding clients
 
