@@ -72,6 +72,9 @@ MIN_CLASSES = len("abc")
 # is how this job spent its first hours. launchd will not start a second copy
 # while one runs, so a long ceiling costs nothing.
 TIMEOUT = 4 * 3600
+# How long one tick may hold the writer lease. Ten minutes covers a useful slice
+# of the archive and leaves ingestion alone for the rest of the hour.
+SLICE_SECONDS = float(os.environ.get("SCRUB_SLICE_SECONDS", 600))
 # Where a scheduled run remembers how far it got. Not in the Lake: the Lake is the
 # thing being repaired, and its own tooling deletes derived files.
 STATE = (
@@ -284,6 +287,11 @@ def main():
     since = ZERO if full else max(float(state.get("last_run", ZERO)) - OVERLAP_SECONDS, ZERO)
     print(f"sweep {'full' if full else 'incremental'} since={since:.0f}")
 
+    # Bounded and resumable: one tick covers a slice of the archive and hands the
+    # next tick a place to continue, so the writer lease is never held for longer
+    # than a slice. An unbounded pass over seven gigabytes held it for eleven
+    # hours here and stopped ingestion for exactly that long.
+    resume_after = str(state.get("resume_after") or "")
     scrub = run(
         [
             PYTHON,
@@ -294,6 +302,9 @@ def main():
             str(LAKE),
             "--since",
             str(int(since)),
+            "--deadline-seconds",
+            str(int(SLICE_SECONDS)),
+            *(("--start-after", resume_after) if resume_after else ()),
             "--apply",
         ],
         VAULTS[ZERO],
@@ -310,14 +321,24 @@ def main():
         # rewritten, so the next run must cover the same window again.
         print("lake busy: the streamer holds the writer lease; state not advanced")
     else:
+        # "partial, resume after <path>" is the inner pass telling us where its
+        # deadline stopped it; carrying that forward is what makes several short
+        # runs equal to one long one.
+        marker = "coverage partial, resume after "
+        resumed = [
+            line.split(marker, len("a"))[len("a")].strip()
+            for line in scrub.stdout.splitlines()
+            if marker in line
+        ]
         write_state(
             {
                 "last_run": started,
-                "last_full_sweep": started if full else last_full,
+                "last_full_sweep": started if (full and not resumed) else last_full,
                 "literals": len(literals),
+                "resume_after": resumed[ZERO] if resumed else "",
             }
         )
-        print(f"state {STATE}")
+        print(f"state {STATE} resume_after={'yes' if resumed else 'none'}")
     print(f"finished in {time.time() - started:.1f}s")
     # A refused literal (over its file cap) is a report, not a failure of the run:
     # exit non-zero so the operator sees it, after the accepted ones were applied.
