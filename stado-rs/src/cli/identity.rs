@@ -220,7 +220,10 @@ pub async fn list(json_output: bool) -> Result<(), CmdError> {
         println!("no host declares an identity binding");
         return Ok(());
     }
-    println!("{:<24} {:<16} {:<32} USER", "HOST", "KIND", "IDENTITY");
+    println!(
+        "{:<24} {:<16} {:<32} {}",
+        "HOST", "KIND", "IDENTITY", "USER"
+    );
     for row in &rows {
         println!(
             "{:<24} {:<16} {:<32} {}",
