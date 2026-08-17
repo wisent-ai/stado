@@ -1,4 +1,4 @@
-//! `stado_fleet doctor` — one command that answers "is every registered
+//! `stado fleet doctor` — one command that answers "is every registered
 //! worker able to run, and if not, why".
 //!
 //! Three read-only sections, all through Stado's own surfaces:
@@ -11,11 +11,11 @@
 //! process exit code carries the verdict for automation.
 
 use serde_json::Value;
-use stado::config;
-use stado::monitor::host_health;
-use stado::queue::{self, JobStorage};
-use stado::skarbiec::Client;
-use stado::targets;
+use crate::config;
+use crate::monitor::host_health;
+use crate::queue::{self, JobStorage};
+use crate::skarbiec::Client;
+use crate::targets;
 
 /// One named probe result.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -159,13 +159,13 @@ pub fn unverifiable_registration(has_channel: bool, has_beacon: bool) -> bool {
 /// say out loud. With `scoped`, only members of that named fleet are
 /// checked; an undeclared fleet name is an error, not an empty pass.
 async fn fleet_checks(store: &JobStorage, scoped: Option<&str>) -> Result<Vec<Check>, String> {
-    let document = stado::cli::registry::fetch_document()
+    let document = crate::cli::registry::fetch_document()
         .await
         .map_err(|exc| exc.to_string())?;
-    let fleets = crate::fleet::parse_fleets(&document)?;
+    let fleets = crate::cli::fleet::fleets::parse_fleets(&document)?;
     let wanted: Option<Vec<String>> = match scoped {
         Some(name) => Some(
-            crate::fleet::find_fleet(&fleets, name)
+            crate::cli::fleet::fleets::find_fleet(&fleets, name)
                 .ok_or_else(|| format!("fleet '{name}' is not declared in the registry"))?
                 .members
                 .clone(),
@@ -283,7 +283,7 @@ pub async fn run(as_json: bool, scoped: Option<&str>) -> Result<bool, String> {
             println!("{status}\t{}\t{}", check.id, check.detail);
         }
         println!(
-            "\nstado-fleet doctor: {}",
+            "\nstado fleet doctor: {}",
             if clean {
                 "fleet is clean"
             } else {

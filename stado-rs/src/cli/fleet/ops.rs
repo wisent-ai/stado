@@ -6,9 +6,9 @@
 //! anything reaches the canonical registry.
 
 use serde_json::{json, Value};
-use stado::cli::registry::{fetch_document, push_document};
+use crate::cli::registry::{fetch_document, push_document};
 
-use crate::fleet::{find_fleet, parse_fleets};
+use crate::cli::fleet::fleets::{find_fleet, parse_fleets};
 
 /// Append a fleet entry to the document. Duplicate names are refused up
 /// front; the result is re-parsed through the same [`parse_fleets`] the
@@ -63,7 +63,7 @@ pub fn assign_target(
     Ok(next)
 }
 
-/// `stado_fleet create NAME` — declare a fleet in the canonical registry.
+/// `stado fleet create NAME` — declare a fleet in the canonical registry.
 pub async fn create(name: &str, notes: &str) -> Result<bool, String> {
     let document = fetch_document().await.map_err(|exc| exc.to_string())?;
     let next = create_fleet(&document, name, notes)?;
@@ -103,7 +103,7 @@ pub fn register_target(
         "release_platform": release_platform,
         "ssh": Value::Null,
         "hostnames": hostnames,
-        "notes": "enrolled by `stado_fleet enroll` (self-install path)",
+        "notes": "enrolled by `stado fleet enroll` (self-install path)",
     }));
     Ok(next)
 }
@@ -126,13 +126,13 @@ pub fn remove_target(document: &Value, name: &str) -> Result<Value, String> {
 
 /// Probe one fixed identity command through Stado's existing deploy channel.
 async fn probe_identity_field(
-    runner: &stado::deploy::Runner,
+    runner: &crate::deploy::Runner,
     target: &str,
     destination: &str,
     command: &str,
 ) -> Result<String, String> {
-    let (argv, _key) = crate::key::channel_argv(target, destination, command).await?;
-    let output = runner(stado::deploy::CommandSpec::new(argv)).await?;
+    let (argv, _key) = crate::cli::fleet::key::channel_argv(target, destination, command).await?;
+    let output = runner(crate::deploy::CommandSpec::new(argv)).await?;
     if !output.ok() {
         return Err(format!("cannot verify {destination}: {}", output.detail()));
     }
@@ -145,22 +145,22 @@ async fn probe_identity_field(
 
 /// Verify hostname and immutable-release platform before any registry write.
 async fn probe_identity(
-    runner: &stado::deploy::Runner,
+    runner: &crate::deploy::Runner,
     target: &str,
     destination: &str,
 ) -> Result<(String, &'static str), String> {
     let raw_hostname = probe_identity_field(runner, target, destination, "hostname").await?;
-    let hostname = stado::targets::normalize_hostname(&raw_hostname);
+    let hostname = crate::targets::normalize_hostname(&raw_hostname);
     if hostname.is_empty() {
         return Err(format!("{destination} returned an empty hostname"));
     }
     let os = probe_identity_field(runner, target, destination, "uname -s").await?;
     let arch = probe_identity_field(runner, target, destination, "uname -m").await?;
-    let platform = crate::enroll::release_platform(&os, &arch)?;
+    let platform = crate::cli::fleet::enroll::release_platform(&os, &arch)?;
     Ok((hostname, platform))
 }
 
-/// `stado_fleet assign TARGET FLEET` — add a registered machine to a fleet.
+/// `stado fleet assign TARGET FLEET` — add a registered machine to a fleet.
 pub async fn assign(target: &str, fleet_name: &str) -> Result<bool, String> {
     let document = fetch_document().await.map_err(|exc| exc.to_string())?;
     let next = assign_target(&document, target, fleet_name)?;
@@ -196,14 +196,14 @@ pub fn preflight_enroll(
     Ok(())
 }
 
-/// `stado_fleet enroll NAME --ssh DEST [--kind local] [--fleet FLEET]
+/// `stado fleet enroll NAME --ssh DEST [--kind local] [--fleet FLEET]
 /// [--bootstrap]` — verified onboarding as one transaction. The machine is
 /// probed through Stado's deploy channel BEFORE anything is written: its
 /// real hostname lands in the entry, so the registration is a verified
 /// fact, not a declaration. A failed bootstrap rolls the entry back — an
 /// unverifiable or uninstallable machine never stays in the registry.
 /// Without `--ssh` there is no channel to verify against; the
-/// machine-initiated path (`stado_fleet join` there, `approve` here) is
+/// machine-initiated path (`stado fleet join` there, `approve` here) is
 /// the answer for that setup.
 pub async fn enroll(
     name: &str,
@@ -214,13 +214,13 @@ pub async fn enroll(
 ) -> Result<bool, String> {
     let Some(destination) = ssh else {
         return Err(
-            "enroll needs --ssh for a verified registration; without a reachable channel use machine-initiated enrollment: stado_fleet join on the machine, then stado_fleet approve here"
+            "enroll needs --ssh for a verified registration; without a reachable channel use machine-initiated enrollment: stado fleet join on the machine, then stado fleet approve here"
                 .to_string(),
         );
     };
     let document = fetch_document().await.map_err(|exc| exc.to_string())?;
-    crate::enroll::catalog::require_enroll_allowed(&document)?;
-    let takeover = crate::enroll::legacy::allow_takeover(&document, name).await?;
+    crate::cli::fleet::enroll::catalog::require_enroll_allowed(&document)?;
+    let takeover = crate::cli::fleet::enroll::legacy::allow_takeover(&document, name).await?;
     if takeover {
         if let Some(fleet) = fleet_name {
             let fleets = parse_fleets(&document)?;
@@ -230,9 +230,9 @@ pub async fn enroll(
     } else {
         preflight_enroll(&document, name, fleet_name)?;
     }
-    let runner = stado::deploy::production_runner();
+    let runner = crate::deploy::production_runner();
     let (hostname, release_platform) = probe_identity(&runner, name, destination).await?;
-    let mut next = crate::enroll::legacy::register_verified(
+    let mut next = crate::cli::fleet::enroll::legacy::register_verified(
         &document,
         name,
         destination,
@@ -247,10 +247,10 @@ pub async fn enroll(
     let generation = push_document(&next).await.map_err(|exc| exc.to_string())?;
     println!("registered '{name}', verified as '{hostname}' (generation {generation})");
     if bootstrap {
-        if let Err(exc) = stado::cli::bootstrap::run(Some(name.to_string()), false, false).await {
+        if let Err(exc) = crate::cli::bootstrap::run(Some(name.to_string()), false, false).await {
             let current = fetch_document().await.map_err(|err| err.to_string())?;
             let rolled_back = if takeover {
-                crate::enroll::legacy::rollback_registration(&current, &document, name, true)?
+                crate::cli::fleet::enroll::legacy::rollback_registration(&current, &document, name, true)?
             } else {
                 remove_target(&current, name)?
             };

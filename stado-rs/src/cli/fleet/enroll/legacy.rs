@@ -2,8 +2,8 @@
 //! communication channel or any proof of contact.
 
 use serde_json::{json, Value};
-use stado::monitor::host_health::HostHealthError;
-use stado::queue::JobStorage;
+use crate::monitor::host_health::HostHealthError;
+use crate::queue::JobStorage;
 
 fn target_index(document: &Value, name: &str) -> Result<Option<usize>, String> {
     let targets = document
@@ -29,7 +29,7 @@ pub async fn allow_takeover(document: &Value, name: &str) -> Result<bool, String
     }
 
     let store = JobStorage::new().await.map_err(|error| error.to_string())?;
-    match stado::monitor::host_health::load_host_health(&store, name).await {
+    match crate::monitor::host_health::load_host_health(&store, name).await {
         Err(HostHealthError::NoBeacon { .. }) => Ok(true),
         Ok(_) => Err(format!(
             "target '{name}' already has a health beacon and cannot be replaced"
@@ -79,7 +79,7 @@ pub fn register_verified(
         target["hostnames"] = json!([hostname]);
         target["release_platform"] = Value::String(release_platform.to_string());
         target["notes"] = Value::String(
-            "legacy declaration repaired by verified `stado_fleet enroll`".to_string(),
+            "legacy declaration repaired by verified `stado fleet enroll`".to_string(),
         );
         return Ok(next);
     }
@@ -90,7 +90,7 @@ pub fn register_verified(
         "ssh": destination,
         "release_platform": release_platform,
         "hostnames": [hostname],
-        "notes": "enrolled by verified `stado_fleet enroll`",
+        "notes": "enrolled by verified `stado fleet enroll`",
     }));
     Ok(next)
 }

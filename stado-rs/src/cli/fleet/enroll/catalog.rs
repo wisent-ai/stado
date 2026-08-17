@@ -4,7 +4,7 @@
 //! declares which registration paths the fleet allows, and a `channels`
 //! section declares how machines reach the control plane. Both are parsed
 //! here, enforced in the preflights of `join`/`approve`/`enroll`, and
-//! rendered by `stado_fleet catalog`. A document without the sections is
+//! rendered by `stado fleet catalog`. A document without the sections is
 //! unrestricted — and says so out loud when the catalog is printed, so an
 //! absent policy is never mistaken for a declared one.
 
@@ -149,10 +149,10 @@ pub fn require_enroll_allowed(document: &Value) -> Result<(), String> {
     Ok(())
 }
 
-/// `stado_fleet catalog` — print the central catalog as declared in the
+/// `stado fleet catalog` — print the central catalog as declared in the
 /// canonical registry.
 pub async fn catalog(as_json: bool) -> Result<bool, String> {
-    let document = stado::cli::registry::fetch_document()
+    let document = crate::cli::registry::fetch_document()
         .await
         .map_err(|exc| exc.to_string())?;
     let enrollment = parse_enrollment(&document)?;

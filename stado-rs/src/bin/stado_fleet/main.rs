@@ -1,197 +1,38 @@
-//! `stado_fleet` — automated fleet management for the registered Stado hosts.
+//! `stado_fleet` — the fleet-management entry point, kept for the hosts and
+//! scripts that already invoke it by name.
 //!
-//! The fleet's blind spot today: a worker can sit in a crash loop with no
-//! command able to say why. `stado_fleet doctor` closes that — it verifies
-//! the agent credential grant against the configured allowlist, probe-reads
-//! every declared secret field without printing values, and reports
-//! per-target beacon and capacity presence, all through Stado's own reads.
+//! Every command, flag and word of output comes from
+//! [`stado::cli::fleet`], which is also what `stado fleet ...` runs. There is
+//! deliberately no logic here: enrollment lived in this binary alone for
+//! months, which is how it drifted two minor versions behind the library it
+//! shares with `stado` without a single command able to report the gap. A
+//! second copy of the parser or the dispatch would be the same mistake with
+//! a different shape.
 
-mod doctor;
-mod enroll;
-mod fleet;
-mod key;
-mod ops;
-#[cfg(test)]
-mod tests;
-
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use std::process::ExitCode;
+use stado::cli::fleet::{self, FleetCommands};
 
 /// Fleet management for registered Stado hosts.
 #[derive(Parser)]
 #[command(name = "stado-fleet", version, about)]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// Diagnose worker health: agent grant, secret probes, beacons, capacity.
-    Doctor {
-        /// Emit the machine-readable report instead of the table.
-        #[arg(long)]
-        json: bool,
-        /// Scope the fleet section to one named fleet.
-        #[arg(long)]
-        fleet: Option<String>,
-    },
-    /// List the fleets declared in the registry with their members.
-    List {
-        /// Emit the machine-readable document instead of the table.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Show live state for the members of one named fleet.
-    Status {
-        /// Fleet name as declared in the registry `fleets` section.
-        name: String,
-    },
-    /// Declare a new fleet in the canonical registry.
-    Create {
-        /// Fleet name: a lowercase identifier.
-        name: String,
-        /// Free-form description of what this fleet is for.
-        #[arg(long, default_value = "")]
-        notes: String,
-    },
-    /// Add a registered machine to a declared fleet.
-    Assign {
-        /// Registry target name (the machine).
-        target: String,
-        /// Declared fleet name.
-        fleet: String,
-    },
-    /// One-command onboarding: register a machine, optionally fleet it,
-    /// optionally install the agent.
-    Enroll {
-        /// Machine name (a lowercase target identifier).
-        name: String,
-        /// SSH destination of the machine (user@host) — the verification
-        /// channel; the machine is probed before anything is written.
-        #[arg(long)]
-        ssh: String,
-        /// Target kind.
-        #[arg(long, default_value = "local")]
-        kind: String,
-        /// Fleet to place the machine in right away.
-        #[arg(long)]
-        fleet: Option<String>,
-        /// Install the agent on the machine after registering it.
-        #[arg(long)]
-        bootstrap: bool,
-    },
-    /// Announce this machine to the fleet (run on the machine being added).
-    Join,
-    /// List unanswered join requests.
-    Pending,
-    /// Turn a pending join request into a registered target.
-    Approve {
-        /// Hostname from the join request.
-        hostname: String,
-        /// Fleet to place the machine in right away.
-        #[arg(long)]
-        fleet: Option<String>,
-    },
-    /// Drop a pending join request.
-    Reject {
-        /// Hostname from the join request.
-        hostname: String,
-    },
-    /// Print the central enrollment and communication catalog.
-    Catalog {
-        /// Emit the machine-readable document instead of the table.
-        #[arg(long)]
-        json: bool,
-    },
-    /// SSH host keys in the globally selected credential store.
-    #[command(subcommand)]
-    Key(KeyCommands),
-}
-
-#[derive(Subcommand)]
-enum KeyCommands {
-    /// Move an existing private key into the credential store (never printed).
-    Add {
-        /// Registry target the key belongs to.
-        target: String,
-        /// Private key file removed after verified storage.
-        #[arg(long)]
-        from: String,
-    },
-    /// List stored SSH host keys (metadata only).
-    Ls,
-    /// Remove a target's SSH key from the credential store.
-    Rm {
-        /// Registry target.
-        target: String,
-    },
-    /// Install the stored public key into the target's authorized_keys.
-    Install {
-        /// Registry target.
-        target: String,
-    },
-    /// Verify the stored key opens the channel to the target.
-    Check {
-        /// Registry target.
-        target: String,
-    },
-    /// Generate a fresh ed25519 pair for the target into the credential store.
-    Generate {
-        /// Registry target.
-        target: String,
-    },
-    /// Rotate the target's key end to end, with rollback on failure.
-    Rotate {
-        /// Registry target.
-        target: String,
-    },
+    command: FleetCommands,
 }
 
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
-    let result = match cli.command {
-        Commands::Doctor { json, fleet } => doctor::run(json, fleet.as_deref()).await,
-        Commands::List { json } => fleet::list(json).await,
-        Commands::Status { name } => fleet::status(&name).await,
-        Commands::Create { name, notes } => ops::create(&name, &notes).await,
-        Commands::Assign { target, fleet } => ops::assign(&target, &fleet).await,
-        Commands::Enroll {
-            name,
-            ssh,
-            kind,
-            fleet,
-            bootstrap,
-        } => ops::enroll(&name, Some(&ssh), &kind, fleet.as_deref(), bootstrap).await,
-        Commands::Join => enroll::join().await,
-        Commands::Pending => enroll::pending().await,
-        Commands::Approve { hostname, fleet } => enroll::approve(&hostname, fleet.as_deref()).await,
-        Commands::Reject { hostname } => enroll::reject(&hostname).await,
-        Commands::Catalog { json } => enroll::catalog::catalog(json).await,
-        Commands::Key(sub) => {
-            let runner = stado::deploy::production_runner();
-            match sub {
-                KeyCommands::Add { target, from } => key::add(&runner, &target, &from).await,
-                KeyCommands::Ls => key::ls().await,
-                KeyCommands::Rm { target } => key::rm(&target).await,
-                KeyCommands::Install { target } => key::install(&runner, &target).await,
-                KeyCommands::Check { target } => key::check(&runner, &target).await,
-                KeyCommands::Generate { target } => key::rotate::generate(&runner, &target).await,
-                KeyCommands::Rotate { target } => key::rotate::rotate(&runner, &target).await,
+    match fleet::run(cli.command).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            // A silent failure already printed its own verdict (`doctor`
+            // reporting an unhealthy fleet); anything else gets this
+            // program's prefix, exactly as before.
+            if let Some(message) = error.message.as_deref() {
+                eprintln!("stado-fleet: {message}");
             }
-        }
-    };
-    match result {
-        Ok(clean) => {
-            if clean {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::FAILURE
-            }
-        }
-        Err(message) => {
-            eprintln!("stado-fleet: {message}");
             ExitCode::FAILURE
         }
     }
