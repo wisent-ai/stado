@@ -2,11 +2,12 @@
 
 ## Approval status
 
-**No user approved these classifications.** The user requested a map of what
-appears necessary; the classifications below are an assistant-authored
-assessment based on repository and live-inventory evidence, not an
-operator-approved retention or deletion plan. Labels such as `DELETE` describe
-the assessment result and do not authorize a destructive operation.
+**The user has approved one migration requirement:** `wisent-images-bucket` is
+critical Wisent app data and must be migrated to Microsoft/Azure. The remaining
+classifications below are an assistant-authored assessment based on repository
+and live-inventory evidence, not an operator-approved retention or deletion
+plan. Labels such as `DELETE` describe the assessment result and do not
+authorize a destructive operation.
 
 ## Assessment conclusion
 
@@ -24,6 +25,7 @@ The assessment classifies everything else as already replaced, an inert deployme
 | Proposed classification | Meaning |
 |---|---|
 | `HOLD-COMPAT` | No new system should use it, but old installed clients may still address it. |
+| `MIGRATE-THEN-CUTOVER` | Active product data must be copied to Azure object storage behind Stado, verified object-for-object, and cut over at every live locator before the GCP source can be removed. |
 | `EXPORT-THEN-DELETE` | The data may matter; the GCP runtime/resource does not. Export, verify the destination and remove the source. |
 | `DEDUP-THEN-DELETE` | Likely replicated or historical data; compare with canonical storage, preserve only unique objects and remove the GCP copy. |
 | `DELETE` | No current capability or unique-data requirement justifies retention. |
@@ -136,7 +138,7 @@ The need is for data from five disks, not for the disks or their GCP runtimes. T
 |---|---|---|
 | `stado` | `DEDUP-THEN-DELETE` | Compare registry, releases, artifacts, queue history and Probierz records against Azure primary and S3 DR; export the two-object mismatch recorded during migration plus any later unique objects. |
 | `wisent-compute` | `DEDUP-THEN-DELETE` | Preserve unique legacy registry, release, agent, schedule, log and run records; no current writer should remain. |
-| `wisent-images-bucket` | `DEDUP-THEN-DELETE` | Preserve unique generated media, character assets, LoRAs, checkpoints, activations and datasets in canonical object/model storage. |
+| `wisent-images-bucket` | `MIGRATE-THEN-CUTOVER` | Critical active Wisent app media: the live database contains 1,453 `Character.imageUrl`, 888 `Character.videoUrl`, and 21 `ProfilePublic.imageUrl` locators for this bucket. Recover and copy every referenced object to Azure object storage behind Stado, verify the destination, replace raw provider URLs with the canonical delivery contract, verify application reads, and only then remove the GCP copy. |
 | `wisent-gcp-pipeline` | `DEDUP-THEN-DELETE` | Preserve unique ComfyUI models/outputs, LoRAs, NeedHer work and SmoothMix artifacts. |
 | `wisent-gcp-bucket` | `DEDUP-THEN-DELETE` | It is already described as a legacy mirror; compare against the two image/model buckets and canonical Stado storage before removal. |
 | `kantbench-training` | `EXPORT-THEN-DELETE` | Preserve code only if absent from Git, plus unique checkpoints, evaluations, Optuna/hyperopt state and run evidence. |
@@ -241,11 +243,13 @@ Workspace, Ads, Android Publisher, Translate, Gemini/Vertex and the many enabled
 
 ## Proposed retirement order encoded by dependency
 
-1. Preserve the five unique disks and export/deduplicate the named buckets, BigQuery table and Cloud SQL contents.
-2. Preserve legacy Sparkle compatibility by moving or redirecting the two old feeds; stop all GCP release writes.
-3. Remove the unused relay stack, all terminated compute support assets, orphan messaging/data services and obsolete build/monitoring resources.
-4. Revoke all twelve service-account keys, retire the fourteen accounts as classified, remove WIF, API keys and GCP Secret Manager values, and disable optional APIs.
-5. Leave `wisent-480400` as a billing-detached tombstone until export checks and retention obligations pass; deletion of the whole project is optional and separate.
+1. Recover and cut over the live `wisent-images-bucket` objects and all 2,362 database locators according to the Microsoft migration strategy.
+2. Establish Azure-backed Stado state and new media writes before moving historical control-plane data.
+3. Preserve the five unique disks and export/deduplicate the remaining named buckets, BigQuery table and Cloud SQL contents.
+4. Keep the two update buckets only for measured old-client compatibility; stop every new writer.
+5. Remove unused compute/service infrastructure only after required capabilities work at their declared replacements.
+6. Revoke all twelve service-account keys, retire the fourteen accounts as classified, remove WIF, API keys and GCP Secret Manager values, and disable optional APIs.
+7. Leave `wisent-480400` as a billing-detached tombstone until export checks and retention obligations pass; deletion of the whole project is optional and separate.
 
 ## Coverage
 
@@ -258,4 +262,4 @@ This assessment classifies every family in the 1,057-asset inventory:
 - all 132 secret versions under the 19 secrets;
 - all 12 user-managed service-account keys.
 
-Source inventory: [`gcp-service-inventory-2026-08-15.md`](gcp-service-inventory-2026-08-15.md). Exact instance/disk topology: [`gcp-compute-retirement-2026-08-15.json`](gcp-compute-retirement-2026-08-15.json).
+Source inventory: [`gcp-service-inventory-2026-08-15.md`](gcp-service-inventory-2026-08-15.md). Approved sequencing and Microsoft targets: [`gcp-to-microsoft-migration-strategy-2026-08-15.md`](gcp-to-microsoft-migration-strategy-2026-08-15.md). Exact instance/disk topology: [`gcp-compute-retirement-2026-08-15.json`](gcp-compute-retirement-2026-08-15.json).

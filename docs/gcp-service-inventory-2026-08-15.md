@@ -25,9 +25,9 @@ This is strong evidence that no current Wisent application runtime uses the proj
 
 ### Wisent app media dependency
 
-The live public `Character` projection contains 1,476 rows with an `imageUrl`; 1,453 of them point directly at `https://storage.googleapis.com/wisent-images-bucket/` (98.4%). A representative object, `images/characters/8808.webp`, returns HTTP 403 with the project billing account absent, both anonymously and through the project's authenticated service account. These are active application data references, not inert archive metadata, so detached GCP currently breaks most character images in Wisent app.
+The live public database contains 2,362 direct locators for `https://storage.googleapis.com/wisent-images-bucket/`: 1,453 `Character.imageUrl`, 888 `Character.videoUrl`, and 21 `ProfilePublic.imageUrl` values. `Room.imageUrl` currently has no populated value. A representative object, `images/characters/8808.webp`, returns HTTP 403 with the project billing account absent, both anonymously and through the project's authenticated service account. These are active application data references, not inert archive metadata, so detached GCP currently breaks most character images, every populated character video, and nearly every populated profile image in Wisent app.
 
-The iOS `GoogleService-Info.plist` also names `wisent-57937.firebasestorage.app`, but the app target does not link `FirebaseStorage` and current source contains no Firebase Storage client call. Image uploads instead request a signed URL from Wisent Backend; the backend stores new media under `stado://wisent-backend/images/...`. A bounded Stado host probe found no `wisent-backend/images/characters` namespace in either the active or backup local store on `charless-mac-mini`, so the 1,453 legacy objects are not proven migrated and cannot currently be recovered from that Stado host.
+The user classified this bucket as critical migration scope for Microsoft/Azure. The iOS `GoogleService-Info.plist` also names `wisent-57937.firebasestorage.app`, but the app target does not link `FirebaseStorage` and current source contains no Firebase Storage client call. Image uploads instead request a signed URL from Wisent Backend; the backend stores new media under `stado://wisent-backend/images/...`. A bounded Stado host probe found no `wisent-backend/images/characters` namespace in either the active or backup local store on `charless-mac-mini`, so the legacy objects are not proven migrated and cannot currently be recovered from that Stado host.
 
 ## Product workload map
 
@@ -310,6 +310,7 @@ Absence here means absent from the 2026-08-15 Cloud Asset search result, not pro
 - Live: `gcloud asset search-all-resources --scope=projects/wisent-480400` on 2026-08-15.
 - Live: Cloud Run, Cloud SQL, IAM, Workload Identity, Pub/Sub subscription, API key and bucket-prefix metadata reads on 2026-08-15.
 - `docs/gcp-compute-retirement-2026-08-15.json`.
+- `docs/gcp-to-microsoft-migration-strategy-2026-08-15.md`.
 - `docs/incidents/2026-07-27-gcp-billing-outage.md`.
 - `stado-rs/data/registry.json` and `deploy/azure/stado.config.json`.
 - `backends/wisent-backend/ARCHITECTURE.md` and media client source.
