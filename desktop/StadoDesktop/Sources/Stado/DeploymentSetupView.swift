@@ -1,5 +1,6 @@
 import SwiftUI
 import WisentAuth
+import WisentDesignSystem
 
 struct DeploymentSetupView: View {
     @ObservedObject var operationsStore: OperationsStore
@@ -24,7 +25,7 @@ struct DeploymentSetupView: View {
             ScrollView {
                 Group {
                     if deploymentStore.isLoading {
-                        VStack(spacing: StadoTheme.Space.sm) {
+                        VStack(spacing: WisentDesign.Space.x3) {
                             ProgressView()
                             Text("Loading your Stado deployments…")
                                 .foregroundStyle(.secondary)
@@ -39,7 +40,7 @@ struct DeploymentSetupView: View {
                         targetContent
                     }
                 }
-                .padding(StadoTheme.Space.xl)
+                .padding(WisentDesign.Space.x8)
                 .frame(maxWidth: 760)
                 .frame(maxWidth: .infinity)
             }
@@ -59,9 +60,9 @@ struct DeploymentSetupView: View {
     }
 
     private var header: some View {
-        HStack(spacing: StadoTheme.Space.md) {
+        HStack(spacing: WisentDesign.Space.x4) {
             ZStack {
-                RoundedRectangle(cornerRadius: StadoTheme.Radius.medium)
+                RoundedRectangle(cornerRadius: WisentDesign.Radius.medium)
                     .fill(Color.accentColor.opacity(0.12))
                 Image(systemName: "point.3.connected.trianglepath.dotted")
                     .font(.title2.weight(.semibold))
@@ -69,7 +70,7 @@ struct DeploymentSetupView: View {
             }
             .frame(width: 48, height: 48)
 
-            VStack(alignment: .leading, spacing: StadoTheme.Space.xxs) {
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
                 Text("Set up Stado")
                     .font(.title2.weight(.semibold))
                 Text("Choose where this deployment's control plane and queue will run.")
@@ -78,7 +79,7 @@ struct DeploymentSetupView: View {
             }
             Spacer()
             if let identity {
-                VStack(alignment: .trailing, spacing: StadoTheme.Space.xxs) {
+                VStack(alignment: .trailing, spacing: WisentDesign.Space.x1) {
                     Text(identity.organization.name)
                         .font(.subheadline.weight(.semibold))
                     Text(identity.email)
@@ -87,19 +88,19 @@ struct DeploymentSetupView: View {
                 }
             }
         }
-        .padding(StadoTheme.Space.lg)
+        .padding(WisentDesign.Space.x6)
     }
 
     private var targetContent: some View {
-        VStack(alignment: .leading, spacing: StadoTheme.Space.lg) {
-            VStack(alignment: .leading, spacing: StadoTheme.Space.xs) {
+        VStack(alignment: .leading, spacing: WisentDesign.Space.x6) {
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
                 Text("Name this deployment")
                     .font(.headline)
                 TextField("My Stado", text: $name)
                     .textFieldStyle(.roundedBorder)
             }
 
-            VStack(alignment: .leading, spacing: StadoTheme.Space.sm) {
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
                 Text("Run the backend on")
                     .font(.headline)
                 if deploymentStore.infrastructureTargets.isEmpty {
@@ -118,7 +119,7 @@ struct DeploymentSetupView: View {
 
             if identity != nil {
                 Toggle(isOn: $shareWithOrganization) {
-                    VStack(alignment: .leading, spacing: StadoTheme.Space.xxs) {
+                    VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
                         Text("Share with \(identity?.organization.name ?? "organization")")
                             .font(.body.weight(.medium))
                         Text("Members receive view and submit access. You remain the owner and can change access later.")
@@ -148,11 +149,11 @@ struct DeploymentSetupView: View {
     }
 
     private var provisioningContent: some View {
-        VStack(alignment: .leading, spacing: StadoTheme.Space.lg) {
+        VStack(alignment: .leading, spacing: WisentDesign.Space.x6) {
             Label("Creating \(name)", systemImage: "server.rack")
                 .font(.title2.weight(.semibold))
             if let update {
-                VStack(alignment: .leading, spacing: StadoTheme.Space.sm) {
+                VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
                     ProgressView(value: update.fraction)
                     Text(update.phase)
                         .font(.headline)
@@ -200,12 +201,12 @@ struct DeploymentSetupView: View {
         return Button {
             selectedTargetID = target.id
         } label: {
-            HStack(spacing: StadoTheme.Space.md) {
+            HStack(spacing: WisentDesign.Space.x4) {
                 Image(systemName: target.provider.symbol)
                     .font(.title3)
                     .foregroundStyle(selected ? Color.accentColor : .secondary)
                     .frame(width: 30)
-                VStack(alignment: .leading, spacing: StadoTheme.Space.xxs) {
+                VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
                     Text(target.displayName)
                         .font(.body.weight(.semibold))
                     Text(targetDetail(target))
@@ -215,18 +216,18 @@ struct DeploymentSetupView: View {
                 }
                 Spacer()
                 if target.provider == .local {
-                    StatusPill(label: "This device", tone: .neutral)
+                    WisentBadge("This device", tone: .neutral)
                 }
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle")
                     .foregroundStyle(selected ? Color.accentColor : Color.secondary)
             }
-            .padding(StadoTheme.Space.md)
+            .padding(WisentDesign.Space.x4)
             .background(
-                RoundedRectangle(cornerRadius: StadoTheme.Radius.medium)
+                RoundedRectangle(cornerRadius: WisentDesign.Radius.medium)
                     .fill(selected ? Color.accentColor.opacity(0.08) : Color.secondary.opacity(0.05))
             )
             .overlay {
-                RoundedRectangle(cornerRadius: StadoTheme.Radius.medium)
+                RoundedRectangle(cornerRadius: WisentDesign.Radius.medium)
                     .stroke(selected ? Color.accentColor.opacity(0.7) : Color.secondary.opacity(0.15), lineWidth: selected ? 2 : 1)
             }
             .contentShape(Rectangle())
@@ -324,8 +325,8 @@ private struct DeploymentErrorBanner: View {
         Label(message, systemImage: "exclamationmark.triangle.fill")
             .font(.subheadline)
             .foregroundStyle(.red)
-            .padding(StadoTheme.Space.sm)
+            .padding(WisentDesign.Space.x3)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: StadoTheme.Radius.small))
+            .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: WisentDesign.Radius.small))
     }
 }

@@ -1,5 +1,6 @@
 import SwiftUI
 import WisentAuth
+import WisentDesignSystem
 
 @main
 struct StadoApp: App {
@@ -18,8 +19,8 @@ struct StadoApp: App {
             )
         }
         .defaultSize(
-            width: StadoTheme.Layout.windowMinimumWidth,
-            height: StadoTheme.Layout.windowMinimumHeight
+            width: WisentDesign.Layout.minimumDesktopWidth,
+            height: WisentDesign.Layout.minimumDesktopHeight
         )
         .windowResizability(.contentMinSize)
 
