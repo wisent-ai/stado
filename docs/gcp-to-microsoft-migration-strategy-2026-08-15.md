@@ -1,0 +1,171 @@
+# GCP to Microsoft migration strategy — 2026-08-15
+
+## Status and decision
+
+This is a strategy only. No data was copied, no destination was provisioned, no application locator was changed, and no GCP resource was removed while preparing it.
+
+The objective is to move required Wisent data and capabilities to Microsoft/Azure without reproducing the old GCP topology. Azure becomes the primary cloud data and burst-compute provider behind Stado; applications use Wisent-owned, provider-neutral contracts. GCP billing for project `wisent-480400` remains intentionally detached and must not be re-enabled as a migration shortcut.
+
+The first approved critical scope is `wisent-images-bucket`. It is active Wisent app data, not an archive.
+
+## Current facts that determine the plan
+
+### Microsoft target
+
+The Azure subscription `Wisent Production` (`9ae7cfa4-93e4-44f6-8f4d-5cea670e22bd`) is enabled. It currently contains the three regional VNets and NSGs, two user-assigned managed identities (`stado-control-plane`, `stado-agent`), and Network Watchers. It contains **no Azure Storage account** and no deployed compute workload.
+
+`deploy/azure/stado.config.json` is still a fenced template: Azure is in `providers_disabled`, the storage account and container are placeholders, and the identity/network/quota gates must pass before Azure can be enabled. The spending-limit and GPU-quota support tickets remain open. Therefore the subscription is administratively available but is not yet a migration destination.
+
+### Critical live media
+
+The live Wisent app database contains **2,362 direct GCS locators** for `wisent-images-bucket`:
+
+| Live field | GCS locator count | Current consequence |
+|---|---:|---|
+| `Character.imageUrl` | 1,453 | Most character cards and portraits depend on GCS. |
+| `Character.videoUrl` | 888 | Every populated character video depends on GCS. |
+| `ProfilePublic.imageUrl` | 21 | 21 of 22 populated profile images depend on GCS. |
+| `Room.imageUrl` | 0 | No current room image locator needs migration. |
+
+A representative object returns HTTP 403 both anonymously and through the project's service account because GCP billing is detached. The prior migration record says these objects were copied from the now-retired CloudFront/S3 location into GCS, but the application database was left with provider URLs. The bounded Stado host inventory found no `wisent-backend/images/characters` copy in either the active or backup local store on `charless-mac-mini`.
+
+This makes **source recovery** the first gate: there is currently no proven readable source copy from which to populate Azure.
+
+## What must move
+
+### P0 — active product data and its delivery contract
+
+| Source / capability | Microsoft target | Required cutover |
+|---|---|---|
+| Referenced objects in `wisent-images-bucket` | Private Azure Blob container owned through Stado | Recover every referenced object; preserve key, content type and cache metadata; verify object-for-object; expose through a stable Wisent delivery route; replace all 2,362 raw GCS locators. |
+| New Wisent Backend media writes | The same Azure-backed `stado://wisent-backend/images/...` namespace | Make upload, read, delete and signed delivery use Azure before accepting new writes. The database must never receive a raw `blob.core.windows.net` URL. |
+| Public media delivery | A provider-neutral `media.wisent.com` or equivalent Stado-managed route | Clients receive stable HTTPS URLs; Azure Blob is an implementation detail. A future provider change must not require another database rewrite. |
+
+Public and private media need separate prefix policy. Public character media may be cacheable; user/profile/private generated media must remain authorization-bound. Raw public-container access is not the application contract.
+
+### P1 — live platform state and required runtime capabilities
+
+| Source / capability | Microsoft target | Strategy |
+|---|---|---|
+| Active local Stado registry, queue, lifecycle, artifacts, releases and Probierz evidence | Azure Blob `stado` namespace, with the declared independent DR replica | Snapshot the active local store, establish Azure versioned writes, reconcile the GCS `stado` and `wisent-compute` histories, then cut the coordinator over once read-after-write and restore checks pass. Do not promote a stale GCS registry over the current local state. |
+| Azure burst compute for Stado jobs | Azure VMs created by the Stado Azure provider and scoped managed identities | Enable only after quota, image, network, identity and termination controls pass. Local RTX capacity remains the default; Azure is scheduled burst capacity, not a hand-managed replacement fleet. |
+| Wisent Backend image generation and ComfyUI/Z-Image | Existing declared local GPU placements plus Azure burst where scheduled by Stado | Deploy the capability from current source and artifacts; do not migrate GCP MIGs, templates or machine images. The missing service-registration and end-to-end image path must be closed before new media is declared migrated. |
+| Wisent Backend inference | Brama plus Stado `chat-primary`; Azure only as scheduled capacity | Preserve Brama's provider-neutral model contract. Do not copy Vertex or direct Gemini credentials into Azure. |
+| `image-video-router` | Stado-managed service on its declared host or Azure placement | Prove the current source/service contract, not the terminated GCP VM. |
+
+### P2 — unique retained data
+
+These are not active application paths, but deleting GCP before exporting them risks permanent loss.
+
+| Source | Microsoft target | Treatment |
+|---|---|---|
+| `wisent-gcp-pipeline`, `wisent-gcp-bucket` | Azure Blob model/media archive | Build manifests, deduplicate against P0 media and canonical Stado objects, preserve unique ComfyUI outputs, LoRAs, models, NeedHer material and training artifacts. |
+| `kantbench-training` | Azure Blob model/evaluation archive plus Stado artifact manifests | Preserve unique checkpoints, evaluations and optimizer state; Git remains canonical for source. |
+| `wisent-body-horror-models`, `wisent-stock-context`, `wisent-video-gen` | Azure Blob cool/archive tier | Export useful unique model/research outputs with metadata and checksums. |
+| `content-platform-vm` 500 GB disk | Azure Blob archive for Weles recordings | Export recordings with recording index and evidence links; the old runtime is not migrated. |
+| Four experiment disks: NeedHer watermark, VATT, Sapiens2, Z-Image interpolation | Azure Blob archive or Stado artifacts | Export unique checkpoints/results as files, not bootable VM clones. |
+| BigQuery billing table | Parquet plus schema in Azure Blob archive | Preserve historical gross cost, credits, net cost and burn history; no live Azure database is required. |
+| Cloud SQL `wisent-compute-db` | Logical PostgreSQL dump in Azure Blob archive | Preserve schema and data once. Provision Azure Database for PostgreSQL only if the experimental marketplace is deliberately reactivated. |
+| `wisent-oko-updates`, `wisent-swiatowid-updates` | Existing GitHub/Stado release delivery, optionally mirrored into Azure | Treat as compatibility holds: old clients may have hard-coded GCS appcasts. Remove only after the installed-version floor proves no supported client needs those URLs. |
+
+### P2 — active Firebase services in Wisent iOS
+
+Firebase Storage is **not** an active dependency: the iOS target does not link `FirebaseStorage` and current source has no Storage client call. Other Firebase products are active and need their own cutover if the goal is to remove the Google application control plane:
+
+| Current service | Observed contract | Microsoft strategy |
+|---|---|---|
+| Firebase Remote Config | Nine runtime keys covering paywall, trending source, ads, character prompt, publishing threshold, Discord URL, companion mode and UI flags | Move ownership to a Wisent Backend configuration endpoint backed by Azure App Configuration. The mobile app must not carry Azure management credentials. Preserve local defaults and cache semantics. |
+| Firebase Analytics | Event and identity reporting | The app already sends first-party analytics to Echo. Land that collector's durable telemetry in Azure Monitor or the chosen Azure analytics store, compare event coverage, then remove Firebase dual-write. |
+| Firebase Crashlytics | Error and crash reporting | Migrate to Azure Monitor Mobile Analytics/Diagnostics only after its current preview contract meets crash-symbolication and privacy requirements; dual-write until parity is recorded. Do not adopt retired App Center as an intermediate target. |
+
+[Microsoft announced Azure Monitor Mobile Analytics public preview on 2026-04-15 and extended App Center Analytics/Diagnostics support to March 2027](https://learn.microsoft.com/en-us/appcenter/retirement). Preview status is therefore a deployment gate, not evidence of production parity.
+
+Google Sign-In is an end-user identity provider passed into Supabase Auth, not Firebase infrastructure. It remains if the product continues offering Google login. Google Play and FCM are vendor edges for Android distribution/push; Azure can own the ingestion and routing plane, but it cannot eliminate Google's delivery protocol while Android support remains.
+
+Supabase is the current Wisent app database/auth system. Moving Supabase itself into Microsoft is a separate database migration, not a prerequisite for removing the broken GCP media dependency.
+
+## What must not be copied into Microsoft
+
+- GCP MIGs, 165 instance templates, 184 machine images, load balancers, firewalls and terminated VM layouts. Rebuild required services from source and Stado declarations.
+- Twelve user-managed GCP service-account keys. Replace authorization with Azure managed identities and exact Stado/Skarbiec grants; revoke old keys after cutover.
+- Nineteen GCP Secret Manager items and 132 versions as a bulk export. Resolve only values still required by a current consumer from Skarbiec, rotate them, and discard obsolete provider/runtime configuration.
+- Orphan Pub/Sub topics, the body-horror queue, the unused Cloud Run PTY relay, empty staging buckets, generated logs/metadata and unused API enablements.
+- Direct Vertex/Gemini model integrations. Wisent model inference goes through Brama.
+
+## Migration waves
+
+### Wave 0 — freeze the finish line
+
+1. Record every live database locator and every source prefix before copying.
+2. Produce source manifests containing object key, size, generation/version, checksum, content type and cache metadata.
+3. Mark each object as live-reference, canonical model/artifact, compatibility hold, archive or disposable staging.
+4. Freeze new provider-specific locators: new writes may use only the provider-neutral media contract.
+
+No source deletion, database rewrite or DNS change occurs in this wave.
+
+### Wave 1 — build the Azure substrate
+
+1. Create a dedicated StorageV2 account with public blob access disabled, versioning, soft delete, lifecycle tiers and diagnostic logs.
+2. Create separate containers/prefix policies for Stado state, public media, private media, models/artifacts and archives.
+3. Grant data-plane roles to the existing managed identities; keep credentials out of files and environment variables.
+4. Configure the stable Wisent delivery route and cache policy without exposing raw Azure provider URLs.
+5. Fill the fenced Azure Stado profile only after identity, network and storage checks pass; leave AWS and GCP providers fenced.
+
+### Wave 2 — recover and cut over P0 media
+
+1. Search the former S3/CloudFront source, GCS mirror buckets, retained disks, release artifacts and other backups for each of the 2,362 references.
+2. If no alternate copy exists, pursue a supported GCP data export that does not relink billing; detached billing remains unchanged.
+3. Copy recovered objects into Azure while preserving keys and metadata.
+4. Compare destination objects against the manifest; quarantine mismatches and missing references.
+5. Serve the Azure copy through the stable Wisent route.
+6. Rewrite database locators in one reversible migration, retaining an encrypted before-image of changed IDs and URLs.
+7. Keep the GCP source untouched through the observation and rollback window.
+
+A partial copy does not authorize a partial database rewrite. Missing objects remain explicit failures; they are not silently replaced with placeholders.
+
+### Wave 3 — move Stado state and new product writes
+
+1. Snapshot the active local Stado store.
+2. Seed Azure from that snapshot and verify versions, leases, schedules, artifacts, releases and Probierz evidence.
+3. Reconcile legacy `stado` and `wisent-compute` GCS objects by version and checksum without allowing old registry state to win.
+4. Run shadow replication, then cut the coordinator and object API to Azure at one recorded revision.
+5. Confirm all new Wisent Backend uploads resolve through the Azure-backed namespace.
+
+### Wave 4 — deploy capabilities, not old machines
+
+Deploy and prove the image service, ComfyUI/Z-Image, image-video-router and any Azure burst worker from current source through Stado. Retire corresponding GCP compute support assets only after the product journey works at the declared replacement and no client points at a GCP endpoint.
+
+### Wave 5 — export retained data
+
+Move the five unique disks, six archive/model buckets, BigQuery history and Cloud SQL dump. Deduplicate before copying large model/media sets. Apply Azure cool/archive lifecycle only after restore metadata and checksums exist.
+
+### Wave 6 — move Firebase support contracts
+
+Move Remote Config first because it changes product behavior, then analytics, then crash reporting. Use dual-read or dual-write only for a bounded parity window; remove the Firebase implementation after the replacement owns the full contract. Google Sign-In, Google Play and FCM remain explicit external provider edges where the product still requires them.
+
+### Wave 7 — retire GCP
+
+Delete only resources whose destination, consumer cutover and rollback evidence are complete. Compatibility feeds remain until the supported-client floor passes. Keep the GCP project as a billing-detached administrative tombstone until every unique-data and compatibility hold is closed.
+
+## Gates before any source removal
+
+1. **Manifest gate:** every in-scope source object has an immutable manifest entry and classification.
+2. **Copy gate:** destination count, key, size, content type and checksum match; zero unexplained differences.
+3. **Reference gate:** live database and source scans contain zero raw `storage.googleapis.com/wisent-images-bucket` or `blob.core.windows.net` application locators.
+4. **Behavior gate:** Probierz records the relevant application journeys: browse character images, play character video, load profile image, create/upload/read/delete media, refresh an expired delivery URL, and read during cache miss.
+5. **Write gate:** all new writes land in Azure and can be restored from the declared independent replica.
+6. **Rollback gate:** the database locator before-image, Azure object versions and previous Stado storage revision restore successfully without GCP mutation.
+7. **Retirement gate:** no supported client, webhook, job, service declaration or database row points at the GCP resource.
+
+## Immediate strategy conclusion
+
+The migration order is not “copy all 1,057 GCP assets.” It is:
+
+1. recover and cut over live Wisent media;
+2. establish Azure-backed Stado state and new media writes;
+3. deploy missing product capabilities from source;
+4. export unique archives and databases;
+5. move active Firebase configuration/telemetry contracts;
+6. retire only the GCP support estate that no longer owns data or compatibility.
+
+The current hard blocker is not Azure subscription status. It is the absence of an Azure Storage destination and, more importantly, the absence of a proven readable source copy for the live GCS media while GCP billing remains intentionally detached.
