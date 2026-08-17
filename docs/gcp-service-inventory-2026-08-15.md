@@ -17,11 +17,17 @@ A live Cloud Asset Inventory read returned **1,057 assets**:
 
 The historical compute workload and disk inventory remains in `docs/gcp-compute-retirement-2026-08-15.json`. This document adds the rest of the project and distinguishes a deployed workload from its support records and from an API that is merely enabled. The unapproved assistant assessment of resource necessity is in [`gcp-resource-need-map-2026-08-15.md`](gcp-resource-need-map-2026-08-15.md).
 
+### Current activity check
+
+The last 24 hours of available Cloud Audit logs contain only Google-managed billing-export work: 28 BigQuery `InsertJob`, 14 `jobservice.insert`, and 14 `jobservice.getqueryresults` events, all under `billing-export-bigquery@system.gserviceaccount.com`. No Wisent service account or application principal appears in that window. The `swiatowid-pty-relay` Cloud Run request log remains empty across 90 days.
+
+This is strong evidence that no current Wisent application runtime uses the project's audited control plane or BigQuery. It is not a complete GCS request census because project IAM does not enable Data Access audit logs for Cloud Storage; the GCS conclusion additionally relies on the active provider/storage configuration and current source bindings.
+
 ## Product workload map
 
 | Capability formerly placed in GCP | GCP resources | Producers / consumers | Current placement or status |
 |---|---|---|---|
-| Stado control plane and queue | `gs://stado`, legacy `gs://wisent-compute`, historical `stado-coordinator`, `wisent-compute-cron`, `stado-alerts`, `wisent-compute-alerts`, billing BigQuery, Stado service accounts and monitoring policies | `wisent-compute`; jobs from Echo, `wisent-tools`, OpenEnv and Probierz | Coordinator and object/release APIs moved to `charless-mac-mini`; Azure Blob is primary object storage and S3 is DR. GCP Cloud Run/Scheduler resources are absent from the live asset inventory; both GCS namespaces remain. |
+| Stado control plane and queue | `gs://stado`, legacy `gs://wisent-compute`, historical `stado-coordinator`, `wisent-compute-cron`, `stado-alerts`, `wisent-compute-alerts`, billing BigQuery, Stado service accounts and monitoring policies | `wisent-compute`; jobs from Echo, `wisent-tools`, OpenEnv and Probierz | The active profile explicitly enables only the local provider and local storage; the operator reaches the object API through `stado://` with a same-disk local backup. Azure Blob with S3 DR remains the fenced production target, not the active profile. GCP Cloud Run/Scheduler resources are absent from the live asset inventory; both GCS namespaces remain as historical data. |
 | Wisent Backend public API | API blue/green MIGs, backend services, health checks, load balancer, Artifact Registry image, `wisent-api-env`, `droid-441` | Wisent apps and product clients | Runtime moved to `charless-mac-mini`. GCP instances are absent, but MIG/LB/template/image support assets remain. |
 | Wisent Backend model inference | inference blue/green MIGs across `us-central1-a/b/c`, internal backend/VIP/health check, inference env secrets | Wisent Backend; serving requests now belong through Brama | Target is Brama plus Stado `chat-primary` on `ubuntu-server-rtx-pro-6000`; target was documented as not fully online. GCP support assets remain without live instances. |
 | Wisent Backend image generation | image blue/green and regional MIGs, image backends/CDN/VPC, `wisent-images-*` secrets, `wisent-images-sa`, image/model buckets | character generation, companion/entertainment scenes, NeedHer pictures/poses and chat image tools through Wisent Backend | Target is `wisent-backend-images` on local GPU 1, but no canonical Stado service endpoint currently wires the path end to end. |
