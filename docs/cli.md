@@ -661,7 +661,7 @@ deployment that needed it.
 | `stado registry pull` | Print the canonical registry to stdout. |
 | `stado registry self [--name-only]` | Which registry target this machine is. |
 | `stado registry doctor [--json]` | Diff registry declarations against live host state. Exits non-zero on any divergence. |
-| `stado registry host add HOST --ssh DEST [--kind local]` | Onboard a machine into the registry, validated, refusing duplicates. |
+| `stado registry host add HOST --ssh DEST --release-platform PLATFORM [--kind local]` | Onboard a machine into the registry, validated, refusing duplicates. Declaration only; `stado_fleet enroll` probes the machine first. |
 | `stado registry beacon-age [--json]` | Every registry host and its last beacon, worst first. |
 
 ### Registry document shape

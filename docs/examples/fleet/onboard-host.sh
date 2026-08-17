@@ -1,9 +1,13 @@
 #!/bin/sh
 # onboard-host.sh — bring a new device to reporting life in the fleet.
 #
-# Prerequisites: the target has Remote Login enabled (host recover rides
-# the approved channel), a skarbiec serve is reachable from the target,
-# and SKARBIEC_VAULT_FILE points at the operator vault here.
+# Prerequisites, all on the target and all before this script: it is reachable
+# at <ssh-destination> (the fleet addresses hosts on its tailnet), Remote Login
+# is enabled, and the public key printed by `stado_fleet key generate <host>`
+# is in its ~/.ssh/authorized_keys. Enrollment probes the machine over that key
+# before it writes anything, so there is no order in which this script can
+# create the channel it needs. Here: a reachable `skarbiec serve`, and
+# SKARBIEC_VAULT_FILE pointing at the operator vault.
 #
 # Usage: sh onboard-host.sh <host> <ssh-destination>
 set -eu
@@ -12,11 +16,13 @@ HOST=$1
 DEST=$2
 SB=${SKARBIEC_BIN:-skarbiec}
 
-# 1. registry membership
-stado registry host add "$HOST" --ssh "$DEST"
+# 1. registry membership, verified: the machine's own hostname and release
+#    platform are probed over the channel before the entry is written, and a
+#    failed agent install rolls the entry back.
+stado_fleet enroll "$HOST" --ssh "$DEST" --bootstrap
 
-# 2. compute agent on the target (over the approved channel, or --local here)
-stado bootstrap --target "$HOST"
+# 2. the channel the rest of this script rides
+stado_fleet key check "$HOST"
 
 # 3. skarbiec side: the two grants every reporting host needs
 "$SB" token-mint stado-local-agent --scopes 'read:*'
