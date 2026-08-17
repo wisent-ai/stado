@@ -219,3 +219,27 @@ Nothing would boot. All 20 Compute Engine instances are `TERMINATED`, all 13 ins
 Storage and disks are prorated to the sub-second, so the cost of a window is its duration times $1.40 per hour, plus $0.12/GiB egress = **$0.37** for the 3.011 GiB P0 copy. The copy itself is minutes of work: 2,674 objects at eight-way concurrency. A thirty-minute window is therefore about **$1.07**, and an hour about **$1.77**. The exposure is one-off dollars, not compute-instance rates — but it is real spend on an account with no credits, so attaching billing stays the operator's decision.
 
 The AWS route is closed: the account is banned, so `s3://wisent-bucket` is unreachable regardless of any Skarbiec grant.
+
+### P0 media migration completed — 2026-08-17
+
+The operator authorized a temporary attached-billing window. The media is now in Azure and Cloud Storage is no longer the only copy.
+
+| Result | Value |
+|---|---|
+| Objects copied and verified | **2,674 of 2,674** |
+| Bytes in Azure | **3,233,160,110**, byte-for-byte equal to the manifest total |
+| Missing objects, MD5 mismatches, size mismatches | **0 / 0 / 0**, confirmed by an independent `az storage blob list` pass, not by the copier's own bookkeeping |
+| Placement | 2,653 catalogue objects in `media-public`; 21 profile objects in `media-private` |
+| Attached-billing time | 1,100 seconds total across four windows |
+| Estimated spend | about **$0.79**: ~$0.43 of prorated storage at $1.40/hour plus ~$0.36 of egress for 3.011 GiB |
+| Billing state now | `billingEnabled=False`, no billing account attached |
+
+Three findings from the run, all fixed in the tooling:
+
+1. Azure rejects non-US-ASCII blob metadata with `InvalidMetadata`. Three seed characters have accented names (`glóin`, `undómiel`, `padmé`), so the recorded source URI is percent-encoded.
+2. Billing activation is eventually consistent across Cloud Storage frontends: one window copied two objects and then hit `403 accountDisabled` on the third. The runner now lets activation settle before spending the window.
+3. `gcloud billing projects link` needs `roles/billing.projectManager` on the project in addition to ownership of the billing account. The grant was added for the window and removed afterwards, restoring the prior IAM state.
+
+The GCP source objects were only read, never modified or deleted, so the rollback window is intact.
+
+What this does **not** yet do: the 2,674 live database rows still point at `storage.googleapis.com`. Rewriting them requires the provider-neutral delivery route first, because both Azure containers are private by design and a raw `blob.core.windows.net` URL must never enter the database. Delivery route, then locator rewrite, then GCP source removal.
