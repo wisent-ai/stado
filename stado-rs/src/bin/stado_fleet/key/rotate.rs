@@ -80,25 +80,67 @@ async fn generate_pair(runner: &Runner, comment: &str) -> Result<KeyPair, String
     })
 }
 
+/// Store the pair, then read it back through the same client the SSH channel
+/// reads it through.
+///
+/// An owner write reaches a vault FILE; every consumer of this key reaches a
+/// BROKER. On a host where the configured broker is a forward to another
+/// machine's vault, those are two different stores, and a key written to the
+/// local one is invisible to the fleet while looking stored. So the write is not
+/// finished until the reader can see it: the alternative is an enrolled host
+/// whose channel cannot open, diagnosed later and from further away.
 async fn store_pair(
     client: &stado::skarbiec::Client,
     target: &str,
     pair: &KeyPair,
 ) -> Result<(), String> {
+    let id = item_id(target);
     client
-        .write_item(
-            &item_id(target),
+        .write_described(
+            &id,
             ITEM_TYPE,
             &json!({
                 "private_key": pair.private_key,
                 "public_key": pair.public_key,
+            }),
+            &json!({
                 "key_type": "ED25519",
                 "fingerprint": pair.fingerprint,
                 "added_at": chrono::Utc::now().to_rfc3339(),
             }),
         )
         .await
-        .map_err(|exc| exc.to_string())
+        .map_err(|exc| exc.to_string())?;
+    // Two different failures wear one 403/None here, and they need different
+    // actions: a fresh item carries no grant yet, while a vault the broker does
+    // not serve is a machine mismatch. Naming which one arrived is the whole
+    // value of reading back.
+    match client.read_string(&id, "public_key").await {
+        Ok(stored) if stored.as_deref().map(str::trim) == Some(pair.public_key.trim()) => {}
+        Ok(_) => {
+            return Err(format!(
+                "wrote {id} to the owner vault, but the configured broker serves a different \
+                 value back. This machine's vault is not the one the fleet reads: mint on the \
+                 host that holds it (`stado host vaults` names them), or point \
+                 SKARBIEC_VAULT_FILE at that vault"
+            ))
+        }
+        Err(error)
+            if error
+                .to_string()
+                .contains("not authorized to read item field") =>
+        {
+            return Err(format!(
+                "stored {id}, but no consumer may read it yet: the grant is per item, so a fresh \
+                 key is unreadable until one is added. Run \
+                 `scripts/grant-consumer-field-read.py local-operator {id} private_key` \
+                 (and once more for public_key) on the host holding the vault, then \
+                 `stado_fleet key check` proves the channel"
+            ))
+        }
+        Err(error) => return Err(error.to_string()),
+    }
+    Ok(())
 }
 
 /// `key generate TARGET` — store a fresh pair and print only the public key.
@@ -119,33 +161,32 @@ pub async fn generate(runner: &Runner, target: &str) -> Result<bool, String> {
 /// credential-store item if the new key cannot open the channel.
 pub async fn rotate(runner: &Runner, target: &str) -> Result<bool, String> {
     let client = configured_client()?;
-    // The rollback below writes this item back verbatim, so every field this
-    // module stores is read by name: a broker that requires a named field
-    // refuses the whole-item form, and losing the private key here would make
-    // the rollback restore an unusable credential.
-    let mut old_item = serde_json::Map::new();
-    for field in [
-        "private_key",
-        "public_key",
-        "key_type",
-        "fingerprint",
-        "added_at",
-    ] {
+    // The rollback below writes this item back, so both halves of the pair and
+    // the description beside them are read explicitly. `private_key` and
+    // `public_key` are the pair's fields; the fingerprint and key type are
+    // context. Losing either half here would make the rollback restore an
+    // unusable credential.
+    let mut old_fields = serde_json::Map::new();
+    for field in ["private_key", "public_key"] {
         if let Some(value) = client
             .read_string(&item_id(target), field)
             .await
             .map_err(|exc| exc.to_string())?
         {
-            old_item.insert(field.to_string(), Value::from(value));
+            old_fields.insert(field.to_string(), Value::from(value));
         }
     }
-    let old_item = Value::Object(old_item);
-    let old_fingerprint = old_item
+    let old_context = client
+        .read_field(&item_id(target), "context")
+        .await
+        .unwrap_or_else(|_| json!({}));
+    let old_fields = Value::Object(old_fields);
+    let old_fingerprint = old_context
         .get("fingerprint")
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    let old_public = old_item
+    let old_public = old_fields
         .get("public_key")
         .and_then(Value::as_str)
         .unwrap_or_default()
@@ -166,7 +207,7 @@ pub async fn rotate(runner: &Runner, target: &str) -> Result<bool, String> {
         }
         Err(exc) => {
             client
-                .write_item(&item_id(target), ITEM_TYPE, &old_item)
+                .write_described(&item_id(target), ITEM_TYPE, &old_fields, &old_context)
                 .await
                 .map_err(|err| err.to_string())?;
             let _ = remove_public_key(runner, target, &pair.public_key).await;

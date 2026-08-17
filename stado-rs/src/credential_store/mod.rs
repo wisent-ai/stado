@@ -35,6 +35,7 @@ pub(crate) fn test_env_lock() -> std::sync::MutexGuard<'static, ()> {
 
 mod file;
 pub mod migrate;
+pub mod owner;
 #[cfg(test)]
 mod tests;
 pub mod write;
