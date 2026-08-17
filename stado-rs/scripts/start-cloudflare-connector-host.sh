@@ -52,7 +52,12 @@ fi
 set -eu
 TUNNEL_TOKEN=\$(/bin/cat "$TOKEN_FILE")
 export TUNNEL_TOKEN
-exec "$BIN" tunnel --no-autoupdate --metrics $METRICS run
+# `--protocol http2` on purpose. With the default QUIC transport this host logs
+# `failed to dial to edge with quic: sendmsg: network is unreachable` and
+# `no route to host` on UDP/7844, so tunnel connections flap and roughly half of
+# the concurrent public requests answer 502 while the origin itself is healthy.
+# HTTP/2 carries the tunnel over TCP/443, which this network does pass.
+exec "$BIN" tunnel --no-autoupdate --protocol http2 --metrics $METRICS run
 RUNNER_EOF
 /bin/chmod 0700 "$RUNNER"
 
