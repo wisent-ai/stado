@@ -58,12 +58,14 @@ fi
 set -eu
 TUNNEL_TOKEN=\$(/bin/cat "$TOKEN_FILE")
 export TUNNEL_TOKEN
-# Transport is pinned to http2 on purpose. With the default QUIC transport this
-# host logs "failed to dial to edge with quic: sendmsg: network is unreachable"
-# and "no route to host" on UDP/7844, so tunnel connections flap and about half
-# of the concurrent public requests answer 502 while the origin is healthy.
-# HTTP/2 carries the tunnel over TCP/443, which this network does pass.
-exec "$BIN" tunnel --no-autoupdate --protocol http2 --metrics $METRICS run
+# Transport is left at the connector's own default. Pinning http2 registered
+# four connections and reported zero errors, yet edge requests stopped arriving
+# at all: a cache-busted request returned 502 while the connector log recorded
+# no request for it and the origin answered 200 over both loopback families.
+# QUIC flaps on this network - the log shows "sendmsg: network is unreachable"
+# on UDP/7844 - but it is the transport that actually receives traffic here,
+# and cloudflared re-dials on its own.
+exec "$BIN" tunnel --no-autoupdate --metrics $METRICS run
 RUNNER_EOF
 /bin/chmod 0700 "$RUNNER"
 
