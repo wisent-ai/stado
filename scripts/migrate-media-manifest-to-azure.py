@@ -247,6 +247,17 @@ def main() -> int:
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--limit", type=int, default=0, help="copy at most N objects")
     parser.add_argument(
+        "--only-prefix",
+        action="append",
+        default=[],
+        metavar="PREFIX",
+        help=(
+            "restrict the run to manifest keys under this source prefix; repeatable. "
+            "Public catalogue media and authorization-bound user media belong in "
+            "different containers, so one manifest is copied in more than one pass."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="inventory the destination and print the plan; read no source body",
@@ -259,6 +270,14 @@ def main() -> int:
     if not entries:
         print("manifest carries no entries", file=sys.stderr)
         return 2
+    if args.only_prefix:
+        selected = [e for e in entries if e["object_key"].startswith(tuple(args.only_prefix))]
+        if not selected:
+            print("no manifest entry matches the requested prefixes", file=sys.stderr)
+            return 2
+        print(f"prefix filter kept {len(selected)} of {len(entries)} manifest entries")
+        entries = selected
+
 
     blob_token = azure_token(args.az)
     present = destination_inventory(
