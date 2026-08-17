@@ -3,7 +3,39 @@ import Foundation
 
 enum DashboardEndpointPreference {
     static let key = "dashboardBaseURL"
-    static let localURL = "http://127.0.0.1:8765"
+    /// Last resort only. `127.0.0.1:8765` is this machine's own host-health
+    /// API, which answers from the local copy of the store: on an operator
+    /// laptop that copy is days behind, so the app showed "no capacity report
+    /// exists" for hosts that were publishing every minute, and a blocked queue
+    /// where the fleet had none. The fleet's address is the one every other
+    /// reader already uses, so read it from the same file instead of keeping a
+    /// fourth port written down somewhere new.
+    static let fallbackURL = "http://127.0.0.1:8765"
+    static let configuredKeyPath = ["storage", "stado", "url"]
+
+    static var localURL: String {
+        fleetURLFromConfig() ?? fallbackURL
+    }
+
+    /// `~/.config/stado/config.json` -> `storage.stado.url`, the canonical
+    /// object API as this host reaches it (a resolver adapter on a laptop, the
+    /// service itself on the authority host).
+    static func fleetURLFromConfig(
+        _ path: URL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config/stado/config.json")
+    ) -> String? {
+        guard let data = try? Data(contentsOf: path),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        var node: Any? = root
+        for key in configuredKeyPath {
+            node = (node as? [String: Any])?[key]
+        }
+        guard let address = node as? String,
+              !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        return address
+    }
 
     static func load(from defaults: UserDefaults) -> String {
         let stored = defaults.string(forKey: key)?
