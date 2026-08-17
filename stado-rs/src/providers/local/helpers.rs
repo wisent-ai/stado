@@ -117,37 +117,94 @@ pub async fn detect_gpu_type() -> String {
     "cpu".to_string()
 }
 
-/// Python `_detect_local_vram_gb`: total VRAM in GB on the first detected
-/// GPU, 0 if none.
-pub async fn detect_local_vram_gb() -> i64 {
-    match smi_query_mib("memory.total").await {
-        Some(mib) => mib / 1024,
-        None => 0,
-    }
+/// One accelerator, as the driver reports it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GpuCard {
+    /// Driver UUID (`GPU-...`), which is what `CUDA_VISIBLE_DEVICES` should
+    /// carry: an index is positional and reorders with the enumeration mode,
+    /// while a UUID names one board.
+    pub uuid: String,
+    pub total_vram_gb: i64,
+    pub free_vram_gb: i64,
 }
 
-/// Python `_smi_free_vram_gb`: live nvidia-smi free VRAM in GB on the first
-/// GPU, -1 if unreadable.
-pub async fn smi_free_vram_gb() -> i64 {
-    match smi_query_mib("memory.free").await {
-        Some(mib) => mib / 1024,
-        None => -1,
+/// Pure parser for `nvidia-smi --query-gpu=uuid,memory.total,memory.free
+/// --format=csv,noheader,nounits`: one [`GpuCard`] per readable row.
+pub fn parse_gpu_cards(stdout: &str) -> Vec<GpuCard> {
+    let mut cards = Vec::new();
+    for line in stdout.lines() {
+        let mut fields = line.split(',').map(str::trim);
+        let (Some(uuid), Some(total), Some(free)) = (fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        let (Ok(total_mib), Ok(free_mib)) = (total.parse::<i64>(), free.parse::<i64>()) else {
+            continue;
+        };
+        if uuid.is_empty() {
+            continue;
+        }
+        cards.push(GpuCard {
+            uuid: uuid.to_string(),
+            total_vram_gb: total_mib / 1024,
+            free_vram_gb: free_mib / 1024,
+        });
     }
+    cards
 }
 
-async fn smi_query_mib(field: &str) -> Option<i64> {
-    let out = tokio::process::Command::new("nvidia-smi")
+/// Every accelerator this host has, newest driver reading. Empty when
+/// `nvidia-smi` is absent or answers nothing parsable.
+///
+/// One call, every card: the previous readings took the FIRST line of a
+/// per-GPU query, so on the fleet's two-card host the agent measured card 0
+/// and nothing else -- it advertised 35 GiB free while a second, idle 95 GiB
+/// board sat beside it, and two concurrent slots were both admitted against
+/// card 0's numbers.
+pub async fn smi_gpu_cards() -> Vec<GpuCard> {
+    let Ok(out) = tokio::process::Command::new("nvidia-smi")
         .args([
-            format!("--query-gpu={field}"),
-            "--format=csv,noheader,nounits".to_string(),
+            "--query-gpu=uuid,memory.total,memory.free",
+            "--format=csv,noheader,nounits",
         ])
         .output()
         .await
-        .ok()?;
+    else {
+        return Vec::new();
+    };
     if !out.status.success() {
-        return None;
+        return Vec::new();
     }
-    parse_smi_mib_first(&String::from_utf8_lossy(&out.stdout))
+    parse_gpu_cards(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Python `_detect_local_vram_gb`: total VRAM in GB of the largest card this
+/// host has, 0 if none.
+///
+/// The largest single card, not the sum: a job that does not shard can only
+/// use one board, and every admission comparison downstream treats this as
+/// "the biggest thing that fits".
+pub async fn detect_local_vram_gb() -> i64 {
+    smi_gpu_cards()
+        .await
+        .iter()
+        .map(|card| card.total_vram_gb)
+        .max()
+        .unwrap_or(0)
+}
+
+/// Python `_smi_free_vram_gb`: live free VRAM in GB on the emptiest card,
+/// -1 if the driver is unreadable.
+///
+/// The emptiest card is the honest answer to "will this job fit": a renter
+/// holding card 0 does not shrink what card 1 can take.
+pub async fn smi_free_vram_gb() -> i64 {
+    smi_gpu_cards()
+        .await
+        .iter()
+        .map(|card| card.free_vram_gb)
+        .max()
+        .unwrap_or(-1)
 }
 
 /// Every GCP gpu_type whose required VRAM tier <= local VRAM.
@@ -269,6 +326,48 @@ pub fn build_capacity_dict(
     }
     if !out.contains_key(gpu_type) {
         out.insert(gpu_type.to_string(), 1);
+    }
+    out
+}
+
+/// The same broadcast for a host with more than one card: how many slots of
+/// each tier fit across all of them, and one entry for this host's own
+/// gpu_type.
+///
+/// A tier count is summed per card, never derived from a pooled total. Two
+/// 95 GiB boards do not hold a 190 GiB model, and a card a renter is using
+/// does not reduce what its neighbour can take -- the single-pool answer was
+/// wrong in both directions at once.
+pub fn build_capacity_dict_per_card(
+    gpu_type: &str,
+    free_vram_gb_per_card: &[i64],
+    total_vram_gb: i64,
+) -> BTreeMap<String, i64> {
+    let mut out: BTreeMap<String, i64> = BTreeMap::new();
+    if gpu_type.is_empty() || gpu_type == "cpu" {
+        return out;
+    }
+    if free_vram_gb_per_card.iter().all(|free| *free <= 0) {
+        return out;
+    }
+    if let Some(sizing) = GPU_SIZING.get(crate::capabilities::ProviderId::Gcp.as_str()) {
+        for (tier, (_, accel)) in sizing {
+            if total_vram_gb < *tier || accel.is_empty() {
+                continue;
+            }
+            let n: i64 = free_vram_gb_per_card
+                .iter()
+                .map(|free| (free / (*tier).max(1)).max(0))
+                .sum();
+            if n > 0 {
+                let entry = out.entry((*accel).to_string()).or_insert(0);
+                *entry = (*entry).max(n);
+            }
+        }
+    }
+    if !out.contains_key(gpu_type) {
+        let usable = free_vram_gb_per_card.iter().filter(|free| **free > 0).count() as i64;
+        out.insert(gpu_type.to_string(), usable.max(1));
     }
     out
 }

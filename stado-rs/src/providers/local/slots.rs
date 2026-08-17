@@ -62,6 +62,11 @@ pub struct ActiveSlot {
     /// dropped (flock closes with the fd) or explicitly via
     /// [`super::disk_cleanup::release_workload_lock`].
     pub disk_cleanup_lock: Option<super::disk_cleanup::WorkloadLock>,
+    /// Driver UUID of the board this job was placed on, when the host has one
+    /// to choose. The agent reads it back to keep the next claim off a card it
+    /// has already filled, and to keep deliberately GPU-sharing jobs together
+    /// on one board.
+    pub gpu_uuid: Option<String>,
 }
 
 impl std::fmt::Debug for ActiveSlot {
@@ -749,6 +754,12 @@ async fn materialize_stado_inputs(
 /// Spawn a subprocess for `job`, register it in 'running' state, return the
 /// slot. Python `start_slot`.
 ///
+/// `gpu_uuid` is the board the caller admitted this job against, or None when
+/// the host has a single accelerator or none at all. When it is set, the child
+/// gets `CUDA_VISIBLE_DEVICES=<uuid>` unless the job's own command already
+/// decides that: without it every job defaults to device 0, so on a two-card
+/// host two admitted slots pile onto one board while the other stays empty.
+///
 /// Returns None when a dedupe/refusal check fires or apt-install refuses —
 /// the caller leaves the job in queue/ for another agent to claim (or the
 /// job was already moved/dropped by the check itself).
@@ -758,6 +769,7 @@ pub async fn start_slot(
     hostname: &str,
     log_fn: &mut dyn FnMut(&str),
     kind: &str,
+    gpu_uuid: Option<&str>,
 ) -> Result<Option<ActiveSlot>, StorageError> {
     let job_id = job.job_id;
     let Some(mut job) = store.read_job("queue", &job_id).await? else {
@@ -865,6 +877,15 @@ pub async fn start_slot(
         // The existing Vast SIGSTOP/SIGCONT still target the root pid
         // directly, so their behavior is unchanged.
         .process_group(0);
+    // The job's own command wins: a workload that sets CUDA_VISIBLE_DEVICES
+    // (sharding across boards, or picking one deliberately) has already made
+    // this decision, and overriding it would silently change what it runs on.
+    if let Some(uuid) = gpu_uuid {
+        if !full_command.contains("CUDA_VISIBLE_DEVICES") {
+            command.env("CUDA_VISIBLE_DEVICES", uuid);
+            log_fn(&format!("placed {} on {uuid}", job.job_id));
+        }
+    }
     let child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
@@ -898,6 +919,7 @@ pub async fn start_slot(
         started_mono: Instant::now(),
         _hb_task: hb_task,
         disk_cleanup_lock: None,
+        gpu_uuid: gpu_uuid.map(str::to_string),
     }))
 }
 
@@ -1402,7 +1424,7 @@ mod tests {
         store.write_job("completed", &job).await.unwrap();
         let mut lines: Vec<String> = Vec::new();
         let mut log = |m: &str| lines.push(m.to_string());
-        let res = start_slot(&store, job, "testhost", &mut log, "local")
+        let res = start_slot(&store, job, "testhost", &mut log, "local", None)
             .await
             .unwrap();
         assert!(res.is_none());
@@ -1424,7 +1446,7 @@ mod tests {
         store.write_job("queue", &job).await.unwrap();
         let mut lines: Vec<String> = Vec::new();
         let mut log = |m: &str| lines.push(m.to_string());
-        let res = start_slot(&store, job, "testhost", &mut log, "local")
+        let res = start_slot(&store, job, "testhost", &mut log, "local", None)
             .await
             .unwrap();
         assert!(res.is_none());
@@ -1452,7 +1474,7 @@ mod tests {
         store.write_job("queue", &job).await.unwrap();
         let mut lines: Vec<String> = Vec::new();
         let mut log = |m: &str| lines.push(m.to_string());
-        let res = start_slot(&store, job, "testhost", &mut log, "local")
+        let res = start_slot(&store, job, "testhost", &mut log, "local", None)
             .await
             .unwrap();
         assert!(res.is_none());
@@ -1477,7 +1499,7 @@ mod tests {
         let mut lines: Vec<String> = Vec::new();
         let mut log = |m: &str| lines.push(m.to_string());
 
-        let slot = start_slot(&store, job, "testhost", &mut log, "local")
+        let slot = start_slot(&store, job, "testhost", &mut log, "local", None)
             .await
             .unwrap()
             .expect("slot");
@@ -1546,7 +1568,7 @@ mod tests {
         let mut lines: Vec<String> = Vec::new();
         let mut log = |m: &str| lines.push(m.to_string());
 
-        let slot = start_slot(&store, job, "testhost", &mut log, "local")
+        let slot = start_slot(&store, job, "testhost", &mut log, "local", None)
             .await
             .unwrap()
             .expect("slot");
@@ -1585,7 +1607,7 @@ mod tests {
         let mut lines: Vec<String> = Vec::new();
         let mut log = |m: &str| lines.push(m.to_string());
 
-        let slot = start_slot(&store, job, "testhost", &mut log, "local")
+        let slot = start_slot(&store, job, "testhost", &mut log, "local", None)
             .await
             .unwrap()
             .expect("slot");
@@ -1628,7 +1650,7 @@ mod tests {
         let mut lines: Vec<String> = Vec::new();
         let mut log = |m: &str| lines.push(m.to_string());
 
-        let slot = start_slot(&store, job, "testhost", &mut log, "local")
+        let slot = start_slot(&store, job, "testhost", &mut log, "local", None)
             .await
             .unwrap()
             .expect("slot");
@@ -1683,7 +1705,7 @@ mod tests {
         let mut lines: Vec<String> = Vec::new();
         let mut log = |m: &str| lines.push(m.to_string());
 
-        let slot = start_slot(&store, job, "testhost", &mut log, "local")
+        let slot = start_slot(&store, job, "testhost", &mut log, "local", None)
             .await
             .unwrap()
             .expect("slot");
