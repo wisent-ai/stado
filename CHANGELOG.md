@@ -95,6 +95,17 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
 - Added a no-argument first-run path and a minimal local configuration contract.
 - Removed cloud credentials, product-specific API clients, and optional
   integrations from the required local onboarding path.
+- Documented enrollment as the verified path it is: `stado_fleet key generate`
+  prints the public key that first contact needs, `stado_fleet enroll` probes the
+  machine's hostname and platform before writing them, and `stado registry host
+  add` is the declaration on its own. The documented `host add` invocations were
+  missing the required `--release-platform` and failed as written.
+- Gave `stado_fleet` a build and install path of its own. Having none is how this
+  control plane came to run `stado_fleet` 0.5.1 against `stado` 0.7.2 from one
+  shared library, until `stado_fleet key ls` began answering HTTP 400 against the
+  current Skarbiec field-read contract. `install-built-stado-binary.py` now also
+  accepts a repair: where the running binary fails a read-only probe the
+  candidate passes, agreement with the broken binary is not required.
 
 ### Core behavior
 

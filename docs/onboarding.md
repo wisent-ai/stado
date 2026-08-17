@@ -57,19 +57,71 @@ Expected result: status progresses from queued or running to completed. The down
 
 ## Onboard another machine
 
-The coordinator must be able to reach the host through the explicit SSH destination. Add it to the canonical registry, inspect drift, then install its persistent worker:
+Enrollment is verified, not declared: every write is preceded by a probe over
+Stado's own SSH channel, and that channel uses only the target-scoped key in the
+selected credential store. So the machine needs three things before the control
+plane can say anything true about it — a reachable destination (the fleet
+addresses hosts on its tailnet, so the machine joins that first), Remote Login
+enabled, and the target's public key in its `authorized_keys`.
+
+Generate the key first, because that is what prints the public half:
 
 ```bash
-stado registry host add <target-name> --ssh <user@host> --kind local
+stado_fleet key generate <target-name>
+```
+
+Append the printed line to `~/.ssh/authorized_keys` on the machine being added.
+This is the one step that happens on that machine: there is no channel yet, so
+`stado_fleet key install`, which appends the key *through* the channel, is a
+rotation tool and not first contact.
+
+Then, from the control plane:
+
+```bash
+stado_fleet enroll <target-name> --ssh <user@host> --bootstrap
+stado_fleet key check <target-name>
+stado host recover <target-name>
+stado registry beacon-age
+```
+
+`enroll` probes `hostname`, `uname -s` and `uname -m` before writing, so the
+entry carries the machine's real hostname and the release platform it actually
+is; `--bootstrap` installs the agent and rolls the entry back if that fails. An
+unverifiable or uninstallable machine never stays in the registry. `host recover`
+installs the health beacon and the managed units, and `beacon-age` is the proof —
+a target with no beacon at all is listed, never omitted.
+
+A reporting host also needs its two Skarbiec grants, which the control plane
+mints:
+
+```bash
+skarbiec token-mint stado-local-agent --scopes 'read:*'
+skarbiec token-mint stado-host-health-beacon --scopes 'read:stado-host-health-api'
+```
+
+When the control plane cannot reach the machine but the machine can reach the
+store, the machine announces itself instead: `stado_fleet join` on it, then
+`stado_fleet pending` and `stado_fleet approve <hostname>` here. Both paths honour
+the registry's optional `enrollment` catalog, printed by `stado_fleet catalog`.
+
+The lower-level write is the declaration on its own, with no probe:
+
+```bash
+stado registry host add <target-name> --ssh <user@host> --release-platform <exact-platform>
 stado registry doctor
 stado bootstrap --target <target-name> --dry-run
 stado bootstrap --target <target-name>
 stado host health <target-name>
 ```
 
-Review the dry-run unit before installation. The worker host must already provide every runtime and driver its jobs require. Registry identity, SSH reachability, workload dependencies, and health publication are separate checks; passing one does not imply the others.
+`--ssh` and `--release-platform` are both required; `--kind` defaults to `local`.
+Review the dry-run unit before installation. The worker host must already provide
+every runtime and driver its jobs require. Registry identity, SSH reachability,
+workload dependencies, and health publication are separate checks; passing one
+does not imply the others.
 
-For the current machine, `stado bootstrap --local --target <target-name>` installs the launchd or systemd-user unit directly.
+For the current machine, `stado bootstrap --local --target <target-name>` installs
+the launchd or systemd-user unit directly.
 
 ## Failure guidance
 

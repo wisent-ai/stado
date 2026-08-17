@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the `stado` binary on the host that owns the checkout, and measure it.
+"""Build one Stado program on the host that owns the checkout, and measure it.
 
 `check-stado-build.py` proves a change type-checks. That is not the same as being
 able to RUN the changed command, and a new `stado registry doctor` finding can only
@@ -18,6 +18,13 @@ The debug profile on purpose: it shares the warm target directory the type-check
 already populated, so this costs a link instead of a from-scratch release build,
 and an unoptimized binary prints exactly the same rows.
 
+The program is the first argument, defaulting to `stado` so the no-argument
+`stado host run-helper` invocation keeps its meaning. It exists because `stado`
+is not the only program the fleet installs: `stado_fleet` carries enrollment and
+SSH-key custody, and having no build path of its own is exactly how it fell two
+minor versions behind the library it shares with `stado` and started failing
+against the current Skarbiec field-read contract.
+
 Prints the compiler's verdict and the artifact it produced. Installs nothing, and
 never touches the binary the fleet runs.
 """
@@ -32,12 +39,16 @@ HOME = pathlib.Path(os.path.expanduser("~"))
 TREE = HOME / "Documents" / "CodingProjects" / "Wisent" / "wisent-compute" / "stado-rs"
 CARGO = HOME / ".cargo" / "bin" / "cargo"
 SCRATCH = HOME / ".cache" / "stado-build"
-PRODUCT = SCRATCH / "debug" / "stado"
+PROGRAMS = ("stado", "stado_fleet", "stado_migrate", "stado-mcp", "stado-watchdog")
+NAME = sys.argv[len("a")] if len(sys.argv) > len("a") else PROGRAMS[len("")]
+PRODUCT = SCRATCH / "debug" / NAME
 TIMEOUT = 3600
 KEEP = ("error", "warning: unused", "Finished", "Compiling stado", "Checking stado")
 
 
 def main():
+    if NAME not in PROGRAMS:
+        raise SystemExit(f"unknown program {NAME!r}; one of {', '.join(PROGRAMS)}")
     if not TREE.is_dir():
         raise SystemExit(f"no stado-rs checkout at {TREE}")
     if not CARGO.is_file():
@@ -46,13 +57,14 @@ def main():
     # session cannot see the checkout, every later line would be noise.
     if not os.access(TREE / "Cargo.toml", os.R_OK):
         raise SystemExit(f"source_read denied at {TREE}")
+    print(f"program       {NAME}")
     print(f"source        {TREE}")
     print(f"target_dir    {SCRATCH}")
     SCRATCH.mkdir(parents=True, exist_ok=True)
     os.umask(0o022)
     os.chmod(SCRATCH, 0o755)
     proc = subprocess.run(
-        [str(CARGO), "build", "--bin", "stado"],
+        [str(CARGO), "build", "--bin", NAME],
         capture_output=True,
         text=True,
         check=False,
