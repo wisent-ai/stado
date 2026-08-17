@@ -110,6 +110,7 @@ struct StadoFirstUseRoot: View {
     @ObservedObject var cleanupStore: CleanupStore
     @ObservedObject var deploymentStore: DeploymentStore
     @ObservedObject var fleetStore: FleetControlStore
+    @ObservedObject var enrollmentStore: MachineEnrollmentStore
     @ObservedObject var auth: WisentAuthStore
     @ObservedObject var router: ConsoleRouter
     @StateObject private var journey = StadoFirstUseJourney()
@@ -130,6 +131,7 @@ struct StadoFirstUseRoot: View {
                     cleanupStore: cleanupStore,
                     deploymentStore: deploymentStore,
                     fleetStore: fleetStore,
+                    enrollmentStore: enrollmentStore,
                     auth: auth,
                     router: router,
                     firstRunNotice: journey.isCompleted ? nil : firstRunNotice

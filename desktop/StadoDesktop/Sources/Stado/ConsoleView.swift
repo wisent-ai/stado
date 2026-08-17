@@ -7,6 +7,7 @@ struct ConsoleView: View {
     @ObservedObject var cleanupStore: CleanupStore
     @ObservedObject var deploymentStore: DeploymentStore
     @ObservedObject var fleetStore: FleetControlStore
+    @ObservedObject var enrollmentStore: MachineEnrollmentStore
     @ObservedObject var auth: WisentAuthStore
     @ObservedObject var router: ConsoleRouter
     /// Present only until the published journey records one authorized job
@@ -306,8 +307,10 @@ struct ConsoleView: View {
                 HostsView(
                     store: store,
                     fleetStore: fleetStore,
+                    enrollmentStore: enrollmentStore,
                     scope: scopeName,
-                    route: { router.destination = $0 }
+                    route: { router.destination = $0 },
+                    refresh: { await refreshAll() }
                 )
             case .disk:
                 DiskView(store: store, cleanupStore: cleanupStore, scope: scopeName)
@@ -388,6 +391,7 @@ struct ConsoleView: View {
         store.configureAuthorization(token: auth.session?.accessToken)
         cleanupStore.configureAuthorization(token: auth.session?.accessToken)
         fleetStore.configureAuthorization(token: auth.session?.accessToken)
+        enrollmentStore.configureAuthorization(token: auth.session?.accessToken)
     }
 
     /// A source that cannot be read says why. Clearing the endpoint and
@@ -400,6 +404,7 @@ struct ConsoleView: View {
                 store.clearDashboardURL()
                 cleanupStore.clearDashboardURL()
                 fleetStore.configureEndpoint(nil)
+                enrollmentStore.configureEndpoint(nil)
                 sourceProblem = "\(deployment.name) has not published an endpoint yet, so there is nothing for the console to read."
                 return
             }
@@ -411,11 +416,13 @@ struct ConsoleView: View {
             try store.saveDashboardURL(endpoint)
             try cleanupStore.saveDashboardURL(endpoint)
             fleetStore.configureEndpoint(endpoint)
+            enrollmentStore.configureEndpoint(endpoint)
             sourceProblem = nil
         } catch {
             store.clearDashboardURL()
             cleanupStore.clearDashboardURL()
             fleetStore.configureEndpoint(nil)
+            enrollmentStore.configureEndpoint(nil)
             sourceProblem = "\(endpoint) was rejected: \((error as? LocalizedError)?.errorDescription ?? "the address is not a supported Stado endpoint.")"
         }
     }

@@ -21,6 +21,15 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   their credential boundaries.
 - Made the macOS bundle use its repository-owned canonical app icon without
   depending on a nonexistent asset resolver.
+- Added an Add a Machine path to Stado Desktop's Hosts screen, reachable from
+  the context bar and from the empty registry state. It walks naming, key
+  minting with the public half and its authorized_keys line to carry,
+  the SSH address, verified enrollment, and the channel and agent proofs;
+  every step runs one allowlisted `fleet` or `host` command through the
+  dashboard's `POST /api/operator/run` argv bridge, never a shell string.
+  Progress survives closing the window, so the walk to the other machine
+  does not cost the minted key, and an enrollment that fails says whether it
+  never reached the machine or reached it and rolled its own entry back.
 ### Release control
 
 - Added repository-owned Stado release manifests, immutable source inputs,
