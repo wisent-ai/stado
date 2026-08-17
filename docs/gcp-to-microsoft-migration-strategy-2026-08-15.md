@@ -257,3 +257,29 @@ What now exists:
 Verified from this host, which has no Azure identity: `stado storage ls` against the Azure backend returned **18 objects under `images/profiles/` in `media-private` and 0 in `media-public`**, matching the public/private split the migration applied.
 
 Shared-key access stays disabled and no SAS was issued: the data plane is reached with Entra tokens only.
+
+### Live cutover completed — 2026-08-17
+
+The product no longer depends on Cloud Storage. Every live locator was rewritten and re-read.
+
+| Column | Rows rewritten |
+|---|---:|
+| `Character.imageUrl` | 1,664 |
+| `Character.videoUrl` | 927 |
+| `Room.imageUrl` | 62 |
+| `ProfilePublic.imageUrl` | 21 |
+| **Total** | **2,674**, zero failures |
+
+A re-read of the database now plans **0** further changes, so no row still names `storage.googleapis.com/wisent-images-bucket`. Anonymous fetches of a migrated character image and character video both return HTTP 200, and a HEAD sweep of all 2,674 objects returned 200 with matching size and MD5 for every one.
+
+How the delivery contract was decided, and where it deviates from this document's original invariant:
+
+- The iOS client reads `imageUrl` and `videoUrl` **straight from the product database** through Supabase, not through Wisent Backend. So the column value is the delivery contract for every already-installed client, and a `stado://` canonical URI would have broken all of them. The backend's own `get_image_url` signing path only serves rows written through its endpoints.
+- `bobloo.com/images/...`, which a large share of rows already use, is behind Cloudflare and currently answers **502**: the Mac mini runs the Wisent API but no `cloudflared`, so that tunnel has no origin. Media served through that host is broken today independently of this migration.
+- The Cloudflare credentials in Skarbiec are a tunnel token and an SSO login, neither of which can edit zone rules through the API, so fronting the storage account with a Wisent host was not reachable in this pass.
+- Therefore the rows now carry `https://wisentprodstado.blob.core.windows.net/media-public/<key>`. This knowingly places a provider host in the database, which this document told us to avoid. The trade was: every character image, character video and public profile image works now, against a second scripted rewrite later. The rewrite is one line in `stado-rs/scripts/rewrite-wisent-media-locators-host.sh` plus one helper run.
+- `media-public` is anonymously readable, which restores exactly the exposure these objects had as public Cloud Storage URLs. Truly private media keeps its authorization-bound path: `media-private` stays `publicAccess=None`, and shared-key access remains disabled account-wide.
+
+Rollback: the before-image of all 2,674 rows, with old and new values per row and column, is retained on `charless-mac-mini` at `~/.stado/wisent-media-locators-before.json`. The Cloud Storage objects were never modified or deleted, so the original source still exists behind detached billing.
+
+Remaining, in order: restore a Wisent-fronted media host (start `cloudflared` for the existing `bobloo` tunnel against the running API), repoint the rows off the provider host, then retire the GCP media bucket.
