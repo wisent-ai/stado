@@ -646,6 +646,47 @@ What it deliberately does not do:
   refuses to read through a symlink and would otherwise report the active
   binary as unreadable.
 
+## `stado fleet`
+
+Enrollment and the SSH channel it rides. This family writes the registry only
+after it has read the machine: `enroll` probes the target over the stored
+target-scoped key and records the hostname and platform it observed, so a
+machine that cannot be reached or cannot take the agent does not stay
+registered.
+
+| Subcommand | Behavior |
+|---|---|
+| `stado fleet key generate TARGET` | Generate a fresh ed25519 pair for the target into the selected credential store and print the public half — the line that goes into the machine's `authorized_keys`. The private half is never printed. Leaves the stored key readable to the local operator, so no separate grant step is needed. |
+| `stado fleet key install TARGET` | Append the stored public key to the target's `authorized_keys` **through the existing channel**. A rotation tool, not first contact. |
+| `stado fleet key check TARGET` | Verify the stored key actually opens the channel to the target. |
+| `stado fleet key rotate TARGET` | Rotate the target's key end to end, with rollback on failure. |
+| `stado fleet key ls` | List stored SSH keys as metadata only. |
+| `stado fleet key rm TARGET` | Remove a target's SSH key from the credential store. |
+| `stado fleet enroll NAME --ssh DEST [--kind local] [--fleet NAME] [--bootstrap]` | Probe-then-write onboarding: reads `hostname`, `uname -s` and `uname -m` over the channel, writes the entry from what it read, optionally assigns a fleet, and with `--bootstrap` installs the agent and rolls the entry back if that install fails. |
+| `stado fleet join` | Run **on the machine being added**: announce it to the fleet when the control plane cannot reach it but it can reach the store. |
+| `stado fleet pending` | List unanswered join requests. |
+| `stado fleet approve HOSTNAME [--fleet NAME]` | Turn a pending join request into a registered target. |
+| `stado fleet reject HOSTNAME` | Drop a pending join request. |
+| `stado fleet catalog [--json]` | Print the registry's central enrollment and communication catalog, which both enrollment paths honour. |
+| `stado fleet list [--json]` | The fleets declared in the registry with their members. |
+| `stado fleet status NAME` | Live state for the members of one declared fleet. |
+| `stado fleet create NAME [--notes TEXT]` | Declare a new fleet in the canonical registry. |
+| `stado fleet assign TARGET FLEET` | Add a registered machine to a declared fleet. |
+| `stado fleet doctor [--json] [--fleet NAME]` | Worker health: agent grant, secret probes, beacons, capacity. |
+
+The channel is the same one the `stado host` commands use, and the SSH
+destination is whatever the operator supplied: a `.local` name on the local
+network is as valid as a tailnet name, and the registry requires no particular
+kind. A `.local` destination limits every channel-opening command to that
+network; it does not limit `stado registry beacon-age` or `stado host health`,
+because the host publishes its beacon outward.
+
+Stado Desktop reaches this family through the dashboard's authenticated
+operator-command bridge instead of carrying its own enrollment logic, so its
+**Fleet › Hosts › Add a Machine** sheet performs exactly the commands above.
+The separate `stado_fleet` binary remains for compatibility over the same
+implementation; `stado fleet` is the documented surface.
+
 ## `stado registry`
 
 Every subcommand reads and writes the canonical registry through the store
@@ -661,7 +702,7 @@ deployment that needed it.
 | `stado registry pull` | Print the canonical registry to stdout. |
 | `stado registry self [--name-only]` | Which registry target this machine is. |
 | `stado registry doctor [--json]` | Diff registry declarations against live host state. Exits non-zero on any divergence. |
-| `stado registry host add HOST --ssh DEST --release-platform PLATFORM [--kind local]` | Onboard a machine into the registry, validated, refusing duplicates. Declaration only; `stado_fleet enroll` probes the machine first. |
+| `stado registry host add HOST --ssh DEST --release-platform PLATFORM [--kind local]` | Onboard a machine into the registry, validated, refusing duplicates. `--ssh` and `--release-platform` are both required. Declaration only; `stado fleet enroll` probes the machine first. |
 | `stado registry beacon-age [--json]` | Every registry host and its last beacon, worst first. |
 
 ### Registry document shape

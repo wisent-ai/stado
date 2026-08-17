@@ -9,8 +9,9 @@ examples requirement). Each script runs end-to-end locally.
 - **First run** — `config init`, `config validate`, `doctor`
 - **Work** — `submit`, `job watch`, `results`, `job rerun`
 - **Secrets** — `secrets put / get / ls / rm / doctor`
-- **Fleet** — `registry beacon-age`, `host ping`, `host uptime`,
-  `service list`, `service status`
+- **Fleet** — `fleet enroll`, `fleet key generate / check`,
+  `registry beacon-age`, `host ping`, `host uptime`, `service list`,
+  `service status`
 - **Queue** — `queue status / pause / drain / resume`
 
 ## Index
@@ -25,13 +26,18 @@ examples requirement). Each script runs end-to-end locally.
 4. [`queue-maintenance.sh`](queue-maintenance.sh) —
    pause, drain, resume — maintenance without cancelling work.
 5. [`fleet/add-remove-host.sh`](fleet/add-remove-host.sh) —
-   onboard a device with `registry host add`, remove it via
+   declare a device with `registry host add` (`--ssh` and
+   `--release-platform` both required), remove it via
    pull → edit → validate → push. Ends net-zero; verified on the real
    registry.
 6. [`fleet/onboard-host.sh`](fleet/onboard-host.sh) —
-   bring a device to reporting life: registry add, bootstrap, skarbiec
-   grants (`stado-local-agent`, `stado-host-health-beacon`), host recover,
-   beacon-age as proof.
+   bring a device to reporting life the verified way: `fleet enroll
+   --bootstrap` (probes hostname and platform before it writes), `fleet key
+   check`, skarbiec grants (`stado-local-agent`,
+   `stado-host-health-beacon`), host recover, beacon-age as proof. The public
+   key it needs in the target's `authorized_keys` comes from
+   `stado fleet key generate` — see
+   [Add your own machine](../add-your-machine.md).
 
 ## Providers (opt-in backends, per user)
 
