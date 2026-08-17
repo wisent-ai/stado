@@ -243,3 +243,17 @@ Three findings from the run, all fixed in the tooling:
 The GCP source objects were only read, never modified or deleted, so the rollback window is intact.
 
 What this does **not** yet do: the 2,674 live database rows still point at `storage.googleapis.com`. Rewriting them requires the provider-neutral delivery route first, because both Azure containers are private by design and a raw `blob.core.windows.net` URL must never enter the database. Delivery route, then locator rewrite, then GCP source removal.
+
+### Delivery blocker removed — Stado can now reach Azure Blob — 2026-08-17
+
+`providers/azure/mod.rs` documented a credential chain of "managed identity, then the `stado-azure` service-principal item from Skarbiec", and `azure_token.rs` documented "the chain falls through to Skarbiec" — but the implementation had **only** IMDS, and IMDS answers nothing off Azure. So the entire control plane, which runs on hardware outside Azure, could not authenticate to Azure Blob at all. Two comments described a feature that did not exist; one of them was the reason the delivery route looked like a design decision rather than a missing function.
+
+What now exists:
+
+- `azure_token::fetch_token` tries the managed identity first and then a scoped Skarbiec service principal (`{tenant_id, client_id, client_secret}`, item chosen by `WC_AZURE_SECRET`, default `stado-azure`), reporting **both** failures when neither source answers.
+- Entra application `stado-azure-storage` holds `Storage Blob Data Contributor` on `wisentprodstado` only. Its secret exists solely inside Skarbiec item `stado-azure`; it was never written to a file, an environment variable or a command line.
+- The `stado-control-plane` token was reminted with its previous 16 capabilities plus exactly three new ones: `read:stado-azure#tenant_id`, `#client_id`, `#client_secret`. The previous token file is retained beside it as `control-plane-skarbiec-token.pre-azure-*` for rollback.
+
+Verified from this host, which has no Azure identity: `stado storage ls` against the Azure backend returned **18 objects under `images/profiles/` in `media-private` and 0 in `media-public`**, matching the public/private split the migration applied.
+
+Shared-key access stays disabled and no SAS was issued: the data plane is reached with Entra tokens only.
