@@ -420,6 +420,34 @@ pub async fn serve(target: &str) -> Result<(), CmdError> {
         config: config.clone(),
     });
 
+    // A resolver that must serve the very address it reads the registry through
+    // cannot start in either order, and the two failures look unrelated: with
+    // the object API up the bind fails with "address already in use", with it
+    // down the read fails with "error sending request". On this workstation that
+    // alternation ran 641 restarts while the desktop app quietly fell back to a
+    // local vault and showed no subscriptions at all. Name the contradiction
+    // once instead of oscillating between its two halves.
+    let store_url = crate::config::wc_stado_storage_url();
+    if let Ok(parsed) = url::Url::parse(store_url.trim()) {
+        if let (Some(host), Some(port)) = (parsed.host_str(), parsed.port()) {
+            let store_authority = format!("{host}:{port}");
+            if let Some(adapter) = config
+                .adapters
+                .iter()
+                .find(|adapter| adapter.bind.trim() == store_authority)
+            {
+                return Err(CmdError::click(format!(
+                    "this resolver is declared to serve {} for service {:?}, and the registry \
+                     it must read first is configured at storage.stado.url = {}. One of the two \
+                     has to move: either place the object API somewhere this resolver does not \
+                     serve, or drop that adapter from the target's service_resolver policy. \
+                     Retrying cannot resolve it.",
+                    adapter.bind, adapter.service, store_url
+                )));
+            }
+        }
+    }
+
     let api = bind_loopback(&config.api_bind).await?;
     let mut adapter_listeners = Vec::with_capacity(config.adapters.len());
     for adapter in &config.adapters {
