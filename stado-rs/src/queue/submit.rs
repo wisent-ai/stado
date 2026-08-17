@@ -119,6 +119,11 @@ impl Default for SubmitOptions {
 /// branch by this machine_type, and must then resubmit with the routing
 /// flags left empty rather than pinning them (pinning any of them flips
 /// `caller_asked_for_gpu` and stamps an accelerator onto a CPU job).
+///
+/// It is a GCE name, kept because it is that readback marker, and it is
+/// therefore **not** a portable VM size. `scheduler::dispatch::agent` refuses
+/// to hand a machine type to a provider that does not name sizes that way, so
+/// this marker cannot reach Azure as `hardwareProfile.vmSize`.
 pub const CPU_MACHINE_TYPE: &str = "e2-standard-8";
 
 /// `os.urandom(4).hex()` — 4 random bytes as 8 hex chars.

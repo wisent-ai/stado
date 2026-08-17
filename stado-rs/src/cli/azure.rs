@@ -379,8 +379,11 @@ async fn store_operator_item(
         "credential_status": "ready",
         "tags": ["wisent", "azure", "operator", "oauth-refresh"]
     });
+    // `stado-secret` is the canonical kind that carries arbitrary named fields.
+    // `oauth-client` is not it: that kind allows only a client id and secret, so
+    // a session with a refresh token, tenant and scope is refused by the schema.
     credential_client()?
-        .write_item(id, "oauth", &value)
+        .write_item(id, "stado-secret", &value)
         .await
         .map_err(|error| {
             CmdError::click(format!("cannot store Azure operator credential: {error}"))

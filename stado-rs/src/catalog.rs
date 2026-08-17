@@ -126,6 +126,29 @@ pub static AWS_INSTANCE_TO_ACCEL: LazyLock<HashMap<&'static str, &'static str>> 
             .collect()
     });
 
+/// Which provider a machine type belongs to, by its naming shape.
+///
+/// Azure sizes are `Standard_*`, AWS instance types carry a family/size dot
+/// (`g4dn.xlarge`), and GCE machine types are dash-separated lowercase
+/// families (`e2-standard-8`). Returns `None` when nothing recognizes it, so
+/// an unknown pin is left alone rather than silently rewritten.
+pub fn machine_type_provider(machine_type: &str) -> Option<&'static str> {
+    let value = machine_type.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if value.starts_with("Standard_") {
+        return Some(crate::capabilities::ProviderId::Azure.as_str());
+    }
+    if value.contains('.') {
+        return Some(crate::capabilities::ProviderId::Aws.as_str());
+    }
+    if value.contains('-') && value == value.to_lowercase() {
+        return Some(crate::capabilities::ProviderId::Gcp.as_str());
+    }
+    None
+}
+
 /// One Azure quota-family record. API spelling, accelerator semantics, and
 /// the scheduler-compatible representative VM live together so the quota
 /// reader and request writer cannot drift into separate family catalogs.

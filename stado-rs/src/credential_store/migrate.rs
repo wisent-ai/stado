@@ -166,16 +166,10 @@ async fn snapshot(
     Ok(snapshot)
 }
 
-async fn clear_items(
-    backend: &Backend,
-    items: &[SnapshotItem],
-    url: &str,
-    consumer: &str,
-    token_file: &str,
-) -> Result<(), SkarbiecError> {
+async fn clear_items(backend: &Backend, items: &[SnapshotItem]) -> Result<(), SkarbiecError> {
     let mut first_error = None;
     for item in items.iter().rev() {
-        if let Err(error) = delete_item_at(backend, url, consumer, token_file, &item.id).await {
+        if let Err(error) = delete_item_at(backend, &item.id).await {
             if first_error.is_none() {
                 first_error = Some(error);
             }
@@ -187,22 +181,14 @@ async fn clear_items(
     }
 }
 
-async fn restore_items(
-    backend: &Backend,
-    items: &[SnapshotItem],
-    url: &str,
-    consumer: &str,
-    token_file: &str,
-) -> Result<(), SkarbiecError> {
+async fn restore_items(backend: &Backend, items: &[SnapshotItem]) -> Result<(), SkarbiecError> {
     for item in items {
         write_item_at(
             backend,
-            url,
-            consumer,
-            token_file,
             &item.id,
             &item.item_type,
             &item.value,
+            &serde_json::json!({}),
         )
         .await?;
     }
@@ -260,14 +246,14 @@ pub async fn migrate(
         )));
     }
 
-    if let Err(copy_error) = restore_items(&destination, &items, url, consumer, token_file).await {
-        let _ = clear_items(&destination, &items, url, consumer, token_file).await;
+    if let Err(copy_error) = restore_items(&destination, &items).await {
+        let _ = clear_items(&destination, &items).await;
         return Err(copy_error);
     }
     let copied = match snapshot(&destination, url, consumer, token_file).await {
         Ok(copied) => copied,
         Err(verification_error) => {
-            let _ = clear_items(&destination, &items, url, consumer, token_file).await;
+            let _ = clear_items(&destination, &items).await;
             return Err(verification_error);
         }
     };
@@ -276,21 +262,20 @@ pub async fn migrate(
             left.id == right.id && left.item_type == right.item_type && left.value == right.value
         });
     if !verified {
-        let _ = clear_items(&destination, &items, url, consumer, token_file).await;
+        let _ = clear_items(&destination, &items).await;
         return Err(deployment(
             "destination verification differs from the source snapshot",
         ));
     }
     if let Err(config_error) = persist_selector(&destination.locator()) {
-        let _ = clear_items(&destination, &items, url, consumer, token_file).await;
+        let _ = clear_items(&destination, &items).await;
         return Err(config_error);
     }
 
-    if let Err(delete_error) = clear_items(&source, &items, url, consumer, token_file).await {
-        let source_restore = restore_items(&source, &items, url, consumer, token_file).await;
+    if let Err(delete_error) = clear_items(&source, &items).await {
+        let source_restore = restore_items(&source, &items).await;
         let selector_restore = persist_selector(&source.locator());
-        let destination_cleanup =
-            clear_items(&destination, &items, url, consumer, token_file).await;
+        let destination_cleanup = clear_items(&destination, &items).await;
         if source_restore.is_err() || selector_restore.is_err() || destination_cleanup.is_err() {
             return Err(deployment(format!(
                 "source cleanup failed ({delete_error}); rollback was incomplete and requires operator recovery"
