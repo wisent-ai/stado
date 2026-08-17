@@ -315,6 +315,11 @@ async fn builder(platform: &str) -> Result<(crate::targets::ComputeTarget, Strin
                 .or_insert_with(|| consumer.clone());
         }
     }
+    let declared_for_platform = registry
+        .targets
+        .iter()
+        .filter(|target| target.release_platform == platform)
+        .count();
     let mut candidates: Vec<_> = registry
         .targets
         .into_iter()
@@ -328,8 +333,26 @@ async fn builder(platform: &str) -> Result<(crate::targets::ComputeTarget, Strin
         .collect();
     candidates.sort_by(|left, right| left.0.name.cmp(&right.0.name));
     candidates.into_iter().next().ok_or_else(|| {
+        // Name the store this looked in. Builders are selected from capacity
+        // publications, not from the registry's platform declaration, so a host
+        // that declares the platform and publishes to a different store is
+        // invisible here. This message blamed a builder that had been running
+        // for seven hours, because the operator machine's queue store was a
+        // private loopback resolver and the fleet publishes to a tailnet
+        // address, both under namespace `probierz`.
+        let store = crate::config::wc_stado_storage_url();
+        let store = if store.is_empty() {
+            "the configured queue store".to_string()
+        } else {
+            store.to_string()
+        };
         CmdError::click(format!(
-            "no live fleet builder is broadcasting verified release_platform {platform}"
+            "no live fleet builder is broadcasting verified release_platform \
+             {platform}; capacity read from {store} namespace {:?} listed {} live \
+             consumer(s) and the registry declares {} target(s) for that platform",
+            crate::config::wc_stado_storage_namespace(),
+            live_consumers.len(),
+            declared_for_platform,
         ))
     })
 }
