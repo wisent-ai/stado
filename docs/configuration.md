@@ -126,10 +126,18 @@ Each target entry:
   "gpu_type": "nvidia-tesla-t4",  // SKU label the agent broadcasts
   "slots": 0,                     // 0 = no concurrency cap, pure VRAM admission
   "vram_gb": 96,                  // total GPU VRAM
+  "gpu_power_limit_watts": 300,   // persistent board power cap, reconciled by the agent
   "env_overrides": { "WISENT_DTYPE": "auto" },
   "agent_args": ["--gpu-type", "nvidia-tesla-t4"]
 }
 ```
+
+`gpu_power_limit_watts` is valid only on `local` targets and must be a positive
+integer. Set it with `stado host gpu-power-limit TARGET WATTS`: Stado writes the
+generation-fenced declaration, applies it immediately, and the local agent
+reconciles it at startup and every five minutes. A declared cap that the NVIDIA
+driver cannot apply closes admission on that host instead of silently running
+new jobs outside the policy.
 
 A coordinator entry pins the scheduling-tick driver:
 

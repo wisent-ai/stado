@@ -391,6 +391,7 @@ unavailable.
 | `stado host health <target> --json` | Emit the same read-only report as JSON for automation and MCP. |
 | `stado host publish-beacon <file-or-dash>` | Validate and publish one locally collected beacon through the route-scoped authenticated Stado API. It requires the dedicated host-health Skarbiec grant and has no direct-storage or provider credential fallback. |
 | `stado host reboot <target>` | Graceful reboot through the approved channel. Reports `reboot_requested` or the host's own refusal — usually sudo wanting a password. |
+| `stado host gpu-power-limit <target> <watts>` | Persist the NVIDIA board power cap on the canonical registry target, apply it immediately over the approved host channel, and report the driver's effective limits. The local agent reasserts the declaration every five minutes and after restart; it advertises zero free capacity when reconciliation fails. |
 | `stado host uptime <target>` | Uptime, load averages and logged-in users. Load is read from the kernel, not scraped from the `uptime` line, whose shape differs between macOS and Linux. |
 | `stado host ping <target>` | One verdict from two signals: ssh reachability and health-beacon age. The worse signal decides, so a box answering ssh with a stale beacon fails. |
 | `stado host disk <target>` | Disk usage plus the registry cleanup policy and the janitor's own state: last pass, bytes freed, next scheduled pass. |

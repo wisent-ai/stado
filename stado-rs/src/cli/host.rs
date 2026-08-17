@@ -284,11 +284,20 @@ async fn host_health_api_token() -> Result<String, CmdError> {
 /// `stado host recover TARGET` — recover a registry-managed macOS host
 /// through its approved channel (Python `host_recover` in cli.py: prints
 /// the report as sorted-keys JSON, exits 1 when status != "ok").
-pub async fn recover(target: &str) -> Result<(), CmdError> {
+///
+/// The canonical remote registry remains the default and fleet-survival
+/// authority. `bundled_registry` is an explicit break-glass path for repairing
+/// the storage or authorization outage that made that authority unreadable.
+pub async fn recover(target: &str, bundled_registry: bool) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
-    let report = crate::deploy::host_recovery::recover_host(target, &runner)
-        .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    let report = if bundled_registry {
+        let registry = crate::targets::load_bundled_registry()
+            .map_err(|exc| CmdError::click(exc.to_string()))?;
+        crate::deploy::host_recovery::recover_host_with_registry(&registry, target, &runner).await
+    } else {
+        crate::deploy::host_recovery::recover_host(target, &runner).await
+    }
+    .map_err(|exc| CmdError::click(exc.to_string()))?;
     println!(
         "{}",
         crate::deploy::host_recovery::to_sorted_pretty(&report)
@@ -656,6 +665,94 @@ pub async fn weles_recordings_dir(target: &str, path: &str) -> Result<(), CmdErr
         println!("  {name}: WELES_RECORDINGS_ROOT={path}");
     }
     println!("updated {touched} LaunchAgent plist(s); reload weles agents to apply");
+    Ok(())
+}
+
+/// Persist TARGET's NVIDIA board power cap in the canonical registry and apply
+/// it immediately. The local agent keeps reconciling the declaration, including
+/// after driver resets and host reboots.
+pub async fn gpu_power_limit(target: &str, watts: u32, json: bool) -> Result<(), CmdError> {
+    if watts == 0 {
+        return Err(CmdError::usage("WATTS must be a positive integer"));
+    }
+
+    let store = crate::targets::RegistryStore::open().await?;
+    let current = store
+        .read_versioned()
+        .await?
+        .ok_or_else(|| CmdError::click("canonical registry generation unavailable"))?;
+    let mut document: Value = serde_json::from_str(&current.content)?;
+    let targets = document
+        .get_mut("targets")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| CmdError::click("registry.targets: must be an array"))?;
+    let entry = targets
+        .iter_mut()
+        .find(|entry| entry.get("name").and_then(Value::as_str) == Some(target))
+        .ok_or_else(|| CmdError::click(format!("target not in registry: {target}")))?
+        .as_object_mut()
+        .ok_or_else(|| CmdError::click("registry target must be an object"))?;
+    entry.insert("gpu_power_limit_watts".to_string(), Value::from(watts));
+    crate::targets::validate_registry(&document)
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let payload = format!("{}\n", serde_json::to_string_pretty(&document)?);
+    let registry = crate::targets::load_registry_from_str(&payload)
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let resolved = registry
+        .lookup(target)
+        .cloned()
+        .ok_or_else(|| CmdError::click(format!("target not in registry: {target}")))?;
+    let generation = store.compare_and_swap(&current.version, &payload).await?;
+
+    let script = format!(
+        r#"set -eu
+nvidia_smi=$(command -v nvidia-smi)
+if [ -z "$nvidia_smi" ]; then
+  printf '%s\n' 'nvidia-smi is unavailable' >&2
+  exit 1
+fi
+indices=$("$nvidia_smi" --query-gpu=index --format=csv,noheader,nounits)
+if [ -z "$indices" ]; then
+  printf '%s\n' 'nvidia-smi returned no GPUs' >&2
+  exit 1
+fi
+for gpu in $indices; do
+  "$nvidia_smi" --id="$gpu" --power-limit={watts} >/dev/null
+done
+"$nvidia_smi" \
+  --query-gpu=index,power.limit,power.min_limit,power.max_limit \
+  --format=csv,noheader,nounits
+"#
+    );
+    let runner = crate::deploy::production_runner();
+    let output = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if !output.ok() {
+        return Err(CmdError::click(format!(
+            "{target}: registry now requires {watts} W at generation {generation}, but immediate reconciliation failed: {}",
+            crate::deploy::host_channel::last_error_line(
+                &output,
+                "remote nvidia-smi power-limit update failed"
+            )
+        )));
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "target": target,
+                "gpu_power_limit_watts": watts,
+                "registry_generation": generation,
+                "driver": output.stdout.trim(),
+                "status": "reconciled",
+            }))?
+        );
+    } else {
+        println!("{target}: gpu_power_limit_watts={watts} (generation {generation})");
+        print!("{}", output.stdout);
+    }
     Ok(())
 }
 
@@ -2328,6 +2425,7 @@ pub async fn run_helper(
     target: &str,
     name: &str,
     uuids: &[String],
+    bundled_registry: bool,
     json: bool,
 ) -> Result<(), CmdError> {
     release_component("helper name", name)?;
@@ -2343,9 +2441,17 @@ pub async fn run_helper(
         arguments.push(' ');
         arguments.push_str(uuid);
     }
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let resolved = if bundled_registry {
+        let registry = crate::targets::load_bundled_registry()
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        crate::deploy::host_channel::resolve_target(&registry, target)
+            .cloned()
+            .map_err(|error| CmdError::click(error.to_string()))?
+    } else {
+        crate::deploy::host_channel::canonical_target(target)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?
+    };
     let remote_name = crate::deploy::shlex_quote(name);
     let script = crate::deploy::host_channel::installed_helper_script(&remote_name, &arguments);
     let runner = crate::deploy::production_runner();
