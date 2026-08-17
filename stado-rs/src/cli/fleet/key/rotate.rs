@@ -6,7 +6,7 @@
 //! key. Failed verification restores the old item.
 
 use serde_json::{json, Value};
-use stado::deploy::{CommandSpec, Runner};
+use crate::deploy::{CommandSpec, Runner};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -90,7 +90,7 @@ async fn generate_pair(runner: &Runner, comment: &str) -> Result<KeyPair, String
 /// finished until the reader can see it: the alternative is an enrolled host
 /// whose channel cannot open, diagnosed later and from further away.
 async fn store_pair(
-    client: &stado::skarbiec::Client,
+    client: &crate::skarbiec::Client,
     target: &str,
     pair: &KeyPair,
 ) -> Result<(), String> {
@@ -257,7 +257,7 @@ async fn verify_new_key(runner: &Runner, target: &str) -> Result<String, String>
 }
 
 async fn destination_of(target: &str) -> Result<String, String> {
-    let registry = stado::targets::load_registry_auto()
+    let registry = crate::targets::load_registry_auto()
         .await
         .map_err(|exc| exc.to_string())?;
     registry

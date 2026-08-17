@@ -48,6 +48,7 @@ const ALLOWED_FAMILIES: &[&str] = &[
     "cost",
     "disk-cleanup",
     "doctor",
+    "fleet",
     "host",
     "identity",
     "inference",
@@ -303,6 +304,15 @@ fn is_read_only(args: &[String]) -> bool {
             "artifact",
             "list" | "show" | "resolve" | "verify" | "lineage"
         ) | ("billing", "show")
+            // Enrollment mutates, and `fleet enroll`/`approve`/`key` are
+            // gated as mutations on purpose. These five only read the
+            // registry and the store; leaving them behind the confirmation
+            // would teach the operator to type RUN_MUTATION to look at
+            // something, which is the one habit this gate exists to prevent.
+            | (
+                "fleet",
+                "list" | "status" | "catalog" | "doctor" | "pending"
+            )
             | (
                 "host",
                 "health" | "inventory" | "uptime" | "ping" | "disk" | "vaults"

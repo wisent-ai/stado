@@ -1,6 +1,6 @@
 //! Selected-store SSH channel materialization.
 
-use stado::deploy::ssh_key::{self, KeyFile};
+use crate::deploy::ssh_key::{self, KeyFile};
 
 /// Build one SSH invocation using only the target key in the credential store.
 pub async fn channel_argv(

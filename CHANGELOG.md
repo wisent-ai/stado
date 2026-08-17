@@ -69,6 +69,15 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   through the Skarbiec CLI's field-aware contract instead of the retired
   whole-item HTTP payload. Restored values still move only over stdin and are
   never printed.
+- Minting an SSH host key now ends with a key that can actually be read. Skarbiec
+  authorizes reads per item, so a freshly written key was readable by nobody: the
+  consumer every host channel authenticates as gained no capability from the
+  write, and every new key was dead until an operator widened that grant by hand.
+  `key generate` and `key add` now widen it themselves — preserving the
+  consumer's bearer, its remaining lifetime, and every capability it already
+  held — and prove the result by reading the item back through the same consumer
+  the channel uses. A read-back that returns a different value still fails the
+  mint: it means the broker serves a vault this machine's write never reached.
 
 ## 0.5.0-rc.1 - 2026-07-29
 
@@ -106,6 +115,18 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   current Skarbiec field-read contract. `install-built-stado-binary.py` now also
   accepts a repair: where the running binary fails a read-only probe the
   candidate passes, agreement with the broken binary is not required.
+- Made enrollment part of `stado`: adding a machine is `stado fleet enroll`, with
+  `join`/`pending`/`approve`/`reject`, `key generate|install|check|rotate|ls|rm|add`,
+  `list`, `status`, `create`, `assign`, `catalog` and `doctor` beside it. The
+  dashboard's operator console can now run enrollment, which it never could: it
+  executes `stado`, and enrollment existed only inside the separate `stado_fleet`
+  binary, so the first command a new machine needs was absent from `stado --help`
+  and from every surface built on it. `stado_fleet` keeps every command, flag and
+  word of output, now as a thin entry point onto the same library code — there is
+  one implementation, not two. Both `stado_fleet` and `stado_migrate` are also
+  declared in the crate manifest instead of being found by directory: nothing
+  naming them is what let `stado_fleet` run 0.5.1 against the 0.7.2 library it
+  shares with `stado` for weeks, with no command able to report the gap.
 
 ### Credentials
 

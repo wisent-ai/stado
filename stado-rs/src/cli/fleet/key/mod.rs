@@ -12,8 +12,8 @@ pub use channel::channel_argv;
 pub mod rotate;
 
 use serde_json::json;
-use stado::deploy::{CommandSpec, Runner};
-use stado::skarbiec::Client;
+use crate::deploy::{CommandSpec, Runner};
+use crate::skarbiec::Client;
 
 /// Credential item id prefix for host keys; the target name follows it.
 const ITEM_PREFIX: &str = "stado-ssh-";
@@ -49,7 +49,7 @@ pub(crate) async fn run_checked(
 /// credential store; Skarbiec uses the external admin bootstrap grant.
 pub(crate) fn configured_client() -> Result<Client, String> {
     let credentials =
-        stado::credential_store::admin_credentials().map_err(|exc| exc.to_string())?;
+        crate::credential_store::admin_credentials().map_err(|exc| exc.to_string())?;
     Client::new(
         &credentials.url,
         &credentials.consumer,
@@ -220,7 +220,7 @@ pub async fn install(runner: &Runner, target: &str) -> Result<bool, String> {
                 item_id(target)
             )
         })?;
-    let registry = stado::targets::load_registry_auto()
+    let registry = crate::targets::load_registry_auto()
         .await
         .map_err(|exc| exc.to_string())?;
     let target_entry = registry
@@ -242,7 +242,7 @@ pub async fn install(runner: &Runner, target: &str) -> Result<bool, String> {
 
 /// `key check TARGET` — verify the selected-store key opens the channel.
 pub async fn check(runner: &Runner, target: &str) -> Result<bool, String> {
-    let registry = stado::targets::load_registry_auto()
+    let registry = crate::targets::load_registry_auto()
         .await
         .map_err(|exc| exc.to_string())?;
     let target_entry = registry

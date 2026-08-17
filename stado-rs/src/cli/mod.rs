@@ -31,6 +31,7 @@ pub mod dashboard;
 pub mod directory;
 pub mod disk_cleanup;
 pub mod doctor;
+pub mod fleet;
 pub mod host;
 pub mod identity;
 pub mod inference;
@@ -461,6 +462,11 @@ enum Commands {
     /// Manage the canonical compute-target registry in configured Stado storage.
     #[command(subcommand)]
     Registry(RegistryCommands),
+
+    /// Add machines to the fleet, group them, hold their SSH keys, and
+    /// diagnose the workers: enroll, join/approve, key, doctor.
+    #[command(subcommand)]
+    Fleet(fleet::FleetCommands),
 
     /// Which host holds which identity, and whether that is still true.
     #[command(subcommand)]
@@ -1617,7 +1623,8 @@ fn failure_service(matches: &clap::ArgMatches) -> &'static str {
     match matches.subcommand_name().unwrap_or_default() {
         "submit" | "status" | "cancel" | "results" | "job" | "machine" | "queue" | "storage"
         | "artifact" => "queue",
-        "host"
+        "fleet"
+        | "host"
         | "registry"
         | "service"
         | "instances"
@@ -1764,6 +1771,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             }) => registry::host_add(&host, &ssh, &kind, &release_platform).await,
             RegistryCommands::BeaconAge { json } => registry::beacon_age(json).await,
         },
+        Commands::Fleet(sub) => fleet::run(sub).await,
         Commands::Identity(sub) => match sub {
             IdentityCommands::List { json } => identity::list(json).await,
             IdentityCommands::Verify {
