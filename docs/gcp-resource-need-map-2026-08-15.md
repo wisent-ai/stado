@@ -26,6 +26,7 @@ The assessment classifies everything else as already replaced, an inert deployme
 |---|---|
 | `HOLD-COMPAT` | No new system should use it, but old installed clients may still address it. |
 | `MIGRATE-THEN-CUTOVER` | Active product data must be copied to Azure object storage behind Stado, verified object-for-object, and cut over at every live locator before the GCP source can be removed. |
+| `OPTIONAL-ARCHIVE` | No current product or control-plane capability needs the data; export only when its historical/audit value justifies retaining it. |
 | `EXPORT-THEN-DELETE` | The data may matter; the GCP runtime/resource does not. Export, verify the destination and remove the source. |
 | `DEDUP-THEN-DELETE` | Likely replicated or historical data; compare with canonical storage, preserve only unique objects and remove the GCP copy. |
 | `DELETE` | No current capability or unique-data requirement justifies retention. |
@@ -158,7 +159,7 @@ The need is for data from five disks, not for the disks or their GCP runtimes. T
 
 | Resource | Proposed classification | Required preservation |
 |---|---|---|
-| BigQuery `billing_export.gcp_billing_export_v1_017364_D3B657_F207B5` | `EXPORT-THEN-DELETE` | Historical gross cost, credits, net cost and burn history as a portable table/archive. |
+| BigQuery `billing_export.gcp_billing_export_v1_017364_D3B657_F207B5` | `OPTIONAL-ARCHIVE` | No current consumer: active Stado billing configuration selects only Azure. The table contains historical GCP gross cost, credits, net cost and burn data; export it only if that financial history is wanted. |
 | Cloud SQL `wisent-compute-db` | `EXPORT-THEN-DELETE` | Schema and data once, unless inspection proves the database empty/disposable; never restart it merely to preserve the old runtime. |
 | Pub/Sub `stado-alerts` | `DELETE` | Current Stado alerting must use its configured current channel; this topic has no subscription. |
 | Pub/Sub `wisent-compute-alerts` | `DELETE` | Retired coordinator topic; no subscription. |

@@ -64,9 +64,10 @@ These are not active application paths, but deleting GCP before exporting them r
 | `wisent-body-horror-models`, `wisent-stock-context`, `wisent-video-gen` | Azure Blob cool/archive tier | Export useful unique model/research outputs with metadata and checksums. |
 | `content-platform-vm` 500 GB disk | Azure Blob archive for Weles recordings | Export recordings with recording index and evidence links; the old runtime is not migrated. |
 | Four experiment disks: NeedHer watermark, VATT, Sapiens2, Z-Image interpolation | Azure Blob archive or Stado artifacts | Export unique checkpoints/results as files, not bootable VM clones. |
-| BigQuery billing table | Parquet plus schema in Azure Blob archive | Preserve historical gross cost, credits, net cost and burn history; no live Azure database is required. |
 | Cloud SQL `wisent-compute-db` | Logical PostgreSQL dump in Azure Blob archive | Preserve schema and data once. Provision Azure Database for PostgreSQL only if the experimental marketplace is deliberately reactivated. |
 | `wisent-oko-updates`, `wisent-swiatowid-updates` | Existing GitHub/Stado release delivery, optionally mirrored into Azure | Treat as compatibility holds: old clients may have hard-coded GCS appcasts. Remove only after the installed-version floor proves no supported client needs those URLs. |
+
+BigQuery billing history is **not a Microsoft migration requirement**. Google-managed billing export is the only observed writer; no Wisent principal appeared in the audited 24-hour window, active Stado billing configuration selects only Azure, and the last local Stado snapshot that attempted GCP billing was an error dated 2026-07-30. The table was formerly queried for GCP gross cost, credits, net cost and seven-day credit burn; retain it only as an optional financial archive.
 
 ### P2 — active Firebase services in Wisent iOS
 
@@ -137,7 +138,7 @@ Deploy and prove the image service, ComfyUI/Z-Image, image-video-router and any 
 
 ### Wave 5 — export retained data
 
-Move the five unique disks, six archive/model buckets, BigQuery history and Cloud SQL dump. Deduplicate before copying large model/media sets. Apply Azure cool/archive lifecycle only after restore metadata and checksums exist.
+Move the five unique disks, six archive/model buckets and Cloud SQL dump. Deduplicate before copying large model/media sets. Apply Azure cool/archive lifecycle only after restore metadata and checksums exist. Export BigQuery billing history only if its optional financial/audit value warrants retention.
 
 ### Wave 6 — move Firebase support contracts
 
