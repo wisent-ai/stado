@@ -571,13 +571,22 @@ struct EnrollmentNameSection: View {
 
 // MARK: - Invite
 
-/// One code, sent to whoever has the machine.
+/// One invitation, sent to whoever has the machine.
 ///
 /// This is the method that exists because the operator cannot always reach the
 /// machine and should not have to. It has two halves separated by somebody
-/// else's attention span: the code is minted and sent in a minute, and the
-/// answer arrives whenever that person gets to it. The second half is why this
-/// screen is written down rather than held in the window.
+/// else's attention span: the invitation is minted and sent in a minute, and
+/// the answer arrives whenever that person gets to it. The second half is why
+/// this screen is written down rather than held in the window.
+///
+/// There are two invitations, and which one is right is decided by the machine
+/// rather than by taste. The online one is a line that fetches the join script
+/// from this fleet's control point, so the machine has to be able to reach it.
+/// The offline one is a fragment that already contains the fleet's public key,
+/// so nothing has to reach anything — and nothing reports back either, which
+/// is why its second half is a person sending an address rather than a machine
+/// putting its hand up. This screen shows exactly one of them, because the
+/// other one does not exist once an invitation is minted.
 struct EnrollmentInviteView: View {
     @ObservedObject var store: MachineEnrollmentStore
     let existingNames: Set<String>
@@ -593,33 +602,52 @@ struct EnrollmentInviteView: View {
             guidance: guidance,
             actions: actions
         ) {
-            if let invite = store.mintedInvite {
+            if let invite = store.mintedInvite, invite.mode == .online {
                 code(invite)
             }
             if let record = store.plan.invite {
-                outstanding(record)
+                if record.isOffline {
+                    offline(record)
+                } else {
+                    outstanding(record)
+                }
             } else if let approved = store.plan.approvedName {
                 settled(approved)
             } else {
                 EnrollmentNameSection(
                     store: store,
                     existingNames: existingNames,
-                    detail: "The name the canonical registry will use for this machine once you approve it. The invitation carries it, so the person you send the code to does not get to choose it."
+                    detail: "The name the canonical registry will use for this machine once it is in. The invitation carries it, so the person you send it to does not get to choose it."
                 )
+                EnrollmentInviteModeSection(store: store)
                 expectations
             }
             if let decision = store.plan.decision {
                 EnrollmentDecisionSection(decision: decision)
             }
         }
-        .task(id: store.plan.invite?.id) {
-            guard store.plan.invite != nil else { return }
+        // Only the online invitation is answered by a machine, so only it has a
+        // request store to watch. Polling for a reply that cannot arrive is how
+        // a screen teaches an operator that waiting means something is broken.
+        .task(id: watchKey) {
+            guard let record = store.plan.invite, !record.isOffline else { return }
             await store.watchPending()
         }
     }
 
+    /// Restarts the watcher when the outstanding invitation changes and never
+    /// for an offline one.
+    private var watchKey: String {
+        guard let record = store.plan.invite, !record.isOffline else { return "" }
+        return record.id
+    }
+
     private var title: String {
-        if let record = store.plan.invite { return "Invitation for \(record.targetName)" }
+        if let record = store.plan.invite {
+            return record.isOffline
+                ? "\(record.targetName) is waiting on its owner"
+                : "Invitation for \(record.targetName)"
+        }
         if let approved = store.plan.approvedName { return "\(approved) is in the fleet" }
         return "Invite a machine into the fleet"
     }
@@ -629,18 +657,24 @@ struct EnrollmentInviteView: View {
     /// not need the pitch again.
     private var detail: String {
         if store.plan.approvedName != nil, store.plan.invite == nil {
-            return "The invitation was answered and approved. Everything below is what that took: what the machine reported, what approval ran, and the two proofs that turn the entry into a working machine."
+            return "The invitation is spent and the machine is in the canonical registry. Everything below is what that took: what the closing command ran, and the two proofs that turn the entry into a working machine."
+        }
+        if let record = store.plan.invite, record.isOffline {
+            return "There is no line and no code in this mode, and nothing on the machine reports itself back. You send the fragment below, its owner pastes it and reads you back one address, and you finish the enrollment here with that address. Everything in the fragment is public: the fleet's private key never left the credential store."
         }
         if store.plan.invitedRequest != nil {
             return "The machine ran the line and installed the key. Approving it opens the channel, asks it what it is, and writes the registry entry only after it answers. Rejecting writes nothing at all."
         }
-        return "You mint one code and send one line. Whoever has the machine runs it there, which puts the fleet's public key into their authorized_keys and makes the machine report itself back here. Then you approve it. You never open a session to the machine and the code carries nothing that can reach into this fleet."
+        if store.plan.invite != nil {
+            return "The machine ran nothing yet. When whoever has it runs the line, the fleet's public key goes into their authorized_keys and the machine reports itself back here for you to approve."
+        }
+        return "Two invitations, and the machine decides which one. Either way you never open a session to it, and either way what travels can reach nothing in this fleet on its own."
     }
 
     private var trailing: (label: String, value: String)? {
         guard let record = store.plan.invite else { return nil }
         if record.isExpired {
-            return ("INVITATION", "expired")
+            return ("INVITATION", "lapsed")
         }
         guard let expiry = record.expiryDate else {
             return ("INVITATION", record.id)
@@ -649,6 +683,11 @@ struct EnrollmentInviteView: View {
     }
 
     private var guidance: String {
+        if let record = store.plan.invite, record.isOffline {
+            return store.draft.hasChannel
+                ? "Nothing has been written to the registry yet. The enrollment below opens the channel on the key the fragment installed, probes \(record.targetName), and writes the entry only if it answers."
+                : "The address has to come from a person, so there is nothing to press until it does. This screen is not waiting on the fleet and not stuck: the fragment above is the whole of your side."
+        }
         if let request = store.plan.invitedRequest {
             return "\(request.hostname) is waiting for your decision. Nothing has been written to the registry for it yet."
         }
@@ -657,13 +696,13 @@ struct EnrollmentInviteView: View {
         }
         if let record = store.plan.invite {
             return record.isExpired
-                ? "This invitation has expired. A machine answering it now is refused. Revoke it and mint another when you are ready."
+                ? "This invitation has lapsed. A machine answering it now is refused. Revoke it and mint another when you are ready."
                 : "Waiting for \(record.targetName) to answer. This screen reads the request store while it is open, and remembers what it is waiting for when it is not."
         }
         if store.plan.approvedName != nil {
-            return "The invitation is spent and cannot be answered again. Inviting another machine mints a new code for a new name."
+            return "The invitation is spent and cannot be used again. Inviting another machine mints a new one for a new name."
         }
-        return "Minting writes one invitation into the store and one key pair into the credential store. Nothing is written to the registry until you approve the machine that answers."
+        return "Minting writes one invitation into the store and one key pair into the credential store. Nothing is written to the registry until the machine is in."
     }
 
     private var actions: [WisentAction] {
@@ -689,10 +728,10 @@ struct EnrollmentInviteView: View {
                 },
             ]
         }
-        guard store.plan.invite != nil else {
+        guard let record = store.plan.invite else {
             return [
                 WisentAction(
-                    "Mint an invitation",
+                    store.plan.inviteMode == .offline ? "Mint the fragment" : "Mint an invitation",
                     symbol: "envelope",
                     kind: .primary,
                     isEnabled: !store.isRunning
@@ -701,6 +740,24 @@ struct EnrollmentInviteView: View {
                         && !existingNames.contains(store.draft.machineName)
                 ) {
                     Task { await store.mintInvite() }
+                },
+            ]
+        }
+        if record.isOffline {
+            return [
+                WisentAction("Revoke this invitation", kind: .destructive, isEnabled: !store.isRunning) {
+                    Task { await store.revokeInvite() }
+                },
+                WisentAction(
+                    "Add \(record.targetName) at this address",
+                    symbol: "arrow.right.circle",
+                    kind: .primary,
+                    isEnabled: !store.isRunning && store.draft.hasChannel
+                ) {
+                    Task {
+                        await store.completeOfflineInvite()
+                        await refresh()
+                    }
                 },
             ]
         }
@@ -737,7 +794,7 @@ struct EnrollmentInviteView: View {
         ) {
             EnrollmentCopyBlock(
                 text: invite.joinCommand,
-                caption: "Assembled by the control plane against its own public address, so it is right from wherever that person is.",
+                caption: probedCaption(invite),
                 isSecret: true
             )
         }
@@ -756,6 +813,119 @@ struct EnrollmentInviteView: View {
             ) {
                 EnrollmentCopyBlock(text: invite.authorizedKeysLine)
             }
+        }
+    }
+
+    /// Where the line came from, naming the address it was built against when
+    /// the control plane reported one. The fact belongs beside the line rather
+    /// than in a panel of its own: a green alert box with a warning triangle
+    /// over good news is how operators learn to stop reading alert boxes.
+    private func probedCaption(_ invite: MachineInvite) -> String {
+        guard let checkpoint = invite.checkpoint, !checkpoint.url.isEmpty else {
+            return "Assembled by the control plane against its own configured address, not by this app, and only after that address served the join script."
+        }
+        return "Assembled by the control plane against \(checkpoint.url), which served /join.sh when this was minted. This app did not build the line and does not know that address."
+    }
+
+    /// The offline invitation: a fragment to send, and one address to wait for.
+    ///
+    /// Deliberately without a single mention of a code or a line: neither
+    /// exists here, and an operator who half-remembers a one-liner from the
+    /// other mode will go looking for it rather than sending what is on screen.
+    @ViewBuilder
+    private func offline(_ record: MachineInviteRecord) -> some View {
+        WisentSignalStrip(signals: [
+            WisentSignal("Invitation", value: record.id, tone: .neutral),
+            WisentSignal("Machine", value: record.targetName, tone: .neutral),
+            WisentSignal("Carries", value: "Public key only", tone: .success),
+            WisentSignal(
+                "State",
+                value: record.isExpired
+                    ? "Lapsed"
+                    : (store.draft.hasChannel ? "Address in hand" : "Waiting for an address"),
+                tone: record.isExpired ? .warning : (store.draft.hasChannel ? .brand : .neutral)
+            ),
+        ])
+
+        if let checkpoint = record.checkpoint, checkpoint.reason != MachineInviteCheckpoint.ok {
+            EnrollmentCheckpointPanel(checkpoint: checkpoint)
+        }
+
+        if record.snippet.isEmpty {
+            WisentAlertPanel(
+                tone: .danger,
+                title: "This invitation has no fragment to show",
+                detail: "The control plane minted it as an offline invitation and did not print the fragment, so there is nothing here to send. Revoke it and mint another; if that repeats, run stado fleet invite --offline in a terminal on the control plane host and read what it prints."
+            )
+        } else {
+            WisentSectionBox(
+                title: "The fragment to send to whoever has the machine",
+                detail: "They paste it into a terminal on the machine being added. It creates ~/.ssh, appends the fleet's public key to authorized_keys without duplicating a line that is already there, fixes the modes, tells them where to turn Remote Login on if it is off, and prints the one address they have to send you.",
+                trailing: "not a secret"
+            ) {
+                VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
+                    EnrollmentCopyBlock(
+                        text: record.snippet,
+                        caption: "Everything in it is public. The only key inside is the public half of the pair for \(record.targetName); the private half is in the credential store on the control plane host and never leaves it, so somebody reading this fragment on the way learns nothing they can use against this fleet. Send it however you already talk to that person."
+                    )
+                    Text("It is safe to send twice. Pasting it a second time appends nothing, so a lost message costs a resend rather than a new invitation.")
+                        .font(WisentTypeScale.caption())
+                        .foregroundStyle(WisentDesign.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+
+        WisentSectionBox(
+            title: "The address its owner sends back",
+            detail: "The last thing the fragment prints on that machine is one line, user@address. Paste it here exactly as they sent it — it is what the fleet will open its channel to."
+        ) {
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
+                TextField(
+                    "kasia@studio-air.local",
+                    text: Binding(
+                        get: { store.draft.sshTarget },
+                        set: { store.setSSHTarget($0) }
+                    )
+                )
+                .textFieldStyle(.roundedBorder)
+                .font(WisentTypeScale.body())
+                Text(verbatim: "stado fleet enroll \(record.targetName) --ssh \(store.draft.hasChannel ? store.draft.sshTarget : "ADDRESS") --bootstrap")
+                    .font(WisentTypeScale.identifier())
+                    .foregroundStyle(WisentDesign.ink)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("That is the command the button below runs. It probes the machine first and writes the registry entry only after it answers; if the agent install then fails, the entry is removed again. The invitation is spent once the entry exists.")
+                    .font(WisentTypeScale.caption())
+                    .foregroundStyle(WisentDesign.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+
+        if !store.draft.hasChannel {
+            WisentSectionBox(
+                title: "You are waiting for a person, not for the fleet",
+                detail: "Nothing is running, nothing has failed, and there is nothing on this screen left to press. An offline invitation is never answered by the machine: it is answered by whoever has it, in whatever channel you sent the fragment through.",
+                trailing: "minted \(ConsoleFormat.relative(record.mintedAt))"
+            ) {
+                VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
+                    EnrollmentChecklistRow(text: "No request will appear under the Join method for \(record.targetName). There is nothing in this mode that reports itself, which is exactly why it works for a machine that cannot reach this fleet.")
+                    EnrollmentChecklistRow(text: "Closing the app does not lose this. The fragment and this invitation are written down, and the code that would have to be protected does not exist in this mode.")
+                    if record.isExpired {
+                        EnrollmentChecklistRow(text: "The invitation lapsed \(ConsoleFormat.relative(record.expiryDate)). The fragment does not lapse — a key already appended to authorized_keys stays there — and the enrollment above is the ordinary one, which needs an address rather than an invitation.")
+                    } else {
+                        EnrollmentChecklistRow(text: "The key pair for \(record.targetName) already exists in the credential store. Revoking this invitation does not remove it; stado fleet key rm \(record.targetName) does.")
+                    }
+                }
+            }
+        }
+
+        if othersWaiting > 0 {
+            EnrollmentNote(
+                title: "\(othersWaiting) machine\(othersWaiting == 1 ? "" : "s") waiting for a decision",
+                detail: "They have nothing to do with this invitation — an offline one is never answered by a machine — but they are waiting on somebody. The Join method lists every request in the store.",
+                actions: [WisentAction("Go to Join") { store.open(.join) }]
+            )
         }
     }
 
@@ -816,8 +986,8 @@ struct EnrollmentInviteView: View {
         }
     }
 
-    /// The end of the method: a machine that answered, was probed, and is now
-    /// a registry entry. Said plainly, with the one thing left to look at.
+    /// The end of the method: a machine that is now a registry entry. Said
+    /// plainly, with the one thing left to look at.
     @ViewBuilder
     private func settled(_ approved: String) -> some View {
         WisentSignalStrip(signals: [
@@ -832,7 +1002,7 @@ struct EnrollmentInviteView: View {
 
         WisentSectionBox(
             title: "Nothing else is waiting",
-            detail: "The invitation was answered once and cannot be answered again. Approval opened the channel, asked \(approved) what it was, and wrote the entry only after it answered — what that command printed is below, verbatim."
+            detail: "The invitation is spent and cannot be used again. The enrollment opened the channel, asked \(approved) what it was, and wrote the entry only after it answered — what that command printed is below, verbatim."
         ) {
             VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
                 EnrollmentChecklistRow(text: "The Hosts table is where \(approved) shows up next, with the capacity reports its agent publishes.")
@@ -848,14 +1018,185 @@ struct EnrollmentInviteView: View {
         return store.waitingRequests.filter { $0.inviteID != record.id }.count
     }
 
+    /// What the other person has to do, which is not the same work in the two
+    /// modes and must not be described as if it were.
     private var expectations: some View {
         WisentSectionBox(title: "What the other person has to do") {
             VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
-                EnrollmentChecklistRow(text: "Turn on Remote Login on the machine. On macOS: System Settings, General, Sharing, Remote Login. On Linux: enable sshd.")
-                EnrollmentChecklistRow(text: "Paste one line into a terminal on that machine and press return.")
-                EnrollmentChecklistRow(text: "Nothing else. They do not install Stado, do not hold any credential for this fleet, and cannot read anything in it with the code.")
+                if store.plan.inviteMode == .offline {
+                    EnrollmentChecklistRow(text: "Paste the fragment you send them into a terminal on that machine and press return.")
+                    EnrollmentChecklistRow(text: "Read back the one address it prints. That is the only thing you need from them, and the only thing you have to wait for.")
+                    EnrollmentChecklistRow(text: "Turn on Remote Login if the fragment says it is off. It prints the exact place in System Settings for macOS and the equivalent for Linux, so they do not have to be told twice.")
+                    EnrollmentChecklistRow(text: "Nothing else. They install no Stado, hold no credential for this fleet, and what you sent them is a public key either way.")
+                } else {
+                    EnrollmentChecklistRow(text: "Turn on Remote Login on the machine. On macOS: System Settings, General, Sharing, Remote Login. On Linux: enable sshd.")
+                    EnrollmentChecklistRow(text: "Paste one line into a terminal on that machine and press return.")
+                    EnrollmentChecklistRow(text: "Nothing else. They do not install Stado, do not hold any credential for this fleet, and cannot read anything in it with the code.")
+                }
             }
         }
+    }
+}
+
+/// The one decision that has to be made before an invitation is minted.
+///
+/// It is a choice about the machine, not a preference, so both options say what
+/// they need rather than what they are called. Two rows rather than a segmented
+/// control: the difference between them is a sentence each, and a segmented
+/// control has room for neither.
+struct EnrollmentInviteModeSection: View {
+    @ObservedObject var store: MachineEnrollmentStore
+
+    var body: some View {
+        WisentSectionBox(
+            title: "Which invitation",
+            detail: "The one line is less work for you and needs the machine to reach this fleet's control point. The fragment needs nothing of the sort and costs you one message more. If the control point does not answer when you mint, the one line is not offered at all — an invitation that cannot be redeemed is worse than none."
+        ) {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array([MachineInviteMode.online, .offline].enumerated()), id: \.element) { index, mode in
+                    if index > 0 {
+                        Divider()
+                    }
+                    row(mode)
+                }
+            }
+            .background(WisentDesign.surface, in: RoundedRectangle(cornerRadius: WisentDesign.Radius.medium))
+            .overlay {
+                RoundedRectangle(cornerRadius: WisentDesign.Radius.medium)
+                    .stroke(WisentDesign.border, lineWidth: WisentDesign.hairline)
+            }
+        }
+    }
+
+    private func row(_ mode: MachineInviteMode) -> some View {
+        let isChosen = store.plan.inviteMode == mode
+        return Button {
+            store.setInviteMode(mode)
+        } label: {
+            HStack(alignment: .top, spacing: WisentDesign.Space.x4) {
+                Image(systemName: isChosen ? "largecircle.fill.circle" : "circle")
+                    .font(.system(size: 13, weight: .regular))
+                    .foregroundStyle(isChosen ? WisentDesign.brand : WisentDesign.muted)
+                    .padding(.top, 1)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
+                    Text(mode.title)
+                        .font(WisentTypeScale.bodyStrong())
+                        .foregroundStyle(WisentDesign.ink)
+                    Text(mode.summary)
+                        .font(WisentTypeScale.body())
+                        .foregroundStyle(WisentDesign.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(alignment: .top, spacing: WisentDesign.Space.x3) {
+                        Text("NEEDS")
+                            .font(WisentTypeScale.eyebrow())
+                            .tracking(0.6)
+                            .foregroundStyle(WisentDesign.muted)
+                            .frame(width: 44, alignment: .leading)
+                            .padding(.top, 2)
+                        Text(mode.requires)
+                            .font(WisentTypeScale.body())
+                            .foregroundStyle(WisentDesign.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Text(verbatim: mode == .offline
+                        ? "stado fleet invite --name \(name) --offline"
+                        : "stado fleet invite --name \(name)")
+                        .font(WisentTypeScale.identifierSmall())
+                        .foregroundStyle(WisentDesign.muted)
+                        .textSelection(.enabled)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(WisentDesign.Space.x5)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(isChosen ? WisentTone.brand.softColor : Color.clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(store.isRunning)
+        .accessibilityAddTraits(isChosen ? [.isButton, .isSelected] : .isButton)
+    }
+
+    private var name: String {
+        store.draft.machineName.isEmpty ? "NAME" : store.draft.machineName
+    }
+}
+
+/// What the control plane found when it asked its own control point whether the
+/// one line would work.
+///
+/// Its sentence is quoted rather than paraphrased, and the address it probed is
+/// shown beside it. Which of the three failures it was decides where the
+/// operator goes next — the name, the listener, or the release on that host —
+/// and no summary of ours is worth more than the words the command used.
+///
+/// A fault gets the alert; a mode the operator chose does not. The difference
+/// is not cosmetic: a warning triangle over "you asked for this" is how a
+/// console teaches an operator that its triangles mean nothing.
+struct EnrollmentCheckpointPanel: View {
+    let checkpoint: MachineInviteCheckpoint
+
+    var body: some View {
+        if checkpoint.isRefusal {
+            WisentAlertPanel(
+                tone: .warning,
+                title: title,
+                detail: checkpoint.headline,
+                command: quoted
+            )
+        } else {
+            WisentPanel {
+                HStack(alignment: .top, spacing: WisentDesign.Space.x4) {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 15, weight: .regular))
+                        .foregroundStyle(WisentDesign.brand)
+                        .padding(.top, 1)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
+                        Text(title)
+                            .font(WisentTypeScale.bodyStrong())
+                            .foregroundStyle(WisentDesign.ink)
+                        Text(checkpoint.headline)
+                            .font(WisentTypeScale.body())
+                            .foregroundStyle(WisentDesign.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if let quoted {
+                            EnrollmentTranscript(text: quoted)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+    }
+
+    /// A control plane that was never given an address to probe did not fail
+    /// either: that is a fact about configuration, reported where configuration
+    /// is edited rather than shouted at here.
+    private var title: String {
+        if checkpoint.isRefusal {
+            return "The control point did not serve the join script, so there is no line to send"
+        }
+        switch checkpoint.reason {
+        case MachineInviteCheckpoint.chosen:
+            return "This is the offline invitation because you asked for it"
+        case MachineInviteCheckpoint.unconfigured:
+            return "No control point is configured, so no line could be built"
+        default:
+            return "The control point was not usable for a one-line invitation"
+        }
+    }
+
+    /// The control plane's own words, with the address they were about. Kept
+    /// verbatim and monospaced, because the operator's next move depends on
+    /// which of the three it was and a paraphrase loses exactly that.
+    private var quoted: String? {
+        let address = checkpoint.url.isEmpty ? nil : "checkpoint: \(checkpoint.url)"
+        let reason = "reason: \(checkpoint.reason)"
+        let detail = checkpoint.detail.isEmpty ? nil : checkpoint.detail
+        let lines = [address, reason, detail].compactMap { $0 }
+        return lines.isEmpty ? nil : lines.joined(separator: "\n")
     }
 }
 
