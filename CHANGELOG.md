@@ -107,6 +107,19 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   the channel uses. A read-back that returns a different value still fails the
   mint: it means the broker serves a vault this machine's write never reached.
 
+### Core behavior
+
+- The disk cleaner has a third cleaner, `build_caches`, so the automatic pass
+  can reclaim build output. It knew only `huggingface_cache` and
+  `weles_recordings`, which is why an operator laptop reached 8.8 GB free of
+  1.8 TB — roughly 450 GB of build and scratch trees — while `disk-cleanup`
+  had nothing to report. A directory is removed only when it carries a
+  `CACHEDIR.TAG` whose first line is the Cache Directory Tagging Standard
+  signature, the same criterion `stado host build-caches` already applied on
+  request; no directory names or extensions are matched. Its policy takes
+  `min_age_seconds` (at least 86400) and an optional `root`, defaulting to the
+  host's `$HOME`, and it reports under `build_caches` like the other two.
+
 ## 0.5.0-rc.1 - 2026-07-29
 
 ### Product contract
