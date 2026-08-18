@@ -61,6 +61,23 @@ rotation needed, the bearer is reproducible now — and retire `pinned_only`.
 **The 16 TB disk is physically absent.** fstab keeps it `nofail`, so the host
 boots without it; nothing else depends on it any more.
 
+**`lukasz-macbook`'s resolver serves a stale registry and restarts constantly.**
+`launchctl print` records `runs = 5019` with `last exit code = 78: EX_CONFIG`, and
+the unit produced no log line between 00:18 and 00:47 while cycling, so the
+failure happens before the binary writes anything. Run in the foreground with the
+unit's own environment it starts cleanly — `api=127.0.0.1:17600 adapters=6` — and
+resolves `stado-object-api` at **generation 8**, while the canonical document is
+at 12: its bootstrap source is this host's local object API (`:18765`), whose
+registry copy is weeks behind. Two consequences worth naming: anything resolved
+through this host can point at endpoints the fleet has already moved, and every
+`stado` command here fails with `registry store unreachable` whenever the adapter
+is between restarts, because the configured store URL *is* that adapter. The
+source already names half of this contradiction in `cli/resolver.rs::serve` ("a
+resolver that must serve the very address it reads the registry through cannot
+start in either order"), with a comment counting 641 restarts. This is older than
+this incident and was not caused by it; the repair belongs with whoever owns that
+bootstrap decision, and the measurement above is what it has to explain.
+
 ## The rule this chain keeps proving
 
 Every one of these passed a check that modelled the wrong thing: a unit state
