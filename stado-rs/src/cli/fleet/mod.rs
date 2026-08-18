@@ -97,7 +97,7 @@ pub enum FleetCommands {
         #[arg(long)]
         bootstrap: bool,
     },
-    /// Mint an invite: one line the machine's owner runs, no access needed.
+    /// Mint an invite: something the machine's owner runs, no access needed.
     Invite {
         /// Registry target name to reserve; derived from the invite id when
         /// omitted.
@@ -109,6 +109,11 @@ pub enum FleetCommands {
         /// How many machines may redeem the invite.
         #[arg(long, default_value_t = 1)]
         uses: u64,
+        /// Skip the control-point probe and issue the pasteable offline
+        /// fragment, which needs no HTTP route at all. Without the flag an
+        /// unreachable control point selects this mode anyway, and says why.
+        #[arg(long)]
+        offline: bool,
         /// Emit the machine-readable document instead of the report.
         #[arg(long)]
         json: bool,
@@ -250,8 +255,9 @@ async fn execute(command: FleetCommands) -> Result<bool, String> {
             name,
             expires,
             uses,
+            offline,
             json,
-        } => invite::invite(name.as_deref(), &expires, uses, json).await,
+        } => invite::invite(name.as_deref(), &expires, uses, offline, json).await,
         FleetCommands::Invites { json } => invite::invites(json).await,
         FleetCommands::RevokeInvite { id } => invite::revoke_invite(&id).await,
         FleetCommands::Methods { json } => enroll::catalog::methods(json).await,

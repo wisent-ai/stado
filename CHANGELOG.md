@@ -155,6 +155,25 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   `fleet enroll --ssh … --bootstrap`, key check, grants, host recover and
   `registry beacon-age` as the proof — and keeps the one-line mode at the bottom
   with its prerequisites.
+- Gave `stado fleet invite` the offline mode and stopped it printing a one-liner
+  for a control point that cannot serve it. Before minting anything it asks the
+  configured address — `STADO_API_URL` / `api.url`, never a name compiled into
+  the binary — for `/join.sh`, and names the three failures apart: a host that
+  resolves to no address, nothing answering the connection, and a live server
+  that answers something other than 200, which is a release older than the
+  invitation routes. Any of them, or no configured address at all, switches to
+  the offline mode and says why; `--offline` chooses it without probing. An
+  offline invite mints no secret and needs no route: it prints a self-contained
+  POSIX `sh` fragment carrying the fleet's public key inline, which creates
+  `~/.ssh` at 700 and `authorized_keys` at 600, installs that key idempotently,
+  diagnoses a missing SSH server and prints the exact macOS or Linux step
+  instead of enabling anything, and prints the `user@address` to send back —
+  chosen by `deploy/join.sh`'s rules, in its order. The stored object records
+  `mode` and, offline, carries no `secret_sha256` at all, so `authorize` and the
+  dashboard routes have nothing a token could ever match; `stado fleet invites`
+  shows such a row as `open (offline, awaiting address)`, and
+  `stado fleet enroll NAME --ssh ADDRESS --bootstrap` closes it through the same
+  `mark_spent` transition `fleet approve` uses for a redeemed token.
 - Served the `invite` method from the dashboard: `GET /api/fleet/invite/key`
   hands the joining machine the fleet's public half and the exact
   `authorized_keys` line, `POST /api/fleet/join` files its pending enrollment
