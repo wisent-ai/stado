@@ -20,6 +20,23 @@
 //! (`GET /api/fleet/invite/key`, `POST /api/fleet/join`); neither may write the
 //! registry. They spend the invite through [`authorize`] and [`spend`] here, so
 //! the lifecycle has one implementation regardless of which surface drives it.
+//!
+//! That is the ONLINE mode, and it needs one thing the fleet does not always
+//! have: a control point the machine's owner can reach over HTTP. When there is
+//! none — the name does not resolve, nothing listens, or the release serving it
+//! predates the invite routes — printing the one-liner anyway would hand
+//! somebody a command that cannot work, so [`invite`] probes `/join.sh` first
+//! and falls back to the OFFLINE mode instead of lying.
+//!
+//! The offline mode carries no secret and uses no route. What travels is a
+//! self-contained `sh` fragment, over whatever channel the operator is already
+//! using to talk to the machine's owner, and the only key in it is the fleet's
+//! PUBLIC half: intercepting the fragment gains nothing. The owner runs it, the
+//! fragment installs the key and prints the `user@address` to send back, and the
+//! operator closes the invite with the ordinary
+//! `fleet enroll NAME --ssh ADDRESS --bootstrap` — which reaches
+//! [`close_offline_for_target`] and spends the invite through the same
+//! [`mark_spent`] that `approve` uses. No second state machine.
 
 use base64::Engine;
 use chrono::{DateTime, Duration, Utc};
@@ -41,6 +58,13 @@ pub const STATUS_SPENT: &str = "spent";
 pub const STATUS_REVOKED: &str = "revoked";
 pub const STATUS_EXPIRED: &str = "expired";
 
+/// How an invite is redeemed. `online` is the token-and-route mode; `offline`
+/// is the pasted-fragment mode, which has no secret to present and no route to
+/// present it to. An object written before the modes existed has no `mode`
+/// field and is read as `online`, which is what it was.
+pub const MODE_ONLINE: &str = "online";
+pub const MODE_OFFLINE: &str = "offline";
+
 /// Bytes of invite identity and of invite secret. The id is public and only
 /// has to be unique; the secret is the credential.
 const ID_BYTES: usize = 8;
@@ -52,7 +76,11 @@ const SECRET_BYTES: usize = 32;
 /// getting.
 const REFUSED: &str = "invite token is not usable";
 
-/// A stored invite. `secret_sha256` is the only trace of the secret anywhere.
+/// A stored invite. `secret_sha256` is the only trace of the secret anywhere,
+/// and it is empty for exactly one reason: an offline invite never had a
+/// secret. An empty digest is not a weak digest — no input hashes to it, so a
+/// presented token cannot match one, which is the same refusal an unknown id
+/// gets.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Invite {
     pub id: String,
@@ -64,6 +92,7 @@ pub struct Invite {
     pub uses_spent: u64,
     pub status: String,
     pub created_by: String,
+    pub mode: String,
 }
 
 /// Store path of one invite.
@@ -96,25 +125,38 @@ pub fn parse_token(token: &str) -> Result<(&str, &str), String> {
     Ok((id, secret))
 }
 
-/// Mint a fresh `(id, secret)` pair from the operating system's CSPRNG. Time
-/// is not an ingredient: a token derived from a clock is guessable by anyone
-/// who knows roughly when it was minted.
-fn mint_token() -> Result<(String, String), String> {
+/// Random bytes from the operating system's CSPRNG. Time is not an ingredient:
+/// anything derived from a clock is guessable by whoever knows roughly when it
+/// was minted.
+fn random_bytes(into: &mut [u8]) -> Result<(), String> {
     use ring::rand::SecureRandom;
-    let rng = ring::rand::SystemRandom::new();
+    ring::rand::SystemRandom::new()
+        .fill(into)
+        .map_err(|_| "system randomness is unavailable".to_string())
+}
+
+/// A fresh public invite id. Minted on its own because an offline invite needs
+/// an identity and must not mint a secret it would then have to be trusted to
+/// throw away.
+fn mint_id() -> Result<String, String> {
     let mut id_bytes = [0u8; ID_BYTES];
+    random_bytes(&mut id_bytes)?;
+    Ok(hex::encode(id_bytes))
+}
+
+/// A fresh invite secret — the credential of the online mode, and the only
+/// thing in this module that must never be stored.
+fn mint_secret() -> Result<String, String> {
     let mut secret_bytes = [0u8; SECRET_BYTES];
-    rng.fill(&mut id_bytes)
-        .map_err(|_| "system randomness is unavailable".to_string())?;
-    rng.fill(&mut secret_bytes)
-        .map_err(|_| "system randomness is unavailable".to_string())?;
-    Ok((
-        hex::encode(id_bytes),
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(secret_bytes),
-    ))
+    random_bytes(&mut secret_bytes)?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(secret_bytes))
 }
 
 /// Parse a stored invite document. Pure.
+///
+/// `secret_sha256` is required of an online invite and refused of an offline
+/// one: a stored offline object carrying a digest would mean something minted
+/// a secret for a mode that has nothing to present it to.
 pub fn parse_invite(document: &Value) -> Result<Invite, String> {
     let field = |name: &str| -> Result<String, String> {
         document
@@ -127,9 +169,22 @@ pub fn parse_invite(document: &Value) -> Result<Invite, String> {
     let counter = |name: &str, fallback: u64| -> u64 {
         document.get(name).and_then(Value::as_u64).unwrap_or(fallback)
     };
+    let mode = match document.get("mode").and_then(Value::as_str) {
+        None | Some("") | Some(MODE_ONLINE) => MODE_ONLINE.to_string(),
+        Some(MODE_OFFLINE) => MODE_OFFLINE.to_string(),
+        Some(other) => return Err(format!("invite object has an unknown mode '{other}'")),
+    };
+    let secret_sha256 = if mode == MODE_OFFLINE {
+        if document.get("secret_sha256").is_some() {
+            return Err("an offline invite object must carry no 'secret_sha256'".to_string());
+        }
+        String::new()
+    } else {
+        field("secret_sha256")?
+    };
     Ok(Invite {
         id: field("id")?,
-        secret_sha256: field("secret_sha256")?,
+        secret_sha256,
         target_name: field("target_name")?,
         created_at: field("created_at")?,
         expires_at: field("expires_at")?,
@@ -141,14 +196,17 @@ pub fn parse_invite(document: &Value) -> Result<Invite, String> {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string(),
+        mode,
     })
 }
 
-/// Render an invite as its stored document. Pure; carries no secret.
+/// Render an invite as its stored document. Pure; carries no secret. An
+/// offline invite has no digest to write, so the key is absent rather than
+/// present and empty — the store never holds a field that reads like a
+/// credential nobody can use.
 pub fn invite_document(invite: &Invite) -> Value {
-    json!({
+    let mut document = json!({
         "id": invite.id,
-        "secret_sha256": invite.secret_sha256,
         "target_name": invite.target_name,
         "created_at": invite.created_at,
         "expires_at": invite.expires_at,
@@ -156,7 +214,12 @@ pub fn invite_document(invite: &Invite) -> Value {
         "uses_spent": invite.uses_spent,
         "status": invite.status,
         "created_by": invite.created_by,
-    })
+        "mode": invite.mode,
+    });
+    if !invite.secret_sha256.is_empty() {
+        document["secret_sha256"] = Value::String(invite.secret_sha256.clone());
+    }
+    document
 }
 
 /// The status an invite actually has now, which is not always the status on
@@ -284,9 +347,17 @@ pub fn digests_match(stored: &str, presented: &str) -> bool {
 
 /// Resolve a presented token to the invite it may spend, or refuse without
 /// saying which of unknown/spent/revoked/expired applies.
+///
+/// An offline invite is refused here by mode as well as by digest. Its stored
+/// digest is empty, so no token could match it anyway; saying so explicitly
+/// means a future writer that puts a digest on an offline object still cannot
+/// turn a pasted fragment into a redeemable credential.
 pub async fn authorize(store: &JobStorage, token: &str) -> Result<Invite, String> {
     let (id, secret) = parse_token(token)?;
     let invite = load_invite(store, id).await?.ok_or(REFUSED)?;
+    if invite.mode == MODE_OFFLINE {
+        return Err(REFUSED.to_string());
+    }
     if !digests_match(&invite.secret_sha256, &secret_digest(secret)) {
         return Err(REFUSED.to_string());
     }
@@ -329,6 +400,467 @@ pub fn join_command(api_url: &str, token: &str) -> String {
     format!("curl -fsSL {api_url}/join.sh | sh -s -- {token}")
 }
 
+/// How long a control-point probe may take. An invite is minted while somebody
+/// waits for the answer, and a checkpoint slower than this is not one the
+/// machine's owner can use either.
+const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Machine-readable verdicts of [`probe_checkpoint`]. The three refusals an
+/// operator fixes by different means are named separately on purpose: a name
+/// with no DNS answer needs a record, a refused connection needs a listener or
+/// a tunnel, and a live server that does not know the route needs a newer
+/// release.
+pub const REASON_OK: &str = "ok";
+pub const REASON_UNRESOLVED: &str = "name_does_not_resolve";
+pub const REASON_CONNECTION_REFUSED: &str = "connection_refused";
+pub const REASON_ROUTE_UNKNOWN: &str = "route_unknown";
+pub const REASON_NOT_CONFIGURED: &str = "not_configured";
+pub const REASON_FORCED_OFFLINE: &str = "forced_offline";
+
+/// What `invite` found out about the control point before deciding which mode
+/// it can honestly offer. `reason` is the verdict a program branches on,
+/// `detail` the sentence a human reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Checkpoint {
+    pub url: String,
+    pub probed: bool,
+    pub reachable: bool,
+    pub reason: &'static str,
+    pub detail: String,
+}
+
+impl Checkpoint {
+    fn refused(url: &str, reason: &'static str, detail: String) -> Self {
+        Self {
+            url: url.to_string(),
+            probed: true,
+            reachable: false,
+            reason,
+            detail,
+        }
+    }
+
+    /// The mode an invite can be issued in given this verdict. Online is
+    /// reachable-only: everything else, including a control point nobody
+    /// configured, is offline.
+    pub fn mode(&self) -> &'static str {
+        if self.reachable {
+            MODE_ONLINE
+        } else {
+            MODE_OFFLINE
+        }
+    }
+}
+
+/// The verdict as a document. Pure.
+pub fn checkpoint_document(checkpoint: &Checkpoint) -> Value {
+    json!({
+        "url": checkpoint.url,
+        "probed": checkpoint.probed,
+        "reachable": checkpoint.reachable,
+        "reason": checkpoint.reason,
+        "detail": checkpoint.detail,
+    })
+}
+
+/// Host and port `/join.sh` would be fetched from. Pure.
+pub fn probe_authority(base: &str) -> Result<(String, u16), String> {
+    let parsed = url::Url::parse(base).map_err(|exc| exc.to_string())?;
+    let host = parsed
+        .host_str()
+        .filter(|host| !host.is_empty())
+        .ok_or_else(|| "the address names no host".to_string())?;
+    let port = parsed
+        .port_or_known_default()
+        .ok_or_else(|| format!("scheme '{}' has no port", parsed.scheme()))?;
+    Ok((host.to_string(), port))
+}
+
+/// Ask the configured control point for `/join.sh` before anybody is told to
+/// fetch it.
+///
+/// Resolution is asked for on its own, ahead of the request, so a name with no
+/// DNS answer is not reported as a refused connection — the client would
+/// collapse both into one transport error, and they are not the same problem.
+/// Only a 200 counts: a live server answering 404 knows nothing about invites,
+/// which is a release older than these routes, not a network fault.
+pub async fn probe_checkpoint(base: &str) -> Checkpoint {
+    if base.is_empty() {
+        return Checkpoint {
+            url: String::new(),
+            probed: false,
+            reachable: false,
+            reason: REASON_NOT_CONFIGURED,
+            detail: "no control point is configured (STADO_API_URL / stado config api.url is empty)"
+                .to_string(),
+        };
+    }
+    let endpoint = format!("{base}/join.sh");
+    let (host, port) = match probe_authority(base) {
+        Ok(authority) => authority,
+        Err(detail) => {
+            return Checkpoint::refused(
+                base,
+                REASON_UNRESOLVED,
+                format!("control point '{base}' is not a usable address ({detail})"),
+            );
+        }
+    };
+    let resolved = tokio::task::spawn_blocking({
+        let host = host.clone();
+        move || {
+            std::net::ToSocketAddrs::to_socket_addrs(&(host.as_str(), port))
+                .map(|addresses| addresses.count())
+                .unwrap_or_default()
+        }
+    })
+    .await
+    .unwrap_or_default();
+    if resolved == 0 {
+        return Checkpoint::refused(
+            base,
+            REASON_UNRESOLVED,
+            format!(
+                "control point '{host}' does not resolve to any address, so nothing can fetch /join.sh from it"
+            ),
+        );
+    }
+    let client = match reqwest::Client::builder().timeout(PROBE_TIMEOUT).build() {
+        Ok(client) => client,
+        Err(exc) => {
+            return Checkpoint::refused(
+                base,
+                REASON_CONNECTION_REFUSED,
+                format!("this host could not build an HTTP client to probe {endpoint} ({exc})"),
+            );
+        }
+    };
+    match client.get(&endpoint).send().await {
+        Err(exc) => Checkpoint::refused(
+            base,
+            REASON_CONNECTION_REFUSED,
+            format!(
+                "nothing answered at {endpoint} (connection refused or timed out): {}",
+                exc.without_url()
+            ),
+        ),
+        Ok(response) if response.status().as_u16() == 200 => Checkpoint {
+            url: base.to_string(),
+            probed: true,
+            reachable: true,
+            reason: REASON_OK,
+            detail: format!("{endpoint} answered 200"),
+        },
+        Ok(response) => Checkpoint::refused(
+            base,
+            REASON_ROUTE_UNKNOWN,
+            format!(
+                "{endpoint} answered HTTP {}, not 200: the release serving that host is older than the invite routes",
+                response.status().as_u16()
+            ),
+        ),
+    }
+}
+
+/// The offline fragment, verbatim, with `@TARGET@` and `@FLEET_KEY@` left to
+/// substitute. One literal so that what an operator reads before sending it is
+/// exactly what runs on the far machine.
+///
+/// It wraps itself in `sh <<'...'`: the fragment is pasted into whatever
+/// interactive shell the owner already has open, and a body that runs under
+/// `set -eu` and calls `exit` on a missing tool must not be able to close that
+/// shell.
+///
+/// The address rules are `deploy/join.sh`'s, in its order — tailnet DNS name,
+/// then a multicast `.local` name only where something answers for it, then the
+/// IPv4 address of the default interface, then the bare hostname. Two commands
+/// choosing an address by different rules would report two different machines.
+const OFFLINE_SNIPPET: &str = r##"sh <<'STADO_OFFLINE_INVITE'
+# stado offline invite for '@TARGET@' -- run this ON THE MACHINE BEING ADDED.
+#
+# Nothing in this text is a secret. The only key in it is the fleet's PUBLIC
+# half; the private half never leaves the operator's vault, so whoever reads
+# this fragment gains no access to anything, here or anywhere else.
+#
+# What it does, and nothing more:
+#   1. creates ~/.ssh (mode 700) and ~/.ssh/authorized_keys (mode 600),
+#   2. appends the fleet's public key there, once, even if it runs twice,
+#   3. checks whether an SSH server answers on port 22 and, if not, prints how
+#      to turn one on -- it never turns anything on itself,
+#   4. prints the user@address to send back to the operator.
+# It installs no software, starts no service, and generates no key.
+set -eu
+
+fleet_key='@FLEET_KEY@'
+fleet_target='@TARGET@'
+
+say() {
+    printf '%s\n' "$*"
+}
+
+die() {
+    printf '%s\n' "$*" >&2
+    exit 1
+}
+
+for required in awk mkdir chmod tail uname id; do
+    command -v "$required" >/dev/null 2>&1 ||
+        die "this machine has no $required, which this fragment needs"
+done
+
+key_type="$(printf '%s' "$fleet_key" | awk '{ print $1 }')"
+key_blob="$(printf '%s' "$fleet_key" | awk '{ print $2 }')"
+[ -n "$key_blob" ] || die 'the pasted fragment carries no key material'
+
+# ------------------------------------------------------------- install the key
+
+ssh_dir="$HOME/.ssh"
+authorized_keys="$ssh_dir/authorized_keys"
+
+[ -d "$ssh_dir" ] || mkdir -p "$ssh_dir"
+chmod 700 "$ssh_dir"
+[ -f "$authorized_keys" ] || (umask 077; : >"$authorized_keys")
+chmod 600 "$authorized_keys"
+
+# Idempotent on the key material, not on the whole line: a re-issued invite may
+# carry a different comment, and a second run must not leave the same key twice.
+if awk -v type="$key_type" -v blob="$key_blob" '
+        $1 == type && $2 == blob { found = 1 }
+        END { exit found ? 0 : 1 }
+    ' "$authorized_keys"; then
+    key_action='already present'
+else
+    # Append on its own line even when the file did not end in a newline.
+    if [ -s "$authorized_keys" ] && [ -n "$(tail -c 1 "$authorized_keys")" ]; then
+        printf '\n' >>"$authorized_keys"
+    fi
+    printf '%s\n' "$fleet_key" >>"$authorized_keys"
+    key_action='installed'
+fi
+
+# ------------------------------------------------------------- reachability
+
+os_name="$(uname -s)"
+login_user="$(id -un)"
+short_hostname="$(uname -n | awk '{ sub(/\..*$/, "", $0); print tolower($0) }')"
+[ -n "$short_hostname" ] || die 'this machine does not report a hostname'
+
+tailscale_bin=''
+if command -v tailscale >/dev/null 2>&1; then
+    tailscale_bin="$(command -v tailscale)"
+else
+    for candidate in \
+        /Applications/Tailscale.app/Contents/MacOS/Tailscale \
+        /usr/local/bin/tailscale \
+        /opt/homebrew/bin/tailscale
+    do
+        if [ -x "$candidate" ]; then
+            tailscale_bin="$candidate"
+            break
+        fi
+    done
+fi
+
+address=''
+address_kind=''
+if [ -n "$tailscale_bin" ]; then
+    # --peers=false leaves exactly this machine's own record, so the DNSName
+    # read back cannot be some other node's.
+    tailnet_name="$("$tailscale_bin" status --json --peers=false 2>/dev/null |
+        awk 'match($0, /"DNSName"[ \t]*:[ \t]*"[^"]*"/) {
+                field = substr($0, RSTART, RLENGTH)
+                sub(/^"DNSName"[ \t]*:[ \t]*"/, "", field)
+                sub(/"$/, "", field)
+                print field
+                exit
+            }' || true)"
+    tailnet_name="${tailnet_name%.}"
+    case "$tailnet_name" in
+        ''|*[!A-Za-z0-9.-]*) ;;
+        *)
+            address="$tailnet_name"
+            address_kind='tailnet name'
+            ;;
+    esac
+fi
+
+if [ -z "$address" ]; then
+    case "$os_name" in
+        Darwin)
+            local_name="$(scutil --get LocalHostName 2>/dev/null || true)"
+            if [ -n "$local_name" ]; then
+                address="$local_name.local"
+                address_kind='multicast DNS name'
+            fi
+            ;;
+        Linux)
+            # Only claim .local where something actually answers for it.
+            if [ -S /run/avahi-daemon/socket ] || [ -S /var/run/avahi-daemon/socket ]; then
+                address="$short_hostname.local"
+                address_kind='multicast DNS name'
+            fi
+            ;;
+    esac
+fi
+
+if [ -z "$address" ]; then
+    case "$os_name" in
+        Darwin)
+            default_if="$(route -n get default 2>/dev/null |
+                awk '$1 == "interface:" { print $2; exit }')"
+            if [ -n "$default_if" ]; then
+                address="$(ipconfig getifaddr "$default_if" 2>/dev/null || true)"
+            fi
+            ;;
+        Linux)
+            address="$(ip route get 1.1.1.1 2>/dev/null |
+                awk '{ for (i = 1; i < NF; i++) if ($i == "src") { print $(i + 1); exit } }')"
+            if [ -z "$address" ] && command -v hostname >/dev/null 2>&1; then
+                address="$(hostname -I 2>/dev/null | awk '{ print $1 }')"
+            fi
+            ;;
+    esac
+    if [ -n "$address" ]; then
+        address_kind='IPv4 address of the default interface'
+    fi
+fi
+
+if [ -z "$address" ]; then
+    address="$short_hostname"
+    address_kind='bare hostname (nothing better was resolvable)'
+fi
+
+# ------------------------------------------------------------- sshd probe
+
+# The fleet dials in over SSH, so a machine with no SSH server answering is
+# reachable in name only. Remote Login is the owner's decision and needs
+# administrator rights: diagnose it, print the exact way to turn it on, and
+# never turn it on here.
+ssh_listening='unknown'
+if command -v nc >/dev/null 2>&1; then
+    if nc -z -w 3 127.0.0.1 22 >/dev/null 2>&1; then
+        ssh_listening='yes'
+    else
+        ssh_listening='no'
+    fi
+elif command -v ssh >/dev/null 2>&1; then
+    ssh_probe="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 \
+        127.0.0.1 true 2>&1 || true)"
+    case "$ssh_probe" in
+        *'Connection refused'*|*'onnection timed out'*|*'No route to host'*) ssh_listening='no' ;;
+        *) ssh_listening='yes' ;;
+    esac
+fi
+
+ssh_instructions() {
+    case "$os_name" in
+        Darwin)
+            cat <<'MACOS'
+Turn on Remote Login yourself -- it needs administrator rights, so this
+fragment will not do it for you:
+
+  System Settings > General > Sharing > Remote Login  (switch it on, and under
+  the (i) button allow access for your own user)
+
+The equivalent from a terminal, which will ask for your password:
+
+  sudo systemsetup -setremotelogin on
+MACOS
+            ;;
+        Linux)
+            cat <<'LINUX'
+Start an SSH server yourself -- it needs root, so this fragment will not do it
+for you. On Debian/Ubuntu:
+
+  sudo apt install openssh-server
+  sudo systemctl enable --now ssh
+
+On Fedora/RHEL/Arch:
+
+  sudo dnf install openssh-server   # or: sudo pacman -S openssh
+  sudo systemctl enable --now sshd
+
+Then make sure the host firewall lets port 22 through from the fleet.
+LINUX
+            ;;
+        *)
+            cat <<'OTHER'
+Start an SSH server on this machine (port 22) and let the fleet reach it. This
+fragment will not start one for you.
+OTHER
+            ;;
+    esac
+}
+
+# ------------------------------------------------------------- summary
+
+say ''
+say '--------------------------------------------------------------'
+say "Stado offline invite for '$fleet_target'"
+say '--------------------------------------------------------------'
+say "  Fleet key ($key_type): $key_action in $authorized_keys"
+say '  Nothing was installed here and no service was started.'
+say '  This fragment held only a PUBLIC key: no private key was received,'
+say '  generated or sent anywhere by it.'
+say ''
+case "$ssh_listening" in
+    yes)
+        say 'Remote login: an SSH server is answering on port 22.'
+        ;;
+    no)
+        say 'Remote login: NOTHING is answering on port 22, so the fleet cannot'
+        say 'reach this machine yet. Turn it on before the operator tries:'
+        say ''
+        ssh_instructions
+        ;;
+    *)
+        say 'Remote login: could not be checked here (no nc, no ssh client). The'
+        say 'fleet needs an SSH server answering on port 22:'
+        say ''
+        ssh_instructions
+        ;;
+esac
+say ''
+say "Send this line back to the operator (chosen as the $address_kind):"
+say "$login_user@$address"
+STADO_OFFLINE_INVITE
+"##;
+
+/// The offline fragment for one target, ready to paste.
+///
+/// Both substitutions land inside single quotes in `sh`, so a value containing
+/// a quote would end the literal and turn the rest of the fragment into
+/// something else entirely; a multi-line key line would smuggle extra
+/// directives into `authorized_keys`. Neither can happen with what
+/// [`crate::cli::fleet::key::authorized_keys_line`] produces from a minted
+/// ed25519 key, which is why they are refusals and not escapes. Pure.
+pub fn offline_snippet(target_name: &str, authorized_line: &str) -> Result<String, String> {
+    let line = authorized_line.trim();
+    if line.is_empty() {
+        return Err("the minted key produced no authorized_keys line".to_string());
+    }
+    if line.contains('\n') || line.contains('\r') {
+        return Err("the minted key produced more than one authorized_keys line".to_string());
+    }
+    if line.contains('\'') || target_name.contains('\'') {
+        return Err(
+            "the key line or target name contains a quote, which cannot go into the fragment"
+                .to_string(),
+        );
+    }
+    if target_name.is_empty()
+        || !target_name
+            .chars()
+            .all(|letter| letter.is_ascii_alphanumeric() || matches!(letter, '.' | '_' | '-'))
+    {
+        return Err(format!("target name '{target_name}' is not usable in the fragment"));
+    }
+    Ok(OFFLINE_SNIPPET
+        .replace("@FLEET_KEY@", line)
+        .replace("@TARGET@", target_name))
+}
+
 /// Refuse a target name already taken by a registered machine or by a live
 /// invite. Silently suffixing a colliding name is how two machines end up
 /// sharing one channel key. Pure.
@@ -361,18 +893,29 @@ pub fn preflight_invite_name(
     Ok(())
 }
 
-/// `stado fleet invite [--name NAME] [--expires 24h] [--uses 1]` — mint the
-/// channel key for a machine nobody has touched yet, plus the one line its
-/// owner runs.
+/// `stado fleet invite [--name NAME] [--expires 24h] [--uses 1] [--offline]` —
+/// mint the channel key for a machine nobody has touched yet, plus the thing
+/// its owner has to run.
 ///
-/// The order is deliberate: the key is minted first, because an invite whose
-/// key does not exist is a token that fails at redemption on somebody else's
-/// laptop. If recording the invite then fails, the freshly minted credential
-/// item is removed again — a half-minted invite leaves nothing behind.
+/// What that thing is depends on whether a control point can actually serve
+/// `/join.sh`, which is probed here before anything is minted. Reachable: the
+/// one line, exactly as before. Not reachable, for any of the three reasons
+/// [`probe_checkpoint`] distinguishes: the offline fragment instead, with the
+/// reason said out loud. `offline` skips the probe and takes that path on
+/// purpose. The one-liner is never printed for an address that did not answer —
+/// a command that cannot work is worse than no command, because the operator
+/// finds out from the machine's owner.
+///
+/// The rest of the order is unchanged and deliberate: the key is minted before
+/// the invite is recorded, because an invite whose key does not exist fails on
+/// somebody else's laptop, and everything that can still refuse — recording the
+/// object, building the fragment — removes that freshly minted credential item
+/// again. A half-minted invite leaves nothing behind.
 pub async fn invite(
     name: Option<&str>,
     expires: &str,
     uses: u64,
+    offline: bool,
     as_json: bool,
 ) -> Result<bool, String> {
     if uses == 0 {
@@ -385,21 +928,60 @@ pub async fn invite(
     crate::cli::fleet::enroll::catalog::require_invite_allowed(&document)?;
     let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
     let live = list_invites(&store).await?;
-    let (id, secret) = mint_token()?;
+    let id = mint_id()?;
     let target_name = match name {
         Some(given) => given.to_string(),
         None => derived_target_name(&id),
     };
     preflight_invite_name(&document, &live, &target_name)?;
 
+    // The control point comes from configuration — never from a name compiled
+    // into this binary. A built-in default would be exactly the silent fallback
+    // that printed a one-liner for a host nobody deployed.
+    let api_url = crate::config::stado_api_url();
+    let checkpoint = if offline {
+        Checkpoint {
+            url: api_url.clone(),
+            probed: false,
+            reachable: false,
+            reason: REASON_FORCED_OFFLINE,
+            detail: "--offline was requested, so the control point was not probed".to_string(),
+        }
+    } else {
+        probe_checkpoint(&api_url).await
+    };
+    let mode = checkpoint.mode();
+    // Offline mints no secret at all, rather than minting one and being trusted
+    // to forget it.
+    let secret = match mode {
+        MODE_OFFLINE => None,
+        _ => Some(mint_secret()?),
+    };
+
     let runner = crate::deploy::production_runner();
     let (public_key, fingerprint) =
         crate::cli::fleet::key::rotate::generate_stored(&runner, &target_name).await?;
+    let line = crate::cli::fleet::key::authorized_keys_line(
+        &public_key,
+        &crate::cli::fleet::key::item_id(&target_name),
+    );
+    let snippet = match mode {
+        MODE_OFFLINE => match offline_snippet(&target_name, &line) {
+            Ok(snippet) => Some(snippet),
+            Err(detail) => {
+                discard_minted_key(&target_name).await;
+                return Err(format!(
+                    "could not build the offline fragment ({detail}); the minted key for '{target_name}' was removed"
+                ));
+            }
+        },
+        _ => None,
+    };
 
     let created_at = Utc::now();
     let invite = Invite {
         id: id.clone(),
-        secret_sha256: secret_digest(&secret),
+        secret_sha256: secret.as_deref().map(secret_digest).unwrap_or_default(),
         target_name: target_name.clone(),
         created_at: created_at.to_rfc3339(),
         expires_at: (created_at + lifetime).to_rfc3339(),
@@ -407,6 +989,7 @@ pub async fn invite(
         uses_spent: 0,
         status: STATUS_OPEN.to_string(),
         created_by: crate::providers::vast::system_hostname(),
+        mode: mode.to_string(),
     };
     let recorded = store
         .create_text_if_absent(
@@ -421,67 +1004,129 @@ pub async fn invite(
                 Err(exc) => exc.to_string(),
                 _ => format!("invite id {id} already exists in the store"),
             };
-            if let Ok(client) = crate::cli::fleet::key::configured_client() {
-                let _ = client
-                    .delete_item(&crate::cli::fleet::key::item_id(&target_name))
-                    .await;
-            }
+            discard_minted_key(&target_name).await;
             return Err(format!(
                 "could not record the invite ({detail}); the minted key for '{target_name}' was removed"
             ));
         }
     }
 
-    let api_url = crate::config::stado_api_url();
-    let token = format!("{id}.{secret}");
-    let command = if api_url.is_empty() {
-        None
-    } else {
-        Some(join_command(&api_url, &token))
-    };
-    let line = crate::cli::fleet::key::authorized_keys_line(
-        &public_key,
-        &crate::cli::fleet::key::item_id(&target_name),
-    );
+    let token = secret.as_deref().map(|secret| format!("{id}.{secret}"));
+    let command = token
+        .as_deref()
+        .map(|token| join_command(&checkpoint.url, token));
+    let next_step = format!("stado fleet enroll {target_name} --ssh <address> --bootstrap");
     if as_json {
-        let rendered = json!({
+        let mut rendered = json!({
             "id": invite.id,
-            "token": token,
+            "mode": invite.mode,
             "target_name": invite.target_name,
+            "created_at": invite.created_at,
             "expires_at": invite.expires_at,
             "uses_allowed": invite.uses_allowed,
-            "join_command": command,
             "public_key": public_key,
             "authorized_keys_line": line,
-            "token_shown_once": true,
+            "checkpoint": checkpoint_document(&checkpoint),
         });
+        match (&token, &command, &snippet) {
+            (Some(token), Some(command), _) => {
+                rendered["token"] = Value::String(token.clone());
+                rendered["token_shown_once"] = Value::Bool(true);
+                rendered["join_command"] = Value::String(command.clone());
+            }
+            (_, _, Some(snippet)) => {
+                rendered["snippet"] = Value::String(snippet.clone());
+                rendered["snippet_is_not_a_secret"] = Value::Bool(true);
+                rendered["next_step"] = Value::String(next_step.clone());
+            }
+            _ => {}
+        }
         println!(
             "{}",
             serde_json::to_string_pretty(&rendered).map_err(|exc| exc.to_string())?
         );
         return Ok(true);
     }
-    println!("invite {} for target '{}'", invite.id, invite.target_name);
-    println!("token: {token}");
-    println!("  this is the only time the token is shown; nothing can reprint it");
-    println!("expires: {} (uses allowed: {uses})", invite.expires_at);
-    println!("channel key minted: {fingerprint}");
-    match command {
-        Some(command) => {
+    println!(
+        "invite {} for target '{}' (mode: {})",
+        invite.id, invite.target_name, invite.mode
+    );
+    match (&token, &command, &snippet) {
+        (Some(token), Some(command), _) => {
+            println!("token: {token}");
+            println!("  this is the only time the token is shown; nothing can reprint it");
+            println!("expires: {} (uses allowed: {uses})", invite.expires_at);
+            println!("channel key minted: {fingerprint}");
+            println!("control point: {}", checkpoint.detail);
             println!("send this one line to the machine's owner:");
             println!("  {command}");
+            println!("then approve the machine: stado fleet pending, stado fleet approve <hostname>");
         }
-        None => {
+        (_, _, Some(snippet)) => {
             println!(
-                "STADO_API_URL is not configured here, so the one-liner cannot name the control plane;"
+                "no token exists for an offline invite; there is nothing here to intercept or replay"
             );
+            println!("expires: {} (uses allowed: {uses})", invite.expires_at);
+            println!("channel key minted: {fingerprint}");
+            if checkpoint.probed {
+                println!("control point: {}", checkpoint.detail);
+            } else {
+                println!("control point not probed: {}", checkpoint.detail);
+            }
+            println!("switched to the offline invite method, which needs no HTTP route at all.");
+            println!();
             println!(
-                "  set it and the line is: curl -fsSL <STADO_API_URL>/join.sh | sh -s -- <token>"
+                "paste everything between the two markers into a terminal ON THE MACHINE BEING ADDED:"
+            );
+            println!("----- 8< ----- stado offline invite for '{target_name}' ----- 8< -----");
+            print!("{snippet}");
+            println!("----- 8< ----- end of fragment ----- 8< -----");
+            println!(
+                "this fragment carries only the fleet's PUBLIC key, so it is not a secret: whoever reads it gains nothing."
+            );
+            println!("  the private half never leaves the operator's vault.");
+            println!(
+                "the owner runs it and sends back the user@address it prints on its last line."
+            );
+            println!("when that address arrives, run: {next_step}");
+        }
+        // Unreachable: online carries a token and a command, offline a
+        // fragment, and the mode chose one of the two before the key was minted.
+        _ => {
+            return Err(
+                "the invite was recorded but neither mode produced anything to send".to_string()
             );
         }
     }
-    println!("then approve the machine: stado fleet pending, stado fleet approve <hostname>");
     Ok(true)
+}
+
+/// Remove the credential item a failed mint left behind. Best effort by
+/// necessity: the alternative to a failed delete is an unusable key staying in
+/// the vault, and the caller is already returning an error naming the target it
+/// belongs to.
+async fn discard_minted_key(target_name: &str) {
+    if let Ok(client) = crate::cli::fleet::key::configured_client() {
+        let _ = client
+            .delete_item(&crate::cli::fleet::key::item_id(target_name))
+            .await;
+    }
+}
+
+/// An open offline invite is not waiting for a redeemer, it is waiting for the
+/// machine's owner to send back an address — nothing will ever spend it by
+/// itself. The list says so where the state goes, because "open" alone reads
+/// like the online mode, where somebody may be about to run the one-liner.
+/// Pure.
+pub fn status_label(invite: &Invite, status: &str) -> String {
+    if invite.mode != MODE_OFFLINE {
+        return status.to_string();
+    }
+    if status == STATUS_OPEN {
+        "open (offline, awaiting address)".to_string()
+    } else {
+        format!("{status} (offline)")
+    }
 }
 
 /// `stado fleet invites` — every invite and the state it is actually in.
@@ -496,6 +1141,8 @@ pub async fn invites(as_json: bool) -> Result<bool, String> {
                     "id": invite.id,
                     "target_name": invite.target_name,
                     "status": status,
+                    "mode": invite.mode,
+                    "awaiting_address": invite.mode == MODE_OFFLINE && *status == STATUS_OPEN,
                     "created_at": invite.created_at,
                     "expires_at": invite.expires_at,
                     "uses_allowed": invite.uses_allowed,
@@ -519,13 +1166,47 @@ pub async fn invites(as_json: bool) -> Result<bool, String> {
             "{}\t{}\t{}\t{}/{}\texpires {}",
             invite.id,
             invite.target_name,
-            status,
+            status_label(invite, status),
             invite.uses_spent,
             invite.uses_allowed,
             invite.expires_at
         );
     }
+    if found
+        .iter()
+        .any(|(invite, status)| invite.mode == MODE_OFFLINE && *status == STATUS_OPEN)
+    {
+        println!(
+            "an offline invite closes when its machine is registered: stado fleet enroll NAME --ssh <address> --bootstrap"
+        );
+    }
     Ok(true)
+}
+
+/// Close the offline invite a fresh registration satisfied, if there is one.
+///
+/// Registering the name IS the redemption of an offline invite: it has no
+/// secret and no route, so nothing else can ever spend it, and the operator
+/// only gets to `fleet enroll` because the fragment installed the key and the
+/// owner sent the address back. A revoked invite is left alone — revocation is
+/// a deliberate refusal that enrolling the name by hand must not undo — and the
+/// transition itself is [`mark_spent`], the very one `approve` drives for an
+/// online invite.
+///
+/// Returns the id it closed, so the caller can say which one.
+pub async fn close_offline_for_target(name: &str) -> Result<Option<String>, String> {
+    let store = JobStorage::new().await.map_err(|exc| exc.to_string())?;
+    let found = list_invites(&store).await?;
+    let Some((invite, _)) = found.iter().find(|(invite, _)| {
+        invite.mode == MODE_OFFLINE
+            && invite.target_name == name
+            && invite.status != STATUS_REVOKED
+            && invite.status != STATUS_SPENT
+    }) else {
+        return Ok(None);
+    };
+    mark_spent(&store, &invite.id).await?;
+    Ok(Some(invite.id.clone()))
 }
 
 /// `stado fleet revoke-invite ID` — retire an invite before anybody uses it.
@@ -564,6 +1245,16 @@ mod tests {
             uses_spent,
             status: status.to_string(),
             created_by: "mini".to_string(),
+            mode: MODE_ONLINE.to_string(),
+        }
+    }
+
+    fn offline_invite_at(status: &str) -> Invite {
+        Invite {
+            secret_sha256: String::new(),
+            status: status.to_string(),
+            mode: MODE_OFFLINE.to_string(),
+            ..invite_at("2026-01-03T00:00:00+00:00", 1, 0, status)
         }
     }
 
@@ -575,8 +1266,8 @@ mod tests {
 
     #[test]
     fn minted_tokens_are_unique_and_shaped_as_declared() {
-        let (first_id, first_secret) = mint_token().expect("mint");
-        let (second_id, second_secret) = mint_token().expect("mint");
+        let (first_id, first_secret) = (mint_id().expect("mint"), mint_secret().expect("mint"));
+        let (second_id, second_secret) = (mint_id().expect("mint"), mint_secret().expect("mint"));
         assert!(is_invite_id(&first_id), "id shape: {first_id}");
         assert_ne!(first_id, second_id);
         assert_ne!(first_secret, second_secret);
@@ -683,5 +1374,106 @@ mod tests {
             join_command("https://stado.wisent.com", "abc.def"),
             "curl -fsSL https://stado.wisent.com/join.sh | sh -s -- abc.def"
         );
+    }
+
+    #[test]
+    fn offline_object_carries_the_mode_and_no_digest() {
+        let invite = offline_invite_at(STATUS_OPEN);
+        let document = invite_document(&invite);
+        assert_eq!(document.get("mode").and_then(Value::as_str), Some(MODE_OFFLINE));
+        assert!(document.get("secret_sha256").is_none(), "offline object: {document}");
+        assert_eq!(parse_invite(&document).expect("round trip"), invite);
+        // A mode-less object predates the modes and was online; an offline one
+        // carrying a digest is a contradiction, not a default.
+        let legacy = serde_json::json!({
+            "id": invite.id,
+            "secret_sha256": secret_digest("s"),
+            "target_name": "studio",
+            "created_at": invite.created_at,
+            "expires_at": invite.expires_at,
+            "status": STATUS_OPEN,
+        });
+        assert_eq!(parse_invite(&legacy).expect("legacy object").mode, MODE_ONLINE);
+        let mut contradiction = document.clone();
+        contradiction["secret_sha256"] = Value::String(secret_digest("s"));
+        assert!(parse_invite(&contradiction).is_err(), "digest on an offline object");
+    }
+
+    #[test]
+    fn offline_invites_are_listed_as_awaiting_an_address() {
+        assert_eq!(
+            status_label(&offline_invite_at(STATUS_OPEN), STATUS_OPEN),
+            "open (offline, awaiting address)"
+        );
+        assert_eq!(
+            status_label(&offline_invite_at(STATUS_SPENT), STATUS_SPENT),
+            "spent (offline)"
+        );
+        assert_eq!(
+            status_label(&invite_at("2026-01-03T00:00:00+00:00", 1, 0, STATUS_OPEN), STATUS_OPEN),
+            STATUS_OPEN
+        );
+    }
+
+    #[test]
+    fn the_offline_fragment_carries_the_public_key_and_nothing_quotable() {
+        let line = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKEY stado-ssh-studio";
+        let snippet = offline_snippet("studio", line).expect("fragment");
+        assert!(snippet.contains(line), "the key line must be in the fragment");
+        assert!(!snippet.contains("@FLEET_KEY@") && !snippet.contains("@TARGET@"));
+        assert!(snippet.contains("chmod 700 \"$ssh_dir\""));
+        assert!(snippet.contains("chmod 600 \"$authorized_keys\""));
+        assert!(snippet.contains("say \"$login_user@$address\""));
+        assert!(
+            snippet.contains("PUBLIC") && snippet.contains("private half never leaves"),
+            "the fragment must say that it holds only the public half"
+        );
+        // A quote or a second line would end the sh literal or smuggle another
+        // authorized_keys directive: both are refusals, not escapes.
+        assert!(offline_snippet("studio", "ssh-ed25519 AAAA 'x'").is_err());
+        assert!(offline_snippet("stu'dio", line).is_err());
+        assert!(offline_snippet("studio", "ssh-ed25519 AAAA c\nssh-ed25519 BBBB d").is_err());
+        assert!(offline_snippet("studio", "  ").is_err());
+        assert!(offline_snippet("stu dio", line).is_err());
+    }
+
+    #[test]
+    fn an_unusable_checkpoint_never_yields_the_online_mode() {
+        for (reason, reachable) in [
+            (REASON_UNRESOLVED, false),
+            (REASON_CONNECTION_REFUSED, false),
+            (REASON_ROUTE_UNKNOWN, false),
+            (REASON_NOT_CONFIGURED, false),
+            (REASON_FORCED_OFFLINE, false),
+            (REASON_OK, true),
+        ] {
+            let checkpoint = Checkpoint {
+                url: "https://example.invalid".to_string(),
+                probed: reason != REASON_FORCED_OFFLINE && reason != REASON_NOT_CONFIGURED,
+                reachable,
+                reason,
+                detail: String::new(),
+            };
+            let expected = if reachable { MODE_ONLINE } else { MODE_OFFLINE };
+            assert_eq!(checkpoint.mode(), expected, "mode for {reason}");
+            assert_eq!(
+                checkpoint_document(&checkpoint).get("reason").and_then(Value::as_str),
+                Some(reason)
+            );
+        }
+    }
+
+    #[test]
+    fn probe_authority_names_the_port_the_probe_will_use() {
+        assert_eq!(
+            probe_authority("https://stado.wisent.com").expect("https"),
+            ("stado.wisent.com".to_string(), 443)
+        );
+        assert_eq!(
+            probe_authority("http://127.0.0.1:8765").expect("explicit port"),
+            ("127.0.0.1".to_string(), 8765)
+        );
+        assert!(probe_authority("stado.wisent.com").is_err(), "a bare name is not an address");
+        assert!(probe_authority("").is_err());
     }
 }
