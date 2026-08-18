@@ -256,8 +256,15 @@ a cloud account, cloud credential, Skarbiec, GPU, or Python.
 - the runtime required by the workload itself.
 
 Install an exact verified release before following the
-[complete onboarding path](docs/onboarding.md); if you are attaching your own
-computer to a fleet someone else operates, read
+[complete onboarding path](docs/onboarding.md). A machine joins a fleet by one
+of four methods — `invite` (send one line, touch nothing), `adopt` (Stado
+installs the key over a session you already have), `join` (the machine
+announces itself) and `declare` (assert the entry, verify later) — all four
+listed by `stado fleet methods` and described under
+[Onboard another machine](docs/onboarding.md#onboard-another-machine). In every
+one of them the private half of the channel key stays in the operator's
+credential store and only the public line reaches the machine. If you are
+attaching your own computer to a fleet someone else operates, read
 [Add your own machine](docs/add-your-machine.md) instead. For source
 development only, install Rust and Cargo and build from `stado-rs/`.
 
@@ -363,6 +370,15 @@ policy checks as the CLI. Local onboarding binds the dashboard to loopback.
 Remote exposure additionally requires authenticated deployment configuration
 and a trusted reverse proxy.
 
+Three enrollment routes sit beside that surface and outside its operator
+identity, because the machine being invited has one credential and it is not an
+operator's: `GET /api/fleet/invite/key` and `POST /api/fleet/join` authorize on
+an invitation token alone, `GET /join.sh` serves the script and authorizes
+nothing. None of the three can write the registry — they hand out the fleet's
+public key and record a pending request, and the registry write happens later
+under operator authority in `stado fleet approve`. See
+[the invite endpoints](docs/cli.md#invite-endpoints-on-the-dashboard).
+
 ## Operational model
 
 ### Configuration
@@ -441,6 +457,7 @@ Documentation:
 - [Changelog](CHANGELOG.md)
 - [Onboarding](docs/onboarding.md)
 - [Add your own machine](docs/add-your-machine.md)
+- [Examples](docs/examples/README.md)
 - [Architecture](docs/architecture.md)
 - [Integration contracts and lifecycle](docs/integrations.md)
 - [CLI reference](docs/cli.md)

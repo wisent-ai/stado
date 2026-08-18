@@ -9,9 +9,10 @@ examples requirement). Each script runs end-to-end locally.
 - **First run** — `config init`, `config validate`, `doctor`
 - **Work** — `submit`, `job watch`, `results`, `job rerun`
 - **Secrets** — `secrets put / get / ls / rm / doctor`
-- **Fleet** — `fleet enroll`, `fleet key generate / check`,
-  `registry beacon-age`, `host ping`, `host uptime`, `service list`,
-  `service status`
+- **Fleet** — `fleet methods`, `fleet invite / invites / revoke-invite`,
+  `fleet pending / approve`, `fleet enroll` (with `--install-key`),
+  `fleet key generate / check`, `registry beacon-age`, `host ping`,
+  `host uptime`, `service list`, `service status`
 - **Queue** — `queue status / pause / drain / resume`
 
 ## Index
@@ -26,18 +27,27 @@ examples requirement). Each script runs end-to-end locally.
 4. [`queue-maintenance.sh`](queue-maintenance.sh) —
    pause, drain, resume — maintenance without cancelling work.
 5. [`fleet/add-remove-host.sh`](fleet/add-remove-host.sh) —
-   declare a device with `registry host add` (`--ssh` and
+   the `declare` method: declare a device with `registry host add` (`--ssh` and
    `--release-platform` both required), remove it via
    pull → edit → validate → push. Ends net-zero; verified on the real
    registry.
 6. [`fleet/onboard-host.sh`](fleet/onboard-host.sh) —
-   bring a device to reporting life the verified way: `fleet enroll
-   --bootstrap` (probes hostname and platform before it writes), `fleet key
-   check`, skarbiec grants (`stado-local-agent`,
-   `stado-host-health-beacon`), host recover, beacon-age as proof. The public
-   key it needs in the target's `authorized_keys` comes from
-   `stado fleet key generate` — see
-   [Add your own machine](../add-your-machine.md).
+   bring a device to reporting life over a channel that already exists:
+   `fleet enroll --bootstrap` (probes hostname and platform before it writes),
+   `fleet key check`, skarbiec grants (`stado-local-agent`,
+   `stado-host-health-beacon`), host recover, beacon-age as proof. If the
+   machine has no key yet, add `--install-key` (the `adopt` method) or use the
+   invite example below instead of pasting a key by hand.
+7. [`fleet/invite-a-machine.sh`](fleet/invite-a-machine.sh) —
+   the `invite` method end to end, operator side: `fleet methods` and `fleet
+   catalog` for what this registry allows, `fleet invite` for the one line the
+   machine's owner runs, `fleet pending` for the request it produces,
+   `fleet approve` (which still probes), then key check, grants, host recover
+   and `registry beacon-age` as proof. The operator never touches the machine
+   and the private key never leaves the vault — see
+   [Add your own machine](../add-your-machine.md) for the owner's side and
+   [Onboard another machine](../onboarding.md#onboard-another-machine) for all
+   four methods.
 
 ## Providers (opt-in backends, per user)
 
@@ -45,15 +55,15 @@ Each provider lights up the same way: credentials into YOUR skarbiec,
 provider flipped on in YOUR config, one verify command. Credentials come
 from your env, never inline.
 
-7. [`providers/enable-azure.sh`](providers/enable-azure.sh) —
+8. [`providers/enable-azure.sh`](providers/enable-azure.sh) —
    `wisent-azure-billing-sp` (tenant_id, client_id, client_secret), then
    `stado azure`.
-8. [`providers/enable-gcp.sh`](providers/enable-gcp.sh) —
+9. [`providers/enable-gcp.sh`](providers/enable-gcp.sh) —
    `stado-gcp` (service_account_json), then `stado doctor`.
-9. [`providers/enable-aws.sh`](providers/enable-aws.sh) —
-   `stado-aws` (access_key_id, secret_access_key), then
-   `config validate`. Verified end-to-end on a scratch config.
-10. [`providers/enable-vast.sh`](providers/enable-vast.sh) —
+10. [`providers/enable-aws.sh`](providers/enable-aws.sh) —
+    `stado-aws` (access_key_id, secret_access_key), then
+    `config validate`. Verified end-to-end on a scratch config.
+11. [`providers/enable-vast.sh`](providers/enable-vast.sh) —
     `stado-vast` (api_key), then `stado vast list`.
 
 ## Template for a new example
