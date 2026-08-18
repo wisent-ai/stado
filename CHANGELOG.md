@@ -59,6 +59,32 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
 
 ### Onboarding platform
 
+- Made enrollment objects writable in this fleet's store. Everything the
+  enrollment methods record — invites, machine-filed join requests, the
+  published ingress address — lives under `enrollments/` inside the queue's
+  own namespace, the object API authorizes writes per declared prefix, and
+  `enrollments/` was never declared: every write, including the pre-existing
+  `stado fleet join` path that nobody had ever exercised, answered
+  `401 unauthorized or non-immutable release write`.
+  `scripts/allow-enrollments-prefix.py` adds the prefix idempotently and
+  atomically to a host's control-plane config; the object API on the always-on
+  host was adopted into the registry (it was live and undeclared, under a
+  LaunchDaemon a never-loaded duplicate LaunchAgent shadowed) and restarted in
+  place through `stado service restart`. A production invite now records,
+  lists, revokes, and cleans up end to end.
+- Made a consumer grant recoverable after a credential item is removed. Grants
+  only ever union, so capabilities naming a deleted item stayed forever, and
+  the next widening re-mint was refused with `capability names a missing
+  item` — one removed test key froze every future grant for
+  `local-operator`. `scripts/scrub-consumer-grant.py` re-mints with the same
+  list minus capabilities whose item is gone or in trash, bearer and TTL
+  preserved, vault copied first, idempotent.
+- Added read-only recon helpers `scripts/report-object-api-host.py` and
+  `scripts/report-object-api-launcher.py`: which process holds the object API
+  port, which launchd declaration owns it, what its launcher resolves at
+  startup, and whether the namespace policy already carries `enrollments/` —
+  the model a restart of an always-on control-plane process must be preceded
+  by, written down as an instrument instead of a lesson.
 - Made the one-line `invite` mode publishable without publishing the operator
   plane with it. `stado dashboard --enrollment-only` runs a listener that
   serves exactly `GET /join.sh`, `GET /api/fleet/invite/key` and
