@@ -83,6 +83,47 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   remote bootstrap, cloud-agent dispatch and the coordinator resolve through:
   repointing it at a narrow enrollment listener would break all of them.
   `stado config show` reports it as `enrollment_url`.
+- Added `stado fleet ingress up|status|down`, which turns the one-line `invite`
+  mode from a documented precondition into a command. `up` picks a free
+  loopback port, starts `stado dashboard --enrollment-only` on it, starts a
+  Cloudflare **quick** tunnel in front of it — no Cloudflare account, no API
+  token, no zone, no DNS record — and then fetches `/join.sh` back through the
+  public `*.trycloudflare.com` address **from the internet**, requiring `200`
+  and the same byte count as the script this build serves. Only that match
+  publishes `enrollments/ingress.json` (`base_url`, `mode`, `host`,
+  `started_at`, `verified_at`, `listener_port`, `pid_hint`); a failure at any
+  earlier stage stops both processes and names the stage, so there is no state
+  in which an operator is told an entrance exists and it does not. Both
+  processes are started as process-group leaders and outlive the command, and
+  `down` signals the groups, so nothing they spawned keeps the port; a pid
+  whose command line no longer matches is reported as gone rather than
+  signalled, and an object recorded by another machine is refused instead of
+  acted on. `--port` on a port already in use is refused before anything
+  starts: this command never puts a public tunnel in front of a service it did
+  not open. Cloudflare documents quick tunnels as non-production and rate
+  limits them, and their address changes on every start — both are printed by
+  `up` and by `status` rather than left in the documentation. `--named` is
+  refused in one sentence, because the vault has no
+  `platform-admin-cloudflare#api_token` field and Skarbiec will not grant on a
+  field that does not exist.
+  Two steps inside `up` earn their place. The tunnel is started with
+  `--http-host-header 127.0.0.1:<port>`, because the dashboard's DNS-rebinding
+  guard answers `403` to a forwarded `Host: <name>.trycloudflare.com` and the
+  honest fix is for the proxy to present the authority it is actually
+  connecting to, not for the guard to be relaxed. And the wait for DNS goes to
+  Cloudflare's own DNS-over-HTTPS resolver rather than to this machine's: the
+  record appears a few seconds after the address is printed, and a local lookup
+  in that window leaves an `NXDOMAIN` in the negative cache — measured here, one
+  premature lookup made the address unresolvable for 64 seconds after
+  Cloudflare had already published it, and where the zone's negative TTL is
+  honoured that is 1800 seconds.
+- `stado fleet invite` now takes its base address from `enrollment.url`, then
+  from the published ingress **while that address still answers**, then from
+  `api.url`. A one-liner built on an ingress address says out loud that it is a
+  temporary tunnel, that it dies with the ingress, and that a restarted ingress
+  returns under a different address; `--json` adds `base_source`,
+  `base_is_temporary` and, for a tunnel base, `base_warning`. `--offline`
+  consults no ingress and its probe verdicts are unchanged.
 - Added product-scoped delivery for immutable onboarding bundles, sticky
   experiment assignment, canonical event collection, and attempt-state reads.
 - Added Stado Desktop's product-owned first-use journey and gated completion on
