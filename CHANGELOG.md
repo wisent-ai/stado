@@ -356,6 +356,40 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   `min_age_seconds` (at least 86400) and an optional `root`, defaulting to the
   host's `$HOME`, and it reports under `build_caches` like the other two.
 
+### Service delivery
+
+- `stado service converge TARGET [BINARY]` reports the version
+  `targets[].managed_versions` declares for each managed binary on that host
+  against the version the host actually runs. Nothing could answer that
+  question per host before: a service declaration named a unit and a plist
+  path, both of which stay true across a release that never reached the box,
+  so a mac mini serving an old build was indistinguishable from one at the
+  declared version and `service list` reported `active` throughout. The
+  comparison is a version and not a commit because that is the primitive these
+  hosts carry — control-host runs Weles as an installed release artefact
+  with `package.json`, `.weles-release` and `provenance.json` beside it and no
+  checkout anywhere — and it is the same declaration `host inventory` and
+  `host release` already judge against. The installed version comes from the
+  read-only `report-installed-versions` helper over the existing
+  `host run-helper` channel, which reads each artefact's own metadata and asks
+  owner-only Stado programs for their version directly; a host that does not
+  carry the helper reports `unknown` — never `drifted` — with the exact
+  `host install-helper` command that fixes that. A product whose artefact
+  carries no version metadata also reports `unknown`, named on stderr, and is
+  never treated as in sync. Reporting exits non-zero on drift alone, so an
+  uninstalled reporter cannot masquerade as drift.
+- `stado service converge --apply` closes the gap by calling
+  `stado host release --binary NAME --version X.Y.Z TARGET` in-process for
+  every drifted binary, then re-reads the installed versions and exits non-zero
+  unless every binary in scope is confirmed at its declared version, printing
+  declared and installed side by side. There is deliberately no second delivery
+  mechanism: the digest check against the canonical release manifest, the
+  versioned staging tree, the `rename(2)` activation and the unit restart
+  happen once in this pack. A declared binary `host release` does not carry is
+  reported as undeliverable rather than as a failed delivery, and converge
+  never writes the registry — the declared version is the operator's statement
+  of intent, published with `stado host declare-version`.
+
 ## 0.5.0-rc.1 - 2026-07-29
 
 ### Product contract

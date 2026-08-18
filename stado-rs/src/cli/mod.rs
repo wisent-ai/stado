@@ -56,6 +56,7 @@ pub mod results;
 pub mod schedule;
 pub mod secrets;
 pub mod service;
+pub mod service_converge;
 pub mod service_verify;
 pub mod status;
 pub mod storage;
