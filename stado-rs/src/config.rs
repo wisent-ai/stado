@@ -940,6 +940,23 @@ pub fn stado_api_url() -> String {
         .to_string()
 }
 
+/// Public origin that serves the three enrollment routes (`GET /join.sh`,
+/// `GET /api/fleet/invite/key`, `POST /api/fleet/join`) — env
+/// `STADO_ENROLLMENT_URL`, config key `enrollment.url`, empty by default.
+///
+/// This is deliberately NOT [`stado_api_url`]. `api.url` is the deployment
+/// endpoint that self-update, remote bootstrap, cloud-agent dispatch and the
+/// coordinator resolve their release channel from; pointing it at a narrow
+/// enrollment listener would break all of those. A publicly tunnelled
+/// `stado dashboard --enrollment-only` listener serves only enrollment, so it
+/// needs its own origin. Empty means "no separate enrollment origin", and
+/// every caller falls back to `api.url` exactly as before.
+pub fn enrollment_url() -> String {
+    cfg("STADO_ENROLLMENT_URL", "enrollment.url", "")
+        .trim_end_matches('/')
+        .to_string()
+}
+
 /// Exact immutable Stado version consumed by bootstrap and cloud agents (env
 /// `STADO_RELEASE_VERSION`, config key `release.version`).
 pub fn stado_release_version() -> String {

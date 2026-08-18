@@ -476,6 +476,23 @@ pub fn probe_authority(base: &str) -> Result<(String, u16), String> {
     Ok((host.to_string(), port))
 }
 
+/// Origin the invite probe and the printed one-liner are built from:
+/// `enrollment.url` when configured, else `api.url`.
+///
+/// A deployment that publishes only the narrow `stado dashboard
+/// --enrollment-only` listener has an enrollment origin that is not its
+/// deployment endpoint, and the owner of a new machine can only reach the
+/// former. Falling back to `api.url` keeps every existing deployment — which
+/// serves enrollment from the same origin as everything else — unchanged.
+pub fn enrollment_base() -> String {
+    let enrollment = crate::config::enrollment_url();
+    if enrollment.is_empty() {
+        crate::config::stado_api_url()
+    } else {
+        enrollment
+    }
+}
+
 /// Ask the configured control point for `/join.sh` before anybody is told to
 /// fetch it.
 ///
@@ -491,7 +508,8 @@ pub async fn probe_checkpoint(base: &str) -> Checkpoint {
             probed: false,
             reachable: false,
             reason: REASON_NOT_CONFIGURED,
-            detail: "no control point is configured (STADO_API_URL / stado config api.url is empty)"
+            detail: "no control point is configured (STADO_ENROLLMENT_URL / stado config \
+                     enrollment.url and STADO_API_URL / stado config api.url are both empty)"
                 .to_string(),
         };
     }
@@ -938,17 +956,24 @@ pub async fn invite(
     // The control point comes from configuration — never from a name compiled
     // into this binary. A built-in default would be exactly the silent fallback
     // that printed a one-liner for a host nobody deployed.
-    let api_url = crate::config::stado_api_url();
+    //
+    // `enrollment.url` wins when it is set, because the origin an owner can
+    // actually reach is the narrow `--enrollment-only` listener behind the
+    // tunnel, not `api.url`. `api.url` stays the release/deployment endpoint
+    // and is the fallback, so a deployment that never configured a separate
+    // enrollment origin behaves exactly as it did before. Both empty still
+    // means `not_configured`.
+    let base = enrollment_base();
     let checkpoint = if offline {
         Checkpoint {
-            url: api_url.clone(),
+            url: base.clone(),
             probed: false,
             reachable: false,
             reason: REASON_FORCED_OFFLINE,
             detail: "--offline was requested, so the control point was not probed".to_string(),
         }
     } else {
-        probe_checkpoint(&api_url).await
+        probe_checkpoint(&base).await
     };
     let mode = checkpoint.mode();
     // Offline mints no secret at all, rather than minting one and being trusted
