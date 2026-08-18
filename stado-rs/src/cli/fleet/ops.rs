@@ -280,6 +280,17 @@ pub async fn enroll(
             ));
         }
     }
+    // An offline invite is closed by exactly this: the operator got the address
+    // from the machine's owner and registered the name. The registration
+    // already stands, so a store that cannot be reached now is a warning, not a
+    // reason to fail a run that wrote the registry.
+    match crate::cli::fleet::invite::close_offline_for_target(name).await {
+        Ok(Some(invite_id)) => println!("offline invite {invite_id} is spent"),
+        Ok(None) => {}
+        Err(exc) => eprintln!(
+            "registration stands, but the offline invite for '{name}' could not be closed: {exc}"
+        ),
+    }
     println!("enrolled '{name}' (kind={kind})");
     Ok(true)
 }
