@@ -632,11 +632,15 @@ async fn status(args: &ReleaseStatusArgs) -> Result<(), CmdError> {
             }));
         }
     }
-    if reports.is_empty() {
+    let runs = super::release_submit::recent_runs(args.product.as_deref(), 10).await?;
+    if reports.is_empty() && runs.is_empty() {
         return Err(CmdError::click("no matching release product"));
     }
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&reports)?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({"targets": reports, "runs": runs}))?
+        );
     } else {
         for report in reports {
             println!(
@@ -646,6 +650,27 @@ async fn status(args: &ReleaseStatusArgs) -> Result<(), CmdError> {
                 report["desired"]["version"].as_str().unwrap_or("-"),
                 report["observed"]["phase"].as_str().unwrap_or("unreported")
             );
+        }
+        if !runs.is_empty() {
+            println!("--- pipeline runs (newest first):");
+        }
+        for run in runs {
+            println!(
+                "run {} {} {} {} {} {}",
+                &run["run_id"].as_str().unwrap_or("-")
+                    [..8.min(run["run_id"].as_str().unwrap_or("-").len())],
+                run["product"].as_str().unwrap_or("-"),
+                run["version"].as_str().unwrap_or("-"),
+                run["channel"].as_str().unwrap_or("-"),
+                run["state"].as_str().unwrap_or("-"),
+                run["updated_at"].as_str().unwrap_or("-"),
+            );
+            if let Some(failure) = run["failure"].as_str() {
+                // One line of evidence, not the whole log: the first line
+                // names the failing step and host; `submit --json` carries
+                // the rest.
+                println!("  failure: {}", failure.lines().next().unwrap_or(failure));
+            }
         }
     }
     Ok(())

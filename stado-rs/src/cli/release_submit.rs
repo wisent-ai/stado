@@ -281,6 +281,54 @@ async fn load(id: &str) -> Result<Option<ReleaseRun>, CmdError> {
         .map(|content| serde_json::from_str(&content).map_err(CmdError::from))
         .transpose()
 }
+
+/// The most recent pipeline runs, newest first, with their persisted
+/// failures.
+///
+/// This is the read side of the run objects `submit` maintains: `stado
+/// release status` prints it and the dashboard's operator console serves the
+/// same text, so a failed run is visible from the CLI and the GUI without
+/// hunting through hosts or job stores.
+pub(crate) async fn recent_runs(
+    product: Option<&str>,
+    limit: usize,
+) -> Result<Vec<Value>, CmdError> {
+    let store = JobStorage::new()
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let mut runs = Vec::new();
+    for path in store
+        .list_paths("runs/release-pipeline/", 0)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?
+    {
+        if !path.ends_with("/run.json") {
+            continue;
+        }
+        let Some(text) = store
+            .download_text(&path)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?
+        else {
+            continue;
+        };
+        let Ok(run) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        if product.is_some_and(|selected| run["product"].as_str() != Some(selected)) {
+            continue;
+        }
+        runs.push(run);
+    }
+    runs.sort_by(|a, b| {
+        b["updated_at"]
+            .as_str()
+            .unwrap_or("")
+            .cmp(a["updated_at"].as_str().unwrap_or(""))
+    });
+    runs.truncate(limit);
+    Ok(runs)
+}
 fn identity(
     product: &str,
     version: &str,
