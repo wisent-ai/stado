@@ -11,9 +11,9 @@ mod channel;
 pub use channel::channel_argv;
 pub mod rotate;
 
-use serde_json::json;
 use crate::deploy::{CommandSpec, Runner};
 use crate::skarbiec::Client;
+use serde_json::json;
 
 /// Credential item id prefix for host keys; the target name follows it.
 const ITEM_PREFIX: &str = "stado-ssh-";
@@ -112,7 +112,10 @@ pub(crate) async fn settle_readable(
             &CHANNEL_FIELDS,
         )
         .map_err(|exc| {
-            format!("cannot make {id} readable by {}: {exc}", credentials.consumer)
+            format!(
+                "cannot make {id} readable by {}: {exc}",
+                credentials.consumer
+            )
         })?;
         if outcome.wrote() {
             // Progress, not output: `fleet invite --json` mints a channel key on
@@ -580,13 +583,21 @@ pub async fn install_first_contact(
     if !output.ok() {
         return Err(first_contact_failure(destination, &output));
     }
-    if output.stdout.lines().any(|line| line == "STADO_ADOPT_PRESENT") {
+    if output
+        .stdout
+        .lines()
+        .any(|line| line == "STADO_ADOPT_PRESENT")
+    {
         println!(
             "the fleet public key for '{target}' is already in ~/.ssh/authorized_keys on {destination}; nothing appended"
         );
         return Ok(AdoptOutcome::AlreadyPresent);
     }
-    if output.stdout.lines().any(|line| line == "STADO_ADOPT_INSTALLED") {
+    if output
+        .stdout
+        .lines()
+        .any(|line| line == "STADO_ADOPT_INSTALLED")
+    {
         println!(
             "installed the fleet public key for '{target}' into ~/.ssh/authorized_keys on {destination}"
         );

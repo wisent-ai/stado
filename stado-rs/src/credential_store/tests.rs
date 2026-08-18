@@ -4,13 +4,17 @@
 //! literal appears in source.
 
 use super::*;
-use std::sync::MutexGuard;
-
-static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+use tokio::sync::MutexGuard;
 
 /// Sync tests take the guard directly.
 fn env_lock() -> MutexGuard<'static, ()> {
     test_env_lock()
+}
+
+/// Async tests hold the guard across `.await`, so they take it through the
+/// async-aware path onto the same process-wide lock.
+async fn env_lock_async() -> MutexGuard<'static, ()> {
+    test_env_lock_async().await
 }
 
 struct StoreEnv {

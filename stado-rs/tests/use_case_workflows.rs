@@ -621,13 +621,22 @@ async fn ai_agent_request_materializes_pinned_input_and_scoped_secret_without_le
     let store = local_store(&storage);
     let mut agent_log = Vec::new();
     let mut logger = |line: &str| agent_log.push(line.to_string());
-    let slot = slots::start_slot(&store, queued, "automation-worker", &mut logger, "local", None)
-        .await
-        .expect("trusted agent starts machine job");
+    let slot = slots::start_slot(
+        &store,
+        queued,
+        "automation-worker",
+        &mut logger,
+        "local",
+        None,
+    )
+    .await
+    .expect("trusted agent starts machine job");
     let slot = match slot {
         Some(slot) => slot,
         None => {
-            drop(logger);
+            // Move the closure out of scope to end its borrow of `agent_log`;
+            // a closure has no `Drop` glue, so `drop()` here trips clippy.
+            let _ = logger;
             panic!(
                 "machine job is admitted; agent log:\n{}",
                 agent_log.join("\n")
@@ -805,10 +814,17 @@ async fn failed_workload_does_not_block_the_next_queued_job() {
         .await
         .unwrap()
         .expect("failing workload is queued");
-    let failed_slot = slots::start_slot(&store, failed_job, "recovery-agent", &mut logger, "local", None)
-        .await
-        .unwrap()
-        .expect("failing workload is admitted");
+    let failed_slot = slots::start_slot(
+        &store,
+        failed_job,
+        "recovery-agent",
+        &mut logger,
+        "local",
+        None,
+    )
+    .await
+    .unwrap()
+    .expect("failing workload is admitted");
     advance_to_done(failed_slot, &store, &mut logger).await;
     let failed = store
         .read_job("failed", &failed_id)

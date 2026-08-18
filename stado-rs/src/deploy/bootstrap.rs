@@ -638,6 +638,7 @@ mod tests {
         ComputeTarget {
             name: name.to_string(),
             kind: "local".to_string(),
+            release_platform: String::new(),
             gpu_type: None,
             slots,
             ssh: ssh.map(str::to_string),
@@ -650,7 +651,10 @@ mod tests {
             notes: String::new(),
             hostnames: Vec::new(),
             weles: None,
+            identities: Vec::new(),
+            account_ref: None,
             disk_cleanup: None,
+            display_stream: None,
             env_overrides: Default::default(),
             agent_args: Vec::new(),
             vram_gb: None,

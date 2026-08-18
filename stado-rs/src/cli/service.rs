@@ -419,9 +419,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             binary,
             apply,
             json,
-        } => {
-            crate::cli::service_converge::converge(&target, binary.as_deref(), apply, json).await
-        }
+        } => crate::cli::service_converge::converge(&target, binary.as_deref(), apply, json).await,
         ServiceCommands::OnboardingCatalog => onboarding_catalog().await,
         ServiceCommands::Status { name, json } => status(&name, json).await,
         ServiceCommands::Update {

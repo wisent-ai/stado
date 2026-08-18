@@ -118,7 +118,10 @@ fn is_invite_id(value: &str) -> bool {
 /// deliberately shape-only: a malformed token is refused with the same
 /// sentence as a valid-looking one that does not exist.
 pub fn parse_token(token: &str) -> Result<(&str, &str), String> {
-    let (id, secret) = token.trim().split_once('.').ok_or_else(|| REFUSED.to_string())?;
+    let (id, secret) = token
+        .trim()
+        .split_once('.')
+        .ok_or_else(|| REFUSED.to_string())?;
     if !is_invite_id(id) || secret.is_empty() {
         return Err(REFUSED.to_string());
     }
@@ -167,7 +170,10 @@ pub fn parse_invite(document: &Value) -> Result<Invite, String> {
             .ok_or_else(|| format!("invite object has no '{name}'"))
     };
     let counter = |name: &str, fallback: u64| -> u64 {
-        document.get(name).and_then(Value::as_u64).unwrap_or(fallback)
+        document
+            .get(name)
+            .and_then(Value::as_u64)
+            .unwrap_or(fallback)
     };
     let mode = match document.get("mode").and_then(Value::as_str) {
         None | Some("") | Some(MODE_ONLINE) => MODE_ONLINE.to_string(),
@@ -263,7 +269,11 @@ pub fn parse_expiry(value: &str) -> Result<Duration, String> {
         "m" => Duration::try_minutes(amount),
         "h" => Duration::try_hours(amount),
         "d" => Duration::try_days(amount),
-        other => return Err(format!("--expires '{raw}': unknown unit '{other}', use s, m, h or d")),
+        other => {
+            return Err(format!(
+                "--expires '{raw}': unknown unit '{other}', use s, m, h or d"
+            ))
+        }
     };
     span.ok_or_else(|| format!("--expires '{raw}': lifetime is out of range"))
 }
@@ -291,7 +301,8 @@ async fn store_invite(store: &JobStorage, invite: &Invite) -> Result<(), String>
     store
         .upload_text(
             &invite_path(&invite.id),
-            &serde_json::to_string_pretty(&invite_document(invite)).map_err(|exc| exc.to_string())?,
+            &serde_json::to_string_pretty(&invite_document(invite))
+                .map_err(|exc| exc.to_string())?,
         )
         .await
         .map_err(|exc| exc.to_string())
@@ -910,7 +921,9 @@ pub fn offline_snippet(target_name: &str, authorized_line: &str) -> Result<Strin
             .chars()
             .all(|letter| letter.is_ascii_alphanumeric() || matches!(letter, '.' | '_' | '-'))
     {
-        return Err(format!("target name '{target_name}' is not usable in the fragment"));
+        return Err(format!(
+            "target name '{target_name}' is not usable in the fragment"
+        ));
     }
     Ok(OFFLINE_SNIPPET
         .replace("@FLEET_KEY@", line)
@@ -1068,7 +1081,8 @@ pub async fn invite(
     let recorded = store
         .create_text_if_absent(
             &invite_path(&id),
-            &serde_json::to_string_pretty(&invite_document(&invite)).map_err(|exc| exc.to_string())?,
+            &serde_json::to_string_pretty(&invite_document(&invite))
+                .map_err(|exc| exc.to_string())?,
         )
         .await;
     match recorded {
@@ -1144,7 +1158,9 @@ pub async fn invite(
             println!("control point: {}", checkpoint.detail);
             println!("send this one line to the machine's owner:");
             println!("  {command}");
-            println!("then approve the machine: stado fleet pending, stado fleet approve <hostname>");
+            println!(
+                "then approve the machine: stado fleet pending, stado fleet approve <hostname>"
+            );
             if from_ingress {
                 println!(
                     "  that address is a TEMPORARY Cloudflare quick-tunnel address, published by \
@@ -1196,7 +1212,7 @@ pub async fn invite(
         // fragment, and the mode chose one of the two before the key was minted.
         _ => {
             return Err(
-                "the invite was recorded but neither mode produced anything to send".to_string()
+                "the invite was recorded but neither mode produced anything to send".to_string(),
             );
         }
     }
@@ -1324,7 +1340,10 @@ pub async fn revoke_invite(id: &str) -> Result<bool, String> {
     let previous = effective_status(&invite, Utc::now());
     invite.status = STATUS_REVOKED.to_string();
     store_invite(&store, &invite).await?;
-    println!("invite {id} for target '{}' is revoked (was {previous})", invite.target_name);
+    println!(
+        "invite {id} for target '{}' is revoked (was {previous})",
+        invite.target_name
+    );
     println!(
         "the minted channel key is still in the credential store: stado fleet key rm '{}' removes it",
         invite.target_name
@@ -1378,7 +1397,8 @@ mod tests {
             .expect("base64url without padding");
         assert_eq!(decoded.len(), SECRET_BYTES);
         assert!(!first_secret.contains('='));
-        let (id, secret) = parse_token(&format!("{first_id}.{first_secret}")).expect("parse");
+        let token = format!("{first_id}.{first_secret}");
+        let (id, secret) = parse_token(&token).expect("parse");
         assert_eq!((id, secret), (first_id.as_str(), first_secret.as_str()));
     }
 
@@ -1396,7 +1416,13 @@ mod tests {
 
     #[test]
     fn malformed_tokens_are_refused_without_detail() {
-        for candidate in ["", "nodot", "short.secret", "0123456789abcdef.", "01234.56789abcdefg.s"] {
+        for candidate in [
+            "",
+            "nodot",
+            "short.secret",
+            "0123456789abcdef.",
+            "01234.56789abcdefg.s",
+        ] {
             let error = parse_token(candidate).unwrap_err();
             assert_eq!(error, REFUSED, "leaked detail for {candidate:?}");
         }
@@ -1415,19 +1441,31 @@ mod tests {
     #[test]
     fn status_is_derived_for_expiry_and_recorded_for_the_rest() {
         assert_eq!(
-            effective_status(&invite_at("2026-01-03T00:00:00+00:00", 1, 0, STATUS_OPEN), now()),
+            effective_status(
+                &invite_at("2026-01-03T00:00:00+00:00", 1, 0, STATUS_OPEN),
+                now()
+            ),
             STATUS_OPEN
         );
         assert_eq!(
-            effective_status(&invite_at("2026-01-01T12:00:00+00:00", 1, 0, STATUS_OPEN), now()),
+            effective_status(
+                &invite_at("2026-01-01T12:00:00+00:00", 1, 0, STATUS_OPEN),
+                now()
+            ),
             STATUS_EXPIRED
         );
         assert_eq!(
-            effective_status(&invite_at("2026-01-03T00:00:00+00:00", 1, 1, STATUS_OPEN), now()),
+            effective_status(
+                &invite_at("2026-01-03T00:00:00+00:00", 1, 1, STATUS_OPEN),
+                now()
+            ),
             STATUS_SPENT
         );
         assert_eq!(
-            effective_status(&invite_at("2026-01-03T00:00:00+00:00", 3, 0, STATUS_REVOKED), now()),
+            effective_status(
+                &invite_at("2026-01-03T00:00:00+00:00", 3, 0, STATUS_REVOKED),
+                now()
+            ),
             STATUS_REVOKED
         );
         assert_eq!(
@@ -1450,7 +1488,10 @@ mod tests {
     fn colliding_target_names_are_refused_not_suffixed() {
         let document = serde_json::json!({ "targets": [{ "name": "studio" }] });
         let error = preflight_invite_name(&document, &[], "studio").unwrap_err();
-        assert!(error.contains("already registered"), "unexpected error: {error}");
+        assert!(
+            error.contains("already registered"),
+            "unexpected error: {error}"
+        );
         let empty = serde_json::json!({ "targets": [] });
         let open = vec![(
             invite_at("2026-01-03T00:00:00+00:00", 1, 0, STATUS_OPEN),
@@ -1482,8 +1523,14 @@ mod tests {
     fn offline_object_carries_the_mode_and_no_digest() {
         let invite = offline_invite_at(STATUS_OPEN);
         let document = invite_document(&invite);
-        assert_eq!(document.get("mode").and_then(Value::as_str), Some(MODE_OFFLINE));
-        assert!(document.get("secret_sha256").is_none(), "offline object: {document}");
+        assert_eq!(
+            document.get("mode").and_then(Value::as_str),
+            Some(MODE_OFFLINE)
+        );
+        assert!(
+            document.get("secret_sha256").is_none(),
+            "offline object: {document}"
+        );
         assert_eq!(parse_invite(&document).expect("round trip"), invite);
         // A mode-less object predates the modes and was online; an offline one
         // carrying a digest is a contradiction, not a default.
@@ -1495,10 +1542,16 @@ mod tests {
             "expires_at": invite.expires_at,
             "status": STATUS_OPEN,
         });
-        assert_eq!(parse_invite(&legacy).expect("legacy object").mode, MODE_ONLINE);
+        assert_eq!(
+            parse_invite(&legacy).expect("legacy object").mode,
+            MODE_ONLINE
+        );
         let mut contradiction = document.clone();
         contradiction["secret_sha256"] = Value::String(secret_digest("s"));
-        assert!(parse_invite(&contradiction).is_err(), "digest on an offline object");
+        assert!(
+            parse_invite(&contradiction).is_err(),
+            "digest on an offline object"
+        );
     }
 
     #[test]
@@ -1512,7 +1565,10 @@ mod tests {
             "spent (offline)"
         );
         assert_eq!(
-            status_label(&invite_at("2026-01-03T00:00:00+00:00", 1, 0, STATUS_OPEN), STATUS_OPEN),
+            status_label(
+                &invite_at("2026-01-03T00:00:00+00:00", 1, 0, STATUS_OPEN),
+                STATUS_OPEN
+            ),
             STATUS_OPEN
         );
     }
@@ -1521,7 +1577,10 @@ mod tests {
     fn the_offline_fragment_carries_the_public_key_and_nothing_quotable() {
         let line = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKEY stado-ssh-studio";
         let snippet = offline_snippet("studio", line).expect("fragment");
-        assert!(snippet.contains(line), "the key line must be in the fragment");
+        assert!(
+            snippet.contains(line),
+            "the key line must be in the fragment"
+        );
         assert!(!snippet.contains("@FLEET_KEY@") && !snippet.contains("@TARGET@"));
         assert!(snippet.contains("chmod 700 \"$ssh_dir\""));
         assert!(snippet.contains("chmod 600 \"$authorized_keys\""));
@@ -1559,7 +1618,9 @@ mod tests {
             let expected = if reachable { MODE_ONLINE } else { MODE_OFFLINE };
             assert_eq!(checkpoint.mode(), expected, "mode for {reason}");
             assert_eq!(
-                checkpoint_document(&checkpoint).get("reason").and_then(Value::as_str),
+                checkpoint_document(&checkpoint)
+                    .get("reason")
+                    .and_then(Value::as_str),
                 Some(reason)
             );
         }
@@ -1575,7 +1636,10 @@ mod tests {
             probe_authority("http://127.0.0.1:8765").expect("explicit port"),
             ("127.0.0.1".to_string(), 8765)
         );
-        assert!(probe_authority("stado.wisent.com").is_err(), "a bare name is not an address");
+        assert!(
+            probe_authority("stado.wisent.com").is_err(),
+            "a bare name is not an address"
+        );
         assert!(probe_authority("").is_err());
     }
 }

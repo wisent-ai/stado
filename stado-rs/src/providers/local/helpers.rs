@@ -367,7 +367,10 @@ pub fn build_capacity_dict_per_card(
         }
     }
     if !out.contains_key(gpu_type) {
-        let usable = free_vram_gb_per_card.iter().filter(|free| **free > 0).count() as i64;
+        let usable = free_vram_gb_per_card
+            .iter()
+            .filter(|free| **free > 0)
+            .count() as i64;
         out.insert(gpu_type.to_string(), usable.max(1));
     }
     out

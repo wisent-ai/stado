@@ -172,9 +172,7 @@ pub fn require_invite_allowed(document: &Value) -> Result<(), String> {
 pub fn require_adopt_allowed(document: &Value) -> Result<(), String> {
     let catalog = parse_enrollment(document)?;
     if !catalog.allow_adopt {
-        return Err(
-            "adoption is disabled by registry.enrollment.allow_adopt".to_string(),
-        );
+        return Err("adoption is disabled by registry.enrollment.allow_adopt".to_string());
     }
     Ok(())
 }
@@ -419,7 +417,10 @@ mod tests {
         assert!(!catalog.allow_invite);
         assert!(!catalog.allow_adopt);
         let invite = require_invite_allowed(&doc).unwrap_err();
-        assert!(invite.contains("allow_invite"), "unexpected error: {invite}");
+        assert!(
+            invite.contains("allow_invite"),
+            "unexpected error: {invite}"
+        );
         let adopt = require_adopt_allowed(&doc).unwrap_err();
         assert!(adopt.contains("allow_adopt"), "unexpected error: {adopt}");
     }
