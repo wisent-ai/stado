@@ -670,9 +670,12 @@ method transmits a private key or asks the machine to generate a pair.
 | `stado fleet key rm TARGET` | Remove a target's SSH key from the credential store. |
 | `stado fleet methods [--json]` | The four ways to add a machine — `invite`, `adopt`, `join`, `declare` — each with the command that performs it, what it requires, what it provides, whether the registry allows it, and the catalog field that gates it. `--json` emits `{"methods":[{"name","command","summary","requires","provides","allowed","gate"}]}` in that fixed order, with `gate` naming a registry field such as `registry.enrollment.allow_invite` (`null` for `declare`, which no field gates). A method the catalog disables is still listed, marked disabled. |
 | `stado fleet enroll NAME --ssh DEST [--install-key] [--kind local] [--fleet NAME] [--bootstrap]` | Probe-then-write onboarding: reads `hostname`, `uname -s` and `uname -m` over the channel, writes the entry from what it read, optionally assigns a fleet, and with `--bootstrap` installs the agent and rolls the entry back if that install fails. `--install-key` is the `adopt` method: before probing, mint the target's pair if needed and append its **public** line to the machine's `authorized_keys` over the access plain `ssh DEST` already has (agent, an operator key, or OpenSSH's own password prompt). Idempotent, and never connected / authentication rejected / write failed are reported apart, all before any registry write. |
-| `stado fleet invite [--name NAME] [--offline] [--expires 24h] [--uses 1] [--json]` | The `invite` method, in two modes, because the one-line form can only work where the machine being added actually reaches the control point. Common to both: the channel key `stado-ssh-NAME` is minted first through the `fleet key generate` path and its fingerprint printed, the private half never leaves the store, a name already held by a target or by another open invite is an error rather than a suffix, `--expires` takes an integer plus `s`, `m`, `h` or `d` and refuses a bare number, `--uses 0` is an error, and a recording failure removes the freshly minted key again. Without `--offline` the command first runs [the control-point check](#the-control-point-check) against the configured address and prints the one-liner only if `/join.sh` answered `200`. **Online mode:** mint `<id>.<secret>`, print it once — nothing can reprint it — store `secret_sha256` and nothing else, and print `curl -fsSL <control-point>/join.sh \| sh -s -- <id>.<secret>` with the configured host, never a host compiled into Stado. **Offline mode** (`--offline`, or any failed check): no token is minted, so there is nothing to intercept, replay or lose. The command prints a paste-ready `sh` fragment between two markers which, run by the machine's owner, creates `~/.ssh` at 700 and `authorized_keys` at 600, appends the fleet's **public** line there idempotently — the line is carried inside the fragment and fetched from nothing — reports whether anything answers on port 22 and names the exact macOS Settings path or Linux equivalent when nothing does, and prints as its last line the `user@address` the owner sends back; the fragment states in its own output that it carries only a public key and is therefore not a secret. The stored invite records `mode: "offline"`, `status: "open"` and no `secret_sha256` at all, and `stado fleet enroll NAME --ssh ADDRESS --bootstrap` closes it as `spent`. `--json` always carries `id`, `mode`, `target_name`, `created_at`, `expires_at`, `uses_allowed`, `public_key`, `authorized_keys_line` and the `checkpoint` object (`url`, `probed`, `reachable`, `reason`, `detail`); online adds `token`, `token_shown_once: true` and `join_command`, so redirecting that output to a file writes a live credential to disk and nothing can reprint the token if it is lost; offline adds `snippet`, `snippet_is_not_a_secret: true` and `next_step`, none of which is a credential. |
+| `stado fleet invite [--name NAME] [--offline] [--expires 24h] [--uses 1] [--json]` | The `invite` method, in two modes, because the one-line form can only work where the machine being added actually reaches the control point. Common to both: the channel key `stado-ssh-NAME` is minted first through the `fleet key generate` path and its fingerprint printed, the private half never leaves the store, a name already held by a target or by another open invite is an error rather than a suffix, `--expires` takes an integer plus `s`, `m`, `h` or `d` and refuses a bare number, `--uses 0` is an error, and a recording failure removes the freshly minted key again. Without `--offline` the command takes the control address from `enrollment.url`, else the live entrance published by [`stado fleet ingress`](#stado-fleet-ingress), else `api.url`, runs [the control-point check](#the-control-point-check) against it, and prints the one-liner only if `/join.sh` answered `200`; when the address came from the ingress it says so and warns that a quick-tunnel address is temporary and changes on restart. `--offline` consults no ingress, since it probes nothing. **Online mode:** mint `<id>.<secret>`, print it once — nothing can reprint it — store `secret_sha256` and nothing else, and print `curl -fsSL <control-point>/join.sh \| sh -s -- <id>.<secret>` with the resolved host, never a host compiled into Stado. **Offline mode** (`--offline`, or any failed check): no token is minted, so there is nothing to intercept, replay or lose. The command prints a paste-ready `sh` fragment between two markers which, run by the machine's owner, creates `~/.ssh` at 700 and `authorized_keys` at 600, appends the fleet's **public** line there idempotently — the line is carried inside the fragment and fetched from nothing — reports whether anything answers on port 22 and names the exact macOS Settings path or Linux equivalent when nothing does, and prints as its last line the `user@address` the owner sends back; the fragment states in its own output that it carries only a public key and is therefore not a secret. The stored invite records `mode: "offline"`, `status: "open"` and no `secret_sha256` at all, and `stado fleet enroll NAME --ssh ADDRESS --bootstrap` closes it as `spent`. `--json` always carries `id`, `mode`, `target_name`, `created_at`, `expires_at`, `uses_allowed`, `public_key`, `authorized_keys_line`, the `checkpoint` object (`url`, `probed`, `reachable`, `reason`, `detail`), `base_source` (`enrollment.url`, `ingress` or `api.url`) and `base_is_temporary`, plus `base_warning` when the base is a tunnel; online adds `token`, `token_shown_once: true` and `join_command`, so redirecting that output to a file writes a live credential to disk and nothing can reprint the token if it is lost; offline adds `snippet`, `snippet_is_not_a_secret: true` and `next_step`, none of which is a credential. |
 | `stado fleet invites [--json]` | Every invite and the state it is actually in: id, target name, status (`open`, `spent`, `revoked`, `expired`), uses spent of uses allowed, timestamps, who created it. Never the token or the secret. An open offline invite reads `open (offline, awaiting address)` — the one state here that waits on a person rather than on a clock — and its other states are marked `<status> (offline)`; online invites are unchanged. `--json` emits `{"invites":[…]}`, each row carrying `mode` and `awaiting_address` alongside the fields above. |
 | `stado fleet revoke-invite ID` | Close one invite immediately, by id. A revoked token is refused exactly like a spent, expired or unknown one. |
+| `stado fleet ingress up [--port N] [--named]` | Stand up the public entrance the one-line invite mode needs: a `stado dashboard --enrollment-only` listener on a free loopback port behind a Cloudflare quick tunnel, with no Cloudflare account, API token or DNS record. Publishes `enrollments/ingress.json` only after fetching `/join.sh` back through the public address from the internet and matching it against the script this build serves; any failure before that stops both processes and names the stage. A `--port` already in use is refused before anything starts. `--named` is refused: the vault has no `platform-admin-cloudflare#api_token` field. See [`stado fleet ingress`](#stado-fleet-ingress). |
+| `stado fleet ingress status [--json]` | What is published, whether that address answers now, when it was last verified from the internet, how long it has stood, which loopback port the listener holds, and whether both processes are alive. |
+| `stado fleet ingress down` | Close the tunnel, stop the listener, and remove `enrollments/ingress.json`. Every one-liner minted against that address stops working. |
 | `stado fleet join` | The `join` method, run **on the machine being added**: announce it to the fleet when the control plane cannot reach it but it can reach the store. |
 | `stado fleet pending [--json]` | List unanswered join requests. An invited request also shows the target name the invite reserved, the SSH destination approval will probe, the invite id it came from, the fingerprint of the key the machine installed, and whether that machine's SSH channel was answering when it reported — an approval spent on a machine with Remote Login still off is a wasted round trip. `--json` emits `{"pending":[{"hostname","os","arch","kind","status","requested_at","target_name","destination","invite_id","installed_key_fingerprint","ssh_listening"}]}`; the invited-only keys are `null` for a plain `join` request, so `select(.destination != null)` is what isolates invited ones. |
 | `stado fleet approve HOSTNAME [--fleet NAME]` | Turn a pending join request into a registered target, over the destination the request carries, through the same probe-then-write enrollment — approval does not skip the probe. The argument is the request's hostname; an invited machine is registered under the target name its invite reserved (which is the name whose key the invite minted), and its probed hostname lands in the entry's `hostnames`. |
@@ -704,9 +707,11 @@ surface.
 line can work, because a one-liner naming an unreachable host is worse than no
 one-liner: it moves the failure onto somebody else's machine, hours later, with
 no way to tell a typo from a fleet that never published an ingress. The check
-reads the control address from configuration — `STADO_API_URL`, or `api.url` in
-`stado config` — fetches `/join.sh` from it, and requires `200`. No control host
-is built into Stado; there is nothing to fall back to silently.
+works out the control address from three sources, in order — `STADO_ENROLLMENT_URL`
+/ `enrollment.url`, then the verified entrance `stado fleet ingress` published
+in `enrollments/ingress.json` (used only while it still answers), then
+`STADO_API_URL` / `api.url` — fetches `/join.sh` from it, and requires `200`. No
+control host is built into Stado; there is nothing to fall back to silently.
 
 | Reason | What it means |
 |---|---|
@@ -719,11 +724,77 @@ is built into Stado; there is nothing to fall back to silently.
 The success verdict is `ok`, and it is the only one that yields the one-liner.
 Every one of the five in the table continues in offline mode and prints which
 applied; the `curl` line is printed in none of them, and `--json` carries the
-verdict as `checkpoint.reason` next to the sentence in `checkpoint.detail`. What
-it takes to make the online mode reachable —
-a resolving name, an ingress in front of the loopback bind, and a release on
-that host carrying the routes below — is set out under
-[what the one-line mode needs](onboarding.md#what-the-one-line-mode-needs).
+verdict as `checkpoint.reason` next to the sentence in `checkpoint.detail`.
+`--json` also carries `base_source` (`enrollment.url`, `ingress` or `api.url`)
+and `base_is_temporary`, and a one-liner built on an ingress address carries
+`base_warning` as well — the text output says the same thing in prose. What it
+takes to make the online mode reachable, and the one command that provides it
+without any Cloudflare credential, is set out under
+[what the one-line mode needs](onboarding.md#what-the-one-line-mode-needs-and-how-to-stand-it-up).
+
+### `stado fleet ingress`
+
+The public entrance the one-line mode needs, as a command rather than a runbook.
+`up` chooses a free loopback port, starts `stado dashboard --enrollment-only` on
+it, starts a Cloudflare **quick** tunnel in front of it — no account, no API
+token, no zone, no DNS record — waits for the `*.trycloudflare.com` address that
+tunnel prints, and then fetches `/join.sh` back through that address **from the
+internet** and compares the bytes with the script this binary serves. Only a
+match publishes `enrollments/ingress.json`. Every failure before that point
+stops both processes and names the stage — `listener`, `tunnel`, `verification`
+or `publication` — so no half-open entrance is ever left behind, and no operator
+is ever told an address works because it probably does.
+
+| Command | What it does |
+|---|---|
+| `stado fleet ingress up [--port N] [--named]` | Stand the entrance up and publish it once it has answered from the internet. The port is chosen automatically; `--port N` is bind-tested first and a port already in use is **refused before any process starts**, because a tunnel in front of a service this command did not open is the one mistake it must not make. `--named` is refused in one sentence: a named tunnel needs a Cloudflare API token, the vault has no `platform-admin-cloudflare#api_token` field, and Skarbiec refuses to grant on a field that does not exist. |
+| `stado fleet ingress status [--json]` | Whether anything is published, whether that address answers **now**, when it was last verified from the internet, how long it has been standing, which loopback port the listener holds, and whether the two processes are still alive. `--json` emits `{"published","base_url","mode","host","started_at","verified_at","standing_seconds","seconds_since_verified","listener_port","reachable","reason","detail","processes_on_this_machine","listener_alive","tunnel_alive","pid_hint","temporary"}`; an unpublished ingress emits `{"published":false,"detail":…}`. |
+| `stado fleet ingress down` | Close the tunnel, stop the listener, remove `enrollments/ingress.json`. Both are signalled as process **groups**, so nothing either of them spawned keeps the port. A pid whose command line no longer matches is reported as gone rather than signalled, and an object recorded by another machine is refused instead of acted on. |
+
+The published object carries `base_url`, `mode` (`quick` or `named`), `host`,
+`started_at`, `verified_at`, `listener_port` and `pid_hint` — the machine that
+owns the processes, both process-group ids, and both log paths, which is exactly
+what `down` and `status` need in order to find them without guessing. Logs live
+in `$HOME/.stado/ingress/`. `cloudflared` is resolved the way Stado resolves
+every external binary: `STADO_CLOUDFLARED_BIN` if set, then
+`/opt/homebrew/bin/cloudflared`, `/usr/local/bin/cloudflared`, then `PATH`; a
+miss names every place that was looked in.
+
+Both processes outlive the command — an entrance that dies with the terminal
+that opened it is not an entrance — and both are started as process-group
+leaders, so a Ctrl-C aimed at a later command cannot take the fleet's front door
+down with it.
+
+Two steps inside `up` look like detail and are not.
+
+**The tunnel presents the loopback authority, not the public name.** The
+dashboard carries a DNS-rebinding guard that accepts a loopback `Host` and
+answers `403` to a DNS one unless a reverse proxy has been explicitly trusted.
+A tunnel forwarding `Host: <name>.trycloudflare.com` verbatim therefore gets
+`403` on all three enrollment routes, so `up` starts `cloudflared` with
+`--http-host-header 127.0.0.1:<port>` — the authority it is genuinely
+connecting to, exactly as any reverse proxy in front of a loopback bind does.
+The guard is not relaxed and nothing else on the machine becomes reachable.
+
+**DNS is waited for through Cloudflare's own resolver, never through this
+machine's.** The `*.trycloudflare.com` record appears a few seconds *after*
+`cloudflared` prints the address, and a `getaddrinfo` issued in that window
+does not merely fail — it leaves an `NXDOMAIN` in the local resolver's negative
+cache. Measured on this fleet's operator machine: one lookup at second zero
+made the address unresolvable for the next 64 seconds, while Cloudflare's own
+resolver had been answering since second six; where the zone's negative TTL is
+honoured rather than clamped that is 1800 seconds. So `up` asks Cloudflare's
+DNS-over-HTTPS endpoint whether the name is published, and only then does
+anything resolve it. A resolver it cannot reach is not treated as a failure —
+the step protects the local cache, it does not decide anything.
+
+Two properties of a quick tunnel are printed by `up` and by `status`, and they
+are not incidental. **Cloudflare documents quick tunnels as non-production and
+rate limits them**, which is an acceptable trade for an entrance used a handful
+of times a month to add a machine and for nothing else. And **the address is new
+on every start**: stopping and restarting the ingress invalidates every
+one-liner already handed out, which is why there is no `restart` subcommand —
+`down` then `up` makes what happened visible.
 
 ### Invite endpoints on the dashboard
 
