@@ -13,13 +13,26 @@ HOST_SLUG=$(/bin/hostname -s | /usr/bin/tr '[:upper:]' '[:lower:]')
 # jq is not on every managed host, and a beacon that dies for want of it is a
 # host that reads as dead. python3 ships with macOS and is already what the
 # operator helpers use.
+# A host knows itself by its hostname; the registry knows it by its target name,
+# and the two differ on any machine somebody named twice. `operator-host`
+# never matched target `operator-host`, so the label list came back empty, the
+# fallback published a map holding only the beacon, and `registry doctor`
+# reported a missing plist for six services that were installed and loaded.
+# Match the way the fleet's readers match: target name, declared hostnames, or
+# either with the local suffix dropped.
 READ_LABELS='import json,sys
-host = sys.argv[1]
+host = sys.argv[1].lower()
+def stem(name):
+    name = (name or "").lower()
+    return name[:-len(".local")] if name.endswith(".local") else name
 doc = json.load(sys.stdin)
 for entry in doc.get("targets", []):
-    if entry.get("name") == host:
+    known = {stem(entry.get("name"))}
+    known.update(stem(name) for name in entry.get("hostnames", []) or [])
+    if stem(host) in known:
         for service in entry.get("services", []):
-            print(service.get("label") or service.get("unit") or service.get("name"))'
+            print(service.get("label") or service.get("unit") or service.get("name"))
+        break'
 READ_NAMES='import json,sys
 for entry in json.load(sys.stdin).get("targets", []):
     print(entry.get("name"))'
