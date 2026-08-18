@@ -16,16 +16,20 @@
 //! restart the unit.
 //! A missing or mismatched release archive leaves the currently active
 //! release untouched and aborts the deployment. That
-//! sentence is the whole design; everything below is it, applied to one
-//! managed binary instead of a worker tree.
+//! sentence is the whole design; everything below is it, applied to whatever
+//! the fleet declares — one program, or one worker tree.
 //!
 //! What that buys, stated as contracts rather than intentions:
 //!
-//! - **`--binary` is a closed compile-time table** ([`MANAGED_BINARIES`]).
-//!   The operator's word SELECTS an entry; it never becomes part of a path,
-//!   a URI segment or a script word. This is [`crate::deploy::host_exec`]'s
-//!   rule, kept: "the operator's words select a fixed argv entry and never
-//!   join the command line".
+//! - **`--binary` selects a declared product** ([`products`]). The
+//!   declaration is one shipped document, `stado` and `weles-worker` are two
+//!   entries in it, and the operator's word SELECTS an entry; it never
+//!   becomes part of a path, a URI segment or a script word. This is
+//!   [`crate::deploy::host_exec`]'s rule, kept: "the operator's words select
+//!   a fixed argv entry and never join the command line". Every check below
+//!   is as strict for the third entry as for the first: the same manifest
+//!   identity, the same digest, the same platform agreement, the same
+//!   proven-to-run version readback before anything is activated.
 //! - **`--version` is an exact coordinate**, not a channel and not an
 //!   alias. `latest` is a legal path segment, which is exactly why nothing
 //!   here resolves one — see [`crate::release::canonical_coordinate`].
@@ -42,18 +46,26 @@
 //!   structural rather than careful.** The remote work is three separate
 //!   programs on the shared channel — probe, stage, activate — and the
 //!   activate program is only ever issued after the stage program reported
-//!   a verified artifact. A failed fetch, a mismatched digest, a staged file
-//!   that does not report the requested version: each leaves the running
-//!   version untouched, because nothing has touched `$HOME/.stado/bin` yet.
-//!   Splitting the phases is what makes the ordering observable at the
+//!   a verified artifact. A failed fetch, a mismatched digest, a staged
+//!   artefact that does not report the requested version: each leaves the
+//!   running version untouched, because nothing has touched the install root
+//!   yet. Splitting the phases is what makes the ordering observable at the
 //!   [`Runner`] seam instead of buried inside one long shell script.
-//! - **Activation is one `rename(2)`.** The staged artifact is hard-linked
-//!   into a pending name beside the live one and renamed over it, so the
-//!   active binary is the exact staged inode and there is no window in which
-//!   `$HOME/.stado/bin/<name>` is half-written. It stays a REGULAR file on
-//!   purpose: `host inventory` refuses to read through a symlink, so
+//! - **Activation is renames, never writes in place.** A program is
+//!   hard-linked into a pending name beside the live one and renamed over it,
+//!   so the active binary is the exact staged inode and there is no window in
+//!   which `$HOME/.stado/bin/<name>` is half-written. It stays a REGULAR file
+//!   on purpose: `host inventory` refuses to read through a symlink, so
 //!   publishing a symlink here would blind the command that reports what is
-//!   installed.
+//!   installed. A tree is replaced path by path out of the verified staging
+//!   tree, one rename each, retiring the path it replaces.
+//! - **A tree delivery replaces code and nothing else.** The install root of
+//!   `weles-worker` is the artefact directory itself, which also holds
+//!   `recordings/`, `var/` and `.work/` — host-local state no release
+//!   produced. Those paths are declared
+//!   ([`crate::deploy::products::Install::Tree`]), they are never named by an
+//!   activation, and an artefact that carries one of them is refused at
+//!   staging rather than allowed to overwrite it.
 //!
 //! What this command does NOT do, each for a reason:
 //!
@@ -71,15 +83,19 @@
 //!   happens before activation, so the previous version is still the active
 //!   one. A rollback is `host release` naming the previous version, which is
 //!   why the versioned staging tree is kept rather than pruned;
-//! - it does not restart a unit it invented. The unit is looked up in the
-//!   registry's own declared service set ([`service::declared_services`])
-//!   and restarted through the shipped `service restart` program. A binary
-//!   with no declared unit — `skarbiec`, a CLI rather than a daemon — is
-//!   activated and reported as having no unit, not silently "restarted".
+//! - it does not restart a unit it invented. A product either declares a unit
+//!   label alone, which has to be FOUND in the registry's own declared
+//!   service set ([`service::declared_services`]) before it is touched, or
+//!   declares the label together with the unit file that runs it, which is
+//!   itself the statement that the unit exists. Either way the restart goes
+//!   through the shipped `service restart` program, and a product with no
+//!   declared unit — `skarbiec`, a CLI rather than a daemon — is activated
+//!   and reported as having no unit, not silently "restarted".
 
 use serde_json::{json, Map, Value};
 
-use super::{host_channel, local_install, service};
+use super::products::{self, Install, Product, Readback};
+use super::{host_channel, service};
 use super::{shlex_quote, CommandOutput, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
@@ -101,111 +117,9 @@ pub const MARKER: &str = "STADO_RELEASE";
 /// operator where to write the declaration.
 pub const MANAGED_VERSIONS_KEY: &str = "managed_versions";
 
-/// One binary this command is allowed to deliver.
-///
-/// A closed table, not a lookup: an operator naming something not in here
-/// gets a refusal and the list, the same shape `host exec` answers an
-/// unapproved command with.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ManagedBinary {
-    /// The name `--binary` matches exactly, and the file name under
-    /// `$HOME/.stado/bin`.
-    pub name: &'static str,
-    /// The `stado://releases/<product>/...` segment the artifact lives under.
-    pub product: &'static str,
-    /// The argument that makes it print its version.
-    pub version_argument: &'static str,
-    /// `plain` (one line, version as the last word) or `json` (an object
-    /// with a `version` member). Both shapes are real:
-    /// `host inventory` had to learn the same distinction after reporting
-    /// `{` as skarbiec's version.
-    pub version_shape: &'static str,
-    /// The [`local_install`] kind whose label names the unit that runs this
-    /// binary on a host, or `None` for a binary that is not a daemon. The
-    /// label is built with [`local_install::label`] rather than spelled out,
-    /// so it cannot drift from the one the installer actually creates.
-    pub unit_kind: Option<&'static str>,
-    /// Why this entry is safe to deliver: what it is and what runs it.
-    pub why: &'static str,
-}
-
-/// Every binary `stado host release` may put on a host.
-///
-/// Exactly the two `host inventory` already reports under
-/// `$HOME/.stado/bin`, and for the same reason: those are the two this fleet
-/// installs, versions and reads back. Adding a third is a code change with a
-/// justification in `why`, not a flag.
-pub const MANAGED_BINARIES: &[ManagedBinary] = &[
-    ManagedBinary {
-        name: "stado",
-        product: "stado",
-        version_argument: "--version",
-        version_shape: "plain",
-        unit_kind: Some("agent"),
-        why: "the fleet's own control binary; the per-host agent LaunchAgent runs it",
-    },
-    ManagedBinary {
-        name: "skarbiec",
-        product: "skarbiec",
-        version_argument: "version",
-        version_shape: "json",
-        unit_kind: None,
-        why: "the credential CLI; invoked per call by launchers, so no unit owns it",
-    },
-];
-
-/// The platforms a managed binary is published for.
-///
-/// Closed for the same reason [`MANAGED_BINARIES`] is: the platform is a
-/// coordinate segment, and an operator-supplied segment is an
-/// operator-supplied path. These are the two
-/// [`crate::deploy::bootstrap::REMOTE_INSTALL_SCRIPT`] maps the remote
-/// kernel and architecture onto, so the two commands cannot disagree about
-/// what a platform is called.
-pub const PLATFORMS: &[&str] = &["darwin-arm64", "linux-amd64"];
-
-/// The default platform, matching `host install-release`'s own default.
-pub const DEFAULT_PLATFORM: &str = "darwin-arm64";
-
 // ---------------------------------------------------------------------------
 // Refusals
 // ---------------------------------------------------------------------------
-
-/// The allowlist, as an operator reads it after a refusal.
-pub fn allowed_binaries() -> String {
-    MANAGED_BINARIES
-        .iter()
-        .map(|entry| format!("  {} — {}", entry.name, entry.why))
-        .collect::<Vec<String>>()
-        .join("\n")
-}
-
-/// Resolve `--binary` against [`MANAGED_BINARIES`].
-pub fn managed_binary(name: &str) -> Result<&'static ManagedBinary, DeployError> {
-    MANAGED_BINARIES
-        .iter()
-        .find(|entry| entry.name == name)
-        .ok_or_else(|| {
-            DeployError(format!(
-                "{name:?} is not a stado-managed binary. Deliverable binaries:\n{}",
-                allowed_binaries()
-            ))
-        })
-}
-
-/// Resolve `--platform` against [`PLATFORMS`].
-pub fn managed_platform(platform: &str) -> Result<&'static str, DeployError> {
-    PLATFORMS
-        .iter()
-        .find(|candidate| **candidate == platform)
-        .copied()
-        .ok_or_else(|| {
-            DeployError(format!(
-                "{platform:?} is not a published release platform; expected one of {}",
-                PLATFORMS.join(", ")
-            ))
-        })
-}
 
 /// True for an exact semantic version: three numeric identifiers without
 /// leading zeros, plus an optional prerelease.
@@ -295,7 +209,8 @@ pub struct ReleaseRequest {
 /// remote programs can be built from it without re-deciding anything.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReleasePlan {
-    pub managed: &'static ManagedBinary,
+    /// The declared product this delivery carries out.
+    pub product: &'static Product,
     pub version: String,
     pub platform: String,
     pub sha256: String,
@@ -306,15 +221,14 @@ pub struct ReleasePlan {
 }
 
 impl ReleasePlan {
-    /// The exact object the host will fetch.
     /// The exact immutable archive the host will fetch.
     pub fn release_uri(&self) -> String {
         format!(
             "stado://releases/{}/{}/{}/{}-v{}-{}.tar.gz",
-            self.managed.product,
+            self.product.source.product,
             self.version,
             self.platform,
-            self.managed.product,
+            self.product.source.product,
             self.version,
             self.platform
         )
@@ -323,21 +237,42 @@ impl ReleasePlan {
     pub fn archive_name(&self) -> String {
         format!(
             "{}-v{}-{}.tar.gz",
-            self.managed.product, self.version, self.platform
+            self.product.source.product, self.version, self.platform
         )
     }
 
-    /// Where the verified artifact is kept, unchanged, after delivery.
-    pub fn staged_path(&self) -> String {
+    /// The versioned staging directory this coordinate owns. Kept after a
+    /// delivery rather than pruned: naming the previous version is the only
+    /// rollback this command has.
+    pub fn staged_dir(&self) -> String {
         format!(
-            "$HOME/.stado/releases/{}/{}/{}/{}",
-            self.managed.name, self.version, self.platform, self.managed.name
+            "$HOME/.stado/releases/{}/{}/{}",
+            self.product.name, self.version, self.platform
         )
     }
 
-    /// The active path an operator (and `host inventory`) reads.
+    /// Where the verified artefact is kept, unchanged, after delivery: the
+    /// staged program itself, or the staged tree it was extracted into.
+    pub fn staged_path(&self) -> String {
+        match &self.product.install {
+            Install::Program { .. } => format!("{}/{}", self.staged_dir(), self.product.name),
+            Install::Tree { .. } => format!("{}/{TREE_DIR}", self.staged_dir()),
+        }
+    }
+
+    /// The path an operator (and `host inventory`) reads the installed
+    /// version out of: the active program, or the install root of a tree.
     pub fn active_path(&self) -> String {
-        format!("$HOME/.stado/bin/{}", self.managed.name)
+        match &self.product.install {
+            Install::Program { root } => format!("{root}/{}", self.product.name),
+            Install::Tree { root, .. } => root.clone(),
+        }
+    }
+
+    /// The host-local paths this delivery must leave exactly as it found
+    /// them, as full paths on the host.
+    pub fn preserved_paths(&self) -> Vec<String> {
+        self.product.preserved_paths()
     }
 }
 
@@ -347,7 +282,7 @@ impl ReleasePlan {
 /// on anything the host says. A request that cannot be delivered correctly
 /// should cost zero ssh connections and change nothing.
 pub fn plan(target: &ComputeTarget, request: &ReleaseRequest) -> Result<ReleasePlan, DeployError> {
-    let managed = managed_binary(&request.binary)?;
+    let product = products::product(&request.binary)?;
     if !is_exact_semver(&request.version) {
         return Err(DeployError(format!(
             "{:?} is not an exact version; --version takes a semantic version such as 0.5.1, \
@@ -355,7 +290,8 @@ pub fn plan(target: &ComputeTarget, request: &ReleaseRequest) -> Result<ReleaseP
             request.version
         )));
     }
-    let platform = managed_platform(&request.platform)?;
+    let platform = products::managed_platform(&request.platform)?;
+    product.platform(platform)?;
     if target.release_platform != platform {
         return Err(DeployError(format!(
             "target {:?} declares release_platform {}, not {platform}",
@@ -387,12 +323,12 @@ pub fn plan(target: &ComputeTarget, request: &ReleaseRequest) -> Result<ReleaseP
             "canonical STADO_API_URL must be a whitespace-free HTTPS URL".to_string(),
         ));
     }
-    let Some(declared) = declared_version(target, managed.name) else {
+    let Some(declared) = declared_version(target, &product.name) else {
         return Err(DeployError(format!(
             "the registry declares no {} version for target {:?}; declare it under \
              {MANAGED_VERSIONS_KEY} first. Delivery carries out a declaration, it does not \
              stand in for one",
-            managed.name, target.name
+            product.name, target.name
         )));
     };
     if declared != request.version {
@@ -400,11 +336,11 @@ pub fn plan(target: &ComputeTarget, request: &ReleaseRequest) -> Result<ReleaseP
             "the registry declares {} {declared} for target {:?}, not {}. Change the \
              declaration if that is the intent; delivering against it would make the \
              registry describe a host it no longer describes",
-            managed.name, target.name, request.version
+            product.name, target.name, request.version
         )));
     }
     Ok(ReleasePlan {
-        managed,
+        product,
         version: request.version.clone(),
         platform: platform.to_string(),
         sha256: request.sha256.clone(),
@@ -546,7 +482,7 @@ read_version() {
 }
 "##;
 
-/// Phase one: what is on the host right now.
+/// Phase one, program shape: what is on the host right now.
 ///
 /// This program creates, moves, removes and overwrites nothing. That is what
 /// makes `--dry-run` genuinely dry: the dry run is this program and nothing
@@ -555,7 +491,7 @@ read_version() {
 pub const REMOTE_PROBE_BODY: &str = r##"
 stado_release_step=probe
 stado_home="$HOME/.stado"
-active_path="$stado_home/bin/$binary"
+active_path="$install_root/$binary"
 staged_path="$stado_home/releases/$binary/$version/$platform/$binary"
 
 # The host's own platform, from the kernel, in the spelling
@@ -587,8 +523,9 @@ say sanitizer "$sanitizer_state"
 say step probe
 "##;
 
-/// Phase two: fetch the release archive, verify its catalog digest, extract
-/// exactly the fixed managed-binary member, verify its declared version, and stage it.
+/// Phase two, program shape: fetch the release archive, verify its catalog
+/// digest, extract exactly the declared archive member, verify the version it
+/// reports, and stage it.
 pub const REMOTE_STAGE_BODY: &str = r##"
 stado_release_step=stage
 stado_home="$HOME/.stado"
@@ -631,8 +568,8 @@ fi
 say verify ok
 
 member_count=0
-while IFS= read -r member; do
-  if [ "$member" = "$binary" ]; then
+while IFS= read -r archive_entry; do
+  if [ "$archive_entry" = "$member" ]; then
     member_count=$((member_count + 1))
   fi
 done <<EOF
@@ -643,7 +580,7 @@ if [ "$member_count" -ne 1 ]; then
   say layout archive_member_missing_or_duplicated
   exit 1
 fi
-if ! /usr/bin/tar -xOzf "$archive_path" "$binary" > "$incoming"; then
+if ! /usr/bin/tar -xOzf "$archive_path" "$member" > "$incoming"; then
   /bin/rm -f "$archive_path" "$incoming"
   say layout archive_extract_failed
   exit 1
@@ -673,13 +610,14 @@ say staged "$version"
 say step stage
 "##;
 
-/// Phase three: atomically activate the version-checked file staged from the
-/// digest-verified archive. Re-reading the version makes this phase refuse a
-/// replaced or corrupt staged file independently of the caller's ordering.
+/// Phase three, program shape: atomically activate the version-checked file
+/// staged from the digest-verified archive. Re-reading the version makes this
+/// phase refuse a replaced or corrupt staged file independently of the
+/// caller's ordering.
 pub const REMOTE_ACTIVATE_BODY: &str = r##"
 stado_release_step=activate
 stado_home="$HOME/.stado"
-bin_dir="$stado_home/bin"
+bin_dir="$install_root"
 active_path="$bin_dir/$binary"
 staged_path="$stado_home/releases/$binary/$version/$platform/$binary"
 pending="$bin_dir/.$binary.pending"
@@ -704,36 +642,428 @@ say activated "$version"
 say step activate
 "##;
 
+/// The directory name a staged artefact tree is kept under, inside the
+/// versioned staging directory the coordinate owns.
+pub const TREE_DIR: &str = "tree";
+
+/// The version reader for a tree, added to [`SANITIZE_PRELUDE`] for a tree
+/// delivery and to nothing else.
+///
+/// A tree has no one installed program to ask, so its version comes out of
+/// one top-level member of one declared JSON file — `package.json`
+/// `/version` for the Weles worker, the same field
+/// `weles/.wisent-release.json` numbers the release from. The parsing rules
+/// are the ones the program reader already uses on a JSON answer, including
+/// the check that only whitespace and the colon sit between the key and its
+/// value: `"version"` followed by `null` must read as unparsable, not as
+/// whatever the next quoted member happens to be.
+pub const TREE_PRELUDE: &str = r##"
+read_version_file() {
+  read_version_path="$1"
+  read_version_value=""
+  read_version_state=missing
+  # -L first, never -f first: -f follows the link, so a symlink pointing at
+  # another product's manifest would be read as this tree's version.
+  if [ -L "$read_version_path" ]; then
+    read_version_state=refused_symlink
+    return 0
+  fi
+  if [ ! -f "$read_version_path" ]; then
+    return 0
+  fi
+  if read_version_output=$(/bin/cat "$read_version_path" 2>/dev/null); then
+    :
+  else
+    read_version_state=version_failed
+    return 0
+  fi
+  if [ -z "$read_version_output" ]; then
+    read_version_state=version_empty
+    return 0
+  fi
+  read_version_key="\"$version_member\""
+  case "$read_version_output" in
+    *"$read_version_key"*)
+      read_version_rest=${read_version_output#*"$read_version_key"}
+      read_version_gap=${read_version_rest%%'"'*}
+      case "$read_version_rest" in
+        *'"'*)
+          case "$read_version_gap" in
+            *[!:[:space:]]*) ;;
+            *)
+              read_version_rest=${read_version_rest#*'"'}
+              read_version_value=${read_version_rest%%'"'*}
+              ;;
+          esac
+          ;;
+      esac
+      ;;
+  esac
+  if [ -z "$read_version_value" ]; then
+    read_version_state=version_unparsable
+  else
+    read_version_state=reported
+  fi
+}
+"##;
+
+/// Phase one, tree shape: what is in the install root right now.
+///
+/// Read-only, like its program counterpart, and it reads one thing more: the
+/// top-level paths the install root holds, split into the code a delivery
+/// would replace and the host-local state it must leave alone. The dry run's
+/// promise is about paths on this host, so the paths come off this host
+/// rather than out of an assumption on the control plane.
+pub const TREE_PROBE_BODY: &str = r##"
+stado_release_step=probe
+stado_home="$HOME/.stado"
+staged_root="$stado_home/releases/$binary/$version/$platform/tree"
+
+# The host's own platform, from the kernel, in the spelling
+# bootstrap's remote install script uses. A plan built for one platform must
+# never be applied on another, and the host is the only authority on which
+# one it is.
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64) host_platform=darwin-arm64 ;;
+  Linux-x86_64) host_platform=linux-amd64 ;;
+  *) host_platform=unsupported ;;
+esac
+say platform "$host_platform"
+
+if [ -L "$install_root" ]; then
+  root_state=refused_symlink
+elif [ -d "$install_root" ]; then
+  root_state=present
+elif [ -e "$install_root" ]; then
+  root_state=not_directory
+else
+  root_state=absent
+fi
+say root_state "$root_state"
+
+read_version_file "$install_root/$version_path"
+say active_state "$read_version_state"
+say active_version "$read_version_value"
+
+if [ -L "$staged_root" ]; then
+  staged_state=refused_symlink
+elif [ -d "$staged_root" ]; then
+  staged_state=present
+elif [ -e "$staged_root" ]; then
+  staged_state=not_directory
+else
+  staged_state=absent
+fi
+say staged_state "$staged_state"
+
+if [ "$root_state" = present ]; then
+  for entry_path in "$install_root"/* "$install_root"/.*; do
+    [ -e "$entry_path" ] || continue
+    entry=${entry_path##*/}
+    case "$entry" in
+      . | ..) continue ;;
+    esac
+    entry_kind=code
+    while IFS= read -r preserved; do
+      [ -n "$preserved" ] || continue
+      if [ "$entry" = "$preserved" ]; then
+        entry_kind=preserved
+      fi
+    done <<EOF
+$preserve
+EOF
+    if [ "$entry_kind" = preserved ]; then
+      say preserved_path "$entry"
+    else
+      say code_path "$entry"
+    fi
+  done
+fi
+say sanitizer "$sanitizer_state"
+say step probe
+"##;
+
+/// Phase two, tree shape: fetch the release archive, verify its catalog
+/// digest, take exactly the declared payload member out of it, unpack that
+/// payload into a versioned staging tree, refuse a payload that carries a
+/// host-local path, and verify the version the staged tree declares.
+///
+/// Nothing in this phase touches the install root, which is what makes the
+/// ordering structural: a failure here leaves the running tree exactly as it
+/// was, because the running tree has not been opened.
+pub const TREE_STAGE_BODY: &str = r##"
+stado_release_step=stage
+stado_home="$HOME/.stado"
+staged_dir="$stado_home/releases/$binary/$version/$platform"
+staged_root="$staged_dir/tree"
+archive_path="$staged_dir/.$archive_name.incoming"
+payload_path="$staged_dir/.payload.incoming"
+incoming="$staged_dir/.tree.incoming"
+
+case "$release_api" in
+  https://*) ;;
+  *) say fetch refused_not_https; exit 1 ;;
+esac
+for required in /usr/bin/curl /usr/bin/openssl /usr/bin/tar; do
+  if [ ! -x "$required" ]; then
+    say fetch "missing_${required##*/}"
+    exit 1
+  fi
+done
+
+/bin/mkdir -p "$staged_dir"
+/bin/rm -f "$archive_path" "$payload_path"
+/bin/rm -rf "$incoming"
+if /usr/bin/curl -fsSL --get \
+  --data-urlencode "uri=stado://releases/$product/$version/$platform/$archive_name" \
+  "$release_api/api/release/object" -o "$archive_path"; then
+  say fetch ok
+else
+  /bin/rm -f "$archive_path"
+  say fetch failed
+  exit 1
+fi
+
+digest_line=$(/usr/bin/openssl dgst -sha256 -r "$archive_path")
+actual_sha256=${digest_line%% *}
+say sha256 "$actual_sha256"
+if [ "$actual_sha256" != "$expected_sha256" ]; then
+  /bin/rm -f "$archive_path"
+  say verify mismatch
+  exit 1
+fi
+say verify ok
+
+member_count=0
+while IFS= read -r archive_entry; do
+  if [ "$archive_entry" = "$member" ]; then
+    member_count=$((member_count + 1))
+  fi
+done <<EOF
+$(/usr/bin/tar -tzf "$archive_path")
+EOF
+if [ "$member_count" -ne 1 ]; then
+  /bin/rm -f "$archive_path"
+  say layout archive_member_missing_or_duplicated
+  exit 1
+fi
+if ! /usr/bin/tar -xOzf "$archive_path" "$member" > "$payload_path"; then
+  /bin/rm -f "$archive_path" "$payload_path"
+  say layout archive_extract_failed
+  exit 1
+fi
+/bin/rm -f "$archive_path"
+if [ ! -s "$payload_path" ]; then
+  /bin/rm -f "$payload_path"
+  say layout empty
+  exit 1
+fi
+
+/bin/mkdir -p "$incoming"
+if ! /usr/bin/tar -xzf "$payload_path" -C "$incoming" --no-same-owner; then
+  /bin/rm -rf "$incoming"
+  /bin/rm -f "$payload_path"
+  say layout payload_extract_failed
+  exit 1
+fi
+/bin/rm -f "$payload_path"
+
+# The payload is code, and only code. A member landing on a declared
+# host-local path would be delivered over recordings or scratch state no
+# release produced, so such an artefact is refused whole here rather than
+# discovered halfway through an activation.
+while IFS= read -r preserved; do
+  [ -n "$preserved" ] || continue
+  if [ -e "$incoming/$preserved" ]; then
+    /bin/rm -rf "$incoming"
+    say layout "artifact_carries_preserved_path_$preserved"
+    exit 1
+  fi
+done <<EOF
+$preserve
+EOF
+
+read_version_file "$incoming/$version_path"
+if [ "$read_version_state" != reported ]; then
+  /bin/rm -rf "$incoming"
+  say layout "$read_version_state"
+  exit 1
+fi
+if [ "$read_version_value" != "$version" ]; then
+  /bin/rm -rf "$incoming"
+  say layout version_mismatch
+  exit 1
+fi
+say layout ok
+
+/bin/rm -rf "$staged_root"
+/bin/mv -f "$incoming" "$staged_root"
+say staged "$version"
+say step stage
+"##;
+
+/// Phase three, tree shape: replace the code in the install root out of the
+/// verified staging tree, one rename per path, and leave every declared
+/// host-local path exactly where it is.
+///
+/// The preserved paths are never named as a destination and never moved: a
+/// delivery that relocated `recordings/` and put it back would be one failure
+/// away from losing it. They are checked against the staged tree again here,
+/// because this is the phase that can destroy state and it must refuse on its
+/// own evidence rather than on the caller's ordering. The retired paths are
+/// kept beside the staging tree for the same reason the staging tree is kept.
+pub const TREE_ACTIVATE_BODY: &str = r##"
+stado_release_step=activate
+stado_home="$HOME/.stado"
+staged_dir="$stado_home/releases/$binary/$version/$platform"
+staged_root="$staged_dir/tree"
+retired="$staged_dir/retired"
+
+if [ -L "$staged_root" ] || [ ! -d "$staged_root" ]; then
+  say verify staged_missing
+  exit 1
+fi
+read_version_file "$staged_root/$version_path"
+if [ "$read_version_state" != reported ] || [ "$read_version_value" != "$version" ]; then
+  say verify staged_version_mismatch
+  exit 1
+fi
+if [ -L "$install_root" ]; then
+  say verify install_root_symlink
+  exit 1
+fi
+if [ -e "$install_root" ] && [ ! -d "$install_root" ]; then
+  say verify install_root_not_directory
+  exit 1
+fi
+say verify ok
+
+/bin/mkdir -p "$install_root"
+/bin/rm -rf "$retired"
+/bin/mkdir -p "$retired"
+
+for staged_entry in "$staged_root"/* "$staged_root"/.*; do
+  [ -e "$staged_entry" ] || continue
+  entry=${staged_entry##*/}
+  case "$entry" in
+    . | ..) continue ;;
+  esac
+  while IFS= read -r preserved; do
+    [ -n "$preserved" ] || continue
+    if [ "$entry" = "$preserved" ]; then
+      say activate "artifact_carries_preserved_path_$entry"
+      exit 1
+    fi
+  done <<EOF
+$preserve
+EOF
+  incoming="$install_root/.$entry.incoming"
+  /bin/rm -rf "$incoming"
+  /bin/cp -Rp "$staged_entry" "$incoming"
+  if [ -e "$install_root/$entry" ]; then
+    /bin/mv -f "$install_root/$entry" "$retired/$entry"
+  fi
+  /bin/mv -f "$incoming" "$install_root/$entry"
+  say replaced "$entry"
+done
+
+while IFS= read -r preserved; do
+  [ -n "$preserved" ] || continue
+  say preserved "$preserved"
+done <<EOF
+$preserve
+EOF
+
+# The delivered tree, asked what it is now. A program is proven to run before
+# it is activated; a tree is proven to declare the delivered version after it
+# is, because the tree in the install root is the one an operator and
+# `service converge` will read next.
+read_version_file "$install_root/$version_path"
+if [ "$read_version_state" != reported ] || [ "$read_version_value" != "$version" ]; then
+  say verify installed_version_mismatch
+  exit 1
+fi
+say activated "$version"
+say step activate
+"##;
+
 /// The checked coordinates one remote program is bound to.
+///
+/// Every operator-facing value arrives as a quoted assignment, so no word of
+/// a request is ever spliced into a program body. `install_root` is the one
+/// value bound in double quotes rather than single ones, because it carries a
+/// literal `$HOME` the host must expand; what makes that safe is not the
+/// quoting but [`products::validate`], which admits a root of `$HOME/` plus a
+/// closed alphabet of path characters and refuses everything else.
 fn bindings(plan: &ReleasePlan) -> String {
-    format!(
+    let mut bound = format!(
         "binary={}\nproduct={}\nversion={}\nplatform={}\narchive_name={}\nexpected_sha256={}\n\
-         release_api={}\nversion_argument={}\nversion_shape={}\n",
-        shlex_quote(plan.managed.name),
-        shlex_quote(plan.managed.product),
+         release_api={}\nmember={}\ninstall_root=\"{}\"\n",
+        shlex_quote(&plan.product.name),
+        shlex_quote(&plan.product.source.product),
         shlex_quote(&plan.version),
         shlex_quote(&plan.platform),
         shlex_quote(&plan.archive_name()),
         shlex_quote(&plan.sha256),
         shlex_quote(&plan.release_api),
-        shlex_quote(plan.managed.version_argument),
-        shlex_quote(plan.managed.version_shape),
-    )
+        shlex_quote(&plan.product.source.member),
+        plan.product.root(),
+    );
+    match &plan.product.readback {
+        Readback::Program { argument, shape } => bound.push_str(&format!(
+            "version_argument={}\nversion_shape={}\n",
+            shlex_quote(argument),
+            shlex_quote(shape.as_str()),
+        )),
+        Readback::JsonFile { path, .. } => bound.push_str(&format!(
+            "version_path={}\nversion_member={}\npreserve={}\n",
+            shlex_quote(path),
+            shlex_quote(plan.product.readback.member().unwrap_or_default()),
+            // One newline-delimited binding rather than a word list: a path
+            // list split on IFS is a path list split on spaces too.
+            shlex_quote(&plan.product.install.preserve().join("\n")),
+        )),
+    }
+    bound
 }
 
 /// The read-only probe program for one plan.
 pub fn probe_script(plan: &ReleasePlan) -> String {
-    format!("{}{SANITIZE_PRELUDE}{REMOTE_PROBE_BODY}", bindings(plan))
+    match &plan.product.install {
+        Install::Program { .. } => {
+            format!("{}{SANITIZE_PRELUDE}{REMOTE_PROBE_BODY}", bindings(plan))
+        }
+        Install::Tree { .. } => format!(
+            "{}{SANITIZE_PRELUDE}{TREE_PRELUDE}{TREE_PROBE_BODY}",
+            bindings(plan)
+        ),
+    }
 }
 
 /// The fetch-verify-stage program for one plan.
 pub fn stage_script(plan: &ReleasePlan) -> String {
-    format!("{}{SANITIZE_PRELUDE}{REMOTE_STAGE_BODY}", bindings(plan))
+    match &plan.product.install {
+        Install::Program { .. } => {
+            format!("{}{SANITIZE_PRELUDE}{REMOTE_STAGE_BODY}", bindings(plan))
+        }
+        Install::Tree { .. } => format!(
+            "{}{SANITIZE_PRELUDE}{TREE_PRELUDE}{TREE_STAGE_BODY}",
+            bindings(plan)
+        ),
+    }
 }
 
 /// The activation program for one plan.
 pub fn activate_script(plan: &ReleasePlan) -> String {
-    format!("{}{SANITIZE_PRELUDE}{REMOTE_ACTIVATE_BODY}", bindings(plan))
+    match &plan.product.install {
+        Install::Program { .. } => {
+            format!("{}{SANITIZE_PRELUDE}{REMOTE_ACTIVATE_BODY}", bindings(plan))
+        }
+        Install::Tree { .. } => format!(
+            "{}{SANITIZE_PRELUDE}{TREE_PRELUDE}{TREE_ACTIVATE_BODY}",
+            bindings(plan)
+        ),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -762,6 +1092,18 @@ pub fn marker<'a>(markers: &'a [(String, String)], key: &str) -> &'a str {
         .iter()
         .find(|(name, _)| name == key)
         .map_or("", |(_, value)| value.as_str())
+}
+
+/// Every value one repeated marker carried, in the order the host emitted
+/// them. A tree probe names one path per marker, and a path list is exactly
+/// the kind of value that must not be flattened into one field: `say` caps
+/// each field at 200 characters, so a joined list would be a truncated list.
+pub fn marker_values<'a>(markers: &'a [(String, String)], key: &str) -> Vec<&'a str> {
+    markers
+        .iter()
+        .filter(|(name, _)| name == key)
+        .map(|(_, value)| value.as_str())
+        .collect()
 }
 
 /// What went wrong in a program that did not finish.
@@ -799,30 +1141,53 @@ fn fail(report: &mut Map<String, Value>, exit_code: i32, error: String) -> Value
     Value::Object(std::mem::take(report))
 }
 
-/// The registry-declared unit that runs this binary on this host, if the
-/// registry declares one.
+/// The unit that runs this product on this host, if one is declared.
 ///
-/// The label is built with [`local_install::label`], the same function the
-/// installer names the unit with, and then has to be FOUND in
-/// [`service::declared_services`]. Both halves matter: deriving the label
-/// keeps it from drifting, and requiring the declaration keeps this command
-/// from restarting a unit nobody said existed.
+/// Two declarations can name it, and both are declarations rather than
+/// guesses. The registry's own service set wins whenever it carries the
+/// label: an operator who adopted the unit stated where its file is, and that
+/// statement is newer than any shipped document. Otherwise the product
+/// declaration may LOCATE the unit itself — label, kind and unit file — and
+/// locating it is the statement that it exists. A product that declares only
+/// a label the registry does not carry has no resolvable unit, which is
+/// reported as such and never restarted: that is the rule this command has
+/// always had, that it does not restart a unit nobody said existed.
 pub fn declared_unit(
     target: &ComputeTarget,
-    managed: &ManagedBinary,
+    product: &Product,
 ) -> Option<service::ManagedService> {
-    let kind = managed.unit_kind?;
-    let label = local_install::label(kind, &target.name);
-    service::declared_services(target)
+    let unit = product.unit.as_ref()?;
+    let label = unit.label_for(&target.name);
+    if let Some(found) = service::declared_services(target)
         .into_iter()
         .find(|declared| declared.matches(&label))
+    {
+        return Some(found);
+    }
+    let path = unit.path_for(&target.name)?;
+    match unit.kind.as_deref()? {
+        products::UNIT_SYSTEMD => Some(service::systemd_service(
+            &target.name,
+            &label,
+            &path,
+            service::SOURCE_PRODUCT,
+            "",
+        )),
+        _ => Some(service::launchd_service(
+            &target.name,
+            &label,
+            &path,
+            service::SOURCE_PRODUCT,
+            "",
+        )),
+    }
 }
 
 // ---------------------------------------------------------------------------
 // The command
 // ---------------------------------------------------------------------------
 
-/// Deliver one managed binary to one already-resolved registry target.
+/// Deliver one declared product to one already-resolved registry target.
 ///
 /// Split out from [`release_host`] so the whole command — every refusal,
 /// every phase, and the order the phases run in — is exercisable through the
@@ -836,7 +1201,7 @@ pub async fn release_target(
 
     let mut report = host_channel::base_report(target);
     report.insert("source_commit".to_string(), json!(plan.source_commit));
-    report.insert("binary".to_string(), json!(plan.managed.name));
+    report.insert("binary".to_string(), json!(plan.product.name));
     report.insert("version".to_string(), json!(plan.version));
     report.insert("platform".to_string(), json!(plan.platform));
     report.insert("declared_version".to_string(), json!(plan.declared_version));
@@ -844,8 +1209,13 @@ pub async fn release_target(
     report.insert("sha256".to_string(), json!(plan.sha256));
     report.insert("staged_path".to_string(), json!(plan.staged_path()));
     report.insert("active_path".to_string(), json!(plan.active_path()));
+    report.insert("install_root".to_string(), json!(plan.product.root()));
+    report.insert(
+        "preserved_paths".to_string(),
+        json!(plan.preserved_paths()),
+    );
     report.insert("dry_run".to_string(), json!(plan.dry_run));
-    let unit = declared_unit(target, plan.managed);
+    let unit = declared_unit(target, plan.product);
     report.insert(
         "unit".to_string(),
         unit.as_ref()
@@ -879,6 +1249,21 @@ pub async fn release_target(
         "staged_state".to_string(),
         json!(marker(&probe_markers, "staged_state")),
     );
+    // What the install root holds now, for a tree: the code a delivery
+    // replaces and the host-local state it does not. Empty for a program,
+    // which has neither.
+    let code_paths: Vec<String> = marker_values(&probe_markers, "code_path")
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    if plan.product.install.is_tree() {
+        report.insert("root_state".to_string(), json!(marker(&probe_markers, "root_state")));
+        report.insert("code_paths".to_string(), json!(code_paths));
+        report.insert(
+            "preserved_paths_present".to_string(),
+            json!(marker_values(&probe_markers, "preserved_path")),
+        );
+    }
     steps.push(step_entry("probe", "ok", None));
 
     // A sanitizer that failed its own probe means every string above is
@@ -919,7 +1304,7 @@ pub async fn release_target(
     if plan.dry_run {
         report.insert(
             "planned_steps".to_string(),
-            json!(planned_steps(&plan, unit.as_ref())),
+            json!(planned_steps(&plan, unit.as_ref(), &code_paths)),
         );
         report.insert("steps".to_string(), json!(steps));
         report.insert("exit_code".to_string(), json!(probe.code));
@@ -927,7 +1312,7 @@ pub async fn release_target(
         return Ok(Value::Object(report));
     }
 
-    // Phase two: fetch, verify, stage. Still nothing in $HOME/.stado/bin.
+    // Phase two: fetch, verify, stage. Still nothing in the install root.
     let stage = host_channel::run_script(target, &stage_script(&plan), runner).await?;
     let stage_markers = markers(&stage.stdout);
     report.insert(
@@ -962,6 +1347,15 @@ pub async fn release_target(
         return Ok(fail(&mut report, activate.code, detail));
     }
     steps.push(step_entry("activate", "ok", None));
+    if plan.product.install.is_tree() {
+        // The paths this delivery actually replaced, as the host named them
+        // one by one. An operator asking what a tree delivery touched gets
+        // the answer from the program that did it.
+        report.insert(
+            "replaced_paths".to_string(),
+            json!(marker_values(&activate_markers, "replaced")),
+        );
+    }
 
     // Phase four: restart whatever the registry says runs it.
     match &unit {
@@ -989,7 +1383,7 @@ pub async fn release_target(
             "no_declared_unit",
             Some(format!(
                 "the registry declares no unit running {} on {}",
-                plan.managed.name, target.name
+                plan.product.name, target.name
             )),
         )),
     }
@@ -1001,7 +1395,20 @@ pub async fn release_target(
 }
 
 /// What a `--dry-run` says it would do, in the order it would do it.
-fn planned_steps(plan: &ReleasePlan, unit: Option<&service::ManagedService>) -> Vec<String> {
+///
+/// `code_paths` is what the read-only probe found in the install root of a
+/// tree, so the paths this promises to replace and the paths it promises to
+/// keep are the paths that are actually there — not a guess made on the
+/// control plane about a host nobody looked at.
+fn planned_steps(
+    plan: &ReleasePlan,
+    unit: Option<&service::ManagedService>,
+    code_paths: &[String],
+) -> Vec<String> {
+    let readback = match &plan.product.readback {
+        Readback::Program { .. } => String::new(),
+        Readback::JsonFile { path, pointer } => format!(" in {path} {pointer}"),
+    };
     let mut steps = vec![
         format!(
             "fetch {} through {}/api/release/object",
@@ -1013,33 +1420,58 @@ fn planned_steps(plan: &ReleasePlan, unit: Option<&service::ManagedService>) -> 
             plan.sha256
         ),
         format!(
-            "extract {} and verify it declares {}",
-            plan.managed.name, plan.version
+            "extract {} and verify it declares {}{readback}",
+            plan.product.source.member, plan.version
         ),
         format!("stage it at {}", plan.staged_path()),
-        format!(
+    ];
+    match &plan.product.install {
+        Install::Program { .. } => steps.push(format!(
             "re-check the staged version and atomically repoint {}",
             plan.active_path()
-        ),
-    ];
+        )),
+        Install::Tree { root, .. } => {
+            steps.push(format!(
+                "re-check the staged version and replace the code under {root}, one rename each, \
+                 retiring what it replaces: {}",
+                if code_paths.is_empty() {
+                    "nothing is installed there yet".to_string()
+                } else {
+                    code_paths.join(", ")
+                }
+            ));
+            steps.push(format!(
+                "preserve untouched, never moved and never named as a destination: {}",
+                plan.preserved_paths().join(", ")
+            ));
+        }
+    }
     steps.push(match unit {
         Some(declared) => format!("restart {}", declared.unit_id()),
         None => format!(
             "no restart: the registry declares no unit running {}",
-            plan.managed.name
+            plan.product.name
         ),
     });
     steps
 }
 
+/// The immutable identity the canonical release manifest states for one
+/// declared product at one coordinate: its source commit and the archive
+/// digest a host must reproduce.
+///
+/// The manifest is the only source of both. A product whose declared version
+/// was never published has no manifest, and this is where that is refused —
+/// on the control plane, before a host is contacted, for a dry run exactly as
+/// for a delivery.
 pub(crate) async fn catalog_identity(
-    managed: &ManagedBinary,
+    product: &Product,
     version: &str,
     platform: &str,
 ) -> Result<(String, String), DeployError> {
     let manifest_uri = format!(
         "stado://releases/{}/{version}/{platform}/release-manifest-{platform}.json",
-        managed.product
+        product.source.product
     );
     let bytes = crate::cli::storage::fetch_object(&manifest_uri)
         .await
@@ -1078,7 +1510,7 @@ pub(crate) async fn catalog_identity(
             )))
         }
     };
-    exact("product", managed.product)?;
+    exact("product", &product.source.product)?;
     exact("version", version)?;
     exact("platform", platform)?;
     let source_commit = manifest
@@ -1094,7 +1526,7 @@ pub(crate) async fn catalog_identity(
     if !is_sha256(&sha256) {
         return Err(DeployError(format!(
             "canonical release manifest has no valid SHA-256 for {}",
-            managed.name
+            product.name
         )));
     }
     if !matches!(source_commit.len(), 40 | 64)
@@ -1107,7 +1539,7 @@ pub(crate) async fn catalog_identity(
     Ok((source_commit, sha256))
 }
 
-/// Deliver one managed binary to one canonical registry host.
+/// Deliver one declared product to one canonical registry host.
 pub async fn release_host(
     target_name: &str,
     binary: &str,
@@ -1115,7 +1547,7 @@ pub async fn release_host(
     dry_run: bool,
     runner: &Runner,
 ) -> Result<Value, DeployError> {
-    let managed = managed_binary(binary)?;
+    let product = products::product(binary)?;
     if !is_exact_semver(version) {
         return Err(DeployError(format!(
             "{version:?} is not an exact version; --version takes a semantic version such as \
@@ -1123,12 +1555,13 @@ pub async fn release_host(
         )));
     }
     let target = host_channel::canonical_target(target_name).await?;
-    let platform = managed_platform(&target.release_platform)?;
+    let platform = products::managed_platform(&target.release_platform)?;
+    product.platform(platform)?;
     let release_api = crate::cli::storage::release_api_origin()
         .map_err(|error| DeployError(error.to_string()))?;
-    let (source_commit, sha256) = catalog_identity(managed, version, platform).await?;
+    let (source_commit, sha256) = catalog_identity(product, version, platform).await?;
     let request = ReleaseRequest {
-        binary: managed.name.to_string(),
+        binary: product.name.clone(),
         version: version.to_string(),
         platform: platform.to_string(),
         source_commit,
@@ -1153,31 +1586,24 @@ mod tests {
     const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     const OTHER_DIGEST: &str = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
 
+    /// The mini, built from a registry document rather than a struct
+    /// literal: the document is what the registry actually carries, and a
+    /// fixture that has to be edited every time a target gains a field
+    /// stops being a fixture.
     fn target_with(declared: &[(&str, &str)]) -> ComputeTarget {
-        ComputeTarget {
-            name: "control-host".to_string(),
-            kind: "local".to_string(),
-            gpu_type: None,
-            slots: 1,
-            ssh: Some("charles@control-host.local".to_string()),
-            region: None,
-            spot: false,
-            max_concurrent: None,
-            team_id: None,
-            notes: String::new(),
-            hostnames: vec!["control-host.local".to_string()],
-            weles: None,
-            disk_cleanup: None,
-            env_overrides: Default::default(),
-            agent_args: Vec::new(),
-            vram_gb: None,
-            pinned_only: false,
-            managed_versions: declared
-                .iter()
-                .map(|(name, version)| ((*name).to_string(), (*version).to_string()))
-                .collect(),
-            extra: Default::default(),
-        }
+        let versions: Map<String, Value> = declared
+            .iter()
+            .map(|(name, version)| ((*name).to_string(), json!(version)))
+            .collect();
+        serde_json::from_value(json!({
+            "name": "control-host",
+            "kind": "local",
+            "ssh": "charles@control-host.local",
+            "release_platform": "darwin-arm64",
+            "hostnames": ["control-host.local"],
+            "managed_versions": versions,
+        }))
+        .expect("registry target")
     }
 
     /// The mini as the registry describes it once it declares stado 0.5.1.
@@ -1190,6 +1616,7 @@ mod tests {
             binary: "stado".to_string(),
             version: "0.5.1".to_string(),
             platform: "darwin-arm64".to_string(),
+            source_commit: "151ce0f907cc1e7b22a2c4e7356a4251444f4d42".to_string(),
             sha256: DIGEST.to_string(),
             release_api: "https://releases.example".to_string(),
             dry_run: false,
@@ -1285,25 +1712,6 @@ mod tests {
     // -----------------------------------------------------------------
     // Refusals made before a host is touched
     // -----------------------------------------------------------------
-
-    #[test]
-    fn an_unmanaged_binary_is_refused_with_the_allowlist() {
-        let error = managed_binary("bash").unwrap_err();
-        assert!(
-            error
-                .0
-                .starts_with("\"bash\" is not a stado-managed binary"),
-            "{}",
-            error.0
-        );
-        // The refusal has to be usable: it names what IS deliverable.
-        assert!(error.0.contains("stado —"), "{}", error.0);
-        assert!(error.0.contains("skarbiec —"), "{}", error.0);
-        // A name that merely contains a managed one is not a managed one.
-        assert!(managed_binary("stado-fix").is_err());
-        assert!(managed_binary("../../bin/stado").is_err());
-        assert_eq!(managed_binary("stado").unwrap().product, "stado");
-    }
 
     #[tokio::test]
     async fn an_unmanaged_binary_never_reaches_the_host() {
@@ -1480,13 +1888,14 @@ mod tests {
     }
 
     /// The same host once the registry declares the LaunchAgent that runs
-    /// the binary. The unit is not named by this command: the label is built
-    /// with the installer's own [`local_install::label`] and then has to be
-    /// found in the registry's declared service set.
+    /// the binary. `stado` declares the label and not the unit file, so the
+    /// label still has to be FOUND in the registry's declared service set —
+    /// and the declared label is the one
+    /// [`crate::deploy::local_install::label`] builds.
     #[tokio::test]
     async fn a_registry_declared_unit_is_restarted_last() {
         let mut target = target();
-        let label = local_install::label("agent", &target.name);
+        let label = crate::deploy::local_install::label("agent", &target.name);
         target.extra.insert(
             service::SERVICES_KEY.to_string(),
             json!([{
@@ -1523,7 +1932,7 @@ mod tests {
     #[tokio::test]
     async fn a_refused_restart_fails_loudly_and_admits_the_binary_is_active() {
         let mut target = target();
-        let label = local_install::label("agent", &target.name);
+        let label = crate::deploy::local_install::label("agent", &target.name);
         target.extra.insert(
             service::SERVICES_KEY.to_string(),
             json!([{
@@ -1905,10 +2314,11 @@ mod tests {
     #[test]
     fn every_program_carries_the_sanitizer_and_its_self_test() {
         let plan = ReleasePlan {
-            managed: managed_binary("skarbiec").unwrap(),
+            product: products::product("skarbiec").expect("a declared product"),
             version: "0.1.3".to_string(),
             platform: "darwin-arm64".to_string(),
             sha256: DIGEST.to_string(),
+            source_commit: "151ce0f907cc1e7b22a2c4e7356a4251444f4d42".to_string(),
             release_api: "https://releases.example".to_string(),
             declared_version: "0.1.3".to_string(),
             dry_run: false,
@@ -1991,23 +2401,37 @@ mod tests {
         let plan = plan(&target(), &request()).unwrap();
         assert_eq!(
             plan.release_uri(),
-            "stado://releases/stado/0.5.1/darwin-arm64/stado"
+            "stado://releases/stado/0.5.1/darwin-arm64/stado-v0.5.1-darwin-arm64.tar.gz"
         );
         assert_eq!(
             plan.staged_path(),
             "$HOME/.stado/releases/stado/0.5.1/darwin-arm64/stado"
         );
         assert_eq!(plan.active_path(), "$HOME/.stado/bin/stado");
+        // A program product has no host-local state beside it, so a delivery
+        // preserves nothing and says so.
+        assert!(plan.preserved_paths().is_empty());
     }
 
+    /// A platform is refused when the fleet does not publish for it at all,
+    /// and — separately — when the requested product does not.
     #[test]
     fn an_unpublished_platform_is_refused() {
-        assert!(managed_platform("darwin-arm64").is_ok());
-        assert!(managed_platform("darwin-amd64").is_err());
-        assert!(managed_platform("../linux-amd64").is_err());
+        let mut unpublished = request();
+        unpublished.platform = "win32".to_string();
+        assert!(plan(&target(), &unpublished).is_err());
+
+        let mut linux = target_with(&[("weles-worker", "0.5.1")]);
+        linux.release_platform = "linux-amd64".to_string();
         let mut request = request();
-        request.platform = "win32".to_string();
-        assert!(plan(&target(), &request).is_err());
+        request.binary = "weles-worker".to_string();
+        request.platform = "linux-amd64".to_string();
+        let error = plan(&linux, &request).unwrap_err();
+        assert!(
+            error.0.contains("publishes no linux-amd64 release"),
+            "{}",
+            error.0
+        );
     }
 
     #[test]

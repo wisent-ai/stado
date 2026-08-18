@@ -76,7 +76,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use super::host_channel;
-use super::{DeployError, Runner};
+use super::products;
+use super::{shlex_quote, DeployError, Runner};
 use crate::targets::{ComputeTarget, ServiceDirectory};
 
 /// `status` for an inventory that was collected. Whether it found drift is
@@ -186,14 +187,16 @@ pub const VAULT_REFUSED_SYMLINK: &str = "refused_symlink";
 /// A vault path that exists and is neither a symlink nor a regular file.
 pub const VAULT_REFUSED_NOT_REGULAR: &str = "refused_not_regular";
 
-/// The fixed remote program.
+/// The remote program.
 ///
-/// Nothing is interpolated into it — it is a `&'static str`, not a
-/// `format!`, so there is no operator input to escape. Every expansion is
-/// quoted, every value passes through `sanitize`, and every external
-/// program is named by absolute path the way the recovery and
-/// GUI-automation scripts name theirs.
-pub const REMOTE_INVENTORY_SCRIPT: &str = r##"set -eu
+/// Nothing an operator says is interpolated into it. The one value bound in
+/// front of it is the declared program set
+/// ([`crate::deploy::products::installed_programs`]), which
+/// [`remote_inventory_script`] quotes as a single newline-delimited
+/// assignment; every expansion below is quoted, every value passes through
+/// `sanitize`, and every external program is named by absolute path the way
+/// the recovery and GUI-automation scripts name theirs.
+pub const REMOTE_INVENTORY_BODY: &str = r##"set -eu
 LC_ALL=C
 export LC_ALL
 
@@ -311,8 +314,9 @@ printf '{"release_platform":"%s","forwards_dir_state":"%s","managed_binaries":['
   "$release_platform" "$forwards_dir_state"
 
 separator=""
-for binary_name in stado skarbiec; do
-  binary_path="$bin_dir/$binary_name"
+while IFS='	' read -r binary_name binary_root version_argument version_shape; do
+  [ -n "$binary_name" ] || continue
+  binary_path="$HOME/$binary_root/$binary_name"
   state=missing
   regular=false
   executable=false
@@ -329,15 +333,11 @@ for binary_name in stado skarbiec; do
     if [ -x "$binary_path" ]; then
       executable=true
       # `stado --version` answers in one plain line; `skarbiec version`
-      # answers with a JSON object whose `version` member is the build. Both
-      # answers are read according to their shape, because taking line one
+      # answers with a JSON object whose `version` member is the build. Which
+      # question to ask, and which shape the answer has, are declared per
+      # product rather than decided by this program: taking line one
       # unconditionally reported `{` for skarbiec, which the sanitizer then
-      # correctly reduced to `?`. A brace is not a version.
-      if [ "$binary_name" = stado ]; then
-        version_argument=--version
-      else
-        version_argument=version
-      fi
+      # correctly reduced to `?`, and a brace is not a version.
       if version_output=$("$binary_path" "$version_argument" 2>/dev/null); then
         version_rc=0
       else
@@ -351,8 +351,8 @@ for binary_name in stado skarbiec; do
       elif [ -z "$version_output" ]; then
         version_state=version_empty
       else
-        case "$version_output" in
-          '{'*)
+        case "$version_shape" in
+          json)
             case "$version_output" in
               *'"version"'*)
                 version_rest=${version_output#*'"version"'}
@@ -401,7 +401,9 @@ for binary_name in stado skarbiec; do
   printf '%s{"name":"%s","state":"%s","regular_file":%s,"executable":%s,"version_state":"%s","version":"%s"}' \
     "$separator" "$binary_name" "$state" "$regular" "$executable" "$version_state" "$sanitized"
   separator=,
-done
+done <<EOF
+$managed_programs
+EOF
 
 printf '],"forwards":['
 separator=""
@@ -634,7 +636,31 @@ printf '],"vault_sidecars_seen":%d,"sanitizer_state":"%s"}\n' \
   "$sidecars_seen" "$sanitizer_state"
 "##;
 
-/// One of the two stado-managed binaries under `$HOME/.stado/bin`.
+/// The remote program, bound to the program products this fleet declares.
+///
+/// The loop that reads `$HOME/.stado/bin` used to spell `for binary_name in
+/// stado skarbiec` into the program text, and to ask `[ "$binary_name" =
+/// stado ]` which version argument to send. Both facts are declared
+/// ([`crate::deploy::products`]), and both are now read from one quoted
+/// tab-separated binding, so the command that REPORTS what a host runs and
+/// the command that DELIVERS it cannot disagree about which programs exist or
+/// how to ask one its version.
+pub fn remote_inventory_script() -> Result<String, DeployError> {
+    let mut rows = String::new();
+    for (name, root, argument, shape) in products::installed_programs()? {
+        // The root is `$HOME`-relative in the declaration and stays that way
+        // on the wire: only the host knows what `$HOME` is, and expanding it
+        // here would bind one host's answer into every host's program.
+        let relative = root.strip_prefix("$HOME/").unwrap_or(root);
+        rows.push_str(&format!("{name}\t{relative}\t{argument}\t{shape}\n"));
+    }
+    Ok(format!(
+        "managed_programs={}\n{REMOTE_INVENTORY_BODY}",
+        shlex_quote(rows.trim_end())
+    ))
+}
+
+/// One declared program product under its install root.
 ///
 /// `version_state` is always an explicit word — `reported`, `missing`,
 /// `not_executable`, `version_failed`, `version_empty`,
@@ -882,8 +908,9 @@ pub fn verdict(
 
 /// The bare version number inside one [`ManagedBinary::version`] field.
 ///
-/// The two managed binaries answer in two shapes, and this function knows
-/// both of them BY NAME rather than sniffing for one:
+/// A declared program answers in the shape its declaration names, and this
+/// function reduces either shape to the bare coordinate BY NAME rather than
+/// sniffing for one:
 ///
 /// - `stado --version` prints `stado 0.5.1`, so the binary's own name
 ///   followed by whitespace is the one prefix that is ever removed;
@@ -1197,7 +1224,7 @@ pub async fn inventory_target(
     directory: Option<&ServiceDirectory>,
     runner: &Runner,
 ) -> Result<Value, DeployError> {
-    let output = host_channel::run_script(target, REMOTE_INVENTORY_SCRIPT, runner).await?;
+    let output = host_channel::run_script(target, &remote_inventory_script()?, runner).await?;
     let parsed = parse_inventory(&output.stdout);
     let mut report = match &parsed {
         Ok(inventory) => to_report(target, directory, inventory),
@@ -1242,28 +1269,19 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
 
+    /// The mini, built from a registry document rather than a struct
+    /// literal: the document is what the registry carries, and a fixture
+    /// that has to be edited every time a target gains a field stops being
+    /// a fixture.
     fn target() -> ComputeTarget {
-        ComputeTarget {
-            name: "control-host".to_string(),
-            kind: "local".to_string(),
-            gpu_type: None,
-            slots: 1,
-            ssh: Some("charles@control-host.local".to_string()),
-            region: None,
-            spot: false,
-            max_concurrent: None,
-            team_id: None,
-            notes: String::new(),
-            hostnames: vec!["control-host.local".to_string()],
-            weles: None,
-            disk_cleanup: None,
-            env_overrides: Default::default(),
-            agent_args: Vec::new(),
-            vram_gb: None,
-            pinned_only: false,
-            managed_versions: Default::default(),
-            extra: Default::default(),
-        }
+        serde_json::from_value(json!({
+            "name": "control-host",
+            "kind": "local",
+            "ssh": "charles@control-host.local",
+            "release_platform": "darwin-arm64",
+            "hostnames": ["control-host.local"],
+        }))
+        .expect("registry target")
     }
 
     /// The incident's own shape: a marker naming 8766 while the listener is
@@ -1352,9 +1370,13 @@ mod tests {
         runner_fn(move |spec| {
             let stdout = stdout.clone();
             async move {
-                // The command rides the shared channel with the fixed script
-                // on stdin, exactly as `host forward-local` marks its endpoint.
-                assert_eq!(spec.stdin.as_deref(), Some(REMOTE_INVENTORY_SCRIPT));
+                // The command rides the shared channel with the declared
+                // program set bound in front of the fixed script, exactly as
+                // `host forward-local` marks its endpoint.
+                assert_eq!(
+                    spec.stdin.as_deref(),
+                    Some(remote_inventory_script().expect("declared products").as_str())
+                );
                 Ok(CommandOutput {
                     code: 0,
                     stdout,
@@ -1604,7 +1626,9 @@ mod tests {
                     )
                 })
                 .collect(),
+            standby: Default::default(),
             consumers: Default::default(),
+            verify: None,
             extra: Default::default(),
         };
         ServiceDirectory {
@@ -2327,7 +2351,7 @@ mod tests {
     async fn scratch_stdout(home: &Path) -> String {
         host_channel::run_script(
             &target(),
-            REMOTE_INVENTORY_SCRIPT,
+            &remote_inventory_script().expect("declared products"),
             &scratch_home_runner(home.to_path_buf()),
         )
         .await

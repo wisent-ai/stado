@@ -576,14 +576,45 @@ What it deliberately does not show, and why:
 
 The command the section above ends by pointing at, and the only thing in the
 pack that owns "get this build onto that host". `managed_versions` is the
-declaration, `host inventory` is the visibility, and this is the delivery.
-It does not decide anything: `host inventory` says a host is behind, and
-this closes the gap by carrying out exactly what the registry already
-declares.
+declaration of WHICH version, `stado-rs/data/products.json` is the
+declaration of WHAT each product is, `host inventory` is the visibility, and
+this is the delivery. It does not decide anything: `host inventory` says a
+host is behind, and this closes the gap by carrying out exactly what the two
+declarations already say.
 
 ```
 stado host release TARGET --binary NAME --version X.Y.Z [--dry-run] [--json]
 ```
+
+`--binary` names a declared product, and there is no hardcoded list of them
+anywhere: `stado`, `skarbiec` and `weles-worker` are three entries in
+`stado-rs/data/products.json`, which ships inside the binary that performs the
+delivery. One entry names the artefact source (the `stado://releases/<product>`
+segment and the exact archive member), the platform keys it is published for,
+the install root on the host, the owning unit label when one exists, and how
+the installed version is read back. Every field is required; a declaration
+that omits one is refused when it is first read, so a half-declaration fails
+every delivery identically instead of the ones whose code path happens to
+look. A product publishes for the platforms it declares — `weles-worker`
+publishes `darwin-arm64` only, and a delivery to a Linux host is refused on
+the control plane rather than by a 404 on the box.
+
+Two install shapes, because the fleet has two:
+
+- **program** (`stado`, `skarbiec`) — one executable member, installed at
+  `$HOME/.stado/bin/<name>` by one `rename(2)`, version read back by running
+  it (`--version` in one plain line, or a `version` subcommand printing a JSON
+  object).
+- **tree** (`weles-worker`) — the install root IS the artefact directory
+  (`$HOME/weles`). The declared payload member is unpacked into a versioned
+  staging tree, and activation replaces every path the verified artefact
+  carries, one rename each, retiring the path it replaces. The declared
+  host-local paths — `recordings`, `var`, `.work`, state no release produced —
+  are never named as a destination, never moved, and never removed; an
+  artefact that carries one of them is refused at staging AND again at
+  activation. The version is read back from a declared file inside the tree
+  (`package.json` `/version`, the field the release itself is numbered from),
+  and the delivered tree is asked again after activation.
 
 The order of operations is the design, and it is Weles's shipped auto-deploy
 order (`weles/scripts/worker/deploy/README.md`) applied to one binary:
@@ -592,10 +623,13 @@ order (`weles/scripts/worker/deploy/README.md`) applied to one binary:
    declares, whether the coordinate is already staged. Writes nothing.
 2. **stage** — read `release-manifest-<platform>.json` through the canonical
    Stado API, fetch the adjacent product archive, verify its SHA-256, extract
-   the fixed root member, confirm that binary declares the requested version,
-   and publish it into `$HOME/.stado/releases/<binary>/<version>/<platform>/`.
-3. **activate** — re-check the staged version, hard-link it beside the live
-   binary and `rename(2)` it over `$HOME/.stado/bin/<binary>`.
+   the declared archive member, confirm the artefact declares the requested
+   version, and publish it into
+   `$HOME/.stado/releases/<product>/<version>/<platform>/`.
+3. **activate** — re-check the staged version, then either hard-link the
+   program beside the live one and `rename(2)` it over
+   `$HOME/.stado/bin/<binary>`, or replace the tree's code path by path under
+   its install root while the preserved paths stay exactly where they are.
 4. **restart** — restart the unit the registry declares runs it, through the
    same program `stado service restart` uses.
 
@@ -608,7 +642,8 @@ version untouched. `active_version_unchanged: true` says so in the report.
 
 | Refusal | Why |
 |---|---|
-| `--binary` not in the compile-time table (`stado`, `skarbiec`) | The operator's word selects a fixed entry and never becomes a path or a URI segment — `host exec`'s rule. A refusal prints the list. |
+| `--binary` names no declared product | The operator's word selects a declared entry and never becomes a path or a URI segment — `host exec`'s rule. A refusal prints every deliverable product and what runs it. |
+| The product declares no artefact for this platform | Publication is per product: a coordinate nobody published cannot be fetched, and saying so costs no ssh connection. |
 | `--version` is not an exact semantic version | A coordinate is immutable. `latest` is a legal path segment, which is exactly why nothing here resolves an alias, a channel or a range. `+build` is refused too: it is not a canonical coordinate segment. |
 | Missing or mismatched `release_platform` | Enrollment records the platform and inventory confirms it from the remote kernel before delivery. |
 | Missing, malformed, or mismatched release manifest | The canonical catalog is the only digest source; delivery fails closed. |
@@ -638,9 +673,14 @@ What it deliberately does not do:
 - **No rollback**, because there is nothing to roll back from: every failure
   happens before activation. Rolling back is `host release` naming the
   previous version, which is why the versioned staging tree is kept.
-- **No invented unit.** A binary with no registry-declared unit — `skarbiec`,
-  a CLI rather than a daemon — is activated and reported as having no unit,
-  never as "restarted".
+- **No invented unit.** A product declares a unit label alone, which must be
+  FOUND in the registry's declared service set before anything restarts it, or
+  a label together with the unit file that runs it, which is itself the
+  statement that the unit exists. A product with no declared unit —
+  `skarbiec`, a CLI rather than a daemon — is activated and reported as having
+  no unit, never as "restarted".
+- **No host-local state in a delivery.** A tree delivery replaces code. The
+  preserved paths are declared, printed by `--dry-run`, and left untouched.
 - **No symlink at `$HOME/.stado/bin/<binary>`.** The active path stays a
   regular file, hard-linked to the staged inode, because `host inventory`
   refuses to read through a symlink and would otherwise report the active
@@ -1350,7 +1390,7 @@ proof.
 **re-reads** the installed versions through the helper. A delivery that reports
 `released` has testified about its own work; the exit code of this command is
 decided by what the host says afterwards. There is no second delivery path: a
-binary outside `host release`'s compile-time table is reported as
+binary the product declaration does not carry is reported as
 undeliverable, never attempted, and `unknown` rows are never delivered to —
 delivery ends in a unit restart, and restarting a working service because a
 report was missing is how a healthy host goes down.
