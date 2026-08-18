@@ -59,6 +59,30 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
 
 ### Onboarding platform
 
+- Made the one-line `invite` mode publishable without publishing the operator
+  plane with it. `stado dashboard --enrollment-only` runs a listener that
+  serves exactly `GET /join.sh`, `GET /api/fleet/invite/key` and
+  `POST /api/fleet/join`; every other path and every other method on those
+  paths answers `404` with one mute body, decided before the Host guard,
+  before any authorization, and before the object store or the credential
+  store is touched. That is an allowlist rather than a list of surfaces to
+  hide, so a route added later is unreachable in this mode until somebody
+  names it — the reverse of the failure where a new route is published by
+  default and nobody notices. Pointing a tunnel at the full dashboard would
+  have published `POST /api/operator/run`, which executes catalog `stado`
+  commands for any caller the loopback bind makes trusted; this mode cannot
+  reach it. The narrow listener also starts none of what the refused routes
+  need: no Skarbiec boundary verifiers, so it runs where no vault does, and no
+  queue-refresh loop. Its startup log names the three served pairs, since that
+  is what the operator is about to expose.
+- Added `enrollment.url` (`STADO_ENROLLMENT_URL`), the origin `stado fleet
+  invite` probes and prints its one line from. It is empty by default and
+  falls back to `api.url`, so an unconfigured deployment behaves exactly as
+  before and both empty still reports `not_configured`. It is a separate key
+  because `api.url` is the release and deployment endpoint that self-update,
+  remote bootstrap, cloud-agent dispatch and the coordinator resolve through:
+  repointing it at a narrow enrollment listener would break all of them.
+  `stado config show` reports it as `enrollment_url`.
 - Added product-scoped delivery for immutable onboarding bundles, sticky
   experiment assignment, canonical event collection, and attempt-state reads.
 - Added Stado Desktop's product-owned first-use journey and gated completion on

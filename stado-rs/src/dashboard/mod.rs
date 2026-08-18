@@ -28,6 +28,13 @@
 //! GET /healthz           - liveness (before auth, after the Host guard)
 //! GET /livez             - Cloud Run liveness alias
 //!
+//! `--enrollment-only` narrows this listener to exactly three of the routes
+//! above — `GET /join.sh`, `GET /api/fleet/invite/key`,
+//! `POST /api/fleet/join` — and answers 404 to every other path and method
+//! before authorization, the store or the vault is touched. That mode exists
+//! so the enrollment routes can be published through a tunnel without
+//! publishing `POST /api/operator/run` with them. See `ENROLLMENT_ROUTES`.
+//!
 //! The application plane was extracted into the private `wisent-backend`
 //! service; Stado keeps only the generic object plane. The product
 //! integrations (Stripe, Resend, SendGrid, GitHub, HuggingFace, captcha
@@ -143,6 +150,37 @@ struct OperatorAuthOverride {
     anon_key: String,
 }
 
+/// The exact (method, path) pairs `--enrollment-only` serves.
+///
+/// This is an ALLOWLIST, and it must stay one. A denylist of the operator
+/// surfaces (`/api/operator/run`, `/api/object`, `/api/state.json`, ...) goes
+/// stale the moment somebody adds a route: the new route is published by
+/// default, and the mistake is invisible until the wrong thing answers on a
+/// public tunnel. With an allowlist a new route is unreachable in this mode
+/// until it is named here on purpose, so forgetting fails closed.
+const ENROLLMENT_ROUTES: [(&str, &str); 3] = [
+    ("GET", "/join.sh"),
+    ("GET", "/api/fleet/invite/key"),
+    ("POST", "/api/fleet/join"),
+];
+
+/// The one body every refused request gets in `--enrollment-only` mode.
+///
+/// Uniform and mute on purpose: it names no route, no surface and no
+/// credential, so a caller cannot learn from a refusal that an operator plane
+/// exists elsewhere, nor tell "wrong method on a served path" from "path this
+/// listener has never heard of".
+const ENROLLMENT_REFUSAL: &[u8] = b"not found\n";
+
+/// Whether `method`+`path` is one of the three enrollment pairs. The query
+/// string is not part of the decision; the routes parse their own.
+fn enrollment_route_allowed(method: &str, path: &str) -> bool {
+    let path = path.split('?').next().unwrap_or("");
+    ENROLLMENT_ROUTES
+        .iter()
+        .any(|(allowed_method, allowed_path)| *allowed_method == method && *allowed_path == path)
+}
+
 #[derive(Clone)]
 pub struct Dashboard {
     store: JobStorage,
@@ -154,6 +192,9 @@ pub struct Dashboard {
     #[cfg(test)]
     operator_auth_override: Option<OperatorAuthOverride>,
     refresh_seconds: i64,
+    /// Serve only [`ENROLLMENT_ROUTES`]; every other request is refused
+    /// before authorization, before the store and before the vault.
+    enrollment_only: bool,
 }
 
 /// The Python `_CACHE_STATE` initial shape.
@@ -240,6 +281,7 @@ impl Dashboard {
             #[cfg(test)]
             operator_auth_override: None,
             refresh_seconds: config::dashboard_refresh_seconds(),
+            enrollment_only: false,
         }
     }
 
@@ -247,6 +289,14 @@ impl Dashboard {
     /// DASHBOARD_REFRESH_SECONDS to the refresher thread).
     pub fn with_refresh_seconds(mut self, seconds: i64) -> Self {
         self.refresh_seconds = seconds;
+        self
+    }
+
+    /// Serve only the enrollment routes (`stado dashboard
+    /// --enrollment-only`), so this listener can be published through a
+    /// tunnel without publishing anything else.
+    pub fn with_enrollment_only(mut self, enrollment_only: bool) -> Self {
+        self.enrollment_only = enrollment_only;
         self
     }
 
@@ -361,6 +411,36 @@ impl Dashboard {
             return Err(DashboardError::Other(format!(
                 "refusing plaintext dashboard bind on non-loopback address {local_addr}; terminate TLS in a loopback reverse proxy"
             )));
+        }
+        if self.enrollment_only {
+            // Nothing below this branch is started, because nothing below it
+            // is reachable in this mode:
+            //
+            // * the seven Skarbiec boundary verifiers only gate object,
+            //   release, machine, service, rate-limit and integration routes,
+            //   all of which are refused by the allowlist. Skipping them also
+            //   means this listener needs no vault at all, which is the point:
+            //   it can run where the operator plane cannot.
+            // * the refresh loop only fills the `/api/state.json` and `/`
+            //   snapshot, also refused. Left running it would download every
+            //   job blob on a timer for nobody.
+            //
+            // `boundaries` therefore stays all-false and `state` stays the
+            // initial shape; no served route reads either.
+            //
+            // This log is the operator's only confirmation of what they are
+            // about to publish, so it names every served pair verbatim.
+            eprintln!("[dashboard] enrollment-only listener on http://{local_addr}");
+            eprintln!(
+                "[dashboard] this listener serves ONLY the enrollment routes; every other path and method answers 404:"
+            );
+            for (method, path) in ENROLLMENT_ROUTES {
+                eprintln!("[dashboard]   {method} {path}");
+            }
+            eprintln!(
+                "[dashboard] no operator, object, machine, service, state or integration route is served here"
+            );
+            return self.serve_on(listener).await;
         }
         // Each boundary reads every item its policy names, and each read is a
         // gpg decryption in the broker. Seventeen object namespaces against a
@@ -522,6 +602,27 @@ impl Dashboard {
             return Ok(());
         };
         request.peer = peer;
+        // The mode gate is the FIRST thing that looks at the request, ahead of
+        // the object PUT preflight, ahead of the remainder of the body, ahead
+        // of every Host check and authorization, and ahead of any store or
+        // vault access. A refused request costs one method/path comparison and
+        // this listener never reads anything on its behalf; the rest of the
+        // declared body is deliberately left unread, since the connection
+        // closes anyway.
+        if self.enrollment_only && !enrollment_route_allowed(&request.method, &request.path) {
+            let response = Response::new(
+                http_status("404"),
+                "Not Found",
+                "text/plain; charset=utf-8",
+                ENROLLMENT_REFUSAL,
+            );
+            eprintln!(
+                "[dashboard] \"{} {} HTTP/1.1\" {} enrollment-only",
+                request.method, request.path, response.status
+            );
+            stream.write_all(&response.bytes).await?;
+            return stream.shutdown().await;
+        }
         let is_object_put = request.method == "PUT" && request.path.starts_with("/api/object?");
         if is_object_put {
             if let Some(response) = self.object_put_preflight(&request).await {
@@ -2011,7 +2112,14 @@ impl Dashboard {
 /// Python `serve(host=None, port=None)`: run the dashboard HTTP server.
 /// Blocks until killed. Defaults from `config::dashboard_bind()` /
 /// `config::dashboard_port()`; storage from `config::bucket()`.
-pub async fn serve(host: Option<&str>, port: Option<i64>) -> Result<(), DashboardError> {
+///
+/// `enrollment_only` narrows the listener to `ENROLLMENT_ROUTES` — the mode
+/// that is safe to publish through a tunnel.
+pub async fn serve(
+    host: Option<&str>,
+    port: Option<i64>,
+    enrollment_only: bool,
+) -> Result<(), DashboardError> {
     let host = host
         .map(str::to_string)
         .unwrap_or_else(|| config::dashboard_bind().to_string());
@@ -2019,7 +2127,10 @@ pub async fn serve(host: Option<&str>, port: Option<i64>) -> Result<(), Dashboar
     let port = u16::try_from(port)
         .map_err(|_| DashboardError::Other(format!("dashboard port out of range: {port}")))?;
     let store = JobStorage::new().await?;
-    Dashboard::new(store).serve_with(&host, port).await
+    Dashboard::new(store)
+        .with_enrollment_only(enrollment_only)
+        .serve_with(&host, port)
+        .await
 }
 
 // ---------------------------------------------------------------------------
