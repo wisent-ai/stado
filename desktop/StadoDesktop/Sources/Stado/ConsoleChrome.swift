@@ -20,6 +20,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
     case hosts
     case disk
     case registry
+    case releases
     case deployments
 
     var id: String { rawValue }
@@ -31,6 +32,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         case .hosts: "Hosts"
         case .disk: "Disk"
         case .registry: "Registry"
+        case .releases: "Releases"
         case .deployments: "Deployments"
         }
     }
@@ -42,6 +44,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         case .hosts: "server.rack"
         case .disk: "externaldrive"
         case .registry: "book.closed"
+        case .releases: "shippingbox"
         case .deployments: "point.3.connected.trianglepath.dotted"
         }
     }
@@ -53,6 +56,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         case .hosts: "Which hosts can take work, and why the others cannot"
         case .disk: "Disk pressure, what the last pass reclaimed, and the next pass"
         case .registry: "Canonical fleet policy and the generation it was read at"
+        case .releases: "What each product should run, what hosts observe, and why a pipeline run failed"
         case .deployments: "Which Stado backend this console reads, and who else may read it"
         }
     }
@@ -61,7 +65,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         switch self {
         case .posture, .queue: .work
         case .hosts, .disk: .fleet
-        case .registry, .deployments: .system
+        case .registry, .releases, .deployments: .system
         }
     }
 

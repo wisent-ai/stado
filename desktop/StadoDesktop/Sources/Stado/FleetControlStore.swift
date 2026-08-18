@@ -11,6 +11,10 @@ final class FleetControlStore: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var lastUpdated: Date?
     @Published private(set) var mutation: WisentMutationOutcome = .idle
+    @Published private(set) var releaseStatusOutput: String?
+    @Published private(set) var releaseStatusError: String?
+    @Published private(set) var isLoadingReleaseStatus = false
+    @Published private(set) var releaseStatusUpdated: Date?
 
     private let client: FleetControlClient
     private var addressString = ""
@@ -126,6 +130,37 @@ final class FleetControlStore: ObservableObject {
             mutation = result.ok ? .succeeded(result.message) : .failed(result.message)
         } catch {
             mutation = .failed(Self.describe(error))
+        }
+    }
+
+    /// `stado release status` through the dashboard's allowlisted command
+    /// bridge: desired vs observed per product target, then the newest
+    /// pipeline runs with their persisted failures. Read-only; the text is
+    /// shown verbatim so the GUI and the CLI read one source.
+    func refreshReleaseStatus() async {
+        guard !isLoadingReleaseStatus else { return }
+        guard let address else {
+            releaseStatusError = "No Stado endpoint is configured, so release state was not read."
+            return
+        }
+        isLoadingReleaseStatus = true
+        defer { isLoadingReleaseStatus = false }
+        do {
+            let result = try await client.run(
+                arguments: ["release", "status"],
+                confirmsMutation: false,
+                at: address,
+                authorizationToken: authorizationToken
+            )
+            if result.ok {
+                releaseStatusOutput = result.standardOutput
+                releaseStatusError = nil
+            } else {
+                releaseStatusError = result.message
+            }
+            releaseStatusUpdated = Date()
+        } catch {
+            releaseStatusError = Self.describe(error)
         }
     }
 
