@@ -496,7 +496,13 @@ pub fn scan_build_caches(
                     report.skip_builds("root_absent", 1);
                     return Ok(());
                 }
-                expanded
+                // Resolved, because the reserved roots below are named
+                // relative to the resolved home: a root spelled through a
+                // symlink (`/tmp/...` for `/private/tmp/...` on macOS) would
+                // otherwise compare unequal to a reserved path it contains,
+                // and the guard that keeps the janitor's own state dir alive
+                // would silently stop matching.
+                std::fs::canonicalize(&expanded)?
             }
             None => home.to_path_buf(),
         };
