@@ -118,6 +118,43 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   the `invite` method end to end from the operator's side, from `fleet invite`
   to `fleet approve` and `registry beacon-age` as the proof, indexed in the
   examples README.
+- Corrected the `invite` method's documentation, which described a path nobody
+  outside the tailnet could walk: it printed
+  `curl -fsSL https://stado.wisent.com/join.sh | sh -s -- <code>` as the
+  machine owner's whole part, while that name is in no DNS zone and the control
+  API listens on loopback only. The method is now documented as the two modes it
+  has. [Onboard another machine](docs/onboarding.md#onboard-another-machine)
+  gives each mode its own section, the chooser table distinguishes them, and the
+  one-line mode carries the three things that have to exist before it can work —
+  a name that resolves, an ingress in front of the loopback-bound dashboard, and
+  a release there serving the invitation routes — stated as requirements rather
+  than as something already published.
+- Documented the offline mode as the way a machine is added today: the operator
+  sends the fragment `stado fleet invite --offline` prints, its owner pastes it
+  on the machine being added, and the `user@address` it prints on its last line
+  comes back for `stado fleet enroll NAME --ssh ADDRESS --bootstrap` to close.
+  The fragment carries only the fleet's public key and is documented as not
+  being a secret, so it travels by whatever channel already reaches its owner.
+- [Add your own machine](docs/add-your-machine.md) now opens with that fragment,
+  because it is the part that works, and keeps the one-line `curl` form lower
+  down with the reachability it requires and the reason a fragment arrives
+  instead. No documented control address is a name that does not resolve, and
+  `docs/onboarding.md` no longer suggests `https://stado.wisent.com` as the
+  value of `STADO_API_URL`.
+- Documented in the CLI reference: `--offline` on `stado fleet invite`, both
+  modes' stored objects and `--json` payloads, `open (offline, awaiting address)`
+  in `stado fleet invites`, and a new
+  [control-point check](docs/cli.md#the-control-point-check) section naming the
+  verdicts apart — `not_configured`, `name_does_not_resolve`,
+  `connection_refused`, `route_unknown`, `forced_offline` — each of which falls
+  back to the fragment instead of printing a `curl` line that cannot work. The
+  three invitation routes are now marked as useful only where the dashboard is
+  reachable from the machine being added, which a loopback bind is not.
+- [`docs/examples/fleet/invite-a-machine.sh`](docs/examples/fleet/invite-a-machine.sh)
+  now runs the offline mode end to end — mint, fragment, the address back, then
+  `fleet enroll --ssh … --bootstrap`, key check, grants, host recover and
+  `registry beacon-age` as the proof — and keeps the one-line mode at the bottom
+  with its prerequisites.
 - Served the `invite` method from the dashboard: `GET /api/fleet/invite/key`
   hands the joining machine the fleet's public half and the exact
   `authorized_keys` line, `POST /api/fleet/join` files its pending enrollment
