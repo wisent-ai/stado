@@ -59,6 +59,25 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
 
 ### Onboarding platform
 
+- Completed the invite screen against today's CLI. It decodes `base_source`,
+  `base_is_temporary` and `base_warning` and shows the control plane's own
+  temporariness sentence verbatim beside the one line; a new entrance section
+  reads `fleet ingress status --json`, names the standing address and its
+  lifetime, offers `ingress up`/`ingress down` from the window, and — when
+  nothing serves the line and no `enrollment.url` is configured — says so and
+  offers the one button that changes it, instead of letting the mint fall to
+  offline as a surprise. Long bridge commands stopped dying at the transport:
+  the client's per-request timeout now clears the 300 s command ceiling, which
+  `fleet ingress up` and `fleet enroll --bootstrap` legitimately need.
+- Made the operator bridge's children see the store their parent serves. The
+  dashboard is the one process that reads the disk store directly and its
+  launcher says so with `WC_STORAGE_BACKEND=local` — but a CLI child spawned
+  by `/api/operator/run` inherited that override and read bare paths at the
+  store root, while the same parent served every remote writer namespaced
+  blobs. Through the bridge, `fleet invites` answered "no invites" for
+  invitations sitting in the store it was served from — two views of one
+  disk. The child now drops the override and resolves storage from the config
+  file like any client; observed agreeing afterwards on the always-on host.
 - Made enrollment objects writable in this fleet's store. Everything the
   enrollment methods record — invites, machine-filed join requests, the
   published ingress address — lives under `enrollments/` inside the queue's
