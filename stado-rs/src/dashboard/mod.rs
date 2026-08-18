@@ -920,6 +920,22 @@ impl Dashboard {
             None => (request.path.as_str(), ""),
         };
         if path == "/api/release/object" {
+            // The fleet's public read-only release channel. The object API
+            // daemon (com.wisent.always-on.stado-object-api) IS this server —
+            // scripts/stado-object-api-mini-launcher.sh runs
+            // `stado dashboard --bind 127.0.0.1 --port 8765` — so this route
+            // is the store's own delivery endpoint, reached off-host through
+            // the tailnet TLS terminator
+            // (deploy/com.wisent.always-on.stado-tailnet-object-proxy.plist).
+            // The response contract the readers parse
+            // (cli::storage::get_release/stat_release, self_update,
+            // deploy::bootstrap, deploy::host_release):
+            //   200: the object bytes, Content-Type from object metadata
+            //        (default application/octet-stream), Accept-Ranges: bytes
+            //   206/416: byte-range answers from get_object
+            //   400: {"error": ...} — missing or unparseable uri
+            //   403: {"error": ...} — a namespace that is not `releases`
+            //   404: {"state": "absent", "uri": ...} — the object is missing
             let object = match object_from_query(query) {
                 Ok(object) => object,
                 Err(response) => return Ok(response),

@@ -491,10 +491,11 @@ fn verdict_rows(
 /// "put a build on a host" is how two of them come to disagree about what a
 /// verified artifact is.
 ///
-/// A binary the registry declares but `host release` does not carry is recorded
-/// as undeliverable and never attempted: that refusal is a compile-time table
-/// ([`host_release::MANAGED_BINARIES`]), so asking the host about it would cost
-/// an ssh connection to learn something already known here.
+/// A binary the registry declares but no product declaration carries is
+/// recorded as undeliverable and never attempted: that refusal is made
+/// against the shipped product declaration
+/// ([`crate::deploy::products`]), so asking the host about it would cost an
+/// ssh connection to learn something already known here.
 ///
 /// `unknown` rows are deliberately not delivered. Nothing is known to be wrong
 /// with them, delivery ends in a unit restart, and restarting a working service
@@ -509,7 +510,7 @@ async fn apply_releases(target: &str, rows: &[Row], runner: &Runner) -> AppliedP
             row.declared,
             row.installed_cell()
         );
-        if let Err(error) = host_release::managed_binary(&row.binary) {
+        if let Err(error) = crate::deploy::products::product(&row.binary) {
             pass.undeliverable.push(Undeliverable {
                 binary: row.binary.clone(),
                 detail: error.to_string(),
