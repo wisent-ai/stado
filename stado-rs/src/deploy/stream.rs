@@ -403,7 +403,9 @@ sleep 8
 printf 'XORG\t%s\n' "$(systemctl is-active XORG_UNIT 2>&1 || true)"
 printf 'SESSION\t'
 if DISPLAY=DISPLAY_NUMBER xdpyinfo >/dev/null 2>&1; then
-  DISPLAY=DISPLAY_NUMBER xdpyinfo | awk '/dimensions:/ { print $2; exit }'
+  # No early `exit` in awk: it closes the pipe, xdpyinfo takes SIGPIPE, and
+  # pipefail turns a healthy screen into a failed script (exit 141).
+  DISPLAY=DISPLAY_NUMBER xdpyinfo | awk '/dimensions:/ { print $2 }' | sed -n 1p
 else
   printf 'no display answered on DISPLAY_NUMBER\n'
 fi
@@ -454,7 +456,9 @@ printf 'XORG\t%s\n' "$(systemctl is-active XORG_UNIT 2>&1 || true)"
 printf 'SUNSHINE\t%s\n' "$(systemctl is-active SUNSHINE_UNIT 2>&1 || true)"
 printf 'SESSION\t'
 if DISPLAY=DISPLAY_NUMBER xdpyinfo >/dev/null 2>&1; then
-  DISPLAY=DISPLAY_NUMBER xdpyinfo | awk '/dimensions:/ { print $2; exit }'
+  # No early `exit` in awk: it closes the pipe, xdpyinfo takes SIGPIPE, and
+  # pipefail turns a healthy screen into a failed script (exit 141).
+  DISPLAY=DISPLAY_NUMBER xdpyinfo | awk '/dimensions:/ { print $2 }' | sed -n 1p
 else
   printf 'no display on DISPLAY_NUMBER\n'
 fi
