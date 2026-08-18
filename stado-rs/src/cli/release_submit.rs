@@ -996,17 +996,60 @@ async fn reconcile(run: &ReleaseRun) -> Result<(), CmdError> {
     .await
 }
 
+/// Resolve one quality/build program the way the agent host actually carries
+/// it.
+///
+/// A LaunchAgent's PATH is minimal by design (`/opt/homebrew/bin:...:/bin`),
+/// and the Rust toolchain installs itself into `~/.cargo/bin` — which is how
+/// the first stado release job in this fleet's history died: `cargo` existed
+/// on the host, the agent's PATH could not see it, and the bare `?` reported
+/// `No such file or directory (os error 2)` without naming what it was trying
+/// to run. A relative program is looked up here first; a name none of the
+/// known homes carries falls through to the spawn's own PATH lookup, so a
+/// correctly provisioned PATH keeps working unchanged.
+fn resolve_step_program(program: &str) -> PathBuf {
+    let path = Path::new(program);
+    if path.is_absolute() || program.contains('/') {
+        return path.to_path_buf();
+    }
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        candidates.push(Path::new(&home).join(".cargo").join("bin").join(program));
+    }
+    candidates.push(Path::new("/opt/homebrew/bin").join(program));
+    candidates.push(Path::new("/usr/local/bin").join(program));
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+        .unwrap_or_else(|| path.to_path_buf())
+}
+
 fn execute(
     name: &str,
     argv: &[String],
     source: &Path,
     environment: &BTreeMap<String, String>,
 ) -> Result<StepReceipt, CmdError> {
-    let status = Command::new(&argv[0])
+    let program = resolve_step_program(&argv[0]);
+    // The step's start is logged before the spawn, so a step that hangs or
+    // dies leaves its name and argv in the job output instead of silence.
+    println!(
+        "[release-worker] step {name}: {} {}",
+        program.display(),
+        argv[1..].join(" ")
+    );
+    let status = Command::new(&program)
         .args(&argv[1..])
         .current_dir(source)
         .envs(environment)
-        .status()?;
+        .status()
+        .map_err(|error| {
+            CmdError::click(format!(
+                "step {name}: cannot run {}: {error}",
+                program.display()
+            ))
+        })?;
+    println!("[release-worker] step {name}: exit {:?}", status.code());
     Ok(StepReceipt {
         name: name.into(),
         argv: argv.to_vec(),
