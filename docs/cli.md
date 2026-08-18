@@ -648,11 +648,17 @@ What it deliberately does not do:
 
 ## `stado fleet`
 
-Enrollment and the SSH channel it rides. This family writes the registry only
-after it has read the machine: `enroll` probes the target over the stored
-target-scoped key and records the hostname and platform it observed, so a
+Enrollment and the SSH channel it rides. Four methods add a machine — `invite`,
+`adopt`, `join` and `declare` — and `stado fleet methods` is the command that
+names them, says what each requires and provides, and reports whether the
+registry's enrollment catalog allows it. Whichever method is used, the registry
+is written only after the machine has been read: `enroll` probes the target over
+the stored target-scoped key and records the hostname and platform it observed,
+and `approve` does the same on the destination the machine reported, so a
 machine that cannot be reached or cannot take the agent does not stay
-registered.
+registered. In every method the private half of the channel key stays in the
+operator's credential store and only the public line reaches the machine; no
+method transmits a private key or asks the machine to generate a pair.
 
 | Subcommand | Behavior |
 |---|---|
@@ -662,12 +668,16 @@ registered.
 | `stado fleet key rotate TARGET` | Rotate the target's key end to end, with rollback on failure. |
 | `stado fleet key ls` | List stored SSH keys as metadata only. |
 | `stado fleet key rm TARGET` | Remove a target's SSH key from the credential store. |
-| `stado fleet enroll NAME --ssh DEST [--kind local] [--fleet NAME] [--bootstrap]` | Probe-then-write onboarding: reads `hostname`, `uname -s` and `uname -m` over the channel, writes the entry from what it read, optionally assigns a fleet, and with `--bootstrap` installs the agent and rolls the entry back if that install fails. |
-| `stado fleet join` | Run **on the machine being added**: announce it to the fleet when the control plane cannot reach it but it can reach the store. |
-| `stado fleet pending` | List unanswered join requests. |
-| `stado fleet approve HOSTNAME [--fleet NAME]` | Turn a pending join request into a registered target. |
+| `stado fleet methods [--json]` | The four ways to add a machine — `invite`, `adopt`, `join`, `declare` — each with the command that performs it, what it requires, what it provides, whether the registry allows it, and the catalog field that gates it. `--json` emits `{"methods":[{"name","command","summary","requires","provides","allowed","gate"}]}` in that fixed order, with `gate` naming a registry field such as `registry.enrollment.allow_invite` (`null` for `declare`, which no field gates). A method the catalog disables is still listed, marked disabled. |
+| `stado fleet enroll NAME --ssh DEST [--install-key] [--kind local] [--fleet NAME] [--bootstrap]` | Probe-then-write onboarding: reads `hostname`, `uname -s` and `uname -m` over the channel, writes the entry from what it read, optionally assigns a fleet, and with `--bootstrap` installs the agent and rolls the entry back if that install fails. `--install-key` is the `adopt` method: before probing, mint the target's pair if needed and append its **public** line to the machine's `authorized_keys` over the access plain `ssh DEST` already has (agent, an operator key, or OpenSSH's own password prompt). Idempotent, and never connected / authentication rejected / write failed are reported apart, all before any registry write. |
+| `stado fleet invite [--name NAME] [--expires 24h] [--uses 1] [--json]` | The `invite` method: mint a single-use enrollment token and print, once, the one line to send the machine's owner. Without `--name` the target is `invited-<first 8 hex of the invite id>`; a collision with an existing target or another open invite is an error, not a suffix. `--expires` takes an integer plus `s`, `m`, `h` or `d` and refuses a bare number; `--uses 0` is an error. It mints the channel key too and prints its fingerprint; the store holds only `secret_sha256`, and if the invite cannot be recorded the minted key is removed again. With no `STADO_API_URL` configured it names the shape of the one-liner instead of inventing a host. `--json` carries `id`, `token`, `target_name`, `expires_at`, `uses_allowed`, `join_command`, `public_key`, `authorized_keys_line` and `token_shown_once: true` — redirecting it to a file writes a live credential to disk, and nothing can reprint the token if it is lost. |
+| `stado fleet invites [--json]` | Every invite and the state it is actually in: id, target name, status (`open`, `spent`, `revoked`, `expired`), uses spent of uses allowed, timestamps, who created it. Never the token or the secret. `--json` emits `{"invites":[…]}`. |
+| `stado fleet revoke-invite ID` | Close one invite immediately, by id. A revoked token is refused exactly like a spent, expired or unknown one. |
+| `stado fleet join` | The `join` method, run **on the machine being added**: announce it to the fleet when the control plane cannot reach it but it can reach the store. |
+| `stado fleet pending [--json]` | List unanswered join requests. An invited request also shows the target name the invite reserved, the SSH destination approval will probe, the invite id it came from, the fingerprint of the key the machine installed, and whether that machine's SSH channel was answering when it reported — an approval spent on a machine with Remote Login still off is a wasted round trip. `--json` emits `{"pending":[{"hostname","os","arch","kind","status","requested_at","target_name","destination","invite_id","installed_key_fingerprint","ssh_listening"}]}`; the invited-only keys are `null` for a plain `join` request, so `select(.destination != null)` is what isolates invited ones. |
+| `stado fleet approve HOSTNAME [--fleet NAME]` | Turn a pending join request into a registered target, over the destination the request carries, through the same probe-then-write enrollment — approval does not skip the probe. The argument is the request's hostname; an invited machine is registered under the target name its invite reserved (which is the name whose key the invite minted), and its probed hostname lands in the entry's `hostnames`. |
 | `stado fleet reject HOSTNAME` | Drop a pending join request. |
-| `stado fleet catalog [--json]` | Print the registry's central enrollment and communication catalog, which both enrollment paths honour. |
+| `stado fleet catalog [--json]` | Print the registry's central enrollment and communication catalog, which every enrollment path honours: `allow_invite`, `allow_adopt`, `allow_join`, `allow_enroll`, `require_verified_hostname`, `key_custody`, and the `channels` block. All four `allow_*` default to `true`, including when an `enrollment` section exists but omits them. |
 | `stado fleet list [--json]` | The fleets declared in the registry with their members. |
 | `stado fleet status NAME` | Live state for the members of one declared fleet. |
 | `stado fleet create NAME [--notes TEXT]` | Declare a new fleet in the canonical registry. |
@@ -683,9 +693,31 @@ because the host publishes its beacon outward.
 
 Stado Desktop reaches this family through the dashboard's authenticated
 operator-command bridge instead of carrying its own enrollment logic, so its
-**Fleet › Hosts › Add a Machine** sheet performs exactly the commands above.
-The separate `stado_fleet` binary remains for compatibility over the same
-implementation; `stado fleet` is the documented surface.
+**Fleet › Hosts › Add a Machine** chooser offers the same four methods and
+performs exactly the commands above. The separate `stado_fleet` binary remains
+for compatibility over the same implementation; `stado fleet` is the documented
+surface.
+
+### Invite endpoints on the dashboard
+
+The `invite` method needs three routes on the dashboard, because the machine
+being added has no Stado binary, no store credential and no operator identity —
+it has one token. All three are served by the same authenticated dashboard
+process that serves `/api/object`, `/api/machine/*` and `/api/operator/run`, and
+all three sit outside that surface's operator authorization: they accept **only**
+an invite token, and **none of them can write the registry.** The registry write
+happens later, in `stado fleet approve`, under operator authority.
+
+| Route | Authorization | Effect |
+|---|---|---|
+| `GET /api/fleet/invite/key` | the invite token as bearer, nothing else | Returns `{"target_name","public_key","authorized_keys_line"}` — the public half only. Reads; writes nothing. |
+| `POST /api/fleet/join` | the invite token as bearer, nothing else | Body `{"hostname","os","arch","destination","installed_key_fingerprint"}`, plus `ssh_listening` so the operator sees an unreachable channel before spending an approval on it. Writes the join request `enrollments/<hostname>.json` with status `pending`, the `invite_id` and the reported `destination`, and increments `uses_spent`. Creates no registry entry and cannot modify one. |
+| `GET /join.sh` | none | The script the machine runs — [`deploy/join.sh`](../deploy/join.sh), embedded verbatim into the binary at build time, so the served script and the reviewed one cannot diverge. It discloses nothing: the secret is the argument its user supplies, and the script fetches the two routes above with it. It needs only a POSIX shell and base utilities — no Stado binary, no `jq`, no Python — installs the public key, reports in, and installs no software. |
+
+A token that is spent, expired, revoked or simply unknown is refused the same
+way on both API routes, without revealing which of those four states applies.
+`stado fleet invites` is the operator-side view of the same objects, and
+`stado fleet revoke-invite ID` is how a token stops working before its expiry.
 
 ## `stado registry`
 
@@ -702,7 +734,7 @@ deployment that needed it.
 | `stado registry pull` | Print the canonical registry to stdout. |
 | `stado registry self [--name-only]` | Which registry target this machine is. |
 | `stado registry doctor [--json]` | Diff registry declarations against live host state. Exits non-zero on any divergence. |
-| `stado registry host add HOST --ssh DEST --release-platform PLATFORM [--kind local]` | Onboard a machine into the registry, validated, refusing duplicates. `--ssh` and `--release-platform` are both required. Declaration only; `stado fleet enroll` probes the machine first. |
+| `stado registry host add HOST --ssh DEST --release-platform PLATFORM [--kind local]` | The `declare` method: onboard a machine into the registry, validated, refusing duplicates. `--ssh` and `--release-platform` are both required. Declaration only — it reads nothing from the machine, so `stado registry doctor` is what later diffs the assertion against reality, and `stado fleet methods` lists it alongside the three probing methods. |
 | `stado registry beacon-age [--json]` | Every registry host and its last beacon, worst first. |
 
 ### Registry document shape
@@ -1298,3 +1330,33 @@ and SDK chain; agent grants containing `stado-gcp`, `stado-azure`, or
 push, object, scheduling, and release functions use their dedicated router or
 client items rather than generic provider keys.
 
+
+## `stado stream probe|declare|apply|status|pair|stop`
+
+An interactive session on a fleet host, and the stream a client receives. This
+is how a GPU in the fleet gets used interactively — for a desktop, a renderer,
+or a game — because a board cannot be borrowed over a network: the process that
+renders has to run on the machine that owns the card, and only the frames
+travel.
+
+| Command | What it does |
+|---|---|
+| `stream probe TARGET` | Read-only: boards with their PCI bus ids and UUIDs, driver version, DRM nodes, whether a display manager already owns the screen, free space on `/` and on the library volume, and the tailnet address a client would dial. Changes nothing. |
+| `stream declare TARGET [--resolution WxH] [--refresh-hz N] [--gpu-uuid GPU-…] [--library-dir PATH] [--steam]` | Writes `targets[TARGET].display_stream` into the canonical registry. Refuses a library on the root volume, a non-`x11` session, a resolution outside 640..7680, a refresh outside 24..240, and an unpinned Sunshine. |
+| `stream apply TARGET` | Reconciles the host to that declaration: Xorg screen sized by the declaration on the declared board (`AllowEmptyInitialConfiguration`, so no monitor is needed), `openbox` to own the root window, Sunshine from a digest-pinned `.deb`, and two systemd units. Idempotent. |
+| `stream status TARGET` | Units, the screen's real size, what is rendering, bound ports, paired client count, library space, and the address to point Moonlight at. |
+| `stream pair TARGET --pin 1234 [--client NAME]` | Hands Moonlight's four-digit PIN to Sunshine's API over the managed host channel. This exists so pairing needs no browser: the web UI is never opened, and its credentials are generated on the host and never leave it. |
+| `stream stop TARGET [--purge]` | Stops the session; `--purge` also removes the units and the Xorg screen, returning the host to headless. |
+
+The board is declared by driver UUID and Xorg is configured by PCI bus id;
+`apply` resolves one to the other from the probe, because only the host knows
+that mapping. On a two-card host, naming the second board keeps the session and
+the job agent out of each other's way — the agent places work on the emptiest
+card, so a session holding one board pushes batch work to the other.
+
+What the fleet does **not** do here: install or launch a client. Moonlight runs
+on the operator's own machine, and the pairing PIN comes from it.
+
+Anti-cheat is the one thing no configuration fixes: titles with kernel-level
+anti-cheat refuse to run on Linux, and streaming a Linux host does not change
+that.

@@ -78,6 +78,29 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   macOS or Linux step for the owner — and deliberately installs no agent, since
   the operator's `stado fleet approve` does that over the channel it just
   opened.
+- Rewrote the machine-adding documentation around the four named methods
+  instead of one procedure: [Onboard another machine](docs/onboarding.md#onboard-another-machine)
+  now opens with a chooser table for `invite`, `adopt`, `join` and `declare` —
+  what each needs from the operator, what it needs from the machine, when it is
+  the right one, and what it cannot do — and gives each method its own section.
+  Every method states the same checkable property: the private half of the
+  channel key never leaves the operator's credential store, and the machine
+  receives only the public line.
+- [Add your own machine](docs/add-your-machine.md) now leads with the one line
+  the owner of a joining machine actually runs, because the invitation is the
+  normal path; pasting a key by hand is kept below as the route for a machine
+  that cannot run it, next to the operator-driven `adopt` alternative.
+- Documented in the CLI reference: `stado fleet methods`, `stado fleet invite`,
+  `stado fleet invites`, `stado fleet revoke-invite`, `--install-key` on
+  `stado fleet enroll`, `--json` on `stado fleet pending`, the `allow_invite`
+  and `allow_adopt` catalog fields, and the three invite routes
+  (`GET /api/fleet/invite/key`, `POST /api/fleet/join`, `GET /join.sh`) —
+  authorized by an invitation token alone, and unable to write the registry,
+  which stays an operator-authority write inside `stado fleet approve`.
+- Added [`docs/examples/fleet/invite-a-machine.sh`](docs/examples/fleet/invite-a-machine.sh),
+  the `invite` method end to end from the operator's side, from `fleet invite`
+  to `fleet approve` and `registry beacon-age` as the proof, indexed in the
+  examples README.
 
 ### Coding clients
 
