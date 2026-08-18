@@ -67,6 +67,17 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
 - Added [Add your own machine](docs/add-your-machine.md) for the owner of a
   machine joining someone else's fleet, linked from the README next to the
   operator onboarding path.
+- Added `deploy/join.sh`, the one-line bootstrap the owner of a joining machine
+  runs for the `invite` method: `curl -fsSL <control-url>/join.sh | sh -s --
+  <code>`. It redeems the invitation for the fleet's public half, installs that
+  line into `~/.ssh/authorized_keys` idempotently with 700/600 modes, resolves
+  the address the fleet should dial (tailnet name, then `.local`, then the
+  default interface's IPv4), and reports the machine as a pending enrollment.
+  It never handles a private key, never prints or stores the invitation code,
+  never enables Remote Login silently — it diagnoses SSH and prints the exact
+  macOS or Linux step for the owner — and deliberately installs no agent, since
+  the operator's `stado fleet approve` does that over the channel it just
+  opened.
 
 ### Coding clients
 
