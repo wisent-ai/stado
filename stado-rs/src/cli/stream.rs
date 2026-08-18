@@ -345,7 +345,7 @@ async fn apply(
     println!(
         "  units:    xorg {}, sunshine {}",
         field(&report, "xorg"),
-        field(&report, "sunshine_unit_state")
+        field(&report, "sunshine_state")
     );
     println!("  ports:    {}", field(&report, "ports"));
     println!("pair a client with `stado stream pair {target_name} --pin XXXX`");
