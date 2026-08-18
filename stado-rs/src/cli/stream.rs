@@ -389,6 +389,12 @@ async fn status(target_name: &str, json: bool) -> Result<(), CmdError> {
     println!("ports:     {}", field(&report, "ports"));
     println!("paired:    {} client(s)", field(&report, "paired_clients"));
     println!("library:   {}", field(&report, "library"));
+    for (label, key) in [("xorg log", "xorg_log"), ("sunshine log", "sunshine_log")] {
+        let line = field(&report, key);
+        if !line.trim().is_empty() && line != "unknown" {
+            println!("{label}:  {line}");
+        }
+    }
     let endpoint = field(&report, "client_endpoint");
     println!("client:    point Moonlight at {endpoint}:{SUNSHINE_HTTPS_PORT}");
     Ok(())
