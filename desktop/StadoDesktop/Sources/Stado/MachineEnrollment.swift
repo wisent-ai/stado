@@ -625,6 +625,18 @@ struct MachineInvite: Decodable, Equatable, Sendable {
     /// What the control plane found when it asked whether the one line would
     /// work. Present in both modes: it is the reason this is the mode it is.
     let checkpoint: MachineInviteCheckpoint?
+    /// Where the one line's address came from: `enrollment.url`, `ingress`,
+    /// or `api.url`. The distinction the operator needs is whether the line
+    /// outlives the process that published it, and only the control plane
+    /// knows which source answered.
+    let baseSource: String
+    /// True when the address is a published quick-tunnel entrance: it dies
+    /// with `stado fleet ingress down` and a restarted ingress answers under
+    /// a different name.
+    let baseIsTemporary: Bool
+    /// The control plane's own sentence about that temporariness, shown
+    /// verbatim — a paraphrase here would drift from what the CLI says.
+    let baseWarning: String
 
     private enum CodingKeys: String, CodingKey {
         case id, mode, token, snippet, checkpoint
@@ -635,6 +647,9 @@ struct MachineInvite: Decodable, Equatable, Sendable {
         case nextStep = "next_step"
         case publicKey = "public_key"
         case authorizedKeysLine = "authorized_keys_line"
+        case baseSource = "base_source"
+        case baseIsTemporary = "base_is_temporary"
+        case baseWarning = "base_warning"
     }
 
     init(from decoder: Decoder) throws {
@@ -650,6 +665,9 @@ struct MachineInvite: Decodable, Equatable, Sendable {
         publicKey = try values.decodeIfPresent(String.self, forKey: .publicKey) ?? ""
         authorizedKeysLine = try values.decodeIfPresent(String.self, forKey: .authorizedKeysLine) ?? ""
         checkpoint = try values.decodeIfPresent(MachineInviteCheckpoint.self, forKey: .checkpoint)
+        baseSource = try values.decodeIfPresent(String.self, forKey: .baseSource) ?? ""
+        baseIsTemporary = try values.decodeIfPresent(Bool.self, forKey: .baseIsTemporary) ?? false
+        baseWarning = try values.decodeIfPresent(String.self, forKey: .baseWarning) ?? ""
         // A release older than the offline mode names no mode at all. What it
         // sent decides which one it meant: a fragment is an offline
         // invitation whatever the release calls itself.
@@ -669,7 +687,10 @@ struct MachineInvite: Decodable, Equatable, Sendable {
             publicKey: publicKey,
             authorizedKeysLine: authorizedKeysLine,
             snippet: snippet,
-            checkpoint: checkpoint
+            checkpoint: checkpoint,
+            baseSource: baseSource,
+            baseIsTemporary: baseIsTemporary,
+            baseWarning: baseWarning
         )
     }
 }
@@ -701,6 +722,14 @@ struct MachineInviteRecord: Codable, Equatable, Sendable {
     /// next question after a restart, and because a mode the control plane
     /// chose has to stay distinguishable from one the operator chose.
     let checkpoint: MachineInviteCheckpoint?
+    /// Where the one line's address came from, and the control plane's own
+    /// sentence about it when that address dies with the ingress. Kept because
+    /// the line was sent in a message that outlives this window, and the
+    /// operator returning here after a restart still has to know that tearing
+    /// the ingress down kills the line they already sent.
+    let baseSource: String
+    let baseIsTemporary: Bool
+    let baseWarning: String
 
     var isOffline: Bool { mode == .offline }
 
@@ -714,6 +743,7 @@ struct MachineInviteRecord: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id, mode, targetName, mintedAt, expiresAt, usesAllowed
         case publicKey, authorizedKeysLine, snippet, checkpoint
+        case baseSource, baseIsTemporary, baseWarning
     }
 }
 
@@ -737,7 +767,10 @@ extension MachineInviteRecord {
             publicKey: try values.decodeIfPresent(String.self, forKey: .publicKey) ?? "",
             authorizedKeysLine: try values.decodeIfPresent(String.self, forKey: .authorizedKeysLine) ?? "",
             snippet: try values.decodeIfPresent(String.self, forKey: .snippet) ?? "",
-            checkpoint: try values.decodeIfPresent(MachineInviteCheckpoint.self, forKey: .checkpoint)
+            checkpoint: try values.decodeIfPresent(MachineInviteCheckpoint.self, forKey: .checkpoint),
+            baseSource: try values.decodeIfPresent(String.self, forKey: .baseSource) ?? "",
+            baseIsTemporary: try values.decodeIfPresent(Bool.self, forKey: .baseIsTemporary) ?? false,
+            baseWarning: try values.decodeIfPresent(String.self, forKey: .baseWarning) ?? ""
         )
     }
 }
@@ -890,5 +923,53 @@ enum EnrollmentTime {
         if let date = formatter.date(from: value) { return date }
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.date(from: value)
+    }
+}
+
+/// `stado fleet ingress status --json` — whether a public entrance for the
+/// one-line invitation is standing, and whether it still answers.
+///
+/// Decoded leniently because the shape belongs to the control plane: a field
+/// this release does not know is not a reason to show the operator nothing.
+struct FleetIngressStatus: Decodable, Equatable, Sendable {
+    let published: Bool
+    let baseURL: String
+    let mode: String
+    let standingSeconds: Int?
+    let secondsSinceVerified: Int?
+    let listenerPort: Int?
+    let reachable: Bool
+    let reason: String
+    let detail: String
+    /// A quick-tunnel entrance: dies with `ingress down`, returns under a
+    /// different address after `ingress up`.
+    let temporary: Bool
+    let listenerAlive: Bool
+    let tunnelAlive: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case published, mode, reachable, reason, detail, temporary
+        case baseURL = "base_url"
+        case standingSeconds = "standing_seconds"
+        case secondsSinceVerified = "seconds_since_verified"
+        case listenerPort = "listener_port"
+        case listenerAlive = "listener_alive"
+        case tunnelAlive = "tunnel_alive"
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        published = try values.decodeIfPresent(Bool.self, forKey: .published) ?? false
+        baseURL = try values.decodeIfPresent(String.self, forKey: .baseURL) ?? ""
+        mode = try values.decodeIfPresent(String.self, forKey: .mode) ?? ""
+        standingSeconds = try values.decodeIfPresent(Int.self, forKey: .standingSeconds)
+        secondsSinceVerified = try values.decodeIfPresent(Int.self, forKey: .secondsSinceVerified)
+        listenerPort = try values.decodeIfPresent(Int.self, forKey: .listenerPort)
+        reachable = try values.decodeIfPresent(Bool.self, forKey: .reachable) ?? false
+        reason = try values.decodeIfPresent(String.self, forKey: .reason) ?? ""
+        detail = try values.decodeIfPresent(String.self, forKey: .detail) ?? ""
+        temporary = try values.decodeIfPresent(Bool.self, forKey: .temporary) ?? false
+        listenerAlive = try values.decodeIfPresent(Bool.self, forKey: .listenerAlive) ?? false
+        tunnelAlive = try values.decodeIfPresent(Bool.self, forKey: .tunnelAlive) ?? false
     }
 }

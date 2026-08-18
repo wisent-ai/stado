@@ -197,7 +197,12 @@ actor FleetControlClient {
         configuration.httpShouldSetCookies = false
         configuration.urlCredentialStorage = nil
         configuration.timeoutIntervalForRequest = 30
-        configuration.timeoutIntervalForResource = 45
+        // The resource ceiling has to clear the longest command the bridge
+        // allows (300 s) — `fleet ingress up` and `fleet enroll --bootstrap`
+        // legitimately run for minutes and print nothing until they finish.
+        // Short reads keep their 30 s idle limit above; run() raises its own
+        // request interval per call instead.
+        configuration.timeoutIntervalForResource = 360
         session = URLSession(configuration: configuration)
     }
 
@@ -256,18 +261,25 @@ actor FleetControlClient {
         arguments: [String],
         confirmsMutation: Bool,
         at address: OperationsDashboardAddress,
-        authorizationToken: String?
+        authorizationToken: String?,
+        timeoutSeconds: Int = 120
     ) async throws -> OperatorCommandResult {
-        var body: [String: Any] = ["args": arguments, "timeout_seconds": 120]
+        // The bridge caps a command at 300 s; asking for more would be lied
+        // about silently, so it is capped here too.
+        let budget = min(max(timeoutSeconds, 1), 300)
+        var body: [String: Any] = ["args": arguments, "timeout_seconds": budget]
         if confirmsMutation {
             body["confirmation"] = "RUN_MUTATION"
         }
         var request = URLRequest(url: address.endpoint("api/operator/run"))
         request.httpMethod = "POST"
+        // The session's 30 s idle timeout would kill a long command that
+        // prints nothing until it finishes — `fleet ingress up` waits for a
+        // tunnel and DNS for up to a minute. The request's own interval wins.
+        request.timeoutInterval = TimeInterval(budget + 30)
         request.setValue("operator-command", forHTTPHeaderField: "X-Stado-Action")
         try attach(body, to: &request)
         apply(authorizationToken, to: &request)
-
         let data = try await payload(for: request)
         do {
             return try JSONDecoder().decode(OperatorCommandResult.self, from: data)
