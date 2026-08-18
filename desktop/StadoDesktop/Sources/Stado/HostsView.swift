@@ -74,18 +74,42 @@ struct HostsView: View {
 
     /// A fleet with no hosts in it is exactly the fleet that needs this verb,
     /// so it lives in the context bar rather than only beside a populated
-    /// table. The unfinished draft is named on the button: enrollment spans a
-    /// walk to another machine, and coming back to a button that says nothing
-    /// about the key already minted is how the walk gets repeated.
+    /// table. What is outstanding is named on the button, because the two
+    /// things this window can leave behind both take hours to come back to: an
+    /// invitation waiting to be answered by somebody else, and a key already
+    /// minted for a machine still to be walked to. A button that says nothing
+    /// about either is how the walk gets repeated and the invitation forgotten.
     private func addMachineAction(kind: WisentAction.Kind) -> WisentAction {
-        let resuming = !enrollmentStore.draft.isEmpty
         return WisentAction(
-            resuming ? "Resume adding \(enrollmentStore.draft.machineName)" : "Add a Machine",
-            symbol: resuming ? "arrow.uturn.forward" : "plus",
+            addMachineTitle,
+            symbol: addMachineSymbol,
             kind: kind
         ) {
             showsEnrollment = true
         }
+    }
+
+    private var addMachineTitle: String {
+        if let invite = enrollmentStore.plan.invite {
+            return enrollmentStore.plan.invitedRequest == nil
+                ? "Waiting on \(invite.targetName)"
+                : "\(invite.targetName) is waiting for you"
+        }
+        if !enrollmentStore.draft.isEmpty,
+           !enrollmentStore.draft.machineName.isEmpty,
+           !enrollmentStore.draft.isEnrolled {
+            return "Resume adding \(enrollmentStore.draft.machineName)"
+        }
+        return "Add a Machine"
+    }
+
+    private var addMachineSymbol: String {
+        if enrollmentStore.plan.invite != nil {
+            return enrollmentStore.plan.invitedRequest == nil ? "hourglass" : "bell.badge"
+        }
+        return enrollmentStore.draft.isEmpty || enrollmentStore.draft.isEnrolled
+            ? "plus"
+            : "arrow.uturn.forward"
     }
 
     /// Every name enrollment would collide with: declared registry targets and

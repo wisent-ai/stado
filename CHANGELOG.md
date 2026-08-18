@@ -30,6 +30,23 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   Progress survives closing the window, so the walk to the other machine
   does not cost the minted key, and an enrollment that fails says whether it
   never reached the machine or reached it and rolled its own entry back.
+- Stado Desktop's Add a Machine window now opens on the ways in rather than on
+  one of them. The list comes from `stado fleet methods --json`, so a method
+  this fleet's registry catalog forbids is shown disabled, naming the field
+  that forbade it, instead of being missing or dead. Invite mints a code, shows
+  it once with the single line to send to whoever has the machine, then waits:
+  the wait survives quitting the app, and reopening the window says which
+  machine is expected, what it reported when it answers, and offers approve or
+  reject. Adopt takes an address and installs the fleet's public key over a
+  session the control plane can already open, and says plainly that no password
+  can be typed into the window because the process opening that session has no
+  terminal. Join and Declare each have a screen stating what the operator has
+  to do, with working pending and approve behind Join. The old path — key
+  minted here, installed by hand over there — remains for the machine nobody
+  can reach. Every call still goes through `POST /api/operator/run` with a
+  `fleet` argv array and the mutation confirmation, and the two proofs now run
+  for a machine added by any method rather than only for the hand-carried key.
+
 ### Release control
 
 - Added repository-owned Stado release manifests, immutable source inputs,
