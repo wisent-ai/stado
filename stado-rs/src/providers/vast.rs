@@ -75,13 +75,18 @@ impl VastError {
 /// provider is unavailable; authorization and transport failures are logged
 /// rather than mistaken for an absent credential.
 ///
-/// Two channels, in this order, because the renter gate has to work on the
-/// machine that is actually rented: the configured (control-plane) consumer
-/// first, and the host's own agent grant when this host holds no control-plane
-/// bearer. The RTX host is the whole reason — it is the fleet's only rented
-/// machine, `~/.stado/control-plane-skarbiec-token` does not exist there and
-/// must not, so `vast_active` was permanently false and nothing kept fleet jobs
-/// off a paying renter's card.
+/// Two channels, in this order: the configured (control-plane) consumer first,
+/// and the host's own agent grant when this host holds no control-plane bearer.
+/// The host side of this bridge runs on a worker -- the RTX box carries the Vast
+/// daemon -- and `~/.stado/control-plane-skarbiec-token` does not exist there and
+/// must not, so asking as `stado-control-plane` could only ever fail with a
+/// message about a missing grant file, which says nothing about the real state.
+///
+/// It said nothing on 2026-08-18 either: this vault holds no `stado-vast` item at
+/// all, so the honest error is the 403 the host's own grant now reports. Nothing
+/// was rented at the time; ten `vastai/test:bandwidth-test-nvidia` containers in
+/// state `Created` are the daemon's own self-tests, and I mistook them plus a
+/// local python3 workload for a renter.
 pub async fn resolve_vast_api_key() -> String {
     let control_plane_bearer = crate::config::skarbiec_token_file();
     let control_plane_usable =

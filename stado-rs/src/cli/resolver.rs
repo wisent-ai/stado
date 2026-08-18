@@ -381,6 +381,20 @@ fn drop_stale_ssh_sockets() {
         if !name.starts_with("resolver-ssh-") {
             continue;
         }
+        // Only sockets. `~/.stado/resolver-ssh-key` and its `.pub` share this
+        // prefix, and deleting the resolver's own credential to clean up after
+        // it is how a cleanup becomes the outage: the service then fails to
+        // authenticate to the authority and exits before it can say why.
+        let is_socket = entry
+            .file_type()
+            .map(|kind| {
+                use std::os::unix::fs::FileTypeExt;
+                kind.is_socket()
+            })
+            .unwrap_or(false);
+        if !is_socket {
+            continue;
+        }
         match std::fs::remove_file(entry.path()) {
             Ok(()) => eprintln!("stado resolver dropped stale ssh control socket {name}"),
             Err(error) => eprintln!("stado resolver could not drop {name}: {error}"),
