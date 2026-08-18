@@ -588,8 +588,118 @@ fn stage_release(
     atomic_json(&marker_path(directory), manifest)
 }
 
-fn next_port(target: &ReleaseTargetPolicy, state: &HostReleaseState) -> u16 {
-    match state.active.as_ref().map(|active| active.port) {
+/// The port the proxy currently forwards to, read from its own target file.
+///
+/// When the state file has lost its `active` record -- interrupted rollouts and an
+/// orphaned reconciler both did that this week -- the proxy's target is the only
+/// truthful statement of which port carries traffic.
+fn proxy_upstream_port(target: &ReleaseTargetPolicy, product: &str) -> Option<u16> {
+    let raw = std::fs::read(proxy_state_path(target, product)).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&raw).ok()?;
+    value
+        .get("upstream")?
+        .as_str()?
+        .rsplit(':')
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// Every process running out of this product's `releases/` directory:
+/// `(pid, version, port)`, the port parsed from a `--port N` argument when the
+/// launcher passed one.
+///
+/// These processes are all children of some run of this agent -- nothing else
+/// executes from that directory -- so any of them the state file does not name is
+/// a leak from a run that died between spawning and recording.
+fn release_processes(install_root: &str) -> Vec<(i32, String, Option<u16>)> {
+    let output = match std::process::Command::new("/bin/ps")
+        .args(["-eo", "pid=,command="])
+        .output()
+    {
+        Ok(output) => output,
+        Err(_) => return Vec::new(),
+    };
+    let marker = format!("{}/releases/", install_root.trim_end_matches('/'));
+    let mut found = Vec::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        if !line.contains(&marker) {
+            continue;
+        }
+        let mut fields = line.split_whitespace();
+        let Some(pid) = fields.next().and_then(|first| first.parse::<i32>().ok()) else {
+            continue;
+        };
+        let version = line
+            .split(&marker)
+            .nth(1)
+            .and_then(|tail| tail.split('/').next())
+            .unwrap_or("?")
+            .to_string();
+        let arguments: Vec<&str> = fields.collect();
+        let mut port = None;
+        for pair in arguments.windows(2) {
+            if pair[0] == "--port" {
+                port = pair[1].parse().ok();
+            }
+        }
+        found.push((pid, version, port));
+    }
+    found
+}
+
+/// Terminate release processes the state file does not know about.
+///
+/// The agent owned every one of them once; a rollout that died between spawn and
+/// save leaves the process running and the record absent, and the agent trusted
+/// only the record. On the always-on Mac that produced a candidate from three
+/// releases ago holding a candidate port for hours, a rollout that could never
+/// bind past it, and an operator asked to stop processes by hand -- which is not a
+/// release system. The one process spared is whichever serves the proxy's current
+/// upstream: it carries traffic, and the normal cutover retires it by routing away
+/// first, after which the next pass sweeps it here.
+fn sweep_leaked_processes(
+    target: &ReleaseTargetPolicy,
+    product: &str,
+    install_root: &str,
+    state: &HostReleaseState,
+) {
+    let mut known = Vec::new();
+    for record in [&state.active, &state.candidate, &state.previous] {
+        if let Some(record) = record {
+            known.push(record.pid);
+        }
+    }
+    if let Some(pid) = state.proxy_pid {
+        known.push(pid);
+    }
+    let upstream = proxy_upstream_port(target, product);
+    for (pid, version, port) in release_processes(install_root) {
+        if known.contains(&pid) {
+            continue;
+        }
+        if upstream.is_some() && port == upstream {
+            eprintln!(
+                "leaked {product} {version} pid={pid} still carries traffic on \
+                 {port:?}; retiring by cutover, not by kill"
+            );
+            continue;
+        }
+        let _ = kill(Pid::from_raw(pid), Signal::SIGTERM);
+        eprintln!("swept leaked {product} {version} pid={pid} port={port:?}");
+    }
+}
+
+fn next_port(
+    target: &ReleaseTargetPolicy,
+    state: &HostReleaseState,
+    occupied: Option<u16>,
+) -> u16 {
+    // With no active record the previous rule always chose the first candidate
+    // port -- exactly where a de-facto active from a lost rollout is still
+    // serving, so the new candidate died on the bind and the rollout could never
+    // proceed. The proxy's upstream is authoritative when the record is silent.
+    match state.active.as_ref().map(|active| active.port).or(occupied) {
         Some(port) if port == target.candidate_ports[0] => target.candidate_ports[1],
         _ => target.candidate_ports[0],
     }
@@ -699,6 +809,10 @@ async fn reconcile_product(
     target: &ReleaseTargetPolicy,
 ) -> Result<HostReleaseState, String> {
     let mut state = load_state(target, product, target_name)?;
+    // Reconcile the process world before reasoning from the record: anything
+    // running out of this product's releases directory that the record does not
+    // name is a leak from a run that died between spawning and saving.
+    sweep_leaked_processes(target, product, &policy.install_root, &state);
     let Some(desired) = policy.desired.as_ref() else {
         state.phase = RolloutPhase::Idle;
         state.detail = "no desired release".to_string();
@@ -882,7 +996,7 @@ async fn reconcile_product(
     state.detail = format!("staged immutable release at {}", directory.display());
     save_state(target, &mut state)?;
 
-    let port = next_port(target, &state);
+    let port = next_port(target, &state, proxy_upstream_port(target, product));
     let process = spawn_release(product, policy, target, &manifest, &directory, port)?;
     state.candidate = Some(process.clone());
     state.phase = RolloutPhase::CandidateRunning;
