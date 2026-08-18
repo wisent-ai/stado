@@ -77,15 +77,37 @@ def main():
 
     # A bearer this script cannot reproduce is a bearer it must not replace: the
     # holders of the old one would start failing with no way back.
-    bearer_file = HOME / ".stado" / f"{consumer}-skarbiec-token"
-    if not bearer_file.is_file():
-        raise SystemExit(f"no bearer file at {bearer_file}; refusing to rotate {consumer}")
-    bearer = bearer_file.read_text(encoding="utf-8").strip()
-    if hashlib.sha256(bearer.encode()).hexdigest() != grant.get("hash"):
+    #
+    # Two spellings, because the fleet has both: `stado-local-agent` keeps its
+    # bearer in `local-agent-skarbiec-token`, dropping the product prefix, while
+    # `local-operator` and the verifiers carry the consumer name verbatim. The
+    # hash check below is what actually decides, so accepting the second spelling
+    # loosens nothing: a file that does not hash to the recorded bearer is still
+    # refused, and this only stops the script from declaring a bearer absent that
+    # is sitting beside the vault under its other name.
+    candidates = [HOME / ".stado" / f"{consumer}-skarbiec-token"]
+    if consumer.startswith("stado-"):
+        candidates.append(
+            HOME / ".stado" / f"{consumer[len('stado-'):]}-skarbiec-token"
+        )
+    present = [candidate for candidate in candidates if candidate.is_file()]
+    if not present:
+        listed = ", ".join(str(candidate) for candidate in candidates)
+        raise SystemExit(f"no bearer file at {listed}; refusing to rotate {consumer}")
+    matching = [
+        candidate
+        for candidate in present
+        if hashlib.sha256(candidate.read_text(encoding="utf-8").strip().encode()).hexdigest()
+        == grant.get("hash")
+    ]
+    if not matching:
+        listed = ", ".join(str(candidate) for candidate in present)
         raise SystemExit(
-            f"{bearer_file} does not hash to the bearer the vault recorded for {consumer}; "
+            f"{listed} does not hash to the bearer the vault recorded for {consumer}; "
             "refusing to rotate it"
         )
+    bearer_file = matching[ZERO]
+    bearer = bearer_file.read_text(encoding="utf-8").strip()
     print(f"bearer       {bearer_file.name} matches the recorded hash ({len(bearer)} chars)")
 
     backup = VAULT.with_suffix(f".before-{consumer}-{field}-grant.json")

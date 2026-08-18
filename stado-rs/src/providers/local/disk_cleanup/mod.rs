@@ -7,10 +7,12 @@
 //!
 //! Layout: [`safefs`] holds the dir_fd-relative primitives (and the only
 //! `unsafe`), [`hf`] the HuggingFace cache eviction, [`weles`] the weles
-//! recordings cleanup. This module owns the report model, the sanitized
-//! public state, the exclusive/shared lock file, the canonical-policy
-//! resolution, and the top-level [`run_cleanup_once`] orchestration.
+//! recordings cleanup, [`build_caches`] the eviction of directories a build
+//! tool tagged as regenerable. This module owns the report model, the
+//! sanitized public state, the exclusive/shared lock file, the canonical-
+//! policy resolution, and the top-level [`run_cleanup_once`] orchestration.
 
+pub mod build_caches;
 pub mod hf;
 #[cfg(test)]
 pub(crate) mod kit;
@@ -211,6 +213,7 @@ pub struct CleanupReport {
     pub pressure_active: Option<bool>,
     pub hf: CleanerReport,
     pub weles: CleanerReport,
+    pub builds: CleanerReport,
     pub caps: Caps,
     pub lock_busy: bool,
     pub active_slot_count: i64,
@@ -236,6 +239,7 @@ impl CleanupReport {
             pressure_active: None,
             hf: CleanerReport::default(),
             weles: CleanerReport::default(),
+            builds: CleanerReport::default(),
             caps: Caps::default(),
             lock_busy: false,
             active_slot_count: active_slot_count.max(0),
@@ -259,6 +263,11 @@ impl CleanupReport {
     /// Python `_skip` for the weles cleaner.
     pub fn skip_weles(&mut self, reason: &str, count: i64) {
         *self.weles.skipped.entry(reason.to_string()).or_insert(0) += count;
+    }
+
+    /// `_skip` for the build-cache cleaner (no Python original).
+    pub fn skip_builds(&mut self, reason: &str, count: i64) {
+        *self.builds.skipped.entry(reason.to_string()).or_insert(0) += count;
     }
 
     /// The report as JSON (key order normalized at serialization sites
@@ -292,6 +301,7 @@ impl CleanupReport {
             "cleaners": {
                 "huggingface_cache": cleaner(&self.hf),
                 "weles_recordings": cleaner(&self.weles),
+                "build_caches": cleaner(&self.builds),
             },
             "caps": {
                 "bytes": self.caps.bytes,
@@ -762,6 +772,7 @@ pub fn sanitize_report(value: &Value, lock_busy: bool) -> Value {
         "cleaners": {
             "huggingface_cache": public_cleaner(cleaners.and_then(|c| c.get("huggingface_cache"))),
             "weles_recordings": public_cleaner(cleaners.and_then(|c| c.get("weles_recordings"))),
+            "build_caches": public_cleaner(cleaners.and_then(|c| c.get("build_caches"))),
         },
         "caps": {
             "bytes": cap("bytes"),
@@ -1161,7 +1172,24 @@ fn run_with_lock(
         report.caps.scan = true;
     }
     weles::scan_weles(home, &policy, attempted_at, remaining_scan, &mut report);
-    let total_scanned = report.hf.scanned_items + report.weles.scanned_items;
+    let remaining_after_weles =
+        (policy.max_scan_items - report.hf.scanned_items - report.weles.scanned_items).max(0);
+    if remaining_after_weles == 0 && policy.cleaners.contains_key("build_caches") {
+        report.caps.scan = true;
+    }
+    // Last of the three, and the only one whose root can be the whole of
+    // `$HOME`: it walks with whatever scan budget the fixed-layout cleaners
+    // left, and with the same pass deadline the HF scan honours.
+    build_caches::scan_build_caches(
+        home,
+        &policy,
+        attempted_at,
+        remaining_after_weles,
+        deadline,
+        &mut report,
+    );
+    let total_scanned =
+        report.hf.scanned_items + report.weles.scanned_items + report.builds.scanned_items;
     if total_scanned >= policy.max_scan_items {
         report.caps.scan = true;
     }
@@ -1175,7 +1203,11 @@ fn run_with_lock(
         }
     };
     report.free_bytes_after = Some(after);
-    let deleted = report.hf.deleted_items;
+    // Deliberately NOT `report.hf.deleted_items` alone, as the Python had
+    // it: build_caches has no Python original to stay faithful to, and a
+    // pass that removed 200 GB of tagged build trees while the HF cache
+    // held nothing evictable must not report `no_eligible_items`.
+    let deleted = report.hf.deleted_items + report.builds.deleted_items;
     if policy.mode != "enforce" {
         report.outcome = "report_only".to_string();
     } else if report.active_slot_count > 0 && policy.cleaners.contains_key("huggingface_cache") {
