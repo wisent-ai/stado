@@ -229,6 +229,15 @@ fn terminate(record: &ProcessRecord) {
     }
 }
 
+fn release_log_path(
+    target: &ReleaseTargetPolicy,
+    product: &str,
+    version: &str,
+    stream: &str,
+) -> PathBuf {
+    Path::new(&target.logs_root).join(format!("{product}-{version}.{stream}"))
+}
+
 fn release_log(
     target: &ReleaseTargetPolicy,
     product: &str,
@@ -237,12 +246,41 @@ fn release_log(
 ) -> Result<File, String> {
     std::fs::create_dir_all(&target.logs_root)
         .map_err(|error| format!("cannot create release logs {}: {error}", target.logs_root))?;
-    let path = Path::new(&target.logs_root).join(format!("{product}-{version}.{stream}"));
+    let path = release_log_path(target, product, version, stream);
     OpenOptions::new()
         .create(true)
         .append(true)
         .open(&path)
         .map_err(|error| format!("cannot open release log {}: {error}", path.display()))
+}
+
+/// The last `lines` lines of a release log, for a failure record that has to
+/// explain itself.
+///
+/// A quarantine reason used to say only what the agent observed from outside --
+/// "pid is gone", "refused the connection" -- and the product's own account of
+/// why it exited sat in a file nobody had opened. Two days of this session went
+/// into reading those files by hand, one candidate at a time, so the reason now
+/// carries the tail with it. Missing or unreadable is reported, never silently
+/// dropped: a reason that mentions no log at all would send the next reader
+/// hunting for one.
+fn log_tail(path: &Path, lines: usize, max_chars: usize) -> String {
+    let body = match std::fs::read_to_string(path) {
+        Ok(body) => body,
+        Err(error) => return format!("[{} unreadable: {error}]", path.display()),
+    };
+    let trimmed = body.trim_end();
+    if trimmed.is_empty() {
+        return format!("[{} is empty]", path.display());
+    }
+    let mut kept: Vec<&str> = trimmed.lines().rev().take(lines).collect();
+    kept.reverse();
+    let joined = kept.join(" | ");
+    let clipped = match joined.char_indices().nth(max_chars) {
+        None => joined.clone(),
+        Some((cut, _)) => format!("{}…", &joined[..cut]),
+    };
+    format!("{}: {clipped}", path.display())
 }
 
 fn expand_home(value: &str, home: &str) -> String {
@@ -1020,8 +1058,18 @@ async fn reconcile_product(
     {
         terminate(&process);
         let reason = format!(
-            "candidate did not become ready within {}s: {why}",
-            policy.strategy.readiness_timeout_seconds
+            "candidate did not become ready within {}s: {why}; stderr {}; stdout {}",
+            policy.strategy.readiness_timeout_seconds,
+            log_tail(
+                &release_log_path(target, product, &manifest.version, "err"),
+                20,
+                1200,
+            ),
+            log_tail(
+                &release_log_path(target, product, &manifest.version, "out"),
+                5,
+                400,
+            )
         );
         state.quarantined.insert(
             process.artifact_sha256.clone(),
@@ -1072,7 +1120,10 @@ async fn reconcile_product(
                         format!("adopted the proxy already serving {}", serving.stable_bind);
                     Ok(())
                 }
-                Err(why) => Err(format!("stable release proxy failed to start: {why}")),
+                Err(why) => Err(format!(
+                    "stable release proxy failed to start: {why}; stderr {}",
+                    log_tail(&release_log_path(target, product, "proxy", "err"), 20, 1200)
+                )),
             }
         }
     };
