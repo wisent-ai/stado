@@ -383,6 +383,11 @@ Requires=XORG_UNIT
 Type=simple
 Environment=DISPLAY=DISPLAY_NUMBER
 Environment=HOME=/root
+# The screen lives on the declared board, but Sunshine's NVENC path opens the
+# driver's default device, so the first live session rendered on card 1 and
+# encoded on card 0. Binding the encoder keeps the whole session on one board,
+# which is the point of declaring one on a two-card host.
+Environment=CUDA_VISIBLE_DEVICES=CUDA_DEVICE
 ExecStartPre=/bin/sh -c 'for _ in $(seq 30); do /usr/bin/xdpyinfo -display DISPLAY_NUMBER >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
 # openbox does not daemonise, so it belongs in the background: as an
 # ExecStartPre it never returned and the unit sat in `activating` until the
@@ -432,6 +437,10 @@ printf '\n'
     .replace("CREDENTIAL_FILE", CREDENTIAL_FILE)
     .replace("XORG_UNIT", XORG_UNIT)
     .replace("SUNSHINE_UNIT", SUNSHINE_UNIT)
+    .replace(
+        "CUDA_DEVICE",
+        declaration.gpu_uuid.as_deref().unwrap_or("0"),
+    )
     .replace("DISPLAY_NUMBER", DISPLAY);
     let output =
         host_channel::run_script_with_timeout(target, &script, install_timeout(), runner).await?;
