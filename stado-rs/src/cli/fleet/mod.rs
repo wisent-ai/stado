@@ -25,6 +25,7 @@ use super::{CmdError, CLICK_ERROR_CODE};
 pub mod doctor;
 pub mod enroll;
 pub mod fleets;
+pub mod ingress;
 pub mod invite;
 pub mod key;
 pub mod ops;
@@ -129,6 +130,11 @@ pub enum FleetCommands {
         /// Invite id as printed by `invite` and `invites`.
         id: String,
     },
+    /// Stand up, inspect or tear down the public entrance the one-line invite
+    /// mode needs — a narrow enrollment listener behind a Cloudflare quick
+    /// tunnel, with no Cloudflare account, token or DNS record involved.
+    #[command(subcommand)]
+    Ingress(IngressCommands),
     /// Every way a machine can be added, and whether this fleet allows it.
     Methods {
         /// Emit the machine-readable document instead of the table.
@@ -165,6 +171,36 @@ pub enum FleetCommands {
     /// SSH host keys in the globally selected credential store.
     #[command(subcommand)]
     Key(KeyCommands),
+}
+
+/// The three things an operator does to the fleet's public entrance. There is
+/// no `restart`: a quick tunnel comes back under a different address, so the
+/// operation that reads like "the same entrance again" is exactly the one that
+/// silently invalidates every invitation already handed out. `down` then `up`
+/// says what happened.
+#[derive(Subcommand)]
+pub enum IngressCommands {
+    /// Start the narrow enrollment listener and a tunnel in front of it,
+    /// verify the public address from the internet, then publish it.
+    Up {
+        /// Loopback port for the listener. Chosen automatically when omitted;
+        /// a port already in use is refused, never adopted.
+        #[arg(long)]
+        port: Option<u16>,
+        /// Use a named tunnel on the fleet's own domain instead of a quick
+        /// one. Refused today: the Cloudflare API token it needs does not
+        /// exist in the vault.
+        #[arg(long)]
+        named: bool,
+    },
+    /// What is published, whether it still answers, and how old it is.
+    Status {
+        /// Emit the machine-readable document instead of the report.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Close the tunnel, stop the listener, and unpublish the address.
+    Down,
 }
 
 #[derive(Subcommand)]
@@ -260,6 +296,11 @@ async fn execute(command: FleetCommands) -> Result<bool, String> {
         } => invite::invite(name.as_deref(), &expires, uses, offline, json).await,
         FleetCommands::Invites { json } => invite::invites(json).await,
         FleetCommands::RevokeInvite { id } => invite::revoke_invite(&id).await,
+        FleetCommands::Ingress(sub) => match sub {
+            IngressCommands::Up { port, named } => ingress::up(port, named).await,
+            IngressCommands::Status { json } => ingress::status(json).await,
+            IngressCommands::Down => ingress::down().await,
+        },
         FleetCommands::Methods { json } => enroll::catalog::methods(json).await,
         FleetCommands::Join => enroll::join().await,
         FleetCommands::Pending { json } => enroll::pending(json).await,

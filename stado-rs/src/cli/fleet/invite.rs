@@ -476,6 +476,15 @@ pub fn probe_authority(base: &str) -> Result<(String, u16), String> {
     Ok((host.to_string(), port))
 }
 
+/// Where the base address came from. The one-liner's usefulness depends on
+/// this: an address from configuration is as durable as the deployment behind
+/// it, and an address from a quick tunnel lasts exactly as long as that tunnel
+/// does — which is a sentence the operator has to read, because the person who
+/// runs the one-liner reads nothing at all.
+pub const BASE_FROM_ENROLLMENT_URL: &str = "enrollment.url";
+pub const BASE_FROM_INGRESS: &str = "ingress";
+pub const BASE_FROM_API_URL: &str = "api.url";
+
 /// Origin the invite probe and the printed one-liner are built from:
 /// `enrollment.url` when configured, else `api.url`.
 ///
@@ -491,6 +500,35 @@ pub fn enrollment_base() -> String {
     } else {
         enrollment
     }
+}
+
+/// The base an online invite is built on, in the order that puts the most
+/// deliberate answer first.
+///
+/// 1. `enrollment.url`. Somebody configured an enrollment origin; nothing this
+///    process discovers may override a decision that was written down.
+/// 2. The published `enrollments/ingress.json`, **if its address still
+///    answers**. This is the entrance `stado fleet ingress up` stood up, and it
+///    is the whole reason the one-line mode is reachable on a fleet with no
+///    public deployment. It is used only when it is live: a stale object from a
+///    tunnel that has since closed must not become a one-liner, which is the
+///    same rule the probe has always enforced, applied one step earlier.
+/// 3. `api.url`, the deployment endpoint — unchanged, and still what every
+///    fleet that serves enrollment from its own origin gets.
+///
+/// Returns the base and which of the three it is, so the caller can say out
+/// loud that a tunnel address is temporary.
+pub async fn resolve_invite_base(store: &JobStorage) -> (String, &'static str) {
+    let configured = crate::config::enrollment_url();
+    if !configured.is_empty() {
+        return (configured, BASE_FROM_ENROLLMENT_URL);
+    }
+    if let Ok(Some(ingress)) = crate::cli::fleet::ingress::published(store).await {
+        if probe_checkpoint(&ingress.base_url).await.reachable {
+            return (ingress.base_url, BASE_FROM_INGRESS);
+        }
+    }
+    (crate::config::stado_api_url(), BASE_FROM_API_URL)
 }
 
 /// Ask the configured control point for `/join.sh` before anybody is told to
@@ -953,17 +991,27 @@ pub async fn invite(
     };
     preflight_invite_name(&document, &live, &target_name)?;
 
-    // The control point comes from configuration — never from a name compiled
-    // into this binary. A built-in default would be exactly the silent fallback
-    // that printed a one-liner for a host nobody deployed.
+    // The control point comes from configuration or from an entrance this
+    // fleet published — never from a name compiled into this binary. A built-in
+    // default would be exactly the silent fallback that printed a one-liner for
+    // a host nobody deployed.
     //
-    // `enrollment.url` wins when it is set, because the origin an owner can
-    // actually reach is the narrow `--enrollment-only` listener behind the
-    // tunnel, not `api.url`. `api.url` stays the release/deployment endpoint
-    // and is the fallback, so a deployment that never configured a separate
-    // enrollment origin behaves exactly as it did before. Both empty still
-    // means `not_configured`.
-    let base = enrollment_base();
+    // `enrollment.url` wins when it is set, because a written-down decision
+    // outranks anything discovered here. Next comes the live
+    // `enrollments/ingress.json`, the entrance `fleet ingress up` verified from
+    // the internet — without it the one-line mode has nothing to point at on a
+    // fleet with no public deployment. `api.url` stays the release/deployment
+    // endpoint and is the last fallback, so a deployment that never configured
+    // a separate enrollment origin behaves exactly as it did before. All three
+    // empty still means `not_configured`.
+    //
+    // `--offline` does not consult the ingress: it probes nothing by definition,
+    // and an unprobed tunnel address is not a base, it is a guess.
+    let (base, base_source) = if offline {
+        (enrollment_base(), BASE_FROM_ENROLLMENT_URL)
+    } else {
+        resolve_invite_base(&store).await
+    };
     let checkpoint = if offline {
         Checkpoint {
             url: base.clone(),
@@ -975,6 +1023,7 @@ pub async fn invite(
     } else {
         probe_checkpoint(&base).await
     };
+    let from_ingress = base_source == BASE_FROM_INGRESS;
     let mode = checkpoint.mode();
     // Offline mints no secret at all, rather than minting one and being trusted
     // to forget it.
@@ -1052,6 +1101,8 @@ pub async fn invite(
             "public_key": public_key,
             "authorized_keys_line": line,
             "checkpoint": checkpoint_document(&checkpoint),
+            "base_source": base_source,
+            "base_is_temporary": from_ingress,
         });
         match (&token, &command, &snippet) {
             (Some(token), Some(command), _) => {
@@ -1065,6 +1116,14 @@ pub async fn invite(
                 rendered["next_step"] = Value::String(next_step.clone());
             }
             _ => {}
+        }
+        if from_ingress {
+            rendered["base_warning"] = Value::String(format!(
+                "{} is a temporary Cloudflare quick-tunnel address published by 'stado fleet \
+                 ingress'; this one-liner stops working the moment that ingress is stopped, and a \
+                 restarted ingress comes back under a different address",
+                checkpoint.url
+            ));
         }
         println!(
             "{}",
@@ -1086,6 +1145,24 @@ pub async fn invite(
             println!("send this one line to the machine's owner:");
             println!("  {command}");
             println!("then approve the machine: stado fleet pending, stado fleet approve <hostname>");
+            if from_ingress {
+                println!(
+                    "  that address is a TEMPORARY Cloudflare quick-tunnel address, published by \
+                     'stado fleet ingress'."
+                );
+                println!(
+                    "  the one line above stops working the moment the ingress is stopped, and a"
+                );
+                println!(
+                    "  restarted ingress comes back under a DIFFERENT address — an invitation \
+                     handed out"
+                );
+                println!(
+                    "  before a restart is dead. Keep the ingress standing until the machine has \
+                     joined,"
+                );
+                println!("  and check it with: stado fleet ingress status");
+            }
         }
         (_, _, Some(snippet)) => {
             println!(

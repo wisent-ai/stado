@@ -63,6 +63,16 @@ pub(super) const MAX_REQUEST_BYTES: usize = 4096;
 /// `deploy/join.sh` by `build.rs`. Empty means the build tree had no script.
 const JOIN_SCRIPT: &str = include_str!(concat!(env!("OUT_DIR"), "/join.sh"));
 
+/// The embedded script itself, for the one caller that must compare against
+/// exactly what this build serves rather than against a second copy of it:
+/// `stado fleet ingress up` fetches `/join.sh` back through the tunnel it just
+/// opened and checks the bytes. Reading `deploy/join.sh` off disk there would
+/// prove the tunnel reaches *a* listener; reading this constant proves it
+/// reaches one serving this binary's script.
+pub(super) fn join_script_source() -> &'static str {
+    JOIN_SCRIPT
+}
+
 /// Store prefix of the join requests these routes file.
 const REQUESTS_PREFIX: &str = "enrollments/";
 const STATUS_PENDING: &str = "pending";
