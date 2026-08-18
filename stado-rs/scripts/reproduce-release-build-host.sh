@@ -11,19 +11,24 @@
 # directory and runs it there. It claims nothing and completes no job.
 set -u
 
-RUN=${1:?run id required}
-PLATFORM=${2:-darwin-arm64}
+
 BIN="$HOME/.stado/bin/stado"
+PLATFORM=darwin-arm64
 work=$(/usr/bin/mktemp -d "$HOME/.stado/build-work/reproduce.XXXXXX")
 
-uri="stado://probierz/runs/release-pipeline/brama/$RUN/requests/$PLATFORM.json"
-"$BIN" storage get "$uri" "$work/release-request.json" >/dev/null 2>&1 || {
+# `host run-helper` hands a helper no operator words on purpose, so the run is
+# discovered here: the newest Brama pipeline request published for this platform.
+uri=$("$BIN" storage ls runs/release-pipeline/brama/ 2>/dev/null \
+  | /usr/bin/awk -v p="requests/$PLATFORM.json" '$1 ~ p {print $1, $2}' \
+  | /usr/bin/sort -k2 -r | /usr/bin/head -1 | /usr/bin/awk '{print $1}')
+[ -n "$uri" ] || { printf 'no brama release request found\n' >/dev/stderr; /bin/rm -rf "$work"; exit 1; }
+printf 'request=%s\n' "$uri"
+
+"$BIN" storage get "stado://probierz/$uri" "$work/release-request.json" >/dev/null 2>&1 || {
   printf 'could not fetch %s\n' "$uri" >/dev/stderr
   /bin/rm -rf "$work"
   exit 1
 }
-printf 'request_bytes=%s\n' "$(/usr/bin/stat -f %z "$work/release-request.json")"
-
 cd "$work" || exit 1
 "$BIN" release worker --request release-request.json >"$work/out.log" 2>&1
 rc=$?
