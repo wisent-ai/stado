@@ -113,6 +113,39 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   the same elapsed time, so the routes cannot be used to enumerate or classify
   invitations; requests are bounded per code, per address and in size before
   any credential store or object store is read.
+- Added the `invite` method to the fleet CLI, so adding somebody else's machine
+  no longer requires reaching it first: `stado fleet invite [--name NAME]
+  [--expires 24h] [--uses 1]` mints the fleet's own ed25519 channel key through
+  the existing `fleet key generate` path and prints, once, the single line the
+  machine's owner runs. The token is `<id>.<secret>` with 32 bytes of system
+  randomness; the store keeps only `secret_sha256`, so nothing — no command, no
+  stored object, no log — can reproduce a code after it is shown. `stado fleet
+  invites` reports the state each invitation is actually in (`open`, `spent`,
+  `revoked`, `expired`, the last derived from the deadline rather than waiting
+  for a writer to notice), and `stado fleet revoke-invite ID` retires one.
+  Expired, spent, revoked and unknown codes are refused identically.
+- `stado fleet methods` (and `--json`) lists the four ways a machine can be
+  added — `invite`, `adopt`, `join`, `declare` — with what each requires, what
+  it provides, which registry field gates it, and whether this fleet's catalog
+  allows it. It is the one source the CLI, Stado Desktop and the documentation
+  read, so a method that exists is a method an operator can find.
+- `stado fleet approve` now completes an invitation the same way the operator's
+  own `enroll` does: it takes the SSH destination from the machine's request and
+  runs the ordinary probing path — `hostname` and `uname` verified before
+  anything is written, the entry rolled back if the agent will not install — and
+  then marks the invitation spent. The machine is registered under the name its
+  invitation reserved (which is the name its channel key was minted under), with
+  its probed hostname recorded beside it. `stado fleet pending` gained `--json`
+  and now shows that reserved name, the channel approval will dial, the
+  invitation behind the request, and the key fingerprint the machine reports
+  having installed.
+- The enrollment catalog gained `allow_invite` and `allow_adopt`, reported by
+  `stado fleet catalog` and honored by both methods' preflights. Like the
+  existing allowances they default to permitted, including in an `enrollment`
+  section written before the method existed.
+- `authorized_keys` lines no longer name the credential item twice: the stored
+  public key already carries `ssh-keygen`'s comment, so `stado fleet key
+  install` was appending it beside a second copy.
 
 ### Coding clients
 

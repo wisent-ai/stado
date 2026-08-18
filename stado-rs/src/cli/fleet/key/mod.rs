@@ -28,8 +28,22 @@ pub fn item_id(target: &str) -> String {
     format!("{ITEM_PREFIX}{target}")
 }
 
+/// One `authorized_keys` line: the key's type and blob, then exactly one
+/// comment.
+///
+/// The stored key still carries the comment `ssh-keygen -C` put on it, which is
+/// already the credential item id, so pasting it verbatim in front of another
+/// comment produced a line naming the same item twice — what `key install`
+/// appends today. Only the first two fields of a public key are the key; the
+/// rest is commentary, and this owns the commentary.
 pub fn authorized_keys_line(public_key: &str, comment: &str) -> String {
-    format!("{public_key} {comment}")
+    let mut fields = public_key.split_whitespace();
+    match (fields.next(), fields.next()) {
+        (Some(kind), Some(blob)) => format!("{kind} {blob} {comment}"),
+        // Not a two-field key: pass it through rather than silently truncating
+        // something the caller will have to recognize in an error message.
+        _ => format!("{} {comment}", public_key.trim()),
+    }
 }
 
 pub(crate) async fn run_checked(
@@ -101,7 +115,11 @@ pub(crate) async fn settle_readable(
             format!("cannot make {id} readable by {}: {exc}", credentials.consumer)
         })?;
         if outcome.wrote() {
-            println!(
+            // Progress, not output: `fleet invite --json` mints a channel key on
+            // its way to printing one JSON document, and a widened grant is not
+            // part of that document. stderr keeps the operator informed without
+            // making every JSON consumer parse around it.
+            eprintln!(
                 "granted {} read on {} ({} capabilities held, was {})",
                 credentials.consumer,
                 outcome.added.join(", "),
@@ -608,9 +626,15 @@ mod tests {
     }
 
     #[test]
-    fn authorized_keys_line_carries_comment() {
+    fn authorized_keys_line_carries_exactly_one_comment() {
         assert_eq!(
             authorized_keys_line("ssh-ed25519 AAAA", "stado-ssh-mini"),
+            "ssh-ed25519 AAAA stado-ssh-mini"
+        );
+        // The stored key already carries ssh-keygen's own comment, which is the
+        // same item id: the line must name it once, not twice.
+        assert_eq!(
+            authorized_keys_line("ssh-ed25519 AAAA stado-ssh-mini", "stado-ssh-mini"),
             "ssh-ed25519 AAAA stado-ssh-mini"
         );
     }
