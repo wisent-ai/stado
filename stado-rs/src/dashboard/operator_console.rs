@@ -485,6 +485,18 @@ pub(super) async fn run(body: &[u8]) -> Result<Value, ConsoleError> {
         .env("NO_COLOR", "1")
         .env("TERM", "dumb")
         .env("STADO_DASHBOARD_CHILD", "1")
+        // The dashboard is the ONE process that reads the disk store directly,
+        // and its launcher says so with WC_STORAGE_BACKEND=local — for the
+        // server, which would otherwise recurse into its own socket. A child
+        // CLI inheriting that override reads bare paths at the store root,
+        // while this same process serves every remote writer namespaced blobs
+        // (`objects/<ns>/<key>`): two views of one disk. That is how `fleet
+        // invites` through this bridge answered "no invites" for invitations
+        // sitting in the store it was served from. The child is an ordinary
+        // client: it resolves storage from the config file, and calling back
+        // into this server over HTTP is a separate process — no recursion.
+        .env_remove("WC_STORAGE_BACKEND")
+        .env_remove("WC_LOCAL_STORAGE_PATH")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

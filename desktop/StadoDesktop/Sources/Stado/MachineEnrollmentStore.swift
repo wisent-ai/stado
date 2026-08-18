@@ -35,6 +35,18 @@ final class MachineEnrollmentStore: ObservableObject {
     /// Why a step or a method the operator just clicked did not open. A locked
     /// row that says nothing is indistinguishable from a broken one.
     @Published private(set) var navigationBlock: String?
+    /// The public entrance for the one-line invitation, as `fleet ingress
+    /// status --json` reports it. Nil until read; the screen must not guess.
+    @Published private(set) var ingress: FleetIngressStatus?
+    /// What the entrance is doing right now ("standing up", "tearing down"),
+    /// shown instead of a frozen button: `ingress up` waits for a tunnel and
+    /// for DNS and legitimately takes up to a minute.
+    @Published private(set) var entranceBusy: String?
+    /// Whether the configuration names a permanent enrollment address
+    /// (`enrollment.url`). Nil until read. When false and no ingress stands,
+    /// an online mint can only fall to the offline mode — the screen says so
+    /// before the operator finds out by minting.
+    @Published private(set) var enrollmentURLConfigured: Bool?
 
     private static let draftKey = "machineEnrollmentDraft"
     private static let planKey = "machineEnrollmentPlan"
@@ -290,6 +302,64 @@ final class MachineEnrollmentStore: ObservableObject {
         plan.inviteMode = mode
         navigationBlock = nil
         persistPlan()
+    }
+
+    // MARK: The public entrance
+
+    /// `fleet ingress status --json` + `config show` — what the one-line mode
+    /// would stand on today. Read when the operator enters the invite path;
+    /// both are reads, but the bridge classifies the whole `fleet` family as
+    /// mutating, so they carry the operator's confirmation like every other
+    /// call here.
+    func refreshEntrance() async {
+        guard isConfigured else { return }
+        if let result = try? await run(["fleet", "ingress", "status", "--json"]),
+           result.ok,
+           let status: FleetIngressStatus = Self.decode(from: result.standardOutput) {
+            ingress = status
+        }
+        if enrollmentURLConfigured == nil,
+           let result = try? await run(["config", "show"]),
+           result.ok,
+           let document = try? JSONSerialization.jsonObject(with: Data(result.standardOutput.utf8)) as? [String: Any],
+           let resolved = document["resolved"] as? [String: Any] {
+            let configured = (resolved["enrollment_url"] as? String) ?? ""
+            enrollmentURLConfigured = !configured.isEmpty
+        }
+    }
+
+    /// `fleet ingress up` — stand the entrance up and wait for the control
+    /// plane to verify it from the internet before anything is published.
+    func standUpEntrance() async {
+        guard !isRunning, entranceBusy == nil else { return }
+        entranceBusy = "Standing the entrance up: starting the listener and the tunnel, then verifying the address from the internet. This takes up to a minute."
+        defer { entranceBusy = nil }
+        do {
+            let result = try await run(["fleet", "ingress", "up"], timeoutSeconds: 240)
+            if !result.ok {
+                failure = .transport(result.message)
+            }
+        } catch {
+            failure = .transport(Self.describe(error))
+        }
+        await refreshEntrance()
+    }
+
+    /// `fleet ingress down` — tear it down. Every one-line invitation minted
+    /// against it stops working; the CLI says the same at mint time.
+    func tearDownEntrance() async {
+        guard !isRunning, entranceBusy == nil else { return }
+        entranceBusy = "Tearing the entrance down."
+        defer { entranceBusy = nil }
+        do {
+            let result = try await run(["fleet", "ingress", "down"], timeoutSeconds: 120)
+            if !result.ok {
+                failure = .transport(result.message)
+            }
+        } catch {
+            failure = .transport(Self.describe(error))
+        }
+        await refreshEntrance()
     }
 
     /// `stado fleet invite --name NAME [--offline] --json` — mint one
@@ -791,7 +861,10 @@ final class MachineEnrollmentStore: ObservableObject {
     /// does not list as read-only as a mutation, and `fleet` is such a family,
     /// so every call here carries the confirmation the operator gave by
     /// pressing the button that started it.
-    private func run(_ arguments: [String]) async throws -> OperatorCommandResult {
+    private func run(
+        _ arguments: [String],
+        timeoutSeconds: Int = 120
+    ) async throws -> OperatorCommandResult {
         guard let address else {
             throw FleetControlError.backend(
                 status: 0,
@@ -802,7 +875,8 @@ final class MachineEnrollmentStore: ObservableObject {
             arguments: arguments,
             confirmsMutation: true,
             at: address,
-            authorizationToken: authorizationToken
+            authorizationToken: authorizationToken,
+            timeoutSeconds: timeoutSeconds
         )
     }
 
