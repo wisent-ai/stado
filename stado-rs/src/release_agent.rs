@@ -378,14 +378,24 @@ async fn await_ready_because(
 /// in use`, and the rollout is failed for a bind that is being served correctly.
 /// Asking the port rather than the record is the only way to tell a stale pid from
 /// a dead proxy.
-async fn stable_bind_serves(target: &ReleaseTargetPolicy) -> bool {
+/// Returns what the bind answered, so a declined adoption records evidence rather
+/// than a silent `false`. The first version returned a bool, declined once, and
+/// left no way to tell a refused connection from a proxy pointing at an upstream
+/// that had just been terminated.
+async fn stable_bind_answer(target: &ReleaseTargetPolicy) -> Result<(), String> {
     let url = format!("http://{}{}", target.stable_bind, target.readiness_path);
-    reqwest::Client::new()
-        .get(url)
+    match reqwest::Client::new()
+        .get(&url)
         .timeout(Duration::from_secs(3))
         .send()
         .await
-        .is_ok_and(|response| response.status().is_success())
+    {
+        Ok(response) if response.status().is_success() => Ok(()),
+        Ok(response) => Err(format!("{url} answered HTTP {}", response.status())),
+        Err(error) if error.is_timeout() => Err(format!("{url} did not answer within 3s")),
+        Err(error) if error.is_connect() => Err(format!("{url} refused the connection")),
+        Err(error) => Err(format!("{url} failed: {error}")),
+    }
 }
 
 fn stop_legacy(target: &ReleaseTargetPolicy) -> Result<(), String> {
@@ -743,13 +753,16 @@ async fn reconcile_product(
             tokio::time::sleep(Duration::from_millis(200)).await;
             if proxy_alive(&state) {
                 Ok(())
-            } else if stable_bind_serves(target).await {
-                state.proxy_pid = None;
-                state.detail =
-                    format!("adopted the proxy already serving {}", target.stable_bind);
-                Ok(())
             } else {
-                Err("stable release proxy failed to start".to_string())
+                match stable_bind_answer(target).await {
+                    Ok(()) => {
+                        state.proxy_pid = None;
+                        state.detail =
+                            format!("adopted the proxy already serving {}", target.stable_bind);
+                        Ok(())
+                    }
+                    Err(why) => Err(format!("stable release proxy failed to start: {why}")),
+                }
             }
         };
         if let Err(reason) = proxy_result {
@@ -917,22 +930,22 @@ async fn reconcile_product(
         tokio::time::sleep(Duration::from_millis(200)).await;
         if proxy_alive(&state) {
             Ok(())
-        } else if stable_bind_serves(target).await {
-            // Someone already serves the stable bind, and the target file this
-            // agent just wrote is what any Stado proxy reads, so the live one is
-            // already forwarding to this candidate. Spawning a second binder
-            // returns `Address already in use (os error 48)` and the rollout was
-            // failed for it while the release it wanted was being served the
-            // whole time -- state said "no proxy", the port said otherwise, and
-            // nothing compared them.
-            state.proxy_pid = None;
-            state.detail = format!(
-                "adopted the proxy already serving {}",
-                target.stable_bind
-            );
-            Ok(())
         } else {
-            Err("stable release proxy failed to start".to_string())
+            // Someone may already serve the stable bind: the target file this
+            // agent just wrote is what every Stado proxy reads, so a proxy left by
+            // an earlier run is already forwarding to this candidate. Spawning a
+            // second binder returns `Address already in use (os error 48)`, and the
+            // rollout used to fail for a bind that was serving correctly -- state
+            // said "no proxy", the port said otherwise, and nothing compared them.
+            match stable_bind_answer(target).await {
+                Ok(()) => {
+                    state.proxy_pid = None;
+                    state.detail =
+                        format!("adopted the proxy already serving {}", target.stable_bind);
+                    Ok(())
+                }
+                Err(why) => Err(format!("stable release proxy failed to start: {why}")),
+            }
         }
     };
     if let Err(reason) = proxy_result {
