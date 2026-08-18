@@ -384,6 +384,9 @@ enum Commands {
     /// Renders queue counts, per-model breakdown, live agent capacity, recent
     /// failures, and a throughput-based completion projection at GET / with
     /// auto-refresh, and the same data as JSON at GET /api/state.json.
+    ///
+    /// With --enrollment-only the listener serves nothing but the three
+    /// enrollment routes, which is the only shape safe to publish.
     Dashboard {
         /// Bind address. Default WC_DASHBOARD_BIND or 127.0.0.1.
         #[arg(long)]
@@ -391,6 +394,11 @@ enum Commands {
         /// Port. Default WC_DASHBOARD_PORT or 8765.
         #[arg(long)]
         port: Option<i64>,
+        /// Serve ONLY GET /join.sh, GET /api/fleet/invite/key and
+        /// POST /api/fleet/join; answer 404 to every other path and method.
+        /// Publish this listener through a tunnel, never the full dashboard.
+        #[arg(long)]
+        enrollment_only: bool,
     },
 
     /// Run a device-local dashboard, scheduler, and worker.
@@ -1752,7 +1760,11 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Vast(sub) => vast::dispatch(&sub).await,
         Commands::Quota { json, sub } => quota::dispatch(json, &sub).await,
         Commands::Coordinator { target, once } => coordinator::run(target, once).await,
-        Commands::Dashboard { bind, port } => dashboard::run(bind, port).await,
+        Commands::Dashboard {
+            bind,
+            port,
+            enrollment_only,
+        } => dashboard::run(bind, port, enrollment_only).await,
         Commands::LocalControlPlane {
             bind,
             port,
