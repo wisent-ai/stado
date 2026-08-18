@@ -216,6 +216,17 @@ pub async fn run_script_with_timeout(
     .map_err(DeployError)
 }
 
+/// The stderr line [`installed_helper_script`] emits when the named helper is
+/// not an executable regular file under `$HOME/.stado/bin`.
+///
+/// Public and spelled once because it is the difference between two operator
+/// answers: a helper that failed has the remote's own words to report, while a
+/// helper that was never delivered needs an `install-helper` command instead of
+/// a diagnosis. `cli/service_converge.rs` decides which of those to print by
+/// matching this text, so the sentence the script emits and the sentence a
+/// caller looks for cannot drift apart.
+pub const HELPER_MISSING: &str = "missing executable regular Stado helper";
+
 /// The script that runs one installed owner-only helper, with its fixed UUID
 /// arguments already appended.
 ///
@@ -227,7 +238,7 @@ pub fn installed_helper_script(remote_name: &str, arguments: &str) -> String {
         r#"set -euo pipefail
 helper="$HOME/.stado/bin/"{remote_name}
 if [ ! -f "$helper" ] || [ -L "$helper" ] || [ ! -x "$helper" ]; then
-  printf '%s\n' "missing executable regular Stado helper: $helper" > /dev/stderr
+  printf '%s\n' "{HELPER_MISSING}: $helper" > /dev/stderr
   false
 fi
 exec "$helper"{arguments}
