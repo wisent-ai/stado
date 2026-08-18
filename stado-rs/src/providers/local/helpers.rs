@@ -196,8 +196,9 @@ pub async fn detect_local_vram_gb() -> i64 {
 /// Python `_smi_free_vram_gb`: live free VRAM in GB on the emptiest card,
 /// -1 if the driver is unreadable.
 ///
-/// The emptiest card is the honest answer to "will this job fit": a renter
-/// holding card 0 does not shrink what card 1 can take.
+/// The emptiest card is the honest answer to "will this job fit": a workload
+/// holding card 0 -- ours, an external one like ComfyUI, or a Vast renter -- does
+/// not shrink what card 1 can take.
 pub async fn smi_free_vram_gb() -> i64 {
     smi_gpu_cards()
         .await
@@ -335,8 +336,8 @@ pub fn build_capacity_dict(
 /// gpu_type.
 ///
 /// A tier count is summed per card, never derived from a pooled total. Two
-/// 95 GiB boards do not hold a 190 GiB model, and a card a renter is using
-/// does not reduce what its neighbour can take -- the single-pool answer was
+/// 95 GiB boards do not hold a 190 GiB model, and a card something else is busy
+/// on does not reduce what its neighbour can take -- the single-pool answer was
 /// wrong in both directions at once.
 pub fn build_capacity_dict_per_card(
     gpu_type: &str,
