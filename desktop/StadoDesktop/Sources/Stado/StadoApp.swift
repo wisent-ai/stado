@@ -47,7 +47,7 @@ struct StadoApp: App {
     @NSApplicationDelegateAdaptor(StadoAppDelegate.self) private var delegate
 
     var body: some Scene {
-        WindowGroup("Stado Operations Console", id: "operations-console") {
+        WindowGroup("Stado", id: "operations-console") {
             StadoFirstUseRoot(
                 operationsStore: delegate.operationsStore,
                 cleanupStore: delegate.cleanupStore,
