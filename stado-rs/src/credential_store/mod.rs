@@ -249,6 +249,31 @@ pub async fn read_item_with(
     }
 }
 
+/// Resolve one optional string field for a caller that carries its own Skarbiec
+/// coordinates — the field-level counterpart of [`read_item_with`].
+///
+/// A worker host holds its own grant and never a control-plane bearer, so a
+/// credential a worker legitimately needs cannot be read through the configured
+/// (control-plane) consumer there. Asking with the caller's own triple is how a
+/// worker reads its own field, and one field is the smaller disclosure than the
+/// whole item.
+pub async fn read_string_with(
+    url: &str,
+    consumer: &str,
+    token_file: &str,
+    id: &str,
+    field: &str,
+) -> Result<Option<String>, SkarbiecError> {
+    match selected()? {
+        Backend::Skarbiec { url: store_url } => {
+            Client::direct(store_url.as_deref().unwrap_or(url), consumer, token_file)?
+                .read_string(id, field)
+                .await
+        }
+        Backend::File { path } => file::file_read_string(&path, id, field),
+    }
+}
+
 /// The broker's base URL when the selected store is a Skarbiec, and `None`
 /// when it is a file. Exposed for diagnostics that need to talk to the broker
 /// directly rather than through a `Client`, which would need a grant the probe
