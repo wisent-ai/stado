@@ -66,7 +66,9 @@ fn parse_fields(stdout: &str) -> Map<String, Value> {
 /// Package installs and a `.deb` download need more than an ordinary host
 /// operation's bound.
 fn install_timeout() -> std::time::Duration {
-    host_channel::remote_timeout().saturating_mul(u8::BITS.saturating_mul(u8::BITS))
+    // Wide enough for apt plus a package download, narrow enough that a wedged
+    // unit start is a five-minute answer rather than an hour of silence.
+    host_channel::remote_timeout().saturating_mul(u8::BITS.saturating_div(2))
 }
 
 /// Can this host render and encode at all, and what would it render on?
@@ -344,7 +346,7 @@ if [ ! -s CREDENTIAL_FILE ]; then
 fi
 user=$(cut -d: -f1 CREDENTIAL_FILE)
 secret=$(cut -d: -f2- CREDENTIAL_FILE)
-sunshine --creds "$user" "$secret" >/dev/null 2>&1 || true
+timeout 20 sunshine --creds "$user" "$secret" >/dev/null 2>&1 || printf 'CREDS\tsunshine refused the credential write; the web UI keeps its own\n'
 printf 'CREDENTIALS\tCREDENTIAL_FILE\n'
 
 install -d -m 0755 /root/.config/sunshine
@@ -382,7 +384,10 @@ Type=simple
 Environment=DISPLAY=DISPLAY_NUMBER
 Environment=HOME=/root
 ExecStartPre=/bin/sh -c 'for _ in $(seq 30); do /usr/bin/xdpyinfo -display DISPLAY_NUMBER >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
-ExecStartPre=/usr/bin/openbox --replace --sm-disable
+# openbox does not daemonise, so it belongs in the background: as an
+# ExecStartPre it never returned and the unit sat in `activating` until the
+# start timeout, which reads exactly like a crash that never happened.
+ExecStartPre=/bin/sh -c 'setsid /usr/bin/openbox --replace --sm-disable >/tmp/stado-stream-openbox.log 2>&1 &'
 ExecStart=/usr/bin/sunshine /root/.config/sunshine/sunshine.conf
 Restart=always
 RestartSec=5
@@ -473,6 +478,8 @@ else
 fi
 printf 'LIBRARY\t'
 df -Ph "LIBRARY_DIR" 2>/dev/null | awk 'NR==2 { print $1, $4 " available" }' || printf 'absent\n'
+printf 'XORG_LOG\t%s\n' "$(journalctl -u XORG_UNIT --no-pager -n 3 -o cat 2>/dev/null | tr '\n' '|' || true)"
+printf 'SUNSHINE_LOG\t%s\n' "$(journalctl -u SUNSHINE_UNIT --no-pager -n 3 -o cat 2>/dev/null | tr '\n' '|' || true)"
 printf 'CLIENT_ENDPOINT\t'
 if command -v tailscale >/dev/null; then
   tailscale ip 2>/dev/null | while IFS= read -r address; do case "$address" in *:*) ;; *) printf '%s\n' "$address"; break ;; esac; done
@@ -631,10 +638,30 @@ pub fn bus_id_for(probe_report: &Value, gpu_uuid: Option<&str>) -> Option<String
         };
         match gpu_uuid {
             Some(wanted) if *uuid != wanted => continue,
-            _ => return Some((*bus).to_string()),
+            _ => return xorg_bus_id(bus),
         }
     }
     None
+}
+
+/// nvidia-smi's `00000000:C2:00.0` as Xorg's `PCI:194:0:0`.
+///
+/// Xorg wants decimal, nvidia-smi prints hex, and passing the hex form through
+/// verbatim produced a config with no matching device: the X server exited with
+/// "no screens found" and systemd restarted it every five seconds, which from
+/// outside looked like a unit stuck in `activating`.
+pub fn xorg_bus_id(smi_bus_id: &str) -> Option<String> {
+    let parts: Vec<&str> = smi_bus_id.split(':').collect();
+    let (bus, tail) = match parts.as_slice() {
+        [_domain, bus, tail] => (*bus, *tail),
+        [bus, tail] => (*bus, *tail),
+        _ => return None,
+    };
+    let (device, function) = tail.split_once('.')?;
+    let bus = u32::from_str_radix(bus.trim(), 16).ok()?;
+    let device = u32::from_str_radix(device.trim(), 16).ok()?;
+    let function = u32::from_str_radix(function.trim(), 16).ok()?;
+    Some(format!("PCI:{bus}:{device}:{function}"))
 }
 
 /// The declaration a fresh `stream declare` writes.
