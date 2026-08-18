@@ -55,6 +55,32 @@ def main():
             changed.append(f"service {SERVICE} (declared, not installed on this host)")
         if entry.pop("placement", NONE) is not NONE:
             changed.append("placement.excludes (replaced by the service derivation)")
+    # The service directory names the declaration it manages, and the validator
+    # refuses a document where that name has no declaration on the active host.
+    # Removing only the host row therefore never validated: both halves of one
+    # fact go together, or neither does.
+    directory = (document.get("service_directory") or {}).get("services") or {}
+    retired_names = [key for key, entry in directory.items()
+                     if entry.get("managed_service") == SERVICE
+                     and entry.get("active_host") == TARGET]
+    for name in retired_names:
+        consumers = sorted((directory[name].get("consumers") or {}))
+        directory.pop(name)
+        changed.append(
+            f"service_directory.services.{name}"
+            + (f" (its consumers were {', '.join(consumers)})" if consumers else "")
+        )
+    # One logical service is named in three places: the host declaration, the
+    # directory, and every resolver adapter that forwards to it. A retirement
+    # that clears two of the three leaves a document the validator rejects for
+    # an "unknown logical service", so the third goes with them.
+    for entry in document.get("targets", []):
+        resolver = entry.get("service_resolver") or {}
+        adapters = resolver.get("adapters") or []
+        kept = [item for item in adapters if item.get("service") not in retired_names]
+        if len(kept) != len(adapters):
+            resolver["adapters"] = kept
+            changed.append(f"{entry['name']}: resolver adapters for {', '.join(retired_names)}")
     if not changed:
         print(f"settled    {TARGET} declares neither the service nor the exclusion")
         return NONE
