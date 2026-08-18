@@ -389,6 +389,44 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   reported as undeliverable rather than as a failed delivery, and converge
   never writes the registry — the declared version is the operator's statement
   of intent, published with `stado host declare-version`.
+- `stado host release` delivers any product the fleet declares, not the two
+  binaries it used to carry in a compile-time table. `stado service converge`
+  already read `weles-worker 0.5.1` off the registry and `0.5.0` off
+  `/Users/charles/weles` and called the drift, and `host release --binary
+  weles-worker` answered `"weles-worker" is not a stado-managed binary` — a
+  drift report with no way to close it. A deliverable product is now a
+  declaration in `stado-rs/data/products.json`, shipped inside the binary that
+  performs the delivery, naming the artefact source and archive member, the
+  platform keys it is published for, the install root on the host, the owning
+  unit label where one exists, and how the installed version is read back.
+  `stado`, `skarbiec` and `weles-worker` are three entries with equal standing;
+  no hardcoded product list remains, and `host inventory` reads the same
+  declaration instead of spelling `stado skarbiec` into its remote program.
+  Every field is required: a declaration that omits one, points an install root
+  outside `$HOME`, claims an unpublished platform, or reads a tree's version
+  out of a path a delivery must preserve is refused when the declaration is
+  first read.
+- A declared product may install a tree rather than a single program.
+  `weles-worker`'s install root is the artefact directory itself, so a delivery
+  unpacks the declared payload into the versioned staging tree, verifies the
+  version the staged tree declares, then replaces the code path by path, one
+  rename each, retiring what it replaces — and leaves the declared host-local
+  paths (`recordings`, `var`, `.work`) exactly where they are. They are never
+  named as a destination, never moved, and an artefact that carries one of them
+  is refused both at staging and again at activation. Every check a program
+  delivery makes still applies: the immutable manifest identity, the archive
+  digest, the platform the host reports, and a version read back from the
+  delivered artefact before the unit is restarted. `--dry-run` prints the
+  artefact it would fetch, the checks it would run, the paths it would replace,
+  the paths it would preserve and the unit it would restart, and sends the
+  read-only probe and nothing else.
+- Publication is per product, so `host release` and `host promote-version`
+  refuse a platform the product does not declare instead of fetching a
+  coordinate nobody published. A product declaring only a unit label still has
+  to have that label found in the registry's declared service set before
+  anything restarts; a product declaring the label with its unit file locates
+  the unit itself, which is how the Weles worker's LaunchAgent is addressable
+  without a registry record for it.
 
 ## 0.5.0-rc.1 - 2026-07-29
 

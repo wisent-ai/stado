@@ -75,6 +75,11 @@ pub const SERVICES_KEY: &str = "services";
 pub const SOURCE_REGISTRY: &str = "registry";
 /// Carried by the fixed `host_recovery::MANAGED_AGENTS` program.
 pub const SOURCE_RECOVERY: &str = "recovery";
+/// Located by a product declaration
+/// ([`crate::deploy::products::Unit`]): the shipped document names the label
+/// AND the unit file, which is what makes it addressable without a registry
+/// record for it.
+pub const SOURCE_PRODUCT: &str = "product";
 
 /// macOS launchd.
 pub const KIND_LAUNCHD: &str = "launchd";
