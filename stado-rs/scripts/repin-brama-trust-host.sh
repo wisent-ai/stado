@@ -20,9 +20,23 @@ LABEL=com.wisent.always-on.brama
 [ -f "$REGISTRY" ] || { printf '%s\n' "missing $REGISTRY" >&2; exit 1; }
 [ -L "$CURRENT" ] || [ -e "$CURRENT" ] || { printf '%s\n' "missing $CURRENT" >&2; exit 1; }
 
-resolved=$(/usr/bin/readlink -f "$CURRENT")
-BIN="$resolved/bin/brama"
-[ -x "$BIN" ] || { printf '%s\n' "no executable at $BIN" >&2; exit 1; }
+# Pin what the service process actually executes, because `current` proved to
+# be a broken link of its own: it resolves to a release directory with no
+# bin/brama inside, so following it pins nothing. Order: the running pid's
+# binary, then the resolved current, then the newest complete release tree.
+BIN=""
+pid=$(/usr/bin/sudo -n /bin/launchctl print "system/$LABEL" 2>/dev/null \
+    | /usr/bin/awk '$1=="pid"{print $3; exit}')
+running=$(/usr/bin/sudo -n /bin/ps -o comm= -p "${pid:-0}" 2>/dev/null)
+for candidate in "$running" "$(/usr/bin/readlink -f "$CURRENT")/bin/brama"; do
+    [ -x "$candidate" ] && BIN="$candidate" && break
+done
+if [ -z "$BIN" ]; then
+    for tree in $(/bin/ls -td "$HOME"/.stado/services/brama/sha256-* 2>/dev/null); do
+        [ -x "$tree/bin/brama" ] && BIN="$tree/bin/brama" && break
+    done
+fi
+[ -n "$BIN" ] || { printf '%s\n' "no brama binary found under current, the running process, or any release" >&2; exit 1; }
 
 stamp=$(/bin/date -u +%Y%m%dT%H%M%SZ)
 /bin/cp -p "$REGISTRY" "$REGISTRY.bak-$stamp"
