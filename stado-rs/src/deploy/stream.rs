@@ -402,9 +402,15 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable --now XORG_UNIT >/dev/null 2>&1 || true
-systemctl enable --now SUNSHINE_UNIT >/dev/null 2>&1 || true
-sleep 8
+# Restart, not `enable --now`: a unit that is already active keeps running the
+# old file, so a reconcile that rewrote the unit changed nothing. The first
+# version of this script rewrote the Sunshine unit with the encoder binding and
+# the session kept encoding on the other board.
+systemctl enable XORG_UNIT >/dev/null 2>&1 || true
+systemctl enable SUNSHINE_UNIT >/dev/null 2>&1 || true
+systemctl restart XORG_UNIT || true
+systemctl restart SUNSHINE_UNIT || true
+sleep 10
 printf 'XORG\t%s\n' "$(systemctl is-active XORG_UNIT 2>&1 || true)"
 printf 'SESSION\t'
 if DISPLAY=DISPLAY_NUMBER xdpyinfo >/dev/null 2>&1; then
