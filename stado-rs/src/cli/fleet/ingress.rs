@@ -86,7 +86,8 @@ pub const MODE_NAMED: &str = "named";
 /// filled in, it is blocked by a vault item that does not exist, and Skarbiec
 /// refuses to grant on a field it cannot see. There is nothing to configure
 /// until that item is created by whoever owns the Cloudflare account.
-const NAMED_REFUSAL: &str = "--named cannot be established today: a named tunnel needs a Cloudflare \
+const NAMED_REFUSAL: &str =
+    "--named cannot be established today: a named tunnel needs a Cloudflare \
      API token and the vault has no 'platform-admin-cloudflare#api_token' field, so Skarbiec \
      refuses to grant on it and no credential exists to authenticate the tunnel with";
 
@@ -95,7 +96,10 @@ const NAMED_REFUSAL: &str = "--named cannot be established today: a named tunnel
 /// operator machines this fleet is driven from; `/usr/local/bin` second for
 /// Intel Homebrew and manual installs; `PATH` last, so a deliberately placed
 /// binary still wins over nothing at all.
-const CLOUDFLARED_CANDIDATES: &[&str] = &["/opt/homebrew/bin/cloudflared", "/usr/local/bin/cloudflared"];
+const CLOUDFLARED_CANDIDATES: &[&str] = &[
+    "/opt/homebrew/bin/cloudflared",
+    "/usr/local/bin/cloudflared",
+];
 
 /// How long the loopback listener gets to answer its own port. It serves three
 /// routes and touches neither store nor vault before answering `/join.sh`, so
@@ -350,9 +354,12 @@ fn runtime_dir() -> Result<PathBuf, String> {
 fn spawn_detached(program: &Path, args: &[String], log: &Path) -> Result<Child, String> {
     let file = std::fs::File::create(log)
         .map_err(|exc| format!("could not open {} for writing: {exc}", log.display()))?;
-    let errors = file
-        .try_clone()
-        .map_err(|exc| format!("could not duplicate the log handle for {}: {exc}", log.display()))?;
+    let errors = file.try_clone().map_err(|exc| {
+        format!(
+            "could not duplicate the log handle for {}: {exc}",
+            log.display()
+        )
+    })?;
     Command::new(program)
         .args(args)
         .stdin(Stdio::null())
@@ -506,7 +513,10 @@ fn log_tail(log: &Path, lines: usize) -> String {
     let Ok(text) = std::fs::read_to_string(log) else {
         return String::new();
     };
-    let collected: Vec<&str> = text.lines().filter(|line| !line.trim().is_empty()).collect();
+    let collected: Vec<&str> = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
     let start = collected.len().saturating_sub(lines);
     collected[start..].join(" | ")
 }
@@ -619,9 +629,9 @@ async fn await_public_dns(host: &str) -> Result<(), String> {
                         .get("Answer")
                         .and_then(Value::as_array)
                         .is_some_and(|answers| {
-                            answers.iter().any(|answer| {
-                                answer.get("data").and_then(Value::as_str).is_some()
-                            })
+                            answers
+                                .iter()
+                                .any(|answer| answer.get("data").and_then(Value::as_str).is_some())
                         });
                     if published {
                         return Ok(());
@@ -745,7 +755,9 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, String> {
         &listener_log,
     )?;
     let listener_pgid = listener.id() as i32;
-    println!("listener: stado dashboard --enrollment-only on 127.0.0.1:{port} (pgid {listener_pgid})");
+    println!(
+        "listener: stado dashboard --enrollment-only on 127.0.0.1:{port} (pgid {listener_pgid})"
+    );
 
     if let Err(detail) = await_listener(&mut listener, port, &listener_log).await {
         terminate_child(&mut listener, "dashboard");
@@ -781,7 +793,10 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, String> {
         }
     };
     let tunnel_pgid = tunnel.id() as i32;
-    println!("tunnel:   {} tunnel --url http://127.0.0.1:{port} (pgid {tunnel_pgid})", cloudflared.display());
+    println!(
+        "tunnel:   {} tunnel --url http://127.0.0.1:{port} (pgid {tunnel_pgid})",
+        cloudflared.display()
+    );
 
     let base_url = match await_tunnel(&mut tunnel, &tunnel_log).await {
         Ok(address) => address,
@@ -803,7 +818,9 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, String> {
     if let Err(detail) = await_public_dns(&host).await {
         terminate_child(&mut tunnel, "cloudflared");
         terminate_child(&mut listener, "dashboard");
-        return Err(format!("ingress failed at the verification stage: {detail}"));
+        return Err(format!(
+            "ingress failed at the verification stage: {detail}"
+        ));
     }
     println!("verifying it from the internet before publishing anything...");
 
@@ -812,7 +829,9 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, String> {
         Err(detail) => {
             terminate_child(&mut tunnel, "cloudflared");
             terminate_child(&mut listener, "dashboard");
-            return Err(format!("ingress failed at the verification stage: {detail}"));
+            return Err(format!(
+                "ingress failed at the verification stage: {detail}"
+            ));
         }
     };
     let verified_at = Utc::now();
@@ -852,12 +871,16 @@ pub async fn up(port: Option<u16>, named: bool) -> Result<bool, String> {
     println!("verified: GET {base_url}/join.sh answered 200 with {served} bytes, matching the {expected} this build serves");
     println!("published: {INGRESS_PATH}");
     println!();
-    println!("this is a Cloudflare QUICK tunnel: no account, no API token and no DNS record were used.");
+    println!(
+        "this is a Cloudflare QUICK tunnel: no account, no API token and no DNS record were used."
+    );
     println!(
         "  Cloudflare documents quick tunnels as not for production and rate limits them, which is"
     );
     println!("  acceptable for an entrance used a few times a month to add a machine and for nothing else.");
-    println!("  the address is NEW on every start: stopping and restarting the ingress invalidates");
+    println!(
+        "  the address is NEW on every start: stopping and restarting the ingress invalidates"
+    );
     println!("  every one-liner already handed out under the old one.");
     println!();
     println!("mint an invitation now: stado fleet invite --name <target-name>");
@@ -955,9 +978,23 @@ pub async fn status(as_json: bool) -> Result<bool, String> {
         ),
         None => println!("  verified:  {}", ingress.verified_at),
     }
-    println!("  listener:  127.0.0.1:{} ({})", ingress.listener_port,
-        if listener_alive { "running" } else { "not running" });
-    println!("  tunnel:    {}", if tunnel_alive { "running" } else { "not running" });
+    println!(
+        "  listener:  127.0.0.1:{} ({})",
+        ingress.listener_port,
+        if listener_alive {
+            "running"
+        } else {
+            "not running"
+        }
+    );
+    println!(
+        "  tunnel:    {}",
+        if tunnel_alive {
+            "running"
+        } else {
+            "not running"
+        }
+    );
     if !local {
         println!(
             "  the two processes belong to '{}', not to this machine, so their state is unknown here",
@@ -1007,10 +1044,9 @@ pub async fn down() -> Result<bool, String> {
     }
     let tunnel_stopped = terminate_group(ingress.pid_hint.tunnel_pgid, "cloudflared");
     let listener_stopped = terminate_group(ingress.pid_hint.listener_pgid, "dashboard");
-    store
-        .delete_blob(INGRESS_PATH)
-        .await
-        .map_err(|exc| format!("both processes were stopped but {INGRESS_PATH} could not be removed: {exc}"))?;
+    store.delete_blob(INGRESS_PATH).await.map_err(|exc| {
+        format!("both processes were stopped but {INGRESS_PATH} could not be removed: {exc}")
+    })?;
     println!("ingress {} is down", ingress.base_url);
     println!(
         "  tunnel:   {}",
@@ -1023,7 +1059,10 @@ pub async fn down() -> Result<bool, String> {
     println!(
         "  listener: {}",
         if listener_stopped {
-            format!("stopped (pgid {}, port {})", ingress.pid_hint.listener_pgid, ingress.listener_port)
+            format!(
+                "stopped (pgid {}, port {})",
+                ingress.pid_hint.listener_pgid, ingress.listener_port
+            )
         } else {
             "was not running".to_string()
         }

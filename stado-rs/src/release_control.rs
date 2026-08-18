@@ -151,7 +151,11 @@ pub struct BlueGreenServing {
 impl ReleaseTargetPolicy {
     /// The blue-green serving coordinates, or why this target has none.
     pub fn blue_green_serving(&self) -> Result<BlueGreenServing, String> {
-        match (&self.stable_bind, &self.candidate_ports, &self.readiness_path) {
+        match (
+            &self.stable_bind,
+            &self.candidate_ports,
+            &self.readiness_path,
+        ) {
             (Some(stable_bind), Some(candidate_ports), Some(readiness_path)) => {
                 Ok(BlueGreenServing {
                     stable_bind: stable_bind.clone(),
@@ -782,6 +786,12 @@ mod tests {
             version: "0.2.2".to_string(),
             platform: "darwin-arm64".to_string(),
             source_revision: "151ce0f907cc1e7b22a2c4e7356a4251444f4d42".to_string(),
+            source_sha256: "714861bf4a2001654d271a62ac1ed99f3f0ce302142baad608b32f13ce056792"
+                .to_string(),
+            pipeline_manifest_sha256:
+                "d460e56bf4bf1582f4c63c31eb8219e8e6bd0b3492d7d0ed59cb2d835326c1d0".to_string(),
+            qualification_receipt_sha256:
+                "ac891e0e5036507e4eb28e5f6652e319de6e3f9d2be895f388a931a51b596081".to_string(),
             artifact_sha256: "119f93dd06634e9249eef8ae633d2bc02139c588f19fe05f1c7864224182c9ef"
                 .to_string(),
             artifact_bytes: 5_000_115,

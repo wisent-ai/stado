@@ -17,10 +17,10 @@
 pub mod catalog;
 pub mod legacy;
 
-use serde_json::{json, Value};
 use crate::cli::registry::{fetch_document, push_document};
 use crate::queue::JobStorage;
 use crate::targets::normalize_hostname;
+use serde_json::{json, Value};
 
 use crate::cli::fleet::ops::register_target;
 
@@ -84,8 +84,7 @@ pub fn build_invited_request(
     request["target_name"] = Value::String(target_name.to_string());
     request["destination"] = Value::String(destination.to_string());
     request["invite_id"] = Value::String(invite_id.to_string());
-    request["installed_key_fingerprint"] =
-        Value::String(installed_key_fingerprint.to_string());
+    request["installed_key_fingerprint"] = Value::String(installed_key_fingerprint.to_string());
     request
 }
 

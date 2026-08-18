@@ -1,9 +1,9 @@
 //! Safe repair of legacy registry entries that declared a machine without a
 //! communication channel or any proof of contact.
 
-use serde_json::{json, Value};
 use crate::monitor::host_health::HostHealthError;
 use crate::queue::JobStorage;
+use serde_json::{json, Value};
 
 fn target_index(document: &Value, name: &str) -> Result<Option<usize>, String> {
     let targets = document

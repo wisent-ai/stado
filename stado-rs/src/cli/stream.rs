@@ -12,8 +12,7 @@ use serde_json::Value;
 use super::CmdError;
 use crate::deploy::{host_channel, production_runner, stream as remote};
 use crate::stream::schema::{
-    DisplayStream, DEFAULT_LIBRARY_DIR, DEFAULT_REFRESH_HZ, DEFAULT_RESOLUTION,
-    SUNSHINE_HTTPS_PORT,
+    DisplayStream, DEFAULT_LIBRARY_DIR, DEFAULT_REFRESH_HZ, DEFAULT_RESOLUTION, SUNSHINE_HTTPS_PORT,
 };
 
 fn click(error: impl ToString) -> CmdError {
@@ -210,6 +209,9 @@ async fn probe(target_name: &str, json: bool) -> Result<(), CmdError> {
     Ok(())
 }
 
+// Nine parameters mirror the `stado stream declare` CLI surface one-to-one;
+// bundling them into a struct would only rename the same nine flags.
+#[allow(clippy::too_many_arguments)]
 async fn declare(
     target_name: &str,
     resolution: &str,
@@ -230,9 +232,15 @@ async fn declare(
         .await
         .map_err(click)?;
     let release = field(&probed, "release");
-    let mut declaration =
-        remote::default_declaration(resolution, refresh_hz, gpu_uuid, library_dir, steam, &release)
-            .map_err(CmdError::click)?;
+    let mut declaration = remote::default_declaration(
+        resolution,
+        refresh_hz,
+        gpu_uuid,
+        library_dir,
+        steam,
+        &release,
+    )
+    .map_err(CmdError::click)?;
     match (sunshine_url, sunshine_sha256) {
         (Some(url), Some(digest)) => {
             declaration.sunshine.deb_url = url;
@@ -307,11 +315,7 @@ fn declaration_of(target: &crate::targets::ComputeTarget) -> Result<DisplayStrea
     })
 }
 
-async fn apply(
-    target_name: &str,
-    provision_library: bool,
-    json: bool,
-) -> Result<(), CmdError> {
+async fn apply(target_name: &str, provision_library: bool, json: bool) -> Result<(), CmdError> {
     let target = host_channel::canonical_target(target_name)
         .await
         .map_err(click)?;
@@ -400,12 +404,7 @@ async fn status(target_name: &str, json: bool) -> Result<(), CmdError> {
     Ok(())
 }
 
-async fn pair(
-    target_name: &str,
-    pin: &str,
-    client: &str,
-    json: bool,
-) -> Result<(), CmdError> {
+async fn pair(target_name: &str, pin: &str, client: &str, json: bool) -> Result<(), CmdError> {
     let target = host_channel::canonical_target(target_name)
         .await
         .map_err(click)?;
@@ -415,7 +414,10 @@ async fn pair(
     if !emitted(&report, json, "paired")? {
         return Ok(());
     }
-    println!("{target_name}: paired {client} (HTTP {})", field(&report, "http"));
+    println!(
+        "{target_name}: paired {client} (HTTP {})",
+        field(&report, "http")
+    );
     Ok(())
 }
 

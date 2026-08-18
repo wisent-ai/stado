@@ -267,7 +267,11 @@ async fn refund(store: &JobStorage, accepted: &Accepted, spent: &Value) {
     let Ok(Some(current)) = store.read_text_versioned(&path).await else {
         return;
     };
-    if serde_json::from_str::<Value>(&current.content).ok().as_ref() != Some(spent) {
+    if serde_json::from_str::<Value>(&current.content)
+        .ok()
+        .as_ref()
+        != Some(spent)
+    {
         return;
     }
     let restored = invite::invite_document(&accepted.invite);

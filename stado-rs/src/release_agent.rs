@@ -358,14 +358,13 @@ async fn await_ready_because(
     seconds: u64,
 ) -> Option<String> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
-    let mut last = None;
     loop {
-        match not_ready_because(record, readiness_path).await {
+        let reason = match not_ready_because(record, readiness_path).await {
             None => return None,
-            Some(reason) => last = Some(reason),
-        }
+            Some(reason) => reason,
+        };
         if tokio::time::Instant::now() >= deadline {
-            return last;
+            return Some(reason);
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
@@ -383,10 +382,7 @@ async fn await_ready_because(
 /// left no way to tell a refused connection from a proxy pointing at an upstream
 /// that had just been terminated.
 async fn stable_bind_answer(serving: &BlueGreenServing) -> Result<(), String> {
-    let url = format!(
-        "http://{}{}",
-        serving.stable_bind, serving.readiness_path
-    );
+    let url = format!("http://{}{}", serving.stable_bind, serving.readiness_path);
     match reqwest::Client::new()
         .get(&url)
         .timeout(Duration::from_secs(3))
@@ -669,10 +665,11 @@ fn sweep_leaked_processes(
     state: &HostReleaseState,
 ) {
     let mut known = Vec::new();
-    for record in [&state.active, &state.candidate, &state.previous] {
-        if let Some(record) = record {
-            known.push(record.pid);
-        }
+    for record in [&state.active, &state.candidate, &state.previous]
+        .into_iter()
+        .flatten()
+    {
+        known.push(record.pid);
     }
     if let Some(pid) = state.proxy_pid {
         known.push(pid);
@@ -694,11 +691,7 @@ fn sweep_leaked_processes(
     }
 }
 
-fn next_port(
-    candidate_ports: [u16; 2],
-    state: &HostReleaseState,
-    occupied: Option<u16>,
-) -> u16 {
+fn next_port(candidate_ports: [u16; 2], state: &HostReleaseState, occupied: Option<u16>) -> u16 {
     // With no active record the previous rule always chose the first candidate
     // port -- exactly where a de-facto active from a lost rollout is still
     // serving, so the new candidate died on the bind and the rollout could never
@@ -1018,8 +1011,12 @@ async fn reconcile_product(
     state.phase = RolloutPhase::CandidateRunning;
     state.detail = format!("candidate pid={} port={port}", process.pid);
     save_state(target, &mut state)?;
-    if let Some(why) =
-        await_ready_because(&process, &serving.readiness_path, policy.strategy.readiness_timeout_seconds).await
+    if let Some(why) = await_ready_because(
+        &process,
+        &serving.readiness_path,
+        policy.strategy.readiness_timeout_seconds,
+    )
+    .await
     {
         terminate(&process);
         let reason = format!(
@@ -1227,6 +1224,9 @@ pub async fn proxy(state_path: &Path, bind: &str) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    // The child is reaped by `pid_alive` itself -- that reap is the behavior
+    // under test, so there is deliberately no `wait()` here.
+    #[allow(clippy::zombie_processes)]
     #[test]
     fn pid_alive_reaps_an_exited_child() {
         let child = Command::new("/usr/bin/true").spawn().unwrap();
@@ -1243,6 +1243,9 @@ mod tests {
         child.wait().unwrap();
     }
 
+    // `terminate` kills the group and the polling `pid_alive` reaps the
+    // shell; a `wait()` would race the reap it is asserting on.
+    #[allow(clippy::zombie_processes)]
     #[test]
     fn terminate_signals_the_release_process_group() {
         let temporary = tempfile::tempdir().unwrap();

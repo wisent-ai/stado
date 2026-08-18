@@ -5,8 +5,8 @@
 //! verifies the channel with the new key, and only then removes the old public
 //! key. Failed verification restores the old item.
 
-use serde_json::{json, Value};
 use crate::deploy::{CommandSpec, Runner};
+use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 

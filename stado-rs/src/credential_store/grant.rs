@@ -82,11 +82,14 @@ fn now_seconds() -> i64 {
 }
 
 fn read_vault(vault: &Path) -> Result<Value, SkarbiecError> {
-    let body = std::fs::read_to_string(vault).map_err(|error| {
-        deployment(format!("cannot read vault {}: {error}", vault.display()))
-    })?;
-    serde_json::from_str(&body)
-        .map_err(|error| deployment(format!("vault {} is not valid JSON: {error}", vault.display())))
+    let body = std::fs::read_to_string(vault)
+        .map_err(|error| deployment(format!("cannot read vault {}: {error}", vault.display())))?;
+    serde_json::from_str(&body).map_err(|error| {
+        deployment(format!(
+            "vault {} is not valid JSON: {error}",
+            vault.display()
+        ))
+    })
 }
 
 fn grant_of<'a>(document: &'a Value, consumer: &str) -> Result<&'a Value, SkarbiecError> {
@@ -289,7 +292,9 @@ mod tests {
     #[test]
     fn missing_consumer_is_named() {
         let document = json!({"tokens": {"other": {}}});
-        let error = grant_of(&document, "local-operator").unwrap_err().to_string();
+        let error = grant_of(&document, "local-operator")
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("local-operator"), "{error}");
     }
 }

@@ -10,12 +10,12 @@
 //! Anything a worker needs but cannot get marks the check failed; the
 //! process exit code carries the verdict for automation.
 
-use serde_json::Value;
 use crate::config;
 use crate::monitor::host_health;
 use crate::queue::{self, JobStorage};
 use crate::skarbiec::Client;
 use crate::targets;
+use serde_json::Value;
 
 /// One named probe result.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -230,31 +230,6 @@ async fn fleet_checks(store: &JobStorage, scoped: Option<&str>) -> Result<Vec<Ch
     Ok(checks)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::unverifiable_registration;
-
-    #[test]
-    fn channelless_and_contactless_is_unverifiable() {
-        assert!(unverifiable_registration(false, false));
-    }
-
-    #[test]
-    fn channel_makes_it_verifiable() {
-        assert!(!unverifiable_registration(true, false));
-    }
-
-    #[test]
-    fn beacon_makes_it_verifiable() {
-        assert!(!unverifiable_registration(false, true));
-    }
-
-    #[test]
-    fn channel_and_beacon_is_verifiable() {
-        assert!(!unverifiable_registration(true, true));
-    }
-}
-
 /// Run every section, print the report, and return whether the fleet is
 /// clean. Read-only: nothing here mutates the store, the registry, or any
 /// credential. `scoped` limits the beacon section to one named fleet; the
@@ -292,4 +267,29 @@ pub async fn run(as_json: bool, scoped: Option<&str>) -> Result<bool, String> {
         );
     }
     Ok(clean)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unverifiable_registration;
+
+    #[test]
+    fn channelless_and_contactless_is_unverifiable() {
+        assert!(unverifiable_registration(false, false));
+    }
+
+    #[test]
+    fn channel_makes_it_verifiable() {
+        assert!(!unverifiable_registration(true, false));
+    }
+
+    #[test]
+    fn beacon_makes_it_verifiable() {
+        assert!(!unverifiable_registration(false, true));
+    }
+
+    #[test]
+    fn channel_and_beacon_is_verifiable() {
+        assert!(!unverifiable_registration(true, true));
+    }
 }

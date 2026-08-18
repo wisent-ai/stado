@@ -346,6 +346,7 @@ mod tests {
         ComputeTarget {
             name: "mini-one".to_string(),
             kind: "local".to_string(),
+            release_platform: String::new(),
             gpu_type: None,
             slots: 1,
             ssh: Some("wisent@mini-one.local".to_string()),
@@ -358,7 +359,10 @@ mod tests {
             notes: String::new(),
             hostnames: vec!["mini-one.lan".to_string(), "mini-one.local".to_string()],
             weles: None,
+            identities: Vec::new(),
+            account_ref: None,
             disk_cleanup: None,
+            display_stream: None,
             env_overrides: Default::default(),
             agent_args: Vec::new(),
             vram_gb: None,

@@ -783,9 +783,8 @@ fn adopt_one(
         return Adoption::Skipped("payload carries no fields".to_string());
     };
     let context = payload.get("context").cloned().unwrap_or_else(|| json!({}));
-    match crate::credential_store::owner::store_json(
-        binary, canonical, id, kind, fields, &context,
-    ) {
+    match crate::credential_store::owner::store_json(binary, canonical, id, kind, fields, &context)
+    {
         Ok(()) => Adoption::Copied,
         Err(error) => Adoption::Failed(error.to_string()),
     }

@@ -890,7 +890,7 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         // because a host with two boards has two independent pools and the
         // pooled reading was wrong about both.
         let mut cards = helpers::smi_gpu_cards().await;
-        cards.sort_by(|left, right| right.free_vram_gb.cmp(&left.free_vram_gb));
+        cards.sort_by_key(|card| std::cmp::Reverse(card.free_vram_gb));
         let smi_free = cards
             .iter()
             .map(|card| card.free_vram_gb)
