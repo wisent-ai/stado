@@ -498,6 +498,29 @@ async fn terminal(store: &JobStorage, id: &str) -> Result<Job, CmdError> {
         tokio::time::sleep(Duration::from_secs(3)).await
     }
 }
+
+/// The last lines the failed job wrote, so the failure carries its own
+/// evidence.
+///
+/// A failed release job used to surface only the queue's one-size verdict
+/// ("workload exited unsuccessfully; inspect the redacted command output"),
+/// which sent the operator hunting per host. The worker names its steps in
+/// that log, so its tail is the diagnosis; it travels in the CLI error and,
+/// through the platform failure field, into the persisted run object the
+/// dashboard serves.
+async fn job_output_tail(store: &JobStorage, job_id: &str) -> String {
+    let path = format!("status/{job_id}/output/command_output.log");
+    match store.read_bytes(&path).await {
+        Ok(Some(bytes)) => {
+            let text = String::from_utf8_lossy(&bytes);
+            let lines: Vec<&str> = text.lines().collect();
+            let tail = &lines[lines.len().saturating_sub(15)..];
+            format!("; the job's last output:\n{}", tail.join("\n"))
+        }
+        Ok(None) => "; the job left no output log".to_string(),
+        Err(error) => format!("; the job's output log could not be read: {error}"),
+    }
+}
 async fn signing(product: &str) -> Result<(String, Vec<u8>), CmdError> {
     let (document, _) = super::registry::fetch_versioned_document().await?;
     let control = release_control::control(&document)?
@@ -550,10 +573,16 @@ async fn publish(
         job.state.as_str(),
         job_state::COMPLETED | job_state::UPLOADED
     ) {
+        let host = if job.pinned_host.is_empty() {
+            "unpinned host"
+        } else {
+            job.pinned_host.as_str()
+        };
         return Err(CmdError::click(format!(
-            "release job {} failed: {}",
+            "release job {} ({p} on {host}) failed: {}{}",
             rec.job_id,
-            job.error.unwrap_or(job.state)
+            job.error.clone().unwrap_or_else(|| job.state.clone()),
+            job_output_tail(store, &rec.job_id).await
         )));
     }
     let prefix = format!("status/{}/output/", rec.job_id);
