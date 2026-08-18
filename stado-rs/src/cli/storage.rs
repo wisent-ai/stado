@@ -34,6 +34,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use clap::{Args, Subcommand};
@@ -1685,7 +1686,16 @@ impl RemoteObjectApi {
 /// request" -- which reads like the host is down rather than like this
 /// process was never told whom to trust.
 pub(crate) fn fleet_https_client() -> Result<reqwest::Client, CmdError> {
-    let mut builder = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none());
+    // Unbounded clients hang forever on a DNS query that never returns: a
+    // release submit sat 20 minutes inside `publish` with zero output and zero
+    // sockets, parked on a getaddrinfo for the tokenless reader's host that had
+    // been issued under a network state that no longer existed. The store this
+    // client talks to is on the tailnet or the same machine; if it does not
+    // answer within a minute it is not going to.
+    let mut builder = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(60));
     let ca_file = crate::config::wc_stado_storage_ca_file().trim().to_string();
     if !ca_file.is_empty() {
         let path = crate::config_file::expand_tilde(&ca_file);
@@ -1751,18 +1761,27 @@ fn configured_object_base_url(variable: &str) -> Result<Option<url::Url>, CmdErr
 /// Canonical public origin for immutable release reads. Release consumers use
 /// the same `STADO_API_URL` contract as `storage get|stat|url`; there is no
 /// release-specific origin that can drift from it.
+///
+/// HTTPS is the rule because the origin leaves the machine asking. The one
+/// exception is loopback HTTP: the delivery fetch runs on the target itself,
+/// so a loopback origin can only name that host's own store — self-delivery,
+/// with no network path to tamper with. [`plan`](crate::deploy::host_release::plan)
+/// keeps the per-target gate: it accepts this shape only for the host the
+/// service directory says serves the object API.
 pub(crate) fn release_api_origin() -> Result<String, CmdError> {
     let url = configured_object_base_url("STADO_API_URL")?
         .ok_or_else(|| CmdError::click("STADO_API_URL is required for canonical release reads"))?;
-    if url.scheme() != "https" {
+    if url.scheme() != "https" && !crate::deploy::host_release::loopback_http_origin(url.as_str())
+    {
         return Err(CmdError::click(
-            "STADO_API_URL must use HTTPS for delivery to fleet hosts",
+            "STADO_API_URL must use HTTPS for delivery to fleet hosts; loopback HTTP is allowed \
+             only when the target is its own release store",
         ));
     }
     Ok(url.as_str().trim_end_matches('/').to_string())
 }
 
-fn object_api_endpoint(
+pub(crate) fn object_api_endpoint(
     base_url: &url::Url,
     route: &str,
     query: &[(&str, &str)],
