@@ -22,16 +22,22 @@ stamp=$(/bin/date -u +%Y%m%dT%H%M%SZ)
 
 printf 'alias_before=%s\n' \
   "$(/usr/bin/grep -m1 -o "WELES_AGENT_MODEL = '[a-z/]*'" "$R/dist/agent/jeden.js" 2>/dev/null)"
-printf 'fallback_before=%s\n' \
-  "$(/usr/bin/grep -c 'WELES_AGENT_FALLBACK_MODEL' "$R/dist/agent/jeden.js" 2>/dev/null)"
 
 /bin/rm -rf "$STAGE"
 /bin/mkdir -p "$STAGE"
 /usr/bin/tar -xzf "$SRC" -C "$STAGE" || { printf 'unpack failed\n' >/dev/stderr; exit 1; }
 [ -f "$STAGE/dist/agent/jeden.js" ] || { printf 'payload has no dist/agent/jeden.js\n' >/dev/stderr; exit 1; }
 
-if ! /usr/bin/grep -q 'WELES_AGENT_FALLBACK_MODEL' "$STAGE/dist/agent/jeden.js"; then
-  printf 'delivered dist has no fallback alias; refusing to swap\n' >/dev/stderr
+# The browser client asks Brama for `best` and for nothing else. A payload that
+# names a second alias is refused here rather than discovered later in a run.
+built=$(/usr/bin/grep -m1 -o "WELES_AGENT_MODEL = '[a-z/]*'" "$STAGE/dist/agent/jeden.js" 2>/dev/null)
+printf 'alias_built=%s\n' "$built"
+case "$built" in
+  *"'best'"*) : ;;
+  *) printf 'delivered dist does not ask for best; refusing to swap\n' >/dev/stderr; exit 1 ;;
+esac
+if /usr/bin/grep -q 'WELES_AGENT_FALLBACK_MODEL' "$STAGE/dist/agent/jeden.js"; then
+  printf 'delivered dist carries a fallback alias; refusing to swap\n' >/dev/stderr
   exit 1
 fi
 
@@ -45,8 +51,8 @@ printf 'kept_previous=%s\n' "$R/dist.before-$stamp"
 /usr/bin/sudo -n /bin/launchctl kickstart -k system/com.wisent.always-on.weles >/dev/null 2>&1 || true
 /bin/sleep 20
 
-printf 'fallback_live=%s\n' \
-  "$(/usr/bin/grep -c 'WELES_AGENT_FALLBACK_MODEL' "$R/dist/agent/jeden.js" 2>/dev/null)"
+printf 'alias_live=%s\n' \
+  "$(/usr/bin/grep -m1 -o "WELES_AGENT_MODEL = '[a-z/]*'" "$R/dist/agent/jeden.js" 2>/dev/null)"
 printf 'worker_pid=%s weles_api=%s\n' \
   "$(/usr/bin/sudo -n /bin/launchctl print system/com.wisent.always-on.weles 2>/dev/null | /usr/bin/awk '$1=="pid"{print $3;exit}')" \
   "$(/usr/bin/curl -s -o /dev/null -w '%{http_code}' --max-time 8 http://127.0.0.1:8788/healthz || true)"
