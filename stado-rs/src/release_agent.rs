@@ -320,27 +320,52 @@ fn spawn_release(
     })
 }
 
-async fn ready(record: &ProcessRecord, path: &str) -> bool {
+/// Why a candidate is not ready yet, or `None` when it is.
+///
+/// This used to be a `bool`, and the quarantine record it fed said only
+/// "candidate did not become ready before deadline". A brama candidate was
+/// quarantined four times across twelve days with its own log showing
+/// `Starting brama server on 127.0.0.1:18080` seconds earlier, and the record
+/// could not distinguish a dead process from a refused connection from an HTTP
+/// status. Every hypothesis had to be excluded by reading the product's source.
+async fn not_ready_because(record: &ProcessRecord, path: &str) -> Option<String> {
     if !pid_alive(record.pid) {
-        return false;
+        return Some(format!("pid {} is gone", record.pid));
     }
     let url = format!("http://127.0.0.1:{}{}", record.port, path);
-    reqwest::Client::new()
-        .get(url)
+    match reqwest::Client::new()
+        .get(&url)
         .timeout(Duration::from_secs(3))
         .send()
         .await
-        .is_ok_and(|response| response.status().is_success())
+    {
+        Ok(response) if response.status().is_success() => None,
+        Ok(response) => Some(format!("{url} answered HTTP {}", response.status())),
+        Err(error) if error.is_timeout() => Some(format!("{url} did not answer within 3s")),
+        Err(error) if error.is_connect() => Some(format!("{url} refused the connection")),
+        Err(error) => Some(format!("{url} failed: {error}")),
+    }
 }
 
-async fn await_ready(record: &ProcessRecord, target: &ReleaseTargetPolicy, seconds: u64) -> bool {
+async fn ready(record: &ProcessRecord, path: &str) -> bool {
+    not_ready_because(record, path).await.is_none()
+}
+
+/// Wait for readiness, returning the last reason it was refused.
+async fn await_ready_because(
+    record: &ProcessRecord,
+    target: &ReleaseTargetPolicy,
+    seconds: u64,
+) -> Option<String> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+    let mut last = None;
     loop {
-        if ready(record, &target.readiness_path).await {
-            return true;
+        match not_ready_because(record, &target.readiness_path).await {
+            None => return None,
+            Some(reason) => last = Some(reason),
         }
         if tokio::time::Instant::now() >= deadline {
-            return false;
+            return last;
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
@@ -828,9 +853,14 @@ async fn reconcile_product(
     state.phase = RolloutPhase::CandidateRunning;
     state.detail = format!("candidate pid={} port={port}", process.pid);
     save_state(target, &mut state)?;
-    if !await_ready(&process, target, policy.strategy.readiness_timeout_seconds).await {
+    if let Some(why) =
+        await_ready_because(&process, target, policy.strategy.readiness_timeout_seconds).await
+    {
         terminate(&process);
-        let reason = "candidate did not become ready before deadline".to_string();
+        let reason = format!(
+            "candidate did not become ready within {}s: {why}",
+            policy.strategy.readiness_timeout_seconds
+        );
         state.quarantined.insert(
             process.artifact_sha256.clone(),
             QuarantineRecord {
