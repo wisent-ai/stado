@@ -1200,10 +1200,7 @@ fn fail(report: &mut Map<String, Value>, exit_code: i32, error: String) -> Value
 /// a label the registry does not carry has no resolvable unit, which is
 /// reported as such and never restarted: that is the rule this command has
 /// always had, that it does not restart a unit nobody said existed.
-pub fn declared_unit(
-    target: &ComputeTarget,
-    product: &Product,
-) -> Option<service::ManagedService> {
+pub fn declared_unit(target: &ComputeTarget, product: &Product) -> Option<service::ManagedService> {
     let unit = product.unit.as_ref()?;
     let label = unit.label_for(&target.name);
     if let Some(found) = service::declared_services(target)
@@ -1259,10 +1256,7 @@ pub async fn release_target(
     report.insert("staged_path".to_string(), json!(plan.staged_path()));
     report.insert("active_path".to_string(), json!(plan.active_path()));
     report.insert("install_root".to_string(), json!(plan.product.root()));
-    report.insert(
-        "preserved_paths".to_string(),
-        json!(plan.preserved_paths()),
-    );
+    report.insert("preserved_paths".to_string(), json!(plan.preserved_paths()));
     report.insert("dry_run".to_string(), json!(plan.dry_run));
     let unit = declared_unit(target, plan.product);
     report.insert(
@@ -1306,7 +1300,10 @@ pub async fn release_target(
         .map(str::to_string)
         .collect();
     if plan.product.install.is_tree() {
-        report.insert("root_state".to_string(), json!(marker(&probe_markers, "root_state")));
+        report.insert(
+            "root_state".to_string(),
+            json!(marker(&probe_markers, "root_state")),
+        );
         report.insert("code_paths".to_string(), json!(code_paths));
         report.insert(
             "preserved_paths_present".to_string(),
@@ -1853,9 +1850,14 @@ mod tests {
 
         // Declared, but not this version. Delivery carries out a
         // declaration; it does not overrule one.
-        let error = release_target(&target_with(&[("stado", "0.4.392")]), &request(), false, &runner)
-            .await
-            .unwrap_err();
+        let error = release_target(
+            &target_with(&[("stado", "0.4.392")]),
+            &request(),
+            false,
+            &runner,
+        )
+        .await
+        .unwrap_err();
         assert!(
             error.0.contains("declares stado 0.4.392") && error.0.contains("not 0.5.1"),
             "{}",
@@ -1863,9 +1865,14 @@ mod tests {
         );
 
         // Declared for the other binary only.
-        let error = release_target(&target_with(&[("skarbiec", "0.1.3")]), &request(), false, &runner)
-            .await
-            .unwrap_err();
+        let error = release_target(
+            &target_with(&[("skarbiec", "0.1.3")]),
+            &request(),
+            false,
+            &runner,
+        )
+        .await
+        .unwrap_err();
         assert!(error.0.contains("declares no stado version"), "{}", error.0);
 
         // An empty declaration is not a declaration. A blank string in the
@@ -1970,7 +1977,9 @@ mod tests {
             ("activate", ok_output(activate_stdout())),
             ("restart", restarted),
         ]);
-        let report = release_target(&target, &request(), false, &runner).await.unwrap();
+        let report = release_target(&target, &request(), false, &runner)
+            .await
+            .unwrap();
 
         assert_eq!(report["status"], RELEASED_STATUS);
         assert_eq!(report["unit"], label);
@@ -2011,7 +2020,9 @@ mod tests {
             ("activate", ok_output(activate_stdout())),
             ("restart", refused),
         ]);
-        let report = release_target(&target, &request(), false, &runner).await.unwrap();
+        let report = release_target(&target, &request(), false, &runner)
+            .await
+            .unwrap();
 
         assert_eq!(report["status"], host_channel::FAILED_STATUS);
         assert_eq!(report["activated"], true);
@@ -2115,7 +2126,9 @@ mod tests {
             ("stage", ok_output(stage_stdout(DIGEST))),
             ("activate", ok_output(activate_stdout())),
         ]);
-        let report = release_target(&target(), &request, &runner).await.unwrap();
+        let report = release_target(&target(), &request, false, &runner)
+            .await
+            .unwrap();
         assert_eq!(report["status"], PLANNED_STATUS);
         assert_eq!(
             *seen.lock().await,
@@ -2485,7 +2498,7 @@ mod tests {
         let mut request = request();
         request.binary = "weles-worker".to_string();
         request.platform = "linux-amd64".to_string();
-        let error = plan(&linux, &request).unwrap_err();
+        let error = plan(&linux, &request, false).unwrap_err();
         assert!(
             error.0.contains("publishes no linux-amd64 release"),
             "{}",

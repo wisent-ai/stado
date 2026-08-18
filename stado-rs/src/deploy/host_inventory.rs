@@ -1375,7 +1375,11 @@ mod tests {
                 // `host forward-local` marks its endpoint.
                 assert_eq!(
                     spec.stdin.as_deref(),
-                    Some(remote_inventory_script().expect("declared products").as_str())
+                    Some(
+                        remote_inventory_script()
+                            .expect("declared products")
+                            .as_str()
+                    )
                 );
                 Ok(CommandOutput {
                     code: 0,

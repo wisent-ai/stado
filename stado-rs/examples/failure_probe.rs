@@ -111,7 +111,10 @@ fn main() {
 
     println!("== bounded_detail ==");
     let long = "x".repeat("4096".parse().expect("valid probe length"));
-    println!("bounded_detail_len={}", failure::bounded_detail(&long).len());
+    println!(
+        "bounded_detail_len={}",
+        failure::bounded_detail(&long).len()
+    );
     println!(
         "bounded_detail_trims={:?}",
         failure::bounded_detail("   an upstream said no   ")

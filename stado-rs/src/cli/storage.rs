@@ -1771,8 +1771,7 @@ fn configured_object_base_url(variable: &str) -> Result<Option<url::Url>, CmdErr
 pub(crate) fn release_api_origin() -> Result<String, CmdError> {
     let url = configured_object_base_url("STADO_API_URL")?
         .ok_or_else(|| CmdError::click("STADO_API_URL is required for canonical release reads"))?;
-    if url.scheme() != "https" && !crate::deploy::host_release::loopback_http_origin(url.as_str())
-    {
+    if url.scheme() != "https" && !crate::deploy::host_release::loopback_http_origin(url.as_str()) {
         return Err(CmdError::click(
             "STADO_API_URL must use HTTPS for delivery to fleet hosts; loopback HTTP is allowed \
              only when the target is its own release store",

@@ -110,8 +110,14 @@ pub async fn resolve_vast_api_key() -> String {
         );
         return String::new();
     }
-    match crate::credential_store::read_string_with(url, consumer, token_file, "stado-vast", "api_key")
-        .await
+    match crate::credential_store::read_string_with(
+        url,
+        consumer,
+        token_file,
+        "stado-vast",
+        "api_key",
+    )
+    .await
     {
         Ok(value) => value.unwrap_or_default(),
         Err(err) => {

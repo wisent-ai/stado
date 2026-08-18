@@ -357,8 +357,8 @@ pub fn product(name: &str) -> Result<&'static Product, DeployError> {
 /// `$HOME/.stado/bin` on a host and used to loop over the two names spelled
 /// into its remote program. A tree product is absent on purpose: nothing
 /// under that directory belongs to one.
-pub fn installed_programs() -> Result<Vec<(&'static str, &'static str, &'static str, &'static str)>, DeployError>
-{
+pub fn installed_programs(
+) -> Result<Vec<(&'static str, &'static str, &'static str, &'static str)>, DeployError> {
     Ok(declared()?
         .iter()
         .filter_map(|entry| match (&entry.install, &entry.readback) {
@@ -411,17 +411,12 @@ fn safe_relative_path(value: &str) -> bool {
 /// `$HOME/<relative>`: every install root is inside the account that runs
 /// the product, so a delivery cannot be pointed at `/` or another user.
 fn home_path(value: &str) -> bool {
-    value
-        .strip_prefix("$HOME/")
-        .is_some_and(safe_relative_path)
+    value.strip_prefix("$HOME/").is_some_and(safe_relative_path)
 }
 
 /// A unit-file path: `$HOME`-relative, or absolute for a system domain.
 fn unit_path(value: &str) -> bool {
-    home_path(value)
-        || value
-            .strip_prefix('/')
-            .is_some_and(safe_relative_path)
+    home_path(value) || value.strip_prefix('/').is_some_and(safe_relative_path)
 }
 
 /// Every refusal the declaration itself can earn.
@@ -555,12 +550,9 @@ pub fn validate(declaration: &Declaration) -> Result<(), String> {
                 // The version source is code, so replacing the code must
                 // replace it. A version read out of a preserved path would
                 // report the old build forever after a successful delivery.
-                if entry
-                    .install
-                    .preserve()
-                    .iter()
-                    .any(|preserved| path == preserved || path.starts_with(&format!("{preserved}/")))
-                {
+                if entry.install.preserve().iter().any(|preserved| {
+                    path == preserved || path.starts_with(&format!("{preserved}/"))
+                }) {
                     return Err(refuse(format!(
                         "version.path {path:?} is inside a preserved path, so a delivery could \
                          never change the version it reports"
@@ -683,7 +675,10 @@ mod tests {
         );
         assert_eq!(weles.readback.member(), Some("version"));
         let unit = weles.unit.as_ref().expect("a LaunchAgent runs the worker");
-        assert_eq!(unit.label_for("control-host"), "com.wisent.weles-worker");
+        assert_eq!(
+            unit.label_for("control-host"),
+            "com.wisent.weles-worker"
+        );
         assert_eq!(
             unit.path_for("control-host").as_deref(),
             Some("$HOME/Library/LaunchAgents/com.wisent.weles-worker.plist")
@@ -759,14 +754,7 @@ mod tests {
     /// nobody stated.
     #[test]
     fn a_declaration_missing_any_required_field_is_refused() {
-        for field in [
-            "name",
-            "why",
-            "source",
-            "platforms",
-            "install",
-            "version",
-        ] {
+        for field in ["name", "why", "source", "platforms", "install", "version"] {
             let mut object: serde_json::Value =
                 serde_json::from_str(COMPLETE).expect("fixture parses");
             object
@@ -820,11 +808,17 @@ mod tests {
     fn a_well_shaped_declaration_can_still_be_refused() {
         let cases: &[(&str, &str)] = &[
             // A member that climbs out of the archive.
-            (r#""member": "payload/weles-worker.tar.gz""#, r#""member": "../../etc/passwd""#),
+            (
+                r#""member": "payload/weles-worker.tar.gz""#,
+                r#""member": "../../etc/passwd""#,
+            ),
             // An install root outside the account.
             (r#""root": "$HOME/weles""#, r#""root": "/etc""#),
             // A platform nothing publishes for.
-            (r#""platforms": ["darwin-arm64"]"#, r#""platforms": ["win32"]"#),
+            (
+                r#""platforms": ["darwin-arm64"]"#,
+                r#""platforms": ["win32"]"#,
+            ),
             (r#""platforms": ["darwin-arm64"]"#, r#""platforms": []"#),
             // A tree whose version is read by running something.
             (
@@ -832,16 +826,10 @@ mod tests {
                 r#""version": {"kind": "program", "argument": "--version", "shape": "plain"}"#,
             ),
             // A version file inside the state a delivery must not replace.
-            (
-                r#""preserve": ["var"]"#,
-                r#""preserve": ["package.json"]"#,
-            ),
+            (r#""preserve": ["var"]"#, r#""preserve": ["package.json"]"#),
             // A unit half-located: a path with no kind cannot be restarted,
             // and a kind with no path is a claim about a file nobody named.
-            (
-                r#""kind": "launchd","#,
-                r#""kind": "cron","#,
-            ),
+            (r#""kind": "launchd","#, r#""kind": "cron","#),
             // A justification a refusal could print nothing useful from.
             (r#""why": "the worker""#, r#""why": "   ""#),
         ];
@@ -894,7 +882,9 @@ mod tests {
     fn an_undeclared_binary_is_refused_with_the_deliverable_set() {
         let error = product("bash").unwrap_err();
         assert!(
-            error.0.starts_with("\"bash\" is not a stado-managed binary"),
+            error
+                .0
+                .starts_with("\"bash\" is not a stado-managed binary"),
             "{}",
             error.0
         );

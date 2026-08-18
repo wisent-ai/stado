@@ -112,9 +112,9 @@ fn reserved_roots(home: &Path, policy: &DiskCleanupPolicy) -> Vec<PathBuf> {
     let configured_root = |name: &str, default: &[&str]| -> PathBuf {
         match policy.cleaners.get(name).and_then(|c| c.root.as_deref()) {
             Some(root) => crate::config_file::expand_tilde(root),
-            None => default.iter().fold(home.to_path_buf(), |path, part| {
-                path.join(part)
-            }),
+            None => default
+                .iter()
+                .fold(home.to_path_buf(), |path, part| path.join(part)),
         }
     };
     roots.push(configured_root(
@@ -331,7 +331,11 @@ impl<'a> Walk<'a> {
                 continue;
             }
             let child_path = dir_path.join(&name);
-            if self.reserved.iter().any(|root| child_path.starts_with(root)) {
+            if self
+                .reserved
+                .iter()
+                .any(|root| child_path.starts_with(root))
+            {
                 report.skip_builds("reserved_or_hidden", 1);
                 continue;
             }
@@ -374,7 +378,10 @@ impl<'a> Walk<'a> {
             // build caches deeper down, so it is descended — but its own
             // tag can never authorize deleting it, because that would take
             // the reserved root with it.
-            let guards_reserved = self.reserved.iter().any(|root| root.starts_with(&child_path));
+            let guards_reserved = self
+                .reserved
+                .iter()
+                .any(|root| root.starts_with(&child_path));
             let tag = match self.read_tag(child.as_raw_fd()) {
                 Ok(tag) => tag,
                 Err(_) => {
@@ -454,7 +461,9 @@ fn remove_contents(dir_fd: RawFd, root_dev: dev_t, depth: usize) -> Result<(), J
         }
         let child = safefs::open_dir_at(dir_fd, &name)?;
         if !same_object(&safefs::fstat(child.as_raw_fd())?, &info) {
-            return Err(JanitorError::os("build cache entry replaced while deleting"));
+            return Err(JanitorError::os(
+                "build cache entry replaced while deleting",
+            ));
         }
         remove_contents(child.as_raw_fd(), root_dev, depth + 1)?;
         drop(child);
