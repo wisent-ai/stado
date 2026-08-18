@@ -283,11 +283,29 @@ final class MachineEnrollmentStore: ObservableObject {
 
     // MARK: Invitation
 
-    /// `stado fleet invite --name NAME --json` — mint one code, once.
+    /// Which invitation the next mint will be, chosen by the operator against
+    /// the machine in front of them.
+    func setInviteMode(_ mode: MachineInviteMode) {
+        guard plan.inviteMode != mode else { return }
+        plan.inviteMode = mode
+        navigationBlock = nil
+        persistPlan()
+    }
+
+    /// `stado fleet invite --name NAME [--offline] --json` — mint one
+    /// invitation, once.
     ///
-    /// The code comes back in the result and stays in memory. What is written
-    /// down is the identifier, the expiry, and the public key, which is what
-    /// the operator needs in order to recognise the answer when it arrives.
+    /// The mode asked for is not always the mode that comes back. The control
+    /// plane probes its own control point before it assembles a line that
+    /// depends on it, and an online request against a control point that does
+    /// not serve `/join.sh` returns the offline invitation instead, with the
+    /// reason it did. This store follows that answer rather than the request:
+    /// showing a one-liner the control plane refused to build would be the app
+    /// inventing a way in.
+    ///
+    /// What is written down is the identifier, the expiry, the public key, and
+    /// — offline — the fragment, because the operator has to be able to send
+    /// that again. The online invitation's code stays in memory only.
     func mintInvite() async {
         guard !isRunning else { return }
         if let problem = MachineName.problem(with: draft.machineName) {
@@ -295,11 +313,21 @@ final class MachineEnrollmentStore: ObservableObject {
             return
         }
         let machine = draft.machineName
+        let requested = plan.inviteMode
         failure = nil
         mintedInvite = nil
-        outcome = .working("Minting one invitation code for \(machine) and the key pair the fleet will use to reach it.")
+        outcome = .working(
+            requested == .offline
+                ? "Minting the key pair the fleet will use to reach \(machine), and the fragment its owner pastes to accept it."
+                : "Minting one invitation code for \(machine) and the key pair the fleet will use to reach it, after checking that the control point really serves the join script."
+        )
+        var arguments = ["fleet", "invite", "--name", machine]
+        if requested == .offline {
+            arguments.append("--offline")
+        }
+        arguments.append("--json")
         do {
-            let result = try await run(["fleet", "invite", "--name", machine, "--json"])
+            let result = try await run(arguments)
             guard result.ok, let invite: MachineInvite = Self.decode(from: result.standardOutput) else {
                 failure = .invite(result.message, machine: machine)
                 outcome = .failed(result.message)
@@ -307,9 +335,10 @@ final class MachineEnrollmentStore: ObservableObject {
             }
             mintedInvite = invite
             plan.invite = invite.record
+            plan.inviteMode = invite.mode
             plan.decision = nil
             persistPlan()
-            outcome = .succeeded("Invitation \(invite.id) is open. The code below is shown once and is not written down anywhere in this app.")
+            outcome = .succeeded(Self.mintedMessage(invite, requested: requested))
         } catch {
             let message = Self.describe(error)
             failure = .transport(message)
@@ -317,12 +346,107 @@ final class MachineEnrollmentStore: ObservableObject {
         }
     }
 
-    /// `stado fleet revoke-invite ID` — close an invitation whose code was
-    /// lost, or whose recipient turned out to be the wrong person.
+    /// What just happened, including the case where the control plane answered
+    /// with a different invitation than the one that was asked for.
+    ///
+    /// A control point that refused and a control point that was never asked
+    /// are two different sentences. Saying "did not answer" about an address
+    /// nobody configured sends the operator looking for a network fault that
+    /// does not exist.
+    private static func mintedMessage(_ invite: MachineInvite, requested: MachineInviteMode) -> String {
+        guard invite.mode == .offline else {
+            return "Invitation \(invite.id) is open. The code below is shown once and is not written down anywhere in this app."
+        }
+        let why = invite.checkpoint?.headline ?? "The control plane did not say why."
+        guard requested == .online else {
+            return "Invitation \(invite.id) is open and waiting for a person, not for a machine. The fragment below carries the public half of the fleet's key and nothing else."
+        }
+        let opening = invite.checkpoint?.isRefusal == true
+            ? "The control point could not serve the join script"
+            : "No one-line invitation could be built"
+        return "\(opening), so invitation \(invite.id) was minted as an offline one and there is nothing for the machine to run. \(why)"
+    }
+
+    /// `stado fleet enroll NAME --ssh ADDRESS --bootstrap` — the other end of
+    /// an offline invitation.
+    ///
+    /// Nothing reports itself in that mode, so there is no request to approve:
+    /// what arrives is an address in a message, and this is the command that
+    /// turns it into a registry entry. The key is already on the machine —
+    /// pasting the fragment is what put it there — so no key install is asked
+    /// for here, and the probe is what proves the paste worked.
+    func completeOfflineInvite() async {
+        guard !isRunning, let record = plan.invite, record.isOffline else { return }
+        guard draft.hasChannel else {
+            navigationBlock = "Closing an offline invitation needs the address its owner sent back. The fragment prints one line for them to copy; that line is what goes in this field."
+            return
+        }
+        let machine = record.targetName
+        let target = draft.sshTarget
+        failure = nil
+        outcome = .working("Opening the channel to \(target) on the key the fragment installed, asking the machine what it is, and writing the entry only if it answers.")
+        do {
+            let result = try await run(["fleet", "enroll", machine, "--ssh", target, "--bootstrap"])
+            plan.decision = MachineEnrollmentCheck(
+                command: "stado fleet enroll \(machine) --ssh \(target) --bootstrap",
+                ok: result.ok,
+                output: result.message,
+                ranAt: Date()
+            )
+            persistPlan()
+            guard result.ok else {
+                failure = .offlineClose(result.message, machine: machine, sshTarget: target)
+                outcome = .failed(result.message)
+                return
+            }
+            draft.machineName = machine
+            draft.enrollmentTranscript = result.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+            draft.enrolledAt = Date()
+            draft.channelCheck = nil
+            draft.agentRecovery = nil
+            persistDraft()
+            // The invitation is spent the moment the entry exists: the control
+            // plane closes it on this enrollment, and leaving the record here
+            // would leave the screen asking for an address it already has.
+            plan.approvedName = machine
+            plan.invite = nil
+            mintedInvite = nil
+            persistPlan()
+            // Enrollment succeeding and the invitation closing are two writes
+            // to two stores, and the command reports the second one failing on
+            // its error stream while still succeeding. The machine is in
+            // either way; what differs is whether an operator reading
+            // `fleet invites` tomorrow will see this one still open.
+            let closed = !result.standardError.localizedCaseInsensitiveContains("could not be closed")
+            outcome = .succeeded(
+                closed
+                    ? "\(machine) answered on the key the fragment installed and is in the canonical registry. The invitation is spent."
+                    : "\(machine) answered on the key the fragment installed and is in the canonical registry. The invitation could not be closed in the store, so it may still read as open in stado fleet invites — nothing can be redeemed against it, and stado fleet revoke-invite \(record.id) settles the record."
+            )
+        } catch {
+            let message = Self.describe(error)
+            failure = .transport(message)
+            outcome = .failed(message)
+        }
+    }
+
+    /// `stado fleet revoke-invite ID` — close an invitation that went to the
+    /// wrong person, or whose code was lost.
+    ///
+    /// The two modes are revoked the same way and mean different things
+    /// afterwards. Revoking the online one takes a credential out of
+    /// circulation. Revoking the offline one takes nothing back: the fragment
+    /// carries no credential, and a machine whose owner already pasted it is
+    /// still reachable on the key in the vault. What revoking it ends is the
+    /// operator's obligation to wait for an address.
     func revokeInvite() async {
         guard !isRunning, let invite = plan.invite else { return }
         failure = nil
-        outcome = .working("Closing invitation \(invite.id) so the code can no longer be spent.")
+        outcome = .working(
+            invite.isOffline
+                ? "Closing invitation \(invite.id) so \(invite.targetName) is no longer expected."
+                : "Closing invitation \(invite.id) so the code can no longer be spent."
+        )
         do {
             let result = try await run(["fleet", "revoke-invite", invite.id])
             guard result.ok else {
@@ -333,7 +457,11 @@ final class MachineEnrollmentStore: ObservableObject {
             mintedInvite = nil
             plan.invite = nil
             persistPlan()
-            outcome = .succeeded("Invitation \(invite.id) is revoked. A machine that answers it now is refused.")
+            outcome = .succeeded(
+                invite.isOffline
+                    ? "Invitation \(invite.id) is revoked and this screen has stopped waiting for an address. The fragment was never a credential, so nothing was taken out of circulation; the key pair for \(invite.targetName) stays in the credential store until stado fleet key rm removes it."
+                    : "Invitation \(invite.id) is revoked. A machine that answers it now is refused."
+            )
         } catch {
             let message = Self.describe(error)
             failure = .transport(message)

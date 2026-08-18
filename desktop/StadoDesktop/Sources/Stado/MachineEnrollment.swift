@@ -209,6 +209,19 @@ struct MachineEnrollmentFailure: Equatable, Sendable {
         )
     }
 
+    /// Closing an offline invitation is the ordinary probing enrollment, so it
+    /// fails in the ordinary ways. What it adds is where its two inputs came
+    /// from: a fragment somebody else pasted, and an address somebody else
+    /// typed into a message. Both are worth doubting before the network is.
+    static func offlineClose(_ message: String, machine: String, sshTarget: String) -> Self {
+        let inner = Self.enrollment(message, machine: machine, sshTarget: sshTarget)
+        return Self(
+            title: inner.title,
+            detail: "\(inner.detail) The address \(sshTarget) was typed here from a message rather than reported by the machine, so read it again before anything else. If it is right, the fragment either was not pasted or was pasted into a different account than the one in that address — the key it appends lands in the home directory of whoever ran it.",
+            backendMessage: message
+        )
+    }
+
     /// Adoption differs from the hand-installed key in exactly one way, and
     /// that one way is where it fails: Stado opens the first session itself,
     /// with whatever `ssh` on the control plane host can already authenticate
@@ -460,31 +473,166 @@ struct FleetEnrollmentMethodList: Decodable, Sendable {
 
 // MARK: - Invitation
 
-/// A freshly minted invitation, secret included.
+/// Which of the two invitations was minted, and therefore what the operator
+/// has to send.
 ///
-/// This value exists for exactly as long as the screen that shows it. Neither
-/// the token nor the one line built around it is ever written to disk: an
-/// invitation code that can be read back a second time is a password on the
-/// filesystem, and the whole point of showing it once is that it is not one.
+/// They differ in one fact about the machine being added: whether it can reach
+/// this fleet's control point at all. The online invitation is one line that
+/// fetches the join script from that control point, so it is worthless to a
+/// machine that cannot resolve or reach it. The offline invitation carries the
+/// fleet's public key inside its own text and asks nothing of the network, so
+/// the only thing left to require is that the operator can send that person a
+/// message and read one back.
+enum MachineInviteMode: String, Codable, Sendable {
+    case online
+    case offline
+
+    var title: String {
+        switch self {
+        case .online: "One line the machine runs"
+        case .offline: "A fragment you send to whoever has the machine"
+        }
+    }
+
+    var summary: String {
+        switch self {
+        case .online:
+            "They paste one line. It fetches the join script from this fleet's control point, installs the fleet's public key, and reports the machine back here for you to approve."
+        case .offline:
+            "They paste a short fragment that already carries the fleet's public key. Nothing is fetched and nothing reports back: they send you the address it prints, and you finish the enrollment with that address."
+        }
+    }
+
+    /// What the method costs, said as the one condition that decides it.
+    var requires: String {
+        switch self {
+        case .online:
+            "The machine being added has to reach this fleet's control point. If it is not on the fleet's network, this is the wrong one."
+        case .offline:
+            "Nothing but a way to send that person a message and get one back. No route to the control point, from either side."
+        }
+    }
+}
+
+/// Whether the control point the one-line invitation depends on actually
+/// answered, in the words of the command that asked it.
+///
+/// The one line is only worth sending if `/join.sh` is really served, so the
+/// control plane probes it before assembling one. The three failures are not
+/// interchangeable — a name that does not resolve, a refused connection, and a
+/// route the release on that host does not serve send the operator to three
+/// different places — so the reason travels as its own fact and the sentence
+/// behind it is shown exactly as it was written.
+struct MachineInviteCheckpoint: Codable, Equatable, Sendable {
+    /// The address that was probed, taken from the control plane's own
+    /// configuration rather than from any name compiled into this app.
+    let url: String
+    /// False when nothing was asked: the operator chose the offline
+    /// invitation, or no control point address is configured at all.
+    let probed: Bool
+    let reachable: Bool
+    /// The machine-readable reason, exactly as the control plane named it.
+    let reason: String
+    /// The control plane's own sentence about it, quoted rather than rewritten.
+    let detail: String
+
+    static let ok = "ok"
+    static let unresolved = "name_does_not_resolve"
+    static let refused = "connection_refused"
+    static let routeUnknown = "route_unknown"
+    static let unconfigured = "not_configured"
+    static let chosen = "forced_offline"
+
+    /// Whether the control point failed, as opposed to never having been
+    /// asked. A mode the operator chose is not a fault and must not be dressed
+    /// as one.
+    var isRefusal: Bool { probed && !reachable }
+
+    /// What the reason means, in words. An unrecognised reason is shown as the
+    /// control plane spelled it rather than as a guess: a newer release may
+    /// name a failure this app has never heard of, and inventing a sentence for
+    /// it would be the app lying about the fleet.
+    var headline: String {
+        switch reason {
+        case Self.ok:
+            "The control point answered on /join.sh."
+        case Self.unresolved:
+            "The control point's name does not resolve, so nothing was contacted. That is a fault in the name, not in the machine you are adding."
+        case Self.refused:
+            "The connection to the control point was refused. The address resolved, so this is about what is listening there and what it is bound to."
+        case Self.routeUnknown:
+            "The control point answered but does not serve /join.sh. That is a fact about the release running on that host, not about its address."
+        case Self.unconfigured:
+            "No control point address is configured, so there was nothing to probe."
+        case Self.chosen:
+            "You asked for the offline invitation, so the control point was not probed."
+        default:
+            reason
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case url, probed, reachable, reason, detail
+    }
+
+    /// Read leniently for the same reason the method list is: a control plane
+    /// that trimmed one of these fields still answered, and refusing the whole
+    /// invitation over a missing sentence would leave the operator with a
+    /// minted key and no screen.
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        url = try values.decodeIfPresent(String.self, forKey: .url) ?? ""
+        probed = try values.decodeIfPresent(Bool.self, forKey: .probed) ?? false
+        reachable = try values.decodeIfPresent(Bool.self, forKey: .reachable) ?? false
+        reason = try values.decodeIfPresent(String.self, forKey: .reason) ?? ""
+        detail = try values.decodeIfPresent(String.self, forKey: .detail) ?? ""
+    }
+}
+
+/// A freshly minted invitation, whatever it carries.
+///
+/// This value exists for exactly as long as the screen that shows it. The
+/// online invitation's token and the one line built around it are never
+/// written to disk: an invitation code that can be read back a second time is
+/// a password on the filesystem, and the whole point of showing it once is that
+/// it is not one. The offline fragment is the opposite and says so about
+/// itself — it carries the public half of a key and nothing else — so it is
+/// kept, because the operator has to be able to send it again.
 struct MachineInvite: Decodable, Equatable, Sendable {
     let id: String
+    let mode: MachineInviteMode
+    /// The online invitation's secret. Empty for the offline one, which has
+    /// none: there is no route for anything to present it to.
     let token: String
     let targetName: String
     let expiresAt: String
     let usesAllowed: Int
     /// The one line to send to the owner of the machine, assembled by the
-    /// control plane against its own public address. The app does not build
-    /// it: a line assembled here would carry this Mac's idea of the endpoint.
+    /// control plane against its own configured address. The app does not
+    /// build it: a line assembled here would carry this Mac's idea of the
+    /// endpoint. Empty in the offline mode, where no such line exists.
     let joinCommand: String
+    /// The offline fragment to paste on the machine being added. It creates
+    /// ~/.ssh, appends the fleet's public key idempotently, fixes the modes,
+    /// checks that SSH is listening, and prints the address its owner has to
+    /// send back. Empty in the online mode.
+    let snippet: String
+    /// The command that finishes an offline enrollment once that address
+    /// arrives, spelled by the control plane.
+    let nextStep: String
     let publicKey: String
     let authorizedKeysLine: String
+    /// What the control plane found when it asked whether the one line would
+    /// work. Present in both modes: it is the reason this is the mode it is.
+    let checkpoint: MachineInviteCheckpoint?
 
     private enum CodingKeys: String, CodingKey {
-        case id, token
+        case id, mode, token, snippet, checkpoint
         case targetName = "target_name"
         case expiresAt = "expires_at"
         case usesAllowed = "uses_allowed"
         case joinCommand = "join_command"
+        case nextStep = "next_step"
         case publicKey = "public_key"
         case authorizedKeysLine = "authorized_keys_line"
     }
@@ -492,25 +640,36 @@ struct MachineInvite: Decodable, Equatable, Sendable {
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         id = try values.decode(String.self, forKey: .id)
-        token = try values.decode(String.self, forKey: .token)
+        token = try values.decodeIfPresent(String.self, forKey: .token) ?? ""
         targetName = try values.decodeIfPresent(String.self, forKey: .targetName) ?? ""
         expiresAt = try values.decodeIfPresent(String.self, forKey: .expiresAt) ?? ""
         usesAllowed = try values.decodeIfPresent(Int.self, forKey: .usesAllowed) ?? 1
         joinCommand = try values.decodeIfPresent(String.self, forKey: .joinCommand) ?? ""
+        snippet = try values.decodeIfPresent(String.self, forKey: .snippet) ?? ""
+        nextStep = try values.decodeIfPresent(String.self, forKey: .nextStep) ?? ""
         publicKey = try values.decodeIfPresent(String.self, forKey: .publicKey) ?? ""
         authorizedKeysLine = try values.decodeIfPresent(String.self, forKey: .authorizedKeysLine) ?? ""
+        checkpoint = try values.decodeIfPresent(MachineInviteCheckpoint.self, forKey: .checkpoint)
+        // A release older than the offline mode names no mode at all. What it
+        // sent decides which one it meant: a fragment is an offline
+        // invitation whatever the release calls itself.
+        let declared = try values.decodeIfPresent(String.self, forKey: .mode)
+        mode = declared.flatMap(MachineInviteMode.init(rawValue:)) ?? (snippet.isEmpty ? .online : .offline)
     }
 
-    /// Everything about the invitation that outlives its code.
+    /// Everything about the invitation that outlives the window.
     var record: MachineInviteRecord {
         MachineInviteRecord(
             id: id,
+            mode: mode,
             targetName: targetName,
             mintedAt: Date(),
             expiresAt: expiresAt,
             usesAllowed: usesAllowed,
             publicKey: publicKey,
-            authorizedKeysLine: authorizedKeysLine
+            authorizedKeysLine: authorizedKeysLine,
+            snippet: snippet,
+            checkpoint: checkpoint
         )
     }
 }
@@ -518,23 +677,68 @@ struct MachineInvite: Decodable, Equatable, Sendable {
 /// What is kept about an invitation once its code has been shown.
 ///
 /// The waiting half of an invitation lasts as long as it takes the other
-/// person to read a message, so this outlives the window. The secret does not:
-/// a public key is not one, an identifier is not one, and those are what the
-/// operator needs in order to recognise the reply when it lands.
+/// person to read a message, so this outlives the window. The online
+/// invitation's secret does not: a public key is not one, an identifier is not
+/// one, and those are what the operator needs in order to recognise the reply
+/// when it lands.
 struct MachineInviteRecord: Codable, Equatable, Sendable {
     let id: String
+    /// Which invitation this was. The offline one has no code and is never
+    /// answered by the machine, so the whole screen reads differently.
+    let mode: MachineInviteMode
     let targetName: String
     let mintedAt: Date
     let expiresAt: String
     let usesAllowed: Int
     let publicKey: String
     let authorizedKeysLine: String
+    /// The offline fragment, kept so it can be sent again. Nothing in it is a
+    /// secret — it is the public half of a key and four lines of shell — and
+    /// the alternative to keeping it is reminting, which mints a second key
+    /// pair for a machine that already has one.
+    let snippet: String
+    /// Why this invitation is the mode it is. Kept because it is the operator's
+    /// next question after a restart, and because a mode the control plane
+    /// chose has to stay distinguishable from one the operator chose.
+    let checkpoint: MachineInviteCheckpoint?
+
+    var isOffline: Bool { mode == .offline }
 
     var expiryDate: Date? { EnrollmentTime.date(from: expiresAt) }
 
     var isExpired: Bool {
         guard let expiryDate else { return false }
         return expiryDate <= Date()
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, mode, targetName, mintedAt, expiresAt, usesAllowed
+        case publicKey, authorizedKeysLine, snippet, checkpoint
+    }
+}
+
+/// Read leniently, because the reader is this app's own earlier state.
+///
+/// A record written before the offline mode existed names no mode, carries no
+/// fragment and no checkpoint. Refusing it would take an invitation that is
+/// still waiting to be answered off the screen at the moment the app is
+/// updated, which is exactly when the operator is least likely to believe the
+/// fleet rather than the window.
+extension MachineInviteRecord {
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try values.decode(String.self, forKey: .id),
+            mode: try values.decodeIfPresent(MachineInviteMode.self, forKey: .mode) ?? .online,
+            targetName: try values.decodeIfPresent(String.self, forKey: .targetName) ?? "",
+            mintedAt: try values.decodeIfPresent(Date.self, forKey: .mintedAt) ?? Date(),
+            expiresAt: try values.decodeIfPresent(String.self, forKey: .expiresAt) ?? "",
+            usesAllowed: try values.decodeIfPresent(Int.self, forKey: .usesAllowed) ?? 1,
+            publicKey: try values.decodeIfPresent(String.self, forKey: .publicKey) ?? "",
+            authorizedKeysLine: try values.decodeIfPresent(String.self, forKey: .authorizedKeysLine) ?? "",
+            snippet: try values.decodeIfPresent(String.self, forKey: .snippet) ?? "",
+            checkpoint: try values.decodeIfPresent(MachineInviteCheckpoint.self, forKey: .checkpoint)
+        )
     }
 }
 
@@ -621,6 +825,11 @@ struct FleetPendingList: Decodable, Sendable {
 struct MachineEnrollmentPlan: Codable, Equatable, Sendable {
     var endpoint = ""
     var flow: MachineEnrollmentFlow = .methods
+    /// Which invitation the operator has chosen to mint next. Kept because it
+    /// is a decision about the machine in front of them, not a preference: the
+    /// window closing between choosing and minting must not silently put them
+    /// back on the mode that cannot work for that machine.
+    var inviteMode: MachineInviteMode = .online
     var invite: MachineInviteRecord?
     var pending: [FleetPendingRequest] = []
     var pendingReadAt: Date?
@@ -634,10 +843,37 @@ struct MachineEnrollmentPlan: Codable, Equatable, Sendable {
 
     var isWaitingForInvite: Bool { invite != nil }
 
+    /// Whether the outstanding invitation is one no machine will ever answer,
+    /// which is what decides whether this screen has anything to wait for.
+    var isWaitingForOwner: Bool { invite?.isOffline == true }
+
     /// The request that answered the outstanding invitation, if one has.
     var invitedRequest: FleetPendingRequest? {
-        guard let invite else { return nil }
+        guard let invite, !invite.isOffline else { return nil }
         return pending.first { $0.inviteID == invite.id }
+    }
+
+    fileprivate enum CodingKeys: String, CodingKey {
+        case endpoint, flow, inviteMode, invite, pending, pendingReadAt, decision, approvedName
+    }
+}
+
+/// Read leniently for the same reason the invitation record is: this app's own
+/// earlier state named no invitation mode, and dropping the whole plan over
+/// that would close an open invitation on screen while leaving it open in the
+/// store.
+extension MachineEnrollmentPlan {
+    init(from decoder: Decoder) throws {
+        self.init()
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        endpoint = try values.decodeIfPresent(String.self, forKey: .endpoint) ?? ""
+        flow = try values.decodeIfPresent(MachineEnrollmentFlow.self, forKey: .flow) ?? .methods
+        inviteMode = try values.decodeIfPresent(MachineInviteMode.self, forKey: .inviteMode) ?? .online
+        invite = try values.decodeIfPresent(MachineInviteRecord.self, forKey: .invite)
+        pending = try values.decodeIfPresent([FleetPendingRequest].self, forKey: .pending) ?? []
+        pendingReadAt = try values.decodeIfPresent(Date.self, forKey: .pendingReadAt)
+        decision = try values.decodeIfPresent(MachineEnrollmentCheck.self, forKey: .decision)
+        approvedName = try values.decodeIfPresent(String.self, forKey: .approvedName)
     }
 }
 
