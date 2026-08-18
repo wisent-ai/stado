@@ -25,6 +25,7 @@ use super::{CmdError, CLICK_ERROR_CODE};
 pub mod doctor;
 pub mod enroll;
 pub mod fleets;
+pub mod invite;
 pub mod key;
 pub mod ops;
 #[cfg(test)]
@@ -96,10 +97,47 @@ pub enum FleetCommands {
         #[arg(long)]
         bootstrap: bool,
     },
+    /// Mint an invite: one line the machine's owner runs, no access needed.
+    Invite {
+        /// Registry target name to reserve; derived from the invite id when
+        /// omitted.
+        #[arg(long)]
+        name: Option<String>,
+        /// How long the invite stays usable: a number plus s, m, h or d.
+        #[arg(long, default_value = "24h")]
+        expires: String,
+        /// How many machines may redeem the invite.
+        #[arg(long, default_value_t = 1)]
+        uses: u64,
+        /// Emit the machine-readable document instead of the report.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List minted invites with the state each is actually in.
+    Invites {
+        /// Emit the machine-readable document instead of the table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Retire an invite so it can no longer be redeemed.
+    RevokeInvite {
+        /// Invite id as printed by `invite` and `invites`.
+        id: String,
+    },
+    /// Every way a machine can be added, and whether this fleet allows it.
+    Methods {
+        /// Emit the machine-readable document instead of the table.
+        #[arg(long)]
+        json: bool,
+    },
     /// Announce this machine to the fleet (run on the machine being added).
     Join,
     /// List unanswered join requests.
-    Pending,
+    Pending {
+        /// Emit the machine-readable document instead of the table.
+        #[arg(long)]
+        json: bool,
+    },
     /// Turn a pending join request into a registered target.
     Approve {
         /// Hostname from the join request.
@@ -208,8 +246,17 @@ async fn execute(command: FleetCommands) -> Result<bool, String> {
             )
             .await
         }
+        FleetCommands::Invite {
+            name,
+            expires,
+            uses,
+            json,
+        } => invite::invite(name.as_deref(), &expires, uses, json).await,
+        FleetCommands::Invites { json } => invite::invites(json).await,
+        FleetCommands::RevokeInvite { id } => invite::revoke_invite(&id).await,
+        FleetCommands::Methods { json } => enroll::catalog::methods(json).await,
         FleetCommands::Join => enroll::join().await,
-        FleetCommands::Pending => enroll::pending().await,
+        FleetCommands::Pending { json } => enroll::pending(json).await,
         FleetCommands::Approve { hostname, fleet } => {
             enroll::approve(&hostname, fleet.as_deref()).await
         }

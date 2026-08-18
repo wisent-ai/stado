@@ -118,17 +118,27 @@ async fn store_pair(
     settle_readable(client, &id, &[("public_key", pair.public_key.trim())]).await
 }
 
-/// `key generate TARGET` — store a fresh pair and print only the public key.
-pub async fn generate(runner: &Runner, target: &str) -> Result<bool, String> {
+/// Mint and store a fresh pair for `target`, returning its public key and
+/// fingerprint.
+///
+/// The whole of `key generate` except the printing: `fleet invite --json` mints
+/// a channel key too and must put exactly one JSON document on stdout, so it
+/// needs this path without the two report lines — not a second copy of it.
+pub(crate) async fn generate_stored(
+    runner: &Runner,
+    target: &str,
+) -> Result<(String, String), String> {
     let pair = generate_pair(runner, &item_id(target)).await?;
     let client = configured_client()?;
     store_pair(&client, target, &pair).await?;
-    println!(
-        "stored credential item {} ({})",
-        item_id(target),
-        pair.fingerprint
-    );
-    println!("public key: {}", pair.public_key);
+    Ok((pair.public_key, pair.fingerprint))
+}
+
+/// `key generate TARGET` — store a fresh pair and print only the public key.
+pub async fn generate(runner: &Runner, target: &str) -> Result<bool, String> {
+    let (public_key, fingerprint) = generate_stored(runner, target).await?;
+    println!("stored credential item {} ({fingerprint})", item_id(target));
+    println!("public key: {public_key}");
     Ok(true)
 }
 
