@@ -409,7 +409,7 @@ if DISPLAY=DISPLAY_NUMBER xdpyinfo >/dev/null 2>&1; then
 else
   printf 'no display answered on DISPLAY_NUMBER\n'
 fi
-printf 'SUNSHINE_UNIT_STATE\t%s\n' "$(systemctl is-active SUNSHINE_UNIT 2>&1 || true)"
+printf 'SUNSHINE_STATE\t%s\n' "$(systemctl is-active SUNSHINE_UNIT 2>&1 || true)"
 printf 'PORTS\t'
 ss -ltn 2>/dev/null | awk '$4 ~ /:479[89][0-9]$/ { printf "%s ", $4 }' || true
 printf '\n'
