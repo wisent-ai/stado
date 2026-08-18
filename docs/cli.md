@@ -1374,10 +1374,22 @@ travel.
 |---|---|
 | `stream probe TARGET` | Read-only: boards with their PCI bus ids and UUIDs, driver version, DRM nodes, whether a display manager already owns the screen, free space on `/` and on the library volume, and the tailnet address a client would dial. Changes nothing. |
 | `stream declare TARGET [--resolution WxH] [--refresh-hz N] [--gpu-uuid GPU-…] [--library-dir PATH] [--steam]` | Writes `targets[TARGET].display_stream` into the canonical registry. Refuses a library on the root volume, a non-`x11` session, a resolution outside 640..7680, a refresh outside 24..240, and an unpinned Sunshine. |
-| `stream apply TARGET` | Reconciles the host to that declaration: Xorg screen sized by the declaration on the declared board (`AllowEmptyInitialConfiguration`, so no monitor is needed), `openbox` to own the root window, Sunshine from a digest-pinned `.deb`, and two systemd units. Idempotent. |
+| `stream apply TARGET [--provision-library]` | Reconciles the host to that declaration: Xorg screen sized by the declaration on the declared board (`AllowEmptyInitialConfiguration`, so no monitor is needed), `openbox` to own the root window, Sunshine from a digest-pinned `.deb`, and two systemd units. Idempotent. |
 | `stream status TARGET` | Units, the screen's real size, what is rendering, bound ports, paired client count, library space, and the address to point Moonlight at. |
 | `stream pair TARGET --pin 1234 [--client NAME]` | Hands Moonlight's four-digit PIN to Sunshine's API over the managed host channel. This exists so pairing needs no browser: the web UI is never opened, and its credentials are generated on the host and never leave it. |
 | `stream stop TARGET [--purge]` | Stops the session; `--purge` also removes the units and the Xorg screen, returning the host to headless. |
+
+`declare` picks the Sunshine artifact from the host's own distribution, because
+that is what decides whether it installs at all: the 26.04 package wants
+`libc6 >= 2.43` and `libicu78`, and on Ubuntu 25.10 apt answers `[no choices]`
+until the artifact matches. `--sunshine-url` with `--sunshine-sha256` pins one
+explicitly for a distribution this build has no measured digest for.
+
+`--provision-library` binds the declared library directory onto the host's
+largest real filesystem when it would otherwise land on a root volume with no
+room. Without it such a host is refused and its filesystems are named; with it,
+the line written to `/etc/fstab` carries a `# stado-stream` tag so
+`stream stop --purge` removes exactly its own.
 
 The board is declared by driver UUID and Xorg is configured by PCI bus id;
 `apply` resolves one to the other from the probe, because only the host knows
