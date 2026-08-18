@@ -51,13 +51,12 @@ REPO_SCRUB = (
 
 PYTHON = "/usr/bin/python3"
 LAKE = pathlib.Path(os.environ.get("LAKE_DATA") or (HOME / ".transcript-lake"))
-# Both vaults this host owns, named explicitly: ~/.stado holds around twenty
+# The canonical vault, named explicitly: ~/.stado holds around twenty
 # *vault*.json files, most of them pre-migration snapshots, and scrubbing against a
-# stale one would both miss current secrets and resurrect retired ones.
-VAULTS = (
-    HOME / ".stado" / "skarbiec.vault.json",
-    HOME / ".stado" / "weles-skarbiec.vault.json",
-)
+# stale one would both miss current secrets and resurrect retired ones. The
+# Weles-dedicated vault used to be scrubbed alongside it; every credential it held
+# now lives here, so reading it would only reintroduce values the fleet retired.
+VAULT = HOME / ".stado" / "skarbiec.vault.json"
 # Fields that are identifiers rather than secrets. Everything else an item carries
 # is treated as material, because the fleet's secrets live in free-form kinds
 # (bundle, stado-secret, internal-authority) whose field names nobody maintains a
@@ -266,14 +265,12 @@ def main():
     if not LAKE.is_dir():
         raise SystemExit(f"no Lake at {LAKE}")
 
-    literals = set()
-    for vault in VAULTS:
-        literals |= collect(vault)
-    print(f"literals from the vaults {len(literals)}")
+    literals = collect(VAULT)
+    print(f"literals from the vault {len(literals)}")
     for value in sorted(literals, key=digest):
         print(f"  literal len={len(value)} sha256[:8]={digest(value)}")
     if not literals:
-        print("nothing to scrub; the vaults hold no value that could occur in text")
+        print("nothing to scrub; the vault holds no value that could occur in text")
         print(f"finished in {time.time() - started:.1f}s")
         return ZERO
 
@@ -307,7 +304,7 @@ def main():
             *(("--start-after", resume_after) if resume_after else ()),
             "--apply",
         ],
-        VAULTS[ZERO],
+        VAULT,
         stdin="\n".join(sorted(literals)),
     )
     for line in scrub.stdout.splitlines():

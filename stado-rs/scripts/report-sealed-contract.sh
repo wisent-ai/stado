@@ -9,7 +9,11 @@
 set -eu
 
 credential=${CREDENTIAL_ITEM:-weles-microsoft-jakub-wisent-ai-password}
-vault=${SKARBIEC_VAULT_FILE:-$HOME/.stado/weles-skarbiec.vault.json}
+# The canonical vault, which is the only one Weles writes into: a report that
+# read the retired `weles-skarbiec.vault.json` described the rotation as it
+# stood before the split was closed, and called a credential absent while the
+# fleet was serving it.
+vault=${SKARBIEC_VAULT_FILE:-$HOME/.stado/skarbiec.vault.json}
 export SKARBIEC_VAULT_FILE="$vault"
 # A helper runs with launchd's PATH, which carries no Homebrew: without this
 # every vault read fails as `spawn gpg: No such file or directory` and reads
