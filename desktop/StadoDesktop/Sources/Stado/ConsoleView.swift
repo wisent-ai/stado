@@ -280,7 +280,7 @@ struct ConsoleView: View {
             case .warning: return (1, .warning)
             case .healthy, .neutral: return nil
             }
-        case .registry, .deployments:
+        case .registry, .releases, .deployments:
             return nil
         }
     }
@@ -316,6 +316,8 @@ struct ConsoleView: View {
                 DiskView(store: store, cleanupStore: cleanupStore, scope: scopeName)
             case .registry:
                 RegistryView(fleetStore: fleetStore, scope: scopeName)
+            case .releases:
+                ReleasesView(fleetStore: fleetStore, scope: scopeName)
             case .deployments:
                 DeploymentsView(
                     deploymentStore: deploymentStore,
