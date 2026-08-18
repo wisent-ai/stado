@@ -130,9 +130,21 @@ impl StadoObjectBackend {
     /// The certificate is added, never substituted: publicly signed endpoints keep
     /// working, and this cannot become a way to disable verification.
     fn client(ca_file: &str) -> Result<Client, StorageError> {
+        // Bounded like `fleet_https_client`, and for the same incident: a
+        // release submit's queue write to the fleet store held one ESTABLISHED
+        // connection for eight minutes with no error and no progress, because
+        // this client had no timeout at all. The store is on the tailnet or the
+        // same machine; five minutes covers a multi-megabyte artifact there, and
+        // a hang converted into a named error reaches callers that already
+        // handle storage failures.
+        let builder = Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(15))
+            .timeout(std::time::Duration::from_secs(300));
         let ca_file = ca_file.trim();
         if ca_file.is_empty() {
-            return Ok(Client::new());
+            return builder.build().map_err(|error| {
+                StorageError::Other(format!("cannot build Stado storage client: {error}"))
+            });
         }
         let path = crate::config_file::expand_tilde(ca_file);
         let pem = std::fs::read(&path).map_err(|error| {
@@ -147,7 +159,7 @@ impl StadoObjectBackend {
                 path.display()
             ))
         })?;
-        Client::builder()
+        builder
             .add_root_certificate(certificate)
             .build()
             .map_err(|error| {
