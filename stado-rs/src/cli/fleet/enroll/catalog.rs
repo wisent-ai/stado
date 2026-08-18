@@ -202,10 +202,10 @@ fn methods_of(document: &Value) -> Result<Vec<Method>, String> {
     Ok(vec![
         Method {
             name: "invite",
-            command: "stado fleet invite [--name NAME]",
-            summary: "mint one line, send it to the machine's owner",
-            requires: "a way to send one line to the machine's owner; the operator never needs to reach the machine",
-            provides: "a single-use, expiring token; running it installs the fleet's public key on the machine and files a pending request to approve",
+            command: "stado fleet invite [--name NAME] [--offline]",
+            summary: "send the machine's owner one line, or a fragment to paste when no control point answers",
+            requires: "any channel to the machine's owner; the operator never needs to reach the machine. The one-line form also needs a control point serving /join.sh, which invite probes and says so when it does not",
+            provides: "online: a single-use, expiring token whose one line installs the fleet's public key and files a pending request to approve. offline: no token and no route — a pasted fragment installs the same public key and prints the user@address the owner sends back, which the operator registers with 'stado fleet enroll NAME --ssh ADDRESS --bootstrap'",
             gate: Some("registry.enrollment.allow_invite"),
             allowed: enrollment.allow_invite,
         },
