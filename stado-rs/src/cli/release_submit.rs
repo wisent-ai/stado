@@ -1061,6 +1061,63 @@ fn execute(
         exit_code: status.code(),
     })
 }
+
+/// Install the toolchain components this recipe's gates run, when the recipe
+/// is a Rust one and rustup manages the host's toolchain.
+///
+/// Scoped deliberately: only `cargo fmt` needs `rustfmt` and only
+/// `cargo clippy` needs `clippy`, and a recipe that runs neither provisions
+/// nothing. rustup reads the toolchain pin from the working directory, so the
+/// component lands on exactly the toolchain the gate will use. A host without
+/// rustup is left alone — its cargo is not rustup-managed and components are
+/// not its concept.
+fn ensure_rust_components(
+    recipe: &crate::release_pipeline::PlatformRecipe,
+    source: &Path,
+) -> Result<(), CmdError> {
+    let mut needed: Vec<&str> = Vec::new();
+    for gate in &recipe.quality {
+        let program = gate.argv.first().map(String::as_str).unwrap_or("");
+        let subcommand = gate.argv.get(1).map(String::as_str).unwrap_or("");
+        if program == "cargo" || program.ends_with("/cargo") {
+            match subcommand {
+                "fmt" if !needed.contains(&"rustfmt") => needed.push("rustfmt"),
+                "clippy" if !needed.contains(&"clippy") => needed.push("clippy"),
+                _ => {}
+            }
+        }
+    }
+    if needed.is_empty() {
+        return Ok(());
+    }
+    let rustup = resolve_step_program("rustup");
+    if !rustup.is_absolute() || !rustup.is_file() {
+        println!(
+            "[release-worker] no rustup on this host; assuming {} are already provided",
+            needed.join(", ")
+        );
+        return Ok(());
+    }
+    println!(
+        "[release-worker] ensuring toolchain components: {}",
+        needed.join(", ")
+    );
+    let output = Command::new(&rustup)
+        .arg("component")
+        .arg("add")
+        .args(&needed)
+        .current_dir(source)
+        .output()
+        .map_err(|error| CmdError::click(format!("cannot run {}: {error}", rustup.display())))?;
+    if !output.status.success() {
+        return Err(CmdError::click(format!(
+            "rustup component add {} failed: {}",
+            needed.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(())
+}
 fn collect(root: &Path, relative: &Path, out: &mut Vec<PathBuf>) -> Result<(), CmdError> {
     let path = root.join(relative);
     // The recipe's stage map is a declaration about what the build produces, and
@@ -1226,6 +1283,17 @@ pub async fn worker(args: &ReleaseWorkerArgs) -> Result<(), CmdError> {
             inputs_root.join(&input.mount).display().to_string(),
         );
     }
+
+    // Give the pinned toolchain the components its own gates are about to
+    // demand. rustup installs a pinned toolchain on first use WITHOUT optional
+    // components, so the first release job on a fresh agent died with
+    // "'cargo-fmt' is not installed for the toolchain" — a fact about host
+    // provisioning that no release should trip over and no operator should
+    // fix by hand, host by host. Adding a component is idempotent and rustup
+    // resolves the pin from the working directory, so a provisioned host pays
+    // a no-op and a fresh one provisions itself, exactly the way the
+    // toolchain itself already arrives.
+    ensure_rust_components(&manifest.platforms[&request.platform], &source)?;
     let recipe = &manifest.platforms[&request.platform];
     let job_id = std::env::var("WC_JOB_ID").unwrap_or_default();
     let mut quality = Vec::new();
