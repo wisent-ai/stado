@@ -49,6 +49,20 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
 
 ### Release control
 
+- A failed release job now reports its own last words: `release submit` reads
+  the job's output-log tail from the store and carries it in the error, the
+  failing platform and pinned host named in the same sentence, and persists it
+  in the run object. `stado release status` lists the newest pipeline runs
+  with the first line of each persisted failure, and Stado Desktop gained a
+  System > Releases screen that shows the same text — one source for the CLI,
+  the web operator console, and the app.
+- The release worker names each step before it runs it, resolves gate and
+  build programs where the agent host actually keeps them, and provisions the
+  pinned toolchain's own gate components (rustfmt, clippy) idempotently
+  instead of dying with a nameless "No such file or directory" under a
+  LaunchAgent's minimal PATH.
+- The stado release recipe builds into WISENT_OUTPUT_DIR, where its own stage
+  map has always claimed the artifact lives.
 - Added repository-owned Stado release manifests, immutable source inputs,
   signed build and delivery receipts, and provider-specific delivery adapters.
 - Added fleet-wide product catalog ownership, retry-safe release submission,
@@ -56,6 +70,26 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   rollback state.
 - Release-managed runtimes now receive their immutable product, version,
   platform, and artifact digest identity in the process environment.
+- `stado release logs PRODUCT --target TARGET` reads a candidate's own stdout
+  and stderr off the host — the `{logs_root}/{product}-{version}.{out,err}`
+  files the release agent opens for every candidate it spawns. A brama
+  candidate died in under ninety seconds and the rollout state said only
+  `candidate did not become ready within 90s: pid 46748 is gone`, while the
+  process's own account of its exit sat unread in
+  `<logs_root>/brama-0.2.27.err`; reading it took a hand-typed ssh session.
+  Defaults to both streams and the last 40 lines, reports the whole file's
+  size next to the tail, and distinguishes a log that is missing from one that
+  is present and empty.
+- `stado release doctor PRODUCT` answers "will this rollout land, and if not,
+  what is holding it" in one read-only pass: desired versus observed release,
+  the rollout phase and detail, the candidate's port, liveness and readiness
+  answer, the host's quarantine map with the desired digest called out, and the
+  host's claiming gates. The verdict is `blocked` when the desired digest is
+  quarantined — which the agent skips silently on every pass — or when the
+  host's disk gate is unresolved, the state in which the queue agent claims
+  nothing; `rolling` while a candidate is in flight; `settled` only when
+  observed equals desired. A gate that cannot be read fails the command
+  instead of being assumed healthy.
 
 ### Onboarding platform
 
