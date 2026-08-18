@@ -1,10 +1,18 @@
 {
   "_comment": "Concrete outage-safe Mac profile. Only the local provider and local storage are active; Azure, AWS and GCP remain explicitly fenced.",
-  "providers": ["local"],
-  "providers_disabled": ["azure", "aws", "gcp"],
+  "providers": [
+    "local"
+  ],
+  "providers_disabled": [
+    "azure",
+    "aws",
+    "gcp"
+  ],
   "billing": {
     "_comment": "Azure remains monitored while compute provisioning stays fenced. GCP billing is intentionally detached and is not an active health source.",
-    "providers": ["azure"]
+    "providers": [
+      "azure"
+    ]
   },
   "storage": {
     "backend": "local",
@@ -50,17 +58,19 @@
       "trading-autonomy": {
         "consumer": "trading-autonomy-rate-limit-client",
         "item": "trading-autonomy-rate-limit-api",
-        "namespaces": ["trading-autonomy"],
-        "actions": ["consume"]
+        "namespaces": [
+          "trading-autonomy"
+        ],
+        "actions": [
+          "consume"
+        ]
       }
     }
   },
-
-
   "services": {
     "brama": {
       "allowed_models": [
-        "-best",
+        "best",
         "wisent-backend/chat/primary",
         "wisent-backend/chat/fallback",
         "wisent-backend/evaluation",
@@ -69,18 +79,20 @@
         "weles/agent/primary"
       ],
       "model_aliases": {
-        "-best": "claude-code/claude-opus-4-6",
         "wisent-backend/chat/primary": "featherless/TheDrummer/Cydonia-24B-v4.3",
         "wisent-backend/chat/fallback": "featherless/TheDrummer/Cydonia-24B-v4.3",
         "wisent-backend/evaluation": "openai/default",
         "wisent-backend/embeddings": "openai/embeddings",
         "wisent-backend/moderation": "openai/moderation",
-        "weles/agent/primary": "featherless/TheDrummer/Cydonia-24B-v4.3"
+        "weles/agent/primary": "featherless/TheDrummer/Cydonia-24B-v4.3",
+        "best": "claude-code/claude-opus-4-6"
       },
-      "required_provider_capabilities": ["featherless", "openai"]
+      "required_provider_capabilities": [
+        "featherless",
+        "openai"
+      ]
     }
   },
-
   "credentials": {
     "_comment": "Host-channel key reads are control-plane operations and use the same exact field-scoped coordinator grant reconciled from the registry.",
     "admin": {
@@ -88,7 +100,6 @@
       "token_file": "~/.stado/control-plane-skarbiec-token"
     }
   },
-
   "secrets": {
     "_comment": "Uses the built-in loopback Skarbiec URL; this coordinator grant is distinct from product, release, and service verifiers and may read only route-local machine and host-health verification items. Host writers use the separate stado-host-health-beacon grant and never receive this control-plane grant.",
     "skarbiec": {
@@ -103,7 +114,15 @@
       "token_file": "~/.stado/stado-integration-api-verifier-skarbiec-token"
     },
     "clients": {
-      "wisent-enterprise": {"item": "wisent-enterprise-integration-api", "allowed_actions": ["enterprise/jobs.snapshot", "enterprise/jobs.timeseries", "enterprise/fleet.host-health", "enterprise/fleet.registry"]}
+      "wisent-enterprise": {
+        "item": "wisent-enterprise-integration-api",
+        "allowed_actions": [
+          "enterprise/jobs.snapshot",
+          "enterprise/jobs.timeseries",
+          "enterprise/fleet.host-health",
+          "enterprise/fleet.registry"
+        ]
+      }
     }
   },
   "object_api": {
@@ -113,55 +132,521 @@
       "token_file": "~/.stado/stado-object-api-verifier-skarbiec-token"
     },
     "namespaces": {
-      "entitlements-rotator": {"item": "entitlements-rotator-object-api", "prefixes": ["skarbiec.vault.json"], "actions": ["get", "put"]},
+      "entitlements-rotator": {
+        "item": "entitlements-rotator-object-api",
+        "prefixes": [
+          "skarbiec.vault.json"
+        ],
+        "actions": [
+          "get",
+          "put"
+        ]
+      },
       "echo": {
         "item": "echo-object-api",
         "prefix_policies": [
-          {"prefix": "aesthetics/", "actions": ["get", "stat"]},
-          {"prefix": "audio/", "actions": ["get", "put"]},
-          {"prefix": "batch-heroes/", "actions": ["get", "put"]},
-          {"prefix": "batch-videos/", "actions": ["delete", "get", "list", "put", "stat"]},
-          {"prefix": "body-horror-requests/", "actions": ["get", "list", "stat"]},
-          {"prefix": "captions/", "actions": ["get", "put"]},
-          {"prefix": "civitai-references/", "actions": ["delete", "get", "list", "put", "stat"]},
-          {"prefix": "daily-fill/", "actions": ["get", "list", "stat"]},
-          {"prefix": "eval-rejections/", "actions": ["get", "put"]},
-          {"prefix": "explainer/", "actions": ["get", "put"]},
-          {"prefix": "external-assets/", "actions": ["get", "put"]},
-          {"prefix": "gateway-output/", "actions": ["get", "list", "stat"]},
-          {"prefix": "lifestyle/", "actions": ["get", "put", "stat"]},
-          {"prefix": "lipsync/", "actions": ["get", "put", "stat"]},
-          {"prefix": "lora-compare/", "actions": ["get", "put", "stat"]},
-          {"prefix": "lora-training/", "actions": ["delete", "get", "list", "put", "stat"]},
-          {"prefix": "loras/", "actions": ["get", "list", "put", "stat"]},
-          {"prefix": "needher/", "actions": ["get", "list", "put", "stat"]},
-          {"prefix": "needher-captions/", "actions": ["get", "put", "stat"]},
-          {"prefix": "needher-lifestyle/", "actions": ["get", "put", "stat"]},
-          {"prefix": "needher-watermarked/", "actions": ["get", "list", "put", "stat"]},
-          {"prefix": "passion-poses/", "actions": ["get", "put", "stat"]},
-          {"prefix": "pose-videos/", "actions": ["delete", "get", "list", "put", "stat"]},
-          {"prefix": "scail/", "actions": ["delete", "get", "list", "put", "stat"]},
-          {"prefix": "scene-videos/", "actions": ["get", "put", "stat"]},
-          {"prefix": "smoothmix/", "actions": ["delete", "get", "list", "put", "stat"]},
-          {"prefix": "training-images/", "actions": ["get", "list", "put", "stat"]},
-          {"prefix": "uploads/", "actions": ["get", "put"]}
+          {
+            "prefix": "aesthetics/",
+            "actions": [
+              "get",
+              "stat"
+            ]
+          },
+          {
+            "prefix": "audio/",
+            "actions": [
+              "get",
+              "put"
+            ]
+          },
+          {
+            "prefix": "batch-heroes/",
+            "actions": [
+              "get",
+              "put"
+            ]
+          },
+          {
+            "prefix": "batch-videos/",
+            "actions": [
+              "delete",
+              "get",
+              "list",
+              "put",
+              "stat"
+            ]
+          },
+          {
+            "prefix": "body-horror-requests/",
+            "actions": [
+              "get",
+              "list",
+              "stat"
+            ]
+          },
+          {
+            "prefix": "captions/",
+            "actions": [
+              "get",
+              "put"
+            ]
+          },
+          {
+            "prefix": "civitai-references/",
+            "actions": [
+              "delete",
+              "get",
+              "list",
+              "put",
+              "stat"
+            ]
+          },
+          {
+            "prefix": "daily-fill/",
+            "actions": [
+              "get",
+              "list",
+              "stat"
+            ]
+          },
+          {
+            "prefix": "eval-rejections/",
+            "actions": [
+              "get",
+              "put"
+            ]
+          },
+          {
+            "prefix": "explainer/",
+            "actions": [
+              "get",
+              "put"
+            ]
+          },
+          {
+            "prefix": "external-assets/",
+            "actions": [
+              "get",
+              "put"
+            ]
+          },
+          {
+            "prefix": "gateway-output/",
+            "actions": [
+              "get",
+              "list",
+              "stat"
+            ]
+          },
+          {
+            "prefix": "lifestyle/",
+            "actions": [
+              "get",
+              "put",
+              "stat"
+            ]
+          },
+          {
+            "prefix": "lipsync/",
+            "actions": [
+              "get",
+              "put",
+              "stat"
+            ]
+          },
+          {
+            "prefix": "lora-compare/",
+            "actions": [
+              "get",
+              "put",
+              "stat"
+            ]
+          },
+          {
+            "prefix": "lora-training/",
+            "actions": [
+              "delete",
+              "get",
+              "list",
+              "put",
+              "stat"
+            ]
+          },
+          {
+            "prefix": "loras/",
+            "actions": [
+              "get",
+              "list",
+              "put",
+              "stat"
+            ]
+          },
+          {
+            "prefix": "needher/",
+            "actions": [
+              "get",
+              "list",
+              "put",
+              "stat"
+            ]
+          },
+          {
+            "prefix": "needher-captions/",
+            "actions": [
+              "get",
+              "put",
+              "stat"
+            ]
+          },
+          {
+            "prefix": "needher-lifestyle/",
+            "actions": [
+              "get",
+              "put",
+              "stat"
+            ]
+          },
+          {
+            "prefix": "needher-watermarked/",
+            "actions": [
+              "get",
+              "list",
+              "put",
+              "stat"
+            ]
+          },
+          {
+            "prefix": "passion-poses/",
+            "actions": [
+              "get",
+              "put",
+              "stat"
+            ]
+          },
+          {
+            "prefix": "pose-videos/",
+            "actions": [
+              "delete",
+              "get",
+              "list",
+              "put",
+              "stat"
+            ]
+          },
+          {
+            "prefix": "scail/",
+            "actions": [
+              "delete",
+              "get",
+              "list",
+              "put",
+              "stat"
+            ]
+          },
+          {
+            "prefix": "scene-videos/",
+            "actions": [
+              "get",
+              "put",
+              "stat"
+            ]
+          },
+          {
+            "prefix": "smoothmix/",
+            "actions": [
+              "delete",
+              "get",
+              "list",
+              "put",
+              "stat"
+            ]
+          },
+          {
+            "prefix": "training-images/",
+            "actions": [
+              "get",
+              "list",
+              "put",
+              "stat"
+            ]
+          },
+          {
+            "prefix": "uploads/",
+            "actions": [
+              "get",
+              "put"
+            ]
+          }
         ]
       },
-      "content-platform": {"item": "content-platform-object-api", "prefixes": ["ad-pipeline/", "aesthetics/", "batch-videos/", "caption-series/", "checkpoints/", "civitai-references/", "daily-fill/", "generated-days/", "generated-images/", "generated-videos/", "lifestyle/", "locations/", "lora-compare/", "passion/", "passion-poses/", "pipeline/", "pose-recipes/", "pose-videos/", "probierz/", "test/", "training/", "training-images/", "ugc/"], "actions": ["delete", "get", "list", "put", "stat"]},
-      "growth-tactics": {"item": "growth-tactics-object-api", "prefixes": ["jobs/"], "actions": ["get", "list", "put"]},
-      "needher": {"item": "needher-object-api", "prefixes": ["avatars/", "covers/", "daily-fill/", "daily-fill-alt-flash/", "daily-fill-noir-bw/", "feed-snapshot.json", "needher-captions/", "needher-lifestyle/", "needher-watermarked/", "pose-previews/", "pose-videos/"], "actions": ["get", "put", "stat"]},
-      "oko": {"item": "oko-object-api", "prefixes": ["transcripts/"], "actions": ["get", "list", "put", "stat"]},
-      "openenv": {"item": "openenv-object-api", "prefixes": ["datasets/", "models/", "pipeline/", "training/"], "actions": ["get", "put"]},
-      "probierz": {"item": "probierz-object-api", "prefixes": ["capacity/", "inputs/", "results/"], "actions": ["get", "list", "put"]},
-      "trading-autonomy": {"item": "trading-autonomy-object-api", "prefixes": ["agents/", "billing/", "media/"], "actions": ["delete", "get", "put"]},
-      "trading-tools": {"item": "trading-tools-object-api", "prefixes": ["stock-context/"], "actions": ["delete", "get", "list", "put", "stat"]},
-      "weles": {"item": "weles-object-api", "prefixes": ["recordings/"], "actions": ["delete", "get", "list", "put", "stat"]},
-      "wisent-app": {"item": "wisent-app-object-api", "prefixes": ["character-previews/", "character-videos/", "characters/", "classifiers/", "dual-video/", "generation-inputs/", "generation-jobs/", "lora_tests/", "loras/", "manual-jobs/", "media/", "processing/", "rooms/", "training-inputs/", "verification/"], "actions": ["delete", "get", "list", "put"]},
-      "wisent-backend": {"item": "wisent-backend-object-client", "prefixes": ["__healthcheck__", "activations/", "benchmarks/", "characters/", "contrastive_pairs/", "control_vectors/", "datasets/", "evaluation_results/", "images/", "optimization/", "personas/", "profiles/", "representations/", "state/", "traits/", "unique_personas/", "vector_stores/"], "actions": ["delete", "get", "list", "put", "stat"]},
-      "wisent-images": {"item": "wisent-images-object-api", "prefixes": ["images/generated/", "models/base/sha256/", "models/loras/sha256/"], "actions": ["get", "put", "stat"]},
-      "wisent-tools": {"item": "wisent-tools-object-api", "prefixes": ["activation-pairs/", "activations/", "datasets/", "evaluations/", "jobs/", "models/", "sweeps/"], "actions": ["delete", "get", "list", "put"]},
-      "wisent-enterprise": {"item": "wisent-enterprise-object-api", "prefix_policies": [{"prefix": "inputs/", "actions": ["put"]}, {"prefix": "models/sha256/", "actions": ["get", "stat"]}, {"prefix": "outputs/", "actions": ["get", "stat"]}]},
-      "wisent-trade": {"item": "wisent-trade-object-api", "prefixes": ["agents/"], "actions": ["delete", "get", "list", "put", "stat"]}
+      "content-platform": {
+        "item": "content-platform-object-api",
+        "prefixes": [
+          "ad-pipeline/",
+          "aesthetics/",
+          "batch-videos/",
+          "caption-series/",
+          "checkpoints/",
+          "civitai-references/",
+          "daily-fill/",
+          "generated-days/",
+          "generated-images/",
+          "generated-videos/",
+          "lifestyle/",
+          "locations/",
+          "lora-compare/",
+          "passion/",
+          "passion-poses/",
+          "pipeline/",
+          "pose-recipes/",
+          "pose-videos/",
+          "probierz/",
+          "test/",
+          "training/",
+          "training-images/",
+          "ugc/"
+        ],
+        "actions": [
+          "delete",
+          "get",
+          "list",
+          "put",
+          "stat"
+        ]
+      },
+      "growth-tactics": {
+        "item": "growth-tactics-object-api",
+        "prefixes": [
+          "jobs/"
+        ],
+        "actions": [
+          "get",
+          "list",
+          "put"
+        ]
+      },
+      "needher": {
+        "item": "needher-object-api",
+        "prefixes": [
+          "avatars/",
+          "covers/",
+          "daily-fill/",
+          "daily-fill-alt-flash/",
+          "daily-fill-noir-bw/",
+          "feed-snapshot.json",
+          "needher-captions/",
+          "needher-lifestyle/",
+          "needher-watermarked/",
+          "pose-previews/",
+          "pose-videos/"
+        ],
+        "actions": [
+          "get",
+          "put",
+          "stat"
+        ]
+      },
+      "oko": {
+        "item": "oko-object-api",
+        "prefixes": [
+          "transcripts/"
+        ],
+        "actions": [
+          "get",
+          "list",
+          "put",
+          "stat"
+        ]
+      },
+      "openenv": {
+        "item": "openenv-object-api",
+        "prefixes": [
+          "datasets/",
+          "models/",
+          "pipeline/",
+          "training/"
+        ],
+        "actions": [
+          "get",
+          "put"
+        ]
+      },
+      "probierz": {
+        "item": "probierz-object-api",
+        "prefixes": [
+          "capacity/",
+          "inputs/",
+          "results/"
+        ],
+        "actions": [
+          "get",
+          "list",
+          "put"
+        ]
+      },
+      "trading-autonomy": {
+        "item": "trading-autonomy-object-api",
+        "prefixes": [
+          "agents/",
+          "billing/",
+          "media/"
+        ],
+        "actions": [
+          "delete",
+          "get",
+          "put"
+        ]
+      },
+      "trading-tools": {
+        "item": "trading-tools-object-api",
+        "prefixes": [
+          "stock-context/"
+        ],
+        "actions": [
+          "delete",
+          "get",
+          "list",
+          "put",
+          "stat"
+        ]
+      },
+      "weles": {
+        "item": "weles-object-api",
+        "prefixes": [
+          "recordings/"
+        ],
+        "actions": [
+          "delete",
+          "get",
+          "list",
+          "put",
+          "stat"
+        ]
+      },
+      "wisent-app": {
+        "item": "wisent-app-object-api",
+        "prefixes": [
+          "character-previews/",
+          "character-videos/",
+          "characters/",
+          "classifiers/",
+          "dual-video/",
+          "generation-inputs/",
+          "generation-jobs/",
+          "lora_tests/",
+          "loras/",
+          "manual-jobs/",
+          "media/",
+          "processing/",
+          "rooms/",
+          "training-inputs/",
+          "verification/"
+        ],
+        "actions": [
+          "delete",
+          "get",
+          "list",
+          "put"
+        ]
+      },
+      "wisent-backend": {
+        "item": "wisent-backend-object-client",
+        "prefixes": [
+          "__healthcheck__",
+          "activations/",
+          "benchmarks/",
+          "characters/",
+          "contrastive_pairs/",
+          "control_vectors/",
+          "datasets/",
+          "evaluation_results/",
+          "images/",
+          "optimization/",
+          "personas/",
+          "profiles/",
+          "representations/",
+          "state/",
+          "traits/",
+          "unique_personas/",
+          "vector_stores/"
+        ],
+        "actions": [
+          "delete",
+          "get",
+          "list",
+          "put",
+          "stat"
+        ]
+      },
+      "wisent-images": {
+        "item": "wisent-images-object-api",
+        "prefixes": [
+          "images/generated/",
+          "models/base/sha256/",
+          "models/loras/sha256/"
+        ],
+        "actions": [
+          "get",
+          "put",
+          "stat"
+        ]
+      },
+      "wisent-tools": {
+        "item": "wisent-tools-object-api",
+        "prefixes": [
+          "activation-pairs/",
+          "activations/",
+          "datasets/",
+          "evaluations/",
+          "jobs/",
+          "models/",
+          "sweeps/"
+        ],
+        "actions": [
+          "delete",
+          "get",
+          "list",
+          "put"
+        ]
+      },
+      "wisent-enterprise": {
+        "item": "wisent-enterprise-object-api",
+        "prefix_policies": [
+          {
+            "prefix": "inputs/",
+            "actions": [
+              "put"
+            ]
+          },
+          {
+            "prefix": "models/sha256/",
+            "actions": [
+              "get",
+              "stat"
+            ]
+          },
+          {
+            "prefix": "outputs/",
+            "actions": [
+              "get",
+              "stat"
+            ]
+          }
+        ]
+      },
+      "wisent-trade": {
+        "item": "wisent-trade-object-api",
+        "prefixes": [
+          "agents/"
+        ],
+        "actions": [
+          "delete",
+          "get",
+          "list",
+          "put",
+          "stat"
+        ]
+      }
     }
   },
   "machine_api": {
@@ -173,13 +658,25 @@
     "clients": {
       "echo": {
         "item": "echo-machine-api",
-        "actions": ["cancel", "status", "submit"],
-        "targets": ["local"]
+        "actions": [
+          "cancel",
+          "status",
+          "submit"
+        ],
+        "targets": [
+          "local"
+        ]
       },
       "wisent-enterprise": {
         "item": "wisent-enterprise-machine-api",
-        "actions": ["cancel", "status", "submit"],
-        "targets": ["local"]
+        "actions": [
+          "cancel",
+          "status",
+          "submit"
+        ],
+        "targets": [
+          "local"
+        ]
       }
     }
   },
@@ -190,16 +687,46 @@
       "token_file": "~/.stado/stado-release-api-verifier-skarbiec-token"
     },
     "publishers": {
-      "brama": {"item": "brama-release-publisher", "prefix": "brama/"},
-      "compute-marketplace": {"item": "compute-marketplace-release-publisher", "prefix": "compute-marketplace/"},
-      "image-video-router": {"item": "image-video-router-release-publisher", "prefix": "image-video-router/"},
-      "jeden": {"item": "jeden-release-publisher", "prefix": "jeden/"},
-      "jeden-desktop": {"item": "jeden-desktop-release-publisher", "prefix": "jeden-desktop/"},
-      "oko": {"item": "oko-release-publisher", "prefix": "oko/"},
-      "skarbiec": {"item": "skarbiec-release-publisher", "prefix": "skarbiec/"},
-      "stado": {"item": "stado-release-publisher", "prefix": "stado/"},
-      "trading-autonomy": {"item": "trading-autonomy-release-publisher", "prefix": "trading-autonomy/"},
-      "wisent-backend": {"item": "wisent-backend-release-publisher", "prefix": "wisent-backend/"}
+      "brama": {
+        "item": "brama-release-publisher",
+        "prefix": "brama/"
+      },
+      "compute-marketplace": {
+        "item": "compute-marketplace-release-publisher",
+        "prefix": "compute-marketplace/"
+      },
+      "image-video-router": {
+        "item": "image-video-router-release-publisher",
+        "prefix": "image-video-router/"
+      },
+      "jeden": {
+        "item": "jeden-release-publisher",
+        "prefix": "jeden/"
+      },
+      "jeden-desktop": {
+        "item": "jeden-desktop-release-publisher",
+        "prefix": "jeden-desktop/"
+      },
+      "oko": {
+        "item": "oko-release-publisher",
+        "prefix": "oko/"
+      },
+      "skarbiec": {
+        "item": "skarbiec-release-publisher",
+        "prefix": "skarbiec/"
+      },
+      "stado": {
+        "item": "stado-release-publisher",
+        "prefix": "stado/"
+      },
+      "trading-autonomy": {
+        "item": "trading-autonomy-release-publisher",
+        "prefix": "trading-autonomy/"
+      },
+      "wisent-backend": {
+        "item": "wisent-backend-release-publisher",
+        "prefix": "wisent-backend/"
+      }
     }
   },
   "service_api": {
@@ -212,30 +739,50 @@
       "weles": {
         "consumer": "weles-service-deployer",
         "item": "weles-service-deployer",
-        "services": ["com.wisent.weles-api"],
-        "actions": ["status", "restart"]
+        "services": [
+          "com.wisent.weles-api"
+        ],
+        "actions": [
+          "status",
+          "restart"
+        ]
       },
       "compute-marketplace": {
         "consumer": "compute-marketplace-service-deployer",
         "item": "compute-marketplace-service-deployer",
-        "services": ["compute-marketplace-backend", "compute-marketplace-frontend"],
-        "actions": ["status", "restart"]
+        "services": [
+          "compute-marketplace-backend",
+          "compute-marketplace-frontend"
+        ],
+        "actions": [
+          "status",
+          "restart"
+        ]
       },
       "wisent-backend": {
         "consumer": "wisent-backend-release-deployer",
         "item": "wisent-backend-release-deployer",
-        "services": ["wisent-backend"],
-        "actions": ["status", "restart"]
+        "services": [
+          "wisent-backend"
+        ],
+        "actions": [
+          "status",
+          "restart"
+        ]
       },
       "image-video-router": {
         "consumer": "image-video-router-release-deployer",
         "item": "image-video-router-release-deployer",
-        "services": ["image-video-router"],
-        "actions": ["promote", "reconcile"]
+        "services": [
+          "image-video-router"
+        ],
+        "actions": [
+          "promote",
+          "reconcile"
+        ]
       }
     }
   },
-
   "agent": {
     "_comment": "Dedicated local workload-agent grant. It is never the control-plane grant; jobs can project only the exact item#field allowlist.",
     "skarbiec": {
