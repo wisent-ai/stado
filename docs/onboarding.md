@@ -57,47 +57,99 @@ Expected result: status progresses from queued or running to completed. The down
 
 ## Onboard another machine
 
-Enrollment is verified, not declared: every write is preceded by a probe over Stado's own SSH channel, and that channel uses only the target-scoped key in the selected credential store. So the machine needs three things before the control plane can say anything true about it — a reachable SSH destination, Remote Login enabled, and the target's public key in its `authorized_keys`.
-
-### Any reachable destination counts
-
-The registry stores the SSH destination verbatim and requires no particular kind of address. `user@machine.local` on the same LAN is as valid a target as a tailnet name or a routable host; enrollment probes whatever you give it and records the machine it actually reached.
-
-A `.local` destination costs reach, not correctness. Every command that opens the channel — `stado fleet enroll`, `stado fleet key check`, `stado host recover`, `stado host exec`, `stado bootstrap` — then works only from inside that network and fails with an unreachable destination from anywhere else. The health beacon travels the other way: the host publishes it outward itself, so `stado registry beacon-age` and `stado host health <target>` keep reporting that machine from anywhere, including while its channel is out of reach. Registering a machine by its `.local` name is therefore a complete way to attach it and watch it, and an incomplete way to administer it remotely.
-
-### Verified enrollment
-
-Generate the key first, because that is what prints the public half:
+A machine enters this fleet by one of **four methods**. All four are first-class, each one is available both from the CLI and from Stado Desktop, and `stado fleet methods` prints them together with the registry's own verdict on each:
 
 ```bash
-stado fleet key generate <target-name>
+stado fleet methods
+stado fleet methods --json
 ```
 
-Append the printed line to `~/.ssh/authorized_keys` on the machine being added. This is the one step that happens on that machine: there is no channel yet, so `stado fleet key install`, which appends the key *through* the channel, is a rotation tool and not first contact. `stado fleet key generate` leaves the stored key readable to the local operator itself; onboarding never sends you to a repository script. If the machine belongs to someone else, hand them [Add your own machine](add-your-machine.md), which covers only their two steps.
+### Choosing a method
 
-Then, from the control plane:
+| Method | The operator needs | The machine needs | Choose it when | It will not |
+|---|---|---|---|---|
+| [`invite`](#invite) | to mint one code and send a single line; no access to the machine at all | to run that one line once, with outward HTTPS to the control address | the machine belongs to somebody else, or you have no way in — a laptop, a colleague's desktop, a box behind someone else's NAT | register anything by itself: a redeemed invite is a `pending` request until you approve it, and approval still probes the machine |
+| [`adopt`](#adopt) | an SSH session that already opens today — agent, your own key, or the machine's own password prompt | Remote Login (`sshd`) enabled and your account able to write `~/.ssh/authorized_keys` | you can already log in: your own box, a fresh cloud VM, a rented or colocated host | help with a machine you cannot log into; it needs a working session before it can install the key |
+| [`join`](#join) | only to answer the request | the Stado binary and credentials for the fleet's store already present | the machine already carries fleet credentials — a reimaged host, a rebuilt worker, a machine that was in the fleet before | bring in a stranger's machine: without store credentials there is nothing to announce with |
+| [`declare`](#declare) | the machine's exact hostname and release platform, asserted by you | nothing at the moment of declaration | you are recording a machine you will verify later, or repairing a registry entry | prove anything — it performs no probe, so a wrong assertion stays wrong until something else reads the machine |
+
+`invite` and `adopt` are the two paths that need no prior key on the machine and are therefore the normal answers. `join` and `declare` are the paths for a machine that already has credentials, or for a registry write with no machine involved yet.
+
+A method the registry's enrollment catalog denies is still listed, marked unavailable and named with the field that denies it — `registry.enrollment.allow_invite`, `allow_adopt`, `allow_join` or `allow_enroll`. `declare` has no gate. `stado fleet catalog` prints the same catalog in full; a registry with no `enrollment` section leaves every method allowed.
+
+### Which way the key travels
+
+One property holds in all four methods, and it is the property to check when reading any of them: **the fleet dials the machine, so the machine only ever receives a public key.** The ed25519 pair is minted by `stado fleet key generate <name>` into the operator's Skarbiec as the `stado-ssh-<name>` item. The private half is stored there, never printed, never transmitted, and never written to the machine being added; no method asks the machine to generate a pair of its own, and no method sends a private key anywhere.
+
+What lands in the machine's `~/.ssh/authorized_keys` is exactly one public line, and it is the same line whichever method put it there — whether a person pasted it, whether `adopt` wrote it over a session the operator already had, or whether the machine fetched it from the dashboard with an invite token. Afterwards `stado fleet key ls` shows stored keys as metadata only and `stado fleet key check <name>` proves the channel actually opens.
+
+### `invite`
+
+The operator mints a code, sends one line, and never touches the machine:
 
 ```bash
-stado fleet enroll <target-name> --ssh <user@host> --bootstrap
-stado fleet key check <target-name>
-stado host recover <target-name>
+stado fleet invite --name <target-name>
+```
+
+`--name` is optional: without it the target is named `invited-<first 8 hex of the invite id>`, and a name that collides with an existing target or another open invite is a hard error asking for `--name` rather than a silent suffix.
+
+The command prints the token once — `<id>.<secret>`, a 16-hex id and 32 CSPRNG bytes in unpadded base64url — states that nothing can reprint it, names the minted channel key's fingerprint, and gives the single line to forward to whoever holds the machine:
+
+```text
+curl -fsSL https://stado.wisent.com/join.sh | sh -s -- <id>.<secret>
+```
+
+With `STADO_API_URL` unset it describes the shape of that line instead of inventing a host. The store keeps only `secret_sha256`, in `enrollments/invites/<id>.json` alongside `target_name`, `created_at`, `expires_at`, `uses_allowed`, `uses_spent`, `status` and `created_by`. A token is good for one use and 24 hours by default; `--uses N` and `--expires <duration>` change that — a duration is an integer plus one of `s`, `m`, `h`, `d`, and a bare number is refused rather than guessed. `stado fleet invites` lists live invites with their status and spend, and `stado fleet revoke-invite <id>` closes one immediately. `--json` carries the same token in `token` next to the ready `join_command`, so redirecting that output to a file writes a live credential to disk; nothing can reprint the token if it is lost, and the answer to a lost token is a new invite plus `revoke-invite`.
+
+On the machine, that one line fetches `GET /join.sh`, reads the fleet's **public** key from `GET /api/fleet/invite/key`, appends it to `~/.ssh/authorized_keys`, and announces the machine through `POST /api/fleet/join` with the hostname, OS, architecture, the destination it worked out for itself, the fingerprint it installed, and whether its SSH channel was answering. Both API routes are authorized by the invite token alone and neither can write the registry; the script itself carries no secret, because the secret is the argument the user supplies, and it installs no software — the agent arrives with your approval. See [the invite endpoints](cli.md#invite-endpoints-on-the-dashboard) for the exact contract.
+
+The machine is then a pending request, exactly like `join`, and the operator finishes it:
+
+```bash
+stado fleet pending
+stado fleet approve <hostname>
 stado registry beacon-age
 ```
 
-`enroll` probes `hostname`, `uname -s` and `uname -m` before writing, so the entry carries the machine's real hostname and the release platform it actually is; `--bootstrap` installs the agent and rolls the entry back if that fails. An unverifiable or uninstallable machine never stays in the registry. `--kind` defaults to `local`, and `--fleet <name>` places the machine in a declared fleet in the same call. `stado fleet key check` proves the channel, `host recover` installs the health beacon and the managed units, and `beacon-age` is the proof — a target with no beacon at all is listed, never omitted.
+`stado fleet pending` shows, for an invited request, the `channel` destination approval will probe, the `invite` id it came from, the fingerprint of the key the machine installed, and whether that machine's SSH channel was answering when it reported; `--json` emits the same. Approving a machine whose channel is not answering yet is the one wasted round trip this view prevents. `approve` then takes that destination and runs the same probe-then-write enrollment as every other path — it reads `hostname`, `uname -s` and `uname -m` over the channel before writing, and rolls the entry back if the agent install fails. Approval is not a shortcut around verification. A spent, expired, revoked or unknown token is refused identically, without telling the caller which of those it was.
 
-A reporting host also needs its two Skarbiec grants, which the control plane mints:
+The machine is registered under the invite's target name — the one `--name` reserved, which is also the name the owner's terminal printed and the name whose key the invite minted — so `stado fleet key check <target-name>` and `stado host recover <target-name>` afterwards use that name, not whatever local hostname the machine happens to have. Its hostname is not discarded: it lands in the entry's `hostnames`, probed rather than trusted. `stado fleet approve` addresses the *request*, and a request is keyed by hostname; that is why the two arguments differ, and why `fleet pending` prints both.
+
+[`fleet/invite-a-machine.sh`](examples/fleet/invite-a-machine.sh) is this method end to end from the operator's side.
+
+### `adopt`
+
+When the operator can already open a session on the machine, Stado installs the public key itself instead of asking a human to paste it:
 
 ```bash
-skarbiec token-mint stado-local-agent --scopes 'read:*'
-skarbiec token-mint stado-host-health-beacon --scopes 'read:stado-host-health-api'
+stado fleet enroll <target-name> --ssh <user@host> --install-key --bootstrap
 ```
 
-When the control plane cannot reach the machine but the machine can reach the store, the machine announces itself instead: `stado fleet join` on it, then `stado fleet pending` and `stado fleet approve <hostname>` here; `stado fleet reject <hostname>` drops a request. Both paths honour the registry's optional `enrollment` catalog, printed by `stado fleet catalog`.
+`--install-key` is first contact: it mints `stado-ssh-<target-name>` if that item has no pair yet, then appends the public line to the machine's `authorized_keys` over whatever access plain `ssh <user@host>` already has — an agent, one of the operator's own keys, or OpenSSH's interactive password prompt. Stado never reads, stores or forwards a password, and again only the public half travels. A second run reports the line already present rather than appending a duplicate.
 
-Stado Desktop offers the same enrollment without a terminal: **Fleet › Hosts**, the **Add a Machine** action, then one sheet that names the machine, shows the generated public key with the exact `authorized_keys` line to paste, takes the SSH destination, and runs the same probe-then-write enrollment before the machine appears in the Hosts table. It issues the `stado fleet …` commands documented here through the dashboard's authenticated command bridge rather than carrying its own enrollment logic, so the CLI remains the canonical surface and the two cannot disagree. The `stado_fleet` binary still exists for compatibility over the same implementation; new instructions should use `stado fleet`.
+The three ways first contact can fail are reported apart — never connected, connected but authentication rejected, authenticated but the `authorized_keys` write failed — and all three abort before any registry write. Once the key is in, the run continues on the unchanged enrollment path: probe, then write, with `--bootstrap` rolling the registration back if the agent install fails.
 
-### The declaration alone
+`stado fleet key install <target-name>` is the related but different tool: it appends the stored public key *through an existing Stado channel*, so it rotates and repairs, and is not first contact.
+
+### `join`
+
+When the control plane cannot reach the machine but the machine can reach the fleet's store, the machine announces itself. On the machine:
+
+```bash
+stado fleet join
+```
+
+On the control plane:
+
+```bash
+stado fleet pending
+stado fleet approve <hostname> [--fleet <name>]
+stado fleet reject <hostname>
+```
+
+This is the same request object and the same approval as `invite`, and it needs the same probe on approval. The difference is who authenticated the announcement: `join` requires the machine to already hold the Stado binary and credentials for the store, while `invite` replaces both with a single-use token.
+
+### `declare`
 
 The lower-level write skips the probe and records what you assert:
 
@@ -109,10 +161,41 @@ stado bootstrap --target <target-name>
 stado host health <target-name>
 ```
 
-`--ssh` and `--release-platform` are both required; `--kind` defaults to `local`. Review the dry-run unit before installation. The worker host must already provide every runtime and driver its jobs require. Registry identity, SSH reachability, workload dependencies, and health publication are separate checks; passing one does not imply the others.
+`--ssh` and `--release-platform` are both required; `--kind` defaults to `local`. Nothing here reads the machine, so `registry doctor` is what later diffs the declaration against live state. Review the dry-run unit before installation. The worker host must already provide every runtime and driver its jobs require. Registry identity, SSH reachability, workload dependencies, and health publication are separate checks; passing one does not imply the others.
 
 For the current machine, `stado bootstrap --local --target <target-name>` installs
 the launchd or systemd-user unit directly.
+
+### Any reachable destination counts
+
+The registry stores the SSH destination verbatim and requires no particular kind of address. `user@machine.local` on the same LAN is as valid a target as a tailnet name or a routable host; enrollment probes whatever you give it and records the machine it actually reached. With `invite`, the destination comes from the machine itself, in the `destination` field of its request.
+
+A `.local` destination costs reach, not correctness. Every command that opens the channel — `stado fleet enroll`, `stado fleet key check`, `stado host recover`, `stado host exec`, `stado bootstrap` — then works only from inside that network and fails with an unreachable destination from anywhere else. The health beacon travels the other way: the host publishes it outward itself, so `stado registry beacon-age` and `stado host health <target>` keep reporting that machine from anywhere, including while its channel is out of reach. Registering a machine by its `.local` name is therefore a complete way to attach it and watch it, and an incomplete way to administer it remotely.
+
+### After any method: the channel and the grants
+
+Whichever method registered the machine, the same three commands turn it into a reporting host, and the last one is the proof:
+
+```bash
+stado fleet key check <target-name>
+stado host recover <target-name>
+stado registry beacon-age
+```
+
+A reporting host also needs its two Skarbiec grants, which the control plane mints:
+
+```bash
+skarbiec token-mint stado-local-agent --scopes 'read:*'
+skarbiec token-mint stado-host-health-beacon --scopes 'read:stado-host-health-api'
+```
+
+`stado fleet key check` proves the channel, `host recover` installs the health beacon and the managed units, and `beacon-age` is the proof — a target with no beacon at all is listed, never omitted.
+
+### The same four methods without a terminal
+
+Stado Desktop offers all four: **Fleet › Hosts**, the **Add a Machine** action, then a chooser that lists `invite`, `adopt`, `join` and `declare` with the same requirements and the same registry verdict `stado fleet methods` reports, and one sheet per method. It issues the `stado fleet …` commands documented here through the dashboard's authenticated command bridge rather than carrying its own enrollment logic, so the CLI remains the canonical surface and the two cannot disagree. The `stado_fleet` binary still exists for compatibility over the same implementation; new instructions should use `stado fleet`.
+
+If the machine belongs to somebody else, hand them [Add your own machine](add-your-machine.md), which is written for their side of `invite` and nothing more.
 
 ## Failure guidance
 
