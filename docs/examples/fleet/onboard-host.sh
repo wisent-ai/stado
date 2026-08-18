@@ -7,8 +7,11 @@
 #   * adopt  — `stado fleet enroll <host> --ssh <dest> --install-key`, when a
 #              plain `ssh <dest>` already works for you; Stado installs the key
 #              itself and this script's step 1 is that same command.
-#   * invite — `stado fleet invite`, when you cannot reach the machine at all;
-#              see invite-a-machine.sh, where approve replaces step 1.
+#   * invite — `stado fleet invite --offline`, when you cannot reach the machine
+#              at all: its owner pastes the printed fragment and sends back an
+#              address, and step 1 below closes the invitation. See
+#              invite-a-machine.sh; in the one-line mode of the same method it
+#              is `stado fleet approve` that replaces step 1 instead.
 #   * paste  — the public line from `stado fleet key generate <host>`, appended
 #              by hand on the machine, which is what this script assumes.
 # In every one of them only the PUBLIC key reaches the machine; the private half

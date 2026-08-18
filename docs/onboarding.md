@@ -7,7 +7,7 @@ This path takes a new operator from no Stado state to one completed local job. L
 Set the immutable release identity, run the verified installer, and expose its binary directory:
 
 ```bash
-export STADO_API_URL=https://stado.wisent.com
+export STADO_API_URL=<your-control-origin>
 export STADO_RELEASE_VERSION=<exact-version>
 export STADO_RELEASE_PLATFORM=<exact-platform>
 ./install-stado.sh
@@ -68,12 +68,13 @@ stado fleet methods --json
 
 | Method | The operator needs | The machine needs | Choose it when | It will not |
 |---|---|---|---|---|
-| [`invite`](#invite) | to mint one code and send a single line; no access to the machine at all | to run that one line once, with outward HTTPS to the control address | the machine belongs to somebody else, or you have no way in — a laptop, a colleague's desktop, a box behind someone else's NAT | register anything by itself: a redeemed invite is a `pending` request until you approve it, and approval still probes the machine |
+| [`invite`, offline fragment](#the-offline-mode) | to mint the key, send a fragment down whatever channel already reaches the machine's owner, and wait for one address back; no access to the machine at all | a terminal its owner can paste into, and Remote Login on before you enroll — no HTTPS, no `curl`, no reachable control point | the machine belongs to somebody else, or you have no way in — a laptop, a colleague's desktop, a box behind someone else's NAT — and it cannot reach this fleet's control point | announce itself: no request appears under `fleet pending`, because you close the invitation yourself with `fleet enroll --ssh <address> --bootstrap`, which still probes |
+| [`invite`, one line](#the-one-line-mode) | to mint one code and send a single line; no access to the machine at all | to run that one line once, with outward HTTPS to a control point that actually answers `/join.sh` — [three things this fleet does not have yet](#what-the-one-line-mode-needs) | the control point is published and reachable from the machine itself; `fleet invite` proves that before printing the line, and falls back to the fragment when it cannot | register anything by itself: a redeemed invite is a `pending` request until you approve it, and approval still probes the machine |
 | [`adopt`](#adopt) | an SSH session that already opens today — agent, your own key, or the machine's own password prompt | Remote Login (`sshd`) enabled and your account able to write `~/.ssh/authorized_keys` | you can already log in: your own box, a fresh cloud VM, a rented or colocated host | help with a machine you cannot log into; it needs a working session before it can install the key |
 | [`join`](#join) | only to answer the request | the Stado binary and credentials for the fleet's store already present | the machine already carries fleet credentials — a reimaged host, a rebuilt worker, a machine that was in the fleet before | bring in a stranger's machine: without store credentials there is nothing to announce with |
 | [`declare`](#declare) | the machine's exact hostname and release platform, asserted by you | nothing at the moment of declaration | you are recording a machine you will verify later, or repairing a registry entry | prove anything — it performs no probe, so a wrong assertion stays wrong until something else reads the machine |
 
-`invite` and `adopt` are the two paths that need no prior key on the machine and are therefore the normal answers. `join` and `declare` are the paths for a machine that already has credentials, or for a registry write with no machine involved yet.
+`invite` and `adopt` are the two paths that need no prior key on the machine and are therefore the normal answers. Of `invite`'s two modes, the offline fragment is the one that needs nothing published on the network, and `fleet invite` selects it for you when the control point does not answer. `join` and `declare` are the paths for a machine that already has credentials, or for a registry write with no machine involved yet.
 
 A method the registry's enrollment catalog denies is still listed, marked unavailable and named with the field that denies it — `registry.enrollment.allow_invite`, `allow_adopt`, `allow_join` or `allow_enroll`. `declare` has no gate. `stado fleet catalog` prints the same catalog in full; a registry with no `enrollment` section leaves every method allowed.
 
@@ -85,21 +86,44 @@ What lands in the machine's `~/.ssh/authorized_keys` is exactly one public line,
 
 ### `invite`
 
-The operator mints a code, sends one line, and never touches the machine:
+The operator mints the machine's channel key and never touches the machine. The method has **two modes**, and which one applies is not a preference: it is whether the machine being added can reach this fleet's control point.
 
 ```bash
-stado fleet invite --name <target-name>
+stado fleet invite --name <target-name>             # probe the control point, then pick the mode
+stado fleet invite --name <target-name> --offline    # do not probe: fragment only
 ```
 
-`--name` is optional: without it the target is named `invited-<first 8 hex of the invite id>`, and a name that collides with an existing target or another open invite is a hard error asking for `--name` rather than a silent suffix.
+`--name` is optional: without it the target is named `invited-<first 8 hex of the invite id>`, and a name that collides with an existing target or another open invite is a hard error asking for `--name` rather than a silent suffix. Both modes mint `stado-ssh-<target-name>` through the same `fleet key generate` path and print its fingerprint, both accept `--expires <duration>` and `--uses N` — a duration is an integer plus one of `s`, `m`, `h`, `d`, and a bare number is refused rather than guessed; the default is one use and 24 hours — and in both the private half stays in the operator's Skarbiec.
 
-The command prints the token once — `<id>.<secret>`, a 16-hex id and 32 CSPRNG bytes in unpadded base64url — states that nothing can reprint it, names the minted channel key's fingerprint, and gives the single line to forward to whoever holds the machine:
+Before it prints anything, the command reads the control address from configuration — `STADO_API_URL`, or `api.url` under `stado config` — and fetches `/join.sh` from it. No control host is compiled into Stado, so an address nobody configured is a reason to fall back, not a name to invent. If the address does not resolve, or refuses the connection, or answers `/join.sh` with anything other than `200`, **the one line is not printed at all**: those three cases are reported apart — a missing DNS record, a missing listener or tunnel, and a release too old for the routes are three different repairs — and the command continues in offline mode. [The control-point check](cli.md#the-control-point-check) is the exact list of verdicts.
+
+[`fleet/invite-a-machine.sh`](examples/fleet/invite-a-machine.sh) is this method end to end from the operator's side, offline mode first.
+
+#### The offline mode
+
+The mode that works today, and the default for any machine that cannot reach the control point. It mints no token and needs no HTTP route at all: the carrier is the channel you are already using to talk to whoever holds the machine.
+
+`stado fleet invite --name <target-name> --offline` prints a self-contained `sh` fragment between two markers. Pasted into a terminal on the machine by its owner, it creates `~/.ssh` at mode 700 and `~/.ssh/authorized_keys` at mode 600, appends the fleet's **public** line there idempotently — the line is *inside* the fragment, not fetched from anywhere — reports whether anything answers on port 22 and prints the exact **System Settings › General › Sharing › Remote Login** path, or its Linux equivalent, when nothing does, and ends by printing the `user@address` its owner sends back to you.
+
+The fragment is not a secret, and it says so in its own output: the only key in it is a public one, so reading it gains nobody anything. That sentence is there for a reason. A fragment treated as a credential gets routed down whichever channel feels secret rather than the one that actually reaches the machine's owner, and then the invitation simply stalls.
+
+The invite object lands in `enrollments/invites/<id>.json` with `mode: "offline"`, status `open`, and no `secret_sha256`, because no secret exists. `stado fleet invites` reports it as `open (offline, awaiting address)` — the one state in this lifecycle that waits on a person rather than on a clock. When the address arrives, the operator closes it with ordinary probe-then-write enrollment:
+
+```bash
+stado fleet enroll <target-name> --ssh <user@address> --bootstrap
+```
+
+That is `adopt`'s command *without* `--install-key`, and it works precisely because the key is already in place: enrollment reads `hostname`, `uname -s` and `uname -m` over the channel, writes the entry from what it read, installs the agent, and rolls the entry back if that install fails. The invitation is then `spent`. There is no `fleet pending` step, because nothing self-reported: an offline invitation produces no request to approve, and the operator's own enrollment is the registry write.
+
+#### The one-line mode
+
+Available only when the check above succeeded. The command then prints the token once — `<id>.<secret>`, a 16-hex id and 32 CSPRNG bytes in unpadded base64url — states that nothing can reprint it, names the minted channel key's fingerprint, and gives the single line to forward to whoever holds the machine:
 
 ```text
-curl -fsSL https://stado.wisent.com/join.sh | sh -s -- <id>.<secret>
+curl -fsSL <control-point>/join.sh | sh -s -- <id>.<secret>
 ```
 
-With `STADO_API_URL` unset it describes the shape of that line instead of inventing a host. The store keeps only `secret_sha256`, in `enrollments/invites/<id>.json` alongside `target_name`, `created_at`, `expires_at`, `uses_allowed`, `uses_spent`, `status` and `created_by`. A token is good for one use and 24 hours by default; `--uses N` and `--expires <duration>` change that — a duration is an integer plus one of `s`, `m`, `h`, `d`, and a bare number is refused rather than guessed. `stado fleet invites` lists live invites with their status and spend, and `stado fleet revoke-invite <id>` closes one immediately. `--json` carries the same token in `token` next to the ready `join_command`, so redirecting that output to a file writes a live credential to disk; nothing can reprint the token if it is lost, and the answer to a lost token is a new invite plus `revoke-invite`.
+`<control-point>` is the configured address that just answered the check, never a name built into Stado. The store keeps only `secret_sha256`, in `enrollments/invites/<id>.json` alongside `target_name`, `created_at`, `expires_at`, `uses_allowed`, `uses_spent`, `status`, `created_by` and the `mode` that distinguishes the two kinds of invitation. `stado fleet invites` lists live invites with their status and spend, and `stado fleet revoke-invite <id>` closes one immediately. `--json` carries the same token in `token` next to the ready `join_command`, so redirecting that output to a file writes a live credential to disk; nothing can reprint the token if it is lost, and the answer to a lost token is a new invite plus `revoke-invite`.
 
 On the machine, that one line fetches `GET /join.sh`, reads the fleet's **public** key from `GET /api/fleet/invite/key`, appends it to `~/.ssh/authorized_keys`, and announces the machine through `POST /api/fleet/join` with the hostname, OS, architecture, the destination it worked out for itself, the fingerprint it installed, and whether its SSH channel was answering. Both API routes are authorized by the invite token alone and neither can write the registry; the script itself carries no secret, because the secret is the argument the user supplies, and it installs no software — the agent arrives with your approval. See [the invite endpoints](cli.md#invite-endpoints-on-the-dashboard) for the exact contract.
 
@@ -113,9 +137,17 @@ stado registry beacon-age
 
 `stado fleet pending` shows, for an invited request, the `channel` destination approval will probe, the `invite` id it came from, the fingerprint of the key the machine installed, and whether that machine's SSH channel was answering when it reported; `--json` emits the same. Approving a machine whose channel is not answering yet is the one wasted round trip this view prevents. `approve` then takes that destination and runs the same probe-then-write enrollment as every other path — it reads `hostname`, `uname -s` and `uname -m` over the channel before writing, and rolls the entry back if the agent install fails. Approval is not a shortcut around verification. A spent, expired, revoked or unknown token is refused identically, without telling the caller which of those it was.
 
-The machine is registered under the invite's target name — the one `--name` reserved, which is also the name the owner's terminal printed and the name whose key the invite minted — so `stado fleet key check <target-name>` and `stado host recover <target-name>` afterwards use that name, not whatever local hostname the machine happens to have. Its hostname is not discarded: it lands in the entry's `hostnames`, probed rather than trusted. `stado fleet approve` addresses the *request*, and a request is keyed by hostname; that is why the two arguments differ, and why `fleet pending` prints both.
+The machine is registered under the invitation's target name — the one `--name` reserved, which is also the name the owner's terminal printed and the name whose key the invitation minted — so `stado fleet key check <target-name>` and `stado host recover <target-name>` afterwards use that name, not whatever local hostname the machine happens to have. Its hostname is not discarded: it lands in the entry's `hostnames`, probed rather than trusted. `stado fleet approve` addresses the *request*, and a request is keyed by hostname; that is why the two arguments differ, and why `fleet pending` prints both.
 
-[`fleet/invite-a-machine.sh`](examples/fleet/invite-a-machine.sh) is this method end to end from the operator's side.
+#### What the one-line mode needs
+
+Nothing inside Stado can make this mode work on its own, and the requirement is worth naming rather than leaving a one-liner in the documentation as though it were live. Three separate things, all of them, on the host that serves the control point:
+
+1. **A name that resolves.** A DNS record for the control host, pointing at something that terminates TLS for it. The `https://stado.wisent.com` this documentation used to print is not that: it is in no zone, resolves nowhere, and an invitation naming it fails the check as a name that does not resolve.
+2. **An ingress in front of `stado-api`.** The dashboard binds loopback on its own host by design, and the invite modes change nothing about that bind. Reaching it from another machine takes the documented deployment boundary — an authenticated reverse proxy in front of that loopback bind — and not a wider bind.
+3. **A release on that host that serves the invite routes.** `GET /api/fleet/invite/key`, `POST /api/fleet/join` and `GET /join.sh` have to exist in the binary actually running there. An older release answers the check with a non-`200`, and `fleet invite` reports an unknown route and goes offline — which is the correct outcome, not a regression.
+
+Until all three hold, pointing `STADO_API_URL` at a host changes only which failure the check reports, and the fragment remains the way a machine is added.
 
 ### `adopt`
 
