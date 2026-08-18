@@ -371,6 +371,23 @@ async fn await_ready_because(
     }
 }
 
+/// Does something already answer the stable bind's readiness path?
+///
+/// The agent tracks its proxy by pid, so a proxy left behind by an earlier run is
+/// invisible to it: `proxy_alive` says no, the spawn fails with `Address already
+/// in use`, and the rollout is failed for a bind that is being served correctly.
+/// Asking the port rather than the record is the only way to tell a stale pid from
+/// a dead proxy.
+async fn stable_bind_serves(target: &ReleaseTargetPolicy) -> bool {
+    let url = format!("http://{}{}", target.stable_bind, target.readiness_path);
+    reqwest::Client::new()
+        .get(url)
+        .timeout(Duration::from_secs(3))
+        .send()
+        .await
+        .is_ok_and(|response| response.status().is_success())
+}
+
 fn stop_legacy(target: &ReleaseTargetPolicy) -> Result<(), String> {
     let Some(label) = target.legacy_launchd_label.as_deref() else {
         return Ok(());
@@ -726,6 +743,11 @@ async fn reconcile_product(
             tokio::time::sleep(Duration::from_millis(200)).await;
             if proxy_alive(&state) {
                 Ok(())
+            } else if stable_bind_serves(target).await {
+                state.proxy_pid = None;
+                state.detail =
+                    format!("adopted the proxy already serving {}", target.stable_bind);
+                Ok(())
             } else {
                 Err("stable release proxy failed to start".to_string())
             }
@@ -894,6 +916,20 @@ async fn reconcile_product(
         )?);
         tokio::time::sleep(Duration::from_millis(200)).await;
         if proxy_alive(&state) {
+            Ok(())
+        } else if stable_bind_serves(target).await {
+            // Someone already serves the stable bind, and the target file this
+            // agent just wrote is what any Stado proxy reads, so the live one is
+            // already forwarding to this candidate. Spawning a second binder
+            // returns `Address already in use (os error 48)` and the rollout was
+            // failed for it while the release it wanted was being served the
+            // whole time -- state said "no proxy", the port said otherwise, and
+            // nothing compared them.
+            state.proxy_pid = None;
+            state.detail = format!(
+                "adopted the proxy already serving {}",
+                target.stable_bind
+            );
             Ok(())
         } else {
             Err("stable release proxy failed to start".to_string())
