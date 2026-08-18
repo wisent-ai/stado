@@ -22,6 +22,9 @@
 //! POST /api/integration/enterprise/<action> - authenticated read-only fleet projection
 //! GET /api/operator/catalog - structured operator workflow and command catalog
 //! POST /api/operator/run - authenticated bounded execution of one catalog command
+//! GET /api/fleet/invite/key - invite-token-authenticated public channel key
+//! POST /api/fleet/join - invite-token-authenticated pending enrollment request
+//! GET /join.sh           - machine-side enrollment bootstrap script (public)
 //! GET /healthz           - liveness (before auth, after the Host guard)
 //! GET /livez             - Cloud Run liveness alias
 //!
@@ -44,6 +47,7 @@
 //!   rather than a process-local lock, so concurrent dashboard revisions
 //!   cannot overwrite each other.
 
+mod fleet_join;
 mod integration;
 mod operator_auth;
 mod operator_console;
@@ -511,9 +515,13 @@ impl Dashboard {
     }
 
     async fn handle_connection(&self, mut stream: TcpStream) -> std::io::Result<()> {
+        // The peer is the reverse proxy's loopback address behind an HTTPS
+        // ingress; the invite routes only ever use it as a rate-limit bucket.
+        let peer = stream.peer_addr().ok().map(|address| address.ip());
         let Some(mut request) = read_request(&mut stream).await? else {
             return Ok(());
         };
+        request.peer = peer;
         let is_object_put = request.method == "PUT" && request.path.starts_with("/api/object?");
         if is_object_put {
             if let Some(response) = self.object_put_preflight(&request).await {
@@ -655,6 +663,16 @@ impl Dashboard {
                     "boundaries": boundaries.json(),
                 }),
             );
+        }
+        // Enrollment by invite. Both answer before any operator
+        // authorization is consulted, and neither ever consults it: the
+        // machine holds an invite code and nothing else, and a loopback
+        // caller's implicit operator trust must not become a way in.
+        if path_no_query == "/join.sh" {
+            return fleet_join::join_script();
+        }
+        if path_no_query == "/api/fleet/invite/key" {
+            return fleet_join::invite_key(&self.store, request).await;
         }
         let release_object_route = path_no_query == "/api/release/object";
         let object_route = path_no_query == "/api/object"
@@ -1496,6 +1514,11 @@ impl Dashboard {
                 cleanup_failure(http_status("403"))
             };
         }
+        // Enrollment by invite: authorized by the invite token alone, before
+        // any operator authorization is reached, and never by it.
+        if path == "/api/fleet/join" {
+            return fleet_join::join(&self.store, request).await;
+        }
         let boundaries = *self
             .boundaries
             .read()
@@ -2019,6 +2042,9 @@ struct Request {
     headers: Vec<(String, String)>,
     content_length: usize,
     body: Vec<u8>,
+    /// Connection peer, filled in by the accept path. `None` when the socket
+    /// no longer has one to report.
+    peer: Option<std::net::IpAddr>,
 }
 
 impl Request {
@@ -2137,6 +2163,7 @@ async fn read_request(stream: &mut TcpStream) -> std::io::Result<Option<Request>
         headers,
         content_length,
         body,
+        peer: None,
     }))
 }
 

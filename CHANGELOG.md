@@ -101,6 +101,18 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   the `invite` method end to end from the operator's side, from `fleet invite`
   to `fleet approve` and `registry beacon-age` as the proof, indexed in the
   examples README.
+- Served the `invite` method from the dashboard: `GET /api/fleet/invite/key`
+  hands the joining machine the fleet's public half and the exact
+  `authorized_keys` line, `POST /api/fleet/join` files its pending enrollment
+  request and spends one use of the invitation, and `GET /join.sh` serves the
+  repository's bootstrap script verbatim and uncached. The two API routes are
+  authorized by the invitation token alone — never by operator credentials,
+  and not by the implicit trust a loopback caller has on operator routes — and
+  write nothing outside `enrollments/`. Unknown, wrong, spent, revoked,
+  expired and rate-limited codes all answer with one status, one sentence and
+  the same elapsed time, so the routes cannot be used to enumerate or classify
+  invitations; requests are bounded per code, per address and in size before
+  any credential store or object store is read.
 
 ### Coding clients
 
