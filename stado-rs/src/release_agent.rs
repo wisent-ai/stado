@@ -24,8 +24,8 @@ use tokio::io::copy_bidirectional;
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::release_control::{
-    self, DesiredRelease, ProductReleasePolicy, QualificationStatus, ReleaseArtifactRef,
-    ReleaseControl, ReleaseManifest, ReleaseTargetPolicy,
+    self, BlueGreenServing, DesiredRelease, ProductReleasePolicy, QualificationStatus,
+    ReleaseArtifactRef, ReleaseControl, ReleaseManifest, ReleaseTargetPolicy, StrategyKind,
 };
 
 const STATE_SCHEMA: u32 = 1;
@@ -354,13 +354,13 @@ async fn ready(record: &ProcessRecord, path: &str) -> bool {
 /// Wait for readiness, returning the last reason it was refused.
 async fn await_ready_because(
     record: &ProcessRecord,
-    target: &ReleaseTargetPolicy,
+    readiness_path: &str,
     seconds: u64,
 ) -> Option<String> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
     let mut last = None;
     loop {
-        match not_ready_because(record, &target.readiness_path).await {
+        match not_ready_because(record, readiness_path).await {
             None => return None,
             Some(reason) => last = Some(reason),
         }
@@ -382,8 +382,11 @@ async fn await_ready_because(
 /// than a silent `false`. The first version returned a bool, declined once, and
 /// left no way to tell a refused connection from a proxy pointing at an upstream
 /// that had just been terminated.
-async fn stable_bind_answer(target: &ReleaseTargetPolicy) -> Result<(), String> {
-    let url = format!("http://{}{}", target.stable_bind, target.readiness_path);
+async fn stable_bind_answer(serving: &BlueGreenServing) -> Result<(), String> {
+    let url = format!(
+        "http://{}{}",
+        serving.stable_bind, serving.readiness_path
+    );
     match reqwest::Client::new()
         .get(&url)
         .timeout(Duration::from_secs(3))
@@ -459,6 +462,7 @@ fn write_proxy_target(
 
 fn start_proxy(
     target: &ReleaseTargetPolicy,
+    serving: &BlueGreenServing,
     product: &str,
     generation: u64,
     port: u16,
@@ -475,7 +479,7 @@ fn start_proxy(
             "--state",
             &proxy_state_path(target, product).display().to_string(),
             "--bind",
-            &target.stable_bind,
+            &serving.stable_bind,
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
@@ -691,7 +695,7 @@ fn sweep_leaked_processes(
 }
 
 fn next_port(
-    target: &ReleaseTargetPolicy,
+    candidate_ports: [u16; 2],
     state: &HostReleaseState,
     occupied: Option<u16>,
 ) -> u16 {
@@ -700,8 +704,8 @@ fn next_port(
     // serving, so the new candidate died on the bind and the rollout could never
     // proceed. The proxy's upstream is authoritative when the record is silent.
     match state.active.as_ref().map(|active| active.port).or(occupied) {
-        Some(port) if port == target.candidate_ports[0] => target.candidate_ports[1],
-        _ => target.candidate_ports[0],
+        Some(port) if port == candidate_ports[0] => candidate_ports[1],
+        _ => candidate_ports[0],
     }
 }
 
@@ -769,8 +773,10 @@ async fn rollback(
                 previous.port,
             )?;
         } else {
+            let serving = target.blue_green_serving()?;
             state.proxy_pid = Some(start_proxy(
                 target,
+                &serving,
                 &state.product,
                 state.rollout_generation,
                 previous.port,
@@ -809,6 +815,11 @@ async fn reconcile_product(
     target: &ReleaseTargetPolicy,
 ) -> Result<HostReleaseState, String> {
     let mut state = load_state(target, product, target_name)?;
+    // `reconcile_once` hands only blue-green policies to this function; ask
+    // for the serving coordinates by name rather than re-checking the
+    // validator's invariant, so a replace policy reaching here fails loudly
+    // instead of halfway through a rollout.
+    let serving = target.blue_green_serving()?;
     // Reconcile the process world before reasoning from the record: anything
     // running out of this product's releases directory that the record does not
     // name is a leak from a run that died between spawning and saving.
@@ -838,7 +849,7 @@ async fn reconcile_product(
         .is_some_and(|active| active.artifact_sha256 == artifact.artifact_sha256)
     {
         let active = state.active.clone().expect("checked above");
-        if !ready(&active, &target.readiness_path).await {
+        if !ready(&active, &serving.readiness_path).await {
             if policy.strategy.automatic_rollback {
                 rollback(
                     target,
@@ -860,6 +871,7 @@ async fn reconcile_product(
             stop_legacy(target)?;
             state.proxy_pid = Some(start_proxy(
                 target,
+                &serving,
                 product,
                 desired.rollout_generation,
                 active.port,
@@ -868,11 +880,11 @@ async fn reconcile_product(
             if proxy_alive(&state) {
                 Ok(())
             } else {
-                match stable_bind_answer(target).await {
+                match stable_bind_answer(&serving).await {
                     Ok(()) => {
                         state.proxy_pid = None;
                         state.detail =
-                            format!("adopted the proxy already serving {}", target.stable_bind);
+                            format!("adopted the proxy already serving {}", serving.stable_bind);
                         Ok(())
                     }
                     Err(why) => Err(format!("stable release proxy failed to start: {why}")),
@@ -895,7 +907,7 @@ async fn reconcile_product(
             state.cutover_at.get_or_insert_with(Utc::now);
             save_state(target, &mut state)?;
             tokio::time::sleep(Duration::from_secs(policy.strategy.drain_timeout_seconds)).await;
-            if !ready(&active, &target.readiness_path).await {
+            if !ready(&active, &serving.readiness_path).await {
                 if policy.strategy.automatic_rollback {
                     rollback(
                         target,
@@ -996,14 +1008,18 @@ async fn reconcile_product(
     state.detail = format!("staged immutable release at {}", directory.display());
     save_state(target, &mut state)?;
 
-    let port = next_port(target, &state, proxy_upstream_port(target, product));
+    let port = next_port(
+        serving.candidate_ports,
+        &state,
+        proxy_upstream_port(target, product),
+    );
     let process = spawn_release(product, policy, target, &manifest, &directory, port)?;
     state.candidate = Some(process.clone());
     state.phase = RolloutPhase::CandidateRunning;
     state.detail = format!("candidate pid={} port={port}", process.pid);
     save_state(target, &mut state)?;
     if let Some(why) =
-        await_ready_because(&process, target, policy.strategy.readiness_timeout_seconds).await
+        await_ready_because(&process, &serving.readiness_path, policy.strategy.readiness_timeout_seconds).await
     {
         terminate(&process);
         let reason = format!(
@@ -1037,6 +1053,7 @@ async fn reconcile_product(
         stop_legacy(target)?;
         state.proxy_pid = Some(start_proxy(
             target,
+            &serving,
             product,
             desired.rollout_generation,
             port,
@@ -1051,11 +1068,11 @@ async fn reconcile_product(
             // second binder returns `Address already in use (os error 48)`, and the
             // rollout used to fail for a bind that was serving correctly -- state
             // said "no proxy", the port said otherwise, and nothing compared them.
-            match stable_bind_answer(target).await {
+            match stable_bind_answer(&serving).await {
                 Ok(()) => {
                     state.proxy_pid = None;
                     state.detail =
-                        format!("adopted the proxy already serving {}", target.stable_bind);
+                        format!("adopted the proxy already serving {}", serving.stable_bind);
                     Ok(())
                 }
                 Err(why) => Err(format!("stable release proxy failed to start: {why}")),
@@ -1081,7 +1098,7 @@ async fn reconcile_product(
         .active
         .clone()
         .ok_or_else(|| "routed release lost its active process record".to_string())?;
-    if !ready(&active, &target.readiness_path).await {
+    if !ready(&active, &serving.readiness_path).await {
         if policy.strategy.automatic_rollback {
             rollback(
                 target,
@@ -1113,6 +1130,13 @@ pub async fn reconcile_once(target_name: &str) -> Result<Vec<HostReleaseState>, 
     };
     let mut states = Vec::new();
     for (product, policy) in &control.products {
+        if policy.strategy.kind != StrategyKind::BlueGreen {
+            // A `replace` policy is delivered by the host-release path: the
+            // artefact tree is swapped in place, and there is no stable
+            // proxy bind or candidate port pair for this reconciler to
+            // switch between. The agent must not drive it.
+            continue;
+        }
         let Some(target) = policy.targets.get(target_name) else {
             continue;
         };

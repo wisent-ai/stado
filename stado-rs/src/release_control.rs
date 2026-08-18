@@ -117,13 +117,54 @@ pub struct ReleaseTargetPolicy {
     pub state_dir: String,
     pub runtime_root: String,
     pub logs_root: String,
-    pub stable_bind: String,
-    pub candidate_ports: [u16; 2],
-    pub readiness_path: String,
+    /// Blue-green serving coordinates. Their presence is decided by the
+    /// policy's strategy, not by the target: a `blue-green` rollout cannot
+    /// run without them and a `replace` rollout has no stable bind, no
+    /// candidate port pair and nothing HTTP to readiness-check, so
+    /// [`validate_registry_contract`] requires them on the one and forbids
+    /// them on the other. Declared-that-it-cannot-exist, not
+    /// declared-empty: a `replace` target carrying any of them is a policy
+    /// that misunderstands what it rolls out.
+    #[serde(default)]
+    pub stable_bind: Option<String>,
+    #[serde(default)]
+    pub candidate_ports: Option<[u16; 2]>,
+    #[serde(default)]
+    pub readiness_path: Option<String>,
     #[serde(default)]
     pub legacy_launchd_label: Option<String>,
     #[serde(default)]
     pub legacy_launchd_plist: Option<String>,
+}
+
+/// The serving coordinates a blue-green rollout binds, probes and switches.
+/// [`validate_registry_contract`] guarantees all three are present on a
+/// `blue-green` target and absent on a `replace` one; consumers ask for this
+/// view rather than re-checking the invariant themselves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlueGreenServing {
+    pub stable_bind: String,
+    pub candidate_ports: [u16; 2],
+    pub readiness_path: String,
+}
+
+impl ReleaseTargetPolicy {
+    /// The blue-green serving coordinates, or why this target has none.
+    pub fn blue_green_serving(&self) -> Result<BlueGreenServing, String> {
+        match (&self.stable_bind, &self.candidate_ports, &self.readiness_path) {
+            (Some(stable_bind), Some(candidate_ports), Some(readiness_path)) => {
+                Ok(BlueGreenServing {
+                    stable_bind: stable_bind.clone(),
+                    candidate_ports: *candidate_ports,
+                    readiness_path: readiness_path.clone(),
+                })
+            }
+            _ => Err(
+                "blue-green target must declare stable_bind, candidate_ports and readiness_path"
+                    .to_string(),
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,6 +181,11 @@ pub struct RolloutStrategy {
 #[serde(rename_all = "kebab-case")]
 pub enum StrategyKind {
     BlueGreen,
+    /// The host-release path swaps the artefact tree in place: there is no
+    /// stable proxy bind, no candidate port pair and no HTTP readiness, so
+    /// the blue-green release agent must never drive it. The policy exists to
+    /// gate who may submit and which version may be promoted.
+    Replace,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -458,6 +504,31 @@ pub fn validate_registry_contract(document: &Value) -> Result<(), String> {
             if !target_names.contains(target.as_str()) {
                 return Err(format!("{location}.targets.{target}: unknown target"));
             }
+            // The strategy decides the serving coordinates, not the target: a
+            // blue-green rollout cannot run without them and a replace rollout
+            // cannot have them. Both directions are errors, so a policy can
+            // neither forget the ports it switches between nor invent a bind
+            // for a product that serves no HTTP.
+            let serving = match policy.strategy.kind {
+                StrategyKind::BlueGreen => Some(target_policy.blue_green_serving().map_err(
+                    |_| {
+                        format!(
+                            "{location}.targets.{target}: blue-green rollout requires stable_bind, candidate_ports and readiness_path"
+                        )
+                    },
+                )?),
+                StrategyKind::Replace => {
+                    if target_policy.stable_bind.is_some()
+                        || target_policy.candidate_ports.is_some()
+                        || target_policy.readiness_path.is_some()
+                    {
+                        return Err(format!(
+                            "{location}.targets.{target}: replace rollout forbids stable_bind, candidate_ports and readiness_path"
+                        ));
+                    }
+                    None
+                }
+            };
             if !identifier(&target_policy.platform)
                 || !identifier(&target_policy.run_as_user)
                 || !safe_absolute(&target_policy.home)
@@ -468,21 +539,25 @@ pub fn validate_registry_contract(document: &Value) -> Result<(), String> {
                     .legacy_launchd_plist
                     .as_deref()
                     .is_some_and(|path| !safe_absolute(path))
-                || !target_policy.readiness_path.starts_with('/')
-                || target_policy.readiness_path.contains("..")
+                || serving.as_ref().is_some_and(|serving| {
+                    !serving.readiness_path.starts_with('/')
+                        || serving.readiness_path.contains("..")
+                })
             {
                 return Err(format!("{location}.targets.{target}: invalid platform, identity, path, or readiness path"));
             }
-            let bind: SocketAddr = target_policy.stable_bind.parse().map_err(|_| {
-                format!("{location}.targets.{target}.stable_bind is not a socket address")
-            })?;
-            if !bind.ip().is_loopback()
-                || target_policy.candidate_ports[0] == target_policy.candidate_ports[1]
-                || target_policy.candidate_ports.contains(&bind.port())
-            {
-                return Err(format!(
-                    "{location}.targets.{target}: blue-green ports are invalid"
-                ));
+            if let Some(serving) = &serving {
+                let bind: SocketAddr = serving.stable_bind.parse().map_err(|_| {
+                    format!("{location}.targets.{target}.stable_bind is not a socket address")
+                })?;
+                if !bind.ip().is_loopback()
+                    || serving.candidate_ports[0] == serving.candidate_ports[1]
+                    || serving.candidate_ports.contains(&bind.port())
+                {
+                    return Err(format!(
+                        "{location}.targets.{target}: blue-green ports are invalid"
+                    ));
+                }
             }
             platforms.insert(target_policy.platform.clone());
         }

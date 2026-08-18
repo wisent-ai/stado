@@ -1032,7 +1032,7 @@ fn parse_target_kind(raw: &str) -> Result<String, String> {
 }
 
 fn parse_release_platform(raw: &str) -> Result<String, String> {
-    crate::deploy::host_release::managed_platform(raw)
+    crate::deploy::products::managed_platform(raw)
         .map(str::to_string)
         .map_err(|error| error.to_string())
 }
