@@ -196,21 +196,33 @@ pub fn preflight_enroll(
     Ok(())
 }
 
-/// `stado fleet enroll NAME --ssh DEST [--kind local] [--fleet FLEET]
-/// [--bootstrap]` — verified onboarding as one transaction. The machine is
-/// probed through Stado's deploy channel BEFORE anything is written: its
-/// real hostname lands in the entry, so the registration is a verified
-/// fact, not a declaration. A failed bootstrap rolls the entry back — an
-/// unverifiable or uninstallable machine never stays in the registry.
+/// `stado fleet enroll NAME --ssh DEST [--install-key] [--kind local]
+/// [--fleet FLEET] [--bootstrap]` — verified onboarding as one transaction.
+/// The machine is probed through Stado's deploy channel BEFORE anything is
+/// written: its real hostname lands in the entry, so the registration is a
+/// verified fact, not a declaration. A failed bootstrap rolls the entry back
+/// — an unverifiable or uninstallable machine never stays in the registry.
 /// Without `--ssh` there is no channel to verify against; the
 /// machine-initiated path (`stado fleet join` there, `approve` here) is
 /// the answer for that setup.
+///
+/// `install_key` is the `adopt` method: the deploy channel needs the fleet's
+/// key to already be in the machine's authorized_keys, and on a machine nobody
+/// has adopted yet it is not, which is why enrolling used to start with an
+/// operator pasting a public key by hand. With the flag, Stado puts it there
+/// itself over a session the operator can already open by other means, and
+/// then the run continues down exactly the path below — probe, write, optional
+/// bootstrap, rollback — with nothing else changed. The install happens before
+/// the probe because the probe is the first thing that needs the key, and
+/// before any registry write, so a machine that cannot be adopted leaves no
+/// entry behind.
 pub async fn enroll(
     name: &str,
     ssh: Option<&str>,
     kind: &str,
     fleet_name: Option<&str>,
     bootstrap: bool,
+    install_key: bool,
 ) -> Result<bool, String> {
     let Some(destination) = ssh else {
         return Err(
@@ -220,6 +232,9 @@ pub async fn enroll(
     };
     let document = fetch_document().await.map_err(|exc| exc.to_string())?;
     crate::cli::fleet::enroll::catalog::require_enroll_allowed(&document)?;
+    if install_key {
+        crate::cli::fleet::enroll::catalog::require_adopt_allowed(&document)?;
+    }
     let takeover = crate::cli::fleet::enroll::legacy::allow_takeover(&document, name).await?;
     if takeover {
         if let Some(fleet) = fleet_name {
@@ -231,6 +246,9 @@ pub async fn enroll(
         preflight_enroll(&document, name, fleet_name)?;
     }
     let runner = crate::deploy::production_runner();
+    if install_key {
+        crate::cli::fleet::key::install_first_contact(&runner, name, destination).await?;
+    }
     let (hostname, release_platform) = probe_identity(&runner, name, destination).await?;
     let mut next = crate::cli::fleet::enroll::legacy::register_verified(
         &document,

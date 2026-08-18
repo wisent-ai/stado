@@ -83,6 +83,15 @@ pub enum FleetCommands {
         /// Fleet to place the machine in right away.
         #[arg(long)]
         fleet: Option<String>,
+        /// Install the fleet's public key into the machine's
+        /// ~/.ssh/authorized_keys before probing it — the `adopt` method. Use
+        /// this for a machine that is not in the fleet yet, whenever you can
+        /// already open an SSH session to it some other way (a loaded ssh
+        /// agent, one of your own keys, or the account password, which OpenSSH
+        /// asks for itself). Without it, enroll assumes the fleet's key is
+        /// already in authorized_keys there.
+        #[arg(long)]
+        install_key: bool,
         /// Install the agent on the machine after registering it.
         #[arg(long)]
         bootstrap: bool,
@@ -187,7 +196,18 @@ async fn execute(command: FleetCommands) -> Result<bool, String> {
             kind,
             fleet,
             bootstrap,
-        } => ops::enroll(&name, Some(&ssh), &kind, fleet.as_deref(), bootstrap).await,
+            install_key,
+        } => {
+            ops::enroll(
+                &name,
+                Some(&ssh),
+                &kind,
+                fleet.as_deref(),
+                bootstrap,
+                install_key,
+            )
+            .await
+        }
         FleetCommands::Join => enroll::join().await,
         FleetCommands::Pending => enroll::pending().await,
         FleetCommands::Approve { hostname, fleet } => {
