@@ -47,7 +47,9 @@
           "--locked",
           "--release",
           "--bin",
-          "stado"
+          "stado",
+          "--target-dir",
+          ".wisent-output/stado-rs/target"
         ]
       },
       "stage": {
@@ -93,7 +95,9 @@
           "--locked",
           "--release",
           "--bin",
-          "stado"
+          "stado",
+          "--target-dir",
+          ".wisent-output/stado-rs/target"
         ]
       },
       "stage": {
