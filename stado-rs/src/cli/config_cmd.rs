@@ -331,6 +331,10 @@ fn show() -> Result<(), CmdError> {
     );
     resolved.insert("stado_api_url".into(), Value::from(config::stado_api_url()));
     resolved.insert(
+        "enrollment_url".into(),
+        Value::from(config::enrollment_url()),
+    );
+    resolved.insert(
         "stado_release_version".into(),
         Value::from(config::stado_release_version()),
     );
