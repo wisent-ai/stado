@@ -59,6 +59,7 @@ pub mod service;
 pub mod service_verify;
 pub mod status;
 pub mod storage;
+pub mod stream;
 pub mod submit;
 pub mod table;
 pub mod vast;
@@ -526,6 +527,11 @@ enum Commands {
     /// Plan, deploy, route and operate local OpenAI-compatible inference.
     #[command(subcommand)]
     Inference(inference::InferenceCommands),
+    /// Provision and operate an interactive display session on a host, and
+    /// stream it to a client (Moonlight): the way to use a fleet GPU
+    /// interactively, since a board cannot be borrowed over a network.
+    #[command(subcommand)]
+    Stream(stream::StreamCommands),
     /// Ordered deployment preflight: config, storage, provider auth, quota,
     /// release channel, agent template, VM identity, registry, queue pause
     /// state and alert channels. Exits non-zero if any check FAILs.
@@ -1990,6 +1996,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Placement(sub) => placement::dispatch(sub).await,
         Commands::Resolver(sub) => resolver::dispatch(sub).await,
         Commands::Inference(sub) => inference::dispatch(sub).await,
+        Commands::Stream(sub) => stream::dispatch(sub).await,
         Commands::Doctor(args) => doctor::dispatch(args).await,
     }
 }

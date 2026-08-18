@@ -1085,6 +1085,11 @@ pub struct ComputeTarget {
     pub account_ref: Option<String>,
     #[serde(default)]
     pub disk_cleanup: Option<DiskCleanupPolicy>,
+    /// Interactive display session this host renders and streams, when it has
+    /// one. Read by `cli::stream` and `deploy::stream`; absent means the host is
+    /// headless, which is what every host is until somebody declares otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_stream: Option<crate::stream::schema::DisplayStream>,
     /// env_overrides and agent_args propagate via the GCS registry to
     /// running agents — the agent compares them every poll and
     /// exits-for-restart when they change, so systemd brings it back up

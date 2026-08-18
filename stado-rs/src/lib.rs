@@ -47,6 +47,7 @@ pub mod self_update;
 pub mod service_resolution;
 pub mod sizing;
 pub mod skarbiec;
+pub mod stream;
 pub mod targets;
 pub mod transcripts;
 pub mod watchdog;
