@@ -16,6 +16,7 @@ REPO=https://github.com/wisent-ai/stado.git
 WORK=/root/.stado/build-work/stado
 LOG=/root/.stado/build-work/stado-build.log
 PIDFILE=/root/.stado/build-work/stado-build.pid
+REVFILE=/root/.stado/build-work/stado-build.rev
 VENDOR_TGZ=/root/.stado/files/wisent-errors-vendor.tgz
 VENDOR_DIR=/root/.stado/build-work/wisent-errors-vendor
 export PATH="/root/.cargo/bin:$PATH"
@@ -30,18 +31,15 @@ if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
   exit 0
 fi
 
-if [ -x "$CANDIDATE" ] && [ -f "$LOG" ] && grep -q '^BUILD_EXIT 0$' "$LOG"; then
-  printf 'STATE\tcomplete\n'
-  printf 'ARTIFACT\t%s\t%s\n' "$CANDIDATE" "$("$CANDIDATE" --version 2>&1)"
-  printf 'SOURCE\t%s\n' "$(git -C "$WORK" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-  exit 0
-fi
-
 command -v cargo >/dev/null 2>&1 || {
   printf 'ERROR\tcargo absent; run the install-rust-toolchain helper first\n' >&2
   exit 1
 }
 
+# Sync the checkout BEFORE judging completeness. Judging first was a trap: the
+# artifact and `BUILD_EXIT 0` survive a new push, so a finished build of the
+# previous revision reported `complete` and the change that had just been pushed
+# was never compiled. A build is complete only for the revision it built.
 mkdir -p "$(dirname "$WORK")" "$CARGO_TARGET_DIR"
 if [ -d "$WORK/.git" ]; then
   git -C "$WORK" remote set-url origin "$REPO"
@@ -51,7 +49,15 @@ else
   rm -rf "$WORK"
   git clone --quiet --depth 50 --branch main "$REPO" "$WORK"
 fi
+REVISION=$(git -C "$WORK" rev-parse HEAD)
 printf 'SOURCE\t%s\n' "$(git -C "$WORK" rev-parse --short HEAD)"
+
+if [ -x "$CANDIDATE" ] && [ -f "$LOG" ] && grep -q '^BUILD_EXIT 0$' "$LOG" &&
+   [ -f "$REVFILE" ] && [ "$(cat "$REVFILE")" = "$REVISION" ]; then
+  printf 'STATE\tcomplete\n'
+  printf 'ARTIFACT\t%s\t%s\n' "$CANDIDATE" "$("$CANDIDATE" --version 2>&1)"
+  exit 0
+fi
 
 # The private dependency, vendored: this host holds no credential for it, so
 # cargo cannot clone it. Only that one source is replaced; crates.io stays live.
@@ -78,10 +84,13 @@ else
 fi
 
 : >"$LOG"
+rm -f "$REVFILE"
 setsid nohup bash -c "
   cd '$WORK/stado-rs'
   PATH=/root/.cargo/bin:\$PATH CARGO_TARGET_DIR='$CARGO_TARGET_DIR' cargo build --release --bin stado >>'$LOG' 2>&1
-  printf 'BUILD_EXIT %s\n' \"\$?\" >>'$LOG'
+  status=\$?
+  printf 'BUILD_EXIT %s\n' \"\$status\" >>'$LOG'
+  if [ \"\$status\" -eq 0 ]; then printf '%s\n' '$REVISION' >'$REVFILE'; fi
   rm -f '$PIDFILE'
 " >/dev/null 2>&1 &
 echo $! >"$PIDFILE"
