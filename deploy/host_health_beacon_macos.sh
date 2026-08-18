@@ -5,7 +5,19 @@
 set -euo pipefail
 
 STADO_BIN="${STADO_BIN:-$HOME/.stado/bin/stado}"
-GUI_DOMAIN="gui/$(/usr/bin/id -u)"
+# A beacon that runs as a system daemon has no GUI domain of its own: `id -u` is
+# 0 and `gui/0` holds nothing, so every user-domain unit read as inactive even
+# while it was listening. Ask the console session's domain instead when running
+# as root, which is where the fleet's per-user services are loaded.
+GUI_UID=$(/usr/bin/id -u)
+if [ "$GUI_UID" = "0" ]; then
+    CONSOLE_UID=$(/usr/bin/stat -f %u /dev/console 2>/dev/null || printf '')
+    case "$CONSOLE_UID" in
+        ''|0) : ;;
+        *) GUI_UID="$CONSOLE_UID" ;;
+    esac
+fi
+GUI_DOMAIN="gui/$GUI_UID"
 # The labels this host is judged on are the ones the registry declares for it.
 # A fixed pair written here reported "inactive" for units nobody runs and said
 # nothing about the ones that matter.
@@ -75,16 +87,32 @@ for lbl in $LABELS; do
     # An always-on unit lives in the system domain, and a `gui/$uid` lookup
     # misses it entirely -- which is how a running fleet reported itself as
     # inactive. Ask both domains, and let the one that answers decide.
-    info=$(/bin/launchctl print "${GUI_DOMAIN}/${lbl}" 2>/dev/null \
-        || /usr/bin/sudo -n /bin/launchctl print "system/${lbl}" 2>/dev/null \
-        || true)
+    #
+    # A root beacon reading another account's GUI domain gets empty output
+    # rather than an error, which read as "inactive" for services that were
+    # loaded: root has to enter that session with `asuser` to see it.
+    info=$(/bin/launchctl print "${GUI_DOMAIN}/${lbl}" 2>/dev/null || true)
+    if [ -z "$info" ] && [ "$(/usr/bin/id -u)" = "0" ]; then
+        info=$(/bin/launchctl asuser "$GUI_UID" /bin/launchctl print \
+            "${GUI_DOMAIN}/${lbl}" 2>/dev/null || true)
+    fi
+    if [ -z "$info" ]; then
+        info=$(/usr/bin/sudo -n /bin/launchctl print "system/${lbl}" 2>/dev/null || true)
+    fi
     if [ -n "$info" ]; then
         state="active"
-        # "last exit code" is the verdict only when it is a number and not
-        # zero; "(never exited)" is healthy, not a failure.
-        last_exit=$(echo "$info" | /usr/bin/awk -F'=' '/last exit code/ {gsub(/[ \t]/,""); print $2; exit}')
-        if [ -n "$last_exit" ] && [ "$last_exit" != "0" ] && [ "$last_exit" != "(neverexited)" ]; then
-            state="failed"
+        # A live process outranks history. launchd keeps the previous run's
+        # "last exit code" while the current one is up, so a worker that
+        # crashed once and was restarted read as failed for the rest of its
+        # life. Read the exit code only when nothing is running now.
+        running=$(echo "$info" | /usr/bin/awk '/state = running/ {print "yes"; exit}')
+        if [ "$running" != "yes" ]; then
+            # "last exit code" is the verdict only when it is a number and not
+            # zero; "(never exited)" is healthy, not a failure.
+            last_exit=$(echo "$info" | /usr/bin/awk -F'=' '/last exit code/ {gsub(/[ \t]/,""); print $2; exit}')
+            if [ -n "$last_exit" ] && [ "$last_exit" != "0" ] && [ "$last_exit" != "(neverexited)" ]; then
+                state="failed"
+            fi
         fi
     else
         state="inactive"
@@ -106,14 +134,40 @@ payload="{\"host\":\"$HOST_SLUG\",\"reported_at\":\"$reported_at\",\"disk\":\"$d
 # relays on every tick it already runs: collect over the approved channel,
 # publish on that host's behalf.
 #
-# The list comes from the registry rather than from a name written here, and a
-# target that publishes for itself simply has no collector helper installed,
-# so its relay attempt fails, says so, and changes nothing. A failed relay
-# never takes this host's own beacon down with it.
+# The list comes from the registry rather than from a name written here. A target
+# that publishes for itself is skipped on freshness, not on the absence of a
+# collector: `ubuntu-server` has both, its own publisher reports every unit the
+# registry declares for it, and the relay's collector carried an older list --
+# so relaying on every tick overwrote a correct document with a thinner one, and
+# a service that had just been installed and started read as missing for as long
+# as the relay kept winning. Ask what the fleet already knows about each host's
+# beacon age, and relay only for the ones nobody is reporting.
 this_target=$("$STADO_BIN" registry self | { IFS="$(printf '\t')" read -r name _rest || true; printf '%s' "$name"; })
 relay_targets=${WC_BEACON_RELAY_TARGETS:-$("$STADO_BIN" registry pull | "$PYTHON_BIN" -c "$READ_NAMES")}
+# Seconds after which a reader calls a host health document stale. A host inside
+# this window is reporting for itself and must not be spoken over.
+READ_FRESH_SECONDS="${WC_BEACON_RELAY_FRESH_SECONDS:-180}"
+READ_FRESH='import json,sys
+limit = float(sys.argv[1])
+document = json.load(sys.stdin)
+rows = document.get("hosts", []) if isinstance(document, dict) else document
+fresh = []
+for row in rows:
+    age = row.get("age_seconds")
+    if isinstance(age, (int, float)) and age < limit:
+        fresh.append(str(row.get("host") or ""))
+print(" ".join(name for name in fresh if name))'
+fresh_targets=$("$STADO_BIN" registry beacon-age --json 2>/dev/null \
+    | "$PYTHON_BIN" -c "$READ_FRESH" "$READ_FRESH_SECONDS" 2>/dev/null || printf '')
 for relay in $relay_targets; do
     [ "$relay" != "$this_target" ] || continue
+    # Somebody is already reporting this host inside the read window: speaking
+    # over it can only make the fleet's picture older than it is.
+    case " $fresh_targets " in
+        *" $relay "*)
+            continue
+            ;;
+    esac
     # A host that publishes for itself has no collector under this name, and
     # the failure it returns is expected rather than interesting. Keep the one
     # line this script writes and drop the command's error block, so a tick
