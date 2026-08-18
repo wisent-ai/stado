@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "products": [
+    {
+      "name": "stado",
+      "why": "the fleet's own control binary; the per-host agent LaunchAgent runs it",
+      "source": {
+        "product": "stado",
+        "member": "stado"
+      },
+      "platforms": [
+        "darwin-arm64",
+        "linux-amd64"
+      ],
+      "install": {
+        "kind": "program",
+        "root": "$HOME/.stado/bin"
+      },
+      "version": {
+        "kind": "program",
+        "argument": "--version",
+        "shape": "plain"
+      },
+      "unit": {
+        "label": "com.wisent.compute.agent.{target}"
+      }
+    },
+    {
+      "name": "skarbiec",
+      "why": "the credential CLI; invoked per call by launchers, so no unit owns it",
+      "source": {
+        "product": "skarbiec",
+        "member": "skarbiec"
+      },
+      "platforms": [
+        "darwin-arm64",
+        "linux-amd64"
+      ],
+      "install": {
+        "kind": "program",
+        "root": "$HOME/.stado/bin"
+      },
+      "version": {
+        "kind": "program",
+        "argument": "version",
+        "shape": "json"
+      }
+    },
+    {
+      "name": "weles-worker",
+      "why": "the Weles worker runtime; installed as a release tree beside its own host-local recordings and scratch state, and run by a per-user LaunchAgent",
+      "source": {
+        "product": "weles-worker",
+        "member": "payload/weles-worker.tar.gz"
+      },
+      "platforms": [
+        "darwin-arm64"
+      ],
+      "install": {
+        "kind": "tree",
+        "root": "$HOME/weles",
+        "preserve": [
+          "recordings",
+          "var",
+          ".work"
+        ]
+      },
+      "version": {
+        "kind": "json_file",
+        "path": "package.json",
+        "pointer": "/version"
+      },
+      "unit": {
+        "label": "com.wisent.weles-worker",
+        "kind": "launchd",
+        "path": "$HOME/Library/LaunchAgents/com.wisent.weles-worker.plist"
+      }
+    }
+  ]
+}
