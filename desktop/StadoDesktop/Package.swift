@@ -8,8 +8,8 @@ let package = Package(
         .executable(name: "Stado", targets: ["Stado"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/wisent-ai/wisent-components.git", revision: "1700f22dd179dd96a0212dd012e8a0e86aaccd60"),
-        .package(url: "https://github.com/wisent-ai/wisent-desktop-auth.git", revision: "3bd2401cbb360a1326893308e5b4d336b8370644"),
+        .package(url: "https://github.com/wisent-ai/wisent-components.git", revision: "63aab577abc78c4d1993a711236479dbc2c2571a"),
+        .package(url: "https://github.com/wisent-ai/wisent-desktop-auth.git", revision: "3fa84dc99e2a470c06655882de0c536874e4c8c3"),
         // By url, not by sibling path: CI checks out this repository alone, and
         // a missing sibling makes the whole graph unresolvable there.
         .package(url: "https://github.com/wisent-ai/echo.git", from: "0.1.2"),
