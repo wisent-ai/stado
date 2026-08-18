@@ -257,7 +257,8 @@ a cloud account, cloud credential, Skarbiec, GPU, or Python.
 
 Install an exact verified release before following the
 [complete onboarding path](docs/onboarding.md). A machine joins a fleet by one
-of four methods — `invite` (send one line, touch nothing), `adopt` (Stado
+of four methods — `invite` (send a fragment, or a one-line code where the
+control point is published; touch nothing either way), `adopt` (Stado
 installs the key over a session you already have), `join` (the machine
 announces itself) and `declare` (assert the entry, verify later) — all four
 listed by `stado fleet methods` and described under
@@ -376,8 +377,12 @@ operator's: `GET /api/fleet/invite/key` and `POST /api/fleet/join` authorize on
 an invitation token alone, `GET /join.sh` serves the script and authorizes
 nothing. None of the three can write the registry — they hand out the fleet's
 public key and record a pending request, and the registry write happens later
-under operator authority in `stado fleet approve`. See
-[the invite endpoints](docs/cli.md#invite-endpoints-on-the-dashboard).
+under operator authority in `stado fleet approve`. All three serve the `invite`
+method's one-line mode, and therefore only a machine that can reach this
+dashboard — which a loopback binding does not allow; the method's offline mode
+exists so that adding a machine never depends on them. See
+[the invite endpoints](docs/cli.md#invite-endpoints-on-the-dashboard) and
+[the control-point check](docs/cli.md#the-control-point-check).
 
 ## Operational model
 

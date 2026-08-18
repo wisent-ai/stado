@@ -9,7 +9,8 @@ examples requirement). Each script runs end-to-end locally.
 - **First run** — `config init`, `config validate`, `doctor`
 - **Work** — `submit`, `job watch`, `results`, `job rerun`
 - **Secrets** — `secrets put / get / ls / rm / doctor`
-- **Fleet** — `fleet methods`, `fleet invite / invites / revoke-invite`,
+- **Fleet** — `fleet methods`, `fleet invite` (with `--offline`),
+  `fleet invites`, `fleet revoke-invite`,
   `fleet pending / approve`, `fleet enroll` (with `--install-key`),
   `fleet key generate / check`, `registry beacon-age`, `host ping`,
   `host uptime`, `service list`, `service status`
@@ -39,13 +40,18 @@ examples requirement). Each script runs end-to-end locally.
    machine has no key yet, add `--install-key` (the `adopt` method) or use the
    invite example below instead of pasting a key by hand.
 7. [`fleet/invite-a-machine.sh`](fleet/invite-a-machine.sh) —
-   the `invite` method end to end, operator side: `fleet methods` and `fleet
-   catalog` for what this registry allows, `fleet invite` for the one line the
-   machine's owner runs, `fleet pending` for the request it produces,
-   `fleet approve` (which still probes), then key check, grants, host recover
-   and `registry beacon-age` as proof. The operator never touches the machine
-   and the private key never leaves the vault — see
-   [Add your own machine](../add-your-machine.md) for the owner's side and
+   the `invite` method end to end, operator side, in the mode that needs
+   nothing published: `fleet methods` and `fleet catalog` for what this registry
+   allows, `fleet invite --offline` for the fragment the machine's owner pastes,
+   `fleet invites` for the invitation waiting on their address, then
+   `fleet enroll --ssh … --bootstrap` (which still probes) to close it, and key
+   check, grants, host recover and `registry beacon-age` as proof. The one-line
+   mode — `fleet invite` without the flag, `fleet pending`, `fleet approve` — is
+   at the bottom of the script with the reachability it requires, because
+   `fleet invite` refuses to print that line until the control point answers.
+   The operator never touches the machine and the private key never leaves the
+   vault — see [Add your own machine](../add-your-machine.md) for the owner's
+   side and
    [Onboard another machine](../onboarding.md#onboard-another-machine) for all
    four methods.
 
