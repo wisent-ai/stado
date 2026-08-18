@@ -248,7 +248,7 @@ fn validate_disk_cleanup(value: &Value, location: &str) -> Result<(), RegistryVa
     let cleaners = map["cleaners"]
         .as_object()
         .ok_or_else(|| verr(&cleaners_location, "must be an object"))?;
-    const ALLOWED: [&str; 2] = ["huggingface_cache", "weles_recordings"];
+    const ALLOWED: [&str; 3] = ["build_caches", "huggingface_cache", "weles_recordings"];
     let mut unknown: Vec<&str> = cleaners
         .keys()
         .map(String::as_str)
@@ -282,6 +282,12 @@ fn validate_disk_cleanup(value: &Value, location: &str) -> Result<(), RegistryVa
         let min_age = cleaner
             .get("min_age_seconds")
             .ok_or_else(|| verr(&cleaner_location, "must contain 'min_age_seconds'"))?;
+        // Per-cleaner floor on retention. The HF cache is content-addressed
+        // and re-downloadable within the hour, so an hour is enough there.
+        // A build tree and a weles run both need a day: a `target/` younger
+        // than that is the working set of a build someone is still waiting
+        // on, and its CACHEDIR.TAG says only that it is reproducible, not
+        // that it is idle.
         let minimum = if name == "huggingface_cache" {
             3600
         } else {

@@ -30,6 +30,10 @@ const CLEANUP_SCALAR_FIELDS: &[&str] = &[
     "max_items_per_pass",
     "max_bytes_per_pass",
 ];
+/// The build-cache cleaner has no proof flag: the tag file IS the proof.
+/// `root` stays out of the dashboard for the same reason weles's does — a
+/// scan root is host shape, not an operator dial.
+const BUILD_CACHES_CLEANER_FIELDS: &[&str] = &["min_age_seconds"];
 const WELES_CLEANER_FIELDS: &[&str] = &["min_age_seconds", "allow_missing_upload_proof"];
 
 #[derive(Debug, thiserror::Error)]
@@ -147,16 +151,19 @@ fn apply_cleanup_patch(target: &mut Map<String, Value>, patch: &Value) -> Result
         let cleaners_patch = object(cleaners_patch, "disk_cleanup.cleaners")?;
         reject_unknown(
             cleaners_patch,
-            &["weles_recordings"],
+            &["build_caches", "weles_recordings"],
             "disk_cleanup.cleaners",
         )?;
-        if let Some(weles_patch) = cleaners_patch.get("weles_recordings") {
-            let weles_patch = object(weles_patch, "disk_cleanup.cleaners.weles_recordings")?;
-            reject_unknown(
-                weles_patch,
-                WELES_CLEANER_FIELDS,
-                "disk_cleanup.cleaners.weles_recordings",
-            )?;
+        for (name, fields) in [
+            ("build_caches", BUILD_CACHES_CLEANER_FIELDS),
+            ("weles_recordings", WELES_CLEANER_FIELDS),
+        ] {
+            let Some(cleaner_patch) = cleaners_patch.get(name) else {
+                continue;
+            };
+            let location = format!("disk_cleanup.cleaners.{name}");
+            let cleaner_patch = object(cleaner_patch, &location)?;
+            reject_unknown(cleaner_patch, fields, &location)?;
             let cleaners = cleanup
                 .get_mut("cleaners")
                 .and_then(Value::as_object_mut)
@@ -164,15 +171,13 @@ fn apply_cleanup_patch(target: &mut Map<String, Value>, patch: &Value) -> Result
                     PolicyError::InvalidRegistry("disk_cleanup.cleaners must be an object".into())
                 })?;
             let cleaner = cleaners
-                .entry("weles_recordings")
+                .entry(name)
                 .or_insert_with(|| json!({}))
                 .as_object_mut()
                 .ok_or_else(|| {
-                    PolicyError::InvalidRegistry(
-                        "disk_cleanup.cleaners.weles_recordings must be an object".into(),
-                    )
+                    PolicyError::InvalidRegistry(format!("{location} must be an object"))
                 })?;
-            merge_fields(cleaner, weles_patch, WELES_CLEANER_FIELDS);
+            merge_fields(cleaner, cleaner_patch, fields);
         }
     }
     Ok(())

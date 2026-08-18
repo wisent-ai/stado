@@ -74,11 +74,45 @@ impl VastError {
 /// Resolve the Vast API key only from Skarbiec. A missing item means that the
 /// provider is unavailable; authorization and transport failures are logged
 /// rather than mistaken for an absent credential.
+///
+/// Two channels, in this order, because the renter gate has to work on the
+/// machine that is actually rented: the configured (control-plane) consumer
+/// first, and the host's own agent grant when this host holds no control-plane
+/// bearer. The RTX host is the whole reason — it is the fleet's only rented
+/// machine, `~/.stado/control-plane-skarbiec-token` does not exist there and
+/// must not, so `vast_active` was permanently false and nothing kept fleet jobs
+/// off a paying renter's card.
 pub async fn resolve_vast_api_key() -> String {
-    match crate::skarbiec::read_string("stado-vast", "api_key").await {
+    let control_plane_bearer = crate::config::skarbiec_token_file();
+    let control_plane_usable =
+        !control_plane_bearer.is_empty() && std::path::Path::new(control_plane_bearer).is_file();
+    if control_plane_usable {
+        match crate::skarbiec::read_string("stado-vast", "api_key").await {
+            Ok(value) => return value.unwrap_or_default(),
+            Err(err) => {
+                eprintln!("[vast] cannot read stado-vast/api_key from Skarbiec: {err}");
+                return String::new();
+            }
+        }
+    }
+    let url = crate::config::agent_skarbiec_url();
+    let consumer = crate::config::agent_skarbiec_consumer();
+    let token_file = crate::config::agent_skarbiec_token_file();
+    if url.is_empty() || consumer.is_empty() || !std::path::Path::new(token_file).is_file() {
+        eprintln!(
+            "[vast] no usable Skarbiec grant for stado-vast/api_key: no control-plane bearer at \
+             {control_plane_bearer} and no agent grant configured on this host"
+        );
+        return String::new();
+    }
+    match crate::credential_store::read_string_with(url, consumer, token_file, "stado-vast", "api_key")
+        .await
+    {
         Ok(value) => value.unwrap_or_default(),
         Err(err) => {
-            eprintln!("[vast] cannot read stado-vast/api_key from Skarbiec: {err}");
+            eprintln!(
+                "[vast] cannot read stado-vast/api_key as {consumer} (this host's own grant): {err}"
+            );
             String::new()
         }
     }
