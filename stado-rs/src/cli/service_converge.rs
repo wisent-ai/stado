@@ -219,7 +219,9 @@ pub async fn converge(
     apply: bool,
     json_output: bool,
 ) -> Result<(), CmdError> {
-    let resolved = host_channel::canonical_target(target).await.map_err(click)?;
+    let resolved = host_channel::canonical_target(target)
+        .await
+        .map_err(click)?;
     let declared = declaring(&resolved, binary)?;
     let runner = production_runner();
 

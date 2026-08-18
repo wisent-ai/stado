@@ -517,10 +517,7 @@ fi
             "fields".to_string(),
             Value::Object(parse_fields(&output.stdout)),
         );
-        map.insert(
-            "client_port".to_string(),
-            Value::from(SUNSHINE_HTTPS_PORT),
-        );
+        map.insert("client_port".to_string(), Value::from(SUNSHINE_HTTPS_PORT));
     }
     Ok(body)
 }
@@ -718,11 +715,7 @@ pub const SUNSHINE_VERSION: &str = "v2026.516.143833";
 
 const SUNSHINE_ARTIFACTS: &[(&str, &str, &str)] = &[
     // release prefix, asset name, sha256
-    (
-        "ubuntu 22.04",
-        "sunshine-ubuntu-22.04-amd64.deb",
-        "",
-    ),
+    ("ubuntu 22.04", "sunshine-ubuntu-22.04-amd64.deb", ""),
     (
         "ubuntu 24.04",
         "sunshine-ubuntu-24.04-amd64.deb",
@@ -751,7 +744,9 @@ const SUNSHINE_ARTIFACTS: &[(&str, &str, &str)] = &[
 /// The pinned artifact for one distribution, or a refusal that names what is
 /// known. A guess here would be a host that installs something its libraries
 /// cannot load.
-pub fn pinned_sunshine_for(release: &str) -> Result<crate::stream::schema::SunshineRelease, String> {
+pub fn pinned_sunshine_for(
+    release: &str,
+) -> Result<crate::stream::schema::SunshineRelease, String> {
     let normalised = release.trim().to_lowercase();
     let found = SUNSHINE_ARTIFACTS
         .iter()

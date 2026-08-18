@@ -186,7 +186,7 @@ mod tests {
     #[tokio::test]
 
     async fn file_backend_roundtrip() {
-        let _guard = super::super::test_env_lock();
+        let _guard = super::super::test_env_lock_async().await;
         let dir =
             std::env::temp_dir().join(format!("stado-cred-store-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
@@ -201,9 +201,14 @@ mod tests {
         .expect("write config");
         std::env::set_var("STADO_CONFIG", config);
         std::env::set_var(ENV_STORE, selector);
-        write_item_with("alpha", "token", &serde_json::json!({"token": "v"}))
-            .await
-            .expect("write");
+        write_item_with(
+            "alpha",
+            "token",
+            &serde_json::json!({"token": "v"}),
+            &serde_json::json!({}),
+        )
+        .await
+        .expect("write");
         let ids = list_ids_with("unused", "unused", "unused")
             .await
             .expect("list");

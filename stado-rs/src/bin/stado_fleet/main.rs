@@ -10,8 +10,8 @@
 //! a different shape.
 
 use clap::Parser;
-use std::process::ExitCode;
 use stado::cli::fleet::{self, FleetCommands};
+use std::process::ExitCode;
 
 /// Fleet management for registered Stado hosts.
 #[derive(Parser)]
