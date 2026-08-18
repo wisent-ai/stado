@@ -74,10 +74,14 @@ struct EnrollmentMethodListView: View {
                 },
             ]
         ) {
-            if store.plan.invite != nil {
+            if let invite = store.plan.invite {
                 EnrollmentNote(
-                    title: "An invitation is still open",
-                    detail: "It was minted from this window and is waiting to be answered. Nothing is expected of you until the machine reports itself.",
+                    title: invite.isOffline
+                        ? "\(invite.targetName) is invited and waiting on its owner"
+                        : "An invitation is still open",
+                    detail: invite.isOffline
+                        ? "The fragment for it was minted from this window. Nothing reports itself in that mode: what you are waiting for is the address its owner reads back to you, and the invite screen is where you put it."
+                        : "It was minted from this window and is waiting to be answered. Nothing is expected of you until the machine reports itself.",
                     actions: [
                         WisentAction("Go to it", kind: .primary) { store.open(.invite) },
                     ]
