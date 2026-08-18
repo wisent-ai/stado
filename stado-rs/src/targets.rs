@@ -594,12 +594,12 @@ pub fn validate_registry(data: &Value) -> Result<(), RegistryValidationError> {
             .get("release_platform")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if !crate::deploy::host_release::PLATFORMS.contains(&platform) {
+        if !crate::deploy::products::PLATFORMS.contains(&platform) {
             return Err(verr(
                 &platform_location,
                 &format!(
                     "must be one of {} and must be confirmed by host inventory",
-                    py_list_repr(crate::deploy::host_release::PLATFORMS)
+                    py_list_repr(crate::deploy::products::PLATFORMS)
                 ),
             ));
         }

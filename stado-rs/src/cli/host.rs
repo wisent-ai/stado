@@ -1225,7 +1225,7 @@ pub async fn declare_version(
     version: &str,
     json: bool,
 ) -> Result<(), CmdError> {
-    let binary = crate::deploy::host_release::managed_binary(binary)
+    let binary = crate::deploy::products::product(binary)
         .map_err(|error| CmdError::click(error.to_string()))?;
     let version = version.trim();
     if version.is_empty() {
@@ -1271,7 +1271,7 @@ pub async fn promote_version(
     version: &str,
     json_output: bool,
 ) -> Result<(), CmdError> {
-    let managed = crate::deploy::host_release::managed_binary(binary)
+    let managed = crate::deploy::products::product(binary)
         .map_err(|error| CmdError::click(error.to_string()))?;
     let version = version.trim();
     if !crate::deploy::host_release::is_exact_semver(version) {
@@ -1354,7 +1354,7 @@ pub async fn promote_version(
                     "cannot verify release_platform for {name:?}: inventory omitted it"
                 ))
             })?;
-        let observed = crate::deploy::host_release::managed_platform(observed)
+        let observed = crate::deploy::products::managed_platform(observed)
             .map_err(|error| CmdError::click(format!("{name}: {error}")))?;
         if !declared.is_empty() && declared != observed {
             return Err(CmdError::click(format!(
@@ -1369,6 +1369,13 @@ pub async fn promote_version(
         platforms.insert(observed.to_string());
     }
     for platform in &platforms {
+        // A product publishes for the platforms it declares, and promoting a
+        // version onto a fleet includes hosts it may not publish for at all.
+        // Refused rather than skipped: a declaration a host can never receive
+        // is drift this pack has no way to close.
+        managed
+            .platform(platform)
+            .map_err(|error| CmdError::click(error.to_string()))?;
         crate::deploy::host_release::catalog_identity(managed, version, platform)
             .await
             .map_err(|error| CmdError::click(error.to_string()))?;

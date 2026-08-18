@@ -187,6 +187,42 @@ fn declared_version<'a>(target: &'a ComputeTarget, binary: &str) -> Option<&'a s
         .filter(|version| !version.is_empty())
 }
 
+/// The service-directory name of the fleet object API. The host the
+/// directory says serves it is the one host a loopback release origin is
+/// self-delivery for.
+const OBJECT_API_SERVICE: &str = "stado-object-api";
+
+/// The scheme contract for one release origin: HTTPS for every target, or
+/// loopback HTTP when the target is its own store. The fetch runs on the
+/// target itself, so a loopback origin never crosses a network and can only
+/// ever name that host's own store; for every other target the origin leaves
+/// the machine, and off-host HTTP is exactly the tamperable path the HTTPS
+/// rule exists to close.
+fn release_origin_allowed(release_api: &str, self_store: bool) -> bool {
+    if release_api.starts_with("https://") {
+        return true;
+    }
+    self_store && loopback_http_origin(release_api)
+}
+
+/// `http://` naming this machine and nothing else: a loopback IP or
+/// `localhost`. The host is parsed, not prefix-matched, so
+/// `http://127.0.0.1.evil.example` is not loopback.
+pub(crate) fn loopback_http_origin(origin: &str) -> bool {
+    let Ok(url) = url::Url::parse(origin) else {
+        return false;
+    };
+    if url.scheme() != "http" {
+        return false;
+    }
+    match url.host() {
+        Some(url::Host::Ipv4(address)) => address.is_loopback(),
+        Some(url::Host::Ipv6(address)) => address.is_loopback(),
+        Some(url::Host::Domain(domain)) => domain.eq_ignore_ascii_case("localhost"),
+        None => false,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The plan
 // ---------------------------------------------------------------------------
@@ -281,7 +317,11 @@ impl ReleasePlan {
 /// All of them are made here, on the control plane, and none of them depend
 /// on anything the host says. A request that cannot be delivered correctly
 /// should cost zero ssh connections and change nothing.
-pub fn plan(target: &ComputeTarget, request: &ReleaseRequest) -> Result<ReleasePlan, DeployError> {
+pub fn plan(
+    target: &ComputeTarget,
+    request: &ReleaseRequest,
+    self_store: bool,
+) -> Result<ReleasePlan, DeployError> {
     let product = products::product(&request.binary)?;
     if !is_exact_semver(&request.version) {
         return Err(DeployError(format!(
@@ -313,14 +353,16 @@ pub fn plan(target: &ComputeTarget, request: &ReleaseRequest) -> Result<ReleaseP
             "the canonical release manifest carries an invalid source_commit".to_string(),
         ));
     }
-    if !request.release_api.starts_with("https://")
-        || request
-            .release_api
-            .bytes()
-            .any(|byte| byte.is_ascii_whitespace())
+    if request
+        .release_api
+        .bytes()
+        .any(|byte| byte.is_ascii_whitespace())
+        || !release_origin_allowed(&request.release_api, self_store)
     {
         return Err(DeployError(
-            "canonical STADO_API_URL must be a whitespace-free HTTPS URL".to_string(),
+            "canonical STADO_API_URL must be a whitespace-free HTTPS URL; loopback HTTP is \
+             allowed only when the target is its own release store"
+                .to_string(),
         ));
     }
     let Some(declared) = declared_version(target, &product.name) else {
@@ -534,8 +576,11 @@ staged_path="$staged_dir/$binary"
 archive_path="$staged_dir/.$archive_name.incoming"
 incoming="$staged_dir/.$binary.incoming"
 
+# The plan enforced the scheme contract before this script existed: HTTPS
+# for every target, loopback HTTP only for a host delivering from its own
+# store. This guard is the host-side tripwire for the same shapes.
 case "$release_api" in
-  https://*) ;;
+  https://*|http://127.*|http://localhost|http://localhost:*|http://\[::1\]|http://\[::1\]:*) ;;
   *) say fetch refused_not_https; exit 1 ;;
 esac
 for required in /usr/bin/curl /usr/bin/openssl /usr/bin/tar; do
@@ -800,8 +845,11 @@ archive_path="$staged_dir/.$archive_name.incoming"
 payload_path="$staged_dir/.payload.incoming"
 incoming="$staged_dir/.tree.incoming"
 
+# The plan enforced the scheme contract before this script existed: HTTPS
+# for every target, loopback HTTP only for a host delivering from its own
+# store. This guard is the host-side tripwire for the same shapes.
 case "$release_api" in
-  https://*) ;;
+  https://*|http://127.*|http://localhost|http://localhost:*|http://\[::1\]|http://\[::1\]:*) ;;
   *) say fetch refused_not_https; exit 1 ;;
 esac
 for required in /usr/bin/curl /usr/bin/openssl /usr/bin/tar; do
@@ -1195,9 +1243,10 @@ pub fn declared_unit(
 pub async fn release_target(
     target: &ComputeTarget,
     request: &ReleaseRequest,
+    self_store: bool,
     runner: &Runner,
 ) -> Result<Value, DeployError> {
-    let plan = plan(target, request)?;
+    let plan = plan(target, request, self_store)?;
 
     let mut report = host_channel::base_report(target);
     report.insert("source_commit".to_string(), json!(plan.source_commit));
@@ -1554,12 +1603,21 @@ pub async fn release_host(
              0.5.1, never a channel, an alias or a range. A release coordinate is immutable"
         )));
     }
-    let target = host_channel::canonical_target(target_name).await?;
+    let registry = crate::targets::fetch_registry_remote()
+        .await
+        .map_err(|exc| DeployError(exc.to_string()))?;
+    let target = host_channel::resolve_target(&registry, target_name)?.clone();
     let platform = products::managed_platform(&target.release_platform)?;
     product.platform(platform)?;
     let release_api = crate::cli::storage::release_api_origin()
         .map_err(|error| DeployError(error.to_string()))?;
     let (source_commit, sha256) = catalog_identity(product, version, platform).await?;
+    // Self-delivery: the directory says this target serves the fleet object
+    // API, so a loopback release origin is the host reading its own store
+    // rather than a network read. Every other target keeps the HTTPS rule.
+    let self_store = registry
+        .service(OBJECT_API_SERVICE)
+        .is_some_and(|object_api| object_api.active_host == target.name);
     let request = ReleaseRequest {
         binary: product.name.clone(),
         version: version.to_string(),
@@ -1569,7 +1627,7 @@ pub async fn release_host(
         release_api,
         dry_run,
     };
-    release_target(&target, &request, runner).await
+    release_target(&target, &request, self_store, runner).await
 }
 
 #[cfg(test)]
@@ -1718,7 +1776,7 @@ mod tests {
         let (runner, seen) = recording_runner(vec![]);
         let mut request = request();
         request.binary = "curl".to_string();
-        let error = release_target(&target(), &request, &runner)
+        let error = release_target(&target(), &request, false, &runner)
             .await
             .unwrap_err();
         assert!(error.0.contains("is not a stado-managed binary"));
@@ -1764,7 +1822,7 @@ mod tests {
         let (runner, seen) = recording_runner(vec![]);
         let mut request = request();
         request.version = "latest".to_string();
-        let error = release_target(&target(), &request, &runner)
+        let error = release_target(&target(), &request, false, &runner)
             .await
             .unwrap_err();
         assert!(error.0.contains("is not an exact version"), "{}", error.0);
@@ -1788,14 +1846,14 @@ mod tests {
         let (runner, seen) = recording_runner(vec![]);
 
         // Nothing declared for this host at all.
-        let error = release_target(&target_with(&[]), &request(), &runner)
+        let error = release_target(&target_with(&[]), &request(), false, &runner)
             .await
             .unwrap_err();
         assert!(error.0.contains("declares no stado version"), "{}", error.0);
 
         // Declared, but not this version. Delivery carries out a
         // declaration; it does not overrule one.
-        let error = release_target(&target_with(&[("stado", "0.4.392")]), &request(), &runner)
+        let error = release_target(&target_with(&[("stado", "0.4.392")]), &request(), false, &runner)
             .await
             .unwrap_err();
         assert!(
@@ -1805,14 +1863,14 @@ mod tests {
         );
 
         // Declared for the other binary only.
-        let error = release_target(&target_with(&[("skarbiec", "0.1.3")]), &request(), &runner)
+        let error = release_target(&target_with(&[("skarbiec", "0.1.3")]), &request(), false, &runner)
             .await
             .unwrap_err();
         assert!(error.0.contains("declares no stado version"), "{}", error.0);
 
         // An empty declaration is not a declaration. A blank string in the
         // document must refuse like an absent key, not deliver "".
-        let error = release_target(&target_with(&[("stado", "")]), &request(), &runner)
+        let error = release_target(&target_with(&[("stado", "")]), &request(), false, &runner)
             .await
             .unwrap_err();
         assert!(error.0.contains("declares no stado version"), "{}", error.0);
@@ -1868,7 +1926,7 @@ mod tests {
             ("stage", ok_output(stage_stdout(DIGEST))),
             ("activate", ok_output(activate_stdout())),
         ]);
-        let report = release_target(&target(), &request(), &runner)
+        let report = release_target(&target(), &request(), false, &runner)
             .await
             .unwrap();
         assert_eq!(report["status"], RELEASED_STATUS);
@@ -1912,7 +1970,7 @@ mod tests {
             ("activate", ok_output(activate_stdout())),
             ("restart", restarted),
         ]);
-        let report = release_target(&target, &request(), &runner).await.unwrap();
+        let report = release_target(&target, &request(), false, &runner).await.unwrap();
 
         assert_eq!(report["status"], RELEASED_STATUS);
         assert_eq!(report["unit"], label);
@@ -1953,7 +2011,7 @@ mod tests {
             ("activate", ok_output(activate_stdout())),
             ("restart", refused),
         ]);
-        let report = release_target(&target, &request(), &runner).await.unwrap();
+        let report = release_target(&target, &request(), false, &runner).await.unwrap();
 
         assert_eq!(report["status"], host_channel::FAILED_STATUS);
         assert_eq!(report["activated"], true);
@@ -1982,7 +2040,7 @@ mod tests {
             ("stage", stage),
             ("activate", ok_output(activate_stdout())),
         ]);
-        let report = release_target(&target(), &request(), &runner)
+        let report = release_target(&target(), &request(), false, &runner)
             .await
             .unwrap();
 
@@ -2019,7 +2077,7 @@ mod tests {
             ("stage", stage),
             ("activate", ok_output(activate_stdout())),
         ]);
-        let report = release_target(&target(), &request(), &runner)
+        let report = release_target(&target(), &request(), false, &runner)
             .await
             .unwrap();
         assert_eq!(report["status"], host_channel::FAILED_STATUS);
@@ -2036,7 +2094,7 @@ mod tests {
             ("stage", ok_output(stage_stdout(DIGEST))),
             ("activate", ok_output(activate_stdout())),
         ]);
-        let report = release_target(&target(), &request(), &runner)
+        let report = release_target(&target(), &request(), false, &runner)
             .await
             .unwrap();
         assert_eq!(report["status"], ALREADY_ACTIVE_STATUS);
@@ -2107,7 +2165,7 @@ mod tests {
             ("probe", probe),
             ("stage", ok_output(stage_stdout(DIGEST))),
         ]);
-        let report = release_target(&target(), &request(), &runner)
+        let report = release_target(&target(), &request(), false, &runner)
             .await
             .unwrap();
         assert_eq!(report["status"], host_channel::FAILED_STATUS);
@@ -2136,7 +2194,7 @@ mod tests {
             ("probe", probe),
             ("stage", ok_output(stage_stdout(DIGEST))),
         ]);
-        let report = release_target(&target(), &request(), &runner)
+        let report = release_target(&target(), &request(), false, &runner)
             .await
             .unwrap();
         assert_eq!(report["status"], host_channel::FAILED_STATUS);
@@ -2171,7 +2229,7 @@ mod tests {
             ("stage", ok_output(stage_stdout(DIGEST))),
             ("activate", ok_output(activate_stdout())),
         ]);
-        let report = release_target(&target(), &request(), &runner)
+        let report = release_target(&target(), &request(), false, &runner)
             .await
             .unwrap();
         assert_eq!(report["status"], host_channel::FAILED_STATUS);
@@ -2282,6 +2340,7 @@ mod tests {
         let report = release_target(
             &target(),
             &request,
+            false,
             &scratch_home_runner(home.path().to_path_buf()),
         )
         .await
@@ -2398,7 +2457,7 @@ mod tests {
 
     #[test]
     fn a_plan_addresses_exactly_one_immutable_coordinate() {
-        let plan = plan(&target(), &request()).unwrap();
+        let plan = plan(&target(), &request(), false).unwrap();
         assert_eq!(
             plan.release_uri(),
             "stado://releases/stado/0.5.1/darwin-arm64/stado-v0.5.1-darwin-arm64.tar.gz"
@@ -2419,7 +2478,7 @@ mod tests {
     fn an_unpublished_platform_is_refused() {
         let mut unpublished = request();
         unpublished.platform = "win32".to_string();
-        assert!(plan(&target(), &unpublished).is_err());
+        assert!(plan(&target(), &unpublished, false).is_err());
 
         let mut linux = target_with(&[("weles-worker", "0.5.1")]);
         linux.release_platform = "linux-amd64".to_string();
@@ -2438,7 +2497,44 @@ mod tests {
     fn a_non_https_release_origin_is_refused() {
         let mut request = request();
         request.release_api = "http://releases.example".to_string();
-        let error = plan(&target(), &request).unwrap_err();
+        let error = plan(&target(), &request, false).unwrap_err();
         assert!(error.0.contains("HTTPS"), "{}", error.0);
+    }
+
+    /// Self-delivery: the host the directory says serves the object API reads
+    /// its own store, and a loopback origin never leaves that machine, so
+    /// loopback HTTP is the one allowed non-HTTPS shape — for that host only.
+    #[test]
+    fn a_loopback_release_origin_is_allowed_only_for_self_delivery() {
+        for origin in [
+            "http://127.0.0.1:8765",
+            "http://127.0.0.1:8765/",
+            "http://localhost:8765",
+            "http://[::1]:8765",
+        ] {
+            let mut request = request();
+            request.release_api = origin.to_string();
+            let error = plan(&target(), &request, false).unwrap_err();
+            assert!(error.0.contains("HTTPS"), "{origin}: {}", error.0);
+            let plan = plan(&target(), &request, true).unwrap();
+            assert_eq!(plan.release_api, origin.trim_end_matches('/'));
+        }
+    }
+
+    /// Off-loopback HTTP stays refused even for the store host: the exception
+    /// exists because a loopback fetch cannot cross a network, and this one
+    /// can.
+    #[test]
+    fn a_remote_http_release_origin_is_refused_even_for_the_store_host() {
+        for origin in [
+            "http://releases.example",
+            "http://127.0.0.1.evil.example",
+            "http://10.0.0.5:8765",
+        ] {
+            let mut request = request();
+            request.release_api = origin.to_string();
+            let error = plan(&target(), &request, true).unwrap_err();
+            assert!(error.0.contains("HTTPS"), "{origin}: {}", error.0);
+        }
     }
 }
