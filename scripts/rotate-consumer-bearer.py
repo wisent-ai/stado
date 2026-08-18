@@ -19,8 +19,14 @@ The cost is explicit: every holder of the old bearer stops authenticating the
 moment this runs, so the caller must deliver the new file to each of them
 (`stado host install-secret`). It refuses when it cannot see how many holders
 there are, which is why the holder count is an argument and not a guess: pass the
-number you have verified, and it must be 1. A shared consumer is not something to
-rotate from a script.
+number you verified, and deliver to every one of them in the same operation.
+
+Measure that count from configuration, not from one convention. `stado-local-agent`
+has two holders and they declare it differently: the RTX host through
+`WC_AGENT_SKARBIEC_TOKEN_FILE` in an env file, the mac mini through
+`agent.skarbiec.token_file` in `~/.config/stado/config.json`. A probe that looked
+only for env files reported one holder and would have taken the other's
+credential reads down.
 
 Usage:
 
@@ -80,10 +86,10 @@ def main():
     holders = sys.argv[ONE + ONE + ONE]
     requested = [decode(text) for text in sys.argv[ONE + ONE + ONE + ONE :]]
 
-    if holders != "1":
+    if not holders.isdigit() or int(holders) < ONE:
         raise SystemExit(
-            f"holders={holders}: this rotates the only bearer a consumer has, so it refuses "
-            "anything but a verified single holder"
+            f"holders={holders!r}: state how many hosts hold this bearer, measured from their "
+            "configuration, and deliver the new file to every one of them"
         )
     if not bearer_file.is_file():
         raise SystemExit(f"no bearer file at {bearer_file}")
@@ -142,10 +148,32 @@ def main():
 
     settled = json.loads(VAULT.read_text(encoding="utf-8"))["tokens"][consumer]
     if settled.get("hash") != supplied_hash:
-        raise SystemExit(
-            "the vault did not record the supplied bearer; the grant is now on an unknown token "
-            f"and {backup} is the copy to restore"
-        )
+        # The installed binary accepted `--token-file` and stored a bearer of its
+        # own: this fleet's mac mini runs a `skarbiec 0.2.1` source build whose
+        # `token-mint` predates that flag, and an unknown flag is not an error
+        # there. The bearer it issued is in the mint's stdout and nowhere else, so
+        # it is written to the file the holders read rather than discarded --
+        # discarding it is what leaves a grant on a token no host has, which is
+        # exactly the state this run had to repair.
+        issued = NONE
+        try:
+            issued = json.loads(minted.stdout).get("token")
+        except ValueError:
+            issued = NONE
+        if not isinstance(issued, str) or len(issued) < MIN_BEARER_CHARS:
+            raise SystemExit(
+                "the vault did not record the supplied bearer and the mint returned none; "
+                f"the grant is on an unknown token and {backup} is the copy to restore"
+            )
+        bearer_file.write_text(issued + "\n", encoding="utf-8")
+        bearer_file.chmod(0o600)
+        supplied_hash = hashlib.sha256(issued.encode()).hexdigest()
+        if settled.get("hash") != supplied_hash:
+            raise SystemExit(
+                "the vault recorded neither the supplied nor the returned bearer; "
+                f"{backup} is the copy to restore"
+            )
+        print(f"bearer       the mint issued its own; persisted to {bearer_file.name}")
     print(f"capabilities {len(settled['capabilities'])} held (was {len(existing)})")
     print(f"bearer       rotated onto {bearer_file.name}; deliver it to the {holders} holder(s) now")
     print(f"expires_in   {settled['expires_at'] - int(time.time())} seconds")
