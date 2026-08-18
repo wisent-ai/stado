@@ -1189,6 +1189,7 @@ an arbitrary, per-host, declared set.
 |---|---|
 | `list [--json]` | Every managed service on every host, with its state. |
 | `status NAME [--json]` | One service everywhere it is managed. |
+| `converge TARGET [SERVICE] [--apply] [--json]` | Declared revision against the revision the host reports. |
 | `restart NAME [--host TARGET] [--json]` | Restart one unit; no recovery pass. |
 | `stop NAME [--host TARGET] [--json]` | Stop one unit, including a process it disowned. |
 | `show NAME [--host TARGET] [--json]` | What the unit actually runs: program and arguments. |
@@ -1275,6 +1276,94 @@ being the broken thing.
 `missing` and `unknown` are deliberately different answers: a silent host
 is not the same fact as a vanished unit, and treating them alike is how a
 dead box reads as a healthy one.
+
+### Is the host running the build we shipped?
+
+Every state above is about the *unit*, and every one of them stays true across
+a release that never reached the box: `active` is still `active`, and the plist
+still names the same program. `converge` asks the other question, per managed
+binary the target declares a version for.
+
+The declaration is `targets[].managed_versions` — the same one `host inventory`
+reconciles against and the only one `host release` will deliver — never a git
+commit. These hosts carry installed release artefacts and not checkouts:
+`charless-mac-mini` runs Weles out of `/Users/charles/weles`, which holds a
+`package.json`, a `.weles-release` stamp, a `provenance.json` and no `.git` at
+all, so a commit comparison there could only ever answer "unknown" about a
+product that is in fact precisely versioned.
+
+```json
+"managed_versions": {
+  "skarbiec": "0.1.3",
+  "stado": "0.6.0",
+  "weles-worker": "0.5.0"
+}
+```
+
+Each value is an exact semantic version — a channel, an alias or a range cannot
+be compared for equality, and equality is the whole of the question. Declare
+one with `stado host declare-version TARGET --binary NAME --version X.Y.Z`;
+`converge` refuses anything else before it contacts the host.
+
+| Verdict | Meaning |
+|---|---|
+| `in-sync` | The host runs exactly the declared version. |
+| `drifted` | The host runs a different version. |
+| `unknown` | Nothing usable came back: the reporting helper is not installed, the channel refused, the binary is not installed, or the artefact carries no version metadata. |
+
+The installed version comes from `report-installed-versions`, installed with
+`stado host install-helper TARGET scripts/report-installed-versions.sh
+report-installed-versions`; a host without it reports `unknown` with that exact
+command in the detail column. The helper is read-only — it fetches nothing,
+restarts nothing, and prints one
+`binary=<name> version=<installed|unknown> root=<path> unit=<label|none>
+state=<launchd state>` line per declared binary. It reads a version from, in
+order: the program itself for an owner-only Stado binary under
+`$HOME/.stado/bin` (`--version`, then the `version` subcommand), then the
+artefact's own `package.json` `/version`, then `.weles-release`, then
+`provenance.json`.
+
+**A product whose artefact carries none of those reports `unknown`, and an
+`unknown` is never silently treated as `in-sync`.** It is printed as its own
+verdict, named again on stderr with the path the helper looked in, and after
+`--apply` it fails the command. The remedy is to make the product stamp its
+artefact, not to re-run `converge`.
+
+Exit codes follow the same rule `service verify` follows, for the same reason:
+
+| Invocation | Exit |
+|---|---|
+| every binary `in-sync` | 0 |
+| any binary `drifted`, without `--apply` | 1 |
+| only `unknown`, without `--apply` | 0 |
+| `--apply`, every binary confirmed `in-sync` afterwards | 0 |
+| `--apply`, anything not `in-sync` afterwards | 1 |
+
+Reporting fails on drift alone, so an uninstalled reporter cannot masquerade as
+drift — the same way a missing probe is never allowed to masquerade as an
+outage. After `--apply`, `unknown` *is* a failure: an operator who asked for
+convergence is owed proof of it, and "the reporter is not installed" is not
+proof.
+
+`--apply` delivers the declared version of every drifted binary by calling
+`stado host release --binary NAME --version X.Y.Z TARGET` in-process, and then
+**re-reads** the installed versions through the helper. A delivery that reports
+`released` has testified about its own work; the exit code of this command is
+decided by what the host says afterwards. There is no second delivery path: a
+binary outside `host release`'s compile-time table is reported as
+undeliverable, never attempted, and `unknown` rows are never delivered to —
+delivery ends in a unit restart, and restarting a working service because a
+report was missing is how a healthy host goes down.
+
+`converge` never writes the registry. The declared version is the operator's
+statement of intent, published with `stado host declare-version`; a converge
+that edited the document to match the host would turn a drift report into a
+rubber stamp.
+
+```bash
+stado service converge charless-mac-mini
+stado service converge charless-mac-mini stado --apply
+```
 
 ### Everything else rides one ssh channel
 

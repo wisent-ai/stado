@@ -385,6 +385,23 @@ fn is_product_identifier(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
+/// `owner/name`, both halves non-empty and spelled the way a git forge
+/// spells them. The onboarding block's `repository` is the one field in the
+/// registry that names a forge repository.
+fn is_repository(value: &str) -> bool {
+    let valid = |part: &str| {
+        !part.is_empty()
+            && part
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    };
+    let mut parts = value.split('/');
+    matches!(
+        (parts.next(), parts.next(), parts.next()),
+        (Some(owner), Some(repository), None) if valid(owner) && valid(repository)
+    )
+}
+
 fn validate_service_onboarding(
     target: &Map<String, Value>,
     location: &str,
@@ -443,17 +460,7 @@ fn validate_service_onboarding(
                 "must be a non-empty string of at most 512 bytes",
             ));
         }
-        let repository_ok = onboarding["repository"].as_str().is_some_and(|value| {
-            let mut parts = value.split('/');
-            let valid = |part: &str| {
-                !part.is_empty()
-                    && part.bytes().all(|byte| {
-                        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
-                    })
-            };
-            matches!((parts.next(), parts.next(), parts.next()), (Some(owner), Some(repo), None) if valid(owner) && valid(repo))
-        });
-        if !repository_ok {
+        if !onboarding["repository"].as_str().is_some_and(is_repository) {
             return Err(verr(
                 &format!("{onboarding_location}.repository"),
                 "must be an owner/repository identifier",

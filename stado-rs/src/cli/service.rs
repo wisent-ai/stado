@@ -77,6 +77,35 @@ pub enum ServiceCommands {
         json: bool,
     },
 
+    /// Is the host running the version the registry declares for it?
+    ///
+    /// `list` and `show` answer questions about the unit -- loaded, running,
+    /// which program -- and every one of those answers stays true across a
+    /// release that never reached the box. This compares
+    /// `targets[].managed_versions`, the declared version of each managed
+    /// binary on TARGET, against the version that host actually runs.
+    ///
+    /// Verdicts are `in-sync`, `drifted`, and `unknown` for a binary whose
+    /// installed version could not be read; the third is never folded into
+    /// either of the other two. Reporting exits non-zero on `drifted` alone,
+    /// so an uninstalled reporting helper cannot masquerade as drift.
+    /// `--apply` delivers the declared version of every drifted binary through
+    /// `stado host release`, re-reads the installed versions afterwards, and
+    /// exits non-zero unless every binary in scope is confirmed `in-sync`.
+    Converge {
+        /// Registry host to compare against its own declarations.
+        target: String,
+        /// One managed binary by name; omit for every binary TARGET declares
+        /// a version for.
+        binary: Option<String>,
+        /// Deliver the declared version of every drifted binary, then read the
+        /// installed versions back.
+        #[arg(long)]
+        apply: bool,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Registry-managed services carrying Echo onboarding product metadata.
     ///
     /// Emits the versioned JSON envelope accepted by Echo's Stado catalog
@@ -384,6 +413,14 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             } else {
                 crate::cli::service_verify::verify(host.as_deref(), json).await
             }
+        }
+        ServiceCommands::Converge {
+            target,
+            binary,
+            apply,
+            json,
+        } => {
+            crate::cli::service_converge::converge(&target, binary.as_deref(), apply, json).await
         }
         ServiceCommands::OnboardingCatalog => onboarding_catalog().await,
         ServiceCommands::Status { name, json } => status(&name, json).await,
