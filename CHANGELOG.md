@@ -117,6 +117,25 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   held — and prove the result by reading the item back through the same consumer
   the channel uses. A read-back that returns a different value still fails the
   mint: it means the broker serves a vault this machine's write never reached.
+- `stado fleet enroll NAME --ssh DEST --install-key` adopts a machine that is
+  not in the fleet yet. Enrolling presupposed that the fleet's public key was
+  already in the machine's `authorized_keys`, because both the identity probe
+  and `fleet key install` open the channel with the vault key itself — so
+  adding someone's laptop began with an operator dictating a key over the
+  phone. The flag installs it over a session the operator can already open
+  otherwise: a loaded or forwarded ssh agent, one of their own keys, or
+  OpenSSH's own password prompt, which OpenSSH asks and answers on its own tty.
+  Stado never sees a password, the private half never leaves the operator's
+  vault, and the line travels on stdin rather than in argv. A pair is minted
+  through the existing `key generate` if the target has none, the append is
+  skipped when the exact line is already present, and the run then continues
+  down the unchanged path — probe the hostname and platform before the registry
+  write, roll the entry back on a failed `--bootstrap`. The three ways first
+  contact can fail now read as three different sentences, because they need
+  three different actions: no connection was established, the connection was
+  established and the credential rejected, or the credential worked and the
+  machine's home directory refused the write. `registry.enrollment.allow_adopt`
+  gates it.
 
 ### Core behavior
 
