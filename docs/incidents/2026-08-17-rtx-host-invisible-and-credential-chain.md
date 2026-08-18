@@ -13,8 +13,8 @@ world.** This records the chain, the measurements, and what is still open.
 | 3 | `training` and `transcript_lake` read as unread declarations | both are honoured by `transcript-label-trainer`; neither was catalogued |
 | 4 | The fleet's only GPU host published no capacity object at all | `wisent-agent.service` was `active` while the binary restarted its own loop every 10 s with `agent loop failed: File exists (os error 17)` |
 | 5 | Three symlinks pointed into the removed disk | `~/.stado/local-backup`, `~/.cargo`, `~/.rustup`, plus `~/.cache/huggingface`; `mkdir` answers EEXIST for a dangling symlink, so every consumer failed with a message about a file existing and none named the link |
-| 6 | The agent measured one accelerator on a two-card host | two RTX PRO 6000 Blackwell boards, 97887 MiB each; with a Vast renter holding 60 GiB on card 0 the host advertised `free_vram_gb: 35` while an untouched 95 GiB board sat beside it, and `slots: 2` admitted two jobs against card 0 with nothing setting `CUDA_VISIBLE_DEVICES` |
-| 7 | The renter gate could not evaluate on the machine that is rented | `stado agent` read `stado-vast/api_key` as `stado-control-plane`, whose bearer a worker does not hold and must not |
+| 6 | The agent measured one accelerator on a two-card host | two RTX PRO 6000 Blackwell boards, 97887 MiB each; while a python3 workload held 60 GiB on card 0 the host advertised `free_vram_gb: 35` and an untouched 95 GiB board sat beside it, and `slots: 2` admitted two jobs against card 0 with nothing setting `CUDA_VISIBLE_DEVICES` |
+| 7 | The Vast bridge asked for its key as the wrong consumer | `stado agent` read `stado-vast/api_key` as `stado-control-plane`, whose bearer a worker does not hold and must not, so the failure named a missing grant file instead of the real state |
 | 8 | `service_directory` changed without advancing its generation | `stado-object-api` for `lukasz-macbook` was corrected from its own adapter (18776) to the object API that host runs (18765); `cli/resolver.rs::refresh` refused the change, the cache went stale, the adapter died, and every `stado` command on that host failed with `registry store unreachable` |
 | 9 | The vault holds no `stado-vast` item at all | `token-mint` refuses the capability with "capability names a missing item"; the broker's 403 for a field of a nonexistent item is what made this look like an authorization problem |
 | 10 | `skarbiec` on the control plane ignored `--token-file` | that build predates the flag and mints a random bearer instead, returning it in stdout; a rotation that discards that stdout leaves the grant on a token no host holds — which is what happened, and what recovering it required |
@@ -45,18 +45,33 @@ world.** This records the chain, the measurements, and what is still open.
   host, and the mini's copy hashes to the vault's record. The control plane now
   runs a `skarbiec` that honours `--token-file`, proven against a scratch vault
   before the swap.
-- **`pinned_only` is declared** on the rented host, so fleet work does not wander
-  onto a renter's card while the gate cannot evaluate. Undo:
-  `RETIRE_PIN=1 python3 scripts/pin-rented-gpu-host.py`.
+
+## The renter reading was wrong
+
+I read `vastai_*` processes and a python3 holding 60 GiB on card 0 as "a paying
+renter is on this machine", declared `pinned_only` on that basis, and asked the
+operator for a Vast API key to close the gate. He said nothing is rented there,
+and the measurement agrees: the ten containers are
+`vastai/test:bandwidth-test-nvidia`, every one in state `Created` — the daemon's
+own self-tests, started by nobody — and both cards now read 2 MiB used at 0%
+utilisation with no compute apps at all. What held 60 GiB was a workload local to
+the host; I never established whose, and joined it to the daemon's presence
+because the daemon was there.
+
+`pinned_only` is therefore retired (`pinned_only True -> False` in the canonical
+registry) and `scripts/pin-rented-gpu-host.py` is deleted with it: a mitigation
+for a condition that does not exist is a second source of truth about the fleet's
+placement. The two-card accounting and the credential repairs stand on their own
+measurements and are unaffected.
 
 ## Still open
 
-**The renter gate needs a Vast.ai API key in Skarbiec.** No item matching `vast`
-exists in this vault, so the capability cannot be minted and the bridge cannot
-authenticate. That value exists only in the operator's Vast account. Once it is
-set (`skarbiec set stado-vast --type api-key api_key=…`), add the capability with
-`scripts/grant-consumer-field-read.py stado-local-agent stado-vast api_key` — no
-rotation needed, the bearer is reproducible now — and retire `pinned_only`.
+**Nothing here needs the operator.** The Vast bridge still cannot authenticate,
+because this vault holds no item matching `vast` — but no rental depends on it, so
+it waits until someone actually wants the marketplace feature. If that day comes:
+`skarbiec set stado-vast --type api-key api_key=…`, then
+`scripts/grant-consumer-field-read.py stado-local-agent stado-vast api_key`; the
+bearer is reproducible now, so no rotation is needed.
 
 **The 16 TB disk is physically absent.** fstab keeps it `nofail`, so the host
 boots without it; nothing else depends on it any more.
