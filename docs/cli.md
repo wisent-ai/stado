@@ -969,10 +969,9 @@ kind. A `.local` destination limits every channel-opening command to that
 network; it does not limit `stado registry beacon-age` or `stado host health`,
 because the host publishes its beacon outward.
 
-Stado Desktop reaches this family through the dashboard's authenticated
-operator-command bridge instead of carrying its own enrollment logic, so its
-**Fleet › Hosts › Add a Machine** chooser offers the same four methods and
-performs exactly the commands above. The separate `stado_fleet` binary remains
+Stado Desktop performs exactly the commands above, so its
+**Fleet › Hosts › Add a Machine** chooser offers the same four methods.
+The separate `stado_fleet` binary remains
 for compatibility over the same implementation; `stado fleet` is the documented
 surface.
 
@@ -1075,9 +1074,9 @@ one-liner already handed out, which is why there is no `restart` subcommand —
 
 The `invite` method needs three routes on the dashboard, because the machine
 being added has no Stado binary, no store credential and no operator identity —
-it has one token. All three are served by the same authenticated dashboard
-process that serves `/api/object`, `/api/machine/*` and `/api/operator/run`, and
-all three sit outside that surface's operator authorization: they accept **only**
+it has one token. All three are served by the same authenticated listener
+process that serves `/api/object` and `/api/machine/*`, and
+all three sit outside that surface's route authorization: they accept **only**
 an invite token, and **none of them can write the registry.** The registry write
 happens later, in `stado fleet approve`, under operator authority. All three are
 useful only where that dashboard is reachable **from the machine being added**,

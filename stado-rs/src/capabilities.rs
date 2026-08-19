@@ -427,7 +427,6 @@ define_capabilities! {
             ProviderId::Azure => (Implemented, "azure_token", "Managed identity and operator token chain"),
             ProviderId::Aws => (Implemented, "providers::aws::sdk_config", "AWS credential chain, IMDS, and scoped fallback"),
             ProviderId::Local => (Partial, "deploy::host_channel", "Local account and SSH identity"),
-            ProviderId::Supabase => (Implemented, "dashboard::authorized", "Optional dashboard user JWT authorization through RLS; not required by the core control plane"),
         ]
     },
     Secrets => {
@@ -1028,16 +1027,6 @@ pub const DASHBOARD_BIND_CONFIG: ConfigField =
     ConfigField::scalar("dashboard-bind", "WC_DASHBOARD_BIND", "dashboard.bind");
 pub const DASHBOARD_PORT_CONFIG: ConfigField =
     ConfigField::scalar("dashboard-port", "WC_DASHBOARD_PORT", "dashboard.port");
-pub const DASHBOARD_REFRESH_SECONDS_CONFIG: ConfigField = ConfigField::scalar(
-    "dashboard-refresh-seconds",
-    "WC_DASHBOARD_REFRESH_SECONDS",
-    "dashboard.refresh_seconds",
-);
-pub const DASHBOARD_AGENT_FRESH_SECONDS_CONFIG: ConfigField = ConfigField::scalar(
-    "dashboard-agent-fresh-seconds",
-    "WC_DASHBOARD_AGENT_FRESH_SECONDS",
-    "dashboard.agent_fresh_seconds",
-);
 
 /// The three keys a Skarbiec-backed boundary binds: the verifier endpoint, the
 /// consumer it authenticates as, and the owner-only file holding the grant.
@@ -1211,8 +1200,6 @@ pub const CONTROL_CONFIG: &[ConfigField] = &[
     ALERT_SKARBIEC_TOKEN_FILE_CONFIG,
     DASHBOARD_BIND_CONFIG,
     DASHBOARD_PORT_CONFIG,
-    DASHBOARD_REFRESH_SECONDS_CONFIG,
-    DASHBOARD_AGENT_FRESH_SECONDS_CONFIG,
     SECRETS_SKARBIEC.url,
     SECRETS_SKARBIEC.consumer,
     SECRETS_SKARBIEC.token_file,
@@ -1962,7 +1949,7 @@ const AUTHENTICATION: &[CapabilityVariant] = &[
         id: "machine-token",
         aliases: &[],
         provider: Some(ProviderId::Skarbiec),
-        implementation: "dashboard::authorized",
+        implementation: "dashboard::authenticate_machine_client",
         summary: "Machine submit/status/cancel bearer stored as stado-machine-api/token.",
         configurable: false,
         constructible: false,
@@ -1984,20 +1971,9 @@ const AUTHENTICATION: &[CapabilityVariant] = &[
         id: "host-health-token",
         aliases: &[],
         provider: Some(ProviderId::Skarbiec),
-        implementation: "dashboard::authorized + cli::host::publish_beacon",
+        implementation: "dashboard::authorize_host_health + cli::host::publish_beacon",
         summary: "Route-scoped host beacon publisher bearer resolved from stado-host-health-api/token.",
         configurable: true,
-        constructible: false,
-        adapter: RuntimeAdapter::None,
-        config: &[],
-    },
-    CapabilityVariant {
-        id: "supabase-rls",
-        aliases: &[],
-        provider: Some(ProviderId::Supabase),
-        implementation: "dashboard::authorized",
-        summary: "User JWT authorization through the stado_can_access RLS RPC.",
-        configurable: false,
         constructible: false,
         adapter: RuntimeAdapter::None,
         config: &[],
@@ -2313,7 +2289,7 @@ pub static REGISTRY: &[Capability] = &[
     Capability {
         kind: RuntimeFacet::Authentication,
         selection: SelectionMode::Automatic,
-        summary: "Dashboard and object-API request authorization.",
+        summary: "Object, release, machine, service and host-health request authorization.",
         variants: AUTHENTICATION,
     },
     Capability {
