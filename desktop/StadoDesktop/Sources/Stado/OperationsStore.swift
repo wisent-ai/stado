@@ -454,6 +454,16 @@ final class FleetServicesStore: ObservableObject {
         entries.filter(\.isFailed)
     }
 
+    /// The rows whose declared launchd domain their host cannot have, in the
+    /// same order as `services` so a facet and the table agree.
+    ///
+    /// The finding rides on the `service list --json` row itself — the CLI
+    /// checks the registry document against the target's own role — so no
+    /// second read is needed and none is performed.
+    var misdeclaredServices: [FleetServiceEntry] {
+        services.filter { $0.misdeclaredDomain != nil }
+    }
+
     nonisolated static func listArguments() -> [String] {
         ["service", "list", "--json"]
     }
@@ -576,6 +586,16 @@ final class FleetServicesStore: ObservableObject {
     /// `service list --json` prints a bare array; naming the type keeps the
     /// decode site reading like the command it runs.
     private typealias FleetServiceList = [FleetServiceEntry]
+
+    /// Decode one `service list --json` payload without running anything, so
+    /// the shape this console reads can be exercised against a recorded
+    /// answer — including the registry finding three of the fleet's rows
+    /// carry today.
+    nonisolated static func decode(from output: String) -> [FleetServiceEntry]? {
+        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(FleetServiceList.self, from: data)
+    }
 
     private nonisolated static func message(for error: Error) -> String {
         if let localized = error as? LocalizedError, let description = localized.errorDescription {
