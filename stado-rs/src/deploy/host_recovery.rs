@@ -307,13 +307,13 @@ pub async fn recover_host_with_registry(
 }
 
 /// Python `recover_host`: run the fixed recovery procedure on one
-/// canonical registry host (the remote registry only — the fleet-survival
-/// authority, same as the Python `source="gcs"` lookup; an unreachable
-/// store is an error, never an empty registry).
+/// canonical registry host, resolved through
+/// [`super::host_channel::canonical_registry`] — the canonical store first,
+/// the last-known-good copy with its age announced when the store does not
+/// answer, never an empty registry. Recovering a host you cannot reach the
+/// registry for is the case this command exists for.
 pub async fn recover_host(target_name: &str, runner: &Runner) -> Result<Value, DeployError> {
-    let registry = crate::targets::fetch_registry_remote()
-        .await
-        .map_err(|exc| DeployError(exc.to_string()))?;
+    let registry = super::host_channel::canonical_registry().await?;
     recover_host_with_registry(&registry, target_name, runner).await
 }
 
