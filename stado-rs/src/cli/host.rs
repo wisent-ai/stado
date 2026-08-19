@@ -4434,6 +4434,7 @@ async fn print_reports(hosts: &[String], json: bool) -> Result<(), CmdError> {
     // answer is one document.
     let registry = crate::targets::fetch_registry_remote().await.ok();
     let mut payload: Vec<Value> = Vec::new();
+    let mut failures = usize::default();
     for host in hosts {
         let report = crate::host_software::load_in(&records, host);
         let declared = registry
@@ -4442,6 +4443,9 @@ async fn print_reports(hosts: &[String], json: bool) -> Result<(), CmdError> {
             .map(|entry| entry.managed_versions.clone())
             .unwrap_or_default();
         let finding = crate::host_software::judge(&report, &declared, None);
+        if finding.failed {
+            failures = failures.saturating_add(1);
+        }
         if json {
             let mut object = report.json();
             finding.merge_into(&mut object);
@@ -4481,7 +4485,20 @@ async fn print_reports(hosts: &[String], json: bool) -> Result<(), CmdError> {
              here can vouch for"
         );
     }
-    Ok(())
+    if failures == usize::default() {
+        return Ok(());
+    }
+    // This command reports and it also gates, for the same reason
+    // `stado release status` now does: printing a host that cannot be shown to
+    // run what the fleet declares, and then exiting zero, is the shape of the
+    // failure the whole report exists to end. Every sentence is already beside
+    // the host it belongs to, so nothing is said twice.
+    eprintln!(
+        "{failures} of {} host(s) cannot be shown to be running what the fleet declares for \
+         them; each is named above",
+        hosts.len()
+    );
+    Err(CmdError::silent(super::CLICK_ERROR_CODE))
 }
 
 #[cfg(test)]
