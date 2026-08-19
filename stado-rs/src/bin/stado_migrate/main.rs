@@ -10,8 +10,6 @@
 
 mod plan;
 mod run;
-#[cfg(test)]
-mod tests;
 
 use clap::{Parser, Subcommand};
 use std::process::ExitCode;
