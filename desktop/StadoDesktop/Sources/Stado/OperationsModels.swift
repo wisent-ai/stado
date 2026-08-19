@@ -677,12 +677,23 @@ struct ReleasePipelineRunRecord: Decodable, Sendable, Identifiable {
         /// CLI only while the run is in flight.
         let jobState: String?
         let failure: String?
+        /// Crates compiled so far, from the job's streamed log.
+        let compiledCrates: Int?
+        /// An estimate against this platform's previous run — cargo publishes
+        /// no total of its own, so the previous run is the denominator.
+        let compilePercent: Int?
 
         enum CodingKeys: String, CodingKey {
             case state
             case jobID = "job_id"
             case jobState = "job_state"
             case failure
+            case compileProgress = "compile_progress"
+        }
+
+        enum ProgressKeys: String, CodingKey {
+            case compiled
+            case percent
         }
 
         init(from decoder: Decoder) throws {
@@ -691,6 +702,15 @@ struct ReleasePipelineRunRecord: Decodable, Sendable, Identifiable {
             jobID = try values.decodeIfPresent(String.self, forKey: .jobID) ?? ""
             jobState = try values.decodeIfPresent(String.self, forKey: .jobState)
             failure = try values.decodeIfPresent(String.self, forKey: .failure)
+            if let progress = try? values.nestedContainer(
+                keyedBy: ProgressKeys.self, forKey: .compileProgress
+            ) {
+                compiledCrates = try progress.decodeIfPresent(Int.self, forKey: .compiled)
+                compilePercent = try progress.decodeIfPresent(Int.self, forKey: .percent)
+            } else {
+                compiledCrates = nil
+                compilePercent = nil
+            }
         }
     }
 

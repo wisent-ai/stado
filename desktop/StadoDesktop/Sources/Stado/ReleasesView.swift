@@ -225,6 +225,14 @@ struct ReleasesView: View {
                 if let live = leg.jobState {
                     part += " [\(live)]"
                 }
+                if let compiled = leg.compiledCrates {
+                    // An estimate, labelled as one: against the previous run.
+                    if let percent = leg.compilePercent {
+                        part += " · \(compiled) crates, ~\(percent)%"
+                    } else {
+                        part += " · \(compiled) crates"
+                    }
+                }
                 return part
             }
             .joined(separator: " · ")
