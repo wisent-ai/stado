@@ -1064,6 +1064,11 @@ async fn restart(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdEr
         cells.push(vec![
             declared.host.clone(),
             declared.unit_id().to_string(),
+            // The domain, in the human output as well as in `--json`: a
+            // restart that acted in `user/501` and a restart that acted in
+            // `gui/501` are different operations, and the table used to print
+            // neither.
+            dash(&report.domain),
             dash(&report.status),
             dash(&report.detail),
         ]);
@@ -1075,7 +1080,7 @@ async fn restart(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdEr
     if json {
         print_json(&Value::Array(payload))?;
     } else {
-        table::print(&["HOST", "UNIT", "STATUS", "DETAIL"], &cells);
+        table::print(&["HOST", "UNIT", "DOMAIN", "STATUS", "DETAIL"], &cells);
     }
     fail_if_any(&failures, "restart")
 }
@@ -1230,6 +1235,7 @@ async fn stop(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdError
         cells.push(vec![
             declared.host.clone(),
             declared.unit_id().to_string(),
+            dash(&report.domain),
             dash(&report.status),
             dash(&report.detail),
         ]);
@@ -1241,7 +1247,7 @@ async fn stop(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdError
     if json {
         print_json(&Value::Array(payload))?;
     } else {
-        table::print(&["HOST", "UNIT", "STATUS", "DETAIL"], &cells);
+        table::print(&["HOST", "UNIT", "DOMAIN", "STATUS", "DETAIL"], &cells);
     }
     fail_if_any(&failures, "stop")
 }
