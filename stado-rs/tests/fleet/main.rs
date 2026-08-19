@@ -45,6 +45,67 @@ fn registry(storage: &Path) -> serde_json::Value {
 
 const EMPTY_REGISTRY: &str = r#"{"schema_version": 2, "targets": [], "coordinators": []}"#;
 
+const REGISTRY_WITH_FLEET: &str = r#"{
+    "schema_version": 2,
+    "targets": [
+        {
+            "name": "w1",
+            "kind": "local",
+            "ssh": "u@10.0.0.1",
+            "release_platform": "linux-amd64",
+            "hostnames": ["w1.local"],
+            "slots": 1
+        }
+    ],
+    "coordinators": [],
+    "fleets": [{"name": "build", "notes": "ci"}]
+}"#;
+
+#[test]
+fn fleet_assign_moves_a_target_into_the_fleet() {
+    let dir = storage_with_registry(REGISTRY_WITH_FLEET);
+    let storage = dir.path();
+
+    let out = stado(storage, &["fleet", "assign", "w1", "build"]);
+    assert!(out.status.success(), "assign failed: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("target 'w1' assigned to fleet 'build'"),
+        "assign reports the move in its own sentence, got: {}",
+        stdout(&out)
+    );
+    assert_eq!(
+        registry(storage)["targets"][0]["fleet"], "build",
+        "the document carries the assignment"
+    );
+
+    // Assigning a machine the registry does not hold is refused by name.
+    let out = stado(storage, &["fleet", "assign", "ghost", "build"]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("target 'ghost' not found in registry"),
+        "got: {}",
+        stderr(&out)
+    );
+
+    // Assigning into a fleet that was never declared is refused by name.
+    let out = stado(storage, &["fleet", "assign", "w1", "ghost"]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("fleet 'ghost' is not declared; create it first"),
+        "got: {}",
+        stderr(&out)
+    );
+
+    // After both refusals the document is exactly what the one good assign left.
+    let document = registry(storage);
+    assert_eq!(document["targets"].as_array().unwrap().len(), 1);
+    assert_eq!(document["targets"][0]["fleet"], "build");
+    assert_eq!(
+        document["fleets"],
+        serde_json::json!([{"name": "build", "notes": "ci"}])
+    );
+}
+
 #[test]
 fn fleet_create_writes_the_fleet_into_the_registry() {
     let dir = storage_with_registry(EMPTY_REGISTRY);
