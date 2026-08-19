@@ -685,6 +685,52 @@ mod tests {
         assert_eq!(gates.policy_mode, None);
     }
 
+    /// The broadcast carries one entry per sizing tier a job could fit into,
+    /// plus one for the host's own card; those are shapes, not a count, and
+    /// summing them reported "44 free slots of 2 declared" on the RTX PRO
+    /// 6000. The gates read the entry named by the host's gpu_type, and fall
+    /// back to the cross-tier sum only for a broadcast that predates the
+    /// own-shape entry.
+    #[test]
+    fn free_slots_reads_the_hosts_own_shape() {
+        let mut rtx = target(8);
+        rtx.gpu_type = Some("nvidia-rtx-pro-6000".to_string());
+        let stamp = Utc::now() - chrono::TimeDelta::seconds(5);
+        let row = Publication {
+            payload: json!({
+                "consumer_id": "local-ubuntu-server",
+                "kind": "local",
+                "free_slots": {
+                    "nvidia-rtx-pro-6000": 1,
+                    "nvidia-a100-80gb": 1,
+                    "nvidia-a100-40gb": 2,
+                    "nvidia-l4": 5,
+                    "nvidia-tesla-t4": 11,
+                },
+                "published_at": stamp.to_rfc3339(),
+                "diag": {"disk_pressure_unresolved": false, "disk_cleanup_policy_known": true},
+            }),
+            stamp: Some(stamp),
+        };
+        let gates = assemble(
+            &rtx,
+            &reading("209715200", Some(8 * disk_cleanup::GIB), 0),
+            Some(&row),
+            Utc::now(),
+        );
+        assert_eq!(gates.free_slots, Some(1));
+
+        // Same broadcast, a target that never declared its gpu_type: the old
+        // cross-tier sum is the only answer the publication carries.
+        let gates = assemble(
+            &target(8),
+            &reading("209715200", Some(8 * disk_cleanup::GIB), 0),
+            Some(&row),
+            Utc::now(),
+        );
+        assert_eq!(gates.free_slots, Some(1 + 1 + 2 + 5 + 11));
+    }
+
     /// The report carries the contract's keys and only those: a desktop
     /// consumer reads this shape. Compared as a sorted set, because the
     /// document is printed through `host recover`'s sorted-keys printer and
@@ -705,7 +751,7 @@ mod tests {
         };
         assert_eq!(
             sorted(&Value::Object(report.clone())),
-            ["blockers", "capacity", "claiming", "disk", "host", "notes"]
+            ["blockers", "capacity", "claiming", "disk", "host", "notes", "waiting_jobs"]
         );
         assert_eq!(
             sorted(&report["disk"]),
