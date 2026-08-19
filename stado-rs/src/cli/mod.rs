@@ -1300,27 +1300,6 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Replace the tags of one Skarbiec item on TARGET, payload untouched.
-    ///
-    /// Consumers enumerate vault items by tag: Brama spends a subscription only
-    /// when its item carries `brama:subscription` and `brama:agent:<agent>`, so
-    /// an item that loses them leaves the fleet while its credential stays
-    /// valid and every check that counts credentials keeps answering green.
-    /// The owner key that may rewrite tags lives on the host, so this runs
-    /// there, reads the item before and after, and reports both.
-    #[command(name = "retag-vault-item")]
-    RetagVaultItem {
-        target: String,
-        /// Vault item id, e.g. provider:kimi:brama-sub-wisent-app-kimi-primary.
-        item: String,
-        /// The complete tag list to store, comma separated. This replaces the
-        /// item's tags rather than adding to them.
-        #[arg(long)]
-        tags: String,
-        /// Emit the before/after report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
     /// Open an encrypted reverse SSH forwarding channel to TARGET.
     #[command(name = "forward-local")]
     ForwardLocal {
@@ -1432,30 +1411,11 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Deliver the checked-in Skarbiec acquisition-scope catalog to TARGET and
-    /// register it against the host's fleet vault, then print the reconciled
-    /// status.
-    #[command(name = "sync-acquisition-scopes")]
-    SyncAcquisitionScopes {
-        target: String,
-        /// Local acquisition-scope catalog file to deliver and register.
-        source: String,
-    },
     /// Report TARGET's stado-managed binaries, forward markers and loopback
     /// listeners, and whether each marker still matches a live listener.
     Inventory {
         target: String,
         /// Emit the inventory and its reconciliation as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Report every program TARGET actually runs with its version, digest and
-    /// whether it came out of a release; omit TARGET to read what every host
-    /// has already reported. A host that has never reported is a failure
-    /// wherever the report is judged, never a pass.
-    Software {
-        target: Option<String>,
-        /// Emit the report and its findings as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -1465,17 +1425,6 @@ enum HostCommands {
     Provenance {
         target: String,
         /// Emit the manifests and their reachability as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// What TARGET's Weles worker is doing: its staged and installed releases,
-    /// whether its worker API answers, and its newest recorded runs with each
-    /// run's own verdict. Counts and timestamps only; recordings stay on the
-    /// host.
-    #[command(name = "weles-activity")]
-    WelesActivity {
-        target: String,
-        /// Emit the report as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -1967,9 +1916,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 executable,
                 json,
             } => host::install_file(&target, &source, &name, executable, json).await,
-            HostCommands::SyncAcquisitionScopes { target, source } => {
-                host::sync_acquisition_scopes(&target, &source).await
-            }
             HostCommands::InstallSecret {
                 target,
                 source,
@@ -2003,12 +1949,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 prune,
                 json,
             } => host::helpers(&target, older_than_days, prune, json).await,
-            HostCommands::RetagVaultItem {
-                target,
-                item,
-                tags,
-                json,
-            } => host::retag_vault_item(&target, &item, &tags, json).await,
             HostCommands::ForwardLocal {
                 target,
                 name,
@@ -2051,11 +1991,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             } => host::reconcile(target, apply, json).await,
             HostCommands::Vaults { target, json } => host::vaults(target, json).await,
             HostCommands::Inventory { target, json } => host::inventory(&target, json).await,
-            HostCommands::Software { target, json } => host::software(target, json).await,
             HostCommands::Provenance { target, json } => host::provenance(&target, json).await,
-            HostCommands::WelesActivity { target, json } => {
-                host::weles_activity(&target, json).await
-            }
             HostCommands::Release {
                 target,
                 binary,
