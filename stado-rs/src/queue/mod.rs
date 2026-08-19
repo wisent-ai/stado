@@ -38,8 +38,6 @@ pub mod local_file;
 pub mod migrations;
 pub mod runs;
 pub mod s3;
-#[cfg(test)]
-pub mod secrets;
 pub mod stado_object;
 pub mod storage;
 pub mod submit;

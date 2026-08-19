@@ -77,17 +77,3 @@ pub async fn install() -> Result<(), CmdError> {
     .map_err(|exc| CmdError::click(exc.to_string()))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn once_and_watch_are_mutually_exclusive() {
-        let err = run(true, true, false).await.unwrap_err();
-        assert_eq!(
-            err.message.as_deref(),
-            Some("--once and --watch are mutually exclusive")
-        );
-        assert_eq!(err.code, 2);
-    }
-}

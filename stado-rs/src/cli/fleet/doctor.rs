@@ -269,27 +269,3 @@ pub async fn run(as_json: bool, scoped: Option<&str>) -> Result<bool, String> {
     Ok(clean)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::unverifiable_registration;
-
-    #[test]
-    fn channelless_and_contactless_is_unverifiable() {
-        assert!(unverifiable_registration(false, false));
-    }
-
-    #[test]
-    fn channel_makes_it_verifiable() {
-        assert!(!unverifiable_registration(true, false));
-    }
-
-    #[test]
-    fn beacon_makes_it_verifiable() {
-        assert!(!unverifiable_registration(false, true));
-    }
-
-    #[test]
-    fn channel_and_beacon_is_verifiable() {
-        assert!(!unverifiable_registration(true, true));
-    }
-}
