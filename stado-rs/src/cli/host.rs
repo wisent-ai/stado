@@ -1017,6 +1017,30 @@ pub async fn disk(target: &str, json: bool) -> Result<(), CmdError> {
             recorded("path")
         );
     }
+    // Said after the cleanup state, because it is the answer to the question
+    // that state raises: the janitor ran, it freed what it could, and the disk
+    // is still full. macOS publishes no size for a snapshot, so the count and
+    // the host's own names are all there is to print — and printing "0 bytes"
+    // for them would be the false reassurance this block exists to prevent.
+    let snapshots = report.get("local_snapshots");
+    let names: Vec<&str> = snapshots
+        .and_then(|value| value.get("names"))
+        .and_then(Value::as_array)
+        .map(|names| names.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    if snapshots.and_then(|value| value.get("supported")) == Some(&Value::Bool(true))
+        && !names.is_empty()
+    {
+        println!(
+            "\nlocal APFS snapshots: {} — their blocks are inside USED above, no \
+             stado command removes them, and macOS reports no size for them. \
+             Thin them with tmutil if the space is needed:",
+            names.len()
+        );
+        for name in names {
+            println!("  {name}");
+        }
+    }
     report_outcome(&report, expected)
 }
 
@@ -1148,6 +1172,24 @@ pub async fn gates(host: &str, json: bool) -> Result<(), CmdError> {
              see it at all ({} slot(s) declared)",
             gates.slots_declared
         ),
+    }
+    // Printed after the verdict and never as part of it: a note is a thing the
+    // operator has to know before they conclude the numbers do not add up, and
+    // `stado host reclaim` is about to tell them it freed less than the deficit.
+    for note in &gates.notes {
+        if note == crate::deploy::host_gates::LOCAL_SNAPSHOTS_UNRECLAIMABLE {
+            println!(
+                "note:     {note} — {} local APFS snapshot(s) hold space no stado \
+                 command reclaims, and macOS reports no size for them. See stado \
+                 host disk {} for their names",
+                gates
+                    .local_snapshots
+                    .map_or_else(|| "-".to_string(), |count| count.to_string()),
+                gates.host,
+            );
+            continue;
+        }
+        println!("note:     {note}");
     }
     claiming_outcome(&gates)
 }

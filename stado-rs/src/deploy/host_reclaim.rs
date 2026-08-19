@@ -13,7 +13,7 @@
 //! left on the machine whose disk changed. [`crate::deploy::host_gates`] is the
 //! read half that says the space is the reason nothing is being claimed.
 //!
-//! Three stages, in this order, and nothing else:
+//! Four stages, in this order, and nothing else:
 //!
 //! 1. `registry_cleanup` — the host's OWN janitor
 //!    ([`crate::providers::local::disk_cleanup`]), invoked exactly the way
@@ -28,14 +28,39 @@
 //! 3. `delivered_trees` — the version directories under `$HOME/`[`SERVICES_ROOT`],
 //!    where every `service deploy` and every artifact install stages one tree
 //!    per version and keeps the previous one beside it as
-//!    `current.before-<version>` so a rollback is a rename. Nothing has ever
-//!    removed the ones a rollback will never reach.
+//!    `current.before-<version>` so a rollback is a rename; plus every
+//!    superseded delivery root the product catalog declares
+//!    ([`crate::deploy::products::Product::superseded_roots`]). The mini
+//!    carries 20 `weles-worker` versions, 9.7 GiB, under
+//!    `$HOME/.local/share/weles-worker` from the installer that predates
+//!    [`crate::deploy::artifact_install`], while the worker runs from its own
+//!    checkout — trees no rollback will reach and, until the catalog declared
+//!    that root, trees no command could see. Same rules for both: the roots
+//!    come from declarations so the next delivery path change is a data
+//!    change, and a product's LIVE install root is never one of them.
+//! 4. `chromium_clones` — the per-launch bundle clones under this account's
+//!    macOS temporary container, `<container>/`[`CLONE_CONTAINER`]`/`
+//!    [`CLONE_ROOT_NAME`]. macOS clones the whole browser bundle every time
+//!    Chromium starts so it can validate a signature nobody can swap
+//!    underneath it, Weles drives Chromium for browser automation, and a run
+//!    that is killed leaves its clone behind. On the mini the day this landed:
+//!    137 clones, 130 of them untouched for more than a day. Last of the four
+//!    because the first three are space the fleet's own software wrote, and
+//!    this is space the operating system wrote — the same order, and the same
+//!    reason, as the janitor's cleaner
+//!    ([`crate::providers::local::disk_cleanup::chromium_clones`], which is
+//!    what removes these when the registry declares that cleaner; this stage
+//!    is for the hosts and the moments where it has not).
 //!
 //! Five rules, encoded here rather than left to whoever is at the keyboard:
 //!
 //! - **nothing outside those roots.** Every candidate is produced by globbing
-//!   one of the two declared roots; no path arrives from the registry, from the
-//!   operator, or from the host's own output.
+//!   one of the three declared roots; no path arrives from the registry, from
+//!   the operator, or from the host's own output. The one exception is named
+//!   and constrained: the clone container is the OS's own answer for this
+//!   account (`$TMPDIR`, `getconf DARWIN_USER_TEMP_DIR` behind it), and the
+//!   stage refuses it unless it is under `/var/folders`, which is the only
+//!   place macOS puts one.
 //! - **one enumeration, not two.** Candidates and the newest-tree guard come
 //!   from the SAME glob, and the age gate is asked per candidate. A `find` for
 //!   one and a glob for the other differ by exactly the dotted entries, and on
@@ -69,8 +94,10 @@ use super::host_channel;
 use super::host_cleanup::cleaner_plans;
 use super::host_disk::gib_from_blocks;
 use super::host_recovery::WC_CANDIDATES;
+use super::products;
 use super::{shlex_quote, DeployError, Runner};
 use crate::deploy::artifact_install::SERVICES_ROOT;
+use crate::providers::local::disk_cleanup::chromium_clones;
 use crate::targets::ComputeTarget;
 
 /// The release build scratch tree, relative to the target account's home.
@@ -99,6 +126,17 @@ pub const REGISTRY_CLEANUP_STAGE: &str = "registry_cleanup";
 pub const BUILD_SCRATCH_STAGE: &str = "build_scratch";
 /// The stage name for delivered product trees.
 pub const DELIVERED_TREES_STAGE: &str = "delivered_trees";
+/// The stage name for the macOS per-launch Chromium bundle clones.
+pub const CHROMIUM_CLONES_STAGE: &str = "chromium_clones";
+
+/// The only prefix a macOS temporary container has, and the guard on the one
+/// root this module does not spell itself.
+///
+/// The container comes from the OS (`$TMPDIR`, `getconf DARWIN_USER_TEMP_DIR`
+/// behind it) because nothing else knows where it is — its name carries a
+/// per-account hash. A value from outside that is not under this prefix is not
+/// a container, and the stage walks nothing rather than trusting it.
+pub const CONTAINER_PREFIX: &str = "/var/folders/";
 
 /// Suffix a stage name carries when the host could not run it at all.
 ///
@@ -124,6 +162,11 @@ const WC_WORDS_MARK: &str = "@WC_WORDS@";
 const SERVICES_ROOT_MARK: &str = "@SERVICES_ROOT@";
 const BUILD_WORK_MARK: &str = "@BUILD_WORK@";
 const AGE_DAYS_MARK: &str = "@AGE_DAYS@";
+const CLONE_CONTAINER_MARK: &str = "@CLONE_CONTAINER@";
+const CLONE_ROOT_MARK: &str = "@CLONE_ROOT@";
+const CLONE_PREFIX_MARK: &str = "@CLONE_PREFIX@";
+const CONTAINER_PREFIX_MARK: &str = "@CONTAINER_PREFIX@";
+const SUPERSEDED_ROOTS_MARK: &str = "@SUPERSEDED_ROOTS@";
 
 /// The fixed remote program.
 ///
@@ -196,65 +239,146 @@ fi
 printf 'STADO_RECLAIM_STAGE\tbuild_scratch\t%s\t%s\n' "$before" "$(free_kb)"
 
 before=$(free_kb)
+# One directory of versions: keep what `current` resolves to, keep the newest,
+# take the stale unheld rest. A function because the same rules have to hold
+# for the services root and for every superseded delivery root a product
+# declares -- two copies would be two policies, and only one of them would be
+# the tested one.
+sweep_versions() {
+  product="$1"
+  # What `current` resolves to, in the spelling the version glob produces,
+  # so the comparison below is an equality and not a guess.
+  keep=""
+  if [ -L "$product/current" ]; then
+    keep=$(/usr/bin/readlink "$product/current" 2>/dev/null || true)
+    case "$keep" in
+      "") ;;
+      /*) ;;
+      *) keep="$product/$keep" ;;
+    esac
+  fi
+  # The newest version directory, `current` itself excluded so a product
+  # whose link is stale still keeps its most recent delivery. `ls -td` sorts
+  # newest first; the listing is walked with globbing off and IFS on newline
+  # so a directory name with a space in it cannot become two words.
+  newest=""
+  listing=$(/bin/ls -td -- "$product"/*/ 2>/dev/null || true)
+  saved_ifs=$IFS
+  set -f
+  IFS='
+'
+  for candidate in $listing; do
+    candidate=${candidate%/}
+    case "$candidate" in
+      */current) continue ;;
+    esac
+    if [ -L "$candidate" ]; then continue; fi
+    newest="$candidate"
+    break
+  done
+  IFS=$saved_ifs
+  set +f
+  # The SAME glob the newest above came from. A `find` here would also list
+  # dotted entries the glob cannot see, and the two halves would disagree
+  # about the set: on this control plane's own host that difference named
+  # `.macos-capability-backup-20260803` -- an operator's state backup living
+  # beside the deliveries, which no delivery created and no reclamation may
+  # take. A delivery and a build both produce plainly named directories, so
+  # the glob IS the set.
+  for tree in "$product"/*; do
+    [ -d "$tree" ] || continue
+    if [ -L "$tree" ]; then continue; fi
+    case "$tree" in
+      */current) continue ;;
+    esac
+    [ "$tree" = "$keep" ] && continue
+    [ "$tree" = "$newest" ] && continue
+    stale "$tree" || continue
+    reclaim "$tree" delivered_trees
+  done
+}
+
 if [ -d "$services" ]; then
   for product in "$services"/*; do
     [ -d "$product" ] || continue
-    # What `current` resolves to, in the spelling the version glob produces,
-    # so the comparison below is an equality and not a guess.
-    keep=""
-    if [ -L "$product/current" ]; then
-      keep=$(/usr/bin/readlink "$product/current" 2>/dev/null || true)
-      case "$keep" in
-        "") ;;
-        /*) ;;
-        *) keep="$product/$keep" ;;
-      esac
-    fi
-    # The newest version directory, `current` itself excluded so a product
-    # whose link is stale still keeps its most recent delivery. `ls -td` sorts
-    # newest first; the listing is walked with globbing off and IFS on newline
-    # so a directory name with a space in it cannot become two words.
-    newest=""
-    listing=$(/bin/ls -td -- "$product"/*/ 2>/dev/null || true)
-    saved_ifs=$IFS
-    set -f
-    IFS='
-'
-    for candidate in $listing; do
-      candidate=${candidate%/}
-      case "$candidate" in
-        */current) continue ;;
-      esac
-      if [ -L "$candidate" ]; then continue; fi
-      newest="$candidate"
-      break
-    done
-    IFS=$saved_ifs
-    set +f
-    # The SAME glob the newest above came from. A `find` here would also list
-    # dotted entries the glob cannot see, and the two halves would disagree
-    # about the set: on this control plane's own host that difference named
-    # `.macos-capability-backup-20260803` -- an operator's state backup living
-    # beside the deliveries, which no delivery created and no reclamation may
-    # take. A delivery and a build both produce plainly named directories, so
-    # the glob IS the set.
-    for tree in "$product"/*; do
-      [ -d "$tree" ] || continue
-      if [ -L "$tree" ]; then continue; fi
-      case "$tree" in
-        */current) continue ;;
-      esac
-      [ "$tree" = "$keep" ] && continue
-      [ "$tree" = "$newest" ] && continue
-      stale "$tree" || continue
-      reclaim "$tree" delivered_trees
-    done
+    sweep_versions "$product"
   done
 fi
+# Where an EARLIER delivery mechanism staged one directory per version, taken
+# from what `data/products.json` declares per product, so a delivery path that
+# changes again is a declaration change and not a change here. Each root IS one
+# product's version directory, one level shallower than the services layout.
+for superseded in @SUPERSEDED_ROOTS@; do
+  [ -d "$superseded" ] || continue
+  sweep_versions "$superseded"
+done
 printf 'STADO_RECLAIM_STAGE\tdelivered_trees\t%s\t%s\n' "$before" "$(free_kb)"
+
+before=$(free_kb)
+# The account's macOS temporary container, as the OS reports it: its name
+# carries a per-account hash, so nothing on this side can spell it. $TMPDIR is
+# that answer inside a session; getconf is the same answer when a session
+# stripped the variable. Anything not under the one prefix macOS uses is not a
+# container and is refused.
+container=${TMPDIR:-$(/usr/bin/getconf DARWIN_USER_TEMP_DIR 2>/dev/null || true)}
+clones=""
+case "$container" in
+  @CONTAINER_PREFIX@*) clones="$(/usr/bin/dirname "${container%/}")/@CLONE_CONTAINER@/@CLONE_ROOT@" ;;
+esac
+if [ -n "$clones" ] && [ -d "$clones" ]; then
+  # The newest clone, kept whatever its age: macOS makes one per launch and
+  # says nothing about which process owns which, so a browser that has been up
+  # longer than the age gate is exactly the owner of the most recent one. Taken
+  # from the SAME glob the candidate loop below uses -- a directory nobody
+  # launched, sitting in the root with the freshest mtime, would otherwise
+  # shield itself and leave the live browser's clone the newest thing eligible.
+  newest=""
+  listing=$(/bin/ls -td -- "$clones"/@CLONE_PREFIX@*/ 2>/dev/null || true)
+  saved_ifs=$IFS
+  set -f
+  IFS='
+'
+  for candidate in $listing; do
+    candidate=${candidate%/}
+    if [ -L "$candidate" ]; then continue; fi
+    newest="$candidate"
+    break
+  done
+  IFS=$saved_ifs
+  set +f
+  # Only entries the OS itself named. A clone root is a directory this stage
+  # did not create and does not own, so the entry name is what says an entry is
+  # a clone rather than something that merely lives there.
+  for clone in "$clones"/@CLONE_PREFIX@*; do
+    [ -d "$clone" ] || continue
+    if [ -L "$clone" ]; then continue; fi
+    [ "$clone" = "$newest" ] && continue
+    stale "$clone" || continue
+    reclaim "$clone" chromium_clones
+  done
+fi
+printf 'STADO_RECLAIM_STAGE\tchromium_clones\t%s\t%s\n' "$before" "$(free_kb)"
 
 printf 'STADO_RECLAIM_FREE\tafter\t%s\n' "$(free_kb)"
 "#;
+
+/// Every superseded delivery root the product catalog declares, as shell words.
+///
+/// Read from [`products::declared`] rather than spelled here: the paths are
+/// facts about each product's delivery history, they live in
+/// `data/products.json`, and a reclamation that carried its own copy would go
+/// stale the next time a delivery path moves. A catalog that will not parse
+/// yields no roots, so the stage sweeps the services root alone rather than
+/// guessing.
+fn superseded_words() -> String {
+    products::declared()
+        .unwrap_or_default()
+        .iter()
+        .flat_map(|product| product.superseded_roots.iter())
+        .map(|root| format!("\"{root}\""))
+        .collect::<Vec<String>>()
+        .join(" ")
+}
 
 /// The remote program for one mode, with every substitution in place.
 ///
@@ -273,6 +397,11 @@ pub fn remote_script(apply: bool) -> String {
         .replace(SERVICES_ROOT_MARK, SERVICES_ROOT)
         .replace(BUILD_WORK_MARK, BUILD_WORK_ROOT)
         .replace(AGE_DAYS_MARK, MIN_AGE_DAYS)
+        .replace(CONTAINER_PREFIX_MARK, CONTAINER_PREFIX)
+        .replace(CLONE_CONTAINER_MARK, chromium_clones::CLONE_CONTAINER)
+        .replace(CLONE_ROOT_MARK, chromium_clones::CLONE_ROOT_NAME)
+        .replace(CLONE_PREFIX_MARK, chromium_clones::CLONE_ENTRY_PREFIX)
+        .replace(SUPERSEDED_ROOTS_MARK, &superseded_words())
 }
 
 /// One stage, as the host measured it.
@@ -547,10 +676,16 @@ mod tests {
 
     /// `/bin/bash -s` with the program on stdin, which is byte for byte what
     /// [`host_channel::run_script`] sends.
+    ///
+    /// `TMPDIR` points at a temporary container INSIDE the scratch home, so the
+    /// clones stage walks a root this test made. Pointed at the real container,
+    /// an apply here would take the code-sign clones of whatever this machine's
+    /// own browsers are doing, and a test is not entitled to one of them.
     fn run_locally(home: &Path, apply: bool) -> String {
         let mut child = Command::new("/bin/bash")
             .arg("-s")
             .env("HOME", home)
+            .env("TMPDIR", container(home).join("T"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -582,11 +717,35 @@ mod tests {
         assert!(status.success(), "could not backdate {}", path.display());
     }
 
-    /// A scratch host carrying exactly what the two filesystem stages have to
+    /// The scratch temporary container of a scratch home.
+    fn container(home: &Path) -> PathBuf {
+        home.join("container")
+    }
+
+    /// The Chromium clone root inside that container, in the layout macOS uses.
+    fn clone_root(home: &Path) -> PathBuf {
+        container(home)
+            .join(chromium_clones::CLONE_CONTAINER)
+            .join(chromium_clones::CLONE_ROOT_NAME)
+    }
+
+    /// One clone bundle in that root, at an exact mtime.
+    fn make_clone(root: &Path, name: &str, stamp: Option<&str>) -> PathBuf {
+        let clone = root.join(name);
+        std::fs::create_dir_all(clone.join("Chromium.app.bundle")).expect("clone bundle");
+        if let Some(stamp) = stamp {
+            backdate(&clone, stamp);
+        }
+        clone
+    }
+
+    /// A scratch host carrying exactly what the three filesystem stages have to
     /// decide about: one stale build tree and one fresh one, three delivered
-    /// versions of one product with `current` on the middle one, and — beside
+    /// versions of one product with `current` on the middle one, — beside
     /// them — the dotted state backup this control plane's own host actually
-    /// carries, which is older than every gate and must still survive.
+    /// carries, which is older than every gate and must still survive, and a
+    /// temporary container holding two stale Chromium clones plus a directory
+    /// macOS did not name.
     fn scratch_host() -> (tempfile::TempDir, PathBuf) {
         let home = tempfile::tempdir().expect("scratch home");
         let scratch = home.path().join(BUILD_WORK_ROOT);
@@ -613,7 +772,93 @@ mod tests {
         let backup = product.join(".macos-capability-backup-20260803");
         std::fs::create_dir_all(&backup).expect("host-local backup");
         backdate(&backup, "202512310000");
+        let clones = clone_root(home.path());
+        std::fs::create_dir_all(container(home.path()).join("T")).expect("scratch container");
+        make_clone(&clones, "code_sign_clone.older", Some("202601010000"));
+        make_clone(&clones, "code_sign_clone.newest", Some("202601020000"));
+        // Not a clone: nothing macOS named, so nothing this stage may take,
+        // however stale it is. The clone root is the one root the fleet's own
+        // software did not create, so its contents are not the fleet's to
+        // assume about.
+        let foreign = clones.join("someone-elses-directory");
+        std::fs::create_dir_all(&foreign).expect("foreign directory");
+        backdate(&foreign, "202512310000");
         (home, product)
+    }
+
+    /// The stage spans the superseded delivery root the catalog declares, with
+    /// the same rules it applies to the services root: the mini's 20 inert
+    /// `weles-worker` trees under `$HOME/.local/share/weles-worker` were
+    /// invisible to every command until that root was declared, and the live
+    /// worker runs from its own checkout, never from there.
+    ///
+    /// The root is read from `data/products.json` rather than spelled here, so
+    /// this fails the day a declaration is dropped — which is the point of
+    /// declaring it.
+    #[test]
+    fn the_stage_spans_every_declared_superseded_root() {
+        let (home, _product) = scratch_host();
+        let declared: Vec<String> = products::declared()
+            .expect("the product catalog parses")
+            .iter()
+            .flat_map(|product| product.superseded_roots.clone())
+            .collect();
+        assert!(
+            declared.contains(&"$HOME/.local/share/weles-worker".to_string()),
+            "no superseded root is declared: {declared:?}"
+        );
+        // One legacy root, laid out the way that installer left it: versions
+        // directly under the root and no `current` link at all.
+        let legacy = home.path().join(".local/share/weles-worker");
+        // Two stale versions and one written today — the shape the mini is in,
+        // where every one of the 20 trees was written today and an apply
+        // therefore takes none of them yet.
+        for (version, stamp) in [
+            ("0.5.20", "202601010000"),
+            ("0.5.21", "202601020000"),
+            ("0.5.22", "202608180000"),
+        ] {
+            let tree = legacy.join(version);
+            std::fs::create_dir_all(&tree).expect("legacy tree");
+            backdate(&tree, stamp);
+        }
+        let named = parse_output(&run_locally(home.path(), false), false);
+        let stage = named
+            .stages
+            .iter()
+            .find(|stage| stage.stage == DELIVERED_TREES_STAGE)
+            .expect("the trees stage ran");
+        assert!(
+            stage
+                .paths
+                .contains(&legacy.join("0.5.20").display().to_string()),
+            "the declared superseded root was not walked: {:?}",
+            stage.paths
+        );
+        assert!(
+            !stage
+                .paths
+                .contains(&legacy.join("0.5.22").display().to_string()),
+            "the newest tree of the superseded root was named"
+        );
+        let applied = parse_output(&run_locally(home.path(), true), true);
+        assert_eq!(
+            applied.stages.len(),
+            named.stages.len(),
+            "the two modes walked different stages"
+        );
+        assert!(
+            !legacy.join("0.5.20").exists(),
+            "a stale legacy tree survived"
+        );
+        assert!(
+            !legacy.join("0.5.21").exists(),
+            "a stale legacy tree survived"
+        );
+        assert!(
+            legacy.join("0.5.22").exists(),
+            "the newest legacy tree was removed"
+        );
     }
 
     /// A dry run names the stale build tree and the one delivered version that
@@ -648,6 +893,15 @@ mod tests {
         assert_eq!(
             stage(DELIVERED_TREES_STAGE).paths,
             vec![product.join("0.4.9").display().to_string()]
+        );
+        // Two stale clones in the root, and the newest of them is kept, so the
+        // older one is the whole of what this stage names.
+        assert_eq!(
+            stage(CHROMIUM_CLONES_STAGE).paths,
+            vec![clone_root(home.path())
+                .join("code_sign_clone.older")
+                .display()
+                .to_string()]
         );
         for kept in [
             "0.4.9",
@@ -695,6 +949,19 @@ mod tests {
             home.path().join(BUILD_WORK_ROOT).join("fresh").exists(),
             "a build tree younger than the age gate was removed"
         );
+        let clones = clone_root(home.path());
+        assert!(
+            !clones.join("code_sign_clone.older").exists(),
+            "the stale clone survived"
+        );
+        assert!(
+            clones.join("code_sign_clone.newest").exists(),
+            "the newest clone was removed"
+        );
+        assert!(
+            clones.join("someone-elses-directory").exists(),
+            "an entry macOS never named was removed"
+        );
     }
 
     /// A path a live process names is never removed, even when every other
@@ -735,6 +1002,53 @@ mod tests {
         assert!(!home.path().join(BUILD_WORK_ROOT).join("stado").exists());
     }
 
+    /// The clones stage keeps a clone a live process names and a clone younger
+    /// than the age gate, and takes the stale unheld ones in the same run —
+    /// which is what makes the two survivals mean something.
+    ///
+    /// A running browser is the case both gates exist for: macOS makes the
+    /// clone at launch, so a live session's clone is young, and a session that
+    /// has outlived the gate is the one a live argv still names.
+    #[test]
+    fn the_clones_stage_keeps_the_young_and_the_held() {
+        let (home, _product) = scratch_host();
+        let clones = clone_root(home.path());
+        // No stamp: as young as a browser that just started.
+        let young = make_clone(&clones, "code_sign_clone.young", None);
+        let held_clone = make_clone(&clones, "code_sign_clone.held", Some("202601010000"));
+        let mut holder = Command::new("/bin/sh")
+            .arg("-c")
+            .arg("sleep 30; :")
+            .arg("stado-reclaim-test-holder")
+            .arg(&held_clone)
+            .spawn()
+            .expect("holder");
+        let reclamation = parse_output(&run_locally(home.path(), true), true);
+        holder.kill().expect("holder stopped");
+        holder.wait().expect("holder reaped");
+        let stage = reclamation
+            .stages
+            .iter()
+            .find(|stage| stage.stage == CHROMIUM_CLONES_STAGE)
+            .expect("the clones stage ran");
+        assert!(young.exists(), "a clone younger than the gate was removed");
+        assert!(held_clone.exists(), "a held clone was removed");
+        assert!(
+            !stage.paths.iter().any(|path| {
+                path == &young.display().to_string() || path == &held_clone.display().to_string()
+            }),
+            "a kept clone was reported as reclaimed: {:?}",
+            stage.paths
+        );
+        // The armed run took the stale, unheld clones beside them. `young` is
+        // now the newest, so both backdated clones of the fixture were
+        // eligible: age and the process table are the only reasons anything
+        // survived here.
+        assert!(!clones.join("code_sign_clone.older").exists());
+        assert!(!clones.join("code_sign_clone.newest").exists());
+        assert_eq!(stage.items, 2, "{:?}", stage.paths);
+    }
+
     fn target() -> ComputeTarget {
         serde_json::from_value(json!({
             "name": "charless-mac-mini",
@@ -763,7 +1077,7 @@ mod tests {
     }
 
     /// The whole marker stream of a dry run, folded into stages in execution
-    /// order with the janitor's own count and both filesystem stages' paths.
+    /// order with the janitor's own count and every filesystem stage's paths.
     #[test]
     fn a_dry_run_reports_every_stage_it_walked() {
         let stdout = format!(
@@ -774,6 +1088,8 @@ mod tests {
              STADO_RECLAIM_ITEM\tdelivered_trees\t/Users/charles/.stado/services/weles/0.4.9\n\
              STADO_RECLAIM_ITEM\tdelivered_trees\t/Users/charles/.stado/services/weles/0.5.0\n\
              STADO_RECLAIM_STAGE\tdelivered_trees\t2097152\t2097152\n\
+             STADO_RECLAIM_ITEM\tchromium_clones\t/var/folders/zy/x/X/org.chromium.Chromium.code_sign_clone/code_sign_clone.aa\n\
+             STADO_RECLAIM_STAGE\tchromium_clones\t2097152\t2097152\n\
              STADO_RECLAIM_FREE\tafter\t2097152\n",
             plan(7, 0)
         );
@@ -790,6 +1106,7 @@ mod tests {
                 (REGISTRY_CLEANUP_STAGE, 7),
                 (BUILD_SCRATCH_STAGE, 1),
                 (DELIVERED_TREES_STAGE, 2),
+                (CHROMIUM_CLONES_STAGE, 1),
             ]
         );
         // Nothing was freed, which is the truth of a preview, and the report
@@ -878,8 +1195,15 @@ mod tests {
         // Every root the program touches is a crate constant, spliced in.
         assert!(apply.contains(BUILD_WORK_ROOT));
         assert!(apply.contains(SERVICES_ROOT));
+        assert!(apply.contains(chromium_clones::CLONE_ROOT_NAME));
+        assert!(apply.contains(chromium_clones::CLONE_ENTRY_PREFIX));
+        assert!(apply.contains(CONTAINER_PREFIX));
         assert!(!apply.contains(AGE_DAYS_MARK));
         assert!(!apply.contains(WC_WORDS_MARK));
+        assert!(!apply.contains(CLONE_ROOT_MARK));
+        assert!(!apply.contains(CLONE_CONTAINER_MARK));
+        assert!(!apply.contains(CLONE_PREFIX_MARK));
+        assert!(!apply.contains(CONTAINER_PREFIX_MARK));
         // The removal is the only place `rm` appears, and it is behind the
         // mode flag.
         assert_eq!(apply.matches("/bin/rm").count(), 1);
