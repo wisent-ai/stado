@@ -756,7 +756,10 @@ mod tests {
     /// The skarbiec case: right name, plausible version, bytes nobody published.
     #[test]
     fn an_unmanaged_program_fails_and_names_the_disagreement() {
-        let report = fresh("control-host", vec![row("skarbiec", "0.2.3", UNMANAGED)]);
+        let report = fresh(
+            "control-host",
+            vec![row("skarbiec", "0.2.3", UNMANAGED)],
+        );
         let finding = judge(&report, &declared(&[("skarbiec", "0.1.3")]), None);
         assert!(finding.failed);
         let sentence = &finding.sentences[0];
@@ -905,7 +908,9 @@ mod tests {
         // A tab and a newline both force quoting, which is what keeps a
         // multi-line binding one shell word.
         assert!(script.starts_with("units='launchd\t/Library/LaunchDaemons"));
-        assert!(script.contains("\nsystemd\t/etc/systemd/system/image-video-router-release.service'"));
+        assert!(
+            script.contains("\nsystemd\t/etc/systemd/system/image-video-router-release.service'")
+        );
         assert!(script.contains(
             "programs='/Users/charles/.stado/services/brama/bin/brama\n\
              /Users/charles/weles/bin/weles'"
@@ -916,7 +921,9 @@ mod tests {
         // back to its standalone defaults and silently report only the
         // `$HOME/.stado/bin` half.
         let bound = script.find("programs=").expect("programs is bound");
-        let used = script.find(": \"${programs:=}\"").expect("the body defaults it");
+        let used = script
+            .find(": \"${programs:=}\"")
+            .expect("the body defaults it");
         assert!(bound < used);
     }
 
