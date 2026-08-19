@@ -3052,6 +3052,81 @@ pub async fn helpers(
     removal_outcome(target, failed)
 }
 
+/// What one Weles worker host is doing, read over the fixed-script channel.
+///
+/// A run performed on a worker host leaves its evidence on that host, so an
+/// operator anywhere else could see none of it — which is what kept sending
+/// people to a shell on the machine. This is the read that answers instead.
+const WELES_ACTIVITY_SCRIPT: &str = include_str!("../../scripts/report-weles-activity.sh");
+
+/// The marker the embedded script prefixes to its one JSON line, so a login
+/// shell's own greeting cannot be mistaken for the report.
+const WELES_ACTIVITY_MARKER: &str = "STADO-WELES-ACTIVITY ";
+
+/// Report TARGET's Weles worker releases, API reachability and recorded runs.
+pub async fn weles_activity(target: &str, json: bool) -> Result<(), CmdError> {
+    let runner = crate::deploy::production_runner();
+    let output =
+        crate::deploy::host_channel::run_fixed_script(target, WELES_ACTIVITY_SCRIPT, &runner)
+            .await
+            .map_err(|error| {
+                CmdError::click(format!("{target}: cannot read Weles activity: {error}"))
+            })?;
+
+    let document = output
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix(WELES_ACTIVITY_MARKER))
+        .next_back()
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{target}: the Weles activity read printed no report line"
+            ))
+        })?;
+    let report: Value = serde_json::from_str(document).map_err(|error| {
+        CmdError::click(format!(
+            "{target}: the Weles activity report is not readable JSON: {error}"
+        ))
+    })?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+
+    let worker = &report["worker"];
+    println!(
+        "{target}: worker {} staged, {} newest installed, API {} on {}",
+        worker["staged_release"].as_str().unwrap_or("unknown"),
+        worker["newest_release"].as_str().unwrap_or("unknown"),
+        if report["api"]["listening"].as_bool().unwrap_or_default() {
+            "answering"
+        } else {
+            "silent"
+        },
+        report["api"]["endpoint"]
+            .as_str()
+            .unwrap_or("unknown endpoint"),
+    );
+    let runs = report["runs"].as_array().map_or(&[][..], Vec::as_slice);
+    println!(
+        "{target}: {} recorded run(s), {} newest below",
+        report["run_total"].as_u64().unwrap_or_default(),
+        runs.len()
+    );
+    // Newest first, exactly as the host ordered them: a run's own verdict and
+    // the time it last wrote are what an operator reads to know where work is.
+    for run in runs {
+        println!(
+            "  {:<10} {:<22} {:<38} {}",
+            run["status"].as_str().unwrap_or("unknown"),
+            run["action"].as_str().unwrap_or("unknown action"),
+            run["id"].as_str().unwrap_or("-"),
+            run["updated_at"].as_str().unwrap_or("-"),
+        );
+    }
+    Ok(())
+}
+
 /// Open a background reverse SSH forward using the exact registry channel.
 /// Both ends bind loopback; SSH supplies transport encryption and refuses to
 /// report success until the remote listener exists.
