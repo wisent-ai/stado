@@ -575,20 +575,91 @@ struct UnownedProcess: Decodable, Identifiable, Sendable {
 
 // MARK: - Release evidence
 
-/// `stado release status --json`, read for one thing only: which products roll
-/// out to which targets. The rollout's actual condition comes from
-/// `release doctor`, one call per pair, because only that command reaches the
-/// host and reads the state file, the candidate and the claiming gates.
+/// `stado release status --json`, read for two things: which products roll out
+/// to which targets, and what each target's own software report says.
+///
+/// The rollout's *progress* still comes from `release doctor`, one call per pair,
+/// because only that command reaches the host and reads the state file, the
+/// candidate and the claiming gates. The software verdict comes from here and is
+/// not recomputed: the CLI already decided it, in the same words it prints, so
+/// this console reads a verdict rather than growing a second opinion about what
+/// `unmanaged` means.
 struct ReleaseInventory: Decodable, Sendable {
-    let pairs: [ReleaseInventoryPair]
+    let entries: [ReleaseInventoryEntry]
+
+    var pairs: [ReleaseInventoryPair] { entries.map(\.pair) }
 
     enum CodingKeys: String, CodingKey {
-        case pairs = "targets"
+        case entries = "targets"
     }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        pairs = try values.decodeIfPresent([ReleaseInventoryPair].self, forKey: .pairs) ?? []
+        entries = try values.decodeIfPresent([ReleaseInventoryEntry].self, forKey: .entries) ?? []
+    }
+}
+
+/// One product target as the inventory lists it: its identity, and the software
+/// report the CLI attached to it.
+struct ReleaseInventoryEntry: Decodable, Sendable {
+    let pair: ReleaseInventoryPair
+    /// Absent only when the CLI predates the software half of the report. It is
+    /// carried as `nil` rather than as a passing verdict, because "this console
+    /// is newer than the CLI" and "the host is accounted for" are different
+    /// facts and only one of them is good news.
+    let software: ReleaseSoftwareReport?
+
+    enum CodingKeys: String, CodingKey {
+        case software
+    }
+
+    init(from decoder: Decoder) throws {
+        pair = try ReleaseInventoryPair(from: decoder)
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        software = try values.decodeIfPresent(ReleaseSoftwareReport.self, forKey: .software)
+    }
+}
+
+/// What a host said it runs, and whether the CLI could account for it.
+///
+/// `state` and `verdict` are two different questions and stay two fields.
+/// `state` is whether anybody looked — `observed`, `unverified`, `never`.
+/// `verdict` is what the look implies — `ok` or `failed`. Folding them would let
+/// this screen paint "nobody has ever asked this host" in the same colour as
+/// "the host answered and it is fine", which is the exact reading that let a
+/// stale skarbiec strip a live subscription's tags for a day.
+struct ReleaseSoftwareReport: Decodable, Sendable {
+    let state: String
+    let verdict: String
+    let failed: Bool
+    /// `just now`, `14m ago`, `stale (3h)`, `never` — the CLI's own phrase.
+    let observed: String
+    let reported: Int
+    let release: Int
+    let unmanaged: Int
+    let scripts: Int
+    /// Verbatim, in the CLI's words, in the CLI's order. Never re-worded here.
+    let findings: [String]
+
+    var hasReport: Bool { state != "never" }
+
+    enum CodingKeys: String, CodingKey {
+        case state, verdict, failed, observed, reported, release, unmanaged, scripts, findings
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        state = try values.decodeIfPresent(String.self, forKey: .state) ?? "never"
+        verdict = try values.decodeIfPresent(String.self, forKey: .verdict) ?? "failed"
+        // Defaulted to a failure, deliberately. A payload this console cannot
+        // read is not evidence that the fleet is healthy.
+        failed = try values.decodeIfPresent(Bool.self, forKey: .failed) ?? true
+        observed = try values.decodeIfPresent(String.self, forKey: .observed) ?? "never"
+        reported = try values.decodeIfPresent(Int.self, forKey: .reported) ?? 0
+        release = try values.decodeIfPresent(Int.self, forKey: .release) ?? 0
+        unmanaged = try values.decodeIfPresent(Int.self, forKey: .unmanaged) ?? 0
+        scripts = try values.decodeIfPresent(Int.self, forKey: .scripts) ?? 0
+        findings = try values.decodeIfPresent([String].self, forKey: .findings) ?? []
     }
 }
 
@@ -826,6 +897,36 @@ struct ReleaseQuarantineEntry: Decodable, Identifiable, Sendable {
     }
 }
 
+/// The order a held-digest list is read in.
+extension Array where Element == ReleaseQuarantineEntry {
+    /// The digest the registry desires first, then the rest newest first.
+    ///
+    /// The host answers in digest order, which is the one order that says
+    /// nothing: on charless-mac-mini it put the digest actually blocking the
+    /// brama rollout seventh of seven, below six refusals that are history.
+    /// Recency orders the rest, because a refusal recorded an hour ago is
+    /// about the release being attempted now.
+    var desiredFirst: [ReleaseQuarantineEntry] {
+        map { (entry: $0, quarantined: StadoFormat.date($0.quarantinedAt)) }
+            .sorted { lhs, rhs in
+                if lhs.entry.isDesiredDigest != rhs.entry.isDesiredDigest {
+                    return lhs.entry.isDesiredDigest
+                }
+                switch (lhs.quarantined, rhs.quarantined) {
+                case let (left?, right?) where left != right:
+                    return left > right
+                case (nil, .some):
+                    return false
+                case (.some, nil):
+                    return true
+                default:
+                    return lhs.entry.digest < rhs.entry.digest
+                }
+            }
+            .map(\.entry)
+    }
+}
+
 /// `stado release quarantine clear … --reason <text> --json`. The audit record
 /// the CLI wrote, read back so the screen states what was recorded rather than
 /// what was requested.
@@ -897,36 +998,6 @@ struct ReleaseLogsReport: Decodable, Sendable {
     }
 }
 
-/// The order a held-digest list is read in.
-extension Array where Element == ReleaseQuarantineEntry {
-    /// The digest the registry desires first, then the rest newest first.
-    ///
-    /// The host answers in digest order, which is the one order that says
-    /// nothing: on charless-mac-mini it put the digest actually blocking the
-    /// brama rollout seventh of seven, below six refusals that are history.
-    /// Recency orders the rest, because a refusal recorded an hour ago is
-    /// about the release being attempted now.
-    var desiredFirst: [ReleaseQuarantineEntry] {
-        map { (entry: $0, quarantined: StadoFormat.date($0.quarantinedAt)) }
-            .sorted { lhs, rhs in
-                if lhs.entry.isDesiredDigest != rhs.entry.isDesiredDigest {
-                    return lhs.entry.isDesiredDigest
-                }
-                switch (lhs.quarantined, rhs.quarantined) {
-                case let (left?, right?) where left != right:
-                    return left > right
-                case (nil, .some):
-                    return false
-                case (.some, nil):
-                    return true
-                default:
-                    return lhs.entry.digest < rhs.entry.digest
-                }
-            }
-            .map(\.entry)
-    }
-}
-
 /// One log file on the host: where it is, how big it is, and its tail.
 ///
 /// A stream with no lines is not a blank pane. The file was either never
@@ -979,10 +1050,23 @@ enum ReleaseDiagnosis: Sendable {
     case failed(String)
 }
 
-/// One row of the Releases table: the pair, and its diagnosis.
+/// One row of the Releases table: the pair, its diagnosis, and what the host
+/// itself reported it runs.
 struct ReleaseRow: Identifiable, Sendable {
     let pair: ReleaseInventoryPair
     let diagnosis: ReleaseDiagnosis
+    /// Straight off `release status --json`, never recomputed here.
+    let software: ReleaseSoftwareReport?
+
+    init(
+        pair: ReleaseInventoryPair,
+        diagnosis: ReleaseDiagnosis,
+        software: ReleaseSoftwareReport? = nil
+    ) {
+        self.pair = pair
+        self.diagnosis = diagnosis
+        self.software = software
+    }
 
     var id: String { pair.id }
     var product: String { pair.product }
@@ -1005,8 +1089,14 @@ struct ReleaseRow: Identifiable, Sendable {
 
     /// Sort key. Blocked first, then a rollout nobody could diagnose, then the
     /// ones still moving, and settled last.
+    ///
+    /// A host that cannot be shown to run what the fleet declares never sorts
+    /// below a moving rollout, whatever the release agent's own state file says
+    /// about the rollout. `brama desired=0.2.27 observed=unreported` sat quietly
+    /// in a list for a day; a row whose software verdict failed is pulled up
+    /// beside the blocked ones so it cannot do that again.
     var attentionRank: Int {
-        switch diagnosis {
+        let rollout: Int = switch diagnosis {
         case .pending:
             4
         case .failed:
@@ -1019,5 +1109,6 @@ struct ReleaseRow: Identifiable, Sendable {
             case .settled: 5
             }
         }
+        return software?.failed == true ? min(rollout, 1) : rollout
     }
 }

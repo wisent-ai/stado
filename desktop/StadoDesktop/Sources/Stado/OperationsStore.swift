@@ -583,6 +583,10 @@ final class ReleaseEvidenceStore: ObservableObject {
     @Published private(set) var isRefreshing = false
     @Published private(set) var lastUpdated: Date?
     @Published private(set) var mutation: WisentMutationOutcome = .idle
+    /// What each host reported it runs, as the last inventory read stated it.
+    /// Held apart from `rows` so re-diagnosing one rollout cannot drop the
+    /// software finding that rollout had nothing to do with.
+    private var softwareReports: [ReleaseInventoryPair: ReleaseSoftwareReport] = [:]
 
     /// Logs are read for the pair the operator is looking at, never for the
     /// whole fleet: each tail is a read off a host.
@@ -678,6 +682,11 @@ final class ReleaseEvidenceStore: ObservableObject {
             }
         }
 
+        // The pair and its software verdict travel together from here on. The
+        // verdict is the CLI's, decided before this process saw it, so a
+        // re-diagnosis of the rollout must not silently drop it — a row that
+        // loses its software finding on refresh is a row that goes quiet again.
+        var software: [ReleaseInventoryPair: ReleaseSoftwareReport] = [:]
         let pairs: [ReleaseInventoryPair]
         do {
             let inventory = try await cli.json(
@@ -686,9 +695,15 @@ final class ReleaseEvidenceStore: ObservableObject {
             )
             guard generation == refreshGeneration else { return }
             inventoryProblem = nil
-            pairs = inventory.pairs
-                .filter { !$0.product.isEmpty && !$0.target.isEmpty }
-                .sorted { $0.id < $1.id }
+            let entries = inventory.entries
+                .filter { !$0.pair.product.isEmpty && !$0.pair.target.isEmpty }
+                .sorted { $0.pair.id < $1.pair.id }
+            for entry in entries {
+                if let report = entry.software {
+                    software[entry.pair] = report
+                }
+            }
+            pairs = entries.map(\.pair)
         } catch {
             guard generation == refreshGeneration else { return }
             // The rows already on screen stay: a refresh that failed does not
@@ -697,7 +712,8 @@ final class ReleaseEvidenceStore: ObservableObject {
             return
         }
 
-        rows = pairs.map { ReleaseRow(pair: $0, diagnosis: .pending) }
+        softwareReports = software
+        rows = pairs.map { ReleaseRow(pair: $0, diagnosis: .pending, software: software[$0]) }
         var diagnoses: [ReleaseInventoryPair: ReleaseDiagnosis] = [:]
         let cli = cli
         await withTaskGroup(of: (ReleaseInventoryPair, ReleaseDiagnosis).self) { group in
@@ -710,7 +726,13 @@ final class ReleaseEvidenceStore: ObservableObject {
                 guard generation == refreshGeneration else { continue }
                 diagnoses[pair] = diagnosis
                 rows = Self.ordered(
-                    pairs.map { ReleaseRow(pair: $0, diagnosis: diagnoses[$0] ?? .pending) }
+                    pairs.map {
+                        ReleaseRow(
+                            pair: $0,
+                            diagnosis: diagnoses[$0] ?? .pending,
+                            software: software[$0]
+                        )
+                    }
                 )
             }
         }
@@ -720,10 +742,18 @@ final class ReleaseEvidenceStore: ObservableObject {
 
     /// One rollout, re-read. Used after a clearance, so the screen states the
     /// host's answer rather than the operator's expectation of it.
+    ///
+    /// `release doctor` says nothing about installed software, so the software
+    /// verdict the inventory carried is kept as it was. Dropping it here would
+    /// make one clearance quietly clear a finding nobody addressed.
     func diagnose(_ pair: ReleaseInventoryPair) async {
         let diagnosis = await Self.diagnosis(of: pair, using: cli)
         guard let index = rows.firstIndex(where: { $0.pair == pair }) else { return }
-        rows[index] = ReleaseRow(pair: pair, diagnosis: diagnosis)
+        rows[index] = ReleaseRow(
+            pair: pair,
+            diagnosis: diagnosis,
+            software: softwareReports[pair]
+        )
         rows = Self.ordered(rows)
         lastUpdated = Date()
     }
