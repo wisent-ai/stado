@@ -25,29 +25,10 @@ use crate::skarbiec::{Client, SkarbiecError};
 pub const ENV_STORE: &str = "STADO_CREDENTIALS_STORE";
 const DEFAULT_STORE: &str = "skarbiec";
 
-/// One process-wide lock for every test that mutates credential-store
-/// environment variables. Tokio's mutex so async tests may hold the guard
-/// across `.await`; sync tests block on the same lock via [`test_env_lock`].
-#[cfg(test)]
-static TEST_ENV_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
-    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
-
-#[cfg(test)]
-pub(crate) fn test_env_lock() -> tokio::sync::MutexGuard<'static, ()> {
-    TEST_ENV_LOCK.blocking_lock()
-}
-
-#[cfg(test)]
-pub(crate) async fn test_env_lock_async() -> tokio::sync::MutexGuard<'static, ()> {
-    TEST_ENV_LOCK.lock().await
-}
-
 mod file;
 pub mod grant;
 pub mod migrate;
 pub mod owner;
-#[cfg(test)]
-mod tests;
 pub mod write;
 
 #[derive(Clone, Debug, PartialEq, Eq)]

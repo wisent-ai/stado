@@ -1243,6 +1243,12 @@ fn resolve_step_program(program: &str) -> PathBuf {
     }
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Ok(home) = std::env::var("HOME") {
+        // The owner-only installs first: `stado` itself and the fleet's
+        // delivered binaries live here, and the first delivery that ran
+        // `stado release install-local` died unable to find the very
+        // program that had been delivered to this directory.
+        candidates.push(Path::new(&home).join(".stado").join("bin").join(program));
+        candidates.push(Path::new(&home).join(".local").join("bin").join(program));
         candidates.push(Path::new(&home).join(".cargo").join("bin").join(program));
     }
     candidates.push(Path::new("/opt/homebrew/bin").join(program));

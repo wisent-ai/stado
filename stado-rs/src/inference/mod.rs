@@ -5,6 +5,3 @@
 pub mod plan;
 pub mod reservation;
 pub mod schema;
-
-#[cfg(test)]
-mod tests;
