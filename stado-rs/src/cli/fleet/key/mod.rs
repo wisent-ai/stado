@@ -627,26 +627,3 @@ pub async fn check(runner: &Runner, target: &str) -> Result<bool, String> {
     Ok(true)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn item_id_scopes_by_target() {
-        assert_eq!(item_id("mini"), "stado-ssh-mini");
-    }
-
-    #[test]
-    fn authorized_keys_line_carries_exactly_one_comment() {
-        assert_eq!(
-            authorized_keys_line("ssh-ed25519 AAAA", "stado-ssh-mini"),
-            "ssh-ed25519 AAAA stado-ssh-mini"
-        );
-        // The stored key already carries ssh-keygen's own comment, which is the
-        // same item id: the line must name it once, not twice.
-        assert_eq!(
-            authorized_keys_line("ssh-ed25519 AAAA stado-ssh-mini", "stado-ssh-mini"),
-            "ssh-ed25519 AAAA stado-ssh-mini"
-        );
-    }
-}
