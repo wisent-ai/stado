@@ -91,6 +91,14 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               path argument it cannot be pointed at anything",
     },
     ApprovedCommand {
+        argv: &["/usr/bin/du", "-xk", "-d", "2", "/"],
+        why: "attributes a full root filesystem two directory levels deep; -x stays on one \
+              filesystem, -k is a fixed unit, the depth and the root are fixed words, and du \
+              writes nothing. Added 2026-08-19: the linux builder sat at 100% used and every \
+              declared cleaner and reclaim stage measured zero, so the operator had no \
+              sanctioned way to even name what was eating the disk",
+    },
+    ApprovedCommand {
         argv: &["/usr/bin/who"],
         why: "reads the login-session table; takes no argument and writes nothing",
     },
