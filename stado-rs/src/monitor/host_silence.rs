@@ -21,16 +21,19 @@
 //!
 //! So two blob families, both append-only, both keyed by host:
 //!
-//! - `host_silence/<host>/<started_at>.json` — one record per gap, opened
-//!   when the newest beacon crosses [`silence_threshold_seconds`] and
-//!   closed by the first fresher beacon. `started_at` is the last moment
-//!   the host was heard from, not the moment somebody noticed, so the
-//!   duration is the outage rather than the polling interval.
-//! - `reader_refusals/<host>/<at>.json` — one record per refusal, carrying
-//!   the refusing component's own sentence VERBATIM in `detail`. A reader
-//!   that rephrases the sentence it logged has invented a second vocabulary
-//!   for one condition, and the operator then greps for a string that
-//!   exists in no source file.
+//! - `state/host_silence/<host>/<started_at>.json` — one record per gap,
+//!   opened when the newest beacon crosses [`silence_threshold_seconds`]
+//!   and closed by the first fresher beacon. `started_at` is the last
+//!   moment the host was heard from, not the moment somebody noticed, so
+//!   the duration is the outage rather than the polling interval.
+//! - `state/reader_refusals/<host>/<at>.json` — one record per refusal,
+//!   carrying the refusing component's own sentence VERBATIM in `detail`. A
+//!   reader that rephrases the sentence it logged has invented a second
+//!   vocabulary for one condition, and the operator then greps for a string
+//!   that exists in no source file.
+//!
+//! Both live under `state/` and not at the store root; [`SILENCE_PREFIX`]
+//! records why.
 //!
 //! `<host>` is the subject of the refusal, not the machine that refused:
 //! the resolver on the laptop failing to reach the authority on the Mac
@@ -53,10 +56,36 @@ use tokio::sync::OnceCell;
 use crate::queue::{JobStorage, StorageError};
 
 /// Blob prefix holding one record per silence, per host.
-pub const SILENCE_PREFIX: &str = "host_silence";
+///
+/// `state/host_silence/`, NOT `host_silence/` at the store root, which is
+/// where the first cut of this module wrote. The object API authorizes a
+/// write by matching its key against this deployment's namespace prefix
+/// allowlist; `host_silence/` and `reader_refusals/` are not in it, and
+/// every write came back
+/// `401 {"error":"unauthorized or non-immutable release write"}` — a
+/// sentence naming neither the prefix nor the grant. Nothing was recorded
+/// and `stado host link` printed a confident `"silences": []`, which is
+/// strictly worse than printing nothing: it answers the question this
+/// module exists for, wrongly.
+///
+/// `state/` satisfies both constraints at once. It is authorized wherever
+/// the queue prefixes are, because the allowlist mirrors
+/// [`crate::queue::copy::CANONICAL_PREFIXES`] — and it IS one of those
+/// canonical prefixes, so a backend migration or a disaster-recovery
+/// backup carries these records along with the queue state they explain.
+///
+/// The obvious alternatives are all taken. `host_health/` is walked
+/// key-by-key by `registry doctor`'s beacon loader, which would report
+/// every silence record as a phantom beacon of a host that does not exist;
+/// `operations/` is walked the same way by the resource journal;
+/// `diagnostics/` is authorized but deliberately OUTSIDE
+/// `CANONICAL_PREFIXES` so that a cutover drops it, which is the wrong
+/// home for the only surviving account of an outage.
+pub const SILENCE_PREFIX: &str = "state/host_silence";
 
-/// Blob prefix holding one record per reader refusal, per host.
-pub const REFUSAL_PREFIX: &str = "reader_refusals";
+/// Blob prefix holding one record per reader refusal, per host. Rooted
+/// under `state/` for the reason [`SILENCE_PREFIX`] gives.
+pub const REFUSAL_PREFIX: &str = "state/reader_refusals";
 
 /// Seconds of beacon age that open a silence when no operator overrides
 /// `STADO_SILENCE_THRESHOLD_SECONDS`.
