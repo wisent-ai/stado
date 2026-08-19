@@ -68,6 +68,14 @@ pub enum FleetCommands {
         /// Declared fleet name.
         fleet: String,
     },
+    /// Retire a declared fleet. Refused while any target still points at it:
+    /// deleting the declaration under a member would leave the document
+    /// naming a fleet that does not exist, and `fleet list` refuses exactly
+    /// that shape. Reassign the members first.
+    Delete {
+        /// Declared fleet name.
+        name: String,
+    },
     /// One-command onboarding: register a machine, optionally fleet it,
     /// optionally install the agent.
     Enroll {
@@ -267,6 +275,7 @@ async fn execute(command: FleetCommands) -> Result<bool, String> {
         FleetCommands::Status { name } => fleets::status(&name).await,
         FleetCommands::Create { name, notes } => ops::create(&name, &notes).await,
         FleetCommands::Assign { target, fleet } => ops::assign(&target, &fleet).await,
+        FleetCommands::Delete { name } => ops::delete(&name).await,
         FleetCommands::Enroll {
             name,
             ssh,
