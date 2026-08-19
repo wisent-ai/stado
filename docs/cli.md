@@ -1763,9 +1763,9 @@ an arbitrary, per-host, declared set.
 |---|---|
 | `list [--json]` | Every managed service on every host, with its state. |
 | `list --unowned [--json]` | Product processes running on any host that no launchd job or systemd unit owns. |
-| `status NAME [--json]` | One service everywhere it is managed. |
+| `status NAME [--json]` | One service everywhere it is managed. A `failed` row earns a `failure:` block under the table: launchd's last exit status for the label and the unit's stderr tail, gathered best-effort from the host. |
 | `converge TARGET [SERVICE] [--apply] [--json]` | Declared revision against the revision the host reports. |
-| `restart NAME [--host TARGET] [--json]` | Restart one unit; no recovery pass. |
+| `restart NAME [--host TARGET] [--json]` | Restart one unit; no recovery pass. The output names the launchd domain the restart acted in. A system LaunchDaemon is restarted by ending its owned process for launchd's `KeepAlive` to replace, or refused with the cause and the privileged command named — see below. |
 | `stop NAME [--host TARGET] [--json]` | Stop one unit, including a process it disowned. |
 | `show NAME [--host TARGET] [--json]` | What the unit actually runs: program and arguments. |
 | `adopt UNIT --host TARGET [--json]` | Bring an existing unit under management. |
@@ -1784,7 +1784,7 @@ an arbitrary, per-host, declared set.
 | `directory bind NAME [--target T] [--json]` | Serving parameters for the placed host: listen address and encrypted peers. |
 | `directory consumer-add NAME CONSUMER [--capability C]...` | Declare that a consumer may use a service. |
 | `directory consumer-rm NAME CONSUMER` | Remove a consumer's declaration. |
-| `logs NAME [--host TARGET] [--lines N] [--json]` | Tail the unit's log. |
+| `logs NAME [--host TARGET] [--lines N] [--json]` | Tail the unit's log, then its stderr as its own section — launchd keeps the two in separate files. A unit whose plist declares no `StandardErrorPath`, or whose stderr file is empty, says so instead of showing nothing. |
 | `env NAME [--host TARGET] [--json]` | Effective environment, secrets redacted. |
 
 `NAME` accepts either the logical service name or the host's own name for
@@ -1900,6 +1900,34 @@ being the broken thing.
 is not the same fact as a vanished unit, and treating them alike is how a
 dead box reads as a healthy one.
 
+### When the beacon says failed
+
+The beacon says "it died" — more often than not with an empty detail. The
+why lives on the host: launchd's last exit status for the label, and the
+stderr the unit wrote before it went. `status` gathers both best-effort over
+the read-only channels and prints them as a `failure:` block under the
+table, one per failed unit:
+
+```
+failure: control-host com.wisent.weles-api: last launchd exit 1
+  stderr: /Users/charles/.stado/logs/com.wisent.weles-api.log
+  Error: listen EADDRINUSE: address already in use 127.0.0.1:8084
+```
+
+The stderr tail is the same file `service logs` reads, narrowed to the ten
+lines a failure block can show, and the `stderr:` line names the file it
+came from — or the reason there was nothing to show (`absent in plist`,
+`<path> (empty)`). Every read can fail, because the host may be the thing
+that is broken; a failed read degrades to a `note:` line in the block,
+never to a failed `status`. A failed system LaunchDaemon's block carries
+one more line saying what `service restart` can and cannot do to it —
+the restart section below has the whole route.
+
+`logs` tails that stderr file as its own section, headed
+`== HOST UNIT stderr (PATH) ==`, whenever the plist declares a
+`StandardErrorPath`; a unit with no stderr path declared, or with an empty
+stderr file, is answered with that fact instead of with silence.
+
 ### Is the host running the build we shipped?
 
 Every state above is about the *unit*, and every one of them stays true across
@@ -1931,7 +1959,8 @@ one with `stado host declare-version TARGET --binary NAME --version X.Y.Z`;
 | Verdict | Meaning |
 |---|---|
 | `in-sync` | The host runs exactly the declared version. |
-| `drifted` | The host runs a different version. |
+| `host-behind` | The host runs a version strictly OLDER than the declared one. This is the state that hid behind a passing `service list` for as long as it took somebody to notice the behaviour was old; `--apply` delivers the declared version. |
+| `host-ahead` | The host runs a version strictly NEWER than the declared one: the declaration is the thing that is stale. Delivering the declared version would downgrade a live host, so `--apply` refuses to touch it and names the `stado host declare-version` command that moves the declaration to what the host runs. |
 | `unknown` | Nothing usable came back: the reporter could not run, the channel refused, the binary is not installed, or the artefact carries no version metadata. |
 
 The installed version comes from `report-installed-versions`
@@ -1958,7 +1987,7 @@ Exit codes follow the same rule `service verify` follows, for the same reason:
 | Invocation | Exit |
 |---|---|
 | every binary `in-sync` | 0 |
-| any binary `drifted`, without `--apply` | 1 |
+| any binary `host-behind` or `host-ahead`, without `--apply` | 1 |
 | only `unknown`, without `--apply` | 0 |
 | `--apply`, every binary confirmed `in-sync` afterwards | 0 |
 | `--apply`, anything not `in-sync` afterwards | 1 |
@@ -1969,15 +1998,24 @@ masquerade as an outage. After `--apply`, `unknown` *is* a failure: an operator
 who asked for convergence is owed proof of it, and "the reporter could not
 answer" is not proof.
 
-`--apply` delivers the declared version of every drifted binary by calling
-`stado host release --binary NAME --version X.Y.Z TARGET` in-process, and then
-**re-reads** the installed versions through the same embedded reporter. A
-delivery that reports `released` has testified about its own work; the exit code of this command is
-decided by what the host says afterwards. There is no second delivery path: a
-binary the product declaration does not carry is reported as
-undeliverable, never attempted, and `unknown` rows are never delivered to —
-delivery ends in a unit restart, and restarting a working service because a
-report was missing is how a healthy host goes down.
+`--apply` delivers the declared version of every `host-behind` binary by
+calling `stado host release --binary NAME --version X.Y.Z TARGET` in-process,
+and then **re-reads** the installed versions through the same embedded
+reporter. A delivery that reports `released` has testified about its own
+work; the exit code of this command is decided by what the host says
+afterwards. There is no second delivery path: a binary the product
+declaration does not carry is reported as undeliverable, never attempted, and
+`unknown` rows are never delivered to — delivery ends in a unit restart, and
+restarting a working service because a report was missing is how a healthy
+host goes down.
+
+A `host-ahead` binary is refused outright: the host runs newer than the
+declaration, so delivering the declared version is a downgrade of a live
+host, and a converge that performs one is the registry's staleness shipped as
+an outage. Each refusal names the exact
+`stado host declare-version TARGET --binary NAME --version X.Y.Z` that moves
+the declaration to the version the host is actually running, and the command
+exits non-zero.
 
 `converge` never writes the registry. The declared version is the operator's
 statement of intent, published with `stado host declare-version`; a converge
@@ -2028,6 +2066,31 @@ not it. The remedy is `stado service restart NAME --host TARGET`.
 stado service converge control-host --json | jq '.binaries[]
   | {binary, installed_version, running_binary, binary_matches_process}'
 ```
+
+### Restarting a system LaunchDaemon
+
+A unit in `/Library/LaunchDaemons` belongs to launchd's system domain, and
+the approved channel is unprivileged: `launchctl bootstrap system` is not
+available to it. `restart` still has a route, and reads both gates off the
+host before anything is signalled. Every daemon this fleet installs carries
+`UserName`, so its process runs as the approved user even though the job is
+root's, and `KeepAlive` `<true/>`, so launchd puts a new process in place of
+one that ends. Ending the process from the account that owns it is the same
+sequence `launchctl kickstart -k` performs, minus the privilege: the job is
+never unloaded, and there is no window in which it does not exist. The
+detail column says so, because `restarted` beside a `kill` should not have
+to be taken on trust.
+
+When a gate does not hold — no `KeepAlive` or a conditional one, a process
+owned by another account, or nothing running the unit's declared argv at all
+— the command refuses rather than end a process nothing will respawn, names
+the cause, and names the one privileged command that works:
+`sudo launchctl kickstart -k system/<label>`. `stado host recover` is not
+that command either: its pass reports each system daemon it skipped as
+`needs_privileged_bootstrap` instead of re-bootstrapping one. The `DOMAIN`
+column in `restart`'s own output names the domain the restart acted in,
+because a restart in `user/501` and one in `gui/501` are different
+operations.
 
 ### Processes no unit owns
 
