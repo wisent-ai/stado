@@ -32,6 +32,7 @@ struct ServicesView: View {
     @State private var selection: String?
     @State private var showsDeclare = false
     @State private var restartCandidate: FleetServiceEntry?
+    @State private var removeFileCandidate: FleetServiceEntry?
 
     private var isRefreshing: Bool {
         store.isRefreshing || fleetStore.isRefreshing
@@ -75,6 +76,9 @@ struct ServicesView: View {
         }
         .sheet(item: $restartCandidate) { entry in
             restartDialog(entry)
+        }
+        .sheet(item: $removeFileCandidate) { entry in
+            removeFileDialog(entry)
         }
     }
 
@@ -771,7 +775,50 @@ struct ServicesView: View {
                 WisentField(label: "Detail", value: entry.detail, tone: entry.isFailed ? .danger : .neutral)
             }
             restartAffordance(entry)
+            removeFileAffordance(entry)
         }
+    }
+
+    /// The file-delete verb is offered only where the CLI's guards could
+    /// pass: a unit file inside a user's own LaunchAgents or under .stado.
+    /// Anything else — a system daemon path, an empty path — has no button,
+    /// because `stado host remove-file` would refuse it before deleting
+    /// anything anyway.
+    @ViewBuilder
+    private func removeFileAffordance(_ entry: FleetServiceEntry) -> some View {
+        if entry.removableByRemoveFile {
+            WisentActionButton(
+                action: WisentAction(
+                    "Remove the unit file…",
+                    symbol: "trash",
+                    kind: .plain,
+                    isEnabled: !fleetStore.mutation.isWorking
+                ) {
+                    removeFileCandidate = entry
+                }
+            )
+        }
+    }
+
+    private func removeFileDialog(_ entry: FleetServiceEntry) -> some View {
+        let unit = entry.unitID.isEmpty ? entry.name : entry.unitID
+        return WisentDecisionDialog(
+            tone: .danger,
+            title: "Remove \(entry.path) on \(entry.host)?",
+            lines: [
+                "This deletes the unit file for \(unit) from the host itself, not only from Stado's management. The guards on the host side decide: a file that is not a regular file owned by the login account is refused before anything is deleted.",
+                "The unit is not restarted, stopped or reloaded: the file simply stops existing. A host that still had it loaded keeps the running process.",
+            ],
+            footnote: "Runs \(StadoCLI.commandLine(FleetServicesStore.removeFileArguments(host: entry.host, path: entry.path))).",
+            actions: [
+                WisentAction("Keep the file", kind: .primary) { removeFileCandidate = nil },
+                WisentAction("Remove the file", symbol: "trash", kind: .destructive) {
+                    let candidate = entry
+                    removeFileCandidate = nil
+                    Task { await fleetStore.removeUnitFile(candidate) }
+                },
+            ]
+        )
     }
 
     /// The failure evidence, composed as the CLI's `failure:` block composes
