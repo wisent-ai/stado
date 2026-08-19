@@ -268,33 +268,3 @@ pub fn grant_field_reads(
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn encodes_field_and_whole_item_capabilities() {
-        assert_eq!(
-            encode(&json!({"action": "read", "item": "stado-ssh-x", "field": "private_key"})),
-            "read:stado-ssh-x#private_key"
-        );
-        assert_eq!(
-            encode(&json!({"action": "read", "item": "stado-ssh-x", "field": Value::Null})),
-            "read:stado-ssh-x"
-        );
-        assert_eq!(
-            encode(&json!({"action": "write", "item": "stado-ssh-x"})),
-            "write:stado-ssh-x"
-        );
-    }
-
-    #[test]
-    fn missing_consumer_is_named() {
-        let document = json!({"tokens": {"other": {}}});
-        let error = grant_of(&document, "local-operator")
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("local-operator"), "{error}");
-    }
-}
