@@ -235,4 +235,3 @@ pub fn consumers_by_free_vram(
     rows.sort_by_key(|row| std::cmp::Reverse(row.1));
     rows
 }
-

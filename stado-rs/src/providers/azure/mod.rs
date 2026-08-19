@@ -1105,4 +1105,3 @@ impl Provider for AzureProvider {
         Ok(counts)
     }
 }
-

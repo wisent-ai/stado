@@ -779,4 +779,3 @@ fn apply_gate(rows: &[Row], pass: &AppliedPass) -> Result<(), CmdError> {
     );
     Err(CmdError::silent(CLICK_ERROR_CODE))
 }
-

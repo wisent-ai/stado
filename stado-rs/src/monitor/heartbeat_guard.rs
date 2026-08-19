@@ -378,4 +378,3 @@ pub async fn build_ref_to_jids(
     }
     Ok(out)
 }
-

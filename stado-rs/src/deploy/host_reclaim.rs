@@ -752,4 +752,3 @@ pub async fn reclaim_host(
     }
     Ok((target, parse_output(&output.stdout, apply)))
 }
-

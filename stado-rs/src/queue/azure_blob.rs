@@ -619,4 +619,3 @@ impl BlobBackend for AzureBlobBackend {
             .collect())
     }
 }
-

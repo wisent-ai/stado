@@ -84,9 +84,8 @@ fn fleet_list_reports_members_resolved_from_targets() {
 
 #[test]
 fn fleet_list_refuses_a_target_pointing_at_an_undeclared_fleet() {
-    let dir = storage_with_registry(
-        r#"{"fleets": [], "targets": [{"name": "t1", "fleet": "ghost"}]}"#,
-    );
+    let dir =
+        storage_with_registry(r#"{"fleets": [], "targets": [{"name": "t1", "fleet": "ghost"}]}"#);
     let out = stado(dir.path(), &["fleet", "list"]);
     assert!(
         !out.status.success(),
@@ -94,9 +93,8 @@ fn fleet_list_refuses_a_target_pointing_at_an_undeclared_fleet() {
         stdout(&out)
     );
     assert!(
-        stderr(&out).contains(
-            "registry.targets[0].fleet: target 't1' points at undeclared fleet 'ghost'"
-        ),
+        stderr(&out)
+            .contains("registry.targets[0].fleet: target 't1' points at undeclared fleet 'ghost'"),
         "the refusal must name the exact document location, got: {}",
         stderr(&out)
     );

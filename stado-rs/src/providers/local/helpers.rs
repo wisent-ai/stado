@@ -648,4 +648,3 @@ fn dir_size_bytes(d: &Path) -> u64 {
     }
     total
 }
-
