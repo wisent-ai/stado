@@ -24,6 +24,7 @@ struct ConsoleView: View {
     @StateObject private var serviceStore = ServiceTruthStore()
     @StateObject private var fleetServiceStore = FleetServicesStore()
     @StateObject private var releaseStore = ReleaseEvidenceStore()
+    @StateObject private var buildsStore = BuildsStore()
     @StateObject private var groupStore = FleetGroupStore()
 
     @State private var showsDeploymentSetup = false
@@ -313,6 +314,11 @@ struct ConsoleView: View {
             // answer for. Both are rollouts that never finish unattended.
             let stalled = releaseStore.attentionCount
             return stalled > 0 ? (stalled, .danger) : nil
+        case .builds:
+            // A failed build shows on the screen itself; the sidebar only
+            // counts it once this window has read the recipes at all.
+            let failed = buildsStore.recipes.count { $0.lastRun?.status == "failed" }
+            return failed > 0 ? (failed, .danger) : nil
         case .registry, .deployments, .fleets:
             return nil
         }
@@ -362,6 +368,8 @@ struct ConsoleView: View {
                 DiskView(store: store, cleanupStore: cleanupStore, scope: scopeName)
             case .registry:
                 RegistryView(fleetStore: fleetStore, scope: scopeName)
+            case .builds:
+                BuildsView(store: buildsStore, scope: scopeName)
             case .fleets:
                 FleetsView(groupStore: groupStore, fleetStore: fleetStore, scope: scopeName)
             case .releases:
