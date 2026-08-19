@@ -205,6 +205,15 @@ pub struct ManagedService {
     pub path: String,
     /// [`KIND_LAUNCHD`] or [`KIND_SYSTEMD`].
     pub kind: String,
+    /// Absolute program the unit runs, on the host. Present when the
+    /// declaration is the source of the unit rather than a pointer at a
+    /// plist somebody installed by hand: `service ensure` renders the unit
+    /// from this and [`ManagedService::args`], so a host that lost its unit
+    /// file can be made to run the right thing again from the document
+    /// alone. Empty for a declaration that only names a path.
+    pub program: String,
+    /// The argument vector [`ManagedService::program`] is started with.
+    pub args: Vec<String>,
     /// [`SOURCE_REGISTRY`] or [`SOURCE_RECOVERY`].
     pub source: String,
     /// When the unit entered management; empty for a recovery-sourced one,
@@ -251,6 +260,17 @@ impl ManagedService {
                     Value::String(heuristic.clone()),
                 );
         }
+        // Written only when the declaration actually is the source of the
+        // unit. A record that merely points at a path keeps the shape it
+        // has always had, so adding this field rewrites no existing entry.
+        if !self.program.is_empty() {
+            let record = record.as_object_mut().expect("managed service record");
+            record.insert("program".to_string(), Value::String(self.program.clone()));
+            record.insert(
+                "args".to_string(),
+                Value::Array(self.args.iter().cloned().map(Value::String).collect()),
+            );
+        }
         if let Some(onboarding) = &self.onboarding {
             record["onboarding"] =
                 serde_json::to_value(onboarding).expect("OnboardingProduct is JSON serializable");
@@ -272,6 +292,8 @@ impl ManagedService {
             "kind": self.kind,
             "source": self.source,
             "managed_since": self.managed_since,
+            "program": self.program,
+            "args": self.args,
         });
         if let Some(onboarding) = &self.onboarding {
             record["onboarding"] =
@@ -320,6 +342,17 @@ impl ManagedService {
             kind,
             source: SOURCE_REGISTRY.to_string(),
             managed_since: text("managed_since"),
+            program: text("program"),
+            args: record
+                .get("args")
+                .and_then(Value::as_array)
+                .map(|args| {
+                    args.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default(),
             onboarding: record
                 .get("onboarding")
                 .and_then(|value| serde_json::from_value(value.clone()).ok()),
@@ -346,6 +379,8 @@ pub fn launchd_service(
         kind: KIND_LAUNCHD.to_string(),
         source: source.to_string(),
         managed_since: since.to_string(),
+        program: String::new(),
+        args: Vec::new(),
         onboarding: None,
     }
 }
@@ -368,6 +403,8 @@ pub fn systemd_service(
         kind: KIND_SYSTEMD.to_string(),
         source: source.to_string(),
         managed_since: since.to_string(),
+        program: String::new(),
+        args: Vec::new(),
         onboarding: None,
     }
 }
@@ -2199,11 +2236,33 @@ const REMOTE_USER_PLACEHOLDER: &str = "__STADO_USER__";
 
 pub fn plan_deploy(name: &str, program: &str, args: &[String]) -> Result<DeployPlan, DeployError> {
     validate_service_name(name)?;
+    let label = local_install::label(DEPLOY_KIND, name);
+    plan_deploy_labelled(name, &label, program, args)
+}
+
+/// [`plan_deploy`] at a label the declaration already carries.
+///
+/// `plan_deploy` mints `com.wisent.compute.service.<name>`, which is right for
+/// a unit being created and wrong for one that already exists under another
+/// label. Rendering the minted spelling for a declaration that says the unit
+/// is `com.wisent.stado-resolver` installs a SECOND launchd job running the
+/// same program, and two resolvers competing for one stable loopback port is
+/// exactly the shape of outage this module was written after. A declaration
+/// that names its own label is rendered at that label, so a declared service
+/// is reinstallable from the document without becoming a second service.
+pub fn plan_deploy_labelled(
+    name: &str,
+    label: &str,
+    program: &str,
+    args: &[String],
+) -> Result<DeployPlan, DeployError> {
+    validate_service_name(name)?;
+    validate_service_name(label)?;
     validate_program(program)?;
     for arg in args {
         validate_unit_argument(arg)?;
     }
-    let label = local_install::label(DEPLOY_KIND, name);
+    let label = label.to_string();
     let render = |os: LocalOs| {
         let path = match os {
             LocalOs::Darwin => "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
