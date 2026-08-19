@@ -592,6 +592,64 @@ where
     }
 }
 
+/// Terse refusal for clients that speak HTTP, sent before the prompt close.
+const UPSTREAM_REFUSAL: &[u8] = b"HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nContent-Length: 21\r\nConnection: close\r\n\r\nupstream unavailable\n";
+
+/// Brief window to sniff the client's first bytes on a refusal where the
+/// establishment phase never read any. The connection is already dead, so the
+/// only cost of a miss is closing without the 502 body.
+const REFUSAL_SNIFF: Duration = Duration::from_millis(250);
+
+/// The stream speaks HTTP when its first bytes open with a request method.
+fn http_request_head(head: &[u8]) -> bool {
+    const METHODS: [&[u8]; 9] = [
+        b"GET ",
+        b"POST ",
+        b"PUT ",
+        b"DELETE ",
+        b"HEAD ",
+        b"OPTIONS ",
+        b"PATCH ",
+        b"CONNECT ",
+        b"TRACE ",
+    ];
+    METHODS.iter().any(|method| head.starts_with(method))
+}
+
+/// Surface an unreachable upstream instead of letting the client hang: one
+/// line naming the service, endpoint, and cause, then an HTTP 502 when the
+/// connection's first bytes are an HTTP request, and a prompt close either
+/// way. A refused connection is a handled outcome, so callers return `Ok(())`
+/// rather than doubling the line through `serve_adapter`.
+async fn refuse_connection<R, W>(
+    reader: &mut R,
+    writer: &mut W,
+    adapter: &ResolverAdapter,
+    endpoint: &str,
+    cause: &str,
+    head: Option<&[u8]>,
+) where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    eprintln!(
+        "stado resolver service={} consumer={} endpoint={} refused connection: {}",
+        adapter.service, adapter.consumer, endpoint, cause
+    );
+    let mut sniff = [0_u8; 512];
+    let head = match head {
+        Some(head) => Some(head),
+        None => match tokio::time::timeout(REFUSAL_SNIFF, reader.read(&mut sniff)).await {
+            Ok(Ok(read)) if read > 0 => Some(&sniff[..read]),
+            _ => None,
+        },
+    };
+    if head.map_or(false, http_request_head) {
+        let _ = writer.write_all(UPSTREAM_REFUSAL).await;
+    }
+    let _ = writer.shutdown().await;
+}
+
 async fn proxy_connection(
     client: TcpStream,
     adapter: &ResolverAdapter,
@@ -625,10 +683,22 @@ async fn proxy_connection(
         ));
     }
     if resolved.active_host == state.local_target {
-        let upstream = TcpStream::connect((host, port))
-            .await
-            .map_err(|error| format!("local upstream connect failed: {error}"))?;
         let (mut client_read, mut client_write) = client.into_split();
+        let upstream = match TcpStream::connect((host, port)).await {
+            Ok(upstream) => upstream,
+            Err(error) => {
+                refuse_connection(
+                    &mut client_read,
+                    &mut client_write,
+                    adapter,
+                    &format!("{host}:{port}"),
+                    &format!("local upstream connect failed: {error}"),
+                    None,
+                )
+                .await;
+                return Ok(());
+            }
+        };
         let (mut upstream_read, mut upstream_write) = upstream.into_split();
         let upload = copy_until_idle(&mut client_read, &mut upstream_write, idle);
         let download = copy_until_idle(&mut upstream_read, &mut client_write, idle);
@@ -661,6 +731,95 @@ async fn proxy_connection(
         .take()
         .ok_or_else(|| "SSH transport has no stdout".to_string())?;
     let (mut client_read, mut client_write) = client.into_split();
+    let connect = Duration::from_secs(adapter.connect_seconds);
+    // Establishment is the one window `idle_seconds` cannot bound: nothing has
+    // flowed yet, so a dead backend would otherwise hold the client for the
+    // whole idle window. Forward whatever the client sends so the upstream has
+    // a request to answer, then wait -- bounded by the connect budget -- for
+    // the first upstream byte, or for the SSH child's early exit: `ssh -W`
+    // opens its channel at startup, so a dead backend fails the channel open
+    // and the child is gone within moments.
+    let mut upstream_head = [0_u8; 16 * 1024];
+    let mut client_head: Option<Vec<u8>> = None;
+    let establishment = async {
+        let mut buffer = [0_u8; 16 * 1024];
+        loop {
+            tokio::select! {
+                status = child.wait() => {
+                    let status = status
+                        .map_err(|error| format!("SSH transport wait failed: {error}"))?;
+                    return Err(format!(
+                        "SSH transport exited before the upstream answered: {status}"
+                    ));
+                }
+                read = ssh_stdout.read(&mut upstream_head) => {
+                    return match read {
+                        Ok(0) => Err(
+                            "SSH transport closed before the upstream answered".to_string()
+                        ),
+                        Ok(read) => Ok(read),
+                        Err(error) => Err(format!("SSH transport read failed: {error}")),
+                    };
+                }
+                read = client_read.read(&mut buffer) => {
+                    match read {
+                        Ok(0) => {
+                            return Err(
+                                "client closed before the upstream answered".to_string()
+                            )
+                        }
+                        Ok(read) => {
+                            if client_head.is_none() {
+                                client_head = Some(buffer[..read].to_vec());
+                            }
+                            ssh_stdin.write_all(&buffer[..read]).await.map_err(|error| {
+                                format!("SSH transport write failed: {error}")
+                            })?;
+                        }
+                        Err(error) => return Err(format!("client read failed: {error}")),
+                    }
+                }
+            }
+        }
+    };
+    let established = match tokio::time::timeout(connect, establishment).await {
+        Ok(Ok(read)) => read,
+        Ok(Err(cause)) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            refuse_connection(
+                &mut client_read,
+                &mut client_write,
+                adapter,
+                &destination,
+                &cause,
+                client_head.as_deref(),
+            )
+            .await;
+            return Ok(());
+        }
+        Err(_) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            refuse_connection(
+                &mut client_read,
+                &mut client_write,
+                adapter,
+                &destination,
+                &format!(
+                    "no upstream bytes within the {}s connect budget",
+                    adapter.connect_seconds
+                ),
+                client_head.as_deref(),
+            )
+            .await;
+            return Ok(());
+        }
+    };
+    client_write
+        .write_all(&upstream_head[..established])
+        .await
+        .map_err(|error| format!("client write failed: {error}"))?;
     let upload = copy_until_idle(&mut client_read, &mut ssh_stdin, idle);
     let download = copy_until_idle(&mut ssh_stdout, &mut client_write, idle);
     let (upload_idle, download_idle) =
