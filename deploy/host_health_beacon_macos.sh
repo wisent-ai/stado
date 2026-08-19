@@ -4,6 +4,17 @@
 # it through the authenticated `stado host publish-beacon` control route.
 set -euo pipefail
 
+# The `link` block `stado host publish-beacon` collects resolves `pmset`, `log`
+# and `tailscale` through PATH, and launchd hands this program the bare
+# `/usr/bin:/bin:/usr/sbin:/sbin`. pmset and log are there; tailscale is not on
+# any managed Mac -- it ships inside its app bundle and symlinks into
+# /usr/local/bin only when somebody clicks "Install CLI". A beacon that cannot
+# see tailscale publishes `path_kind: unknown` on a host holding a perfectly
+# good direct path, so the directories it actually lives in are named here,
+# once, where every launcher of this script picks them up.
+PATH="${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}:/usr/local/bin:/opt/homebrew/bin:/Applications/Tailscale.app/Contents/MacOS"
+export PATH
+
 STADO_BIN="${STADO_BIN:-$HOME/.stado/bin/stado}"
 # A beacon that runs as a system daemon has no GUI domain of its own: `id -u` is
 # 0 and `gui/0` holds nothing, so every user-domain unit read as inactive even
