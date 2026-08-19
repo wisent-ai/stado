@@ -1,4 +1,5 @@
 import Foundation
+import WisentDesignSystem
 
 struct DashboardSnapshot: Decodable, Sendable {
     let ready: Bool
@@ -1247,5 +1248,287 @@ struct ReleaseRow: Identifiable, Sendable {
             }
         }
         return software?.failed == true ? min(rollout, 1) : rollout
+    }
+}
+
+// MARK: - Connectivity, sleep and silence
+
+/// `stado host link <host> --json`.
+///
+/// The reading that did not exist on 2026-08-19, when `control-host` went
+/// unreachable for six minutes and the only evidence anywhere was an operator's
+/// two ping packets: the product recorded nothing, and the reader-side refusals
+/// went to a log file nobody was watching. Every field here is the CLI's own
+/// answer. Nothing is derived from a second source, and nothing absent is
+/// rendered as a zero — a host whose beacon carries no `link` block has not
+/// reported its path, which is a different fact from reporting `unknown`.
+struct HostLink: Decodable, Identifiable, Sendable {
+    let host: String
+    /// How old the newest beacon for this host is. `nil` when no beacon has
+    /// ever been published, which is not the same as "0 s ago".
+    let beaconAgeSeconds: Int?
+    let sshReachable: Bool
+    /// `direct`, `relay` or `unknown` as the beacon's link block spelled it;
+    /// `nil` when the beacon carried no link block at all.
+    let pathKind: HostLinkPathKind?
+    let endpoint: String?
+    let lastSleepAt: String?
+    let lastWakeAt: String?
+    let interfaceChanges: [HostLinkInterfaceChange]
+    /// Newest first, as the command orders them.
+    let silences: [HostSilenceRecord]
+    let readerRefusals: HostReaderRefusals?
+    let verdict: HostLinkVerdict
+    /// Verbatim. A blocker paraphrased here is a second opinion about why a
+    /// host went quiet.
+    let blockers: [String]
+
+    var id: String { host }
+
+    /// Whether the beacon carried a link block at all.
+    ///
+    /// `stado host link` prints `path_kind: "unknown"` with every other link
+    /// field empty when there was no block to read — checked against the live
+    /// answer for `control-host` — so a bare `unknown` is the absence of a
+    /// report, not a report of an unknown path. The distinction decides whether
+    /// an operator chases the network or the collector, and the command states
+    /// which one it is in its own blocker sentence.
+    var linkReported: Bool {
+        if endpoint != nil || lastSleepAt != nil || lastWakeAt != nil || !interfaceChanges.isEmpty {
+            return true
+        }
+        guard let pathKind else { return false }
+        return pathKind != .unknown
+    }
+
+    /// The silence that has not ended. At most one: a silence closes on the
+    /// first fresher beacon, so an open one is the current gap.
+    var openSilence: HostSilenceRecord? {
+        silences.first { $0.isOpen }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case host, endpoint, silences, verdict, blockers
+        case beaconAgeSeconds = "beacon_age_seconds"
+        case sshReachable = "ssh_reachable"
+        case pathKind = "path_kind"
+        case lastSleepAt = "last_sleep_at"
+        case lastWakeAt = "last_wake_at"
+        case interfaceChanges = "interface_changes"
+        case readerRefusals = "reader_refusals"
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        host = try values.decodeIfPresent(String.self, forKey: .host) ?? ""
+        beaconAgeSeconds = try values.decodeIfPresent(Int.self, forKey: .beaconAgeSeconds)
+        sshReachable = try values.decodeIfPresent(Bool.self, forKey: .sshReachable) ?? false
+        pathKind = (try values.decodeIfPresent(String.self, forKey: .pathKind))
+            .map(HostLinkPathKind.init)
+        endpoint = try values.decodeIfPresent(String.self, forKey: .endpoint)
+        lastSleepAt = try values.decodeIfPresent(String.self, forKey: .lastSleepAt)
+        lastWakeAt = try values.decodeIfPresent(String.self, forKey: .lastWakeAt)
+        interfaceChanges =
+            try values.decodeIfPresent([HostLinkInterfaceChange].self, forKey: .interfaceChanges) ?? []
+        silences = try values.decodeIfPresent([HostSilenceRecord].self, forKey: .silences) ?? []
+        readerRefusals = try values.decodeIfPresent(HostReaderRefusals.self, forKey: .readerRefusals)
+        verdict = HostLinkVerdict(try values.decodeIfPresent(String.self, forKey: .verdict) ?? "")
+        blockers = try values.decodeIfPresent([String].self, forKey: .blockers) ?? []
+    }
+}
+
+/// Which way the packets went when the beacon was collected.
+///
+/// `unknown` is the beacon's own word for "the collector ran and could not
+/// tell", so it is a case rather than an absence, and an unrecognised spelling
+/// is carried through instead of folded into `unknown`.
+enum HostLinkPathKind: Hashable, Sendable {
+    case direct
+    case relay
+    case unknown
+    case unrecognised(String)
+
+    init(_ raw: String) {
+        switch raw {
+        case "direct": self = .direct
+        case "relay": self = .relay
+        case "unknown": self = .unknown
+        default: self = .unrecognised(raw)
+        }
+    }
+
+    /// The beacon's own word, never a translation of it.
+    var word: String {
+        switch self {
+        case .direct: "direct"
+        case .relay: "relay"
+        case .unknown: "unknown"
+        case let .unrecognised(raw): raw
+        }
+    }
+
+    /// A relay path is slower but working, and the collector failing to tell is
+    /// not an outage either. Neither is coloured: this is a fact about the
+    /// route, not a severity.
+    var tone: WisentTone {
+        .neutral
+    }
+}
+
+/// One `link.interface_changes` entry: when the machine's interfaces moved, and
+/// the collector's own description of the move.
+struct HostLinkInterfaceChange: Decodable, Identifiable, Sendable {
+    let at: String
+    let detail: String
+
+    var id: String { "\(at)|\(detail)" }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        at = try values.decodeIfPresent(String.self, forKey: .at) ?? ""
+        detail = try values.decodeIfPresent(String.self, forKey: .detail) ?? ""
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case at, detail
+    }
+}
+
+/// One recorded gap in a host's beacon stream — `host_silence/<host>/<at>.json`
+/// read back.
+///
+/// `endedAt` nil is the live case and the one the Posture screen exists to
+/// raise: the host is quiet right now.
+struct HostSilenceRecord: Decodable, Identifiable, Sendable {
+    let host: String
+    let startedAt: String
+    let endedAt: String?
+    let durationSeconds: Int?
+    /// The first refusal a reader hit while the host was quiet, in that
+    /// component's own sentence.
+    let firstReaderError: String?
+    /// Which components noticed — resolver, cli, dashboard.
+    let observedBy: [String]
+
+    var id: String { "\(host)|\(startedAt)" }
+
+    var isOpen: Bool { endedAt == nil }
+
+    /// How long the gap lasted, or has lasted so far. The record's own figure
+    /// when it carries one; otherwise measured from `startedAt`, because an
+    /// open silence has no recorded duration until it closes.
+    var elapsedSeconds: Double? {
+        if let durationSeconds { return Double(durationSeconds) }
+        guard let started = StadoFormat.date(startedAt) else { return nil }
+        let ended = endedAt.flatMap(StadoFormat.date) ?? Date()
+        let seconds = ended.timeIntervalSince(started)
+        return seconds >= 0 ? seconds : nil
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case host
+        case startedAt = "started_at"
+        case endedAt = "ended_at"
+        case durationSeconds = "duration_seconds"
+        case firstReaderError = "first_reader_error"
+        case observedBy = "observed_by"
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        host = try values.decodeIfPresent(String.self, forKey: .host) ?? ""
+        startedAt = try values.decodeIfPresent(String.self, forKey: .startedAt) ?? ""
+        endedAt = try values.decodeIfPresent(String.self, forKey: .endedAt)
+        durationSeconds = try values.decodeIfPresent(Int.self, forKey: .durationSeconds)
+        firstReaderError = try values.decodeIfPresent(String.self, forKey: .firstReaderError)
+        observedBy = try values.decodeIfPresent([String].self, forKey: .observedBy) ?? []
+    }
+}
+
+/// How often a reader refused to answer about this host inside the window, and
+/// under which stable reason tokens.
+///
+/// The tokens are the product's, not this console's: `directory_cache_stale`,
+/// `authority_unreachable`, `beacon_stale`. Their verbatim sentences live in
+/// the refusal blobs; the count and the tokens are what a screen can aggregate.
+struct HostReaderRefusals: Decodable, Sendable {
+    let windowSeconds: Int
+    let count: Int
+    let reasons: [String: Int]
+
+    /// Descending by count, then by token, so the same reading orders the same
+    /// way twice.
+    var rankedReasons: [(reason: String, count: Int)] {
+        reasons
+            .map { (reason: $0.key, count: $0.value) }
+            .sorted { $0.count == $1.count ? $0.reason < $1.reason : $0.count > $1.count }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case count, reasons
+        case windowSeconds = "window_seconds"
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        windowSeconds = try values.decodeIfPresent(Int.self, forKey: .windowSeconds) ?? 0
+        count = try values.decodeIfPresent(Int.self, forKey: .count) ?? 0
+        reasons = try values.decodeIfPresent([String: Int].self, forKey: .reasons) ?? [:]
+    }
+}
+
+/// The one word the Link section colours on.
+///
+/// `silent` and `degraded` are both failures the command exits 1 for, so both
+/// get a panel. An unrecognised verdict is carried through rather than folded
+/// into `healthy`: a link this console cannot classify must never read as fine.
+enum HostLinkVerdict: Hashable, Sendable {
+    case healthy
+    case silent
+    case degraded
+    case unrecognised(String)
+
+    init(_ raw: String) {
+        switch raw {
+        case "healthy": self = .healthy
+        case "silent": self = .silent
+        case "degraded": self = .degraded
+        default: self = .unrecognised(raw)
+        }
+    }
+
+    /// The CLI's own word, never a translation of it.
+    var word: String {
+        switch self {
+        case .healthy: "healthy"
+        case .silent: "silent"
+        case .degraded: "degraded"
+        case let .unrecognised(raw): raw.isEmpty ? "unreported" : raw
+        }
+    }
+
+    /// Severity is the layout: a healthy link is one line, and everything else
+    /// is a panel carrying the command's own blockers.
+    var tone: WisentTone {
+        switch self {
+        case .healthy: .neutral
+        case .silent, .degraded: .danger
+        case .unrecognised: .warning
+        }
+    }
+
+    var needsAttention: Bool {
+        if case .healthy = self { return false }
+        return true
+    }
+
+    /// The sentence the inspector and the facet rail both label this with.
+    var label: String {
+        switch self {
+        case .healthy: "Healthy"
+        case .silent: "Silent"
+        case .degraded: "Degraded"
+        case let .unrecognised(raw): raw.isEmpty ? "Not reported" : raw.humanizedIdentifier
+        }
     }
 }
