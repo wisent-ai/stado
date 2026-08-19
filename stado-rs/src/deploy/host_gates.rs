@@ -73,6 +73,19 @@ pub const NO_CAPACITY_PUBLICATION: &str = "no_capacity_publication";
 /// said anything" are different findings.
 pub const CAPACITY_PUBLICATION_STALE: &str = "capacity_publication_stale";
 
+/// Local APFS snapshots are holding space while this host cannot prove it has
+/// room, and no command in this product will take them.
+///
+/// A NOTE and never a blocker: snapshots do not stop the agent claiming, disk
+/// pressure does, and a host claiming normally with snapshots on it is a
+/// healthy host. It is reported because of what an operator does next — they
+/// run `stado host reclaim`, watch it free what it can, see the host still
+/// short of its watermark, and have to be told where the rest of the space is
+/// rather than left to conclude the numbers are lying. macOS publishes no size
+/// for a snapshot ([`host_disk::LocalSnapshots`]), so this says how many there
+/// are and never how large they are.
+pub const LOCAL_SNAPSHOTS_UNRECLAIMABLE: &str = "local_snapshots_unreclaimable";
+
 /// Everything one host answered about whether it can claim.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HostGates {
@@ -98,6 +111,14 @@ pub struct HostGates {
     /// published nothing.
     pub free_slots: Option<i64>,
     pub slots_declared: i64,
+    /// Findings that are true and are NOT reasons this host claims nothing, so
+    /// they can never change `claiming` or the exit status: an operator needs
+    /// them to act, and a note that could fail a script would be suppressed
+    /// within the week.
+    pub notes: Vec<String>,
+    /// How many local APFS snapshots the host is holding, or `None` where the
+    /// host could not be asked (every Linux host).
+    pub local_snapshots: Option<usize>,
 }
 
 /// One capacity publication, with the instant it was made.
@@ -212,6 +233,19 @@ fn assemble(
         blockers.push(PINNED_ONLY.to_string());
     }
 
+    // The note fires only while the disk is the reason this host claims
+    // nothing: snapshots on a healthy box are a backup policy, not a finding,
+    // and a command that reports them every time is a command whose output
+    // stops being read.
+    let local_snapshots = reading
+        .snapshots
+        .supported
+        .then_some(reading.snapshots.names.len());
+    let mut notes: Vec<String> = Vec::new();
+    if disk_pressure_unresolved && local_snapshots.is_some_and(|count| count > 0) {
+        notes.push(LOCAL_SNAPSHOTS_UNRECLAIMABLE.to_string());
+    }
+
     HostGates {
         host: target.name.clone(),
         claiming: blockers.is_empty(),
@@ -225,6 +259,8 @@ fn assemble(
         age_seconds,
         free_slots: payload.map(free_slots),
         slots_declared: target.slots,
+        notes,
+        local_snapshots,
     }
 }
 
@@ -325,12 +361,26 @@ pub fn to_report(gates: &HostGates) -> Map<String, Value> {
         ),
     );
     report.insert(
+        "notes".to_string(),
+        Value::Array(
+            gates
+                .notes
+                .iter()
+                .map(|note| Value::String(note.clone()))
+                .collect(),
+        ),
+    );
+    report.insert(
         "disk".to_string(),
         json!({
             "free_gb": gates.free_gb,
             "low_watermark_gb": gates.low_watermark_gb,
             "target_free_gb": gates.target_free_gb,
             "policy_mode": gates.policy_mode,
+            // Held space no stage of `host reclaim` can return, so an operator
+            // reading "free 2 GiB, watermark 55 GiB" is not left to guess.
+            // Null on a host that has no such notion at all.
+            "local_snapshots": gates.local_snapshots,
         }),
     );
     report.insert(
@@ -389,8 +439,13 @@ mod tests {
     }
 
     /// `available_kb` is what `df -Pk` printed; the state's `low_bytes` is what
-    /// the janitor validated.
-    fn reading(available_kb: &str, low_bytes: Option<i64>) -> host_disk::DiskReading {
+    /// the janitor validated; `snapshots` is how many local APFS snapshots the
+    /// host listed.
+    fn reading(
+        available_kb: &str,
+        low_bytes: Option<i64>,
+        snapshots: usize,
+    ) -> host_disk::DiskReading {
         host_disk::DiskReading {
             usage: Some(host_disk::DiskUsage {
                 available_kb: available_kb.to_string(),
@@ -400,6 +455,12 @@ mod tests {
                 present: low_bytes.is_some(),
                 low_bytes,
                 ..host_disk::CleanupState::default()
+            },
+            snapshots: host_disk::LocalSnapshots {
+                supported: true,
+                names: (0..snapshots)
+                    .map(|index| format!("com.apple.TimeMachine.2026-08-1{index}-000000.local"))
+                    .collect(),
             },
         }
     }
@@ -419,8 +480,9 @@ mod tests {
     }
 
     /// The incident, as the command now reports it: 2 GiB free against a
-    /// 55 GiB policy, the agent publishing its own refusal, and the CLI saying
-    /// so in the agent's own word.
+    /// 55 GiB policy, the agent publishing its own refusal, the CLI saying so
+    /// in the agent's own word — and the three local snapshots on that box
+    /// named as space no reclamation will return.
     #[test]
     fn the_mac_mini_incident_is_one_payload() {
         let row = publication(
@@ -429,7 +491,7 @@ mod tests {
         );
         let gates = assemble(
             &target(55),
-            &reading("2097152", Some(55 * disk_cleanup::GIB)),
+            &reading("2097152", Some(55 * disk_cleanup::GIB), 3),
             Some(&row),
             Utc::now(),
         );
@@ -447,10 +509,18 @@ mod tests {
                 "low_watermark_gb": 55,
             })
         );
+        assert_eq!(gates.notes, vec![LOCAL_SNAPSHOTS_UNRECLAIMABLE]);
+        assert_eq!(gates.local_snapshots, Some(3));
+        // A note is never a blocker: the verdict is the disk, and the exit
+        // status follows `claiming`.
+        assert!(!gates
+            .blockers
+            .contains(&LOCAL_SNAPSHOTS_UNRECLAIMABLE.to_string()));
     }
 
     /// A host with room, a live row and nothing pinned is claiming, and the
-    /// report says exactly that.
+    /// report says exactly that — snapshots and all, which on a healthy host
+    /// are a backup policy and not a finding.
     #[test]
     fn a_healthy_host_reports_no_blockers() {
         let row = publication(
@@ -459,7 +529,7 @@ mod tests {
         );
         let gates = assemble(
             &target(55),
-            &reading("209715200", Some(55 * disk_cleanup::GIB)),
+            &reading("209715200", Some(55 * disk_cleanup::GIB), 3),
             Some(&row),
             Utc::now(),
         );
@@ -467,6 +537,11 @@ mod tests {
         assert!(gates.blockers.is_empty());
         assert_eq!(gates.free_gb, Some(200.0));
         assert_eq!(gates.age_seconds, Some(12));
+        assert!(
+            gates.notes.is_empty(),
+            "a claiming host was given a disk note: {:?}",
+            gates.notes
+        );
     }
 
     /// A silent agent is a blocker of its own, and the pressure verdict falls
@@ -475,7 +550,7 @@ mod tests {
     fn a_host_that_published_nothing_is_not_claiming() {
         let gates = assemble(
             &target(55),
-            &reading("2097152", Some(55 * disk_cleanup::GIB)),
+            &reading("2097152", Some(55 * disk_cleanup::GIB), 0),
             None,
             Utc::now(),
         );
@@ -495,7 +570,7 @@ mod tests {
         let row = publication(json!({"disk_pressure_unresolved": true}), 3_600);
         let gates = assemble(
             &target(55),
-            &reading("209715200", Some(55 * disk_cleanup::GIB)),
+            &reading("209715200", Some(55 * disk_cleanup::GIB), 0),
             Some(&row),
             Utc::now(),
         );
@@ -514,7 +589,12 @@ mod tests {
             json!({"disk_pressure_unresolved": true, "disk_cleanup_policy_known": false}),
             10,
         );
-        let gates = assemble(&target, &reading("209715200", None), Some(&row), Utc::now());
+        let gates = assemble(
+            &target,
+            &reading("209715200", None, 0),
+            Some(&row),
+            Utc::now(),
+        );
         assert_eq!(
             gates.blockers,
             vec![DISK_PRESSURE_UNRESOLVED, DISK_CLEANUP_POLICY_UNKNOWN]
@@ -529,7 +609,7 @@ mod tests {
     /// insertion order is not part of the contract.
     #[test]
     fn the_report_shape_is_the_contract() {
-        let gates = assemble(&target(55), &reading("2097152", None), None, Utc::now());
+        let gates = assemble(&target(55), &reading("2097152", None, 0), None, Utc::now());
         let report = to_report(&gates);
         let sorted = |value: &Value| -> Vec<String> {
             let mut keys: Vec<String> = value
@@ -543,12 +623,13 @@ mod tests {
         };
         assert_eq!(
             sorted(&Value::Object(report.clone())),
-            ["blockers", "capacity", "claiming", "disk", "host"]
+            ["blockers", "capacity", "claiming", "disk", "host", "notes"]
         );
         assert_eq!(
             sorted(&report["disk"]),
             [
                 "free_gb",
+                "local_snapshots",
                 "low_watermark_gb",
                 "policy_mode",
                 "target_free_gb"
