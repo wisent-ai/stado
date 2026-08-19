@@ -381,11 +381,8 @@ pub(crate) async fn recent_runs(
                             .await
                     {
                         progress.insert("of_previous_run".into(), Value::from(total));
-                        if total > 0 {
-                            progress.insert(
-                                "percent".into(),
-                                Value::from((compiled * 100 / total).min(99)),
-                            );
+                        if let Some(ratio) = (compiled * 100).checked_div(total) {
+                            progress.insert("percent".into(), Value::from(ratio.min(99)));
                         }
                     }
                     record["compile_progress"] = Value::Object(progress);
