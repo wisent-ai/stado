@@ -60,7 +60,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         case .services: "What each declared unit runs, and which processes nothing owns"
         case .disk: "Disk pressure, what the last pass reclaimed, and the next pass"
         case .registry: "Canonical fleet policy and the generation it was read at"
-        case .releases: "What each product should run, what hosts observe, and why a pipeline run failed"
+        case .releases: "What each product should run, what its host runs, and what is holding the rollout"
         case .deployments: "Which Stado backend this console reads, and who else may read it"
         }
     }
