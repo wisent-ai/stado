@@ -15,6 +15,7 @@
 //! this command answers with, the sentences it names them in, and the silence
 //! record it leaves behind on disk.
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -416,4 +417,424 @@ fn host_link_refuses_a_target_the_registry_does_not_carry() {
     // that does not exist is worse than none.
     assert!(stdout(&out).trim().is_empty(), "got: {}", stdout(&out));
     assert!(!storage.join("host_silence").exists());
+}
+
+// ---------------------------------------------------------------------------
+// The session behind the link
+// ---------------------------------------------------------------------------
+//
+// The operator's question was "where do I see whether anyone is logged in on
+// that host", and the answer was nowhere. These tests pin the answer.
+//
+// The host is a fake, and it is a fake in one place: `ssh`. The product pipes
+// its fixed remote script to `ssh` on stdin, so a script named `ssh` on PATH
+// receives that script byte for byte and runs it against the fake `uname` /
+// `id` / `stat` / `launchctl` in `host-bin`. Those tools are NOT on the
+// caller's PATH — only the far side of that hop sees them.
+//
+// The login is `charles` and the uid is 501 because they are charless-mac-mini's
+// own, so every sentence asserted below is the sentence the live host printed
+// on 2026-08-19 rather than a rephrasing of it.
+
+/// The remote script arrives on stdin. Only the four tools the session read
+/// touches are rewritten to bare names, so `host-bin` means something; every
+/// other absolute path stays absolute and resolves to the real tool.
+///
+/// The reachability half of `host link` sends a fixed program and no stdin at
+/// all, so `sed` reads EOF, `bash` runs nothing, and the fake host answers ssh
+/// — which is the state that makes the session read run at all.
+const FAKE_SSH: &str = r#"#!/bin/sh
+PATH="$STADO_FAKE_HOST_BIN:$PATH"; export PATH
+/usr/bin/sed \
+  -e "s#/usr/bin/uname#uname#g" \
+  -e "s#/usr/bin/id#id#g" \
+  -e "s#/usr/bin/stat#stat#g" \
+  -e "s#/bin/launchctl#launchctl#g" \
+  | /bin/bash -s
+"#;
+
+/// An ssh that never connects, the way a box that has dropped off the network
+/// answers. Its last stderr line is what the operator has to be shown.
+const DEAD_SSH: &str = r#"#!/bin/sh
+echo "ssh: connect to host 10.9.9.11 port 22: Operation timed out" >&2
+exit 255
+"#;
+
+const FAKE_UNAME: &str = "#!/bin/sh\ncat \"$STADO_FAKE_STATE/os\"\n";
+
+/// The login on the far side: the mini's own account and uid.
+const FAKE_ID: &str = r#"#!/bin/sh
+case "${1:-}" in
+  -un) echo charles ;;
+  *) echo 501 ;;
+esac
+"#;
+
+/// The one read that says whether anybody is logged in graphically:
+/// `stat -f%Su /dev/console` is the console's owner — the login user while a
+/// session exists, root at the login window.
+const FAKE_STAT: &str = r#"#!/bin/sh
+case "${1:-}" in
+  -f%Su) cat "$STADO_FAKE_STATE/console" ;;
+  *) exit 1 ;;
+esac
+"#;
+
+/// launchd, reduced to the one verb the session read uses: does this domain
+/// exist. `state/gui` is the graphical domain, and `state/no_user_domain`
+/// takes the background one away as well.
+const FAKE_LAUNCHCTL: &str = r#"#!/bin/sh
+S="$STADO_FAKE_STATE"
+[ "${1:-}" = print ] || exit 0
+case "${2:-}" in
+  gui/*)
+    [ -f "$S/gui" ] || { echo "Could not find domain for ${2}" >&2; exit 113; }
+    ;;
+  user/*)
+    if [ -f "$S/no_user_domain" ]; then
+      echo "Could not find domain for ${2}" >&2
+      exit 113
+    fi
+    ;;
+esac
+exit 0
+"#;
+
+/// The unit charless-mac-mini declares as a LaunchAgent and cannot start.
+const AGENT: &str = "com.wisent.compute.service.stado-agent-mini";
+/// Where that declaration puts it.
+const AGENT_PATH: &str =
+    "/Users/charles/Library/LaunchAgents/com.wisent.compute.service.stado-agent-mini.plist";
+/// The daemon spelling of the same job — the only domain the host can load.
+const DAEMON_PATH: &str =
+    "/Library/LaunchDaemons/com.wisent.compute.service.stado-agent-mini.plist";
+
+/// A temp root carrying a registry, a fake host behind a fake ssh, and a HOME.
+struct FakeHost {
+    dir: tempfile::TempDir,
+}
+
+impl FakeHost {
+    /// Seeded in the state charless-mac-mini is in: macOS, nobody at the
+    /// screen so `/dev/console` is root's, no `gui/501`, and the agent
+    /// declared as a per-login unit.
+    fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        for sub in ["ssh-bin", "host-bin", "state", "storage", "home"] {
+            std::fs::create_dir_all(root.join(sub)).unwrap();
+        }
+        let host_bin = root.join("host-bin");
+        for (dir, name, body) in [
+            (root.join("ssh-bin"), "ssh", FAKE_SSH),
+            (host_bin.clone(), "uname", FAKE_UNAME),
+            (host_bin.clone(), "id", FAKE_ID),
+            (host_bin.clone(), "stat", FAKE_STAT),
+            (host_bin, "launchctl", FAKE_LAUNCHCTL),
+        ] {
+            let path = dir.join(name);
+            std::fs::write(&path, body).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        // The owner-only key file the channel's identity seam accepts in place
+        // of the broker. Nothing reads it: the ssh it is handed to is a script.
+        let key = root.join("state/ssh-key");
+        std::fs::write(&key, "-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n").unwrap();
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let host = Self { dir };
+        host.state("os", "Darwin\n");
+        host.state("console", "root\n");
+        host.declare(Some(AGENT_PATH));
+        host.publish_fresh_beacon();
+        host
+    }
+
+    fn root(&self) -> &Path {
+        self.dir.path()
+    }
+
+    fn state(&self, name: &str, content: &str) {
+        std::fs::write(self.root().join("state").join(name), content).unwrap();
+    }
+
+    /// Somebody holds the screen: the console is this login's, and launchd has
+    /// the graphical domain that comes with it.
+    fn graphical_session(&self) {
+        self.state("console", "charles\n");
+        self.state("gui", "");
+    }
+
+    /// The box stopped answering between the operator asking and the command
+    /// running.
+    fn does_not_answer(&self) {
+        let path = self.root().join("ssh-bin/ssh");
+        std::fs::write(&path, DEAD_SSH).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// The registry this fake host is declared in. `always-on` is the word the
+    /// declaration check reads, and `hostnames` deliberately does not name this
+    /// machine so the channel really goes through the fake `ssh`.
+    fn declare(&self, unit_path: Option<&str>) {
+        let services = match unit_path {
+            None => String::new(),
+            Some(path) => format!(
+                "{{\"name\": \"{AGENT}\", \"unit\": \"\", \"label\": \"{AGENT}\", \
+                 \"path\": \"{path}\", \"kind\": \"launchd\", \
+                 \"managed_since\": \"2026-08-01T00:00:00Z\"}}"
+            ),
+        };
+        std::fs::write(
+            self.root().join("storage/registry.json"),
+            format!(
+                "{{\"schema_version\": 2, \"targets\": [{{\
+                 \"name\": \"fake-mini\", \"kind\": \"local\", \
+                 \"ssh\": \"charles@10.9.9.11\", \"role\": \"always-on\", \
+                 \"release_platform\": \"darwin-arm64\", \
+                 \"hostnames\": [\"fake-mini.local\"], \"slots\": 1, \
+                 \"services\": [{services}]}}], \"coordinators\": []}}"
+            ),
+        )
+        .unwrap();
+    }
+
+    /// A beacon fresh enough to keep the verdict out of the way. What these
+    /// tests are about is the session, not the silence.
+    fn publish_fresh_beacon(&self) {
+        let reported_at = beacon_time(Utc::now() - TimeDelta::seconds(30));
+        write_blob(
+            &self.root().join("storage"),
+            "host_health/fake-mini.json",
+            &format!(
+                r#"{{"host": "fake-mini", "reported_at": "{reported_at}", "link": {}}}"#,
+                link_block(&reported_at)
+            ),
+        );
+    }
+
+    fn stado(&self, args: &[&str]) -> Output {
+        let root = self.root();
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_stado"));
+        cmd.args(args)
+            .env_clear()
+            .env("HOME", root.join("home"))
+            .env(
+                "PATH",
+                format!(
+                    "{}:/usr/bin:/bin:/usr/sbin:/sbin",
+                    root.join("ssh-bin").display()
+                ),
+            )
+            .env("STADO_FAKE_HOST_BIN", root.join("host-bin"))
+            .env("STADO_FAKE_STATE", root.join("state"))
+            .env("STADO_HOST_SSH_KEY_FILE", root.join("state/ssh-key"))
+            .env("STADO_SILENCE_THRESHOLD_SECONDS", THRESHOLD_SECONDS)
+            .env("WC_STORAGE_BACKEND", "local")
+            .env("WC_LOCAL_STORAGE_PATH", root.join("storage"))
+            // A set-but-missing STADO_CONFIG disables config-file discovery.
+            .env("STADO_CONFIG", root.join("storage/no-such-config.json"));
+        cmd.output().expect("stado binary runs")
+    }
+}
+
+/// The blocker a headless host carrying this declaration owes its operator,
+/// spelled the way the command spells it — the plain sentence first, the
+/// privileged command that closes it second.
+fn agent_blocker() -> String {
+    format!(
+        "nobody is logged in on the screen here, and {AGENT} is registered as a user service, so \
+         this machine cannot start it; install it as a machine service with one privileged \
+         command on the host: sudo /bin/sh -c '/usr/bin/install -m 644 -o root -g wheel \
+         {AGENT_PATH} {DAEMON_PATH} && /usr/bin/plutil -insert UserName -string charles \
+         {DAEMON_PATH}'"
+    )
+}
+
+/// True when the document names the session as a reason work cannot start.
+fn names_the_session(report: &Value) -> bool {
+    report["blockers"]
+        .as_array()
+        .expect("blockers is an array")
+        .iter()
+        .any(|entry| {
+            entry
+                .as_str()
+                .is_some_and(|line| line.contains("logged in on the screen here"))
+        })
+}
+
+/// charless-mac-mini's whole condition in one document: nobody at the screen,
+/// a unit only a screen can start, and the command that moves it.
+#[test]
+fn a_headless_host_declaring_a_user_service_names_it_as_a_blocker() {
+    let host = FakeHost::new();
+
+    let out = host.stado(&["host", "link", "fake-mini", "--json"]);
+    let report = document(&out);
+    assert_eq!(report["session"]["kind"], "headless");
+    assert_eq!(report["session"]["console_owner"], "root");
+    // The resolver's own sentence, unabridged. This is what `stado service
+    // restart --host charless-mac-mini --json` printed under
+    // `launchd_domain.reason` on 2026-08-19, and it is what a reader who
+    // wants the next command needs.
+    assert_eq!(
+        report["session"]["detail"],
+        "/dev/console belongs to root, not charles: no graphical session, so gui/501 does not \
+         exist and a LaunchAgent has only the background domain user/501"
+    );
+    assert!(
+        report["blockers"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::String(agent_blocker())),
+        "the blocker is missing from {:#}",
+        report["blockers"]
+    );
+    // The verdict rules did not learn about the session: this host's beacon is
+    // fresh and nothing refused, so it is healthy and the command exits 0 with
+    // the blocker named in the document.
+    assert_eq!(
+        report["verdict"], "healthy",
+        "a headless host is not by itself unhealthy: {}",
+        stderr(&out)
+    );
+    assert_eq!(out.status.code(), Some(0));
+
+    // The report form: the operator's words on the line they read first, the
+    // domain vocabulary underneath it and never the other way round.
+    let out = host.stado(&["host", "link", "fake-mini"]);
+    let text = stdout(&out);
+    for line in [
+        "session:  nobody is logged in on the screen here",
+        "          /dev/console belongs to root, not charles: no graphical session, so gui/501 \
+         does not exist and a LaunchAgent has only the background domain user/501",
+    ] {
+        assert!(text.contains(line), "missing {line:?} in:\n{text}");
+    }
+}
+
+/// The same declaration on a host somebody is logged into is not a blocker.
+/// A LaunchAgent is exactly what a graphical session is for, and a finding
+/// that fired here would be a finding an operator learns to ignore.
+#[test]
+fn a_graphical_host_with_the_same_declaration_names_no_blocker() {
+    let host = FakeHost::new();
+    host.graphical_session();
+
+    let out = host.stado(&["host", "link", "fake-mini", "--json"]);
+    let report = document(&out);
+    assert_eq!(report["session"]["kind"], "graphical");
+    assert_eq!(report["session"]["console_owner"], "charles");
+    assert_eq!(
+        report["session"]["detail"],
+        "charles owns /dev/console and launchd has gui/501, so a LaunchAgent of this login loads \
+         there"
+    );
+    assert_eq!(
+        report["blockers"],
+        serde_json::json!([]),
+        "nothing is wrong with this host: {}",
+        stderr(&out)
+    );
+    assert_eq!(out.status.code(), Some(0));
+
+    let text = stdout(&host.stado(&["host", "link", "fake-mini"]));
+    assert!(
+        text.contains("session:  charles is logged in on the screen here"),
+        "missing the session line in:\n{text}"
+    );
+}
+
+/// Headless on its own is not the fault. The same host with its unit declared
+/// where the machine can load it has nothing blocking it, and still reports
+/// the session — the fact stays visible after the repair.
+#[test]
+fn a_headless_host_declaring_only_a_machine_service_names_no_blocker() {
+    let host = FakeHost::new();
+    host.declare(Some(DAEMON_PATH));
+
+    let report = document(&host.stado(&["host", "link", "fake-mini", "--json"]));
+    assert_eq!(report["session"]["kind"], "headless");
+    assert_eq!(report["session"]["console_owner"], "root");
+    assert_eq!(
+        report["blockers"],
+        serde_json::json!([]),
+        "a headless host is not by itself unhealthy"
+    );
+}
+
+/// launchd with no per-login domain at all is still a host nobody is logged
+/// in on, and still a host that cannot start a per-login unit. Reading this
+/// state as "unknown" would silence the blocker on a host that is certainly
+/// blocked.
+#[test]
+fn a_host_whose_launchd_has_no_per_login_domain_is_still_headless() {
+    let host = FakeHost::new();
+    host.state("no_user_domain", "");
+
+    let report = document(&host.stado(&["host", "link", "fake-mini", "--json"]));
+    assert_eq!(report["session"]["kind"], "headless");
+    assert_eq!(
+        report["session"]["detail"],
+        "launchd has neither gui/501 nor user/501 for charles"
+    );
+    assert!(
+        report["blockers"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::String(agent_blocker())),
+        "the blocker is missing from {:#}",
+        report["blockers"]
+    );
+}
+
+/// A host that is not a mac has no console session of this kind to read, and
+/// the honest answer is that the question does not apply — not a guess in
+/// either direction, and never a blocker.
+#[test]
+fn a_host_that_is_not_a_mac_reports_an_unknown_session() {
+    let host = FakeHost::new();
+    host.state("os", "Linux\n");
+
+    let report = document(&host.stado(&["host", "link", "fake-mini", "--json"]));
+    assert_eq!(report["session"]["kind"], "unknown");
+    assert_eq!(report["session"]["console_owner"], Value::Null);
+    assert_eq!(
+        report["session"]["detail"],
+        "Linux has no console session of the kind a per-login unit needs"
+    );
+    assert!(!names_the_session(&report));
+}
+
+/// The rule the whole probe is built under: a session nobody could read never
+/// costs the operator a fact they already had. The host that does not answer
+/// still publishes its path, its sleep times and its verdict, and the session
+/// is `unknown` carrying ssh's own last line rather than an error that eats
+/// the document.
+#[test]
+fn a_host_that_does_not_answer_reports_an_unknown_session_and_stays_readable() {
+    let host = FakeHost::new();
+    host.does_not_answer();
+
+    let out = host.stado(&["host", "link", "fake-mini", "--json"]);
+    let report = document(&out);
+    assert_eq!(report["ssh_reachable"], false);
+    assert_eq!(report["session"]["kind"], "unknown");
+    assert_eq!(report["session"]["console_owner"], Value::Null);
+    assert_eq!(
+        report["session"]["detail"],
+        "this host did not answer, so nobody could ask it whether anyone is logged in on its \
+         screen: ssh: connect to host 10.9.9.11 port 22: Operation timed out"
+    );
+    assert!(
+        !names_the_session(&report),
+        "a blocker must never be invented from a session nobody read: {:#}",
+        report["blockers"]
+    );
+    // Everything the command could still read is still here.
+    assert_eq!(report["path_kind"], "direct");
+    assert_eq!(report["endpoint"], "10.0.0.253:41641");
+    assert_eq!(report["verdict"], "healthy");
+    assert_eq!(out.status.code(), Some(0));
 }
