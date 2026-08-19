@@ -19,6 +19,7 @@ pub mod coordinator;
 pub mod coverage;
 pub mod credential_store;
 pub mod dashboard;
+pub mod declaration;
 pub mod deploy;
 pub mod doctor;
 pub mod failure;
