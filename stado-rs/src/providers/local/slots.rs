@@ -708,15 +708,22 @@ async fn materialize_stado_inputs(
             )));
         }
         let object = crate::object_store::ObjectRef::parse(uri)?;
-        let storage_path = if object.namespace() == crate::config::wc_stado_storage_namespace() {
-            object.key().to_string()
+        // A software release lives in its own namespace and is served by the
+        // public release channel; the plain blob read would silently ask the
+        // job store's namespace for it and call the published artifact
+        // absent. Everything else stays on the store the job runs against.
+        let content = if object.namespace() == "releases" {
+            store.download_release(&object.to_string()).await?
         } else {
-            object.storage_path()
-        };
-        let content = store
-            .read_bytes(&storage_path)
-            .await?
-            .ok_or_else(|| StorageError::Other(format!("input {name} is absent: {object}")))?;
+            let storage_path = if object.namespace() == crate::config::wc_stado_storage_namespace()
+            {
+                object.key().to_string()
+            } else {
+                object.storage_path()
+            };
+            store.read_bytes(&storage_path).await?
+        }
+        .ok_or_else(|| StorageError::Other(format!("input {name} is absent: {object}")))?;
         if let Some(expected) = spec
             .get("sha256")
             .and_then(Value::as_str)
