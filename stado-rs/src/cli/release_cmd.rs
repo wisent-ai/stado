@@ -57,6 +57,9 @@ pub enum ReleaseCommands {
     Quarantine(crate::cli::release_quarantine::QuarantineCommands),
     /// Atomically restore the previous desired release.
     Rollback(ReleaseRollbackArgs),
+    /// Install a delivered release archive's binary on this very host.
+    #[command(name = "install-local")]
+    InstallLocal(ReleaseInstallLocalArgs),
 }
 
 #[derive(Args)]
@@ -67,6 +70,26 @@ pub struct ReleaseKeygenArgs {
     public_key: PathBuf,
     #[arg(long)]
     key_id: String,
+}
+
+/// `stado release install-local` — the delivery contract's local endpoint.
+///
+/// A delivery job pinned to its target runs ON that target, so installation
+/// is a local file operation and needs no login service: the release that
+/// installed over ssh died on the first host without Remote Login. The
+/// archive path and digest come from the delivery worker's environment
+/// (`WISENT_RELEASE_ARCHIVE`, `WISENT_RELEASE_SHA256`), the same contract
+/// the retired python installer read. This command replaced the last
+/// load-bearing script of the 137 deleted on 2026-08-19.
+#[derive(Args)]
+pub struct ReleaseInstallLocalArgs {
+    /// Archive member to install, e.g. bin/stado.
+    #[arg(long, default_value = "bin/stado")]
+    member: String,
+    /// Installed name under $HOME/.stado/bin; defaults to the member's
+    /// basename.
+    #[arg(long, default_value = "")]
+    name: String,
 }
 
 #[derive(Args)]
@@ -859,6 +882,96 @@ async fn rollback(args: &ReleaseRollbackArgs) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// Verify the delivered archive against the delivery contract's digest,
+/// extract one member, and install it under `$HOME/.stado/bin` by rename —
+/// Linux refuses to write into a running executable (ETXTBSY) but allows
+/// replacing the name, and a dated backup is kept beside it.
+async fn install_local(args: &ReleaseInstallLocalArgs) -> Result<(), CmdError> {
+    use sha2::Digest as _;
+    let archive = std::env::var("WISENT_RELEASE_ARCHIVE")
+        .map_err(|_| CmdError::click("WISENT_RELEASE_ARCHIVE is not set; this command is the delivery contract's local endpoint"))?;
+    let expected = std::env::var("WISENT_RELEASE_SHA256")
+        .map_err(|_| CmdError::click("WISENT_RELEASE_SHA256 is not set; this command is the delivery contract's local endpoint"))?;
+    let bytes = std::fs::read(&archive).map_err(|error| {
+        CmdError::click(format!("cannot read delivered archive {archive}: {error}"))
+    })?;
+    let actual = hex::encode(sha2::Sha256::digest(&bytes));
+    if actual != expected {
+        return Err(CmdError::click(format!(
+            "delivered archive digest mismatch: expected {expected}, got {actual}"
+        )));
+    }
+    let decoder = flate2::read::GzDecoder::new(std::io::Cursor::new(bytes));
+    let mut bundle = tar::Archive::new(decoder);
+    let member = args.member.trim_start_matches('/');
+    let mut payload: Option<Vec<u8>> = None;
+    for entry in bundle
+        .entries()
+        .map_err(|error| CmdError::click(format!("unreadable release archive: {error}")))?
+    {
+        let mut entry =
+            entry.map_err(|error| CmdError::click(format!("unreadable archive entry: {error}")))?;
+        let path = entry
+            .path()
+            .map_err(|error| CmdError::click(format!("unreadable archive path: {error}")))?
+            .to_string_lossy()
+            .into_owned();
+        if !entry.header().entry_type().is_file() {
+            continue;
+        }
+        if path == member || path.ends_with(&format!("/{member}")) {
+            let mut content = Vec::new();
+            std::io::Read::read_to_end(&mut entry, &mut content)
+                .map_err(|error| CmdError::click(format!("cannot extract {member}: {error}")))?;
+            payload = Some(content);
+            break;
+        }
+    }
+    let Some(content) = payload else {
+        return Err(CmdError::click(format!(
+            "release archive carries no regular member {member}"
+        )));
+    };
+    let name = if args.name.is_empty() {
+        args.member
+            .rsplit('/')
+            .next()
+            .unwrap_or(args.member.as_str())
+            .to_string()
+    } else {
+        args.name.clone()
+    };
+    let home = crate::config_file::expand_tilde("~");
+    let directory = home.join(".stado").join("bin");
+    std::fs::create_dir_all(&directory).map_err(|error| {
+        CmdError::click(format!("cannot prepare {}: {error}", directory.display()))
+    })?;
+    let destination = directory.join(&name);
+    if destination.exists() {
+        let stamp = chrono::Utc::now().format("%Y%m%d");
+        let backup = directory.join(format!("{name}.release-backup-{stamp}"));
+        if !backup.exists() {
+            std::fs::copy(&destination, &backup)
+                .map_err(|error| CmdError::click(format!("cannot back up {name}: {error}")))?;
+        }
+    }
+    let staged = directory.join(format!("{name}.release-incoming"));
+    std::fs::write(&staged, &content)
+        .map_err(|error| CmdError::click(format!("cannot stage {name}: {error}")))?;
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755))
+            .map_err(|error| CmdError::click(format!("cannot mark {name} executable: {error}")))?;
+    }
+    std::fs::rename(&staged, &destination)
+        .map_err(|error| CmdError::click(format!("cannot install {name}: {error}")))?;
+    println!(
+        "installed {} from the delivered release archive",
+        destination.display()
+    );
+    Ok(())
+}
+
 pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
     match command {
         ReleaseCommands::Keygen(args) => keygen(&args).await,
@@ -879,5 +992,6 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
         ReleaseCommands::Doctor(args) => crate::cli::release_evidence::dispatch_doctor(&args).await,
         ReleaseCommands::Quarantine(sub) => crate::cli::release_quarantine::dispatch(sub).await,
         ReleaseCommands::Rollback(args) => rollback(&args).await,
+        ReleaseCommands::InstallLocal(args) => install_local(&args).await,
     }
 }
