@@ -377,7 +377,9 @@ struct ReleasesView: View {
         WisentSectionBox(
             title: "Candidate",
             detail: candidateDetail(row),
-            trailing: store.logs.map { "version \($0.version)" }
+            trailing: store.logsPair == row.pair
+                ? store.logs.map { "\($0.product) \($0.version) on \($0.target)" }
+                : nil
         ) {
             if let report = row.report {
                 HStack(alignment: .top, spacing: WisentDesign.Space.x6) {
@@ -571,7 +573,9 @@ struct ReleasesView: View {
         WisentSectionBox(
             title: "Quarantine",
             detail: "Digests this host refuses to roll out again. The agent skips a quarantined digest on every pass, so the one the registry desires is a rollout that never finishes on its own.",
-            trailing: store.quarantine.map { "\($0.entries.count) held" }
+            trailing: store.quarantinePair == row.pair
+                ? store.quarantine.map { "\($0.entries.count) held" }
+                : nil
         ) {
             Text(StadoCLI.commandLine(ReleaseEvidenceStore.quarantineArguments(pair: row.pair)))
                 .font(WisentTypeScale.identifierSmall())
@@ -589,6 +593,33 @@ struct ReleasesView: View {
                         }
                     ]
                 )
+                // The diagnosis already carried the host's quarantine map, so
+                // a failed second read degrades to a list without the desired
+                // flag rather than to nothing at all.
+                if let held = row.report?.quarantined, !held.isEmpty {
+                    Text("The diagnosis above read \(held.count) quarantined \(held.count == 1 ? "digest" : "digests") on this host. Clearing is unavailable until the map itself can be read.")
+                        .font(WisentTypeScale.caption())
+                        .foregroundStyle(WisentDesign.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    ForEach(held) { entry in
+                        VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
+                            Text(entry.digest)
+                                .font(WisentTypeScale.identifier())
+                                .foregroundStyle(WisentDesign.ink)
+                                .textSelection(.enabled)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Text("\(entry.quarantinedAt ?? "no timestamp recorded") — \(entry.reason.isEmpty ? "the host recorded no reason" : entry.reason)")
+                                .font(WisentTypeScale.caption())
+                                .foregroundStyle(WisentDesign.secondary)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(WisentDesign.Space.x3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(WisentDesign.canvasMuted, in: RoundedRectangle(cornerRadius: WisentDesign.Radius.small))
+                    }
+                }
             } else if store.isLoadingQuarantine, store.quarantine == nil {
                 Text("Reading the host's quarantine map…")
                     .font(WisentTypeScale.body())
