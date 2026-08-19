@@ -4,6 +4,9 @@ import WisentDesignSystem
 private enum HostFacet: String, Hashable {
     case all
     case notClaiming
+    case silentLink
+    case degradedLink
+    case healthyLink
     case live
     case stale
     case unavailable
@@ -25,8 +28,14 @@ struct HostsView: View {
     @ObservedObject var store: OperationsStore
     @ObservedObject var fleetStore: FleetControlStore
     @ObservedObject var gatesStore: HostGatesStore
+    @ObservedObject var linkStore: HostLinkStore
     @ObservedObject var enrollmentStore: MachineEnrollmentStore
     let scope: String
+    /// A host another screen sent the operator here to read. Consumed once and
+    /// then cleared: after the jump the selection belongs to the operator, not
+    /// to the route that opened the screen.
+    let focusedHost: String?
+    let clearFocusedHost: () -> Void
     let route: (ConsoleDestination) -> Void
     let refresh: () async -> Void
 
@@ -44,12 +53,13 @@ struct HostsView: View {
                 WisentAction(
                     "Refresh",
                     symbol: "arrow.clockwise",
-                    isEnabled: !store.isRefreshing && !gatesStore.isRefreshing
+                    isEnabled: !store.isRefreshing && !gatesStore.isRefreshing && !linkStore.isRefreshing
                 ) {
                     Task {
                         await store.refresh()
                         await fleetStore.refresh()
                         await gatesStore.refresh(hosts: gateHostNames)
+                        await linkStore.refresh(hosts: gateHostNames)
                     }
                 },
                 addMachineAction(kind: .primary),
@@ -83,6 +93,12 @@ struct HostsView: View {
         .task(id: gateHostNames) {
             await gatesStore.refresh(hosts: gateHostNames)
         }
+        .task(id: gateHostNames) {
+            await linkStore.refresh(hosts: gateHostNames)
+        }
+        .task(id: focusedHost) {
+            focusRoutedHost()
+        }
         .sheet(isPresented: $showsEnrollment) {
             MachineEnrollmentView(
                 store: enrollmentStore,
@@ -99,6 +115,18 @@ struct HostsView: View {
                 dismiss: { reclaimTarget = nil }
             )
         }
+    }
+
+    /// Another screen named a host and sent the operator here. Select that
+    /// row and widen the filter to a facet that can contain it, because a jump
+    /// that lands on an empty table is worse than no jump at all.
+    private func focusRoutedHost() {
+        guard let focusedHost, !focusedHost.isEmpty else { return }
+        facet = .all
+        let match = (store.snapshot?.workers ?? [])
+            .first { ($0.targetName ?? $0.displayName) == focusedHost }
+        selection = match?.id ?? focusedHost
+        clearFocusedHost()
     }
 
     /// A fleet with no hosts in it is exactly the fleet that needs this verb,
@@ -180,7 +208,7 @@ struct HostsView: View {
                 footerDetail: registryFooter
             )
             VStack(spacing: 0) {
-                gateAlarms
+                alarms
                 table(snapshot)
             }
             inspector(snapshot)
@@ -228,6 +256,19 @@ struct HostsView: View {
                     facetRow(.live, "Live", live, live > 0 ? .success : .neutral),
                 ]
             ),
+            // Connectivity is asked separately from availability because the
+            // two answer different questions: availability is what the host
+            // last published, and this is whether the host is publishing at
+            // all. The healthy count lives here so the table needs no pill on
+            // the majority of its rows.
+            WisentFacetGroup(
+                "Link",
+                facets: [
+                    facetRow(.silentLink, "Silent", silentLinks, silentLinks > 0 ? .danger : .neutral),
+                    facetRow(.degradedLink, "Degraded", degradedLinks, degradedLinks > 0 ? .danger : .neutral),
+                    facetRow(.healthyLink, "Healthy", healthyLinks, .neutral),
+                ]
+            ),
             WisentFacetGroup(
                 "Registry",
                 facets: [
@@ -237,6 +278,18 @@ struct HostsView: View {
                 ]
             ),
         ]
+    }
+
+    private var silentLinks: Int {
+        linkStore.links.count { $0.verdict == .silent }
+    }
+
+    private var degradedLinks: Int {
+        linkStore.links.count { $0.verdict == .degraded }
+    }
+
+    private var healthyLinks: Int {
+        linkStore.links.count { $0.verdict == .healthy }
     }
 
     private func facetRow(_ value: HostFacet, _ label: String, _ count: Int, _ tone: WisentTone) -> WisentFacet {
@@ -285,6 +338,15 @@ struct HostsView: View {
             // hardware of a host that takes no work is not what the operator
             // needs. Kind, GPU, role and VRAM are one selection away, in the
             // inspector.
+            //
+            // The beacon age gets no column of its own. Seven columns already
+            // ask 706 pt of fixed width plus a flexible reason column, against
+            // the 556 pt this middle zone has at the 1280 pt default, so the
+            // reason column is squeezed as it stands. A beacon age is also
+            // identical and unremarkable on every healthy row — the ink that
+            // makes the one exception harder to find, not easier. Silence is
+            // named in the alarm above the table, counted in the Link facets,
+            // and read in the inspector's Link section.
             ConsoleTable(head: [
                 ConsoleHeaderCell("Host", width: 200),
                 ConsoleHeaderCell("Claiming", width: 92),
@@ -354,6 +416,7 @@ struct HostsView: View {
                 badges: badges(for: host)
             ) {
                 gateSection(for: host)
+                linkSection(for: host)
                 if host.status != .live {
                     WisentAlertPanel(
                         tone: tone(for: host.status),
@@ -380,7 +443,7 @@ struct HostsView: View {
             }
         } else {
             WisentInspector(eyebrow: "Selection", title: "No host selected") {
-                Text("Select a host to read its capacity report, the reason the fleet gave for its state, and the policy the canonical registry declares for it.")
+                Text("Select a host to read its capacity report, the reason the fleet gave for its state, why it went quiet the last time it did, and the policy the canonical registry declares for it.")
                     .font(WisentTypeScale.body())
                     .foregroundStyle(WisentDesign.secondary)
             }
@@ -434,6 +497,9 @@ struct HostsView: View {
         switch facet {
         case .all: filtered = hosts
         case .notClaiming: filtered = hosts.filter { hostGates($0)?.claiming == false }
+        case .silentLink: filtered = hosts.filter { hostLink($0)?.verdict == .silent }
+        case .degradedLink: filtered = hosts.filter { hostLink($0)?.verdict == .degraded }
+        case .healthyLink: filtered = hosts.filter { hostLink($0)?.verdict == .healthy }
         case .live: filtered = hosts.filter { $0.status == .live }
         case .stale: filtered = hosts.filter { $0.status == .stale }
         case .unavailable: filtered = hosts.filter { $0.status == .unavailable }
@@ -526,27 +592,32 @@ struct HostsView: View {
         gatesStore.failure(for: host.targetName ?? host.displayName)
     }
 
-    /// The alarm, above the table rather than inside it.
+    /// The alarms, above the table rather than inside it.
     ///
-    /// A host that claims nothing looks exactly like a host with nothing to do,
-    /// and the last time the two were confused every release build waited hours
-    /// on a machine sitting at 2 GB free against a 55 GB policy. Nothing else on
-    /// this console reports it.
+    /// Two questions, both invisible everywhere else on this console. A host
+    /// that claims nothing looks exactly like a host with nothing to do, and
+    /// the last time the two were confused every release build waited hours on
+    /// a machine sitting at 2 GB free against a 55 GB policy. A host that has
+    /// stopped publishing beacons looks exactly like a host nobody asked, and
+    /// the last time that happened the only evidence of a six-minute gap on
+    /// control-host was an operator's two ping packets.
     @ViewBuilder
-    private var gateAlarms: some View {
+    private var alarms: some View {
         // A pinned host with nothing pinned to it is policy, not an alarm; it
         // still costs a pinned job when the queue says so.
-        let silent = gatesStore.notClaiming.filter { $0.refusingUnpinned || !$0.waitingJobs.isEmpty }
-        let unreadable = gatesStore.failures
+        let notClaiming = gatesStore.notClaiming.filter { $0.refusingUnpinned || !$0.waitingJobs.isEmpty }
+        let unreadableGates = gatesStore.failures
+        let quiet = linkStore.needingAttention
+        let unreadableLinks = linkStore.failures
         VStack(spacing: WisentDesign.Space.x3) {
-            if !silent.isEmpty {
+            if !notClaiming.isEmpty {
                 WisentAlertPanel(
                     tone: .danger,
-                    title: silent.count == 1
-                        ? "\(silent[0].host) is claiming no work"
-                        : "\(silent.count.formatted(.number)) hosts are claiming no work",
-                    detail: silentDetail(silent),
-                    command: "stado host gates \(silent[0].host) --json",
+                    title: notClaiming.count == 1
+                        ? "\(notClaiming[0].host) is claiming no work"
+                        : "\(notClaiming.count.formatted(.number)) hosts are claiming no work",
+                    detail: silentDetail(notClaiming),
+                    command: "stado host gates \(notClaiming[0].host) --json",
                     actions: [
                         WisentAction("Show them", symbol: "arrow.down.right") {
                             facet = .notClaiming
@@ -555,17 +626,33 @@ struct HostsView: View {
                     ]
                 )
             }
-            if !unreadable.isEmpty {
+            if let worst = quiet.first {
+                WisentAlertPanel(
+                    tone: worst.verdict.tone,
+                    title: quiet.count == 1
+                        ? linkAlarmTitle(worst)
+                        : "\(quiet.count.formatted(.number)) hosts have a link the fleet cannot vouch for",
+                    detail: quietDetail(quiet),
+                    command: HostLinkStore.commandLine(host: worst.host),
+                    actions: [
+                        WisentAction("Show them", symbol: "arrow.down.right") {
+                            facet = worst.verdict == .degraded ? .degradedLink : .silentLink
+                            selection = nil
+                        },
+                    ]
+                )
+            }
+            if !unreadableGates.isEmpty {
                 WisentAlertPanel(
                     tone: .warning,
-                    title: unreadable.count == 1
+                    title: unreadableGates.count == 1
                         ? "One host did not answer whether it is claiming work"
-                        : "\(unreadable.count.formatted(.number)) hosts did not answer whether they are claiming work",
-                    detail: unreadable
+                        : "\(unreadableGates.count.formatted(.number)) hosts did not answer whether they are claiming work",
+                    detail: unreadableGates
                         .sorted { $0.key < $1.key }
                         .map { "\($0.key): \($0.value)" }
                         .joined(separator: "\n"),
-                    command: "stado host gates \(unreadable.keys.sorted()[0]) --json",
+                    command: "stado host gates \(unreadableGates.keys.sorted()[0]) --json",
                     actions: [
                         WisentAction("Retry", symbol: "arrow.clockwise", isEnabled: !gatesStore.isRefreshing) {
                             Task { await gatesStore.refresh(hosts: gateHostNames) }
@@ -573,9 +660,72 @@ struct HostsView: View {
                     ]
                 )
             }
+            if !unreadableLinks.isEmpty {
+                WisentAlertPanel(
+                    tone: .warning,
+                    title: unreadableLinks.count == 1
+                        ? "One host's link could not be read"
+                        : "\(unreadableLinks.count.formatted(.number)) hosts' links could not be read",
+                    detail: unreadableLinks
+                        .sorted { $0.key < $1.key }
+                        .map { "\($0.key): \($0.value)" }
+                        .joined(separator: "\n"),
+                    command: HostLinkStore.commandLine(host: unreadableLinks.keys.sorted()[0]),
+                    actions: [
+                        WisentAction("Retry", symbol: "arrow.clockwise", isEnabled: !linkStore.isRefreshing) {
+                            Task { await linkStore.refresh(hosts: gateHostNames) }
+                        },
+                    ]
+                )
+            }
         }
         .padding(.horizontal, WisentDesign.Space.x4)
-        .padding(.top, silent.isEmpty && unreadable.isEmpty ? 0 : WisentDesign.Space.x4)
+        .padding(
+            .top,
+            notClaiming.isEmpty && quiet.isEmpty && unreadableGates.isEmpty && unreadableLinks.isEmpty
+                ? 0
+                : WisentDesign.Space.x4
+        )
+    }
+
+    /// The headline for one host, in the shape the operator asks the question:
+    /// how long has it been quiet.
+    private func linkAlarmTitle(_ link: HostLink) -> String {
+        if let silence = link.openSilence {
+            return "\(link.host) has been silent for \(StadoFormat.duration(silence.elapsedSeconds))"
+        }
+        if link.verdict == .silent {
+            return "\(link.host) is silent"
+        }
+        return "\(link.host)'s link is \(link.verdict.word)"
+    }
+
+    /// Every quiet host's own blockers, verbatim, and the first refusal a reader
+    /// hit while it was quiet — the sentence that used to reach nothing but
+    /// ~/.stado/logs/stado-resolver.err.
+    private func quietDetail(_ links: [HostLink]) -> String {
+        var lines = links.prefix(3).map { link -> String in
+            var line = "\(link.host) — \(link.verdict.word)"
+            if let silence = link.openSilence {
+                line += ", quiet for \(StadoFormat.duration(silence.elapsedSeconds))"
+            } else if let age = link.beaconAgeSeconds {
+                line += ", newest beacon \(ConsoleFormat.age(Double(age)))"
+            } else {
+                line += ", no beacon has ever been published for it"
+            }
+            line += ": "
+            line += link.blockers.isEmpty
+                ? "the command named no blocker, which is itself the thing to chase"
+                : link.blockers.joined(separator: "; ")
+            if let reader = link.openSilence?.firstReaderError, !reader.isEmpty {
+                line += "\nFirst reader refusal: \(reader)"
+            }
+            return line
+        }
+        if links.count > 3 {
+            lines.append("and \((links.count - 3).formatted(.number)) more in the Link facets")
+        }
+        return lines.joined(separator: "\n")
     }
 
     private func silentDetail(_ hosts: [HostGates]) -> String {
@@ -710,6 +860,188 @@ struct HostsView: View {
                 tone: .warning
             )
         }
+    }
+
+    private func hostLink(_ host: WorkerNode) -> HostLink? {
+        linkStore.link(for: host.targetName ?? host.displayName)
+    }
+
+    private func linkFailure(_ host: WorkerNode) -> String? {
+        linkStore.failure(for: host.targetName ?? host.displayName)
+    }
+
+    /// Why this host went quiet, under the gates that decide whether it works.
+    ///
+    /// The gates answer "is it taking jobs"; this answers "is it there at all",
+    /// which is the question that had no surface anywhere in the product when
+    /// `control-host` dropped for six minutes on 2026-08-19. A healthy link
+    /// is one line and no card: absence of an incident is not an incident.
+    @ViewBuilder
+    private func linkSection(for host: WorkerNode) -> some View {
+        let name = host.targetName ?? host.displayName
+        if let link = hostLink(host) {
+            if link.verdict.needsAttention {
+                WisentAlertPanel(
+                    tone: link.verdict.tone,
+                    title: linkAlarmTitle(link),
+                    detail: link.blockers.isEmpty
+                        ? "The command called this link \(link.verdict.word) and named no blocker. Nothing downstream reports it either, so the next reader to refuse will be the only trace."
+                        : link.blockers.joined(separator: "\n"),
+                    command: HostLinkStore.commandLine(host: link.host)
+                )
+            } else {
+                WisentField(
+                    label: "Link",
+                    value: healthyLinkLine(link),
+                    tone: .neutral
+                )
+                if !link.blockers.isEmpty {
+                    // A healthy verdict can still carry sentences: an old
+                    // beacon format that predates the link block is not the
+                    // host's ill health, and the command says so rather than
+                    // failing the verdict over it. Neutral, because absence by
+                    // choice is never red — but never dropped either, because
+                    // the alternative is a console that quietly loses the one
+                    // sentence explaining why the fields below read "Not
+                    // reported".
+                    WisentField(
+                        label: "Blockers",
+                        value: link.blockers.joined(separator: "\n"),
+                        tone: .neutral
+                    )
+                }
+            }
+            WisentField(
+                label: "Newest beacon",
+                value: link.beaconAgeSeconds.map { ConsoleFormat.age(Double($0)) }
+                    ?? "No beacon has ever been published for this host",
+                tone: link.verdict.needsAttention ? link.verdict.tone : .neutral
+            )
+            WisentField(
+                label: "SSH reachable",
+                value: link.sshReachable ? "Yes" : "No",
+                tone: link.sshReachable ? .neutral : .danger
+            )
+            WisentField(label: "Network path", value: pathDescription(link))
+            WisentField(label: "Last sleep", value: stampDescription(link.lastSleepAt))
+            WisentField(label: "Last wake", value: stampDescription(link.lastWakeAt))
+            WisentField(label: "Interface changes", value: interfaceDescription(link))
+            WisentField(
+                label: "Recorded silences",
+                value: silenceDescription(link),
+                tone: link.openSilence == nil ? .neutral : .danger
+            )
+            if let reader = link.openSilence?.firstReaderError ?? link.silences.first?.firstReaderError,
+               !reader.isEmpty {
+                // The refusal in the reader's own words. This sentence reached
+                // nothing but a log file on the operator's laptop before the
+                // silence records existed.
+                WisentField(label: "First reader refusal", value: reader, tone: .danger)
+            }
+            WisentField(
+                label: "Reader refusals",
+                value: refusalDescription(link.readerRefusals),
+                tone: (link.readerRefusals?.count ?? 0) > 0 ? .warning : .neutral
+            )
+        } else if let failure = linkFailure(host) {
+            WisentAlertPanel(
+                tone: .warning,
+                title: "This host's link could not be read",
+                detail: failure,
+                command: HostLinkStore.commandLine(host: name),
+                actions: [
+                    WisentAction("Retry", symbol: "arrow.clockwise", isEnabled: !linkStore.isRefreshing) {
+                        Task { await linkStore.refresh(hosts: gateHostNames) }
+                    },
+                ]
+            )
+        } else if linkStore.isRefreshing {
+            WisentField(label: "Link", value: "Reading…")
+        } else {
+            WisentField(
+                label: "Link",
+                value: host.declared
+                    ? "Not read for this host"
+                    : "Not asked: this host is not a declared registry target",
+                tone: .warning
+            )
+        }
+    }
+
+    /// The one line a healthy link earns: how fresh the beacon is and, when the
+    /// beacon actually carried a link block, which way the packets went.
+    ///
+    /// A bare `unknown` path is left off this line on purpose. It is the
+    /// command's word for "there was no link block to read", and appending it
+    /// here reads as a diagnosis of the route rather than the absence of one.
+    /// The Network path field below still carries the command's own word.
+    private func healthyLinkLine(_ link: HostLink) -> String {
+        var text = "Healthy"
+        if let age = link.beaconAgeSeconds {
+            text += " · beacon \(ConsoleFormat.age(Double(age)))"
+        }
+        if link.linkReported, let kind = link.pathKind {
+            text += " · \(kind.word)"
+            if let endpoint = link.endpoint, !endpoint.isEmpty {
+                text += " \(endpoint)"
+            }
+        }
+        return text
+    }
+
+    private func pathDescription(_ link: HostLink) -> String {
+        guard let kind = link.pathKind else { return "Not reported" }
+        guard let endpoint = link.endpoint, !endpoint.isEmpty else { return kind.word }
+        return "\(kind.word) \(endpoint)"
+    }
+
+    /// The stamp the collector recorded and how long ago that was. The stamp
+    /// alone answers "did it sleep at 18:29"; the age alone answers "was that
+    /// during the gap". The incident needed both.
+    private func stampDescription(_ value: String?) -> String {
+        guard let value, !value.isEmpty else { return "Not reported" }
+        guard let date = StadoFormat.date(value) else { return value }
+        return "\(value) · \(ConsoleFormat.age(Date().timeIntervalSince(date)))"
+    }
+
+    private func interfaceDescription(_ link: HostLink) -> String {
+        guard !link.interfaceChanges.isEmpty else {
+            return link.linkReported ? "None recorded" : "Not reported"
+        }
+        var lines = link.interfaceChanges.prefix(3).map { "\($0.at) — \($0.detail)" }
+        if link.interfaceChanges.count > 3 {
+            lines.append("and \((link.interfaceChanges.count - 3).formatted(.number)) more")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func silenceDescription(_ link: HostLink) -> String {
+        guard !link.silences.isEmpty else { return "None recorded" }
+        return link.silences.prefix(5).map { silence -> String in
+            var line = silence.startedAt
+            if let ended = silence.endedAt {
+                line += " → \(ended)"
+            } else {
+                line += " → still quiet"
+            }
+            line += " · \(StadoFormat.duration(silence.elapsedSeconds))"
+            if !silence.observedBy.isEmpty {
+                line += " · seen by \(silence.observedBy.joined(separator: ", "))"
+            }
+            return line
+        }
+        .joined(separator: "\n")
+    }
+
+    private func refusalDescription(_ refusals: HostReaderRefusals?) -> String {
+        guard let refusals else { return "Not reported" }
+        let window = StadoFormat.duration(Double(refusals.windowSeconds))
+        guard refusals.count > 0 else { return "None in the last \(window)" }
+        let reasons = refusals.rankedReasons
+            .map { "\($0.reason) \($0.count.formatted(.number))" }
+            .joined(separator: " · ")
+        let head = "\(refusals.count.formatted(.number)) in the last \(window)"
+        return reasons.isEmpty ? head : "\(head)\n\(reasons)"
     }
 
     private func claimingLabel(_ host: WorkerNode) -> String {

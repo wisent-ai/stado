@@ -15,11 +15,12 @@ struct ConsoleView: View {
     /// card over the shell.
     let firstRunNotice: String?
 
-    /// The three stores that read the hosts themselves rather than the
+    /// The four stores that read the hosts themselves rather than the
     /// published snapshot, by running the product CLI. Window-scoped: unlike
     /// enrollment, nothing here spans a walk to another machine, and a
     /// claiming gate read two hours ago is not worth keeping.
     @StateObject private var gatesStore = HostGatesStore()
+    @StateObject private var linkStore = HostLinkStore()
     @StateObject private var serviceStore = ServiceTruthStore()
     @StateObject private var fleetServiceStore = FleetServicesStore()
     @StateObject private var releaseStore = ReleaseEvidenceStore()
@@ -228,7 +229,7 @@ struct ConsoleView: View {
         let isSelected = router.destination == destination
         let attention = attentionCount(for: destination)
         return Button {
-            router.destination = destination
+            router.show(destination)
         } label: {
             HStack(spacing: WisentDesign.Space.x2) {
                 Image(systemName: destination.symbol)
@@ -273,12 +274,20 @@ struct ConsoleView: View {
         guard let snapshot = store.snapshot else { return nil }
         switch destination {
         case .posture:
-            let count = FleetPosture(snapshot: snapshot, report: cleanupStore.report).decisionCount
+            let count = FleetPosture(
+                snapshot: snapshot,
+                report: cleanupStore.report,
+                links: linkStore.links
+            ).decisionCount
             return count > 0 ? (count, .warning) : nil
         case .queue:
             let failed = snapshot.recentFailed.count
             return failed > 0 ? (failed, .danger) : nil
         case .hosts:
+            // A host nobody can reach outranks a host that merely published a
+            // stale report: the first is why the second happened.
+            let quiet = linkStore.needingAttention.count
+            if quiet > 0 { return (quiet, .danger) }
             let unavailable = snapshot.workers.count { $0.status == .unavailable }
             if unavailable > 0 { return (unavailable, .danger) }
             // Same rule as the Hosts screen: a declared pin is policy and only
@@ -320,9 +329,11 @@ struct ConsoleView: View {
                     store: store,
                     cleanupStore: cleanupStore,
                     fleetStore: fleetStore,
+                    linkStore: linkStore,
                     scope: scopeName,
                     firstRunNotice: firstRunNotice,
-                    route: { router.destination = $0 },
+                    route: { router.show($0) },
+                    routeToHost: { router.show(.hosts, host: $0) },
                     refresh: { await refreshAll() }
                 )
             case .queue:
@@ -332,9 +343,12 @@ struct ConsoleView: View {
                     store: store,
                     fleetStore: fleetStore,
                     gatesStore: gatesStore,
+                    linkStore: linkStore,
                     enrollmentStore: enrollmentStore,
                     scope: scopeName,
-                    route: { router.destination = $0 },
+                    focusedHost: router.focusedHost,
+                    clearFocusedHost: { router.focusedHost = nil },
+                    route: { router.show($0) },
                     refresh: { await refreshAll() }
                 )
             case .services:
