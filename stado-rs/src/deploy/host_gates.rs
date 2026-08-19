@@ -147,9 +147,7 @@ struct Publication {
 /// answering and refuses to claim", and only the second one is what this
 /// command was written to find.
 pub async fn read_host_gates(host: &str, runner: &Runner) -> Result<HostGates, DeployError> {
-    let registry = crate::targets::fetch_registry_remote()
-        .await
-        .map_err(|exc| DeployError(exc.to_string()))?;
+    let registry = host_channel::canonical_registry().await?;
     let target = host_channel::resolve_target(&registry, host)?.clone();
 
     let interval = target
