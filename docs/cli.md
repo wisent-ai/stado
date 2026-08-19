@@ -1173,6 +1173,35 @@ One row per registry target, sorted worst-first: hosts that never reported
 at all, then the oldest beacon, then the `gcp`/`vast` targets where no
 beacon is expected. The "has not reported in days" detector.
 
+## `stado builds`
+
+Native builds, v1. A build recipe lives in the top-level `builds` key of the
+canonical registry document and names a repository, the branch to watch, one
+POSIX sh build command and the artifact paths the checkout leaves behind. The
+control-plane poller (`coordinator_loop`) checks each enabled recipe at its
+`interval_seconds` cadence with `git ls-remote`; a branch head it has not
+seen enqueues exactly one ordinary queue job that clones the branch shallow,
+runs the build command and uploads the artifacts under the job's canonical
+results URI (`status/<job_id>/output/`). Every mutation is the same fenced
+registry read-modify-write `stado host declare-version` uses.
+
+**v1 boundary:** builds produce artifacts and job results only. Version
+declaration and fleet delivery remain manual — `stado host declare-version`
+and `stado host converge --apply`.
+
+| Subcommand | Behavior |
+|---|---|
+| `stado builds list [--json]` | Every recipe: source, enabled flag, last seen commit, last run. `--json` emits the recipe array verbatim. |
+| `stado builds add --name N --repo URL --branch B --command C --artifact PATH... [--interval-seconds N]` | Add a recipe, validated (kebab-case name, `https://` repo, relative artifact paths). Recipes start **disabled**: polling a repository is explicit opt-in, never a side effect of writing it down. |
+| `stado builds remove NAME` | Delete the recipe. |
+| `stado builds enable NAME [--json]` | Start polling the recipe. |
+| `stado builds disable NAME [--json]` | Stop polling without deleting; `last_seen_ref` survives, so re-enabling does not rebuild a commit already built. |
+| `stado builds run NAME [--json]` | Enqueue one build job now, cadence and enable flag notwithstanding — how a recipe is vetted before it is enabled. |
+| `stado builds status NAME [--json]` | The recipe plus the live queue state of its last build job. |
+
+A top-level `builds_disabled: true` in the registry halts all build polling
+fleet-wide without touching any recipe's own flag.
+
 ## `stado release`
 
 | Subcommand | Behavior |
