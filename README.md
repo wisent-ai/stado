@@ -384,6 +384,41 @@ exists so that adding a machine never depends on them. See
 [the invite endpoints](docs/cli.md#invite-endpoints-on-the-dashboard) and
 [the control-point check](docs/cli.md#the-control-point-check).
 
+### Desktop operator screens
+
+Stado Desktop is optional — the CLI stays canonical — but three of its screens
+are the fastest way to read a stalled fleet, because each one runs the same
+`stado` commands an operator would type and puts their answers side by side.
+Every read below is read-only; the two writes these screens can make
+(`host reclaim --apply`, `release quarantine clear`) print the exact command
+and refuse without a preview or a typed reason. Build and install the app with
+`desktop/StadoDesktop/scripts/build-app.sh`. The screenshots are live reads of
+the Wisent fleet.
+
+![Stado Desktop Releases screen: brama on control-host blocked, its blockers, the candidate's stderr tail, and the quarantined digest the registry desires](desktop/StadoDesktop/docs/screenshots/releases.png)
+
+*Releases — find out why a rollout never finishes: the verdict and blockers
+`stado release doctor` reached for every product target, the host's own
+software report, the tail of the candidate's stderr off the host
+(`stado release logs`), and the digests the host refuses to roll out again with
+the desired one first (`stado release quarantine list`). Clearing a digest is
+done here, with a typed reason, and starts nothing by itself.*
+
+![Stado Desktop Hosts screen: two hosts claiming no work, their blockers and disk policy, and the inspector for control-host](desktop/StadoDesktop/docs/screenshots/hosts.png)
+
+*Hosts — find out why a host is claiming no work: the blockers its own agent
+publishes, the free space against the watermark the cleanup policy enforces,
+and the age of its capacity report (`stado host gates`). Disk reclamation
+starts from the inspector and previews before it deletes
+(`stado host reclaim`).*
+
+![Stado Desktop Services screen: declared units per host with their running binary, two marked as serving replaced code, and the inspector for the drifted skarbiec unit](desktop/StadoDesktop/docs/screenshots/services.png)
+
+*Services — find out what the fleet is actually running: each declared unit's
+state, the program it declares, the binary the process is really executing and
+whether the two agree (`stado service converge`), plus the product processes no
+unit owns at all (`stado service list --unowned`).*
+
 ## Operational model
 
 ### Configuration

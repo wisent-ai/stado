@@ -60,18 +60,36 @@ actor StadoCLI {
         timeoutSeconds: Int = 120
     ) async throws -> T {
         let executable = try await executableURL()
-        let output = try await Self.capture(
+        let completion = try await Self.capture(
             executable: executable,
             arguments: arguments,
             timeoutSeconds: timeoutSeconds
         )
         do {
-            return try JSONDecoder().decode(T.self, from: output)
+            return try JSONDecoder().decode(T.self, from: completion.output)
         } catch {
+            // No payload to read: now the exit status is the only answer there
+            // is, and the CLI's own sentence is better than a decoding one.
+            if let refusal = completion.refusal { throw refusal }
             throw StadoCLIError.malformedJSON(
                 "\(Self.commandLine(arguments)) — \(error.localizedDescription)"
             )
         }
+    }
+
+    /// What one invocation produced: its stdout, and the sentence it refused
+    /// with when it exited non-zero.
+    ///
+    /// A non-zero exit is not the absence of an answer here. `host gates`
+    /// exits non-zero when the host is claiming nothing, `service converge`
+    /// when a binary has drifted, `release status` when a host never reported
+    /// its software — each after printing its complete `--json` payload. Those
+    /// are the exact states these screens were built to show, so the payload
+    /// is decoded first and the refusal is kept for the case where there is no
+    /// payload at all.
+    private struct Completion: Sendable {
+        let output: Data
+        let refusal: StadoCLIError?
     }
 
     private func executableURL() throws -> URL {
@@ -147,7 +165,7 @@ actor StadoCLI {
         executable: URL,
         arguments: [String],
         timeoutSeconds: Int
-    ) async throws -> Data {
+    ) async throws -> Completion {
         let invocation = Invocation()
         let watchdog = Task.detached(priority: .utility) {
             try? await Task.sleep(for: .seconds(timeoutSeconds))
@@ -177,7 +195,7 @@ actor StadoCLI {
         executable: URL,
         arguments: [String],
         timeoutSeconds: Int
-    ) throws -> Data {
+    ) throws -> Completion {
         let process = invocation.process
         let output = Pipe()
         let errors = Pipe()
@@ -211,24 +229,45 @@ actor StadoCLI {
         drained.wait()
 
         guard process.terminationStatus == 0 else {
-            if invocation.didTimeOut {
-                throw StadoCLIError.failed(
+            return Completion(
+                output: data,
+                refusal: refusal(
+                    arguments: arguments,
                     exitCode: process.terminationStatus,
-                    message: "\(commandLine(arguments)) gave no answer within \(timeoutSeconds) s and was stopped. Nothing was written."
+                    stdout: data,
+                    stderr: collected.text,
+                    timedOut: invocation.didTimeOut,
+                    timeoutSeconds: timeoutSeconds
                 )
-            }
-            let stderrText = collected.text
-            let stdoutText = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let message = stderrText.isEmpty ? stdoutText : stderrText
-            throw StadoCLIError.failed(
-                exitCode: process.terminationStatus,
-                message: message.isEmpty
-                    ? "\(commandLine(arguments)) exited \(process.terminationStatus) and said nothing."
-                    : message
             )
         }
-        return data
+        return Completion(output: data, refusal: nil)
+    }
+
+    /// The sentence a non-zero exit refused with, in the CLI's own words.
+    private static func refusal(
+        arguments: [String],
+        exitCode: Int32,
+        stdout: Data,
+        stderr: String,
+        timedOut: Bool,
+        timeoutSeconds: Int
+    ) -> StadoCLIError {
+        if timedOut {
+            return .failed(
+                exitCode: exitCode,
+                message: "\(commandLine(arguments)) gave no answer within \(timeoutSeconds) s and was stopped. Nothing was written."
+            )
+        }
+        let stdoutText = String(data: stdout, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let message = stderr.isEmpty ? stdoutText : stderr
+        return .failed(
+            exitCode: exitCode,
+            message: message.isEmpty
+                ? "\(commandLine(arguments)) exited \(exitCode) and said nothing."
+                : message
+        )
     }
 
     /// Shell quoting for display only. Nothing here is ever handed to a shell:

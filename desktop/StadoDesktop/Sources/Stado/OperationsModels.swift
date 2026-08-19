@@ -897,6 +897,36 @@ struct ReleaseLogsReport: Decodable, Sendable {
     }
 }
 
+/// The order a held-digest list is read in.
+extension Array where Element == ReleaseQuarantineEntry {
+    /// The digest the registry desires first, then the rest newest first.
+    ///
+    /// The host answers in digest order, which is the one order that says
+    /// nothing: on control-host it put the digest actually blocking the
+    /// brama rollout seventh of seven, below six refusals that are history.
+    /// Recency orders the rest, because a refusal recorded an hour ago is
+    /// about the release being attempted now.
+    var desiredFirst: [ReleaseQuarantineEntry] {
+        map { (entry: $0, quarantined: StadoFormat.date($0.quarantinedAt)) }
+            .sorted { lhs, rhs in
+                if lhs.entry.isDesiredDigest != rhs.entry.isDesiredDigest {
+                    return lhs.entry.isDesiredDigest
+                }
+                switch (lhs.quarantined, rhs.quarantined) {
+                case let (left?, right?) where left != right:
+                    return left > right
+                case (nil, .some):
+                    return false
+                case (.some, nil):
+                    return true
+                default:
+                    return lhs.entry.digest < rhs.entry.digest
+                }
+            }
+            .map(\.entry)
+    }
+}
+
 /// One log file on the host: where it is, how big it is, and its tail.
 ///
 /// A stream with no lines is not a blank pane. The file was either never
