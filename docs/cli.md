@@ -782,9 +782,11 @@ free: 2 GiB -> 2 GiB
 ```
 
 `--apply` is the only thing that deletes, and it refuses to run without
-`--reason`: the record it appends to `$HOME/.stado/audit/host-reclaim.jsonl` on
-the host is the only account of why several tens of gigabytes left that
-machine. The record is written after the stages, because the measurements have
+`--reason`: the owner-only record it appends to
+`$HOME/.stado/audit/host-reclaim.jsonl` on the host is the only account of why
+several tens of gigabytes left that machine. It carries the reason verbatim, who
+ran it — `service ensure`'s spelling of that, not a second one — and what each
+stage did. The record is written after the stages, because the measurements have
 to exist before it can be true, and it lives on the machine whose disk changed
 rather than in a central ledger — the operator who reclaimed the space may
 never touch this control plane again, and a record kept anywhere else is a

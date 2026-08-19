@@ -464,16 +464,22 @@ printf 'STADO_RECLAIM_AUDITED\t%s\n' "$log"
 /// reclamation actually did: the measurements have to exist before the record
 /// can be true, and a record written up front would be a record of an
 /// intention.
+///
+/// `actor` arrives from the caller rather than being read here, so that this
+/// binary has ONE spelling of "who did this" — `cli/autonomy_cmd::actor`, the
+/// same one `service ensure` stamps its own record with.
 pub async fn record_audit(
     target: &ComputeTarget,
     reclamation: &Reclamation,
     reason: &str,
+    actor: &str,
     runner: &Runner,
 ) -> Result<String, DeployError> {
     let record = json!({
         "at": crate::models::isoformat_utc(chrono::Utc::now()),
         "command": "stado host reclaim",
         "mode": reclamation.mode,
+        "actor": actor,
         "reason": reason,
         "free_gb_before": reclamation.free_kb_before.map(|kb| gib_from_blocks(kb as f64)),
         "free_gb_after": reclamation.free_kb_after.map(|kb| gib_from_blocks(kb as f64)),
