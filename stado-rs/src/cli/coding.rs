@@ -34,8 +34,19 @@ pub async fn connect_jeden(
     if let Some(session) = resume {
         validate_component("resume session", session)?;
     }
-    let (registry, canonical) = match crate::targets::fetch_registry_remote().await {
-        Ok(registry) => (registry, true),
+    // The last-known-good copy sits between the authority and the bundled
+    // snapshot and is trusted no further than the snapshot is: `canonical`
+    // stays false for both, so the remote-reconnect refusal below is
+    // unchanged. What changes is which document a local placement reads —
+    // minutes old instead of as old as this binary.
+    let (registry, canonical) = match crate::targets::fetch_registry_or_last_good().await {
+        Ok((registry, notice)) => {
+            if let Some(notice) = notice {
+                crate::targets::report_registry_notice(&notice);
+            }
+            let canonical = registry.staleness_seconds.is_none();
+            (registry, canonical)
+        }
         Err(_) => (
             crate::targets::load_bundled_registry()
                 .map_err(|error| CmdError::click(error.to_string()))?,
