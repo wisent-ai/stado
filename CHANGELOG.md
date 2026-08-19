@@ -65,6 +65,43 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
 
 ### Host operations
 
+- Added `stado host software [TARGET] [--json]`: what a host actually runs, one
+  row per program with its version, its SHA-256 and whether those exact bytes
+  came out of a release Stado published. Every other read in the pack asks about
+  a declaration — `managed_versions` says which version a host must run,
+  `service list` says a unit is loaded, `release status` says what the registry
+  desires — and all of them stay true across a release that never reached the
+  box. On 2026-08-18 two macs were running a skarbiec built on a laptop, 0.2.1
+  on one and 0.2.3 on the other, neither in any published release and both
+  declared 0.1.3, and the older one stripped the `brama:agent:<id>` tags off a
+  live credential every rotation for a day while no screen in the fleet could
+  name the program doing it. `provenance` is decided by digest on the host and by
+  nothing else: `host release` stages every delivery out of an archive whose
+  SHA-256 it verified against the canonical release manifest and hard-links that
+  staged file into place, so bytes matching a staged artefact provably came
+  through the channel and bytes matching none provably did not — a name, a
+  version string and a program's own claim about its provenance all survive one
+  `scp`, and that digest does not. The population is every program in
+  `$HOME/.stado/bin`, every declared unit's program, and every release-control
+  product install path, the last of which appears in neither of the others.
+  Shell scripts are counted rather than rowed, because charless-mac-mini carries
+  1393 of them against 28 programs and a release pipeline produces none. The
+  report is stored as an observation in `~/.stado/observations.json`, so it
+  carries an age and goes stale, and a read that fails is recorded as
+  `unverified` instead of leaving yesterday's answer looking current. The
+  reporter is a checked-in script embedded in the binary and run over the same
+  audited fixed-script channel `host provenance` reads with; nothing is
+  installed on the host.
+- Added `stado host retag-vault-item TARGET ITEM --tags a,b,c`: an owner-only
+  vault write that replaces an item's tags and never its payload, over the
+  fixed-script channel. A vault item's tags are the only thing binding a
+  subscription credential to its agent — `list_subscriptions(agent)` discovers
+  accounts by the `brama:agent:<id>` tag — so an item whose tags were stripped
+  leaves the fleet while the credential itself stays valid. This is what brought
+  the kimi subscription back: five tags restored on
+  `provider:kimi:brama-sub-wisent-app-kimi-primary`, revision unchanged at 144
+  because the payload is untouched, and a signed request for
+  `kimi/kimi-k2-thinking` through the always-on gateway then answered 200.
 - Removed `stado host install-helper` and `stado host run-helper`. The helper
   channel — deliver a checked-in script into `$HOME/.stado/bin`, then execute it
   by name — was the source of recurring ad-hoc-script damage on hosts, and
@@ -113,6 +150,29 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
 
 ### Release control
 
+- `stado release status` no longer exits zero on silence. It printed
+  `brama target=charless-mac-mini desired=0.2.27 observed=unreported` and
+  succeeded, which made a host that had never once said what it runs
+  indistinguishable from a healthy one in the command an operator reaches for to
+  ask exactly that. Each target row now also carries the host's own software
+  report (`stado host software`), read out of the observation store rather than
+  gathered per target, and the command exits non-zero when a target has no
+  report, a report older than the observation TTL, a refused read, an
+  `unmanaged` program, or a version disagreeing with what the fleet declares —
+  naming the host and the exact disagreement in one sentence per row. The gate's
+  scope is what the fleet declares it manages: every name in the target's
+  `managed_versions` plus the release-control product's own binary at
+  `<install_root>/<binary>`, which lives under the product install root and
+  appears in no `managed_versions` entry. A program nothing declares — a host's
+  `$HOME/.stado/bin` accumulates dated backup copies, eleven of `stado` on one
+  laptop, none of them running — is reported and counted but does not fail the
+  gate, for the reason `service converge` refuses to fail on an unmeasured
+  binary: a command that fails forever on fossils teaches operators to append
+  `|| true`, and then the drift it exists to catch stops being noticed again.
+  StadoDesktop's Releases screen shows the same verdict in a `Software` column,
+  pulls a failing row up beside the blocked ones, and lists the CLI's sentences
+  verbatim — it reads `verdict`, `failed` and `findings` out of `status --json`
+  and re-derives none of them, so one command decides what `unmanaged` means.
 - A failed release job now reports its own last words: `release submit` reads
   the job's output-log tail from the store and carries it in the error, the
   failing platform and pinned host named in the same sentence, and persists it
