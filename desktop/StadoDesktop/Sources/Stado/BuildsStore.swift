@@ -164,15 +164,227 @@ struct BuildRunReceipt: Decodable, Sendable {
     }
 }
 
+/// What `stado builds remove <name> --json` answers with: the recipe it was
+/// asked about, and whether the registry stopped carrying it.
+struct BuildRecipeRemoval: Decodable, Sendable {
+    let name: String
+    let removed: Bool
+}
+
+/// The release platforms a recipe may name, in the order the published
+/// platform table declares them.
+///
+/// The form offers exactly these words. A word the table does not carry is a
+/// usage error from the CLI, and a console that lets an operator type one is a
+/// console that hands back a refusal it could have prevented.
+enum BuildPlatforms {
+    static let all: [String] = ["darwin-arm64", "linux-amd64"]
+}
+
+/// One recipe as the form holds it while the operator types: every field a
+/// string or a list, before any of the CLI's rules are applied to it.
+///
+/// This is the only place the console decides anything about a recipe.
+/// `problems(taken:)` is `stado builds add`'s own set of refusals, checked
+/// here so the operator reads the problem beside the field instead of getting
+/// it back as a non-zero exit; `change(from:)` is the diff that becomes flags.
+struct BuildRecipeDraft {
+    /// The CLI's own `--interval-seconds` default, so a new recipe starts at
+    /// the cadence `stado builds add` would have chosen anyway.
+    static let defaultIntervalSeconds: UInt64 = 300
+
+    var name = ""
+    var repo = ""
+    var branch = "main"
+    var command = ""
+    /// One row per `--artifact`, in the order the registry records them. A
+    /// blank row is a row not filled in yet, not an artifact: the form always
+    /// carries one so there is somewhere to type.
+    var artifacts = [""]
+    /// The platforms named, in the order they were named — the order the CLI
+    /// canonicalizes and the registry stores.
+    var platforms: [String] = []
+    /// Seconds, as typed. Held as text so a half-typed number stays a
+    /// half-typed number instead of collapsing to zero.
+    var interval = String(BuildRecipeDraft.defaultIntervalSeconds)
+    var autoDeclare = false
+
+    init() {}
+
+    /// The recipe as the registry records it, ready to be changed. `ref` is
+    /// the registry's name for the branch; the flag that writes it is
+    /// `--branch`.
+    init(_ recipe: BuildRecipe) {
+        name = recipe.name
+        repo = recipe.repo
+        branch = recipe.ref
+        command = recipe.command
+        artifacts = recipe.artifacts.isEmpty ? [""] : recipe.artifacts
+        platforms = recipe.platforms
+        interval = String(recipe.intervalSeconds)
+        autoDeclare = recipe.autoDeclare
+    }
+
+    var recipeName: String { name.trimmingCharacters(in: .whitespaces) }
+    var repoURL: String { repo.trimmingCharacters(in: .whitespaces) }
+    var branchName: String { branch.trimmingCharacters(in: .whitespaces) }
+    var buildCommand: String { command.trimmingCharacters(in: .whitespaces) }
+
+    /// The artifact rows that carry a path, trimmed, in order.
+    var artifactPaths: [String] {
+        artifacts
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// The cadence as a number, or nil while the text is not one.
+    var intervalSeconds: UInt64? {
+        UInt64(interval.trimmingCharacters(in: .whitespaces))
+    }
+
+    /// Every rule the CLI would refuse this draft by, in the CLI's own terms.
+    ///
+    /// `taken` are the recipe names the registry already carries — empty when
+    /// changing a recipe, since a change never renames one.
+    func problems(taken: Set<String>) -> [String] {
+        var problems: [String] = []
+        if !Self.isRecipeName(recipeName) {
+            problems.append(
+                "The name must be kebab-case: lowercase letters, digits and '-', starting and ending with a letter or a digit."
+            )
+        } else if taken.contains(recipeName) {
+            problems.append(
+                "A build recipe named \(recipeName) already exists. Change that one instead, or pick another name."
+            )
+        }
+        if !repoURL.hasPrefix("https://") {
+            problems.append("The repository must be an https:// clone URL.")
+        }
+        if branchName.isEmpty {
+            problems.append("Name the branch the poller watches.")
+        }
+        if buildCommand.isEmpty {
+            problems.append("Name the build command each job runs in the checkout.")
+        }
+        let paths = artifactPaths
+        if paths.isEmpty {
+            problems.append("Name at least one artifact path to upload from the checkout.")
+        }
+        for path in paths where !Self.isArtifactPath(path) {
+            problems.append("Artifact paths are relative to the checkout and never climb out of it: \(path)")
+        }
+        if platforms.isEmpty {
+            problems.append(
+                "Name at least one platform: a build job can only be claimed by a worker that is that platform."
+            )
+        }
+        for platform in platforms where !BuildPlatforms.all.contains(platform) {
+            problems.append(
+                "\(platform) is not a release platform. The published table carries \(BuildPlatforms.all.joined(separator: " and "))."
+            )
+        }
+        switch intervalSeconds {
+        case .none:
+            problems.append("The poll interval must be a whole number of seconds.")
+        case .some(0):
+            problems.append("The poll interval must be positive.")
+        case .some:
+            break
+        }
+        return problems
+    }
+
+    /// The fields this draft changes on `recipe`, and nothing else.
+    ///
+    /// Ordered lists are compared in order, platforms excepted: the form names
+    /// platforms with a set of switches, which cannot express an order, so a
+    /// selection naming the same platforms is not a change and the registry
+    /// keeps the order it recorded.
+    func change(from recipe: BuildRecipe) -> BuildRecipeEdit {
+        BuildRecipeEdit(
+            name: recipe.name,
+            repo: repoURL == recipe.repo ? nil : repoURL,
+            branch: branchName == recipe.ref ? nil : branchName,
+            command: buildCommand == recipe.command ? nil : buildCommand,
+            artifacts: artifactPaths == recipe.artifacts ? nil : artifactPaths,
+            platforms: Set(platforms) == Set(recipe.platforms) ? nil : platforms,
+            intervalSeconds: intervalSeconds == recipe.intervalSeconds ? nil : intervalSeconds,
+            autoDeclare: autoDeclare == recipe.autoDeclare ? nil : autoDeclare
+        )
+    }
+
+    /// `^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`, the CLI's own rule: a name that is
+    /// safe verbatim in a shell word, a JSON key and a table column.
+    static func isRecipeName(_ value: String) -> Bool {
+        let bare = { (character: Character) in
+            character.isASCII && (character.isLowercase || character.isNumber)
+        }
+        guard let first = value.first, let last = value.last, bare(first), bare(last) else {
+            return false
+        }
+        return value.allSatisfy { bare($0) || $0 == "-" }
+    }
+
+    /// A path inside the checkout: relative, and never climbing out of it.
+    static func isArtifactPath(_ path: String) -> Bool {
+        !path.hasPrefix("/")
+            && !path.split(separator: "/", omittingEmptySubsequences: false).contains("..")
+    }
+}
+
+/// The write `stado builds edit` makes, as the set of fields that actually
+/// change. A field the operator left alone is absent here and gets no flag,
+/// and a flag that is not passed leaves the registry's value untouched.
+struct BuildRecipeEdit {
+    let name: String
+    let repo: String?
+    let branch: String?
+    let command: String?
+    /// The whole artifact list, when it changed. `--artifact` replaces the
+    /// recorded list rather than appending to it, so a list that changed at
+    /// all is sent whole.
+    let artifacts: [String]?
+    /// The whole platform list, when it changed, on the same replace terms.
+    let platforms: [String]?
+    let intervalSeconds: UInt64?
+    let autoDeclare: Bool?
+
+    /// Nothing changed, so there is no write to make.
+    var isEmpty: Bool {
+        repo == nil && branch == nil && command == nil && artifacts == nil
+            && platforms == nil && intervalSeconds == nil && autoDeclare == nil
+    }
+
+    /// Whether this change points the recipe at a different source, which is
+    /// the one thing on this form that discards recorded state: the last seen
+    /// commit and every recorded run describe the repository and branch that
+    /// were there before, so they go with them.
+    var movesSource: Bool { repo != nil || branch != nil }
+
+    /// The registry's own field names for what changed, so a sentence can say
+    /// which fields moved without quoting their values a second time.
+    var changedFields: [String] {
+        var fields: [String] = []
+        if repo != nil { fields.append("repo") }
+        if branch != nil { fields.append("ref") }
+        if command != nil { fields.append("command") }
+        if artifacts != nil { fields.append("artifacts") }
+        if platforms != nil { fields.append("platforms") }
+        if intervalSeconds != nil { fields.append("interval_seconds") }
+        if autoDeclare != nil { fields.append("auto_declare") }
+        return fields
+    }
+}
+
 /// The build recipes in the canonical registry, read and written through the
 /// product CLI.
 ///
-/// Reads run `stado builds list --json`; the two writes this screen allows —
-/// flipping a recipe's enablement and enqueuing a build of every platform now
-/// — run the same `stado builds` commands an operator would type, so the
-/// confirmation dialog can quote the exact invocation. A refresh that fails
-/// keeps the rows from the last successful read on screen: a registry that
-/// stopped answering does not erase what it last said.
+/// Reads run `stado builds list --json`. Every write — authoring a recipe,
+/// changing one, removing one, flipping its enablement, enqueuing a build of
+/// every platform now — runs the same `stado builds` command an operator would
+/// type, so the confirmation dialog can quote the exact invocation. A refresh
+/// that fails keeps the rows from the last successful read on screen: a
+/// registry that stopped answering does not erase what it last said.
 @MainActor
 final class BuildsStore: ObservableObject {
     @Published private(set) var recipes: [BuildRecipe] = []
@@ -199,6 +411,66 @@ final class BuildsStore: ObservableObject {
 
     nonisolated static func runArguments(name: String) -> [String] {
         ["builds", "run", name, "--json"]
+    }
+
+    /// `stado builds add --name … --json`. Every field is given because add
+    /// requires them: a recipe with no artifact and no platform builds nothing.
+    nonisolated static func addArguments(_ draft: BuildRecipeDraft) -> [String] {
+        var arguments = [
+            "builds", "add",
+            "--name", draft.recipeName,
+            "--repo", draft.repoURL,
+            "--branch", draft.branchName,
+            "--command", draft.buildCommand,
+        ]
+        for path in draft.artifactPaths {
+            arguments += ["--artifact", path]
+        }
+        for platform in draft.platforms {
+            arguments += ["--platform", platform]
+        }
+        arguments += [
+            "--interval-seconds",
+            String(draft.intervalSeconds ?? BuildRecipeDraft.defaultIntervalSeconds),
+        ]
+        if draft.autoDeclare {
+            arguments.append("--auto-declare")
+        }
+        arguments.append("--json")
+        return arguments
+    }
+
+    /// `stado builds edit <name> [the changed flags only] --json`. A field the
+    /// operator left alone contributes no flag, and the registry keeps it.
+    nonisolated static func editArguments(_ change: BuildRecipeEdit) -> [String] {
+        var arguments = ["builds", "edit", change.name]
+        if let repo = change.repo {
+            arguments += ["--repo", repo]
+        }
+        if let branch = change.branch {
+            arguments += ["--branch", branch]
+        }
+        if let command = change.command {
+            arguments += ["--command", command]
+        }
+        for path in change.artifacts ?? [] {
+            arguments += ["--artifact", path]
+        }
+        for platform in change.platforms ?? [] {
+            arguments += ["--platform", platform]
+        }
+        if let seconds = change.intervalSeconds {
+            arguments += ["--interval-seconds", String(seconds)]
+        }
+        if let autoDeclare = change.autoDeclare {
+            arguments.append(autoDeclare ? "--auto-declare" : "--no-auto-declare")
+        }
+        arguments.append("--json")
+        return arguments
+    }
+
+    nonisolated static func removeArguments(name: String) -> [String] {
+        ["builds", "remove", name, "--json"]
     }
 
     /// The recipe's platforms in one clause, for a sentence an operator reads
@@ -270,6 +542,86 @@ final class BuildsStore: ObservableObject {
                     ? "Enqueued the build of \(receipt.name). The Queue screen tracks its jobs from here."
                     : "Enqueued \(receipt.jobs.count == 1 ? "job" : "jobs") for \(receipt.name): \(enqueued). The Queue screen tracks them from here."
             )
+        } catch {
+            mutation = .failed(Self.message(for: error))
+        }
+        await refresh()
+    }
+
+    /// `stado builds add … --json`. The CLI answers with the recipe it wrote,
+    /// which lands in the table before the follow-up read confirms it.
+    ///
+    /// A new recipe is disabled: authoring one polls nothing and builds
+    /// nothing until an operator says so, which is why this write asks for no
+    /// confirmation of its own.
+    func add(_ draft: BuildRecipeDraft) async {
+        mutation = .working("Adding \(draft.recipeName)")
+        do {
+            let created = try await cli.json(
+                BuildRecipe.self,
+                arguments: Self.addArguments(draft)
+            )
+            replace(created)
+            var sentence =
+                "\(created.name) is recorded for \(Self.platformList(created)) and starts disabled: nothing is polled and nothing is built until it is enabled here, and Run now… builds it once without enabling it."
+            if created.autoDeclare {
+                sentence +=
+                    " Auto-declare is on: a succeeded build whose commit carried a semver tag writes that version into the managed versions of every registry host on the run's platform."
+            }
+            mutation = .succeeded(sentence)
+        } catch {
+            mutation = .failed(Self.message(for: error))
+        }
+        await refresh()
+    }
+
+    /// `stado builds edit <name> [changed flags] --json`: the fields the
+    /// operator changed, and no others.
+    ///
+    /// Whether the recipe re-fires is decided by which fields moved, so the
+    /// outcome says which state the write cleared. Moving the source clears the
+    /// last seen commit and the recorded runs — they describe a repository and
+    /// branch that are no longer the recipe's; changing how it builds keeps
+    /// both, and a platform named for the first time simply has no run yet.
+    func edit(_ change: BuildRecipeEdit) async {
+        mutation = .working("Changing \(change.name)")
+        do {
+            let updated = try await cli.json(
+                BuildRecipe.self,
+                arguments: Self.editArguments(change)
+            )
+            replace(updated)
+            let fields = change.changedFields.joined(separator: ", ")
+            mutation = .succeeded(
+                change.movesSource
+                    ? "\(updated.name) now builds \(updated.repo) at \(updated.ref) (changed: \(fields)). The last seen commit and every recorded run were cleared: they described the source it no longer builds, so the next poll builds the current head of this one."
+                    : "\(updated.name) is changed (changed: \(fields)). The last seen commit and the recorded runs are untouched — how it builds moved, not what it builds from, and a platform named for the first time simply has no run yet."
+            )
+        } catch {
+            mutation = .failed(Self.message(for: error))
+        }
+        await refresh()
+    }
+
+    /// `stado builds remove <name> --json`. The registry stops declaring the
+    /// recipe; what the recipe already did to the fleet stays done.
+    func remove(_ recipe: BuildRecipe) async {
+        mutation = .working("Removing \(recipe.name)")
+        do {
+            let removal = try await cli.json(
+                BuildRecipeRemoval.self,
+                arguments: Self.removeArguments(name: recipe.name)
+            )
+            if removal.removed {
+                recipes.removeAll { $0.name == removal.name }
+                mutation = .succeeded(
+                    "\(removal.name) is removed from the registry: nothing polls it and no new job is enqueued for it. A job it already enqueued keeps running and keeps its results, and a version it declared stays declared on the hosts that took it."
+                )
+            } else {
+                mutation = .failed(
+                    "The registry still declares \(removal.name). Nothing was removed."
+                )
+            }
         } catch {
             mutation = .failed(Self.message(for: error))
         }
