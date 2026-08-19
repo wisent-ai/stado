@@ -109,4 +109,3 @@ pub async fn self_terminate(log_fn: &mut dyn FnMut(&str)) {
         log_fn(&format!("GCE self-terminate failed: {err}"));
     }
 }
-

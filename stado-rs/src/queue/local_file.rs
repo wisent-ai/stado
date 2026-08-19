@@ -425,4 +425,3 @@ fn remove_missing_ok(path: &Path) -> Result<(), StorageError> {
         Err(err) => Err(err.into()),
     }
 }
-

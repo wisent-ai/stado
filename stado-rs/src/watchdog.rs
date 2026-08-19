@@ -566,4 +566,3 @@ pub async fn cli_main() -> i32 {
         tokio::time::sleep(Duration::from_secs(interval)).await;
     }
 }
-

@@ -159,4 +159,3 @@ pub fn global() -> &'static HistoryCache {
     static GLOBAL: LazyLock<HistoryCache> = LazyLock::new(HistoryCache::new);
     &GLOBAL
 }
-

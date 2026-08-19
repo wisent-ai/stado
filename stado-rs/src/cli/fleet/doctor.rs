@@ -268,4 +268,3 @@ pub async fn run(as_json: bool, scoped: Option<&str>) -> Result<bool, String> {
     }
     Ok(clean)
 }
-

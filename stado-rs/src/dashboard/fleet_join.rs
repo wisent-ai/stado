@@ -568,4 +568,3 @@ pub(super) async fn join(store: &JobStorage, request: &Request) -> Response {
         }),
     )
 }
-

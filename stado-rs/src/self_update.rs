@@ -23,7 +23,6 @@ use crate::release::{canonical_coordinate, version_newer};
 
 /// Legacy pointer name retained only by offline compatibility tests. Runtime
 /// release resolution never fetches it.
-
 /// The checksum manifest inside each `<version>/<platform>/` directory.
 pub const SHA256SUMS_NAME: &str = "SHA256SUMS";
 
@@ -456,4 +455,3 @@ pub fn reexec() -> std::io::Error {
         Err(err) => err,
     }
 }
-

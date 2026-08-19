@@ -276,8 +276,6 @@ pub async fn upload_output(
     Ok(())
 }
 
-/// Test-only byte-tail helper.
-
 // ---------------------------------------------------------------------------
 // small env / json / process helpers
 // ---------------------------------------------------------------------------
@@ -1318,4 +1316,3 @@ pub async fn advance_slot(
     }
     Ok(SlotOutcome::Done)
 }
-

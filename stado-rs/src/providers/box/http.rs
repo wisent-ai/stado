@@ -80,7 +80,6 @@ impl BoxHttpTransport {
 
     /// Test-only constructor: same wiring, without the HTTPS scheme check,
     /// so a loopback mock can stand in for ascii.dev.
-
     fn assemble(api_key: &str, base_url: &str, timeout_seconds: f64) -> Self {
         BoxHttpTransport {
             client: reqwest::Client::new(),
@@ -315,4 +314,3 @@ pub const DEFAULT_TIMEOUT: f64 = DEFAULT_TIMEOUT_SECONDS;
 /// Default base URL (re-exported so `super::BoxProvider` mirrors the
 /// Python constructor defaults).
 pub const DEFAULT_BASE_URL: &str = DEFAULT_BOX_API_URL;
-

@@ -1159,4 +1159,3 @@ pub fn humanize(seconds: i64) -> String {
     }
     parts.join(" ")
 }
-

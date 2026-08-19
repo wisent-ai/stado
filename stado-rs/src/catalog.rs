@@ -478,4 +478,3 @@ pub static AZURE_VM_HOURLY_RATE_USD: LazyLock<HashMap<&'static str, (f64, f64)>>
             ("Standard_NV28adms_V710_v5", (3.06, 0.61)),
         ])
     });
-

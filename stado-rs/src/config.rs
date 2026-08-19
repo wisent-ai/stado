@@ -3158,4 +3158,3 @@ pub fn lookup_instance_type(provider: &str, gpu_mem_gb: i64) -> (&'static str, &
         .map(|(_, spec)| *spec)
         .unwrap_or(("", ""))
 }
-

@@ -582,4 +582,3 @@ impl JobStorage {
         Ok(())
     }
 }
-
