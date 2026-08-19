@@ -379,6 +379,25 @@ pub enum ServiceCommands {
         json: bool,
     },
 
+    /// Declare a service against the fleet's one contract.
+    ///
+    /// Stado ships no list of services: a service is whatever its author
+    /// declares — an immutable source the bytes come from, a run spec the
+    /// unit is rendered from, how the service is observed, and who may call
+    /// it. This command writes that declaration into the service directory;
+    /// `deploy` then needs no flags beyond the name, because everything it
+    /// would ask for is already written down.
+    Declare {
+        /// Path to the declaration file (JSON). Required keys: `name`,
+        /// `host`, `source.artifact`, `source.sha256`. Optional: `run`,
+        /// `verify`, `consumers`, `endpoints`, or `port` as a shorthand for
+        /// one loopback endpoint on the declared host.
+        #[arg(long)]
+        file: String,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Assert the unit a host must be running, over ssh, idempotently.
     ///
     /// `deploy` installs a unit and refuses one that is already declared, so
@@ -409,9 +428,14 @@ pub enum ServiceCommands {
         #[arg(long)]
         host: String,
         /// Absolute path, ON THE TARGET HOST, of the program the unit runs.
+        /// Omit it to render the unit from the service's own declaration,
+        /// which is what makes a declared service reinstallable from the
+        /// document instead of from a plist somebody installed by hand.
         #[arg(long)]
-        from: String,
-        /// One argument the unit is started with; repeat for each.
+        from: Option<String>,
+        /// One argument the unit is started with; repeat for each. Only with
+        /// `--from`: the declared argument vector belongs to the declared
+        /// program and the two are never mixed.
         #[arg(long = "arg")]
         args: Vec<String>,
         /// Why this host must run this unit. Required: `ensure` installs units
@@ -616,6 +640,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             )
             .await
         }
+        ServiceCommands::Declare { file, json } => declare(&file, json).await,
         ServiceCommands::Ensure {
             name,
             host,
@@ -627,7 +652,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             ensure(EnsureOptions {
                 name: &name,
                 host: &host,
-                from: &from,
+                from: from.as_deref(),
                 args: &args,
                 reason: &reason,
                 as_json: json,
@@ -699,9 +724,7 @@ pub(crate) async fn declared_matching(
         // the registry's own precise refusal rather than "no such service".
         host_channel::canonical_target(host).await.map_err(click)?;
     }
-    let registry = targets::fetch_registry_remote()
-        .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    let registry = registry::read_registry().await?;
     let mut found: Vec<ManagedService> = Vec::new();
     for target in registry.local_targets() {
         if host.is_some_and(|host| target.name != host) {
@@ -762,9 +785,7 @@ async fn list(json: bool) -> Result<(), CmdError> {
 /// than dropped — "no unowned processes" and "nobody looked" are the fold this
 /// whole group refuses to make.
 async fn list_unowned(json: bool) -> Result<(), CmdError> {
-    let registry = targets::fetch_registry_remote()
-        .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    let registry = registry::read_registry().await?;
     let runner = production_runner();
     let mut found: Vec<service::UnownedProcess> = Vec::new();
     let mut failures: Vec<String> = Vec::new();
@@ -1007,20 +1028,34 @@ fn render_status(
         headers.insert(3, "DOMAIN");
     }
     table::print(&headers, &cells);
+    // A unit declared in a domain its host cannot have, named where the
+    // operator is already reading the table it is missing from. This is a
+    // fact about the document, so it prints for every row that carries it
+    // whatever the beacon said — including the `missing` rows, where the
+    // declaration is the reason the beacon reports nothing.
+    for row in rows {
+        if let Some(misdeclared) = &row.misdeclared_domain {
+            println!("declaration: {}", misdeclared.sentence());
+        }
+    }
     for failure in failures {
         let exit = match &failure.last_exit {
             Some(exit) => format!("last launchd exit {exit}"),
             None => "last launchd exit unknown".to_string(),
         };
         println!("failure: {} {}: {}", failure.host, failure.unit, exit);
-        // A failed system LaunchDaemon cannot be restarted over the approved
-        // channel; say so here, where the operator is reading why.
+        // A failed system LaunchDaemon has exactly one repair over the
+        // approved channel, and it has conditions; say which, here, where the
+        // operator is reading why.
         if rows.iter().any(|row| {
             row.service.host == failure.host
                 && row.service.unit_id() == failure.unit.as_str()
                 && UnitDomain::from_path(&row.service.path).requires_privileged_bootstrap()
         }) {
-            println!("  unit: system LaunchDaemon — restart requires a privileged bootstrap");
+            println!(
+                "  unit: system LaunchDaemon — `service restart` can only end its process and let \
+                 launchd's KeepAlive replace it; loading it takes sudo on the host"
+            );
         }
         if let Some(error_origin) = &failure.error_origin {
             println!("  stderr: {error_origin}");
@@ -1059,6 +1094,11 @@ async fn restart(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdEr
         cells.push(vec![
             declared.host.clone(),
             declared.unit_id().to_string(),
+            // The domain, in the human output as well as in `--json`: a
+            // restart that acted in `user/501` and a restart that acted in
+            // `gui/501` are different operations, and the table used to print
+            // neither.
+            dash(&report.domain),
             dash(&report.status),
             dash(&report.detail),
         ]);
@@ -1070,7 +1110,7 @@ async fn restart(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdEr
     if json {
         print_json(&Value::Array(payload))?;
     } else {
-        table::print(&["HOST", "UNIT", "STATUS", "DETAIL"], &cells);
+        table::print(&["HOST", "UNIT", "DOMAIN", "STATUS", "DETAIL"], &cells);
     }
     fail_if_any(&failures, "restart")
 }
@@ -1225,6 +1265,7 @@ async fn stop(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdError
         cells.push(vec![
             declared.host.clone(),
             declared.unit_id().to_string(),
+            dash(&report.domain),
             dash(&report.status),
             dash(&report.detail),
         ]);
@@ -1236,7 +1277,7 @@ async fn stop(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdError
     if json {
         print_json(&Value::Array(payload))?;
     } else {
-        table::print(&["HOST", "UNIT", "STATUS", "DETAIL"], &cells);
+        table::print(&["HOST", "UNIT", "DOMAIN", "STATUS", "DETAIL"], &cells);
     }
     fail_if_any(&failures, "stop")
 }
@@ -1552,9 +1593,30 @@ fn fail_if_any(failures: &[String], action: &str) -> Result<(), CmdError> {
 ///
 /// `push_document` runs `targets::validate_registry` before it writes, so a
 /// declaration that would produce an invalid registry is refused with
-/// nothing uploaded. Returns the new generation.
+/// Nothing uploaded. Returns the new generation.
 async fn record_declaration(record: &ManagedService) -> Result<String, CmdError> {
     let mut document = registry::fetch_document().await?;
+    // A placeholder left by `service declare` is the declaration, not the
+    // unit: deploy replaces it with the real record rather than refusing on
+    // a name it put there itself.
+    if let Some(services) = document
+        .get_mut("targets")
+        .and_then(Value::as_array_mut)
+        .and_then(|targets| {
+            targets
+                .iter_mut()
+                .find(|target| {
+                    target.get("name").and_then(Value::as_str) == Some(record.host.as_str())
+                })
+                .and_then(|target| target.get_mut("services"))
+                .and_then(Value::as_array_mut)
+        })
+    {
+        services.retain(|existing| {
+            !(existing.get("name").and_then(Value::as_str) == Some(record.name.as_str())
+                && existing.get("declared_only").and_then(Value::as_bool) == Some(true))
+        });
+    }
     service::add_service(&mut document, record).map_err(click)?;
     registry::push_document(&document).await
 }
@@ -1673,6 +1735,212 @@ async fn retire(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
     )
 }
 
+/// One declared service name: lowercase letters and digits at the edges,
+/// with '.', '-' and '_' inside — the same rule the directory validator
+/// applies, enforced here so a bad name fails before the document moves.
+fn declaration_name_ok(value: &str) -> bool {
+    let edge = |byte: u8| byte.is_ascii_lowercase() || byte.is_ascii_digit();
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && edge(bytes[0])
+        && edge(bytes[bytes.len() - 1])
+        && bytes
+            .iter()
+            .all(|byte| edge(*byte) || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+/// Write one user-authored declaration into the service directory.
+///
+/// The declaration file is the whole contract: `name` and `host`, the
+/// immutable `source`, the opaque `run` spec, and optionally `verify`,
+/// `consumers`, and `endpoints` (or `port` as the loopback shorthand).
+/// The fleet learns nothing about the service's kind from it — that is the
+/// design, not a gap: anything the service knows about itself lives inside
+/// the artifact and the run spec.
+async fn declare(file: &str, as_json: bool) -> Result<(), CmdError> {
+    let text = std::fs::read_to_string(file)
+        .map_err(|error| CmdError::click(format!("{file}: {error}")))?;
+    let value: Value = serde_json::from_str(&text)
+        .map_err(|error| CmdError::click(format!("{file}: not a JSON object: {error}")))?;
+    let name = value
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| CmdError::usage(format!("{file}: 'name' is required")))?;
+    if !declaration_name_ok(name) {
+        return Err(CmdError::usage(format!(
+            "{file}: 'name' must be a lowercase identifier without empty edges"
+        )));
+    }
+    let host = value
+        .get("host")
+        .and_then(Value::as_str)
+        .ok_or_else(|| CmdError::usage(format!("{file}: 'host' is required")))?;
+    let mut declaration_value = match value.get("declaration") {
+        Some(declaration) => declaration.clone(),
+        None => {
+            let mut assembled = json!({"source": value.get("source")});
+            if let Some(run) = value.get("run") {
+                assembled["run"] = run.clone();
+            }
+            assembled
+        }
+    };
+    let declaration: crate::declaration::ServiceDeclaration =
+        serde_json::from_value(std::mem::take(&mut declaration_value)).map_err(|error| {
+            CmdError::usage(format!(
+                "{file}: declaration must carry source.artifact and source.sha256: {error}"
+            ))
+        })?;
+    let location = format!("service_directory.services.{name}");
+    let problems = crate::declaration::validate(&location, &declaration);
+    if !problems.is_empty() {
+        return Err(CmdError::usage(problems.join("; ")));
+    }
+    let verify = match value.get("verify") {
+        Some(descriptor) => {
+            let descriptor: targets::VerifyDescriptor =
+                serde_json::from_value(descriptor.clone()).map_err(|error| {
+                    CmdError::usage(format!("{file}: 'verify': {error}"))
+                })?;
+            let problems = targets::validate_verification(&location, &descriptor);
+            if !problems.is_empty() {
+                return Err(CmdError::usage(problems.join("; ")));
+            }
+            Some(
+                serde_json::to_value(&descriptor)
+                    .map_err(|error| CmdError::click(format!("verify: {error}")))?,
+            )
+        }
+        None => None,
+    };
+    // Endpoints: explicit map wins; `port` is the loopback shorthand for the
+    // declared host. The directory contract requires at least the active
+    // host's endpoint, so neither present is an author error, not a default.
+    let mut endpoints = value
+        .get("endpoints")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    if let (Some(port), false) = (
+        value.get("port").and_then(Value::as_u64),
+        endpoints.contains_key(host),
+    ) {
+        if port == 0 || port > u16::MAX as u64 {
+            return Err(CmdError::usage(format!("{file}: 'port' out of range")));
+        }
+        endpoints.insert(
+            host.to_string(),
+            json!({"url": format!("http://127.0.0.1:{port}")}),
+        );
+    }
+    if !endpoints.contains_key(host) {
+        return Err(CmdError::usage(format!(
+            "{file}: the declaration needs an endpoint for {host} — pass 'endpoints' or the 'port' shorthand"
+        )));
+    }
+    // The directory answers "who may call it" from the same entry, so a
+    // declaration without consumers is not a declaration the contract can
+    // publish: it would answer that question with silence.
+    match value.get("consumers").and_then(Value::as_object) {
+        Some(consumers) if !consumers.is_empty() => {}
+        _ => {
+            return Err(CmdError::usage(format!(
+                "{file}: 'consumers' is required and must name at least one caller"
+            )));
+        }
+    }
+
+    let mut document = registry::fetch_document().await?;
+    let known_target = document
+        .get("targets")
+        .and_then(Value::as_array)
+        .is_some_and(|targets| {
+            targets
+                .iter()
+                .any(|target| target.get("name").and_then(Value::as_str) == Some(host))
+        });
+    if !known_target {
+        return Err(CmdError::usage(format!(
+            "{file}: 'host' names {host}, which is not a registry target"
+        )));
+    }
+    let directory = document
+        .get_mut("service_directory")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| {
+            CmdError::click(
+                "registry has no service_directory; an authority must publish it before services can be declared",
+            )
+        })?;
+    let services = directory
+        .entry("services")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .ok_or_else(|| CmdError::click("service_directory.services: must be an object"))?;
+    let entry = services
+        .entry(name.to_string())
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .ok_or_else(|| CmdError::click(format!("service_directory.services.{name}: must be an object")))?;
+    entry.insert("active_host".to_string(), json!(host));
+    entry.insert("endpoints".to_string(), Value::Object(endpoints));
+    // The directory contract binds every fixed route to the managed unit on
+    // its active host, and the unit lands when `deploy` runs — so declare
+    // writes the link now and a placeholder record on the host, which
+    // `deploy` replaces with the real one. Declared-but-not-yet-deployed is
+    // a designed state, not an error: the registry says what should run,
+    // the beacons say what does.
+    entry.insert("managed_service".to_string(), json!(name));
+    if let Some(consumers) = value.get("consumers") {
+        entry.insert("consumers".to_string(), consumers.clone());
+    }
+    if let Some(descriptor) = verify {
+        entry.insert("verify".to_string(), descriptor);
+    }
+    entry.insert(
+        "declaration".to_string(),
+        serde_json::to_value(&declaration)
+            .map_err(|error| CmdError::click(format!("declaration: {error}")))?,
+    );
+    let target_entry = document
+        .get_mut("targets")
+        .and_then(Value::as_array_mut)
+        .and_then(|targets| {
+            targets.iter_mut().find(|target| {
+                target.get("name").and_then(Value::as_str) == Some(host)
+            })
+        })
+        .ok_or_else(|| CmdError::click(format!("registry targets lost {host}")))?;
+    let host_services = target_entry
+        .as_object_mut()
+        .ok_or_else(|| CmdError::click("registry target: must be an object"))?
+        .entry("services")
+        .or_insert_with(|| json!([]))
+        .as_array_mut()
+        .ok_or_else(|| CmdError::click(format!("registry target {host}: services must be an array")))?;
+    let already = host_services
+        .iter()
+        .any(|record| record.get("name").and_then(Value::as_str) == Some(name));
+    if !already {
+        host_services.push(json!({"name": name, "declared_only": true}));
+    }
+    let generation = registry::push_document(&document).await?;
+    if !as_json {
+        println!("declared {name} on {host} (generation {generation})");
+    } else {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "declared": name,
+                "host": host,
+                "generation": generation,
+            }))
+            .map_err(|error| CmdError::click(format!("declare report: {error}")))?
+        );
+    }
+    Ok(())
+}
+
 async fn deploy(
     name: &str,
     host: Option<&str>,
@@ -1688,6 +1956,7 @@ async fn deploy(
     // whatever is on the host with no version identity, and an artifact
     // deploys a named version; guessing between them is how a host ends up
     // running something nobody can name.
+    let mut declaration_args: Vec<String> = Vec::new();
     let (from, installed) = match (from, from_artifact) {
         (Some(path), None) => (path, None),
         (None, Some(reference)) => {
@@ -1695,15 +1964,48 @@ async fn deploy(
             (installed.program_path.clone(), Some(installed))
         }
         (None, None) => {
-            return Err(CmdError::click(
-                "deploy needs --from PATH or --from-artifact REF",
-            ))
+            // A declared service deploys from its declaration: `service
+            // declare` already wrote the artifact reference and the run
+            // spec, so the name alone is enough.
+            let document = registry::fetch_document().await?;
+            let entry = document
+                .get("service_directory")
+                .and_then(|directory| directory.get("services"))
+                .and_then(|services| services.get(name))
+                .cloned();
+            let Some(entry) = entry else {
+                return Err(CmdError::click(format!(
+                    "deploy needs --from PATH or --from-artifact REF, or a declaration written by \
+                     `stado service declare --file`; the directory names no service '{name}'"
+                )));
+            };
+            let Some(declared) = crate::declaration::ServiceDeclaration::from_entry(&entry) else {
+                return Err(CmdError::click(format!(
+                    "deploy needs --from PATH or --from-artifact REF: '{name}' is declared without a source"
+                )));
+            };
+            let installed = install_from_artifact(&target, name, &declared.source.artifact).await?;
+            if installed.sha256 != declared.source.sha256 {
+                return Err(CmdError::click(format!(
+                    "{name}: declaration pins sha256 {} but the artifact installed {}",
+                    declared.source.sha256, installed.sha256
+                )));
+            }
+            if args.is_empty() {
+                declaration_args = declared.run.args;
+            }
+            (installed.program_path.clone(), Some(installed))
         }
         (Some(_), Some(_)) => {
             return Err(CmdError::click("--from and --from-artifact are exclusive"))
         }
     };
     let from = from.as_str();
+    let args: &[String] = if args.is_empty() {
+        &declaration_args
+    } else {
+        args
+    };
     let plan = service::plan_deploy(name, from, args).map_err(click)?;
 
     // Refuse a colliding declaration BEFORE touching the host: pushing a
@@ -1772,13 +2074,90 @@ async fn deploy(
 struct EnsureOptions<'a> {
     name: &'a str,
     host: &'a str,
-    from: &'a str,
+    from: Option<&'a str>,
     args: &'a [String],
     reason: &'a str,
     as_json: bool,
 }
 
-/// `service ensure NAME --host HOST --from PATH --reason WHY`.
+/// What a unit runs, and which declaration said so.
+struct UnitProgram {
+    program: String,
+    args: Vec<String>,
+    /// `"flag"`, `"registry"` or `"shipped"`.
+    source: &'static str,
+}
+
+/// The launchd label a declaration carries, or a systemd unit name without
+/// its suffix — the spelling `deploy::service::plan_deploy_labelled` renders
+/// at.
+fn declared_label(service: &ManagedService) -> Option<&str> {
+    let unit_id = service.unit_id();
+    Some(unit_id.strip_suffix(".service").unwrap_or(unit_id)).filter(|label| !label.is_empty())
+}
+
+/// The program and argument vector `ensure` renders the unit from.
+///
+/// Flags win, because an operator correcting a wrong declaration has to be
+/// able to. Absent them, the host's own `services[]` entry answers: a
+/// declaration that carries its program is one this command can reinstall
+/// from the document alone, which is the whole difference between a declared
+/// service and a plist somebody installed by hand — the resolver and the
+/// local dashboard on `lukasz-macbook` were the second kind, and nothing in
+/// the product knew their restart policy. Last, the declaration shipped in
+/// this build ([`targets::load_bundled_registry`]), which is how a unit
+/// declared in a release reaches a canonical document published before it:
+/// the first `ensure` writes it there.
+fn unit_program(
+    host: &str,
+    name: &str,
+    from: Option<&str>,
+    args: &[String],
+    declared: Option<&ManagedService>,
+) -> Result<UnitProgram, CmdError> {
+    if let Some(from) = from {
+        return Ok(UnitProgram {
+            program: from.to_string(),
+            args: args.to_vec(),
+            source: "flag",
+        });
+    }
+    if !args.is_empty() {
+        return Err(CmdError::usage(
+            "--arg needs --from: an argument vector without the program it belongs to would be \
+             appended to a declared program the caller never named",
+        ));
+    }
+    if let Some(declared) = declared.filter(|candidate| !candidate.program.is_empty()) {
+        return Ok(UnitProgram {
+            program: declared.program.clone(),
+            args: declared.args.clone(),
+            source: "registry",
+        });
+    }
+    let bundled =
+        targets::load_bundled_registry().map_err(|error| CmdError::click(error.to_string()))?;
+    let shipped = bundled
+        .lookup(host)
+        .map(service::declared_services)
+        .unwrap_or_default()
+        .into_iter()
+        .find(|candidate| candidate.matches(name) && !candidate.program.is_empty());
+    if let Some(shipped) = shipped {
+        return Ok(UnitProgram {
+            program: shipped.program,
+            args: shipped.args,
+            source: "shipped",
+        });
+    }
+    Err(CmdError::usage(format!(
+        "nothing declares what {name} runs on {host}: pass --from PATH (repeating --arg for each \
+         argument), or give its registry services[] entry a \"program\" and \"args\" so the \
+         declaration is the source of the unit"
+    )))
+}
+
+/// `service ensure NAME --host HOST [--from PATH] --reason WHY`.
 ///
 /// The idempotent half of `deploy`, and the only one that works on an ssh
 /// login with no Aqua session. Two facts decide everything it does, and both
@@ -1797,18 +2176,44 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
         .await
         .map_err(click)?;
     let host = target.name.clone();
-    let plan = service::plan_deploy(options.name, options.from, options.args).map_err(click)?;
+
+    // The declaration is looked up twice on purpose. This one answers what the
+    // unit runs and so has to precede the plan; the one below decides whether
+    // the document needs writing and matches the rendered label and unit name
+    // as well as the operator's NAME.
+    let declared = service::declared_services(&target);
+    let existing = declared
+        .iter()
+        .find(|candidate| candidate.matches(options.name));
+    let unit = unit_program(&host, options.name, options.from, options.args, existing)?;
+    if unit.source == "shipped" {
+        eprintln!(
+            "{host} declares no program for {}; rendering the unit from the declaration shipped \
+             with this build: {} {}",
+            options.name,
+            unit.program,
+            unit.args.join(" ")
+        );
+    }
+    // At the label the declaration already carries, when it carries one. A
+    // minted label for a unit that exists under another one is a second unit,
+    // not this one.
+    let plan = match existing.and_then(declared_label) {
+        Some(label) => {
+            service::plan_deploy_labelled(options.name, label, &unit.program, &unit.args)
+        }
+        None => service::plan_deploy(options.name, &unit.program, &unit.args),
+    }
+    .map_err(click)?;
 
     // An existing declaration is not a refusal here, and that is the whole
     // difference from `deploy`: asserting a unit that is already declared and
     // already running is what makes this safe to run twice, or from a script.
-    let already = service::declared_services(&target)
-        .into_iter()
-        .find(|candidate| {
-            candidate.matches(options.name)
-                || candidate.matches(&plan.label)
-                || candidate.matches(&plan.unit)
-        });
+    let already = declared.into_iter().find(|candidate| {
+        candidate.matches(options.name)
+            || candidate.matches(&plan.label)
+            || candidate.matches(&plan.unit)
+    });
 
     let runner = production_runner();
     let outcome = service::ensure_service(&target, &plan, &runner)
@@ -1832,14 +2237,19 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
         return Err(CmdError::click(detail));
     }
 
-    let record = service::record_from_ensure(&host, options.name, &outcome, &now());
+    let mut record = service::record_from_ensure(&host, options.name, &outcome, &now());
+    record.program = unit.program;
+    record.args = unit.args;
     let generation = match &already {
-        // Declared, at the same file, by the registry: the document already
-        // says what this pass just confirmed, so nothing is written to it.
+        // Declared, at the same file and running the same program, by the
+        // registry: the document already says what this pass just confirmed,
+        // so nothing is written to it.
         Some(existing)
             if existing.source == SOURCE_REGISTRY
                 && existing.path == record.path
-                && existing.kind == record.kind =>
+                && existing.kind == record.kind
+                && existing.program == record.program
+                && existing.args == record.args =>
         {
             None
         }

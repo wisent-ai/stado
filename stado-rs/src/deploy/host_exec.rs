@@ -39,7 +39,7 @@
 use serde_json::{json, Value};
 
 use super::host_channel;
-use super::{py_str_repr, DeployError, Runner};
+use super::{py_str_repr, shlex_quote, DeployError, Runner};
 
 /// `status` for a command that ran and exited clean.
 pub const OK_STATUS: &str = "ok";
@@ -73,7 +73,50 @@ impl ApprovedCommand {
         }
         words.join(" ")
     }
+
+    /// Every absolute path this entry's program may be installed at, in probe
+    /// order. A one-element slice — `argv[0]` itself — for every program that
+    /// lives in exactly one place.
+    pub fn candidates(&self) -> &'static [&'static str] {
+        let Some((program, _)) = self.argv.split_first() else {
+            return &[];
+        };
+        PROGRAM_CANDIDATES
+            .iter()
+            .find(|(named, _)| named == program)
+            .map_or(std::slice::from_ref(program), |(_, paths)| paths)
+    }
 }
+
+/// The tailscale CLI, as the fleet's Linux hosts install it.
+///
+/// It is `argv[0]` of the two tailscale entries, so [`ApprovedCommand::display`]
+/// spells them `tailscale …` — the name of the program, in the case every
+/// operator and every script in this repository types it. On macOS the same CLI
+/// ships inside the application bundle instead, which is why the entry needs
+/// [`PROGRAM_CANDIDATES`]: one program, two install layouts, one spelling.
+const TAILSCALE_PROGRAM: &str = "/usr/bin/tailscale";
+
+/// Every absolute path a program in this table is installed at, for the
+/// programs whose location differs per platform.
+///
+/// The order is the one every other reader in this repository already probes
+/// (`scripts/diagnose-tailscale-serve-host.sh`,
+/// `scripts/reconcile-stado-object-tailnet-route-host.sh`, the enrolment
+/// script in `cli/fleet/invite.rs`), so `host exec` cannot disagree with them
+/// about which binary is the tailscale CLI on a given host.
+///
+/// A program absent from this table has exactly one path — its `argv[0]` — and
+/// keeps the plain [`host_channel::run_program`] transport.
+const PROGRAM_CANDIDATES: &[(&str, &[&str])] = &[(
+    TAILSCALE_PROGRAM,
+    &[
+        "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+        "/usr/local/bin/tailscale",
+        "/opt/homebrew/bin/tailscale",
+        TAILSCALE_PROGRAM,
+    ],
+)];
 
 /// The allowlist.
 ///
@@ -197,6 +240,51 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               because the allowlist matches an entry exactly and never appends operator words. \
               Answers 'whose process is holding that port', which the pid-only listing cannot",
     },
+    // The four reads a connectivity gap needs, added 2026-08-19. Between
+    // 18:29 and 18:35 UTC charless-mac-mini answered no ping and no ssh, then
+    // came back on a direct path; every fact about that gap — when the host
+    // slept and woke, whether its path was direct or relayed and to which
+    // endpoint, whether its own view of the tailnet was degraded, and which
+    // interface had dropped — was read by an operator over a private ssh
+    // session, eleven times, because no sanctioned path existed. These are
+    // that path.
+    ApprovedCommand {
+        argv: &["/usr/bin/pmset", "-g", "log"],
+        why: "prints the power-management event log: every sleep, every wake, and the reason \
+              the kernel recorded for each. `-g` is pmset's read-only getter and `log` names \
+              the log to print; the verbs that change anything (`sleep`, `displaysleepnow`, \
+              `schedule`, `repeat`, and the `-a`/`-b`/`-c` setting forms) are absent from this \
+              table and cannot be reached through it, because the allowlist matches an entry \
+              exactly and never appends operator words. A host that went quiet because it slept \
+              is indistinguishable from one that crashed until this log is read",
+    },
+    ApprovedCommand {
+        argv: &[TAILSCALE_PROGRAM, "status", "--json"],
+        why: "prints this node's own view of the tailnet as JSON: for every peer, whether the \
+              current path is direct or through a relay, and which endpoint carries it. \
+              `status` is the read-only verb and `--json` changes only the rendering; the verbs \
+              that change anything (`up`, `down`, `set`, `login`, `logout`, `serve`, `funnel`) \
+              are absent from this table. The output carries node names, tailnet addresses and \
+              endpoints — the same addresses the registry already holds — and no keys beyond \
+              the public ones every node publishes. This is where `direct 10.0.0.253:41641` \
+              comes from, the line that said the 2026-08-19 gap had ended",
+    },
+    ApprovedCommand {
+        argv: &[TAILSCALE_PROGRAM, "netcheck"],
+        why: "reports what this host can reach of the relay mesh: UDP reachability, whether a \
+              router will map a port, and the latency to each relay region. It sends probe \
+              traffic to Tailscale's own relays and writes nothing on the host and nothing to \
+              the tailnet, so it is safe to run against a live machine. It answers the question \
+              a one-sided ping cannot — whether the degraded path is this host's or the peer's",
+    },
+    ApprovedCommand {
+        argv: &["/sbin/ifconfig", "-a"],
+        why: "lists every network interface with its addresses and flags. `-a` only widens the \
+              selection to interfaces that are not up, which is the whole point: the interface \
+              that dropped is the one that is no longer listed by default. There is no \
+              interface operand and no address, and every configuring form of ifconfig requires \
+              one, so this entry cannot change an address, a route, or an interface's state",
+    },
 ];
 
 /// Every approved spelling, comma-separated, for help and error text.
@@ -251,6 +339,41 @@ pub fn approve(words: &[String]) -> Result<&'static ApprovedCommand, DeployError
         })
 }
 
+/// The remote program for an entry whose binary is installed at a different
+/// absolute path on each platform: run the first candidate that is executable
+/// on the host, with the entry's own fixed arguments.
+///
+/// Every word of this script is a compile-time constant of this module — the
+/// candidate paths and the entry's arguments — and each one is quoted for the
+/// remote shell anyway. The operator's words selected the entry and reach the
+/// host in nothing else, so barrier three of this module holds exactly as it
+/// does on the [`host_channel::run_program`] path.
+///
+/// A host carrying none of the candidates gets the refusal named here rather
+/// than a shell's `No such file or directory` against whichever path happened
+/// to be listed first, because the second reads as "the fleet installed this
+/// wrongly" when the truth is "this program is not on this machine".
+fn candidate_script(candidates: &[&str], arguments: &[&str]) -> String {
+    let fixed = arguments
+        .iter()
+        .map(|word| shlex_quote(word))
+        .collect::<Vec<String>>()
+        .join(" ");
+    let mut script = String::from("set -eu\n");
+    for candidate in candidates {
+        let path = shlex_quote(candidate);
+        script.push_str(&format!("if [ -x {path} ]; then exec {path} {fixed}; fi\n"));
+    }
+    script.push_str(&format!(
+        "printf '%s\\n' {} >&2\nexit 127\n",
+        shlex_quote(&format!(
+            "this program is installed at none of its approved paths on this host: {}",
+            candidates.join(", ")
+        ))
+    ));
+    script
+}
+
 /// Run one approved read-only command on a canonical registry host.
 pub async fn exec_host(
     target_name: &str,
@@ -262,11 +385,28 @@ pub async fn exec_host(
     // registry round-trip and without the host ever being contacted.
     let approved = approve(words)?;
     let target = host_channel::canonical_target(target_name).await?;
-    let output = host_channel::run_program(&target, approved.argv, runner).await?;
+    // A program that lives in exactly one place keeps the plain transport: its
+    // fixed argv IS the command line, and probing a single path on the host
+    // would only replace the remote shell's own report of a missing program
+    // with a worse one.
+    let candidates = approved.candidates();
+    let output = match approved.argv.split_first() {
+        Some((_, arguments)) if candidates.len() > usize::from(true) => {
+            let script = candidate_script(candidates, arguments);
+            host_channel::run_script(&target, &script, runner).await?
+        }
+        _ => host_channel::run_program(&target, approved.argv, runner).await?,
+    };
 
     let mut report = host_channel::base_report(&target);
     report.insert("command".to_string(), json!(approved.display()));
     report.insert("argv".to_string(), json!(approved.argv));
+    // Where this program may live, for an entry that has more than one install
+    // path: `argv[0]` is one candidate among several and is not evidence of
+    // where the host actually found it.
+    if candidates.len() > usize::from(true) {
+        report.insert("program_candidates".to_string(), json!(candidates));
+    }
     report.insert("stdout".to_string(), json!(output.stdout));
     report.insert("stderr".to_string(), json!(output.stderr));
     host_channel::finish_report(&mut report, &output, OK_STATUS, "ssh failed");
