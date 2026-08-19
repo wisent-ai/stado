@@ -67,6 +67,12 @@ pub struct ServiceRoute {
     /// service entry has to land in both places, in the same change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verify: Option<crate::targets::VerifyDescriptor>,
+    /// The deployable half of the declaration
+    /// ([`crate::targets::Service::declaration`]). Kept in lockstep with the
+    /// tolerant reader per the note on `verify` above: both readers must
+    /// learn a new entry field in the same change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declaration: Option<crate::declaration::ServiceDeclaration>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -495,6 +501,12 @@ pub fn validate_registry_contract(document: &Value) -> Result<(), String> {
         // now name a thing it does not declare.
         if let Some(verify) = route.verify.as_ref() {
             let problems = crate::targets::validate_verification(&location, verify);
+            if !problems.is_empty() {
+                return Err(problems.join("; "));
+            }
+        }
+        if let Some(declaration) = route.declaration.as_ref() {
+            let problems = crate::declaration::validate(&location, declaration);
             if !problems.is_empty() {
                 return Err(problems.join("; "));
             }

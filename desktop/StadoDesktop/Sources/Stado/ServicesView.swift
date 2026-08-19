@@ -29,6 +29,7 @@ struct ServicesView: View {
 
     @State private var facet: ServiceFacet = .units
     @State private var selection: String?
+    @State private var showsDeclare = false
     @State private var restartCandidate: FleetServiceEntry?
 
     private var isRefreshing: Bool {
@@ -45,6 +46,9 @@ struct ServicesView: View {
             scope: scope,
             freshness: "Read \(ConsoleFormat.relative(lastRead))",
             actions: [
+                WisentAction("Declare service", symbol: "plus") {
+                    showsDeclare = true
+                },
                 WisentAction("Refresh", symbol: "arrow.clockwise", isEnabled: !isRefreshing) {
                     Task { await refresh() }
                 },
@@ -63,6 +67,11 @@ struct ServicesView: View {
             }
         }
         .task { await refresh() }
+        .sheet(isPresented: $showsDeclare) {
+            ServiceDeclareView(hosts: hosts) {
+                Task { await refresh() }
+            }
+        }
         .sheet(item: $restartCandidate) { entry in
             restartDialog(entry)
         }

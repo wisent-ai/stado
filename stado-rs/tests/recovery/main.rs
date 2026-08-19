@@ -57,12 +57,24 @@ PATH="$STADO_FAKE_HOST_BIN:$PATH"; export PATH
   -e "s#/usr/bin/uname#uname#g" \
   -e "s#/usr/bin/id#id#g" \
   -e "s#/bin/kill#$STADO_FAKE_HOST_BIN/kill#g" \
+  -e "s#/usr/bin/stat#stat#g" \
   | /bin/bash -s
 "#;
 
 const FAKE_UNAME: &str = "#!/bin/sh\necho Darwin\n";
 
 const FAKE_HOSTNAME: &str = "#!/bin/sh\ncat \"$STADO_FAKE_STATE/hostname\"\n";
+
+/// `/dev/console` belongs to root: nobody is logged in graphically on this
+/// fake host, which is the state charless-mac-mini is in and the reason its
+/// agent domain is the `user/501` fallback. Faked rather than left to the real
+/// `stat` so a pass never reads the developer's own console.
+const FAKE_STAT: &str = r#"#!/bin/sh
+case "${1:-}" in
+  -f%Su) echo root ;;
+  *) exit 1 ;;
+esac
+"#;
 
 /// The approved login: an ordinary account, never root.
 const FAKE_ID: &str = r#"#!/bin/sh
@@ -116,24 +128,39 @@ case "$key" in
 esac
 "#;
 
+/// The unit declares one program and no arguments, in both the spellings the
+/// product reads: the whole `ProgramArguments` array, which is how a unit's
+/// pids are scoped now, and the first element.
 const FAKE_PLISTBUDDY: &str = r#"#!/bin/sh
 case "${2:-}" in
+  "Print :ProgramArguments")
+    echo "Array {"
+    /usr/bin/sed 's/^/    /' "$STADO_FAKE_STATE/program"
+    echo "}"
+    ;;
   "Print :ProgramArguments:0") cat "$STADO_FAKE_STATE/program" ;;
   *) exit 1 ;;
 esac
 "#;
 
-/// The fake process table is `state/pids`, one `pid user` per line.
+/// The fake process table is `state/pids`, one `pid user` per line; every
+/// process in it runs the unit's one program.
 const FAKE_PGREP: &str = "#!/bin/sh\n/usr/bin/awk '{print $1}' \"$STADO_FAKE_STATE/pids\" 2>/dev/null\n";
 
 const FAKE_PS: &str = r#"#!/bin/sh
 want=""
+field=""
 prev=""
 for arg in "$@"; do
   if [ "$prev" = "-p" ]; then want="$arg"; fi
+  case "$arg" in user=|comm=|command=) field="$arg" ;; esac
   prev="$arg"
 done
-/usr/bin/awk -v pid="$want" '$1 == pid {print $2}' "$STADO_FAKE_STATE/pids" 2>/dev/null
+/usr/bin/awk -v pid="$want" '$1 == pid {found = 1} END {exit !found}' "$STADO_FAKE_STATE/pids" 2>/dev/null || exit 1
+case "$field" in
+  comm=|command=) cat "$STADO_FAKE_STATE/program" ;;
+  *) /usr/bin/awk -v pid="$want" '$1 == pid {print $2}' "$STADO_FAKE_STATE/pids" 2>/dev/null ;;
+esac
 "#;
 
 /// Waiting is the one thing a test must not do for real.
@@ -222,6 +249,7 @@ impl Harness {
         tool(&host_bin, "hostname", FAKE_HOSTNAME);
         tool(&host_bin, "id", FAKE_ID);
         tool(&host_bin, "sudo", FAKE_SUDO);
+        tool(&host_bin, "stat", FAKE_STAT);
         tool(&host_bin, "launchctl", FAKE_LAUNCHCTL);
         tool(&host_bin, "plutil", FAKE_PLUTIL);
         tool(&host_bin, "PlistBuddy", FAKE_PLISTBUDDY);

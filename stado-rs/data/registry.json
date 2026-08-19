@@ -651,6 +651,19 @@
           "path": "/Library/LaunchDaemons/com.wisent.actions-runner.wisent-backend-publisher.plist",
           "kind": "launchd",
           "managed_since": "2026-08-15T16:57:43.770653+00:00"
+        },
+        {
+          "name": "com.wisent.compute.service.stado-agent-mini",
+          "unit": "",
+          "label": "com.wisent.compute.service.stado-agent-mini",
+          "path": "/Library/LaunchDaemons/com.wisent.compute.service.stado-agent-mini.plist",
+          "kind": "launchd",
+          "program": "/Users/charles/.stado/bin/stado",
+          "args": [
+            "agent",
+            "--auto"
+          ],
+          "managed_since": "2026-08-19T00:46:51.797832+00:00"
         }
       ],
       "pinned_only": true,
