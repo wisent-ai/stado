@@ -135,7 +135,7 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   queued behind it — and no command said so, because the one fact that mattered
   lived only in its capacity broadcast. Read-only, safe against a live host, and
   it exits non-zero when the host is not claiming.
-- `stado host reclaim <host>` reclaims the space in three declared stages — the
+- `stado host reclaim <host>` reclaims the space in declared stages — the
   host's own janitor pass, the release build scratch tree, and delivered product
   trees no `current` link and no live process references — measuring free space
   and counting items either side of each one. It previews by default; `--apply`
@@ -147,6 +147,35 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
 - `stado host disk --json` now also reports the low watermark the host's janitor
   last validated, which is the threshold admission is really gated on when a
   host cannot read the registry.
+- The disk janitor gained a `chromium_clones` cleaner, and `stado host reclaim`
+  the matching fourth stage: macOS clones the whole Chromium bundle on every
+  launch to validate its signature, Weles drives Chromium for browser
+  automation, and a killed run leaves its clone behind. The mini carried 137 of
+  them, 130 untouched for more than a day, while its queue agent published
+  `disk_pressure_unresolved` and every release build queued behind it — and
+  nothing in the product removed or even reported one. Only entries macOS
+  itself named are candidates, the newest clone in the root is kept whatever
+  its age, nothing younger than the policy's minimum age (a day, floored by the
+  registry) is touched, and no clone a live process names in its argv is taken.
+- `stado host reclaim`'s `delivered_trees` stage now also sweeps every
+  superseded delivery root the product catalog declares
+  (`superseded_roots` in `stado-rs/data/products.json`), under the rules it
+  already applied: at least a day old, never `current`, never a product's newest
+  tree, never a path a live process names. The mini holds 20 inert
+  `weles-worker` versions (9.7 GiB) under `$HOME/.local/share/weles-worker` from
+  the installer that predates the artifact install path, which no rollback will
+  reach and no command could report. A product's live install root is never
+  swept.
+- `stado host disk` names the host's local APFS snapshots, and `stado host
+  gates` adds a `local_snapshots_unreclaimable` note — a note, never a blocker,
+  so it cannot change the claiming verdict or the exit status — while the disk is
+  the reason a host claims nothing. Their blocks are inside the `used` figure,
+  no stado command removes them, and macOS publishes no size for a snapshot, so
+  the count and the host's own names are reported and no byte figure is invented.
+  An operator is no longer left believing a reclamation that freed less than the
+  deficit means the numbers are lying.
+- Removed `stado-rs/scripts/reclaim-mini-disk-host.sh`. Every stage it had is a
+  product command now: `stado host reclaim <host> [--dry-run|--apply --reason]`.
 
 ### Release control
 

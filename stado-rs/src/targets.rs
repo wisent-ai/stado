@@ -248,7 +248,12 @@ fn validate_disk_cleanup(value: &Value, location: &str) -> Result<(), RegistryVa
     let cleaners = map["cleaners"]
         .as_object()
         .ok_or_else(|| verr(&cleaners_location, "must be an object"))?;
-    const ALLOWED: [&str; 3] = ["build_caches", "huggingface_cache", "weles_recordings"];
+    const ALLOWED: [&str; 4] = [
+        "build_caches",
+        "chromium_clones",
+        "huggingface_cache",
+        "weles_recordings",
+    ];
     let mut unknown: Vec<&str> = cleaners
         .keys()
         .map(String::as_str)
@@ -287,7 +292,10 @@ fn validate_disk_cleanup(value: &Value, location: &str) -> Result<(), RegistryVa
         // A build tree and a weles run both need a day: a `target/` younger
         // than that is the working set of a build someone is still waiting
         // on, and its CACHEDIR.TAG says only that it is reproducible, not
-        // that it is idle.
+        // that it is idle. A Chromium code-sign clone needs the same day,
+        // for the reason that floor exists at all: macOS makes the clone at
+        // launch and records nothing about which process owns it, so age is
+        // most of what says the launch is over.
         let minimum = if name == "huggingface_cache" {
             3600
         } else {
