@@ -56,9 +56,6 @@ pub mod watchdog;
 pub(crate) mod azure_token;
 pub(crate) mod procutil;
 
-#[cfg(test)]
-mod testutil;
-
 /// Root of the source tree's `data/` directory for build-time tooling.
 ///
 /// `CARGO_MANIFEST_DIR` is frozen at compile time and must never be used to

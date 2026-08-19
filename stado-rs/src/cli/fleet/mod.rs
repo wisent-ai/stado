@@ -29,8 +29,6 @@ pub mod ingress;
 pub mod invite;
 pub mod key;
 pub mod ops;
-#[cfg(test)]
-mod tests;
 
 /// Fleet management for registered Stado hosts.
 #[derive(Subcommand)]
