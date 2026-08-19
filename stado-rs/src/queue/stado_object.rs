@@ -318,6 +318,28 @@ impl BlobBackend for StadoObjectBackend {
         Ok(Some(response.bytes().await?.to_vec()))
     }
 
+    /// One `stado://releases/...` object off the fleet's public release
+    /// channel.
+    ///
+    /// The plain object route answers for the store's configured namespace,
+    /// so reading a cross-namespace release URI through `download_bytes`
+    /// quietly asks for `<namespace>/releases/...` and reports the software
+    /// artifact absent — which is how every fleet delivery of 0.7.6 failed
+    /// while the archive sat published. `/api/release/object` is the route
+    /// the channel itself serves those bytes on.
+    async fn download_release(&self, uri: &str) -> Result<Option<Vec<u8>>, StorageError> {
+        let mut url = self.url("/api/release/object");
+        url.query_pairs_mut().append_pair("uri", uri);
+        let response = self.request(Method::GET, url).send().await?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(Self::response_error(response).await);
+        }
+        Ok(Some(response.bytes().await?.to_vec()))
+    }
+
     async fn download_to_filename(&self, path: &str, dest: &Path) -> Result<bool, StorageError> {
         let Some(bytes) = self.download_bytes(path).await? else {
             return Ok(false);

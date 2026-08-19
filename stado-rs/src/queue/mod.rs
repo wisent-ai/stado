@@ -168,6 +168,20 @@ pub trait BlobBackend: Send + Sync {
     /// Raw bytes of a blob, or `None` when it does not exist.
     async fn download_bytes(&self, path: &str) -> Result<Option<Vec<u8>>, StorageError>;
 
+    /// One `stado://releases/...` object off the public release channel, for
+    /// backends that HAVE such a channel. The plain blob routes answer for
+    /// the store's configured namespace, so a cross-namespace release URI
+    /// read through them silently becomes `<namespace>/releases/...` and
+    /// reports a published artifact absent — which is how every fleet
+    /// delivery of stado 0.7.6 failed while the archive sat published. The
+    /// default falls back to the namespaced path so disk-backed stores,
+    /// which hold releases under their literal storage path, keep working.
+    async fn download_release(&self, uri: &str) -> Result<Option<Vec<u8>>, StorageError> {
+        let object = crate::object_store::ObjectRef::parse(uri)
+            .map_err(|error| StorageError::Other(error.to_string()))?;
+        self.download_bytes(&object.storage_path()).await
+    }
+
     /// Download one blob to a local file; `false` when it is absent.
     async fn download_to_filename(&self, path: &str, dest: &Path) -> Result<bool, StorageError>;
 
