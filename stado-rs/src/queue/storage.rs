@@ -223,6 +223,13 @@ impl JobStorage {
         self.backend.upload_bytes(blob_path, content).await
     }
 
+    /// One `stado://releases/...` object off the public release channel —
+    /// see [`BlobBackend::download_release`] for why the plain blob read is
+    /// the wrong route for a cross-namespace software artifact.
+    pub async fn download_release(&self, uri: &str) -> Result<Option<Vec<u8>>, StorageError> {
+        self.backend.download_release(uri).await
+    }
+
     /// Text content of a blob, or `None` when absent.
     pub async fn download_text(&self, blob_path: &str) -> Result<Option<String>, StorageError> {
         self.backend.download_text(blob_path).await

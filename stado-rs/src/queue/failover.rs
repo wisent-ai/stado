@@ -64,6 +64,13 @@ impl BlobBackend for ReadFailoverBackend {
         }
     }
 
+    async fn download_release(&self, uri: &str) -> Result<Option<Vec<u8>>, StorageError> {
+        match self.primary.download_release(uri).await {
+            answer @ Ok(_) => answer,
+            Err(_) => self.backup.download_release(uri).await,
+        }
+    }
+
     async fn download_to_filename(&self, path: &str, dest: &Path) -> Result<bool, StorageError> {
         match self.primary.download_to_filename(path, dest).await {
             answer @ Ok(_) => answer,
