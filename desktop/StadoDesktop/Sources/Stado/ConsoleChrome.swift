@@ -88,6 +88,16 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
 @MainActor
 final class ConsoleRouter: ObservableObject {
     @Published var destination: ConsoleDestination = .posture
+    /// The host a screen named while sending the operator somewhere else, so a
+    /// decision row about one machine lands on that machine's row rather than
+    /// on a table of twelve. Cleared by the destination once it has selected
+    /// it: after the jump the selection is the operator's.
+    @Published var focusedHost: String?
+
+    func show(_ destination: ConsoleDestination, host: String? = nil) {
+        focusedHost = host
+        self.destination = destination
+    }
 }
 
 // MARK: - Dense table
