@@ -326,6 +326,7 @@ pub(crate) async fn recent_runs(
             .unwrap_or("")
             .cmp(a["updated_at"].as_str().unwrap_or(""))
     });
+    let all = runs.clone();
     runs.truncate(limit);
     // An in-flight run says only "publishing", which reads as a promise. The
     // run object already names each platform's queue job, and the queue knows
@@ -340,10 +341,12 @@ pub(crate) async fn recent_runs(
         if !live {
             continue;
         }
+        let run_id = run["run_id"].as_str().unwrap_or("").to_owned();
+        let product_name = run["product"].as_str().unwrap_or("").to_owned();
         let Some(platforms) = run["platforms"].as_object_mut() else {
             continue;
         };
-        for record in platforms.values_mut() {
+        for (platform_name, record) in platforms.iter_mut() {
             let Some(job_id) = record["job_id"].as_str().map(str::to_owned) else {
                 continue;
             };
@@ -364,9 +367,74 @@ pub(crate) async fn recent_runs(
                     Err(_) => break,
                 }
             }
+            // The build's own progress, from the log the agent streams while
+            // the job runs: crates compiled so far, measured against the same
+            // count from this platform's previous run. cargo publishes no
+            // total, so the previous run IS the honest denominator, and the
+            // figure is labelled an estimate everywhere it is shown.
+            if record["job_state"].as_str() == Some("running") {
+                if let Some(compiled) = compiling_count(&store, &job_id).await {
+                    let mut progress = Map::new();
+                    progress.insert("compiled".into(), Value::from(compiled));
+                    if let Some(total) =
+                        previous_compile_total(&store, &all, &run_id, &product_name, platform_name)
+                            .await
+                    {
+                        progress.insert("of_previous_run".into(), Value::from(total));
+                        if total > 0 {
+                            progress.insert(
+                                "percent".into(),
+                                Value::from((compiled * 100 / total).min(99)),
+                            );
+                        }
+                    }
+                    record["compile_progress"] = Value::Object(progress);
+                }
+            }
         }
     }
     Ok(runs)
+}
+
+/// Distinct crates the job's streamed log says were compiled so far.
+async fn compiling_count(store: &JobStorage, job_id: &str) -> Option<u64> {
+    let bytes = store
+        .read_bytes(&format!("status/{job_id}/output/command_output.log"))
+        .await
+        .ok()
+        .flatten()?;
+    let text = String::from_utf8_lossy(&bytes);
+    Some(
+        text.lines()
+            .filter(|line| line.trim_start().starts_with("Compiling "))
+            .count() as u64,
+    )
+}
+
+/// The compile count of the newest older run of the same product and
+/// platform whose job finished — the denominator for the estimate.
+async fn previous_compile_total(
+    store: &JobStorage,
+    all: &[Value],
+    current_run: &str,
+    product: &str,
+    platform: &str,
+) -> Option<u64> {
+    for run in all {
+        if run["run_id"].as_str() == Some(current_run) || run["product"].as_str() != Some(product) {
+            continue;
+        }
+        let record = &run["platforms"][platform];
+        let Some(job_id) = record["job_id"].as_str() else {
+            continue;
+        };
+        if let Some(count) = compiling_count(store, job_id).await {
+            if count > 0 {
+                return Some(count);
+            }
+        }
+    }
+    None
 }
 fn identity(
     product: &str,
