@@ -1723,8 +1723,10 @@ whatever happens to be on the host, with no version anybody can name.
 
 Stado ships no list of services and no schema per service kind. A service is
 whatever its author declares against the one contract — `service declare`
-writes it into the service directory, and everything else (`deploy`, `update`,
-`verify`, `converge`) reads it from there:
+writes it into the service directory, and the lifecycle reads it from there —
+`deploy` installs from it with no flags beyond the name, `verify` checks the
+service the way the declaration says, and the directory answers callers from
+the same entry:
 
 ```json
 {
