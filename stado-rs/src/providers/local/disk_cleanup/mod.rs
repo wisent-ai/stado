@@ -8,11 +8,14 @@
 //! Layout: [`safefs`] holds the dir_fd-relative primitives (and the only
 //! `unsafe`), [`hf`] the HuggingFace cache eviction, [`weles`] the weles
 //! recordings cleanup, [`build_caches`] the eviction of directories a build
-//! tool tagged as regenerable. This module owns the report model, the
-//! sanitized public state, the exclusive/shared lock file, the canonical-
-//! policy resolution, and the top-level [`run_cleanup_once`] orchestration.
+//! tool tagged as regenerable, [`chromium_clones`] the eviction of the bundle
+//! clones macOS makes to validate Chromium's signature at every launch. This
+//! module owns the report model, the sanitized public state, the
+//! exclusive/shared lock file, the canonical-policy resolution, and the
+//! top-level [`run_cleanup_once`] orchestration.
 
 pub mod build_caches;
+pub mod chromium_clones;
 pub mod hf;
 #[cfg(test)]
 pub(crate) mod kit;
@@ -214,6 +217,7 @@ pub struct CleanupReport {
     pub hf: CleanerReport,
     pub weles: CleanerReport,
     pub builds: CleanerReport,
+    pub clones: CleanerReport,
     pub caps: Caps,
     pub lock_busy: bool,
     pub active_slot_count: i64,
@@ -240,6 +244,7 @@ impl CleanupReport {
             hf: CleanerReport::default(),
             weles: CleanerReport::default(),
             builds: CleanerReport::default(),
+            clones: CleanerReport::default(),
             caps: Caps::default(),
             lock_busy: false,
             active_slot_count: active_slot_count.max(0),
@@ -268,6 +273,11 @@ impl CleanupReport {
     /// `_skip` for the build-cache cleaner (no Python original).
     pub fn skip_builds(&mut self, reason: &str, count: i64) {
         *self.builds.skipped.entry(reason.to_string()).or_insert(0) += count;
+    }
+
+    /// `_skip` for the Chromium clone cleaner (no Python original).
+    pub fn skip_clones(&mut self, reason: &str, count: i64) {
+        *self.clones.skipped.entry(reason.to_string()).or_insert(0) += count;
     }
 
     /// The report as JSON (key order normalized at serialization sites
@@ -302,6 +312,7 @@ impl CleanupReport {
                 "huggingface_cache": cleaner(&self.hf),
                 "weles_recordings": cleaner(&self.weles),
                 "build_caches": cleaner(&self.builds),
+                chromium_clones::CLEANER: cleaner(&self.clones),
             },
             "caps": {
                 "bytes": self.caps.bytes,
@@ -773,6 +784,9 @@ pub fn sanitize_report(value: &Value, lock_busy: bool) -> Value {
             "huggingface_cache": public_cleaner(cleaners.and_then(|c| c.get("huggingface_cache"))),
             "weles_recordings": public_cleaner(cleaners.and_then(|c| c.get("weles_recordings"))),
             "build_caches": public_cleaner(cleaners.and_then(|c| c.get("build_caches"))),
+            chromium_clones::CLEANER: public_cleaner(
+                cleaners.and_then(|c| c.get(chromium_clones::CLEANER)),
+            ),
         },
         "caps": {
             "bytes": cap("bytes"),
@@ -1177,7 +1191,7 @@ fn run_with_lock(
     if remaining_after_weles == 0 && policy.cleaners.contains_key("build_caches") {
         report.caps.scan = true;
     }
-    // Last of the three, and the only one whose root can be the whole of
+    // The build-cache scan is the only one whose root can be the whole of
     // `$HOME`: it walks with whatever scan budget the fixed-layout cleaners
     // left, and with the same pass deadline the HF scan honours.
     build_caches::scan_build_caches(
@@ -1188,8 +1202,30 @@ fn run_with_lock(
         deadline,
         &mut report,
     );
-    let total_scanned =
-        report.hf.scanned_items + report.weles.scanned_items + report.builds.scanned_items;
+    let remaining_after_builds = (policy.max_scan_items
+        - report.hf.scanned_items
+        - report.weles.scanned_items
+        - report.builds.scanned_items)
+        .max(0);
+    if remaining_after_builds == 0 && policy.cleaners.contains_key(chromium_clones::CLEANER) {
+        report.caps.scan = true;
+    }
+    // Last, and the only cleaner whose root is outside this account's home:
+    // macOS puts the clones in the per-user temporary container, and what it
+    // keeps there is nobody's working set — so it is scanned after every root
+    // the fleet's own software writes to, on the budget those leave.
+    chromium_clones::scan_chromium_clones(
+        home,
+        &policy,
+        attempted_at,
+        remaining_after_builds,
+        deadline,
+        &mut report,
+    );
+    let total_scanned = report.hf.scanned_items
+        + report.weles.scanned_items
+        + report.builds.scanned_items
+        + report.clones.scanned_items;
     if total_scanned >= policy.max_scan_items {
         report.caps.scan = true;
     }
@@ -1204,10 +1240,12 @@ fn run_with_lock(
     };
     report.free_bytes_after = Some(after);
     // Deliberately NOT `report.hf.deleted_items` alone, as the Python had
-    // it: build_caches has no Python original to stay faithful to, and a
-    // pass that removed 200 GB of tagged build trees while the HF cache
-    // held nothing evictable must not report `no_eligible_items`.
-    let deleted = report.hf.deleted_items + report.builds.deleted_items;
+    // it: neither build_caches nor chromium_clones has a Python original to
+    // stay faithful to, and a pass that removed 200 GB of tagged build trees
+    // or 130 stale browser clones while the HF cache held nothing evictable
+    // must not report `no_eligible_items`.
+    let deleted =
+        report.hf.deleted_items + report.builds.deleted_items + report.clones.deleted_items;
     if policy.mode != "enforce" {
         report.outcome = "report_only".to_string();
     } else if report.active_slot_count > 0 && policy.cleaners.contains_key("huggingface_cache") {
@@ -1559,8 +1597,14 @@ mod tests {
         // Registry validation itself rejects duplicate identities; either
         // way the janitor refuses to run.
         assert!(resolve_canonical_policy(&dup, "shared").is_err());
-        // Local target WITHOUT a disk_cleanup policy.
-        let bare = json!({"schema_version": 2, "targets": [{"name": "testhost", "kind": "local"}]});
+        // Local target WITHOUT a disk_cleanup policy — otherwise valid, so
+        // the refusal under test is the missing policy and not the schema.
+        let bare = json!({
+            "schema_version": 2,
+            "targets": [
+                {"name": "testhost", "kind": "local", "release_platform": "darwin-arm64"},
+            ],
+        });
         let err = resolve_canonical_policy(&bare, "testhost").unwrap_err();
         assert_eq!(err.code, "LookupError");
         // Invalid schema.

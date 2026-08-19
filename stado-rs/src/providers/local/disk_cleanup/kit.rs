@@ -75,12 +75,19 @@ pub fn now_epoch() -> i64 {
 
 /// A registry-v2 document naming `hostname` as a local target with the
 /// given disk_cleanup policy object.
+///
+/// `release_platform` is carried because the janitor resolves its policy
+/// through [`crate::targets::validate_registry`], which requires every target
+/// to declare one: without it the fabricated document is invalid and every
+/// cleaner test reads as `invalid_or_unavailable_policy` rather than as the
+/// cleaner behaviour it is asserting.
 pub fn registry_json(hostname: &str, disk_cleanup: Value) -> Value {
     json!({
         "schema_version": 2,
         "targets": [{
             "name": hostname,
             "kind": "local",
+            "release_platform": "darwin-arm64",
             "disk_cleanup": disk_cleanup,
         }],
     })
