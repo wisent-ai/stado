@@ -22,9 +22,9 @@
 //!    own. `--dry-run` runs its planning phase; `--apply` runs the enforcing
 //!    pass. The item count is the janitor's own.
 //! 2. `build_scratch` — `$HOME/`[`BUILD_WORK_ROOT`], the release build scratch
-//!    tree. `scripts/build-stado-linux-host.sh` and the reproduce helper both
-//!    work there and neither removes what it wrote; a from-scratch release
-//!    build leaves its checkout and its vendored sources behind every time.
+//!    tree. `scripts/build-stado-linux-host.sh` works there and does not remove
+//!    what it wrote; a from-scratch release build leaves its checkout and its
+//!    vendored sources behind every time.
 //! 3. `delivered_trees` — the version directories under `$HOME/`[`SERVICES_ROOT`],
 //!    where every `service deploy` and every artifact install stages one tree
 //!    per version and keeps the previous one beside it as
@@ -76,9 +76,9 @@ use crate::targets::ComputeTarget;
 /// The release build scratch tree, relative to the target account's home.
 ///
 /// Its own root under `.stado`, and the one the fleet's checked-in build
-/// helpers already use (`scripts/build-stado-linux-host.sh`,
-/// `scripts/reproduce-release-build-host.sh`): a stage that reclaimed a
-/// directory those helpers do not write would be reclaiming something else.
+/// helper already uses (`scripts/build-stado-linux-host.sh`): a stage that
+/// reclaimed a directory that helper does not write would be reclaiming
+/// something else.
 pub const BUILD_WORK_ROOT: &str = ".stado/build-work";
 
 /// Nothing younger than this is a candidate, in any stage.
