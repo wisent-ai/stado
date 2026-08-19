@@ -476,8 +476,8 @@ final class FleetServicesStore: ObservableObject {
         ["service", "restart", name, "--host", host, "--json"]
     }
 
-    nonisolated static func removeFileArguments(host: String, path: String) -> [String] {
-        ["host", "remove-file", host, path, "--json"]
+    nonisolated static func removeServiceArguments(name: String, host: String) -> [String] {
+        ["service", "remove", name, "--host", host, "--json"]
     }
 
     func refresh(hosts: [String]) async {
@@ -540,25 +540,27 @@ final class FleetServicesStore: ObservableObject {
         await refresh(hosts: lastHosts)
     }
 
-    /// `stado host remove-file <host> <path>` through the CLI runner: the
-    /// delete half `service retire` deliberately does not have. The CLI's
-    /// guards decide on the host — the view offers this only where they could
-    /// pass, and a refusal still arrives in the command's own sentence.
-    func removeUnitFile(_ entry: FleetServiceEntry) async {
-        mutation = .working("Removing \(entry.path) on \(entry.host)")
+    /// `stado service remove <name> --host <host>`: the whole of "remove
+    /// this service" — stop, forget, and delete the declared unit file, in
+    /// the CLI's order, with its refusals. The view does not decompose it
+    /// into retire + delete, because two commands an operator must order
+    /// correctly are one command that cannot go wrong.
+    func removeService(_ entry: FleetServiceEntry) async {
+        let unit = entry.unitID.isEmpty ? entry.name : entry.unitID
+        mutation = .working("Removing \(unit) on \(entry.host)")
         do {
             let report = try await cli.json(
-                RemoveFileReport.self,
-                arguments: Self.removeFileArguments(host: entry.host, path: entry.path)
+                ServiceRemoveReport.self,
+                arguments: Self.removeServiceArguments(name: entry.name, host: entry.host)
             )
             if report.succeeded {
                 mutation = .succeeded(
-                    report.status == "removed"
-                        ? "Removed \(report.path) on \(entry.host)."
-                        : "\(report.path) was already absent on \(entry.host)."
+                    report.file.status == "removed"
+                        ? "Removed \(unit) on \(entry.host): stopped, forgotten, file deleted."
+                        : "Removed \(unit) on \(entry.host); its file was already absent."
                 )
             } else {
-                mutation = .failed("\(report.target): \(report.status)\(report.detail.map { " — \($0)" } ?? "")")
+                mutation = .failed("\(report.target): \(report.fileSentence)")
             }
         } catch {
             mutation = .failed(Self.message(for: error))

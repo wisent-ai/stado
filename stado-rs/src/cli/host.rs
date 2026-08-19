@@ -3262,7 +3262,41 @@ pub async fn remove_helper(target: &str, name: &str, json: bool) -> Result<(), C
 ///   delete, and somebody else's file is not this login's to remove.
 ///
 /// Absence is reported as `absent`, not invented into a success.
-pub async fn remove_file(target: &str, path: &str, json: bool) -> Result<(), CmdError> {
+/// The outcome of one [`remove_file_document`] call, so a composed command
+/// (`service remove`) can carry the file half as data instead of scraping
+/// another command's stdout.
+pub struct RemoveFileOutcome {
+    pub target: String,
+    pub path: String,
+    pub status: String,
+    pub detail: Option<String>,
+}
+
+impl RemoveFileOutcome {
+    pub fn succeeded(&self) -> bool {
+        self.status == "removed" || self.status == "absent"
+    }
+
+    fn failure_sentence(&self) -> String {
+        format!(
+            "{}: {} {}{}",
+            self.target,
+            self.path,
+            self.status,
+            self.detail
+                .as_ref()
+                .map(|detail| format!(" — {detail}"))
+                .unwrap_or_default()
+        )
+    }
+}
+
+/// The guarded delete itself, as a value: validation, resolution, the fixed
+/// remote script, the marker read. Printing belongs to the caller.
+pub async fn remove_file_document(
+    target: &str,
+    path: &str,
+) -> Result<RemoveFileOutcome, CmdError> {
     if !path.starts_with('/') || path.contains("..") || path.contains('\0') {
         return Err(CmdError::usage(
             "path must be absolute, contain no '..', and carry no NUL",
@@ -3327,33 +3361,57 @@ fi
                 crate::deploy::host_channel::last_error_line(&output, "no marker in output")
             ))
         })?;
+    let outcome = RemoveFileOutcome {
+        target: resolved.name.clone(),
+        path: path.to_string(),
+        status: state,
+        detail,
+    };
+    if outcome.succeeded() {
+        Ok(outcome)
+    } else {
+        Err(CmdError::click(outcome.failure_sentence()))
+    }
+}
+
+/// Remove one file from TARGET's home: the path Stado never had a way to
+/// delete, so a retired or broken unit left its plist on disk forever and the
+/// only answer was a bare `rm` over ssh, which nothing bounds and nobody
+/// audits. This is that answer as a product verb. The guards are on the host,
+/// not on the client, because the file is what the host says it is, not what
+/// the operator believes:
+///
+/// - the path must be absolute, contain no `..`, and live under
+///   `$HOME/Library/LaunchAgents` or `$HOME/.stado` of the approved account —
+///   a system path is not refused because it is dangerous, it is refused
+///   because this channel has no right there, and the refusal names the
+///   privileged command that does have one;
+/// - it must be a regular file owned by that account — a symlink under an
+///   allowed root can point anywhere, a directory would make this a recursive
+///   delete, and somebody else's file is not this login's to remove.
+///
+/// Absence is reported as `absent`, not invented into a success.
+pub async fn remove_file(target: &str, path: &str, json: bool) -> Result<(), CmdError> {
+    let outcome = remove_file_document(target, path).await?;
     if json {
         println!(
             "{}",
             serde_json::to_string_pretty(&json!({
-                "target": resolved.name,
-                "path": path,
-                "status": state,
-                "detail": detail,
+                "target": outcome.target,
+                "path": outcome.path,
+                "status": outcome.status,
+                "detail": outcome.detail,
             }))?
         );
     } else {
-        match &detail {
+        match &outcome.detail {
             Some(detail) if !detail.is_empty() => {
-                println!("{}: {path} {state} — {detail}", resolved.name)
+                println!("{}: {} {} — {detail}", outcome.target, outcome.path, outcome.status)
             }
-            _ => println!("{}: {path} {state}", resolved.name),
+            _ => println!("{}: {} {}", outcome.target, outcome.path, outcome.status),
         }
     }
-    if state == "removed" || state == "absent" {
-        Ok(())
-    } else {
-        Err(CmdError::click(format!(
-            "{}: {path} {state}{}",
-            resolved.name,
-            detail.map(|d| format!(" — {d}")).unwrap_or_default()
-        )))
-    }
+    Ok(())
 }
 
 /// The retag this binary carries, run as one fixed remote script — the same

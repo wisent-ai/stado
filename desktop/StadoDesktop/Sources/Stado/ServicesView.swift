@@ -789,7 +789,7 @@ struct ServicesView: View {
         if entry.removableByRemoveFile {
             WisentActionButton(
                 action: WisentAction(
-                    "Remove the unit file…",
+                    "Remove this service…",
                     symbol: "trash",
                     kind: .plain,
                     isEnabled: !fleetStore.mutation.isWorking
@@ -804,18 +804,18 @@ struct ServicesView: View {
         let unit = entry.unitID.isEmpty ? entry.name : entry.unitID
         return WisentDecisionDialog(
             tone: .danger,
-            title: "Remove \(entry.path) on \(entry.host)?",
+            title: "Remove \(unit) on \(entry.host)?",
             lines: [
-                "This deletes the unit file for \(unit) from the host itself, not only from Stado's management. The guards on the host side decide: a file that is not a regular file owned by the login account is refused before anything is deleted.",
-                "The unit is not restarted, stopped or reloaded: the file simply stops existing. A host that still had it loaded keeps the running process.",
+                "This is the whole of removing a service: it is stopped, forgotten by Stado, and its unit file is deleted from the host, in that order. A unit that will not stop keeps everything — its file is not deleted out from under a running process.",
+                "The file's guards decide on the host: anything that is not a regular file owned by the login account is refused, and the refusal arrives in the CLI's own words.",
             ],
-            footnote: "Runs \(StadoCLI.commandLine(FleetServicesStore.removeFileArguments(host: entry.host, path: entry.path))).",
+            footnote: "Runs \(StadoCLI.commandLine(FleetServicesStore.removeServiceArguments(name: entry.name, host: entry.host))).",
             actions: [
-                WisentAction("Keep the file", kind: .primary) { removeFileCandidate = nil },
-                WisentAction("Remove the file", symbol: "trash", kind: .destructive) {
+                WisentAction("Keep the service", kind: .primary) { removeFileCandidate = nil },
+                WisentAction("Remove the service", symbol: "trash", kind: .destructive) {
                     let candidate = entry
                     removeFileCandidate = nil
-                    Task { await fleetStore.removeUnitFile(candidate) }
+                    Task { await fleetStore.removeService(candidate) }
                 },
             ]
         )
