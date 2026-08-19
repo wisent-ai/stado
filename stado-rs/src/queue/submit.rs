@@ -21,7 +21,6 @@ use crate::queue::StorageError;
 
 /// Directory the startup-script templates ship in (Python `TEMPLATE_DIR` =
 /// `stado/templates/`).
-
 /// Submission failure from validation, queue storage, or local rendering.
 #[derive(Debug, thiserror::Error)]
 pub enum SubmitError {
@@ -126,15 +125,6 @@ pub const CPU_MACHINE_TYPE: &str = "e2-standard-8";
 pub fn generate_job_id() -> String {
     hex::encode(&uuid::Uuid::new_v4().as_bytes()[..4])
 }
-
-/// Render a startup-script template: naive sequential `${KEY}` replacement,
-/// exactly Python `str.replace(f"${{{key}}}", str(value))` per variable.
-/// Variables not present in the template are ignored; `${...}` placeholders
-/// with no matching variable are left untouched (Python parity).
-
-/// Bash that clones repo into $WORK/{workdir} and pip-installs its extras
-/// so the user's command can `cd {workdir} && python -m foo` directly.
-/// Returns empty string when no repo was requested.
 
 /// Python `json.dumps(value, sort_keys=True, separators=(",", ":"))`:
 /// compact separators, keys sorted recursively, non-ASCII escaped as
