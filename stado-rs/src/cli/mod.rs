@@ -536,6 +536,11 @@ enum Commands {
     #[command(subcommand)]
     Resolver(resolver::ResolverCommands),
     /// Plan, deploy, route and operate local OpenAI-compatible inference.
+    ///
+    /// Being replaced by the service declaration contract: a model server is
+    /// a service like any other, declared once with `stado service declare`
+    /// and deployed with `stado service deploy`. This plane keeps working
+    /// while its declarations migrate; add nothing new to it.
     #[command(subcommand)]
     Inference(inference::InferenceCommands),
     /// Provision and operate an interactive display session on a host, and
