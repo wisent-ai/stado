@@ -1091,10 +1091,17 @@ enum HostCommands {
         json: bool,
     },
     /// Publish one locally collected beacon through the scoped Stado health API.
+    ///
+    /// The `link` block (tailnet path, sleep/wake, interface changes) is
+    /// collected here, on the host, and merged into the document about this
+    /// machine before it is published.
     #[command(name = "publish-beacon")]
     PublishBeacon {
         /// JSON beacon file, or '-' for stdin.
         source: String,
+        /// Print the document that would be published; publish nothing.
+        #[arg(long)]
+        print: bool,
     },
     /// Recover a registry-managed macOS host through its approved channel.
     Recover {
@@ -1860,7 +1867,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         },
         Commands::Host(sub) => match sub {
             HostCommands::Health { target, json } => host::health(&target, json).await,
-            HostCommands::PublishBeacon { source } => host::publish_beacon(&source).await,
+            HostCommands::PublishBeacon { source, print } => {
+                host::publish_beacon(&source, print).await
+            }
             HostCommands::Recover {
                 target,
                 bundled_registry,
