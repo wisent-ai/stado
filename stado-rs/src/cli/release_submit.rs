@@ -508,6 +508,36 @@ async fn builder(platform: &str) -> Result<(crate::targets::ComputeTarget, Strin
         ))
     })
 }
+
+/// The live consumer id of one exact registry target, for a delivery pinned
+/// to the host it installs on. Same capacity-publication resolution as
+/// [`builder`], narrowed from "any live host of this platform" to "this
+/// host, live, or a named refusal".
+async fn target_consumer(target_name: &str) -> Result<String, CmdError> {
+    let registry = crate::targets::fetch_registry_remote()
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let store = JobStorage::new()
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let capacity = crate::queue::capacity::read_consumer_capacity(&store)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    for consumer in capacity.keys() {
+        let identity = consumer.strip_prefix("local-").unwrap_or(consumer);
+        if registry
+            .lookup_self(identity)
+            .map_err(|error| CmdError::click(error.to_string()))?
+            .is_some_and(|target| target.name == target_name)
+        {
+            return Ok(consumer.clone());
+        }
+    }
+    Err(CmdError::click(format!(
+        "delivery target {target_name} is not broadcasting capacity, so the delivery pinned to \
+         it cannot run; see stado host gates {target_name}"
+    )))
+}
 fn secret_refs(v: &BTreeMap<String, String>) -> BTreeMap<String, JobSecretRef> {
     v.iter()
         .filter_map(|(n, r)| {
@@ -1041,7 +1071,14 @@ async fn run_deliveries(
                     &run.source_sha256,
                 ),
             );
-            let (_, consumer) = builder(&m.platforms[&d.platform].runner_platform).await?;
+            // A delivery that names its target runs ON that target and
+            // installs locally; only target-less deliveries fall back to any
+            // live builder of the platform.
+            let consumer = if d.target.is_empty() {
+                builder(&m.platforms[&d.platform].runner_platform).await?.1
+            } else {
+                target_consumer(&d.target).await?
+            };
             let options = SubmitOptions {
                 pinned_host: consumer,
                 run_id: run.run_id.clone(),

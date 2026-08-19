@@ -114,30 +114,40 @@
   },
   "deliveries": [
     {
-      "name": "fleet-darwin",
+      "name": "fleet-macbook",
       "platform": "darwin-arm64",
       "argv": [
-        "python3",
-        "scripts/release/install-fleet.py",
-        "--target",
-        "operator-host",
-        "--target",
-        "control-host"
+        "stado",
+        "release",
+        "install-local"
       ],
       "required": true,
-      "secret_env": {}
+      "secret_env": {},
+      "target": "operator-host"
+    },
+    {
+      "name": "fleet-mini",
+      "platform": "darwin-arm64",
+      "argv": [
+        "stado",
+        "release",
+        "install-local"
+      ],
+      "required": true,
+      "secret_env": {},
+      "target": "control-host"
     },
     {
       "name": "fleet-linux",
       "platform": "linux-amd64",
       "argv": [
-        "python3",
-        "scripts/release/install-fleet.py",
-        "--target",
-        "gpu-host"
+        "stado",
+        "release",
+        "install-local"
       ],
       "required": true,
-      "secret_env": {}
+      "secret_env": {},
+      "target": "gpu-host"
     }
   ]
 }
