@@ -400,6 +400,7 @@ unavailable.
 | `stado host reclaim <host> [--dry-run\|--apply --reason TEXT]` | Reclaim disk in three declared stages — the host's own janitor pass, the release build scratch tree, and delivered product trees no `current` link and no live process references. Previews by default; `--apply` needs `--reason` and appends an audit record on the host. |
 | `stado host exec <target> -- CMD` | Run one approved read-only command. An allowlist, not a shell: the operator's words select a fixed argv entry and never join the command line. A refusal prints the allowlist. |
 | `stado host inventory <target>` | The stado-managed binaries under `$HOME/.stado/bin`, the `$HOME/.stado/forwards/*.url` markers, the listening loopback TCP ports, the Skarbiec vault files under `$HOME/.stado` as metadata, whether the installed `stado` knows a fixed set of subcommands — and, the point of the command, whether each forward marker still matches a live listener. |
+| `stado host software [<target>] [--json]` | What a host actually runs: one row per program with its version, its SHA-256 and whether those exact bytes came out of a release Stado published. Naming a target takes the report over the audited channel and persists it as an observation; omitting the target prints what every host has already reported, ages included. The read counterpart of `host release`, and the evidence `stado release status` gates on. |
 | `stado host release <target> --binary NAME --version X.Y.Z` | Put one registry-declared managed binary on the host: fetch the exact coordinate, verify the operator's configured SHA-256, check the layout, stage it under a versioned directory, and only then atomically repoint the active binary and restart its declared unit. The write counterpart of `host inventory`. `--dry-run` probes read-only and reports the plan. |
 | `stado host install-binary <target> --from PATH [--name NAME]` | Replace one owner-only Stado program on the host with a build proven to run there. It is delivered over the approved channel, signed, executed BEFORE it becomes the installed one, renamed into place rather than written through the file already there — overwriting a Mach-O in place invalidates its signature and the kernel answers the next exec with SIGKILL and no message — verified again, and the previous build is kept. `--rollback` puts that previous build back. |
 | `stado host precheck-runner install <target>` | Install or reconcile the isolated GitHub pre-check runner declared by Stado. The target address and platform come from the canonical registry; Stado obtains a short-lived organization token from the admin-scoped `GITHUB_TOKEN` credential, verifies the pinned runner archive, creates an unprivileged account, installs the service, and applies the private-network boundary. |
@@ -574,6 +575,76 @@ What it deliberately does not show, and why:
   that would carry the content does not exist in the report shape. Read a
   vault with `skarbiec`, on purpose, not as a side effect of asking what is
   installed.
+
+### `stado host software`
+
+`host inventory` lists what is in `$HOME/.stado/bin`. It cannot say whether any
+of it came out of a release, and on 2026-08-18 that was the gap that cost the
+fleet a day: two macs were running a skarbiec built on a laptop — 0.2.1 on one,
+0.2.3 on the other, neither in any published release, while `managed_versions`
+declared 0.1.3 on both — and the older one was stripping the
+`brama:agent:<id>` tags off a live credential every rotation. Nothing on any
+screen could name the program doing it.
+
+This command is the host stating what it runs. One row per program:
+
+```
+PROVENANCE  NAME      VERSION  SHA256        PATH
+unmanaged   skarbiec  0.2.4    2e059a3abd19  /Users/charles/.stado/bin/skarbiec
+release     stado     0.6.0    9d582e6e96da  /Users/charles/.stado/bin/stado
+```
+
+**`provenance` is decided by digest, on the host, and by nothing else.**
+`host release` stages every delivery under
+`$HOME/.stado/releases/<binary>/<version>/<platform>/` out of an archive whose
+SHA-256 it verified against the canonical release manifest, then hard-links that
+staged file into place — so the active file is byte-identical to a verified
+published artefact. The reporter hashes each program and looks for that digest
+among the staged artefacts: a match is `release`, no match is `unmanaged`. A
+name, a version string and a program's own claim about its provenance all survive
+one `scp`; a digest that equals a verified archive's extracted member does not.
+A build delivered by `host install-binary` therefore reads `unmanaged` and that
+is correct — it stages nothing under `.stado/releases`, and "the fix is running
+but it did not come through the channel" is the finding, not a defect.
+
+Three sources make up the population, and all three are needed. Every program in
+`$HOME/.stado/bin` is what Stado placed. Every declared service unit's program is
+what the host actually runs, which is not the same set. Every release-control
+product install path is the third: brama lives at
+`/Users/charles/.stado/services/brama/bin/brama` and appears in neither of the
+others. The unit files and product paths are bound by the control plane from the
+registry, so the host is asked to read files and hash bytes and is never asked
+which of its files matter.
+
+Shell scripts are counted, not rowed. control-host carries 1393 of them in
+`$HOME/.stado/bin` against 28 programs — the retired helper channel had a writer
+and no reaper — and a release pipeline produces none of them, so rowing each as
+`unmanaged` would bury the twenty-eight answers the report exists to give. The
+shebang decides, and it is tested before the executable bit: not one of those
+1393 leftovers is executable any more, so filtering on the exec bit first made
+every one of them vanish instead of being counted. The count is printed, so the
+accretion stays visible.
+
+The report is an **observation**, not a declaration: it is stored in
+`~/.stado/observations.json` under `software:<name>@<host>` with the target as the
+vantage, so it carries an age and goes stale exactly as a service reachability
+observation does. That is what lets `stado release status` gate on it without one
+ssh connection per target, and what makes "nobody has looked for three hours" a
+visible state rather than a silent one. A read that fails is recorded as
+`unverified` rather than swallowed, because leaving yesterday's report in place
+after a refused connection is how an hour-old answer keeps reading as current.
+
+```bash
+# Take the report from one host and persist it.
+stado host software control-host --json
+
+# Read what every host has already reported, with ages.
+stado host software
+```
+
+A host that has never reported is absent from the second listing and is a
+**failure** wherever the report is judged — never a pass. See
+"`stado release status` fails on silence".
 
 ### `stado host release`
 
@@ -1058,7 +1129,7 @@ beacon is expected. The "has not reported in days" detector.
 | `prepare PRODUCT VERSION PLATFORM ...` | Hash an existing archive, bind source revision, schema compatibility and qualification evidence into a canonical manifest, sign it, then publish archive, signature and manifest create-only. The manifest is the last commit marker. |
 | `promote PRODUCT VERSION --channel candidate|stable` | Re-fetch every platform, verify exact bytes, signature and passed qualification, then compare-and-swap one `desired` registry generation. It never rebuilds. |
 | `agent --target TARGET [--once]` | Reconcile canonical desired state on a host: verify, stage immutably, start a private candidate, check readiness, switch the stable proxy, drain, monitor and commit or roll back. |
-| `status [PRODUCT] [--json]` | Join central desired/previous state with each host's observed rollout state. A host that has not published status is `unreported`, never healthy by assumption. |
+| `status [PRODUCT] [--json]` | Join central desired/previous state with each host's observed rollout state **and with the host's own software report**. A host that has not published rollout status is `unreported`, never healthy by assumption — and a host whose software report is missing, stale, `unmanaged` or at a version the fleet does not declare makes the command **exit non-zero**, naming the host and the exact disagreement in one sentence per row. |
 | `logs PRODUCT --target TARGET [--version V] [--stream out\|err\|both] [--lines N] [--json]` | Read the candidate's own `stdout`/`stderr` off the target host: `{logs_root}/{product}-{version}.{out,err}`, the exact files the release agent opens for a candidate it spawns. Read-only, over the registry ssh channel. Defaults to both streams and the last 40 lines of each, and reports a file that is missing separately from one that is present and empty. |
 | `doctor PRODUCT [--target TARGET] [--json]` | One verdict — `settled`, `rolling` or `blocked` — over desired versus observed release, the rollout phase and its detail, the candidate's port, liveness and readiness answer, the host's quarantine map with the desired digest called out, and the host's claiming gates. Read-only: it starts nothing, stops nothing and writes nothing. |
 | `quarantine list PRODUCT [--target TARGET] [--json]` | The digests this host refuses to roll out again, each with the agent's own reason, when it was quarantined, and whether it is the digest the registry currently wants. Read-only. |
@@ -1069,6 +1140,58 @@ beacon is expected. The "has not reported in days" detector.
 run or infer qualification. `promote` rejects `pending` and `failed` records,
 untrusted keys, mixed source revisions, missing target platforms, or any byte
 that differs from its signed manifest.
+
+### `stado release status` fails on silence
+
+Until 2026-08-18 this command printed
+`brama target=control-host desired=0.2.27 observed=unreported` and exited
+**zero**. Both halves of that line were declarations: `desired` is what the
+registry wants, `observed` is what the release agent last wrote about itself, and
+a host that had never written anything was rendered indistinguishable from a
+healthy one — in the command an operator reaches for to ask exactly that. On the
+same day two machines were running a skarbiec built on a laptop (0.2.1 on one,
+0.2.3 on the other, neither in any published release), the older of the two was
+stripping the `brama:agent:<id>` tags off a live credential every rotation, and
+nothing on any screen could name the program doing it.
+
+A third column closes both gaps. It is the host's own software report
+(`stado host software`), read out of `~/.stado/observations.json` rather than
+gathered here, because a status read must not cost one ssh connection per target
+— and because the *age* of the report is itself the finding when nobody has
+refreshed it.
+
+Five states fail, and each prints one sentence naming the host and the exact
+disagreement:
+
+| State | The sentence, and why it is a failure |
+|---|---|
+| No report | `control-host has never reported what software it runs…`. This is the state that used to print as `observed=unreported` beside exit 0. |
+| Stale report | `… last reported its software stale (3h), past the window an observation speaks for…`. A report older than `observations::DEFAULT_TTL` is history and must never be read as the present. |
+| Refused read | `… could not report its software (unverified): <the channel's own words>`. The previous report is not left standing looking current. |
+| Unmanaged program | `… runs skarbiec 0.2.4 at $HOME/.stado/bin/skarbiec: its digest 2e059a3abd19 matches no release artefact Stado published, so it is unmanaged`. |
+| Version disagreement | `… and the fleet declares 0.1.3`, on the same line as the row it is about. |
+
+What is deliberately **not** a failure is a program nothing declares. A host's
+`$HOME/.stado/bin` accumulates dated backup copies — this laptop carries eleven
+of `stado` alone — and none of them is running. Failing on those forever is how
+an operator learns to write `|| true` after the command, at which point the drift
+it exists to catch stops being noticed again; `stado service converge` refuses to
+fail on an unmeasured binary for the same reason. Every such program is still
+reported and still counted in `stado host software`. It just does not decide the
+gate.
+
+The scope of the gate is therefore exactly what the fleet declares it manages:
+each name in the target's `managed_versions`, plus the release-control product's
+own binary at `<install_root>/<binary>` — which lives under the product's install
+root and so appears in no `managed_versions` entry and no `$HOME/.stado/bin`
+listing. Accountability is resolved against the live registry on every read
+rather than frozen into the record, so a declaration added an hour after a report
+brings that program into scope immediately.
+
+`StadoDesktop`'s Releases screen shows the same verdict in a `Software` column
+and lists the findings verbatim in the pane below. It reads `verdict`, `failed`
+and `findings` straight out of `status --json` and re-derives none of them: one
+command decides what `unmanaged` means.
 
 On macOS, install the reconciler as the registry target's runtime account:
 
