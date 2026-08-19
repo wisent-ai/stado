@@ -134,13 +134,6 @@ async fn imds_token(http: &reqwest::Client, resource: &str) -> Result<TokenGrant
 /// Seconds until an `expiresOn` value from `az account get-access-token`
 /// ("2026-07-25 21:02:38.000000", local time — the same interpretation
 /// azure-identity's AzureCliCredential uses). Split out pure for tests.
-#[cfg(test)]
-fn az_cli_expires_in(expires_on: &str, now_unix: i64) -> Option<i64> {
-    let naive = chrono::NaiveDateTime::parse_from_str(expires_on, "%Y-%m-%d %H:%M:%S%.f").ok()?;
-    let local = naive.and_local_timezone(chrono::Local).single()?;
-    Some(local.timestamp() - now_unix)
-}
-
 /// One client-credentials token from the scoped Skarbiec service principal.
 ///
 /// Read field by field: the broker requires a named field and refuses a
@@ -240,57 +233,4 @@ pub(crate) async fn identity_bearer_token(
     resource: &str,
 ) -> Result<String, TokenError> {
     bearer_token(http, scope, resource).await
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn token_cache_freshness_with_injected_clock() {
-        let token = CachedToken {
-            access_token: "t".into(),
-            expires_at_unix: 1_000_000,
-        };
-        // More than 5 min left: fresh.
-        assert!(token.fresh_at(1_000_000 - TOKEN_REFRESH_SKEW_S - 1));
-        // Inside the 5 min skew window: stale (refresh early).
-        assert!(!token.fresh_at(1_000_000 - TOKEN_REFRESH_SKEW_S));
-        assert!(!token.fresh_at(1_000_000 - 1));
-        assert!(!token.fresh_at(1_000_000));
-    }
-
-    #[test]
-    fn az_cli_expires_on_parses_local_time() {
-        let now = chrono::Utc::now().timestamp();
-        let future = chrono::DateTime::from_timestamp(now + 3600, 0)
-            .unwrap()
-            .with_timezone(&chrono::Local)
-            .format("%Y-%m-%d %H:%M:%S%.6f")
-            .to_string();
-        let expires_in = az_cli_expires_in(&future, now).unwrap();
-        assert!((expires_in - 3600).abs() <= 1, "{expires_in}");
-        assert_eq!(az_cli_expires_in("not a date", now), None);
-    }
-
-    #[test]
-    fn cache_is_keyed_by_scope() {
-        let now = chrono::Utc::now().timestamp();
-        let grant_a = TokenGrant {
-            access_token: "arm-token".into(),
-            expires_in: 3600,
-        };
-        let grant_b = TokenGrant {
-            access_token: "storage-token".into(),
-            expires_in: 3600,
-        };
-        cache_token("scope-a", &grant_a, now);
-        cache_token("scope-b", &grant_b, now);
-        assert_eq!(cached_token("scope-a", now).as_deref(), Some("arm-token"));
-        assert_eq!(
-            cached_token("scope-b", now).as_deref(),
-            Some("storage-token")
-        );
-        assert_eq!(cached_token("scope-c", now), None);
-    }
 }

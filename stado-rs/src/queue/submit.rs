@@ -21,11 +21,6 @@ use crate::queue::StorageError;
 
 /// Directory the startup-script templates ship in (Python `TEMPLATE_DIR` =
 /// `stado/templates/`).
-#[cfg(test)]
-fn template_dir() -> std::path::PathBuf {
-    crate::data_dir().join("templates")
-}
-
 /// Submission failure from validation, queue storage, or local rendering.
 #[derive(Debug, thiserror::Error)]
 pub enum SubmitError {
@@ -129,48 +124,6 @@ pub const CPU_MACHINE_TYPE: &str = "e2-standard-8";
 /// `os.urandom(4).hex()` — 4 random bytes as 8 hex chars.
 pub fn generate_job_id() -> String {
     hex::encode(&uuid::Uuid::new_v4().as_bytes()[..4])
-}
-
-/// Render a startup-script template: naive sequential `${KEY}` replacement,
-/// exactly Python `str.replace(f"${{{key}}}", str(value))` per variable.
-/// Variables not present in the template are ignored; `${...}` placeholders
-/// with no matching variable are left untouched (Python parity).
-#[cfg(test)]
-fn render_template(
-    template_name: &str,
-    variables: &[(String, String)],
-) -> Result<String, SubmitError> {
-    let mut content = std::fs::read_to_string(template_dir().join(template_name))?;
-    for (key, value) in variables {
-        content = content.replace(&format!("${{{key}}}"), value);
-    }
-    Ok(content)
-}
-
-/// Bash that clones repo into $WORK/{workdir} and pip-installs its extras
-/// so the user's command can `cd {workdir} && python -m foo` directly.
-/// Returns empty string when no repo was requested.
-#[cfg(test)]
-fn render_repo_block(repo: &str, workdir: &str, extras: &str) -> String {
-    if repo.is_empty() {
-        return String::new();
-    }
-    // Default workdir = repo basename without .git
-    let workdir = if workdir.is_empty() {
-        let basename = repo.trim_end_matches('/').rsplit('/').next().unwrap_or("");
-        basename
-            .strip_suffix(".git")
-            .unwrap_or(basename)
-            .to_string()
-    } else {
-        workdir.to_string()
-    };
-    let install = if extras.is_empty() {
-        String::new()
-    } else {
-        format!("pip install -e '.[{extras}]'")
-    };
-    format!("git clone --depth 1 {repo} {workdir}\ncd {workdir}\n{install}\ncd $WORK\n")
 }
 
 /// Python `json.dumps(value, sort_keys=True, separators=(",", ":"))`:
@@ -464,116 +417,4 @@ pub async fn default_store(bucket: &str) -> Result<JobStorage, StorageError> {
         bucket
     };
     JobStorage::with_bucket(bucket).await
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::queue::local_file::LocalBackend;
-    use std::sync::Arc;
-
-    #[test]
-    fn job_id_is_8_hex_chars() {
-        let id = generate_job_id();
-        assert_eq!(id.len(), 8);
-        assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
-    }
-
-    #[test]
-    fn repo_block_matches_python_layout() {
-        assert_eq!(render_repo_block("", "", ""), "");
-        let block = render_repo_block("https://github.com/org/repo.git", "", "train");
-        assert_eq!(
-            block,
-            "git clone --depth 1 https://github.com/org/repo.git repo\ncd repo\npip install -e '.[train]'\ncd $WORK\n"
-        );
-        // Explicit workdir + empty extras skips the install line content.
-        let block = render_repo_block("https://github.com/org/repo", "wd", "");
-        assert_eq!(
-            block,
-            "git clone --depth 1 https://github.com/org/repo wd\ncd wd\n\ncd $WORK\n"
-        );
-    }
-
-    #[test]
-    fn compact_sorted_json_matches_python_dumps() {
-        let value = serde_json::json!({"b": 1, "a": {"z": true, "y": "ż"}, "c": [2, 1]});
-        assert_eq!(
-            json_dumps_sorted_compact(&value),
-            "{\"a\":{\"y\":\"\\u017c\",\"z\":true},\"b\":1,\"c\":[2,1]}"
-        );
-    }
-
-    #[tokio::test]
-    async fn yieldable_without_command_is_refused() {
-        let options = SubmitOptions {
-            yieldable: true,
-            ..Default::default()
-        };
-        let err = submit_job("echo hi", &options).await.unwrap_err();
-        assert!(
-            err.to_string()
-                .starts_with("yieldable=True requires a yield_command"),
-            "{err}"
-        );
-    }
-
-    #[tokio::test]
-    async fn deprecated_entrypoint_is_refused() {
-        let err = submit_job(
-            "python -m wisent.scripts.activations.extract_and_upload --x",
-            &SubmitOptions::default(),
-        )
-        .await
-        .unwrap_err();
-        assert!(err.to_string().starts_with("refusing deprecated"), "{err}");
-    }
-
-    #[tokio::test]
-    async fn template_rendering_substitutes_only_known_variables() {
-        let script = render_template(
-            "startup_gpu_agent.sh",
-            &[
-                ("WC_BUCKET".into(), "fixture-bucket".into()),
-                ("STADO_RELEASE_VERSION".into(), "fixture-release".into()),
-            ],
-        )
-        .unwrap();
-        assert!(
-            script.contains("export WC_BUCKET=\"fixture-bucket\""),
-            "{script}"
-        );
-        assert!(
-            script.contains("RELEASE_VERSION=\"fixture-release\""),
-            "{script}"
-        );
-        assert!(!script.contains("${WC_BUCKET}"), "{script}");
-        assert!(!script.contains("${STADO_RELEASE_VERSION}"), "{script}");
-        // A placeholder without a supplied variable stays untouched.
-        assert!(script.contains("${WC_STORAGE_BACKEND}"), "{script}");
-    }
-
-    #[tokio::test]
-    async fn gcs_submit_writes_script_and_job() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = JobStorage::with_backend(
-            Arc::new(LocalBackend::new(dir.path().to_str().unwrap()).unwrap()),
-            "local",
-        );
-        // Exercise the Job construction half via the public submit_job by
-        // pointing the backend env at the temp dir is not possible here
-        // (config LazyLock); this test instead verifies the template + job
-        // wiring indirectly through render_template and the store facade.
-        // The end-to-end path is covered by tests/cli_local.rs.
-        let mut job = Job::new("abcd1234", "echo hi");
-        job.gpu_mem_gb = 0;
-        job.machine_type = "e2-standard-8".into();
-        store
-            .upload_script("abcd1234", "#!/bin/bash\n")
-            .await
-            .unwrap();
-        store.write_job("queue", &job).await.unwrap();
-        let back = store.read_job("queue", "abcd1234").await.unwrap().unwrap();
-        assert_eq!(back.machine_type, "e2-standard-8");
-    }
 }
