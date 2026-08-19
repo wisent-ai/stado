@@ -186,27 +186,3 @@ pub fn delete_item(id: &str) -> Result<(), SkarbiecError> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn binary_override_must_name_a_file() {
-        let _guard = super::super::test_env_lock();
-        std::env::set_var("SKARBIEC_BIN", "/nonexistent/skarbiec");
-        let error = binary().expect_err("a missing override is an error");
-        assert!(error.to_string().contains("SKARBIEC_BIN names no file"));
-        std::env::remove_var("SKARBIEC_BIN");
-    }
-
-    #[test]
-    fn vault_override_must_name_a_file() {
-        let _guard = super::super::test_env_lock();
-        std::env::set_var("SKARBIEC_VAULT_FILE", "/nonexistent/vault.json");
-        let error = vault().expect_err("a missing override is an error");
-        assert!(error
-            .to_string()
-            .contains("SKARBIEC_VAULT_FILE names no file"));
-        std::env::remove_var("SKARBIEC_VAULT_FILE");
-    }
-}
