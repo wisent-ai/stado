@@ -1,0 +1,211 @@
+{
+  "schemaVersion": 1,
+  "hero": {
+    "eyebrow": "Compute and storage control plane",
+    "headline": "Describe the workload. Stado decides where it runs.",
+    "lede": "Stado is a harness for managing compute and storage across local, GCP, AWS, and Azure infrastructure. Describe the workload, required capacity, deadline, data, and budget; Stado decides where and when to run it, then records what happened.",
+    "metaDescription": "Stado runs your AI workloads across local, GCP, AWS and Azure infrastructure from one provider-neutral queue, and records what happened.",
+    "proofStrip": [
+      "Provider-neutral queue",
+      "Leases, fencing, CAS",
+      "SHA-256 result evidence",
+      "macOS arm64 · Linux amd64",
+      "Apache-2.0"
+    ]
+  },
+  "sections": [
+    {
+      "kind": "recognition",
+      "id": "the-fleet-you-have",
+      "heading": "The capacity is already paid for. The control is not.",
+      "lede": "AI compute fleets grow as disconnected local workstations, long-lived servers, cloud VMs, provider consoles, scripts, queues, artifact stores, and billing dashboards. Expensive capacity ends up difficult to schedule, difficult to recover, and dangerous to automate.",
+      "claimRefs": [
+        0,
+        2,
+        12
+      ],
+      "items": [
+        {
+          "title": "Scheduling is guesswork",
+          "text": "Every console answers for one provider. Nothing answers for the fleet, so work lands where somebody remembered there was room."
+        },
+        {
+          "title": "Recovery is manual",
+          "text": "A machine that disappears mid-job takes the job with it. What ran, on what inputs, and what it produced has to be reconstructed by hand."
+        },
+        {
+          "title": "Automation is dangerous",
+          "text": "Handing an agent a shell or a cloud-administrator credential is the usual way to make orchestration programmable, and the usual way to lose control of it."
+        }
+      ]
+    },
+    {
+      "kind": "mechanism",
+      "id": "how-a-job-runs",
+      "heading": "One queue, one job lifecycle, one result contract",
+      "lede": "Stado replaces ad hoc orchestration with a provider-neutral product contract. The same four steps run whether the work lands on the laptop in front of you or on a cloud VM.",
+      "claimRefs": [
+        1,
+        2,
+        3,
+        4,
+        6,
+        7
+      ],
+      "items": [
+        {
+          "step": "01",
+          "title": "Describe",
+          "text": "Submit the workload with its required capacity, deadline, data, and budget. No provider is named in the request; the contract is the same everywhere."
+        },
+        {
+          "step": "02",
+          "title": "Admit",
+          "text": "Leases, fencing, and compare-and-swap revisions prevent two workers or coordinators from ever owning the same transition."
+        },
+        {
+          "step": "03",
+          "title": "Execute",
+          "text": "A worker resolves immutable inputs and runs the workload. Secret plaintext is materialized only inside the trusted workload process and is excluded from durable job JSON."
+        },
+        {
+          "step": "04",
+          "title": "Account",
+          "text": "The worker publishes output plus SHA-256 evidence. Pause and drain stay durable control state, so maintenance never deletes queued work."
+        }
+      ]
+    },
+    {
+      "kind": "proof",
+      "id": "the-local-path",
+      "heading": "The whole path, on one machine, with no cloud account",
+      "lede": "The quick start requires no cloud account, cloud credential, Skarbiec, GPU, or Python. This is the documented local transcript, start to finished job.",
+      "claimRefs": [
+        8,
+        1
+      ],
+      "artifact": {
+        "type": "terminal",
+        "caption": "Local quick start, as documented in the Stado README. The job reaches completed with result evidence on disk.",
+        "lines": [
+          "$ stado config init",
+          "~/.stado/config.json",
+          "",
+          "$ stado config validate",
+          "config ok (~/.stado/config.json)",
+          "",
+          "$ stado local-control-plane",
+          "coordinator, local agent and dashboard running",
+          "dashboard http://127.0.0.1:8765",
+          "",
+          "$ stado submit \"printf 'hello from Stado\\n'\"",
+          "Job ID: 01JD7QF6ZK4M2V8B0S3XN9TCEA",
+          "",
+          "$ stado status 01JD7QF6ZK4M2V8B0S3XN9TCEA",
+          "completed",
+          "",
+          "$ stado results 01JD7QF6ZK4M2V8B0S3XN9TCEA ./results",
+          "./results/stdout.txt",
+          "./results/result.json"
+        ]
+      }
+    },
+    {
+      "kind": "proof",
+      "id": "what-is-actually-stable",
+      "heading": "Capability status is a product fact, not a marketing one",
+      "lede": "`stado capabilities --json` is the source of truth for the installed build. An implementation status does not promote an integration to stable support, and every cloud adapter stays preview until its own live acceptance matrix passes.",
+      "claimRefs": [
+        9,
+        10,
+        11
+      ],
+      "artifact": {
+        "type": "table",
+        "caption": "The vocabulary stado capabilities --json reports, and what each value commits to.",
+        "columns": [
+          "Status",
+          "What it means",
+          "Stable in 0.5"
+        ],
+        "rows": [
+          [
+            "implemented",
+            "The adapter exists in this build",
+            "Only for local execution and local filesystem"
+          ],
+          [
+            "partial",
+            "Some operations of the family work",
+            "No"
+          ],
+          [
+            "external",
+            "Capacity is operated outside Stado",
+            "No"
+          ],
+          [
+            "planned",
+            "Declared, not built",
+            "No"
+          ],
+          [
+            "unsupported",
+            "Refused by this build",
+            "No"
+          ],
+          [
+            "preview",
+            "Built, awaiting live acceptance evidence",
+            "No"
+          ]
+        ]
+      }
+    },
+    {
+      "kind": "objection",
+      "id": "before-you-adopt-it",
+      "heading": "What Stado is not, said before you find out",
+      "claimRefs": [
+        5,
+        7,
+        10,
+        11,
+        12,
+        13
+      ],
+      "items": [
+        {
+          "question": "Is this a Kubernetes replacement?",
+          "answer": "No. Stado is not a general Kubernetes replacement or a container platform, and it does not manage arbitrary networks, load balancers, registries, or application platforms."
+        },
+        {
+          "question": "Can I depend on the cloud adapters today?",
+          "answer": "Stado 0.5 is in release-candidate validation and stable support is intentionally limited to the local execution and local filesystem contracts. Every cloud adapter remains preview until its own release-scoped live acceptance matrix passes."
+        },
+        {
+          "question": "Will every provider behave the same?",
+          "answer": "No, and Stado does not promise it. It also does not provision physical machines or install their operating systems, GPU drivers, or workload runtimes."
+        },
+        {
+          "question": "What do I have to give an AI agent?",
+          "answer": "Versioned `stado machine` JSON for authorized mutations, or read-only `stado-mcp` for inspection. Neither interface provides unrestricted shell access or cloud-administrator credentials."
+        },
+        {
+          "question": "What happens to queued work during maintenance?",
+          "answer": "Pause and drain are durable control state rather than a best-effort signal on one machine. Storage migration previews and executes a fenced copy, verifies names, metadata, and bodies, and never allows two active writers."
+        }
+      ]
+    },
+    {
+      "kind": "decision",
+      "id": "start-locally",
+      "heading": "Start on the machine you are already sitting at",
+      "lede": "The local path is the stable path in 0.5, it needs no cloud account, and it is the same queue, lifecycle, and result contract you will use when the fleet grows.",
+      "claimRefs": [
+        8,
+        10
+      ]
+    }
+  ]
+}
