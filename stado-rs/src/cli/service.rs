@@ -1008,6 +1008,16 @@ fn render_status(
         headers.insert(3, "DOMAIN");
     }
     table::print(&headers, &cells);
+    // A unit declared in a domain its host cannot have, named where the
+    // operator is already reading the table it is missing from. This is a
+    // fact about the document, so it prints for every row that carries it
+    // whatever the beacon said — including the `missing` rows, where the
+    // declaration is the reason the beacon reports nothing.
+    for row in rows {
+        if let Some(misdeclared) = &row.misdeclared_domain {
+            println!("declaration: {}", misdeclared.sentence());
+        }
+    }
     for failure in failures {
         let exit = match &failure.last_exit {
             Some(exit) => format!("last launchd exit {exit}"),
