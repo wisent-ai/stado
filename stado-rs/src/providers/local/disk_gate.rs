@@ -149,4 +149,3 @@ pub(crate) fn observe(home: &Path) -> GateObservation {
         largest_pending_gb,
     }
 }
-

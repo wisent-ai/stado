@@ -194,7 +194,6 @@ pub fn dynamic_per_tick_cap(queue_depth: i64) -> i64 {
 /// priority into blob metadata, so this filters + orders the whole queue
 /// cheaply and we read only the surviving window's bodies.
 /// The stuck backlog stays queued and untouched — it just stops blocking.
-
 fn prefilter_candidates_with_routing(
     blobs: &[crate::queue::BlobInfo],
     available: &BTreeMap<String, i64>,
@@ -508,4 +507,3 @@ async fn schedule_queued_jobs_inner(
     .await?;
     Ok(created)
 }
-

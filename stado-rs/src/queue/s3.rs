@@ -47,7 +47,6 @@ impl S3Backend {
     }
 
     /// Assemble from an explicit client (tests bind a loopback endpoint).
-
     fn assemble(client: aws_sdk_s3::Client, bucket: &str) -> Self {
         Self {
             inner: Arc::new(Inner {
@@ -469,4 +468,3 @@ impl S3Backend {
         Ok(out)
     }
 }
-

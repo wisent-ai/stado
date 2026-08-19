@@ -134,7 +134,6 @@ async fn imds_token(http: &reqwest::Client, resource: &str) -> Result<TokenGrant
 /// Seconds until an `expiresOn` value from `az account get-access-token`
 /// ("2026-07-25 21:02:38.000000", local time — the same interpretation
 /// azure-identity's AzureCliCredential uses). Split out pure for tests.
-
 /// One client-credentials token from the scoped Skarbiec service principal.
 ///
 /// Read field by field: the broker requires a named field and refuses a
@@ -235,4 +234,3 @@ pub(crate) async fn identity_bearer_token(
 ) -> Result<String, TokenError> {
     bearer_token(http, scope, resource).await
 }
-

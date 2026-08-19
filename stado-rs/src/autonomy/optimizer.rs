@@ -908,4 +908,3 @@ fn crosses_provider_boundary(job: &Job, provider: ProviderId) -> bool {
                     && provider != ProviderId::Azure))
     })
 }
-

@@ -272,4 +272,3 @@ pub async fn exec_host(
     host_channel::finish_report(&mut report, &output, OK_STATUS, "ssh failed");
     Ok(Value::Object(report))
 }
-

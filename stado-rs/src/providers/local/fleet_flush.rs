@@ -173,4 +173,3 @@ fn spawn_fleet_flush_with_token(
     // handle leaves the process running (it is re-parented to init).
     Ok(true)
 }
-

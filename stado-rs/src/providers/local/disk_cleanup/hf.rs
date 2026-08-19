@@ -1427,4 +1427,3 @@ fn identity_from_metadata(metadata: &std::fs::Metadata) -> Identity {
         nlink: metadata.nlink(),
     }
 }
-

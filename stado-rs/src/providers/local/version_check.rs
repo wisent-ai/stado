@@ -19,7 +19,6 @@ pub use crate::release::{version_newer, version_tuple, VersionToken};
 
 /// Pure: newest release key of a PyPI /pypi/<pkg>/json payload.
 /// None when there are no releases (Python `if not releases: return None`).
-
 /// `(installed, desired)` when the exact configured Stado release version is
 /// strictly newer than this binary; `None` when the coordinate is absent,
 /// malformed, or not newer.
@@ -108,4 +107,3 @@ pub async fn maybe_drain_or_upgrade(
     }
     DriftOutcome::DriftDetected
 }
-

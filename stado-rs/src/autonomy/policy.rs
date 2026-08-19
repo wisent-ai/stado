@@ -505,4 +505,3 @@ impl AuthorizationDecision {
         }
     }
 }
-

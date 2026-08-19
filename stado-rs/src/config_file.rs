@@ -1367,4 +1367,3 @@ pub fn template() -> Value {
         }
     })
 }
-

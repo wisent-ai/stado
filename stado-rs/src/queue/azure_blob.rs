@@ -80,7 +80,6 @@ impl AzureBlobBackend {
     }
 
     /// Bind to an explicit base URL without auth (loopback mocks in tests).
-
     fn assemble(base_url: &str, account: &str, container: &str, auth: bool) -> Self {
         Self {
             inner: Arc::new(Inner {
@@ -619,4 +618,3 @@ impl BlobBackend for AzureBlobBackend {
             .collect())
     }
 }
-

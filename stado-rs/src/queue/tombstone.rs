@@ -67,4 +67,3 @@ pub async fn on_transition(store: &JobStorage, job: &Job, to_prefix: &str) {
         eprintln!("[tombstone] write failed for {orig}: {exc:?}");
     }
 }
-

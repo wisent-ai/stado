@@ -81,7 +81,6 @@ impl CloudQuotasClient {
     }
 
     /// Bind to an explicit base URL without credentials (loopback mocks).
-
     fn assemble(
         project: &str,
         base_url: &str,
@@ -724,4 +723,3 @@ pub async fn azure_request_all_families(new_limit: i64, locations: &[String]) ->
     }
     out
 }
-

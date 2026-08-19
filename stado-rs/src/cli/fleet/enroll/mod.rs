@@ -371,4 +371,3 @@ pub async fn reject(hostname: &str) -> Result<bool, String> {
     println!("rejected join request for '{hostname}'");
     Ok(true)
 }
-

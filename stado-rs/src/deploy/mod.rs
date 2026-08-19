@@ -308,4 +308,3 @@ pub fn write_if_changed(path: &std::path::Path, content: &str) -> Result<bool, s
     std::fs::write(path, content)?;
     Ok(true)
 }
-
