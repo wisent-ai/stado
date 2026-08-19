@@ -2,17 +2,14 @@
 # Move the registry-published Weles placement policy into the path the worker
 # reads, or refuse and change nothing.
 #
-# Install:
-#   stado host install-helper <target> \
-#     stado-rs/scripts/apply-placement-policy.sh apply-placement-policy
-#
-# `stado host publish-placement-policy` delivers the document to
+# This script is embedded in the stado binary itself
+# (`placement::APPLY_SCRIPT`, via include_str!). `stado host
+# publish-placement-policy` delivers the document to
 # $HOME/.stado/files/placement-policy.json through the audited channel and then
-# runs this. It takes no arguments on purpose: the fleet channel restricts
-# helper argv to correlation identifiers, and a helper that accepted a source or
-# a destination path would be a remote writer with the audit trail removed. Both
-# paths below are fixed, so the only thing an operator can vary is what the
-# registry says.
+# runs this as one fixed remote script. It takes no arguments on purpose: a
+# script that accepted a source or a destination path would be a remote writer
+# with the audit trail removed. Both paths below are fixed, so the only thing
+# an operator can vary is what the registry says.
 #
 # Three refusals, all of them silent failures somewhere else:
 #
@@ -37,8 +34,8 @@ dest_dir="$HOME/.config/weles"
 dest="$dest_dir/placement-policy.json"
 
 # Every check below is a JSON question, so a host without jq cannot answer any
-# of them -- and a helper that cannot verify must not write. The fleet's other
-# helpers hardcode /usr/bin/jq; that path is real on the Linux hosts and absent
+# of them -- and a script that cannot verify must not write. The fleet's other
+# scripts hardcode /usr/bin/jq; that path is real on the Linux hosts and absent
 # on the macOS ones, where Homebrew owns it, so this one looks in the three
 # places it is actually installed rather than assuming one of them.
 jq=
@@ -77,7 +74,7 @@ def entry($h): [ .hosts[]? | select(((.hostname // "") | tostring | norm) == $h
 
 # generation, enabled, actions -- as three tab-separated fields, for whichever
 # entry belongs to this machine. `stado host publish-placement-policy` parses
-# these to report the delta; an operator running the helper by hand reads them
+# these to report the delta; an operator reading the remote output sees them
 # directly.
 summarize() {
   "$jq" -r --arg host "$host" "$filter"'

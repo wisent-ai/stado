@@ -2,16 +2,12 @@
 # Report, for every binary this host has a declared `managed_versions` entry
 # for, which version it is actually running.
 #
-# Install:
-#   stado host install-helper <target> \
-#     scripts/report-installed-versions.sh report-installed-versions
-#
-# `stado service converge` runs this over `stado host run-helper` and compares
-# each `version=` against the registry's `targets[].managed_versions`. It takes
-# no arguments on purpose: the fleet channel restricts helper argv to
-# correlation identifiers, so everything this reads comes from the canonical
-# registry this host already resolves, exactly as `probe-service-endpoints`
-# does.
+# This script is embedded in the stado binary itself
+# (`service_converge::VERSION_PROBE`, via include_str!). `stado service
+# converge` runs it as one fixed remote script and compares each `version=`
+# against the registry's `targets[].managed_versions`. It takes no arguments on
+# purpose, so everything this reads comes from the canonical registry this host
+# already resolves, exactly as `probe-service-endpoints` does.
 #
 # The gap it closes: a declaration names a unit and a plist and says nothing
 # about which build is behind them, so a host serving an old release is
@@ -58,7 +54,7 @@
 #       state=<launchd state>
 #   * `version=` is an exact semantic version or the literal `unknown` -- never
 #     a partial, never empty;
-#   * exit 0 whenever the helper itself ran, including when every version is
+#   * exit 0 whenever the reporter itself ran, including when every version is
 #     unknown. Non-zero means this host cannot report at all.
 set -eu
 
@@ -84,7 +80,7 @@ HOST=$("$STADO" registry self --name-only 2>/dev/null | tr -d '[:space:]') || HO
 }
 
 # One name per line: the binaries this host declares a version for. The
-# declaration is the scope -- a binary nobody declared is not this helper's
+# declaration is the scope -- a binary nobody declared is not this reporter's
 # business, and reporting it would bury the ones that are.
 "$PYTHON" -c 'import json,sys
 host = sys.argv[1]
@@ -183,7 +179,7 @@ artefact_version() {
 }
 
 # Where an installed product lives, or nothing. Candidates and never a search:
-# a helper that walks the filesystem looking for something called <name> finds
+# a script that walks the filesystem looking for something called <name> finds
 # a backup copy and reports its version as the running one.
 artefact_root() {
   name=$1

@@ -2,24 +2,21 @@
 # Every helper script sitting in this host's ~/.stado/bin, with its age and its
 # size. The inventory nothing produced while the directory filled up.
 #
-# `stado host install-helper` writes into that directory and nothing removes
-# what it wrote. charless-mac-mini carries 553 installed helper scripts beside
+# The retired helper channel wrote into that directory and nothing removed what
+# it wrote. charless-mac-mini carries 553 installed helper scripts beside
 # 16 binaries: each one was delivered to settle one incident, none was ever
 # withdrawn, and the only record of what any of them was for is an operator's
 # memory. A count is what makes that visible; `stado host provenance` already
 # prints it as a footnote, and this is the inventory behind the footnote.
 #
-# Install:
-#   stado host install-helper <target> \
-#     stado-rs/scripts/report-stale-helpers.sh report-stale-helpers
-#
-# `stado host helpers <target>` runs this and renders it oldest first. It takes
-# no arguments on purpose, exactly as probe-service-endpoints.sh does: the
-# fleet channel restricts helper argv to correlation identifiers, and a helper
-# that accepted a path or an age threshold would be a remote file walker, or a
-# remote reaper, with the audit trail removed. The threshold is applied by the
-# caller against these numbers, and every removal goes back over the audited
-# channel one named helper at a time.
+# This script is embedded in the stado binary itself
+# (`host::INVENTORY_SCRIPT`, via include_str!) and run by
+# `stado host helpers <target>` as one fixed remote script -- nothing is
+# installed on the host and nothing is left behind. It takes no arguments on
+# purpose: a script that accepted a path or an age threshold would be a remote
+# file walker, or a remote reaper, with the audit trail removed. The threshold
+# is applied by the caller against these numbers, and every removal goes back
+# over the audited channel one named helper at a time.
 #
 # Read-only throughout: it stats files and writes nothing anywhere. Deciding
 # what to delete is not a decision a script installed on 553 hosts gets to make.

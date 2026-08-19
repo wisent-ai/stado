@@ -49,6 +49,7 @@ pub mod recovery;
 pub mod registry;
 pub mod release_catalog;
 pub mod release_cmd;
+pub mod release_evidence;
 pub mod release_quarantine;
 pub mod release_submit;
 pub mod resolver;
@@ -1171,6 +1172,41 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Why HOST is claiming nothing: its own agent's published gates, the
+    /// disk policy behind them, and what it declared against what it has.
+    ///
+    /// Read-only and safe against a live host. The Mac mini claimed nothing
+    /// for hours at 2 GiB free against a 55 GiB policy, publishing
+    /// `disk_pressure_unresolved` every tick, and no command said so.
+    Gates {
+        host: String,
+        /// Emit the gates as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Reclaim disk on HOST in declared stages, measuring each one.
+    ///
+    /// Previews by default: the host's own janitor pass, the release build
+    /// scratch tree, and delivered product trees no `current` link and no
+    /// live process references. `--apply` is the only thing that deletes and
+    /// requires `--reason`, which is recorded on the host itself.
+    Reclaim {
+        host: String,
+        /// Report what each stage would remove and delete nothing. The
+        /// default, so it never has to be remembered.
+        #[arg(long)]
+        dry_run: bool,
+        /// Remove what the stages name. Requires --reason.
+        #[arg(long, conflicts_with = "dry_run")]
+        apply: bool,
+        /// Why the space is being reclaimed; appended to the host's own
+        /// audit log beside the disk it changed.
+        #[arg(long)]
+        reason: Option<String>,
+        /// Emit the staged report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Replace an owner-only Stado program on TARGET with a build proven to run there.
     #[command(name = "install-binary")]
     InstallBinary {
@@ -1185,18 +1221,6 @@ enum HostCommands {
         #[arg(long, default_value = "stado")]
         name: String,
         /// Emit the installation report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Install one small operator helper in TARGET's owner-only Stado bin directory.
-    #[command(name = "install-helper")]
-    InstallHelper {
-        target: String,
-        /// Local helper file to transfer.
-        source: String,
-        /// Safe basename under $HOME/.stado/bin on the target.
-        name: String,
-        /// Emit the transfer report as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -1246,23 +1270,6 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Run one previously installed owner-only helper and wait for its result.
-    #[command(name = "run-helper")]
-    RunHelper {
-        target: String,
-        /// Safe basename under $HOME/.stado/bin on the target.
-        name: String,
-        /// Correlation identifier to hand the helper, repeatable. UUIDs only: a
-        /// helper that takes operator words is a remote shell.
-        #[arg(long = "uuid")]
-        uuid: Vec<String>,
-        /// Use the bundled registry snapshot when the canonical registry cannot be read.
-        #[arg(long)]
-        bundled_registry: bool,
-        /// Emit the execution report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
     /// Remove one previously installed owner-only helper from TARGET.
     #[command(name = "remove-helper")]
     RemoveHelper {
@@ -1275,10 +1282,10 @@ enum HostCommands {
     },
     /// Every helper script TARGET carries, oldest first, with its age and size.
     ///
-    /// `install-helper` writes into `$HOME/.stado/bin` and nothing removes
-    /// what it wrote: charless-mac-mini holds 553 installed helper scripts
-    /// beside 16 binaries. Reporting is the default; `--prune` removes the
-    /// ones past `--older-than-days` and refuses to run without it, because
+    /// The retired helper channel wrote into `$HOME/.stado/bin` and nothing
+    /// removed what it wrote: charless-mac-mini holds 553 installed helper
+    /// scripts beside 16 binaries. Reporting is the default; `--prune` removes
+    /// the ones past `--older-than-days` and refuses to run without it, because
     /// "remove everything" is never what an operator means here.
     Helpers {
         target: String,
@@ -1873,6 +1880,17 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 dry_run,
                 json,
             } => host::cleanup(&target, dry_run, json).await,
+            HostCommands::Gates { host: target, json } => host::gates(&target, json).await,
+            // `--dry-run` is the default and needs no argument: `--apply` is
+            // the only flag that changes anything, and clap already refuses
+            // the two together.
+            HostCommands::Reclaim {
+                host: target,
+                dry_run: _,
+                apply,
+                reason,
+                json,
+            } => host::reclaim(&target, apply, reason.as_deref(), json).await,
             HostCommands::InstallBinary {
                 target,
                 from,
@@ -1880,12 +1898,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 rollback,
                 json,
             } => host::install_binary(&target, from.as_deref(), &name, rollback, json).await,
-            HostCommands::InstallHelper {
-                target,
-                source,
-                name,
-                json,
-            } => host::install_helper(&target, &source, &name, json).await,
             HostCommands::PrecheckRunner(command) => match command {
                 HostPrecheckRunnerCommands::Install { target, json } => {
                     precheck_runner::install(&target, json).await
@@ -1928,13 +1940,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 platform,
                 json,
             } => host::install_release(&target, &source, &family, &version, &platform, json).await,
-            HostCommands::RunHelper {
-                target,
-                name,
-                uuid,
-                bundled_registry,
-                json,
-            } => host::run_helper(&target, &name, &uuid, bundled_registry, json).await,
             HostCommands::RemoveHelper { target, name, json } => {
                 host::remove_helper(&target, &name, json).await
             }

@@ -1151,24 +1151,25 @@ async fn move_services(
 // ---------------------------------------------------------------------------
 
 /// Basename the policy takes in the target's delivered-files directory, and the
-/// only name [`APPLY_HELPER`] will read.
+/// only name [`APPLY_SCRIPT`] will read.
 const POLICY_FILE: &str = "placement-policy.json";
 
 /// Where the worker reads it, per `weles/src/worker/placement-policy.ts`: the
 /// loader joins `homedir()` with `.config/weles/placement-policy.json` unless
 /// `WELES_PLACEMENT_POLICY_FILE` overrides it. Reported here, never written
-/// here — the move belongs to the helper, because only the host can see what
-/// the document replaced.
+/// here — the move belongs to the remote script, because only the host can see
+/// what the document replaced.
 const POLICY_DESTINATION: &str = "$HOME/.config/weles/placement-policy.json";
 
-/// Helper that moves a delivered policy into place and reports both sides of
-/// the change. Installed with
-/// `stado host install-helper <target> stado-rs/scripts/apply-placement-policy.sh
-/// apply-placement-policy`.
-const APPLY_HELPER: &str = "apply-placement-policy";
+/// The fixed remote script that moves a delivered policy into place and reports
+/// both sides of the change, embedded in this binary. It takes no arguments and
+/// both of its paths are fixed, so the only thing an operator can vary is what
+/// the registry says. Kept as a checked-in file rather than a string literal so
+/// it is reviewed and read as the shell program it is.
+const APPLY_SCRIPT: &str = include_str!("../../scripts/apply-placement-policy.sh");
 
 /// `PLACEMENT_POLICY <phase> <generation> <enabled> <actions>`, tab separated:
-/// the helper's report of what the host carried and what it carries now.
+/// the apply script's report of what the host carried and what it carries now.
 const POLICY_MARKER: &str = "PLACEMENT_POLICY";
 
 /// `PLACEMENT_VANTAGE <hostname>`: the name the host gave for itself, which is
@@ -1284,7 +1285,7 @@ fn checked_actions(target: &str, weles: &WelesPolicy) -> Result<Vec<String>, Cmd
 
 /// One side of the change, as the host reported it.
 struct PolicySnapshot {
-    /// Registry generation the document was stamped with, or the helper's word
+    /// Registry generation the document was stamped with, or the script's word
     /// for a file that carried no stamp, could not be parsed, or was not there.
     generation: String,
     /// `true`, `false`, or `-` when no entry on that host named this machine.
@@ -1292,9 +1293,9 @@ struct PolicySnapshot {
     actions: Vec<String>,
 }
 
-/// Read one `PLACEMENT_POLICY <phase> ...` line out of the helper's output.
+/// Read one `PLACEMENT_POLICY <phase> ...` line out of the script's output.
 ///
-/// The before-state arrives as helper output rather than as anything this
+/// The before-state arrives as remote output rather than as anything this
 /// process knows, because the file it replaced only ever existed on that host.
 /// A missing line is reported as missing and never defaulted to "the same as
 /// now": defaulting would render every publication as a no-op and hide exactly
@@ -1310,7 +1311,7 @@ fn snapshot(stdout: &str, phase: &str) -> Option<PolicySnapshot> {
     })
 }
 
-/// `-` is the helper's word for "no entry, or an empty list", not an action
+/// `-` is the script's word for "no entry, or an empty list", not an action
 /// named `-`.
 fn action_list(field: &str) -> Vec<String> {
     if field == "-" {
@@ -1405,24 +1406,25 @@ pub async fn publish_placement_policy(
     let (delivered, bytes) = super::host::deliver_file(&resolved.name, source, POLICY_FILE).await?;
 
     let runner = production_runner();
-    let reported = host_channel::run_installed_helper(&resolved.name, APPLY_HELPER, &runner)
+    let reported = host_channel::run_fixed_script(&resolved.name, APPLY_SCRIPT, &runner)
         .await
         .map_err(|error| {
             // Delivered and not installed is a real state, and the operator has
             // to be told which half happened: the worker is still running the
-            // old list, and a file it does not read is sitting next to it.
+            // old list, and a file it does not read is sitting next to it. The
+            // refusal is the remote's own words -- the script says exactly
+            // which of its checks the document failed.
             CmdError::click(format!(
-                "{name}: the policy reached {delivered} and was NOT installed: {error}. Install \
-                 the helper with `stado host install-helper {name} \
-                 stado-rs/scripts/apply-placement-policy.sh {APPLY_HELPER}`, then publish again",
+                "{name}: the policy reached {delivered} and was NOT installed: {error}. \
+                 Settle the refusal and publish again",
                 name = resolved.name
             ))
         })?;
 
     let installed = snapshot(&reported, "installed").ok_or_else(|| {
         CmdError::click(format!(
-            "{}: the helper reported no installed policy, so {POLICY_DESTINATION} on that host \
-             is now of unknown provenance; read it there before publishing again",
+            "{}: the apply script reported no installed policy, so {POLICY_DESTINATION} on that \
+             host is now of unknown provenance; read it there before publishing again",
             resolved.name
         ))
     })?;
@@ -1435,7 +1437,7 @@ pub async fn publish_placement_policy(
         .trim();
 
     // The delta is computed from what the host reports it now carries, not from
-    // what was sent: the two are the same only if the helper installed exactly
+    // what was sent: the two are the same only if the script installed exactly
     // the document that was delivered, and that is the claim worth checking.
     let before: BTreeSet<&str> = previous
         .iter()

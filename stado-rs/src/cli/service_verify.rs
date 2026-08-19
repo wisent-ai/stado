@@ -28,8 +28,9 @@
 //!                that is told to call it. The declaration is true right now.
 //!   unreachable  nothing answered. The declaration is false, and this is the
 //!                state that hid for twelve days behind a passing validator.
-//!   unverified   the probe could not run: host down, helper not installed,
-//!                channel refused. Kept apart from `unreachable` deliberately --
+//!   unverified   the probe could not run: host down, channel refused, the
+//!                remote's own stado too old to answer. Kept apart from
+//!                `unreachable` deliberately --
 //!                "I did not look" and "I looked and it is gone" send an
 //!                operator to two different places, and collapsing them is how a
 //!                fleet learns to ignore its own reports.
@@ -101,11 +102,10 @@ use crate::targets::{
     VERIFY_FROM_ACTIVE_HOST, VERIFY_FROM_ENDPOINT_HOLDERS, VERIFY_KIND_HTTP, VERIFY_KIND_TCP,
 };
 
-/// Helper that runs this same command in `--local` mode on a remote host.
-/// Installed with
-/// `stado host install-helper <target> stado-rs/scripts/probe-service-endpoints.sh
-/// probe-service-endpoints`.
-const PROBE_HELPER: &str = "probe-service-endpoints";
+/// The probe that runs this same command in `--local` mode on a remote host,
+/// embedded in this binary and run as one fixed remote script — nothing is
+/// installed on the host, and nothing is left behind.
+const PROBE_SCRIPT: &str = include_str!("../../scripts/probe-service-endpoints.sh");
 
 /// A probe must not hang a fleet sweep behind one dead forward. Long enough for
 /// a loopback service under load, short enough that a closed laptop answers
@@ -131,7 +131,7 @@ struct Finding {
     ///
     /// A flag rather than a comparison against [`STANDBY_DETAIL`]: two places
     /// decide something about these rows -- the sweep, which must not print a
-    /// helper's copy of a declaration it read itself, and the observation
+    /// probe's copy of a declaration it read itself, and the observation
     /// record, which must not file one -- and a decision that turns on
     /// matching a sentence breaks the day the sentence is reworded.
     probed: bool,
@@ -513,12 +513,12 @@ pub async fn verify_local(json_output: bool) -> Result<(), CmdError> {
     fail_on_unreachable(&findings)
 }
 
-/// Run the probe on one remote host through the installed helper.
+/// Run the probe on one remote host as a fixed script embedded in this binary.
 ///
 /// Not `ssh`, and not `host exec`: the exec allowlist carries fixed read-only
-/// argv and cannot express "and then interpret this URL", while a helper that
+/// argv and cannot express "and then interpret this URL", while a script that
 /// took the URL as an argument would be a remote fetcher with the audit trail
-/// removed. The helper takes no arguments at all -- it asks the same registry
+/// removed. The probe takes no arguments at all -- it asks the same registry
 /// this command is reading and probes the host's own share of it.
 async fn remote_findings(host: &str, declared: &[(String, String)]) -> Vec<Finding> {
     let runner = crate::deploy::production_runner();
@@ -535,12 +535,8 @@ async fn remote_findings(host: &str, declared: &[(String, String)]) -> Vec<Findi
             })
             .collect()
     };
-    let output = match crate::deploy::host_channel::run_installed_helper(
-        host,
-        PROBE_HELPER,
-        &runner,
-    )
-    .await
+    let output = match crate::deploy::host_channel::run_fixed_script(host, PROBE_SCRIPT, &runner)
+        .await
     {
         Ok(output) => output,
         Err(error) => return unverified(root_cause(&error)),
@@ -555,10 +551,10 @@ async fn remote_findings(host: &str, declared: &[(String, String)]) -> Vec<Findi
     rows.iter()
         // A standby row is a declaration, not evidence: identical on every
         // machine, and this sweep already read it out of the directory. Taking
-        // the helper's copy as well would print the same address twice for a
-        // row that has no vantage to be probed from. A helper older than the
-        // flag sends no such rows and reports every one of its own as probed,
-        // which is what it did.
+        // the probe's copy as well would print the same address twice for a
+        // row that has no vantage to be probed from. A remote stado older than
+        // the flag sends no such rows and reports every one of its own as
+        // probed, which is what it did.
         .filter(|row| row.get("probed").and_then(Value::as_bool).unwrap_or(true))
         .map(|row| Finding {
             service: field(row, "service"),
@@ -634,8 +630,8 @@ pub async fn verify(host: Option<&str>, json_output: bool) -> Result<(), CmdErro
 
     let mut findings = Vec::new();
     for (target, declared) in &per_host {
-        // Own host in-process: the local path is the same code the helper runs,
-        // and requiring a helper on the machine already executing the command
+        // Own host in-process: the local path is the same code the probe runs,
+        // and round-tripping to the machine already executing the command
         // would report `unverified` for the one vantage that is certain.
         if me.as_deref() == Some(target.as_str()) {
             findings.extend(local_findings(&registry, target).await);
