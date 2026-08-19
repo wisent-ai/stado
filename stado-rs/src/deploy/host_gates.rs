@@ -119,6 +119,18 @@ pub struct HostGates {
     /// How many local APFS snapshots the host is holding, or `None` where the
     /// host could not be asked (every Linux host).
     pub local_snapshots: Option<usize>,
+    /// Queued jobs pinned to this host, oldest first. This is the gate's
+    /// consequence made visible: a host that claims nothing while work is
+    /// pinned to it is starving that exact list, and "blocked" without the
+    /// starved work named is a verdict nobody can size.
+    pub waiting_jobs: Vec<WaitingJob>,
+}
+
+/// One queued job a non-claiming host is starving.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WaitingJob {
+    pub job_id: String,
+    pub age_seconds: Option<i64>,
 }
 
 /// One capacity publication, with the instant it was made.
@@ -158,12 +170,9 @@ pub async fn read_host_gates(host: &str, runner: &Runner) -> Result<HostGates, D
         .map_err(|exc| DeployError(exc.to_string()))?;
     let publication = publication(&registry, &target, &store).await?;
 
-    Ok(assemble(
-        &target,
-        &reading,
-        publication.as_ref(),
-        Utc::now(),
-    ))
+    let mut gates = assemble(&target, &reading, publication.as_ref(), Utc::now());
+    gates.waiting_jobs = waiting_jobs(&registry, &target, &store, Utc::now()).await?;
+    Ok(gates)
 }
 
 /// Join the three sources into the verdict.
@@ -261,7 +270,57 @@ fn assemble(
         slots_declared: target.slots,
         notes,
         local_snapshots,
+        waiting_jobs: Vec::new(),
     }
+}
+
+/// Queued jobs pinned to this host, oldest first.
+///
+/// A pinned job names its consumer as `<kind>-<hostname>`, and the hostname
+/// is the machine's own word for itself, not its registry name — the same
+/// gap [`publication`] closes with [`Registry::lookup_self`], closed the same
+/// way here. Jobs pinned by exact registry name are honored too, because the
+/// operator-facing `--pinned-host` accepts that spelling.
+async fn waiting_jobs(
+    registry: &Registry,
+    target: &ComputeTarget,
+    store: &JobStorage,
+    now: DateTime<Utc>,
+) -> Result<Vec<WaitingJob>, DeployError> {
+    let queued = store
+        .list_jobs("queue", 0)
+        .await
+        .map_err(|exc| DeployError(exc.to_string()))?;
+    let prefix = format!("{}-", target.kind);
+    let mut waiting = Vec::new();
+    for job in queued {
+        if job.pinned_host.is_empty() {
+            continue;
+        }
+        let mine = job.pinned_host == target.name
+            || job
+                .pinned_host
+                .strip_prefix(prefix.as_str())
+                .is_some_and(|identity| {
+                    registry
+                        .lookup_self(identity)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|found| found.name == target.name)
+                });
+        if !mine {
+            continue;
+        }
+        let age_seconds = DateTime::parse_from_rfc3339(&job.created_at)
+            .ok()
+            .map(|created| (now - created.with_timezone(&Utc)).num_seconds());
+        waiting.push(WaitingJob {
+            job_id: job.job_id,
+            age_seconds,
+        });
+    }
+    waiting.sort_by_key(|job| std::cmp::Reverse(job.age_seconds));
+    Ok(waiting)
 }
 
 /// One `diag` boolean the agent published, or `None` when this host published
@@ -391,6 +450,21 @@ pub fn to_report(gates: &HostGates) -> Map<String, Value> {
             "free_slots": gates.free_slots,
             "slots_declared": gates.slots_declared,
         }),
+    );
+    report.insert(
+        "waiting_jobs".to_string(),
+        Value::Array(
+            gates
+                .waiting_jobs
+                .iter()
+                .map(|job| {
+                    json!({
+                        "job_id": job.job_id,
+                        "age_seconds": job.age_seconds,
+                    })
+                })
+                .collect(),
+        ),
     );
     report
 }

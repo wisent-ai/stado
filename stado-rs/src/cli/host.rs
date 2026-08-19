@@ -1173,6 +1173,29 @@ pub async fn gates(host: &str, json: bool) -> Result<(), CmdError> {
             gates.slots_declared
         ),
     }
+    // The consequence beside the cause: what this host's refusal is starving,
+    // oldest first, so "blocked" has a size and an age.
+    if !gates.waiting_jobs.is_empty() {
+        println!(
+            "waiting:  {} pinned job(s) this host is not taking: {}",
+            gates.waiting_jobs.len(),
+            gates
+                .waiting_jobs
+                .iter()
+                .map(|job| {
+                    let id = &job.job_id[..8.min(job.job_id.len())];
+                    match job.age_seconds {
+                        Some(age) => format!(
+                            "{id} ({} in queue)",
+                            super::registry::human_age(chrono::TimeDelta::seconds(age))
+                        ),
+                        None => id.to_string(),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
     // Printed after the verdict and never as part of it: a note is a thing the
     // operator has to know before they conclude the numbers do not add up, and
     // `stado host reclaim` is about to tell them it freed less than the deficit.

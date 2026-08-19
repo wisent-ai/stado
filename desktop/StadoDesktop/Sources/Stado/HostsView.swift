@@ -578,11 +578,20 @@ struct HostsView: View {
             let blockers = gates.blockers.isEmpty
                 ? "the host named no blocker, which is itself the thing to chase"
                 : gates.blockers.joined(separator: "; ")
-            guard let disk = gates.disk, let free = disk.freeGB, let low = disk.lowWatermarkGB else {
-                return "\(gates.host): \(blockers)"
+            var line = "\(gates.host): \(blockers)"
+            if let disk = gates.disk, let free = disk.freeGB, let low = disk.lowWatermarkGB {
+                line += " (\(StadoFormat.decimal(free)) GB free against a \(StadoFormat.decimal(low)) GB watermark)"
             }
-            return "\(gates.host): \(blockers) "
-                + "(\(StadoFormat.decimal(free)) GB free against a \(StadoFormat.decimal(low)) GB watermark)"
+            if !gates.waitingJobs.isEmpty {
+                // The refusal's cost, in the refusal's own sentence: work is
+                // sitting in the queue for this exact host right now.
+                let oldest = gates.waitingJobs.compactMap(\.ageSeconds).max()
+                line += " — starving \(gates.waitingJobs.count) pinned job(s)"
+                if let oldest {
+                    line += ", oldest \(ConsoleFormat.age(Double(oldest)))"
+                }
+            }
+            return line
         }
         if hosts.count > 3 {
             lines.append("and \((hosts.count - 3).formatted(.number)) more in the Not claiming filter")
@@ -615,6 +624,18 @@ struct HostsView: View {
                 label: "Blockers",
                 value: gates.blockers.isEmpty ? "None reported" : gates.blockers.joined(separator: "\n"),
                 tone: gates.blockers.isEmpty ? .neutral : .danger
+            )
+            WisentField(
+                label: "Waiting pinned jobs",
+                value: gates.waitingJobs.isEmpty
+                    ? "None"
+                    : gates.waitingJobs
+                        .map { job in
+                            let age = job.ageSeconds.map { ConsoleFormat.age(Double($0)) } ?? "age unknown"
+                            return "\(String(job.jobID.prefix(8))) — in queue \(age)"
+                        }
+                        .joined(separator: "\n"),
+                tone: gates.waitingJobs.isEmpty || gates.claiming ? .neutral : .danger
             )
             WisentField(
                 label: "Free space",
