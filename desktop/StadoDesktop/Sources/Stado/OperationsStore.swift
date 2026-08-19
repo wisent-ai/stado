@@ -476,6 +476,10 @@ final class FleetServicesStore: ObservableObject {
         ["service", "restart", name, "--host", host, "--json"]
     }
 
+    nonisolated static func removeFileArguments(host: String, path: String) -> [String] {
+        ["host", "remove-file", host, path, "--json"]
+    }
+
     func refresh(hosts: [String]) async {
         guard !isRefreshing else { return }
         refreshGeneration += 1
@@ -533,6 +537,32 @@ final class FleetServicesStore: ObservableObject {
         // Whatever happened, the beacon's next word is the one worth reading:
         // a succeeded restart shows as active, a refused one as the state it
         // was refused in.
+        await refresh(hosts: lastHosts)
+    }
+
+    /// `stado host remove-file <host> <path>` through the CLI runner: the
+    /// delete half `service retire` deliberately does not have. The CLI's
+    /// guards decide on the host — the view offers this only where they could
+    /// pass, and a refusal still arrives in the command's own sentence.
+    func removeUnitFile(_ entry: FleetServiceEntry) async {
+        mutation = .working("Removing \(entry.path) on \(entry.host)")
+        do {
+            let report = try await cli.json(
+                RemoveFileReport.self,
+                arguments: Self.removeFileArguments(host: entry.host, path: entry.path)
+            )
+            if report.succeeded {
+                mutation = .succeeded(
+                    report.status == "removed"
+                        ? "Removed \(report.path) on \(entry.host)."
+                        : "\(report.path) was already absent on \(entry.host)."
+                )
+            } else {
+                mutation = .failed("\(report.target): \(report.status)\(report.detail.map { " — \($0)" } ?? "")")
+            }
+        } catch {
+            mutation = .failed(Self.message(for: error))
+        }
         await refresh(hosts: lastHosts)
     }
 
