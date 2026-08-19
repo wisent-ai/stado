@@ -73,6 +73,7 @@ impl Identity {
     }
 }
 
+#[allow(clippy::unnecessary_cast)] // libc field widths differ per OS; the cast is required on macOS
 fn identity(info: &FileStat) -> Identity {
     Identity {
         dev: info.st_dev as u64,
