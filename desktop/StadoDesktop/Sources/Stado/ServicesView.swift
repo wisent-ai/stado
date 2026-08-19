@@ -6,6 +6,7 @@ private enum ServiceFacet: String, Hashable {
     case replaced
     case unowned
     case fleet
+    case misdeclared
 }
 
 /// What is running, as opposed to what is declared.
@@ -122,6 +123,7 @@ struct ServicesView: View {
         let units = store.units
         let replaced = store.mismatched.count
         let fleetFailed = fleetStore.failedServices.count
+        let misdeclared = fleetStore.misdeclaredServices
         return [
             WisentFacetGroup(
                 "Declared units",
@@ -138,6 +140,17 @@ struct ServicesView: View {
                         "Managed services",
                         fleetStore.services.count,
                         fleetFailed > 0 ? .danger : .neutral
+                    ),
+                    // Where the minority count lives. Three of the fleet's
+                    // rows are declared in a launchd domain their host cannot
+                    // have, and one of them is the fleet's own agent on the
+                    // mini: nothing loads it, so that host publishes no
+                    // capacity and the job pinned to it waits.
+                    facetRow(
+                        .misdeclared,
+                        "Cannot start where declared",
+                        misdeclared.count,
+                        misdeclared.isEmpty ? .neutral : .warning
                     ),
                 ]
             ),
@@ -277,7 +290,7 @@ struct ServicesView: View {
         switch facet {
         case .units, .replaced:
             unitsTable
-        case .fleet:
+        case .fleet, .misdeclared:
             fleetTable
         case .unowned:
             unownedTable
@@ -300,7 +313,16 @@ struct ServicesView: View {
         }
     }
 
+    /// The fleet rows, narrowed to the finding when that facet is selected.
+    ///
+    /// An unreadable host contributes no row to the finding facet: a host that
+    /// did not answer is not a host with a misdeclared unit, and a warning row
+    /// standing in for an unknown one would be this console inventing a
+    /// finding.
     private var fleetRows: [FleetRow] {
+        if facet == .misdeclared {
+            return fleetStore.misdeclaredServices.map(FleetRow.service)
+        }
         let services = fleetStore.services.map(FleetRow.service)
         let unavailable = fleetStore.failures
             .sorted { $0.key < $1.key }
@@ -337,7 +359,11 @@ struct ServicesView: View {
                                 width: 92,
                                 tone: entry.isFailed ? .danger : .neutral
                             )
-                            ConsoleCell(text: entry.domain.rawValue, width: 90)
+                            ConsoleCell(
+                                text: entry.domain.rawValue,
+                                width: 90,
+                                tone: entry.misdeclaredDomain == nil ? .neutral : .warning
+                            )
                             ConsoleCell(
                                 text: entry.reportedAt.isEmpty ? "Not reported" : entry.reportedAt,
                                 width: 190,
@@ -347,6 +373,9 @@ struct ServicesView: View {
                         }
                         if entry.isFailed, let evidence = failureEvidenceLine(entry) {
                             fleetFailureLine(evidence)
+                        }
+                        if let finding = entry.misdeclaredDomain {
+                            declarationLine(finding)
                         }
                     case let .unavailable(host, _):
                         ConsoleTableRow(isSelected: selection == row.id, select: { selection = row.id }) {
@@ -386,6 +415,37 @@ struct ServicesView: View {
         return parts.isEmpty ? nil : parts.joined(separator: " — ")
     }
 
+    /// The finding under an affected row, in plain words.
+    ///
+    /// The CLI's own sentence names the launchd domain and the console device,
+    /// and it belongs in the inspector where an operator has already decided
+    /// to read the detail — beside the command that closes it. What a row
+    /// earns is the fact itself, in the vocabulary the CLI's own blocker uses
+    /// for the same finding: nobody is at the screen, the unit is registered
+    /// as a user service, so this machine will never start it.
+    ///
+    /// Three of 22 rows carry it, which is what makes it a row marker rather
+    /// than a column.
+    private func declarationLine(_ finding: MisdeclaredDomain) -> some View {
+        Text(
+            "Nobody is logged in on the screen of \(finding.host), and this unit is registered as a user service, "
+                + "so that machine cannot start it."
+        )
+        .font(WisentTypeScale.identifierSmall())
+        .foregroundStyle(WisentDesign.warning)
+        .lineLimit(2)
+        .truncationMode(.tail)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, WisentDesign.Space.x4)
+        .padding(.vertical, WisentDesign.Space.x2)
+        .background(WisentDesign.warning.opacity(0.06))
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(WisentDesign.border.opacity(0.6))
+                .frame(height: WisentDesign.hairline)
+        }
+    }
+
     private func fleetFailureLine(_ text: String) -> some View {
         Text(text)
             .font(WisentTypeScale.identifierSmall())
@@ -411,6 +471,19 @@ struct ServicesView: View {
                     title: "No registry hosts to ask",
                     detail: "The canonical registry projection lists no target, so no beacon was read for managed services. Nothing here is inferred from local configuration.",
                     symbol: "gearshape.2"
+                )
+            } else if facet == .misdeclared {
+                // Empty-because-nothing-is-wrong, not empty-because-filter:
+                // every declared unit names a domain its host can load, which
+                // is the state this facet exists to prove rather than assume.
+                WisentEmptyPanel(
+                    title: "Every declared unit can start where it is declared",
+                    detail: "No registry-declared unit asks for a launchd domain its host cannot have. On a machine nobody logs in to, a unit registered as a user service is one nothing can ever start, and there is none.",
+                    symbol: "checkmark.seal",
+                    action: WisentAction("Managed services", kind: .primary) {
+                        facet = .fleet
+                        selection = nil
+                    }
                 )
             } else {
                 WisentEmptyPanel(
@@ -596,11 +669,12 @@ struct ServicesView: View {
 
     @ViewBuilder
     private var inspector: some View {
-        if facet == .fleet, let row = fleetRows.first(where: { $0.id == selection }) {
+        if facet == .fleet || facet == .misdeclared,
+           let row = fleetRows.first(where: { $0.id == selection }) {
             fleetInspector(row)
         } else if facet == .unowned, let process = store.unownedProcesses.first(where: { $0.id == selection }) {
             unownedInspector(process)
-        } else if facet != .fleet,
+        } else if facet != .fleet, facet != .misdeclared,
                   let row = (facet == .replaced ? store.mismatched : store.units).first(where: { $0.id == selection }) {
             unitInspector(row)
         } else {
@@ -644,6 +718,9 @@ struct ServicesView: View {
         if !entry.state.isEmpty {
             badges.append((entry.state, entry.isFailed ? .danger : .neutral))
         }
+        if entry.misdeclaredDomain != nil {
+            badges.append(("cannot start here", .warning))
+        }
         return WisentInspector(eyebrow: "Managed service", title: unit, badges: badges) {
             if entry.isFailed {
                 WisentAlertPanel(
@@ -651,6 +728,20 @@ struct ServicesView: View {
                     title: "The beacon reports this unit as failed",
                     detail: fleetFailureDetail(entry),
                     command: "stado service status \(entry.name) --json"
+                )
+            }
+            if let finding = entry.misdeclaredDomain {
+                // The finding gets a panel, and the panel carries the CLI's own
+                // sentence unedited. This is where the launchd domain and the
+                // console device belong: an operator reading a panel has
+                // already decided to read the detail, and the words the
+                // command chose are the words `stado registry doctor` prints
+                // for the same unit.
+                WisentAlertPanel(
+                    tone: .warning,
+                    title: "Nobody is logged in on \(finding.host), so this unit cannot start there",
+                    detail: finding.detail,
+                    command: "stado service list --json"
                 )
             }
             WisentField(label: "Host", value: entry.host)
@@ -661,7 +752,15 @@ struct ServicesView: View {
                 value: entry.state.isEmpty ? "Not reported" : entry.state,
                 tone: entry.isFailed ? .danger : .neutral
             )
-            WisentField(label: "Domain", value: entry.domain.rawValue)
+            WisentField(
+                label: "Domain",
+                value: entry.domain.rawValue,
+                tone: entry.misdeclaredDomain == nil ? .neutral : .warning
+            )
+            if let finding = entry.misdeclaredDomain {
+                WisentField(label: "Domain this host can load", value: finding.loadableDomain)
+                WisentField(label: "Where the machine service belongs", value: finding.daemonPath)
+            }
             WisentField(
                 label: "Beacon reported",
                 value: entry.reportedAt.isEmpty ? "Not reported" : entry.reportedAt
@@ -698,9 +797,27 @@ struct ServicesView: View {
     /// The one write this screen allows, and an honest sentence where it is
     /// not allowed: a system LaunchDaemon loads as root, the approved channel
     /// is unprivileged, and a button that can only be refused is a lie.
+    ///
+    /// A unit declared where its host cannot load it is the same lie with a
+    /// different cause. `stado service restart` on the mini's agent exits 1
+    /// with the unit `not_loaded` and the postcondition unmet, every time,
+    /// because there is no per-login domain on that machine to load it into.
+    /// So this offers the command that changes the answer instead of a button
+    /// that cannot.
     @ViewBuilder
     private func restartAffordance(_ entry: FleetServiceEntry) -> some View {
-        if entry.domain.requiresPrivilegedBootstrap {
+        if let finding = entry.misdeclaredDomain {
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
+                Text("Restarting it cannot help")
+                    .font(WisentTypeScale.bodyStrong())
+                    .foregroundStyle(WisentDesign.secondary)
+                Text("Nobody is logged in on \(finding.host), so it has nowhere to start a unit registered as a user service: a restart is refused every time, with the unit left not loaded. Installing it as a machine service is what changes that, and it takes one privileged command run on the host itself.")
+                    .font(WisentTypeScale.body())
+                    .foregroundStyle(WisentDesign.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                WisentField(label: "Run this on \(finding.host)", value: finding.installCommand)
+            }
+        } else if entry.domain.requiresPrivilegedBootstrap {
             VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
                 Text("Privileged bootstrap required")
                     .font(WisentTypeScale.bodyStrong())
