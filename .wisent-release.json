@@ -114,30 +114,40 @@
   },
   "deliveries": [
     {
-      "name": "fleet-darwin",
+      "name": "fleet-macbook",
       "platform": "darwin-arm64",
       "argv": [
-        "python3",
-        "scripts/release/install-fleet.py",
-        "--target",
-        "lukasz-macbook",
-        "--target",
-        "charless-mac-mini"
+        "stado",
+        "release",
+        "install-local"
       ],
       "required": true,
-      "secret_env": {}
+      "secret_env": {},
+      "target": "lukasz-macbook"
+    },
+    {
+      "name": "fleet-mini",
+      "platform": "darwin-arm64",
+      "argv": [
+        "stado",
+        "release",
+        "install-local"
+      ],
+      "required": true,
+      "secret_env": {},
+      "target": "charless-mac-mini"
     },
     {
       "name": "fleet-linux",
       "platform": "linux-amd64",
       "argv": [
-        "python3",
-        "scripts/release/install-fleet.py",
-        "--target",
-        "ubuntu-server-rtx-pro-6000"
+        "stado",
+        "release",
+        "install-local"
       ],
       "required": true,
-      "secret_env": {}
+      "secret_env": {},
+      "target": "ubuntu-server-rtx-pro-6000"
     }
   ]
 }
