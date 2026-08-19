@@ -1,4 +1,6 @@
-//! `stado dashboard` — read-only HTTP operator dashboard.
+//! `stado dashboard` — the Stado API listener: object, release, machine,
+//! service, host-health and enrollment routes over loopback HTTP. It serves
+//! no HTML page; the operator workspace is Stado Desktop.
 //!
 //! Python `cli.py::dashboard` → `dashboard.serve(host=bind, port=port)`.
 
