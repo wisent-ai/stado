@@ -2829,4 +2829,3 @@ async fn authenticate_machine_client(
     }
     Ok(matched)
 }
-

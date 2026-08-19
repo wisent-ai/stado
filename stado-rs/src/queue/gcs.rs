@@ -474,4 +474,3 @@ impl BlobBackend for GcsBackend {
         Ok(out)
     }
 }
-

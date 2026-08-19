@@ -140,4 +140,3 @@ pub async fn smi_job_used_gb(root_pid: i32) -> i64 {
         &pids,
     )
 }
-

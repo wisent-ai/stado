@@ -636,4 +636,3 @@ pub fn respond_to_open_quota_tickets(
     }
     Ok(out)
 }
-

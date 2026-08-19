@@ -1325,4 +1325,3 @@ pub async fn proxy(state_path: &Path, bind: &str) -> Result<(), String> {
         });
     }
 }
-

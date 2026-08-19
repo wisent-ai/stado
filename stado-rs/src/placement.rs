@@ -426,4 +426,3 @@ pub fn root_object(document: &mut Value) -> Result<&mut Map<String, Value>, Stri
         .as_object_mut()
         .ok_or_else(|| "registry: must be an object".to_string())
 }
-

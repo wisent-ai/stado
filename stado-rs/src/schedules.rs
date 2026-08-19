@@ -641,4 +641,3 @@ pub async fn fire_due_schedules(
     }
     Ok(fired)
 }
-

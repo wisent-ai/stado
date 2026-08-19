@@ -198,4 +198,3 @@ pub async fn mark_region_quota_exceeded(
     let key = format!("{region}:{accel}");
     mark(store, &QUOTA_CACHE, QUOTA_BLOB, QUOTA_TTL_S, &key).await
 }
-

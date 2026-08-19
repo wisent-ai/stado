@@ -404,4 +404,3 @@ fn py_type_name(err: &QuotaRequestError) -> &'static str {
         QuotaRequestError::Value(_) => "ValueError",
     }
 }
-

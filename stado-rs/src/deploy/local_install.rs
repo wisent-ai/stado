@@ -973,4 +973,3 @@ pub async fn install_local(
     ensure_bins(&home, echo).await?;
     execute_plan(&install_plan, &home, current_uid(), runner, echo).await
 }
-

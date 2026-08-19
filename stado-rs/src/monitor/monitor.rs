@@ -730,4 +730,3 @@ pub async fn reap_dead_agents(
     }
     Ok(deleted)
 }
-
