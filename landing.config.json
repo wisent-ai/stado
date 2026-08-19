@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "siteName": "Stado",
+  "domain": "https://stado.wisent.com",
+  "repository": "https://github.com/wisent-ai/stado",
+  "sourceUrl": "https://github.com/wisent-ai/stado",
+  "docsUrl": "https://github.com/wisent-ai/stado/tree/main/docs",
+  "discordUrl": "https://discord.gg/qRjpkthq54",
+  "ogImageAlt": "Stado by Wisent — one provider-neutral queue and job lifecycle across local, GCP, AWS, and Azure infrastructure",
+  "navLinks": [
+    {
+      "label": "Docs",
+      "href": "https://github.com/wisent-ai/stado/tree/main/docs"
+    },
+    {
+      "label": "CLI reference",
+      "href": "https://github.com/wisent-ai/stado/blob/main/docs/cli.md"
+    },
+    {
+      "label": "Source",
+      "href": "https://github.com/wisent-ai/stado"
+    },
+    {
+      "label": "Discord",
+      "href": "https://discord.gg/qRjpkthq54"
+    }
+  ],
+  "footerLinks": [
+    {
+      "label": "Onboarding",
+      "href": "https://github.com/wisent-ai/stado/blob/main/docs/onboarding.md"
+    },
+    {
+      "label": "Add your own machine",
+      "href": "https://github.com/wisent-ai/stado/blob/main/docs/add-your-machine.md"
+    },
+    {
+      "label": "Architecture",
+      "href": "https://github.com/wisent-ai/stado/blob/main/docs/architecture.md"
+    },
+    {
+      "label": "Operations",
+      "href": "https://github.com/wisent-ai/stado/blob/main/docs/operations.md"
+    },
+    {
+      "label": "Release and compatibility",
+      "href": "https://github.com/wisent-ai/stado/blob/main/docs/release.md"
+    },
+    {
+      "label": "Issues",
+      "href": "https://github.com/wisent-ai/stado/issues"
+    },
+    {
+      "label": "Source",
+      "href": "https://github.com/wisent-ai/stado"
+    },
+    {
+      "label": "Discord",
+      "href": "https://discord.gg/qRjpkthq54"
+    },
+    {
+      "label": "Wisent",
+      "href": "https://wisent.ai"
+    },
+    {
+      "label": "License (Apache-2.0)",
+      "href": "https://github.com/wisent-ai/stado/blob/main/LICENSE"
+    }
+  ]
+}
