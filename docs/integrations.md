@@ -18,7 +18,6 @@ This document is the release boundary for Stado integrations. The machine-readab
 | Box | implemented fixed-shape lifecycle | Preview leased CPU sandbox with durable ownership and fencing. It is not a general autoscaling VM provider. | allocate through release, crash recovery, lease expiry, output persistence |
 | Vast.ai | partial | Execution on an operator-published host only. Renter provisioning and marketplace autoscaling are unavailable. | published-host execution, cancellation, disappearance, output recovery |
 | Alerts | optional adapters | Slack, Telegram, SendGrid, Pub/Sub, and billing alerts are not a queue, execution, or health dependency. | route-specific delivery and provider-outage isolation |
-| Supabase | optional implemented auth | Optional dashboard user JWT/RLS boundary. The CLI, coordinator, local dashboard, and queue do not require it. | JWT/RLS acceptance, rejection, verifier outage, local-disabled path |
 
 `planned` means no callable Stado contract. In particular, AWS Auto Scaling and Azure VM Scale Sets must not be inferred from the EC2 and Azure VM lifecycle adapters.
 
@@ -96,9 +95,9 @@ The local backend provides process-safe filesystem semantics on one host. It is 
 
 ## Optional integrations
 
-Alert sinks and Supabase are leaf integrations. Disabling every alert sink and Supabase must leave submit, scheduling, execution, storage recovery, local dashboard operation, and machine authentication functional. Their verifier or network outage is reported on the affected route and must not stall the coordinator or agent loop.
+Alert sinks are leaf integrations. Disabling every alert sink must leave submit, scheduling, execution, storage recovery, local listener operation, and machine authentication functional. A sink's verifier or network outage is reported on the affected route and must not stall the coordinator or agent loop.
 
-Alert payloads contain bounded operational identifiers and classifications, not workload output or secret material. Supabase JWT/RLS authorization applies only to the configured dashboard boundary; machine and service routes use their own dedicated verifiers.
+Alert payloads contain bounded operational identifiers and classifications, not workload output or secret material.
 
 ## Release gate
 

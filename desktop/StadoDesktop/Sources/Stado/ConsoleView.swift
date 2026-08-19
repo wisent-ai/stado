@@ -21,6 +21,7 @@ struct ConsoleView: View {
     /// claiming gate read two hours ago is not worth keeping.
     @StateObject private var gatesStore = HostGatesStore()
     @StateObject private var serviceStore = ServiceTruthStore()
+    @StateObject private var fleetServiceStore = FleetServicesStore()
     @StateObject private var releaseStore = ReleaseEvidenceStore()
     @StateObject private var groupStore = FleetGroupStore()
 
@@ -339,6 +340,7 @@ struct ConsoleView: View {
             case .services:
                 ServicesView(
                     store: serviceStore,
+                    fleetStore: fleetServiceStore,
                     hosts: StadoRegistryHosts.names(targets: fleetStore.targets, snapshot: store.snapshot),
                     scope: scopeName
                 )
