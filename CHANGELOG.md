@@ -62,6 +62,17 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   `host helpers --prune` remain to reap what the channel already delivered;
   `host install-file`, `host install-secret`, and the allowlisted `host exec`
   are the surviving delivery and read channels.
+- Added `stado host sync-acquisition-scopes TARGET SOURCE`, the reviewed
+  replacement for running weles's acquisition-scope register script through
+  the retired helper channel. The catalog travels through the `host
+  install-file` delivery path into `$HOME/.stado/files`, and an embedded
+  fixed script derives the Ed25519 workload public key on the host —
+  migrating an older key only after registration with its successor
+  succeeded — and registers the catalog against the host's fleet vault with
+  `skarbiec token-register-acquisitions --replace-capabilities`, printing
+  the reconciled status. The old script's two appstore `token-mint` calls
+  are not carried over: they mint unrelated `weles-worker` credentials, and
+  each call silently extended those tokens' expiry.
 - `stado host gates <host>` answers "why is this host claiming nothing" in one
   payload. It joins the blockers the host's own queue agent publishes with the
   disk policy behind them and the slots the registry declares, and reports the
