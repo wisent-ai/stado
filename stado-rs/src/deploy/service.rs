@@ -689,6 +689,22 @@ pub fn split_marker_body<'a>(stdout: &'a str, marker: &str) -> Option<(&'a str, 
     }
 }
 
+/// Split a log tail at the `STADO_ERR` section the logs program emits after
+/// the stdout tail on Darwin. The marker line's field is the stderr file,
+/// or the reason there is nothing to show ("absent in plist", "<path>
+/// (empty)"); everything after the marker line is the stderr tail. Linux
+/// tails carry no such marker — the journal merges the streams — and pass
+/// through whole.
+fn split_error_section(tail: &str) -> (&str, Option<(&str, &str)>) {
+    let Some(index) = tail.find("\nSTADO_ERR\t") else {
+        return (tail, None);
+    };
+    let section = &tail[index + 1..];
+    let (line, error_body) = section.split_once('\n').unwrap_or((section, ""));
+    let error_origin = line.strip_prefix("STADO_ERR\t").unwrap_or_default();
+    (&tail[..index + 1], Some((error_origin, error_body)))
+}
+
 // ---------------------------------------------------------------------------
 // Splicing operator data into the fixed remote programs
 // ---------------------------------------------------------------------------
@@ -1723,20 +1739,40 @@ for root in \"$@\"; do
 done
 ";
 
-/// `service logs`: tail the unit's own log. On launchd the log path comes
-/// from the unit file itself, so an adopted unit keeps its chosen destination.
-/// A unit without one falls back to the account's owner-only Stado log path.
+/// `service logs`: tail the unit's own logs. On launchd the log paths come
+/// from the unit file itself, so an adopted unit keeps its chosen
+/// destinations. A unit without a StandardOutPath falls back to the
+/// account's owner-only Stado log path.
+///
+/// stderr is a second file under launchd, not a stream the stdout tail
+/// already carries, so it gets its own delimited section: `STADO_ERR` names
+/// the path and streams its tail, or carries the reason there is nothing to
+/// show. It is never silently omitted — a unit that died answering nothing
+/// on stdout kept its reason in stderr, and "no section" used to be
+/// indistinguishable from "nothing written". The two tails share the
+/// --lines budget, half each. On Linux the journal already merges the
+/// streams, so that branch stays one section.
 const LOGS_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   log=''
+  err_log=''
   if [ -f \"$unit_path\" ]; then
     log=$(/usr/bin/plutil -extract StandardOutPath raw -o - \"$unit_path\" 2>/dev/null)
+    err_log=$(/usr/bin/plutil -extract StandardErrorPath raw -o - \"$unit_path\" 2>/dev/null)
   fi
   if [ -z \"$log\" ]; then log=\"$HOME/.stado/logs/$unit.log\"; fi
   if [ -f \"$log\" ]; then
     printf 'STADO_LOG\\t%s\\n' \"$log\"
-    /usr/bin/tail -n @LINES@ \"$log\"
+    /usr/bin/tail -n @OUT_LINES@ \"$log\"
   else
     say 'missing_log' \"$log\"
+  fi
+  if [ -z \"$err_log\" ]; then
+    printf 'STADO_ERR\\t%s\\n' 'absent in plist'
+  elif [ -s \"$err_log\" ]; then
+    printf 'STADO_ERR\\t%s\\n' \"$err_log\"
+    /usr/bin/tail -n @ERR_LINES@ \"$err_log\"
+  else
+    printf 'STADO_ERR\\t%s\\n' \"$err_log (empty)\"
   fi
 else
   printf 'STADO_LOG\\tjournalctl --user -u %s\\n' \"$unit\"
@@ -2613,7 +2649,7 @@ pub fn record_from_report(
     service
 }
 
-/// One host's tail of a managed unit's log.
+/// One host's tail of a managed unit's logs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceLog {
     pub host: String,
@@ -2621,16 +2657,27 @@ pub struct ServiceLog {
     /// The log file, or the journalctl invocation that produced the body.
     pub origin: String,
     pub body: String,
+    /// The stderr half of the tail: the file it came from, or the reason
+    /// there is none ("absent in plist", "<path> (empty)"). `None` where
+    /// the channel merges the streams itself — journalctl already carries
+    /// stderr, so Linux tails leave this unset.
+    pub error_origin: Option<String>,
+    pub error_body: String,
 }
 
 impl ServiceLog {
     pub fn to_json(&self) -> Value {
-        json!({
+        let mut report = json!({
             "host": self.host,
             "unit": self.unit,
             "origin": self.origin,
             "lines": self.body.lines().collect::<Vec<&str>>(),
-        })
+        });
+        if let Some(error_origin) = &self.error_origin {
+            report["error_origin"] = json!(error_origin);
+            report["error_lines"] = json!(self.error_body.lines().collect::<Vec<&str>>());
+        }
+        report
     }
 }
 
@@ -2641,7 +2688,15 @@ pub async fn tail_logs(
     lines: usize,
     runner: &Runner,
 ) -> Result<ServiceLog, DeployError> {
-    let body = LOGS_BODY.replace("@LINES@", &shlex_quote(&lines.to_string()));
+    // The stdout and stderr tails share the --lines budget, half each with
+    // the odd line going to stdout; each side always gets at least one, so
+    // `--lines 1` cannot blank stderr entirely.
+    let out_lines = lines.saturating_sub(lines / 2).max(1);
+    let err_lines = (lines / 2).max(1);
+    let body = LOGS_BODY
+        .replace("@LINES@", &shlex_quote(&lines.to_string()))
+        .replace("@OUT_LINES@", &shlex_quote(&out_lines.to_string()))
+        .replace("@ERR_LINES@", &shlex_quote(&err_lines.to_string()));
     let script = remote_script(service.unit_id(), "", &service.path, &body)?;
     let report = run_remote(target, script, runner).await?;
     let Some((origin, tail)) = split_marker_body(&report.stdout, "STADO_LOG") else {
@@ -2652,11 +2707,20 @@ pub async fn tail_logs(
             report.failure()
         )));
     };
+    let (body, error) = split_error_section(tail);
+    let (error_origin, error_body) = match error {
+        Some((error_origin, error_body)) => {
+            (Some(error_origin.to_string()), error_body.to_string())
+        }
+        None => (None, String::new()),
+    };
     Ok(ServiceLog {
         host: target.name.clone(),
         unit: service.unit_id().to_string(),
         origin: origin.to_string(),
-        body: tail.to_string(),
+        body: body.to_string(),
+        error_origin,
+        error_body,
     })
 }
 

@@ -21,16 +21,25 @@
 //! there could only ever report "unknown" about a product that is in fact
 //! precisely versioned.
 //!
-//! Three verdicts, never two:
+//! Four verdicts, never two:
 //!
-//!   in-sync   the host runs exactly the declared version.
-//!   drifted   the host runs a different version. This is the state that hid
-//!             behind a passing `service list` for as long as it took somebody
-//!             to notice the behaviour was old.
-//!   unknown   the host said nothing usable: the reporter could not run, the
-//!             channel refused, or the artefact carries no
-//!             version metadata at all. Kept apart from `drifted` for the same
-//!             reason [`crate::cli::service_verify`] keeps `unverified` apart
+//!   in-sync     the host runs exactly the declared version.
+//!   host-behind the host runs a version strictly OLDER than the declared
+//!               one. This is the state that hid behind a passing
+//!               `service list` for as long as it took somebody to notice
+//!               the behaviour was old. `--apply` delivers the declared
+//!               version through `stado host release`.
+//!   host-ahead  the host runs a version strictly NEWER than the declared
+//!               one: the declaration is the thing that is stale. Delivering
+//!               the declared version here would DOWNGRADE a live host, so
+//!               `--apply` refuses to touch it and names the
+//!               `stado host declare-version` command that moves the
+//!               declaration to the version the host is actually running.
+//!   unknown     the host said nothing usable: the reporter could not run, the
+//!               channel refused, or the artefact carries no
+//!               version metadata at all. Kept apart from both drift verdicts
+//!               for the same
+//!               reason [`crate::cli::service_verify`] keeps `unverified` apart
 //!             from `unreachable` — "I did not look" and "I looked and it is
 //!             wrong" send an operator to two different places, and folding
 //!             them together is how a fleet learns to ignore its own reports.
@@ -40,8 +49,9 @@
 //! The exit codes follow from that split, and the split is the whole reason
 //! they differ:
 //!
-//! - **report mode** exits non-zero on `drifted` alone. A drifted host is a
-//!   false declaration and a gate should fail on it; an uninstalled reporter is
+//! - **report mode** exits non-zero on `host-behind` or `host-ahead` alone.
+//!   Either is a false declaration and a gate should fail on it; an
+//!   uninstalled reporter is
 //!   not evidence of anything and must not masquerade as drift, exactly as
 //!   `service verify` refuses to let a missing probe masquerade as an outage.
 //!   Every `unknown` row is still named on stderr, so nothing about it is
@@ -62,6 +72,7 @@
 //! one restart — for the command that reports drift and for the command that
 //! delivers, because two ways to put a build on a host is one way too many.
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use serde_json::{json, Value};
@@ -74,8 +85,13 @@ use super::{CmdError, CLICK_ERROR_CODE};
 
 /// The host runs exactly the declared version.
 pub const IN_SYNC: &str = "in-sync";
-/// The host runs a version that is not the declared one.
-pub const DRIFTED: &str = "drifted";
+/// The host runs a version strictly OLDER than the declared one: the host is
+/// behind the declaration and `--apply` delivers the declared one.
+pub const HOST_BEHIND: &str = "host-behind";
+/// The host runs a version strictly NEWER than the declared one: the
+/// declaration is the thing that is stale, and delivering it would take the
+/// host backwards, so `--apply` refuses to touch the host at all.
+pub const HOST_AHEAD: &str = "host-ahead";
 /// Nothing usable came back, so drift is neither confirmed nor ruled out.
 pub const UNKNOWN: &str = "unknown";
 
@@ -197,7 +213,7 @@ struct Installed {
     state: String,
 }
 
-/// One `host release` invocation, run for one drifted binary.
+/// One `host release` invocation, run for one `host-behind` binary.
 struct Released {
     binary: String,
     version: String,
@@ -216,7 +232,8 @@ impl Released {
     }
 }
 
-/// What `--apply` found drifted and could do nothing about, kept apart from the
+/// What `--apply` found behind its declaration and could do nothing about,
+/// kept apart from the
 /// deliveries on purpose: a binary `host release` does not carry produced no
 /// delivery at all, and counting it as a failed one would report an attempt
 /// that never happened.
@@ -234,15 +251,39 @@ impl Undeliverable {
     }
 }
 
+/// What `--apply` refused to do: the host runs a version strictly NEWER than
+/// the declaration, so delivering the declared one would be a downgrade of a
+/// live host. Kept apart from both the deliveries and the undeliverable:
+/// nothing was attempted, and the remedy moves the declaration, not the host.
+struct Refused {
+    binary: String,
+    declared: String,
+    installed: String,
+    /// The exact command that moves the declaration to the observed version.
+    remediation: String,
+}
+
+impl Refused {
+    fn to_json(&self) -> Value {
+        json!({
+            "binary": self.binary,
+            "declared_version": self.declared,
+            "installed_version": self.installed,
+            "remediation": self.remediation,
+        })
+    }
+}
+
 const COMPLETED: &str = "completed";
 const FAILED: &str = "failed";
 
-/// Everything one `--apply` pass did: the releases it ran, and the drifted
-/// binaries it could not run one for.
+/// Everything one `--apply` pass did: the releases it ran, the `host-behind`
+/// binaries it could not run one for, and the downgrades it refused.
 #[derive(Default)]
 struct AppliedPass {
     releases: Vec<Released>,
     undeliverable: Vec<Undeliverable>,
+    refused: Vec<Refused>,
 }
 
 fn click(error: DeployError) -> CmdError {
@@ -433,6 +474,72 @@ fn parse_report(stdout: &str) -> BTreeMap<String, Installed> {
     reported
 }
 
+/// Direction-aware ordering of two exact semantic versions.
+///
+/// The numeric core decides, per semver; equal cores are settled by the
+/// prerelease the same way: a release outranks its own prereleases, numeric
+/// identifiers order numerically and below alphanumeric ones, alphanumeric
+/// ones lexically, and a longer list outranks its own prefix. Both inputs
+/// here have already passed [`host_release::is_exact_semver`], so the parse
+/// cannot fail; the `Option` is the parse's own honesty, not a third answer.
+fn version_order(left: &str, right: &str) -> Option<Ordering> {
+    fn core(version: &str) -> Option<(u64, u64, u64)> {
+        let core = version.split_once('-').map_or(version, |(core, _)| core);
+        let mut parts = core.split('.');
+        let triple = (
+            parts.next()?.parse().ok()?,
+            parts.next()?.parse().ok()?,
+            parts.next()?.parse().ok()?,
+        );
+        if parts.next().is_some() {
+            return None;
+        }
+        Some(triple)
+    }
+    fn prerelease(version: &str) -> &str {
+        version.split_once('-').map_or("", |(_, prerelease)| prerelease)
+    }
+    fn prerelease_order(left: &str, right: &str) -> Ordering {
+        match (left.is_empty(), right.is_empty()) {
+            (true, true) => return Ordering::Equal,
+            // A release outranks every one of its own prereleases.
+            (true, false) => return Ordering::Greater,
+            (false, true) => return Ordering::Less,
+            (false, false) => {}
+        }
+        let mut lefts = left.split('.');
+        let mut rights = right.split('.');
+        loop {
+            let ordering = match (lefts.next(), rights.next()) {
+                (None, None) => return Ordering::Equal,
+                (None, Some(_)) => return Ordering::Less,
+                (Some(_), None) => return Ordering::Greater,
+                (Some(left), Some(right)) => {
+                    let numeric = |identifier: &str| identifier.bytes().all(|b| b.is_ascii_digit());
+                    match (numeric(left), numeric(right)) {
+                        (true, true) => left
+                            .parse::<u64>()
+                            .unwrap_or(u64::MAX)
+                            .cmp(&right.parse::<u64>().unwrap_or(u64::MAX)),
+                        // Numeric identifiers order below alphanumeric ones.
+                        (true, false) => Ordering::Less,
+                        (false, true) => Ordering::Greater,
+                        (false, false) => left.cmp(right),
+                    }
+                }
+            };
+            if ordering != Ordering::Equal {
+                return ordering;
+            }
+        }
+    }
+    let ordering = core(left)?.cmp(&core(right)?);
+    if ordering != Ordering::Equal {
+        return Some(ordering);
+    }
+    Some(prerelease_order(prerelease(left), prerelease(right)))
+}
+
 /// One row per declared binary, each carrying the verdict its two versions
 /// imply.
 fn verdict_rows(
@@ -449,13 +556,43 @@ fn verdict_rows(
             let installed = entry.and_then(|entry| entry.version.clone());
             let (verdict, detail) = match (&installed, reported) {
                 (Some(version), _) if version == declared_version => (IN_SYNC, String::from("-")),
-                (Some(_), _) => (
-                    DRIFTED,
-                    String::from(
-                        "the host runs a version the registry does not declare; --apply \
-                         delivers the declared one through `stado host release`",
+                (Some(version), _) => match version_order(version, declared_version) {
+                    // The host is behind the declaration: `--apply` delivers
+                    // the declared one, which is an upgrade here.
+                    Some(Ordering::Less) => (
+                        HOST_BEHIND,
+                        format!(
+                            "the host runs {version}, older than the declared \
+                             {declared_version}; --apply delivers the declared one \
+                             through `stado host release`"
+                        ),
                     ),
-                ),
+                    // The declaration is behind the host: delivering it would
+                    // be a downgrade, so nothing is delivered and the remedy
+                    // is to move the declaration.
+                    Some(Ordering::Greater) => (
+                        HOST_AHEAD,
+                        format!(
+                            "the host runs {version}, newer than the declared \
+                             {declared_version}: the declaration is stale, not the \
+                             host; --apply refuses to downgrade it and names the \
+                             declare-version command that moves the declaration"
+                        ),
+                    ),
+                    // Equal orderings of unequal strings cannot happen for two
+                    // exact semantic versions, and are reported as in sync
+                    // rather than invented into drift if one ever does.
+                    Some(Ordering::Equal) => (IN_SYNC, String::from("-")),
+                    // Unreachable for two exact semantic versions; reported
+                    // unmeasured rather than ordered by invention.
+                    None => (
+                        UNKNOWN,
+                        format!(
+                            "the host runs {version} against the declared \
+                             {declared_version}, and the two cannot be ordered"
+                        ),
+                    ),
+                },
                 (None, Err(failure)) => (UNKNOWN, failure.clone()),
                 (None, Ok(_)) => (
                     UNKNOWN,
@@ -555,7 +692,8 @@ async fn attach_processes(target: &ComputeTarget, rows: &mut [Row], runner: &Run
 // Converging
 // ---------------------------------------------------------------------------
 
-/// Deliver the declared version of every drifted binary.
+/// Deliver the declared version of every `host-behind` binary, and refuse
+/// every `host-ahead` one.
 ///
 /// This is `stado host release --binary NAME --version X.Y.Z TARGET`, called
 /// in-process rather than reimplemented: the digest check against the canonical
@@ -574,9 +712,28 @@ async fn attach_processes(target: &ComputeTarget, rows: &mut [Row], runner: &Run
 /// with them, delivery ends in a unit restart, and restarting a working service
 /// on the strength of a reporter that failed to answer is how a healthy host
 /// goes down because a report was missing.
+///
+/// `host-ahead` rows are refused outright: the host runs NEWER than the
+/// declaration, so delivering the declared version is a downgrade of a live
+/// host, and a converge that performs one is the registry's staleness shipped
+/// as an outage. Each refusal records the exact `stado host declare-version`
+/// command that moves the declaration to the observed version instead.
 async fn apply_releases(target: &str, rows: &[Row], runner: &Runner) -> AppliedPass {
     let mut pass = AppliedPass::default();
-    for row in rows.iter().filter(|row| row.verdict == DRIFTED) {
+    for row in rows.iter().filter(|row| row.verdict == HOST_AHEAD) {
+        let remediation = format!(
+            "stado host declare-version {target} --binary {} --version {}",
+            row.binary,
+            row.installed_cell()
+        );
+        pass.refused.push(Refused {
+            binary: row.binary.clone(),
+            declared: row.declared.clone(),
+            installed: row.installed_cell().to_string(),
+            remediation,
+        });
+    }
+    for row in rows.iter().filter(|row| row.verdict == HOST_BEHIND) {
         eprintln!(
             "{}: declared {} but runs {}",
             row.binary,
@@ -653,6 +810,7 @@ fn emit(
                     .iter()
                     .map(Undeliverable::to_json)
                     .collect::<Vec<Value>>(),
+                "refused": pass.refused.iter().map(Refused::to_json).collect::<Vec<Value>>(),
                 "binaries": rows.iter().map(Row::to_json).collect::<Vec<Value>>(),
             }))?
         );
@@ -696,18 +854,27 @@ fn emit(
     for entry in &pass.undeliverable {
         eprintln!("{}: {}", entry.binary, entry.detail);
     }
+    for entry in &pass.refused {
+        eprintln!(
+            "{}: runs {}, newer than the declared {} — refused to downgrade the \
+             host; move the declaration instead: {}",
+            entry.binary, entry.installed, entry.declared, entry.remediation
+        );
+    }
     Ok(())
 }
 
-/// Report mode: drift fails, an unmeasured binary does not.
+/// Report mode: drift in either direction fails, an unmeasured binary does
+/// not.
 ///
-/// This is what makes the command usable as a gate. A drifted host is a false
-/// declaration and belongs in a non-zero exit; a host whose reporter is not
-/// installed, or a product whose artefact carries no version metadata, has
-/// produced no evidence either way, and turning that into a failure teaches
-/// operators to pass `|| true`, at which point the drift the command exists to
-/// catch stops being noticed again. Every such row is named on stderr instead,
-/// because the one thing an unmeasured product must never be is quiet.
+/// This is what makes the command usable as a gate. A host behind or ahead of
+/// its declaration is a false declaration and belongs in a non-zero exit; a
+/// host whose reporter is not installed, or a product whose artefact carries
+/// no version metadata, has produced no evidence either way, and turning that
+/// into a failure teaches operators to pass `|| true`, at which point the
+/// drift the command exists to catch stops being noticed again. Every such
+/// row is named on stderr instead, because the one thing an unmeasured
+/// product must never be is quiet.
 fn report_gate(rows: &[Row]) -> Result<(), CmdError> {
     for row in rows.iter().filter(|row| row.verdict == UNKNOWN) {
         eprintln!(
@@ -716,14 +883,25 @@ fn report_gate(rows: &[Row]) -> Result<(), CmdError> {
             row.binary, row.declared, row.detail
         );
     }
-    let drifted = rows.iter().filter(|row| row.verdict == DRIFTED).count();
-    if drifted == 0 {
+    let behind = rows.iter().filter(|row| row.verdict == HOST_BEHIND).count();
+    let ahead = rows.iter().filter(|row| row.verdict == HOST_AHEAD).count();
+    if behind + ahead == 0 {
         return Ok(());
     }
-    eprintln!(
-        "{drifted} declared binary/binaries run a version the registry does not \
-         declare; re-run with --apply to deliver the declared one"
-    );
+    if behind != 0 {
+        eprintln!(
+            "{behind} declared binary/binaries run a version older than the \
+             registry declares; re-run with --apply to deliver the declared one"
+        );
+    }
+    if ahead != 0 {
+        eprintln!(
+            "{ahead} declared binary/binaries run a version NEWER than the \
+             registry declares: the declaration is stale, not the host; \
+             `stado host declare-version` moves it, --apply will not touch \
+             these hosts"
+        );
+    }
     Err(CmdError::silent(CLICK_ERROR_CODE))
 }
 
@@ -764,13 +942,20 @@ fn apply_gate(rows: &[Row], pass: &AppliedPass) -> Result<(), CmdError> {
         (total, failed) => format!("{total} delivery/deliveries, {failed} of which failed"),
     };
     if pass.undeliverable.is_empty() {
-        if pass.releases.is_empty() {
-            effort.push_str(", because nothing was confirmed drifted");
+        if pass.releases.is_empty() && pass.refused.is_empty() {
+            effort.push_str(", because nothing was confirmed behind its declaration");
         }
     } else {
         effort.push_str(&format!(
-            "; {} drifted binary/binaries are not deliverable by `stado host release`",
+            "; {} host-behind binary/binaries are not deliverable by `stado host release`",
             pass.undeliverable.len()
+        ));
+    }
+    if !pass.refused.is_empty() {
+        effort.push_str(&format!(
+            "; {} host-ahead binary/binaries were refused rather than downgraded — \
+             the declaration is stale, not the host",
+            pass.refused.len()
         ));
     }
     eprintln!(
@@ -820,9 +1005,10 @@ mod tests {
         assert_eq!(running[0].to_json()["binary_matches_process"], false);
     }
 
-    /// The reporter's contract, exercised on the three shapes one host really
-    /// produces at once: a binary at its declared version, a binary at another
-    /// one, and an artefact whose metadata carries no version at all.
+    /// The reporter's contract, exercised on the shapes one host really
+    /// produces at once: a binary at its declared version, a binary behind
+    /// it, a binary AHEAD of it, and an artefact whose metadata carries no
+    /// version at all.
     #[test]
     fn a_versionless_artefact_is_unknown_and_never_in_sync() {
         let stdout = "# host charless-mac-mini\n\
@@ -830,10 +1016,13 @@ mod tests {
              unit=com.wisent.compute.agent.charless-mac-mini state=running\n\
              binary=skarbiec version=0.1.2 root=/Users/charles/.stado/bin/skarbiec \
              unit=none state=none\n\
+             binary=brama version=0.2.4 root=/Users/charles/.stado/bin/brama \
+             unit=none state=none\n\
              binary=weles-worker version=unknown root=/Users/charles/weles unit=none state=none\n";
         let reported = Ok(parse_report(stdout));
         let rows = verdict_rows(
             &declared(&[
+                ("brama", "0.1.3"),
                 ("skarbiec", "0.1.3"),
                 ("stado", "0.6.0"),
                 ("weles-worker", "0.5.0"),
@@ -848,14 +1037,20 @@ mod tests {
         assert_eq!(
             verdicts,
             vec![
-                ("skarbiec", DRIFTED),
+                ("brama", HOST_AHEAD),
+                ("skarbiec", HOST_BEHIND),
                 ("stado", IN_SYNC),
                 ("weles-worker", UNKNOWN),
             ]
         );
+        // The direction is in the words: the host ahead is a stale
+        // declaration, never a wrong host.
+        assert!(rows[0].detail.contains("newer than the declared"));
+        assert!(rows[0].detail.contains("the declaration is stale, not the host"));
+        assert!(rows[1].detail.contains("older than the declared"));
         // The unmeasured row keeps the host's own words for where it looked,
         // so the remedy names the artefact rather than the command.
-        let weles = &rows[2];
+        let weles = &rows[3];
         assert_eq!(weles.installed_cell(), UNKNOWN_VERSION);
         assert_eq!(weles.root, "/Users/charles/weles");
         assert!(
@@ -864,15 +1059,33 @@ mod tests {
             weles.detail
         );
 
-        // Report mode fails on the drifted binary alone; the unknown one is
+        // Report mode fails on drift in either direction; the unknown one is
         // reported, not counted.
         assert!(report_gate(&rows).is_err());
-        assert!(report_gate(&rows[1..2]).is_ok());
-        assert!(report_gate(&rows[2..]).is_ok());
+        assert!(report_gate(&rows[0..1]).is_err());
+        assert!(report_gate(&rows[1..2]).is_err());
+        assert!(report_gate(&rows[2..3]).is_ok());
+        assert!(report_gate(&rows[3..]).is_ok());
 
         // After an apply, an unconfirmed binary is a failed apply.
-        assert!(apply_gate(&rows[1..2], &AppliedPass::default()).is_ok());
-        assert!(apply_gate(&rows[2..], &AppliedPass::default()).is_err());
+        assert!(apply_gate(&rows[2..3], &AppliedPass::default()).is_ok());
+        assert!(apply_gate(&rows[3..], &AppliedPass::default()).is_err());
+    }
+
+    /// The ordering the verdicts stand on, including the prerelease rules:
+    /// a release outranks its own prereleases, numeric identifiers order
+    /// numerically and below alphanumeric ones.
+    #[test]
+    fn version_order_is_semver_ordering() {
+        assert_eq!(version_order("0.1.3", "0.2.4"), Some(Ordering::Less));
+        assert_eq!(version_order("0.2.4", "0.1.3"), Some(Ordering::Greater));
+        assert_eq!(version_order("0.2.4", "0.2.4"), Some(Ordering::Equal));
+        assert_eq!(version_order("0.2.0", "0.10.0"), Some(Ordering::Less));
+        assert_eq!(version_order("1.0.0-rc.1", "1.0.0"), Some(Ordering::Less));
+        assert_eq!(version_order("1.0.0-alpha", "1.0.0-alpha.1"), Some(Ordering::Less));
+        assert_eq!(version_order("1.0.0-alpha.1", "1.0.0-alpha.beta"), Some(Ordering::Less));
+        assert_eq!(version_order("1.0.0-beta.2", "1.0.0-beta.11"), Some(Ordering::Less));
+        assert_eq!(version_order("1.0.0-rc.1", "1.0.0"), Some(Ordering::Less));
     }
 
     /// A host whose reporter could not run leaves every row unknown, carrying
