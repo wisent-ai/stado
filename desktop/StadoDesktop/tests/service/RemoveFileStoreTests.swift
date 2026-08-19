@@ -2,46 +2,61 @@ import Foundation
 import XCTest
 @testable import Stado
 
-/// The Services screen's remove-file verb: what the store decodes, which rows
-/// may show the button, and the exact argv the button runs.
+/// The Services screen's remove verb: what the store decodes from
+/// `stado service remove --json`, which rows may show the button, and the
+/// exact argv the button runs.
 @MainActor
 final class RemoveFileStoreTests: XCTestCase {
-    func testDecodesTheRemovalReport() throws {
+    func testDecodesTheComposedReport() throws {
         let payload = """
-        {"target": "control-host", "path": "/Users/charles/Library/LaunchAgents/com.wisent.weles-echo-api.plist", "status": "removed", "detail": ""}
+        {"target": "control-host", "unit": "weles-echo-api", "action": "removed",
+         "generation": "abc123",
+         "file": {"path": "/Users/charles/Library/LaunchAgents/com.wisent.weles-echo-api.plist",
+                  "status": "removed", "detail": ""},
+         "report": {}}
         """
-        let report = try JSONDecoder().decode(RemoveFileReport.self, from: Data(payload.utf8))
-        XCTAssertEqual(report.status, "removed")
+        let report = try JSONDecoder().decode(ServiceRemoveReport.self, from: Data(payload.utf8))
+        XCTAssertEqual(report.unit, "weles-echo-api")
+        XCTAssertEqual(report.generation, "abc123")
         XCTAssertTrue(report.succeeded)
     }
 
-    func testAbsentCountsAsDoneNotAsFailure() throws {
+    func testAbsentFileCountsAsDoneNotAsFailure() throws {
         let payload = """
-        {"target": "control-host", "path": "/Users/charles/Library/LaunchAgents/gone.plist", "status": "absent", "detail": null}
+        {"target": "control-host", "unit": "ghost", "action": "removed",
+         "generation": "abc123",
+         "file": {"path": "/Users/charles/Library/LaunchAgents/ghost.plist",
+                  "status": "absent", "detail": null},
+         "report": {}}
         """
-        let report = try JSONDecoder().decode(RemoveFileReport.self, from: Data(payload.utf8))
+        let report = try JSONDecoder().decode(ServiceRemoveReport.self, from: Data(payload.utf8))
         XCTAssertTrue(report.succeeded, "absence is the goal state, not a failure")
     }
 
-    func testARefusalCarriesThePrivilegedCommandVerbatim() throws {
+    func testARefusedFileIsNamedWithItsReasonVerbatim() throws {
         let payload = """
-        {"target": "control-host", "path": "/Library/LaunchDaemons/com.wisent.always-on.weles.plist", "status": "refused", "detail": "outside the managed home areas; remove it on the host with: sudo rm -- /Library/LaunchDaemons/com.wisent.always-on.weles.plist"}
+        {"target": "control-host", "unit": "weles", "action": "removed",
+         "generation": "abc123",
+         "file": {"path": "/Library/LaunchDaemons/com.wisent.always-on.weles.plist",
+                  "status": "refused",
+                  "detail": "outside the managed home areas; remove it on the host with: sudo rm -- /Library/LaunchDaemons/com.wisent.always-on.weles.plist"},
+         "report": {}}
         """
-        let report = try JSONDecoder().decode(RemoveFileReport.self, from: Data(payload.utf8))
+        let report = try JSONDecoder().decode(ServiceRemoveReport.self, from: Data(payload.utf8))
         XCTAssertFalse(report.succeeded)
         XCTAssertEqual(
-            report.detail,
-            "outside the managed home areas; remove it on the host with: sudo rm -- /Library/LaunchDaemons/com.wisent.always-on.weles.plist"
+            report.fileSentence,
+            "refused — outside the managed home areas; remove it on the host with: sudo rm -- /Library/LaunchDaemons/com.wisent.always-on.weles.plist"
         )
     }
 
     func testTheButtonRunsTheExactCommand() {
         XCTAssertEqual(
-            FleetServicesStore.removeFileArguments(
-                host: "control-host",
-                path: "/Users/charles/Library/LaunchAgents/com.wisent.weles-echo-api.plist"
+            FleetServicesStore.removeServiceArguments(
+                name: "weles-echo-api",
+                host: "control-host"
             ),
-            ["host", "remove-file", "control-host", "/Users/charles/Library/LaunchAgents/com.wisent.weles-echo-api.plist", "--json"]
+            ["service", "remove", "weles-echo-api", "--host", "control-host", "--json"]
         )
     }
 
