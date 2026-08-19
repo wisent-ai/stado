@@ -1,5 +1,10 @@
 # Architecture
 
+The high-level plan — Stado laid out against the product-guidelines
+reviewable sequence, with completion gates per stage — is
+[architecture-plan.md](architecture-plan.md). This file is the mechanism
+reference below it.
+
 ## Data flow
 
 ```text
