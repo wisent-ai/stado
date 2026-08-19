@@ -1427,7 +1427,15 @@ fi
 /// command exists to end.
 const ENSURE_BODY: &str = "program=@PROGRAM@
 argv=@ARGV@
+# The staged unit is removed inline, on every path, and NO `trap` is installed
+# for it. `host_channel::PostCondition::arm` arms the end-state probe as an EXIT
+# trap before this body runs, and a second `trap ... EXIT` here replaces it: a
+# create pass then wrote the plist, bootstrapped it, left launchd running it
+# with a live pid, and still failed with `postcondition unobserved`, because the
+# probe that would have confirmed the success had been unhooked by the cleanup.
+staged=''
 bail() {
+  if [ -n \"$staged\" ]; then /bin/rm -f \"$staged\" \"$staged.rendered\"; fi
   say 'ensure_failed' \"$1\"
   exit 0
 }
@@ -1507,7 +1515,6 @@ if [ \"$declared_argv\" != \"$argv\" ]; then
     : >> \"$log\" || bail \"cannot create $log\"
     /bin/chmod u=rw,go= \"$log\" || bail \"cannot protect $log\"
     staged=\"$HOME/.stado/$unit.plist.$$\"
-    trap '/bin/rm -f \"$staged\" \"$staged.rendered\"' EXIT HUP INT TERM
     if [ \"$domain\" = system ]; then
       /bin/cat > \"$staged\" <<'@HEREDOC@'
 @DARWIN_DAEMON_UNIT@
@@ -1531,7 +1538,6 @@ if [ \"$declared_argv\" != \"$argv\" ]; then
       /bin/chmod u=rw,go= \"$unit_path\" || bail \"cannot protect $unit_path\"
     fi
     /bin/rm -f \"$staged\" \"$staged.rendered\"
-    trap - EXIT HUP INT TERM
   else
     /bin/mkdir -p \"$HOME/.config/systemd/user\" >/dev/null 2>&1 || bail 'cannot create the systemd user directory'
     /bin/cat > \"$unit_path\" <<'@HEREDOC@'
