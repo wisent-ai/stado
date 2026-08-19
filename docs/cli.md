@@ -1175,32 +1175,90 @@ beacon is expected. The "has not reported in days" detector.
 
 ## `stado builds`
 
-Native builds, v1. A build recipe lives in the top-level `builds` key of the
+Native builds. A build recipe lives in the top-level `builds` key of the
 canonical registry document and names a repository, the branch to watch, one
-POSIX sh build command and the artifact paths the checkout leaves behind. The
-control-plane poller (`coordinator_loop`) checks each enabled recipe at its
-`interval_seconds` cadence with `git ls-remote`; a branch head it has not
-seen enqueues exactly one ordinary queue job that clones the branch shallow,
-runs the build command and uploads the artifacts under the job's canonical
-results URI (`status/<job_id>/output/`). Every mutation is the same fenced
-registry read-modify-write `stado host declare-version` uses.
+POSIX sh build command, the artifact paths the checkout leaves behind and the
+release platforms it is built for. The control-plane poller
+(`coordinator_loop`) checks each enabled recipe at its `interval_seconds`
+cadence with `git ls-remote`; a branch head it has not seen enqueues one
+ordinary queue job **per platform**, each cloning the branch shallow, running
+the build command and uploading the artifacts under its own canonical results
+URI (`status/<job_id>/output/`). Every mutation is the same fenced registry
+read-modify-write `stado host declare-version` uses.
 
-**v1 boundary:** builds produce artifacts and job results only. Version
-declaration and fleet delivery remain manual — `stado host declare-version`
-and `stado host converge --apply`.
+**Platforms.** `--platform` takes a published release platform word —
+`darwin-arm64` or `linux-amd64` — and is repeatable and required. Each job
+declares that platform as its `platform_os`/`architecture`, and a worker
+refuses to claim a job whose platform is not its own, so a Linux build is
+never built on a Mac because a Mac was free. The outcome is recorded per
+platform under the recipe's `runs` map, keyed by the platform word: one
+recipe, one row per platform, each with its own job, status and version. A
+job carrying no platform fields is unconstrained, so every job submitted
+before platform routing existed stays claimable everywhere.
+
+**Versions come from tags, never from the poller.** After a build job
+finishes, its run's `version` is the exact tag the built commit carries, with
+a leading `v` stripped, and only when that tag is an exact semantic version
+(`1.4.2`, `1.4.2-rc1`; build metadata is refused). The tag is resolved on the
+build machine right after the clone — before the build command runs, so a
+build that fetches or tags inside its checkout cannot change the answer — and
+written into the uploaded output as `stado-build-version.txt`, empty for an
+untagged commit. An untagged commit therefore produces artifacts and **no**
+version, which is the normal case and not a failure. That file is the run's
+own bookkeeping and is not listed among its `artifact_uris`.
+
+**`--auto-declare`.** Off by default. When on, a run that succeeded *and* has
+a version declares that version as the fleet's managed version of the
+product the recipe's **name** selects, on every registry host whose
+`release_platform` equals the run's platform — through the same code path
+`stado host declare-version` runs, with one line per host. The run's
+`declared` flag turns true only when every matching host took it. A run with
+no version is skipped with the reason logged; a recipe whose name is not a
+declared product declares nothing and says so. On every commit this would
+move the fleet on every commit, which is why it is opt-in per recipe.
+
+**Boundary: a build is not a release.** Builds publish artifacts and record
+versions. They never write `release_control.products[...]` desired state.
+Promoting a *signed* release re-fetches every platform's archive, verifies
+the exact bytes, the signature and the passed qualification against a release
+key, and only then moves desired state — that is `stado release promote`, and
+it stays a deliberate, separate step. Collapsing the two would let a poller
+publish an unverified build to the fleet. `stado host converge --apply` still
+does the delivery.
+
+**Editing a recipe.** `stado builds edit` takes the same flags as `add`,
+every one optional: a flag not given leaves its field alone, and
+`--artifact`/`--platform` given at all REPLACE the recorded list. The state
+semantics decide whether the recipe re-fires. A changed `--repo` or
+`--branch` is a *different source*, so the edit clears `last_seen_ref` and
+every recorded run — the runs describe commits of the old source, and a
+retained head would leave the new source's current head unbuilt until it
+happened to move. A changed `--command`, artifact set, platform set,
+interval or auto-declare flag says how the *same* source is built, so
+`last_seen_ref` and the runs are kept: this head was already built, and the
+poller only fires when it moves. An edit naming no flag at all is refused,
+and an edit whose values already stand writes nothing and says so.
+`enabled` is not editable here — `enable` and `disable` own it, because
+whether a recipe builds is a decision, never a side effect of correcting a
+build command.
 
 | Subcommand | Behavior |
 |---|---|
-| `stado builds list [--json]` | Every recipe: source, enabled flag, last seen commit, last run. `--json` emits the recipe array verbatim. |
-| `stado builds add --name N --repo URL --branch B --command C --artifact PATH... [--interval-seconds N]` | Add a recipe, validated (kebab-case name, `https://` repo, relative artifact paths). Recipes start **disabled**: polling a repository is explicit opt-in, never a side effect of writing it down. |
-| `stado builds remove NAME` | Delete the recipe. |
+| `stado builds list [--json]` | Every recipe: source, enabled flag, auto-declare flag, last seen commit, then one run row per platform (platform, status, version, declared, when). `--json` emits the recipe array verbatim. |
+| `stado builds add --name N --repo URL --branch B --command C --artifact PATH... --platform P... [--auto-declare] [--interval-seconds N] [--json]` | Add a recipe, validated (kebab-case name, `https://` repo, relative artifact paths, known platform words; a platform named twice is built once). Recipes start **disabled**: polling a repository is explicit opt-in, never a side effect of writing it down. `--json` emits the created recipe. |
+| `stado builds edit NAME [--repo URL] [--branch B] [--command C] [--artifact PATH...] [--platform P...] [--auto-declare | --no-auto-declare] [--interval-seconds N] [--json]` | Change the named fields in place; absent flags leave their fields alone, lists given at all replace. Changing the source clears `last_seen_ref` and the runs; changing anything else keeps them. `--json` emits the updated recipe. |
+| `stado builds remove NAME [--json]` | Delete the recipe. `--json` emits `{"name": ..., "removed": true}`. |
 | `stado builds enable NAME [--json]` | Start polling the recipe. |
 | `stado builds disable NAME [--json]` | Stop polling without deleting; `last_seen_ref` survives, so re-enabling does not rebuild a commit already built. |
-| `stado builds run NAME [--json]` | Enqueue one build job now, cadence and enable flag notwithstanding — how a recipe is vetted before it is enabled. |
-| `stado builds status NAME [--json]` | The recipe plus the live queue state of its last build job. |
+| `stado builds run NAME [--json]` | Enqueue one build job per declared platform now, cadence and enable flag notwithstanding — how a recipe is vetted before it is enabled. |
+| `stado builds status NAME [--json]` | The recipe plus, per platform, the recorded run and the live queue state of its job. |
 
 A top-level `builds_disabled: true` in the registry halts all build polling
-fleet-wide without touching any recipe's own flag.
+fleet-wide without touching any recipe's own flag. A build already submitted
+still has its outcome recorded while the switch is set — a run stuck at
+`running` forever would be the switch corrupting the record — but
+`--auto-declare` is withheld, because acting on a build is exactly what the
+switch takes away.
 
 ## `stado release`
 
