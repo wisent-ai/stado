@@ -47,6 +47,9 @@ pub enum ReleaseCommands {
     Proxy(ReleaseProxyArgs),
     /// Show desired and observed rollout state.
     Status(ReleaseStatusArgs),
+    /// List and retire the digests a host refuses to roll out again.
+    #[command(subcommand)]
+    Quarantine(crate::cli::release_quarantine::QuarantineCommands),
     /// Atomically restore the previous desired release.
     Rollback(ReleaseRollbackArgs),
 }
@@ -743,6 +746,9 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
             .await
             .map_err(CmdError::click),
         ReleaseCommands::Status(args) => status(&args).await,
+        ReleaseCommands::Quarantine(sub) => {
+            crate::cli::release_quarantine::dispatch(sub).await
+        }
         ReleaseCommands::Rollback(args) => rollback(&args).await,
     }
 }
