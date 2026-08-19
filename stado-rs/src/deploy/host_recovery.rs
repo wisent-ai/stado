@@ -21,6 +21,10 @@ use crate::targets::{normalize_hostname, ssh_hostname, ComputeTarget, Registry};
 /// Python `_TIMEOUT_SECONDS`.
 pub const TIMEOUT_SECONDS: u64 = 120;
 
+/// The report value `recover` treats as success; `cli::host::recover` compares
+/// against this name rather than spelling the string a second time.
+pub const STATUS_OK: &str = "ok";
+
 /// Rust Stado cleanup binary. Recovery has no Python-package fallback.
 pub const WC_CANDIDATES: &[&str] = &["$HOME/.stado/bin/stado"];
 

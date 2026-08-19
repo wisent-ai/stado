@@ -1460,6 +1460,12 @@ pub struct Service {
     /// the unverifiable declaration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verify: Option<VerifyDescriptor>,
+    /// The deployable half of the declaration: where the bytes come from and
+    /// what the unit runs. Absent on entries declared before the contract
+    /// existed; older builds keep it verbatim in `extra`, so no writer drops
+    /// it silently.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declaration: Option<crate::declaration::ServiceDeclaration>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
