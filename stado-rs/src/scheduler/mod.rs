@@ -13,6 +13,7 @@
 //! report/estimate from finished-job wall-times; `skip_done`: the
 //! (currently disabled in Python) HF pre-dispatch filter.
 
+pub mod builds;
 pub mod cost;
 pub mod dispatch;
 pub mod makespan;
