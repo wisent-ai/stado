@@ -266,7 +266,7 @@ fn assemble(
         policy_mode: policy.map(|policy| policy.mode.clone()),
         published_at,
         age_seconds,
-        free_slots: payload.map(free_slots),
+        free_slots: payload.map(|p| free_slots(p, target.gpu_type.as_deref())),
         slots_declared: target.slots,
         notes,
         local_snapshots,
@@ -332,14 +332,22 @@ fn diag_flag(payload: Option<&Value>, key: &str) -> Option<bool> {
         .and_then(Value::as_bool)
 }
 
-/// Free slots across every accelerator type the host broadcast.
-fn free_slots(payload: &Value) -> i64 {
-    payload
-        .get("free_slots")
-        .and_then(Value::as_object)
-        .map_or(0, |slots| {
-            slots.values().filter_map(Value::as_i64).sum::<i64>()
-        })
+/// Free slots of this host's own accelerator shape, not a sum across every
+/// sizing tier the broadcast also carries: those entries describe how many
+/// jobs of *each* footprint fit, and adding a 2 GB tier to a 48 GB tier to a
+/// whole-card count produced "44 free slots of 2 declared" on the RTX PRO
+/// 6000. Fall back to the sum only when the broadcast carries no entry named
+/// by the host's gpu_type, which is the shape older agents publish.
+fn free_slots(payload: &Value, gpu_type: Option<&str>) -> i64 {
+    let Some(slots) = payload.get("free_slots").and_then(Value::as_object) else {
+        return 0;
+    };
+    if let Some(gpu_type) = gpu_type {
+        if let Some(own) = slots.get(gpu_type).and_then(Value::as_i64) {
+            return own;
+        }
+    }
+    slots.values().filter_map(Value::as_i64).sum::<i64>()
 }
 
 /// This host's capacity publication, stale ones included.
