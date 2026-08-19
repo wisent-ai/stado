@@ -123,7 +123,14 @@ impl BeaconSignal {
 /// ISO-8601 parse for the two spellings involved: the `%Y-%m-%dT%H:%M:%SZ`
 /// the beacon writers emit, and the offset form the storage layer reports
 /// for `updated_at`. Both are RFC 3339.
-fn parse_timestamp(raw: &str) -> Option<DateTime<Utc>> {
+///
+/// Public because [`BeaconSignal::reported_at`] hands back the raw string it
+/// aged, and a caller that needs the instant — `stado host link`, recording
+/// when a host was last heard from — must recover it with the same parser that
+/// accepted it. Deriving the instant from `age_seconds` instead would put a
+/// whole second of rounding into a record whose whole purpose is when the
+/// silence began.
+pub fn parse_timestamp(raw: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(raw)
         .ok()
         .map(|value| value.with_timezone(&Utc))

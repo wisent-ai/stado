@@ -7,9 +7,11 @@
 //! [`crate::deploy::host_reboot`] already ships, factored out so five
 //! commands cannot drift into five slightly different channels:
 //!
-//! - the canonical remote registry ([`crate::targets::fetch_registry_remote`],
-//!   the fleet-survival authority) selects the HOST and nothing else; an
-//!   unreachable registry is an error, never an empty registry;
+//! - [`canonical_registry`] selects the HOST and nothing else: the canonical
+//!   remote registry ([`crate::targets::fetch_registry_remote`], the
+//!   fleet-survival authority), or the last-known-good copy with its age
+//!   announced once when the store does not answer. Never an empty registry,
+//!   and never a guessed host — an unknown name still fails;
 //! - the remote program is FIXED per command and is never assembled from
 //!   registry data — registry values reach ssh only as the destination
 //!   argument;
@@ -92,12 +94,31 @@ pub fn resolve_target<'a>(
     Ok(target)
 }
 
-/// [`resolve_target`] against the canonical remote registry.
-pub async fn canonical_target(target_name: &str) -> Result<ComputeTarget, DeployError> {
-    let registry = crate::targets::fetch_registry_remote()
+/// The registry every host-channel operation resolves through: the canonical
+/// store first, the last-known-good copy — with its age on stderr, once —
+/// when the store does not answer.
+///
+/// A host command that cannot resolve its own host while the registry store
+/// is unreachable goes silent exactly when the fleet does: on 2026-08-19
+/// every `stado host ...` invocation against a mac mini that had dropped off
+/// the network failed with one line about the store, and the question — which
+/// host went quiet, and when — went unanswered because no reader would speak
+/// without the authority. The copy is not an empty registry and never invents
+/// a target: an unknown name still fails, and [`resolve_target`]'s refusals
+/// are unchanged.
+pub async fn canonical_registry() -> Result<Registry, DeployError> {
+    let (registry, notice) = crate::targets::fetch_registry_or_last_good()
         .await
         .map_err(|exc| DeployError(exc.to_string()))?;
-    resolve_target(&registry, target_name).cloned()
+    if let Some(notice) = notice {
+        crate::targets::report_registry_notice(&notice);
+    }
+    Ok(registry)
+}
+
+/// [`resolve_target`] against [`canonical_registry`].
+pub async fn canonical_target(target_name: &str) -> Result<ComputeTarget, DeployError> {
+    resolve_target(&canonical_registry().await?, target_name).cloned()
 }
 
 /// The ssh invocation up to and including the destination, taken from
