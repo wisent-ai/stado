@@ -31,6 +31,7 @@ struct ReleasesView: View {
     @State private var lines = 40
     @State private var clearance: PendingClearance?
     @State private var reason = ""
+    @State private var selectedRunID: String?
 
     private static let lineChoices = [40, 100, 250, 500, 1_000]
 
@@ -65,14 +66,21 @@ struct ReleasesView: View {
                     .padding(WisentDesign.Space.x4)
                 }
 
-                if store.rows.isEmpty {
+                if store.rows.isEmpty && store.pipelineRuns.isEmpty {
                     placeholder
                         .padding(WisentDesign.Space.x6)
                     Spacer(minLength: 0)
                 } else {
-                    table
-                        .frame(height: tableHeight)
-                    Divider()
+                    if !store.rows.isEmpty {
+                        table
+                            .frame(height: tableHeight)
+                        Divider()
+                    }
+                    if !store.pipelineRuns.isEmpty {
+                        pipelineRuns
+                            .frame(height: runsHeight)
+                        Divider()
+                    }
                     detail
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
@@ -122,6 +130,104 @@ struct ReleasesView: View {
     private var tableHeight: CGFloat {
         let rows = min(max(store.rows.count, 3), 8)
         return WisentAppLayout.denseRowHeight + CGFloat(rows) * WisentAppLayout.tableRowHeight
+    }
+
+    /// Room for the header and up to five runs; the failure text of the
+    /// selected run lives in this pane and scrolls rather than growing it.
+    private var runsHeight: CGFloat {
+        let rows = min(max(store.pipelineRuns.count, 1), 5)
+        return WisentAppLayout.denseRowHeight * 2
+            + CGFloat(rows) * WisentAppLayout.tableRowHeight
+            + (selectedRunFailure == nil ? 0 : 96)
+    }
+
+    private var selectedRunFailure: (run: ReleasePipelineRunRecord, text: String)? {
+        let run = store.pipelineRuns.first { $0.id == selectedRunID }
+            ?? store.pipelineRuns.first { $0.failure != nil }
+        guard let run else { return nil }
+        let text = run.failure
+            ?? run.platforms.values.compactMap(\.failure).first
+        guard let text else { return nil }
+        return (run, text)
+    }
+
+    /// The pipeline itself, newest run first: identity, run state, and each
+    /// platform's leg with the queue's live word on its build job. A failed
+    /// run's recorded failure — the failing platform, pinned host, and the
+    /// job's own last output lines — is shown verbatim below the list.
+    private var pipelineRuns: some View {
+        VStack(spacing: 0) {
+            ConsoleTableHead(cells: [
+                ConsoleHeaderCell("Run", width: 78),
+                ConsoleHeaderCell("Product", width: 130),
+                ConsoleHeaderCell("Version", width: 70),
+                ConsoleHeaderCell("Channel", width: 82),
+                ConsoleHeaderCell("State", width: 92),
+                ConsoleHeaderCell("Platforms"),
+                ConsoleHeaderCell("Updated", width: 110, trailing: true),
+            ])
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(store.pipelineRuns) { run in
+                        ConsoleTableRow(
+                            isSelected: selectedRunFailure?.run.id == run.id,
+                            select: { selectedRunID = run.id }
+                        ) {
+                            ConsoleCell(text: String(run.runID.prefix(8)), width: 78, identifier: true)
+                            ConsoleCell(text: run.product, width: 130, strong: true)
+                            ConsoleCell(text: run.version, width: 70, identifier: true)
+                            ConsoleCell(text: run.channel, width: 82)
+                            ConsoleCell(text: run.state, width: 92, tone: runTone(run))
+                            ConsoleCell(text: platformSummary(run))
+                            ConsoleCell(
+                                text: ConsoleFormat.relative(run.updated),
+                                width: 110,
+                                trailing: true
+                            )
+                        }
+                    }
+                }
+            }
+            if let failure = selectedRunFailure {
+                Divider()
+                ScrollView {
+                    Text(failure.text)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(WisentDesign.ink)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                        .padding(WisentDesign.Space.x3)
+                }
+                .frame(height: 96)
+                .background(WisentTone.danger.color.opacity(0.05))
+            }
+        }
+        .background(WisentDesign.surface)
+    }
+
+    private func runTone(_ run: ReleasePipelineRunRecord) -> WisentTone {
+        switch run.state {
+        case "failed": .danger
+        case "reconciled", "completed", "promoted": .success
+        default: .warning
+        }
+    }
+
+    /// "darwin-arm64 published · linux-amd64 submitted [running]" — the leg
+    /// states the run object records, plus the queue's live word for a run
+    /// still in flight. This is the line that answers "is anything actually
+    /// happening" without a terminal.
+    private func platformSummary(_ run: ReleasePipelineRunRecord) -> String {
+        run.platforms
+            .sorted { $0.key < $1.key }
+            .map { platform, leg in
+                var part = "\(platform) \(leg.state)"
+                if let live = leg.jobState {
+                    part += " [\(live)]"
+                }
+                return part
+            }
+            .joined(separator: " · ")
     }
 
     @ViewBuilder
