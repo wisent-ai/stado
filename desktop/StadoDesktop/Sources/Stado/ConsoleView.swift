@@ -316,8 +316,11 @@ struct ConsoleView: View {
             return stalled > 0 ? (stalled, .danger) : nil
         case .builds:
             // A failed build shows on the screen itself; the sidebar only
-            // counts it once this window has read the recipes at all.
-            let failed = buildsStore.recipes.count { $0.lastRun?.status == "failed" }
+            // counts it once this window has read the recipes at all. One
+            // recipe counts once however many of its platforms failed: the
+            // count answers "how many recipes need me", and the screen's
+            // platform rows answer which half broke.
+            let failed = buildsStore.recipes.count(where: \.hasFailedRun)
             return failed > 0 ? (failed, .danger) : nil
         case .registry, .deployments, .fleets:
             return nil
