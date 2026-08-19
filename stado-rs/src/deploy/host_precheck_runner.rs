@@ -298,7 +298,6 @@ if [ ! -f "$runner_root/.runner" ]; then
 fi
 
 root mkdir -p "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache"
-
 root chown -R root:root "$runner_root"
 root chmod -R go-w "$runner_root"
 root chown "$runner_user:$runner_user" "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache"
@@ -445,7 +444,6 @@ if [ ! -f "$runner_root/.runner" ]; then
 fi
 
 root mkdir -p "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache"
-
 root chown -R root:wheel "$runner_root"
 root chmod -R go-w "$runner_root"
 root chown "$runner_user:$runner_user" "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache"
