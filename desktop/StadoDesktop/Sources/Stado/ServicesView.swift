@@ -25,6 +25,7 @@ struct ServicesView: View {
 
     @State private var facet: ServiceFacet = .units
     @State private var selection: String?
+    @State private var showsDeclare = false
 
     var body: some View {
         WisentScreen(
@@ -32,6 +33,9 @@ struct ServicesView: View {
             scope: scope,
             freshness: "Read \(ConsoleFormat.relative(store.lastUpdated))",
             actions: [
+                WisentAction("Declare service", symbol: "plus") {
+                    showsDeclare = true
+                },
                 WisentAction("Refresh", symbol: "arrow.clockwise", isEnabled: !store.isRefreshing) {
                     Task { await store.refresh(hosts: hosts) }
                 },
@@ -50,6 +54,11 @@ struct ServicesView: View {
             }
         }
         .task { await store.refresh(hosts: hosts) }
+        .sheet(isPresented: $showsDeclare) {
+            ServiceDeclareView(hosts: hosts) {
+                Task { await store.refresh(hosts: hosts) }
+            }
+        }
     }
 
     private var placeholder: some View {
