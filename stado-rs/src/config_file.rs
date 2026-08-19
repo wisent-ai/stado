@@ -690,7 +690,7 @@ pub fn validate(data: &Value) -> Vec<String> {
     if azure_provider {
         if !field_in(root, &crate::capabilities::DEPLOYMENT_ID_CONFIG).is_some_and(py_truthy) {
             problems.push(
-                "Azure control plane needs deployment.id for dashboard RLS and trusted-proxy \
+                "Azure control plane needs deployment.id for trusted-proxy \
                  deployment binding"
                     .to_string(),
             );

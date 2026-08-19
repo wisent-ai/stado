@@ -430,13 +430,6 @@ static DASHBOARD_BIND: LazyLock<String> =
     LazyLock::new(|| cfg("WC_DASHBOARD_BIND", "dashboard.bind", "127.0.0.1"));
 static DASHBOARD_PORT: LazyLock<i64> =
     LazyLock::new(|| cfg_i64("WC_DASHBOARD_PORT", "dashboard.port", "8765"));
-static DASHBOARD_REFRESH_SECONDS: LazyLock<i64> = LazyLock::new(|| {
-    cfg_i64(
-        "WC_DASHBOARD_REFRESH_SECONDS",
-        "dashboard.refresh_seconds",
-        "10",
-    )
-});
 static DASHBOARD_TRUST_HTTPS_PROXY: LazyLock<bool> = LazyLock::new(|| {
     let value = cfg(
         "WC_DASHBOARD_TRUST_HTTPS_PROXY",
@@ -449,44 +442,28 @@ static DASHBOARD_TRUST_HTTPS_PROXY: LazyLock<bool> = LazyLock::new(|| {
         || value.eq_ignore_ascii_case("yes")
         || value.eq_ignore_ascii_case("on")
 });
-static DASHBOARD_AGENT_FRESH_SECONDS: LazyLock<i64> = LazyLock::new(|| {
-    cfg_i64(
-        "WC_DASHBOARD_AGENT_FRESH_SECONDS",
-        "dashboard.agent_fresh_seconds",
-        "180",
-    )
-});
 
-/// Dashboard HTTP server bind address (env `WC_DASHBOARD_BIND`). Azure
+/// API listener bind address (env `WC_DASHBOARD_BIND`). Azure
 /// cutover keeps this on loopback behind the TLS reverse proxy; never bind a
 /// private dashboard route directly to a public interface.
 pub fn dashboard_bind() -> &'static str {
     DASHBOARD_BIND.as_str()
 }
 
-/// Dashboard HTTP port (env `WC_DASHBOARD_PORT`).
+/// API listener port (env `WC_DASHBOARD_PORT`).
 pub fn dashboard_port() -> i64 {
     *DASHBOARD_PORT
 }
 
-/// Dashboard auto-refresh interval (env `WC_DASHBOARD_REFRESH_SECONDS`).
-pub fn dashboard_refresh_seconds() -> i64 {
-    *DASHBOARD_REFRESH_SECONDS
-}
 /// Whether the loopback listener accepts host authorities supplied by an HTTPS
-/// reverse proxy. This is independent from deployment RLS identity.
+/// reverse proxy.
 pub fn dashboard_trust_https_proxy() -> bool {
     *DASHBOARD_TRUST_HTTPS_PROXY
 }
 
-/// Capacity blob is "live" if its published_at is within this many seconds
-/// (env `WC_DASHBOARD_AGENT_FRESH_SECONDS`).
-pub fn dashboard_agent_fresh_seconds() -> i64 {
-    *DASHBOARD_AGENT_FRESH_SECONDS
-}
-
-/// Deployment identity for dashboard RLS (env `STADO_DEPLOYMENT_ID`, config
-/// key `deployment.id`), trimmed.
+/// Deployment identity (env `STADO_DEPLOYMENT_ID`, config
+/// key `deployment.id`), trimmed. A bound deployment implies an authenticated
+/// HTTPS reverse proxy fronts the loopback listener.
 ///
 /// Read per call so a process-level override remains dynamic; the config
 /// file itself is cached by [`crate::config_file`].
