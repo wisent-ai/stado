@@ -61,6 +61,65 @@ const REGISTRY_WITH_FLEET: &str = r#"{
     "fleets": [{"name": "build", "notes": "ci"}]
 }"#;
 
+const REGISTRY_WITH_MEMBER: &str = r#"{
+    "schema_version": 2,
+    "targets": [
+        {
+            "name": "w1",
+            "kind": "local",
+            "ssh": "u@10.0.0.1",
+            "release_platform": "linux-amd64",
+            "hostnames": ["w1.local"],
+            "slots": 1,
+            "fleet": "build"
+        }
+    ],
+    "coordinators": [],
+    "fleets": [{"name": "build", "notes": "ci"}, {"name": "edge"}]
+}"#;
+
+#[test]
+fn fleet_delete_retires_only_an_unmanned_fleet() {
+    let dir = storage_with_registry(REGISTRY_WITH_MEMBER);
+    let storage = dir.path();
+
+    // The empty fleet goes, and the document on disk proves it.
+    let out = stado(storage, &["fleet", "delete", "edge"]);
+    assert!(out.status.success(), "delete failed: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("fleet 'edge' deleted"),
+        "got: {}",
+        stdout(&out)
+    );
+    assert_eq!(
+        registry(storage)["fleets"],
+        serde_json::json!([{"name": "build", "notes": "ci"}])
+    );
+
+    // Deleting it again is a refusal, not a second success.
+    let out = stado(storage, &["fleet", "delete", "edge"]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("fleet 'edge' is not declared"),
+        "got: {}",
+        stderr(&out)
+    );
+
+    // A fleet with a member cannot be deleted out from under it; the
+    // refusal names the member, and the document keeps both.
+    let out = stado(storage, &["fleet", "delete", "build"]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out)
+            .contains("fleet 'build' still has 1 member(s): w1; reassign them first"),
+        "got: {}",
+        stderr(&out)
+    );
+    let document = registry(storage);
+    assert_eq!(document["fleets"].as_array().unwrap().len(), 1);
+    assert_eq!(document["targets"][0]["fleet"], "build");
+}
+
 #[test]
 fn fleet_assign_moves_a_target_into_the_fleet() {
     let dir = storage_with_registry(REGISTRY_WITH_FLEET);

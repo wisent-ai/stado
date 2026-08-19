@@ -72,6 +72,40 @@ pub async fn create(name: &str, notes: &str) -> Result<bool, String> {
     Ok(true)
 }
 
+/// Remove a fleet entry from the document. A fleet that still has members
+/// is refused with their names: dropping the declaration underneath them
+/// would produce the dangling `fleet` reference every reader rejects, so
+/// the write that would strand them never happens. Pure.
+pub fn delete_fleet(document: &Value, name: &str) -> Result<Value, String> {
+    let fleets = parse_fleets(document)?;
+    let fleet = find_fleet(&fleets, name)
+        .ok_or_else(|| format!("fleet '{name}' is not declared"))?;
+    if !fleet.members.is_empty() {
+        return Err(format!(
+            "fleet '{name}' still has {} member(s): {}; reassign them first",
+            fleet.members.len(),
+            fleet.members.join(", ")
+        ));
+    }
+    let mut next = document.clone();
+    let section = next
+        .get_mut("fleets")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| "registry.fleets: must be an array".to_string())?;
+    section.retain(|entry| entry.get("name").and_then(Value::as_str) != Some(name));
+    parse_fleets(&next)?;
+    Ok(next)
+}
+
+/// `stado fleet delete NAME` — retire a declared fleet.
+pub async fn delete(name: &str) -> Result<bool, String> {
+    let document = fetch_document().await.map_err(|exc| exc.to_string())?;
+    let next = delete_fleet(&document, name)?;
+    let generation = push_document(&next).await.map_err(|exc| exc.to_string())?;
+    println!("fleet '{name}' deleted (generation {generation})");
+    Ok(true)
+}
+
 /// Register a target without an ssh destination (`ssh: null`) — the
 /// self-install path: the machine later runs `stado bootstrap --local
 /// --target NAME` on itself. `hostnames` carries the machine's real DNS
