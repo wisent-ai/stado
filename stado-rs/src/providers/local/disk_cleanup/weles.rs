@@ -106,7 +106,11 @@ fn run_active(path: &Path, cutoff: f64) -> bool {
 /// classifies with entry.is_dir() (FOLLOWS symlinks: a symlinked dir is
 /// listed but, with followlinks=False, never recursed and never sized);
 /// getsize also follows symlinks. Unreadable entries are skipped.
-fn dir_size(path: &Path) -> i64 {
+///
+/// Shared with [`super::chromium_clones`], which sizes the same shape of
+/// thing — one shallow directory of files under a fixed root — and would
+/// otherwise be a second walk with its own symlink judgement.
+pub(super) fn dir_size(path: &Path) -> i64 {
     let mut total = 0i64;
     let mut stack = vec![path.to_path_buf()];
     while let Some(current) = stack.pop() {
@@ -136,7 +140,11 @@ fn dir_size(path: &Path) -> i64 {
 /// Python `shutil.rmtree(entry.path)`: refuses a top-level symlink, never
 /// follows symlinked directories, unlinks everything else. Errors abort
 /// the removal and surface to the caller (Python's default onerror).
-fn remove_tree(path: &Path) -> io::Result<()> {
+///
+/// Shared with [`super::chromium_clones`] for the reason [`dir_size`] is:
+/// two spellings of "delete this tree, refusing symlinks" would be two
+/// safety models, and only one of them would be the tested one.
+pub(super) fn remove_tree(path: &Path) -> io::Result<()> {
     let info = std::fs::symlink_metadata(path)?;
     if info.file_type().is_symlink() {
         return Err(io::Error::new(

@@ -5,13 +5,13 @@
 //! rules come from [`crate::deploy::host_reboot`] via
 //! [`crate::deploy::host_channel`].
 //!
-//! Two halves, deliberately reported together. "97% full" on its own does
+//! Three parts, deliberately reported together. "97% full" on its own does
 //! not tell an operator whether anything is going to be done about it, and
 //! "the janitor last ran at 04:12" on its own does not say whether it
 //! helped. The July incident was precisely the pair coming apart: a box at
 //! zero free bytes whose cleanup policy looked fine in the registry.
 //!
-//! Neither half invents a schema.
+//! No part invents a schema.
 //!
 //! - Usage comes from `df -Pk /` — the POSIX output format, so the columns
 //!   are the same on macOS and Linux, unlike the default macOS layout,
@@ -24,6 +24,19 @@
 //!   bytes` and `next scheduled pass` this command reports are all derived
 //!   from that document; nothing here re-implements the janitor's
 //!   bookkeeping.
+//! - Local APFS snapshots come from `tmutil listlocalsnapshots /`, and they
+//!   are here because NOTHING in this product can reclaim them and their
+//!   blocks are already inside the `used` figure above. On
+//!   `charless-mac-mini` on 2026-08-18 the janitor's cleaners and the three
+//!   `host reclaim` filesystem stages between them accounted for every
+//!   consumer an operator could act on, and three OS-update snapshots sat
+//!   outside all of it — the kind of thing that holds tens of GiB and turns
+//!   "the product says the disk is accounted for" into a false statement.
+//!   Reported, never touched. macOS publishes no size for a snapshot:
+//!   `tmutil`, `diskutil apfs listSnapshots` and `diskutil info` all name
+//!   them and none of them measures them (checked on macOS 26.5 on both this
+//!   control plane's host and the mini), so the count and the host's own
+//!   names are reported and no byte figure is invented from them.
 //!
 //! Like [`crate::deploy::host_recovery`]'s script, the remote program is
 //! written as an escaped string: `\\t` / `\\n` are the literal backslash
@@ -46,7 +59,7 @@ pub const OK_STATUS: &str = "ok";
 const STATE_PATH_MARK: &str = "@STATE_PATH@";
 
 /// The fixed remote program, with the janitor's state path spliced in by
-/// [`remote_script`]. Read-only: one `df` and one `cat`.
+/// [`remote_script`]. Read-only: one `df`, one `cat`, one snapshot listing.
 const REMOTE_SCRIPT_TEMPLATE: &str = "set -u
 /bin/df -Pk / 2>/dev/null | while IFS= read -r row; do
   set -- $row
@@ -61,6 +74,14 @@ if [ -r \"$state\" ]; then
   printf 'STADO_CLEANUP_STATE\\t%s\\n' \"$(/usr/bin/tr -d '\\t\\r\\n' < \"$state\")\"
 else
   printf 'STADO_CLEANUP_STATE_MISSING\\t%s\\n' \"$state\"
+fi
+if [ -x /usr/bin/tmutil ]; then
+  /usr/bin/tmutil listlocalsnapshots / 2>/dev/null | while IFS= read -r row; do
+    case \"$row\" in
+      com.apple.*) printf 'STADO_SNAPSHOT\\t%s\\n' \"$row\" ;;
+    esac
+  done
+  printf 'STADO_SNAPSHOT_END\\t%s\\n' 'listed'
 fi
 ";
 
@@ -128,11 +149,36 @@ pub struct CleanupState {
     pub error: Option<String>,
 }
 
+/// The local APFS snapshots this host is holding, which nothing in this
+/// product removes.
+///
+/// Their blocks are inside `df`'s used figure, so free space does not come
+/// back until they are thinned — and `stado host reclaim` cannot thin them:
+/// dropping a snapshot is dropping a restore point, which is an operator's
+/// decision about that machine's recovery and not a janitor's about its disk.
+/// Reported so nobody reads a reclamation that freed nothing and concludes the
+/// space is unexplained.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LocalSnapshots {
+    /// Whether the host could be asked at all. False on every Linux host and
+    /// on any Mac without `tmutil`: "nobody looked" is not "there are none".
+    pub supported: bool,
+    /// The snapshot names as the host listed them, verbatim — the same
+    /// strings `tmutil deletelocalsnapshots` and `tmutil thinlocalsnapshots`
+    /// take, so what is printed here is what an operator can act on.
+    ///
+    /// No sizes: macOS publishes none for a snapshot (see the module header),
+    /// and a byte figure derived from anything else here would be a guess
+    /// wearing a number's clothes.
+    pub names: Vec<String>,
+}
+
 /// Everything one host answered.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DiskReading {
     pub usage: Option<DiskUsage>,
     pub state: CleanupState,
+    pub snapshots: LocalSnapshots,
 }
 
 /// Fold the marker lines of stdout into a reading.
@@ -159,6 +205,14 @@ pub fn parse_output(stdout: &str, policy_interval_seconds: Option<i64>) -> DiskR
                     ..CleanupState::default()
                 };
             }
+            ["STADO_SNAPSHOT", name] => {
+                reading.snapshots.supported = true;
+                reading.snapshots.names.push((*name).to_string());
+            }
+            // The host has `tmutil` and listed what it has, which is how a Mac
+            // with no snapshots at all is told apart from a host nobody could
+            // ask.
+            ["STADO_SNAPSHOT_END", _] => reading.snapshots.supported = true,
             _ => {}
         }
     }
@@ -265,6 +319,20 @@ pub fn to_report(target: &ComputeTarget, reading: &DiskReading) -> Map<String, V
             "error": state.error,
         }),
     );
+    // Reported next to the usage it does not appear in: `size_bytes` is
+    // deliberately absent rather than null, because macOS states no size and a
+    // key an operator could read as "zero" is worse than a key that is not
+    // there. `reclaimable_by_stado` is the finding.
+    let snapshots = &reading.snapshots;
+    report.insert(
+        "local_snapshots".to_string(),
+        json!({
+            "supported": snapshots.supported,
+            "count": snapshots.names.len(),
+            "names": snapshots.names,
+            "reclaimable_by_stado": false,
+        }),
+    );
     report
 }
 
@@ -280,4 +348,60 @@ pub async fn disk_host(target_name: &str, runner: &Runner) -> Result<Value, Depl
     let mut report = to_report(&target, &reading);
     host_channel::finish_report(&mut report, &output, OK_STATUS, "ssh failed");
     Ok(Value::Object(report))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn target() -> ComputeTarget {
+        serde_json::from_value(json!({
+            "name": "charless-mac-mini",
+            "kind": "local",
+            "ssh": "charles@charless-mac-mini.local",
+            "release_platform": "darwin-arm64",
+        }))
+        .expect("registry target")
+    }
+
+    /// The snapshots a Mac listed reach the report as a count and the host's
+    /// own names, with no size anywhere — macOS states none, and this command
+    /// does not make one up.
+    #[test]
+    fn the_snapshots_a_host_listed_are_reported_by_name() {
+        let stdout = "STADO_DISK\t/dev/disk3s1s1\t239362496\t213090784\t2097152\t99%\t/\n\
+                      STADO_SNAPSHOT\tcom.apple.os.update-DEDECEC5\n\
+                      STADO_SNAPSHOT\tcom.apple.TimeMachine.2026-08-18-021829.local\n\
+                      STADO_SNAPSHOT_END\tlisted\n";
+        let reading = parse_output(stdout, Some(300));
+        assert!(reading.snapshots.supported);
+        assert_eq!(reading.snapshots.names.len(), 2);
+        let report = to_report(&target(), &reading);
+        let snapshots = &report["local_snapshots"];
+        assert_eq!(snapshots["count"], json!(2));
+        assert_eq!(
+            snapshots["names"][1],
+            json!("com.apple.TimeMachine.2026-08-18-021829.local")
+        );
+        assert_eq!(snapshots["reclaimable_by_stado"], json!(false));
+        assert!(
+            snapshots.get("size_bytes").is_none(),
+            "a size was reported for something macOS does not measure"
+        );
+    }
+
+    /// A Mac holding none and a host nobody could ask are different findings,
+    /// and the report keeps them apart: `count` is 0 for both, `supported` is
+    /// not. Folding the two would let a Linux host read as "checked, clean".
+    #[test]
+    fn a_host_that_could_not_be_asked_is_not_a_host_with_none() {
+        let listed = parse_output("STADO_SNAPSHOT_END\tlisted\n", None);
+        assert!(listed.snapshots.supported);
+        assert!(listed.snapshots.names.is_empty());
+        let unasked = parse_output("STADO_DISK\t/dev/sda1\t1\t1\t1\t1%\t/\n", None);
+        assert!(!unasked.snapshots.supported);
+        let report = to_report(&target(), &unasked);
+        assert_eq!(report["local_snapshots"]["supported"], json!(false));
+        assert_eq!(report["local_snapshots"]["count"], json!(0));
+    }
 }
