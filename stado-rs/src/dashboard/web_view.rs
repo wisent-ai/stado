@@ -348,6 +348,85 @@ fn policy_script() -> &'static str {
 </script>"#
 }
 
+/// The `Fleet services` section: the same managed-service records
+/// `stado service list` renders, fetched from `/api/services.json`.
+/// Read-only on purpose — a restart is always the CLI's job, so the action
+/// column only ever carries the command or the reason there is none.
+fn fleet_services_card() -> &'static str {
+    r#"
+<section class="cleanup-card" aria-labelledby="services-title">
+  <div class="cleanup-heading">
+    <div><h2 id="services-title">Fleet services</h2>
+      <p class="muted">Managed units and their latest beacon state, fleet-wide. Read-only; restarts go through the CLI.</p></div>
+    <div class="controls"><button type="button" id="services-refresh">Refresh</button></div>
+  </div>
+  <p id="services-status" class="service-status" role="status" aria-live="polite"></p>
+  <table id="services-table">
+    <thead><tr>
+      <th>host</th><th>unit</th><th>state</th><th>domain</th><th>action</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table>
+</section>"#
+}
+
+/// Talks to `/api/services.json`; a failed fetch renders the reason in the
+/// status line rather than leaving an empty table.
+fn fleet_services_script() -> &'static str {
+    r##"
+<script>
+(() => {
+  const status = document.getElementById('services-status');
+  const tbody = document.querySelector('#services-table tbody');
+  const SYSTEM_HINT = "this unit is a LaunchDaemon in launchd's system domain (/Library/LaunchDaemons); the approved channel is an unprivileged user, so stado service restart cannot bootstrap it — restarting it needs sudo on the host";
+  async function load() {
+    status.textContent = 'Loading fleet services.';
+    tbody.textContent = '';
+    let services;
+    try {
+      const response = await fetch('/api/services.json');
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+      services = payload;
+    } catch (error) {
+      status.textContent = 'services unavailable: ' + (error instanceof Error ? error.message : 'request failed');
+      return;
+    }
+    for (const svc of services) {
+      const row = document.createElement('tr');
+      if (svc.state === 'failed') row.classList.add('failed-row');
+      for (const text of [svc.host, svc.unit_id || svc.name, svc.state || 'unknown', svc.domain || 'unknown']) {
+        const cell = document.createElement('td');
+        cell.textContent = text || '';
+        row.appendChild(cell);
+      }
+      const action = document.createElement('td');
+      if (svc.restartable) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'cli-hint';
+        button.setAttribute('aria-disabled', 'true');
+        button.textContent = 'restart via CLI';
+        button.title = `stado service restart ${svc.name} --host ${svc.host}`;
+        action.appendChild(button);
+      } else {
+        const note = document.createElement('span');
+        note.className = 'muted';
+        note.textContent = 'privileged bootstrap required';
+        note.title = SYSTEM_HINT;
+        action.appendChild(note);
+      }
+      row.appendChild(action);
+      tbody.appendChild(row);
+    }
+    status.textContent = services.length ? '' : 'No managed services declared.';
+  }
+  document.getElementById('services-refresh').addEventListener('click', load);
+  load();
+})();
+</script>"##
+}
+
 fn operator_workspace() -> &'static str {
     r##"
 <style>
@@ -747,7 +826,7 @@ pub fn render_html(state: &Value, cleanup: &Value, refresh: i64) -> String {
         .map_or(0, Vec::len);
 
     let mut out = String::new();
-    out.push_str("<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<title>Stado Control Center</title>\n<style>\n:root{color-scheme:light dark}body{font-family:-apple-system,system-ui,sans-serif;margin:1em;color:#222;background:#fff}\nh2{margin-top:1.2em;border-bottom:1px solid #ddd;padding-bottom:.3em}table{border-collapse:collapse;font-size:13px;margin:.4em 0;max-width:100%;display:block;overflow-x:auto}\nth,td{border:1px solid #ddd;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f5f5f5}\n.big{font-size:24px;font-weight:600}.muted{color:#666;font-size:12px}.warn{color:#a00}\n.cleanup-card{margin:1.2em 0;padding:1em;border:1px solid #ccc;border-radius:12px;background:#fafafa}.cleanup-heading{display:flex;gap:1em;align-items:flex-start;justify-content:space-between}.cleanup-heading h2{margin:0;border:0}.cleanup-heading p{margin:.3em 0}.controls{display:flex;gap:.5em;flex-wrap:wrap}button{font:inherit;padding:.5em .8em;cursor:pointer}button:disabled{cursor:wait;opacity:.6}.service-status{font-weight:600}.cleanup-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.8em;margin:1em 0 0}.cleanup-grid div{min-width:0}dt{font-size:12px;color:#666}dd{margin:.2em 0 0;font-weight:600;overflow-wrap:anywhere}\n@media(max-width:800px){.cleanup-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:480px){.cleanup-heading{display:block}.controls{margin-top:.8em}.cleanup-grid{grid-template-columns:1fr}}\n@media(prefers-color-scheme:dark){body{color:#eee;background:#111}th{background:#222}.cleanup-card{background:#181818;border-color:#444}.muted,dt{color:#aaa}}\n</style></head><body>\n<h1>Stado Control Center</h1><div class=\"muted\">refreshed every ");
+    out.push_str("<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<title>Stado Control Center</title>\n<style>\n:root{color-scheme:light dark}body{font-family:-apple-system,system-ui,sans-serif;margin:1em;color:#222;background:#fff}\nh2{margin-top:1.2em;border-bottom:1px solid #ddd;padding-bottom:.3em}table{border-collapse:collapse;font-size:13px;margin:.4em 0;max-width:100%;display:block;overflow-x:auto}\nth,td{border:1px solid #ddd;padding:4px 8px;text-align:left;vertical-align:top}th{background:#f5f5f5}\n.big{font-size:24px;font-weight:600}.muted{color:#666;font-size:12px}.warn{color:#a00}\n.cleanup-card{margin:1.2em 0;padding:1em;border:1px solid #ccc;border-radius:12px;background:#fafafa}.cleanup-heading{display:flex;gap:1em;align-items:flex-start;justify-content:space-between}.cleanup-heading h2{margin:0;border:0}.cleanup-heading p{margin:.3em 0}.controls{display:flex;gap:.5em;flex-wrap:wrap}button{font:inherit;padding:.5em .8em;cursor:pointer}button:disabled{cursor:wait;opacity:.6}button.cli-hint{opacity:.6;cursor:default}tr.failed-row td{color:#a00;background:#fdecec}.service-status{font-weight:600}.cleanup-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.8em;margin:1em 0 0}.cleanup-grid div{min-width:0}dt{font-size:12px;color:#666}dd{margin:.2em 0 0;font-weight:600;overflow-wrap:anywhere}\n@media(max-width:800px){.cleanup-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:480px){.cleanup-heading{display:block}.controls{margin-top:.8em}.cleanup-grid{grid-template-columns:1fr}}\n@media(prefers-color-scheme:dark){body{color:#eee;background:#111}th{background:#222}.cleanup-card{background:#181818;border-color:#444}.muted,dt{color:#aaa}tr.failed-row td{color:#ff9a9a;background:#3a1d1d}}\n</style></head><body>\n<h1>Stado Control Center</h1><div class=\"muted\">refreshed every ");
     out.push_str(&e(&Value::from(refresh)));
     out.push_str("s &middot; now ");
     out.push_str(&e_or(state.get("now"), "?"));
@@ -755,6 +834,7 @@ pub fn render_html(state: &Value, cleanup: &Value, refresh: i64) -> String {
     out.push_str(&cleanup_card(cleanup));
     out.push('\n');
     out.push_str(policy_card());
+    out.push_str(fleet_services_card());
     out.push_str(operator_workspace());
     out.push_str("\n<h2>autonomy &amp; FinOps</h2><div class=\"cleanup-card\">");
     out.push_str("<div>mode <strong>");
@@ -840,6 +920,7 @@ pub fn render_html(state: &Value, cleanup: &Value, refresh: i64) -> String {
     out.push_str(&refresh_ms.to_string());
     out.push_str(");\n    }\n  }\n  buttons[0].addEventListener('click', () => request('/api/cleanup.json'));\n  buttons[1].addEventListener('click', () => request('/api/cleanup/run', {method:'POST', headers:{'X-Stado-Action':'cleanup'}}));\n})();\n</script>\n");
     out.push_str(policy_script());
+    out.push_str(fleet_services_script());
     out.push_str("</body></html>");
     out
 }
