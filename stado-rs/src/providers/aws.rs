@@ -453,7 +453,6 @@ impl AwsProvider {
     }
 
     /// Bind explicit settings + a fake API (tests).
-
     async fn api(&self) -> Result<&Arc<dyn Ec2Api>, ProviderError> {
         self.api
             .get_or_try_init(|| async { Ok(Arc::new(Ec2Client::new().await?) as Arc<dyn Ec2Api>) })

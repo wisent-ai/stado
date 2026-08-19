@@ -104,7 +104,6 @@ impl GceClient {
 
     /// Bind to an explicit base URL without credentials (loopback mocks in
     /// tests) and with a near-zero LRO poll interval.
-
     fn assemble(
         project: &str,
         base_url: &str,
@@ -438,7 +437,6 @@ impl GcpProvider {
     }
 
     /// Bind explicit client + storage (tests).
-
     async fn state(&self) -> Result<&GcpState, ProviderError> {
         self.state
             .get_or_try_init(|| async {

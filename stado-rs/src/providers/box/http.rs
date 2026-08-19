@@ -80,7 +80,6 @@ impl BoxHttpTransport {
 
     /// Test-only constructor: same wiring, without the HTTPS scheme check,
     /// so a loopback mock can stand in for ascii.dev.
-
     fn assemble(api_key: &str, base_url: &str, timeout_seconds: f64) -> Self {
         BoxHttpTransport {
             client: reqwest::Client::new(),

@@ -81,7 +81,6 @@ impl CloudQuotasClient {
     }
 
     /// Bind to an explicit base URL without credentials (loopback mocks).
-
     fn assemble(
         project: &str,
         base_url: &str,
