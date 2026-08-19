@@ -22,6 +22,7 @@ struct ConsoleView: View {
     @StateObject private var gatesStore = HostGatesStore()
     @StateObject private var serviceStore = ServiceTruthStore()
     @StateObject private var releaseStore = ReleaseEvidenceStore()
+    @StateObject private var groupStore = FleetGroupStore()
 
     @State private var showsDeploymentSetup = false
     @State private var showsDeploymentAccess = false
@@ -279,7 +280,9 @@ struct ConsoleView: View {
         case .hosts:
             let unavailable = snapshot.workers.count { $0.status == .unavailable }
             if unavailable > 0 { return (unavailable, .danger) }
-            let silent = gatesStore.notClaiming.count
+            // Same rule as the Hosts screen: a declared pin is policy and only
+            // counts when it starves a job; every other refusal counts always.
+            let silent = gatesStore.notClaiming.count { $0.refusingUnpinned || !$0.waitingJobs.isEmpty }
             if silent > 0 { return (silent, .danger) }
             let stale = snapshot.workers.count { $0.status == .stale }
             return stale > 0 ? (stale, .warning) : nil
@@ -300,7 +303,7 @@ struct ConsoleView: View {
             // answer for. Both are rollouts that never finish unattended.
             let stalled = releaseStore.attentionCount
             return stalled > 0 ? (stalled, .danger) : nil
-        case .registry, .deployments:
+        case .registry, .deployments, .fleets:
             return nil
         }
     }
@@ -343,6 +346,8 @@ struct ConsoleView: View {
                 DiskView(store: store, cleanupStore: cleanupStore, scope: scopeName)
             case .registry:
                 RegistryView(fleetStore: fleetStore, scope: scopeName)
+            case .fleets:
+                FleetsView(groupStore: groupStore, fleetStore: fleetStore, scope: scopeName)
             case .releases:
                 ReleasesView(store: releaseStore, scope: scopeName)
             case .deployments:
@@ -421,6 +426,7 @@ struct ConsoleView: View {
         cleanupStore.configureAuthorization(token: auth.session?.accessToken)
         fleetStore.configureAuthorization(token: auth.session?.accessToken)
         enrollmentStore.configureAuthorization(token: auth.session?.accessToken)
+        groupStore.configureAuthorization(token: auth.session?.accessToken)
     }
 
     /// A source that cannot be read says why. Clearing the endpoint and
@@ -434,6 +440,7 @@ struct ConsoleView: View {
                 cleanupStore.clearDashboardURL()
                 fleetStore.configureEndpoint(nil)
                 enrollmentStore.configureEndpoint(nil)
+                groupStore.configureEndpoint(nil)
                 sourceProblem = "\(deployment.name) has not published an endpoint yet, so there is nothing for the console to read."
                 return
             }
@@ -446,12 +453,14 @@ struct ConsoleView: View {
             try cleanupStore.saveDashboardURL(endpoint)
             fleetStore.configureEndpoint(endpoint)
             enrollmentStore.configureEndpoint(endpoint)
+            groupStore.configureEndpoint(endpoint)
             sourceProblem = nil
         } catch {
             store.clearDashboardURL()
             cleanupStore.clearDashboardURL()
             fleetStore.configureEndpoint(nil)
             enrollmentStore.configureEndpoint(nil)
+            groupStore.configureEndpoint(nil)
             sourceProblem = "\(endpoint) was rejected: \((error as? LocalizedError)?.errorDescription ?? "the address is not a supported Stado endpoint.")"
         }
     }
@@ -460,6 +469,7 @@ struct ConsoleView: View {
         await store.refresh()
         await cleanupStore.refresh()
         await fleetStore.refresh()
+        await groupStore.refresh()
     }
 
     private func presentDeploymentSetup() {
