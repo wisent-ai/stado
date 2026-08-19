@@ -333,6 +333,32 @@ struct HostGates: Decodable, Identifiable, Sendable {
     }
 }
 
+/// `stado host remove-file <host> <path> --json`, one document: what the
+/// host did with the file, in its own words. `status` is `removed`,
+/// `absent`, `refused` or `failed`; `detail` carries the refusal's reason —
+/// including the privileged command a system path names — verbatim, because
+/// that sentence is the answer.
+struct RemoveFileReport: Decodable, Sendable {
+    let target: String
+    let path: String
+    let status: String
+    let detail: String?
+
+    var succeeded: Bool { status == "removed" || status == "absent" }
+}
+
+extension FleetServiceEntry {
+    /// True only where `stado host remove-file`'s host-side guards could
+    /// pass: a path inside a user's own `Library/LaunchAgents` (never the
+    /// system `/Library/LaunchDaemons`) or under `.stado`. Offering the verb
+    /// anywhere else would be a button that can only be refused.
+    var removableByRemoveFile: Bool {
+        guard !path.isEmpty, !path.contains("..") else { return false }
+        if path.hasPrefix("/Library/") { return false }
+        return path.contains("/Library/LaunchAgents/") || path.contains("/.stado/")
+    }
+}
+
 /// One queued job a non-claiming host is starving.
 struct HostGatesWaitingJob: Decodable, Sendable, Identifiable {
     let jobID: String
