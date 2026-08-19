@@ -18,6 +18,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
     case posture
     case queue
     case hosts
+    case fleets
     case services
     case disk
     case registry
@@ -31,6 +32,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         case .posture: "Posture"
         case .queue: "Queue"
         case .hosts: "Hosts"
+        case .fleets: "Fleets"
         case .services: "Services"
         case .disk: "Disk"
         case .registry: "Registry"
@@ -44,6 +46,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         case .posture: "bell.badge"
         case .queue: "list.bullet.rectangle"
         case .hosts: "server.rack"
+        case .fleets: "rectangle.3.group"
         case .services: "gearshape.2"
         case .disk: "externaldrive"
         case .registry: "book.closed"
@@ -57,6 +60,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         case .posture: "What in the fleet needs a human right now"
         case .queue: "Queued work by model and the outcome of every recent job"
         case .hosts: "Which hosts can take work, and why the others cannot"
+        case .fleets: "Named groups of machines: declare one, assign machines, retire one"
         case .services: "What each declared unit runs, and which processes nothing owns"
         case .disk: "Disk pressure, what the last pass reclaimed, and the next pass"
         case .registry: "Canonical fleet policy and the generation it was read at"
@@ -68,7 +72,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
     var group: ConsoleGroup {
         switch self {
         case .posture, .queue: .work
-        case .hosts, .disk, .services: .fleet
+        case .hosts, .fleets, .disk, .services: .fleet
         case .registry, .releases, .deployments: .system
         }
     }
