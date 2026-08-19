@@ -7,7 +7,8 @@ use serde_json::{json, Map, Value};
 
 use super::CmdError;
 use crate::monitor::billing;
-use crate::queue::{capacity, JobStorage, StorageError};
+use crate::deploy::fleet_claim::{self, FleetClaim};
+use crate::queue::{JobStorage, StorageError};
 use crate::targets::{self, ComputeTarget, Registry};
 
 const CLOUD_BILLING_BASE: &str = "https://cloudbilling.googleapis.com";
@@ -20,16 +21,22 @@ pub async fn run(as_json: bool) -> Result<(), CmdError> {
         .await
         .map_err(|err| CmdError::click(err.to_string()))?;
 
-    let (jobs, consumers, billing_snapshot, budgets, quotas) = tokio::join!(
+    // The claimability verdict reads the capacity prefix, so it is the one
+    // reader of it here: `capacity::read_consumer_capacity` would have
+    // deleted every row past its GC horizon on the way, and a report that
+    // collects the evidence it is reporting turns "this host went quiet
+    // seventeen hours ago" into "this host never said anything".
+    let now = Utc::now();
+    let (jobs, claim, billing_snapshot, budgets, quotas) = tokio::join!(
         queue_counts(&store),
-        capacity::read_consumer_capacity(&store),
+        fleet_claim::read_fleet_claim(&store, &registry, now),
         read_billing(&store),
         read_gcp_budgets(),
         crate::scheduler::quota::summarize_quotas(&store),
     );
 
     let jobs = jobs?;
-    let consumers = consumers?;
+    let claim = claim.map_err(|err| CmdError::click(err.to_string()))?;
     let billing_snapshot = billing_snapshot?;
     let budgets = budgets;
     let quotas = match quotas {
@@ -43,11 +50,12 @@ pub async fn run(as_json: bool) -> Result<(), CmdError> {
     let measurements = crate::cli::registry::load_capability_measurements(&store)
         .await
         .unwrap_or_default();
-    let fleet = fleet_snapshot(&registry, &consumers, &measurements);
+    let fleet = fleet_snapshot(&registry, &claim.live_consumers(), &measurements, &claim);
     let document = json!({
-        "generated_at": Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false),
+        "generated_at": now.to_rfc3339_opts(SecondsFormat::Micros, false),
         "jobs": jobs,
         "fleet": fleet,
+        "claimability": claim.to_report(),
         "quota": quotas,
         "billing": billing_snapshot,
         "budgets": budgets,
@@ -56,7 +64,7 @@ pub async fn run(as_json: bool) -> Result<(), CmdError> {
     if as_json {
         println!("{}", serde_json::to_string_pretty(&document)?);
     } else {
-        print_human(&document);
+        print_human(&document, &claim);
     }
     Ok(())
 }
@@ -121,6 +129,7 @@ fn fleet_snapshot(
     registry: &Registry,
     consumers: &std::collections::BTreeMap<String, Value>,
     measurements: &std::collections::BTreeMap<String, crate::cli::registry::Measurement>,
+    claim: &FleetClaim,
 ) -> Value {
     let mut active_targets = HashSet::new();
     let workers: Vec<Value> = consumers
@@ -203,7 +212,14 @@ fn fleet_snapshot(
         .count();
 
     json!({
-        "active_workers": workers.len(),
+        // How many DECLARED LOCAL HOSTS published capacity inside the
+        // staleness horizon -- not how many rows are in the capacity prefix,
+        // and emphatically not how many workers the registry declares. The
+        // key used to be `active_workers`, a count of live broadcast rows
+        // printed under the words "active workers", which read as a healthy
+        // fleet on a day when nothing in it could claim anything.
+        "publishing_capacity": claim.publishing.len(),
+        "capacity_rows_live": workers.len(),
         "registered_targets": targets.len(),
         "registered_local_workers": local_registered,
         "workers": workers,
@@ -286,7 +302,7 @@ fn money(value: &Value) -> String {
     format!("{currency} {:.2}", units + nanos / 1_000_000_000.0)
 }
 
-fn print_human(document: &Value) {
+fn print_human(document: &Value, claim: &FleetClaim) {
     println!("STADO OVERVIEW");
     println!(
         "generated: {}",
@@ -304,9 +320,14 @@ fn print_human(document: &Value) {
 
     let fleet = &document["fleet"];
     println!(
-        "fleet: {} active workers | {} registered local | {} registered targets",
-        fleet["active_workers"], fleet["registered_local_workers"], fleet["registered_targets"]
+        "fleet: {} of {} local hosts publishing capacity | {} registered targets",
+        fleet["publishing_capacity"], fleet["registered_local_workers"], fleet["registered_targets"]
     );
+    // Nothing when the queue is moving, or when it is empty: a report that
+    // prints a verdict every time is a report whose verdict stops being read.
+    for line in claim.lines() {
+        println!("{line}");
+    }
     if let Some(workers) = fleet.get("workers").and_then(Value::as_array) {
         for worker in workers {
             let target = worker

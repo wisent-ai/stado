@@ -86,6 +86,22 @@ recover_agent() {
   fi
 }
 
+# A unit the registry declares in launchd's system domain. This pass logs in
+# as the approved unprivileged user, so `launchctl bootstrap system` is not
+# available to it and the whole of `recover_agent` above would be a sequence
+# of silent failures ending in a report of success. Look, say what is there,
+# touch nothing: the caller turns these two words into the skipped entry and
+# the blocker that make the overall status honest.
+report_system_agent() {
+  label="$1"
+  plist="$2"
+  if [ ! -f "$plist" ]; then
+    printf 'STADO_AGENT\t%s\tmissing_plist\n' "$label"
+    return
+  fi
+  printf 'STADO_AGENT\t%s\tneeds_privileged_bootstrap\n' "$label"
+}
+
 recover_agent com.wisent.host-health-beacon "$HOME/Library/LaunchAgents/com.wisent.host-health-beacon.plist"
 /bin/sleep 5
 disk_after=$(/bin/df -k / 2>/dev/null | /usr/bin/awk 'NR==2 {print $4}')

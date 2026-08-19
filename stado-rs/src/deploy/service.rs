@@ -59,7 +59,7 @@ use super::{
 };
 use crate::monitor::host_health::{self, HostHealthError};
 use crate::queue::JobStorage;
-use crate::targets::{self, ComputeTarget};
+use crate::targets::ComputeTarget;
 
 // ---------------------------------------------------------------------------
 // Vocabulary
@@ -108,13 +108,20 @@ pub const DEPLOY_KIND: &str = "service";
 /// already puts in front of operators.
 pub const REDACTED: &str = "[REDACTED]";
 
-/// The launchd domain a unit-file path loads into.
+/// The launchd domain a unit-file path loads into, decided locally.
 ///
 /// The registry declares paths, and the path alone says which domain the
 /// unit lives in — which in turn says whether the approved channel can
 /// bootstrap it at all: a system LaunchDaemon loads as root, and the
 /// channel is unprivileged. Derived here rather than on the host because
 /// the refusal has to happen before the host is contacted.
+///
+/// This is the local half of [`DOMAIN_RESOLVER`]'s first branch and the two
+/// MUST agree on it: `/Library/LaunchDaemons/...` is the system domain here
+/// and on the host. Everything the path cannot answer — whether the user has
+/// a graphical session, and therefore whether an agent's domain is
+/// `gui/<uid>` or the background `user/<uid>` — is the host's answer alone,
+/// and this type deliberately does not guess at it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnitDomain {
     /// `/Library/LaunchDaemons/...` — loads as root.
@@ -147,6 +154,15 @@ impl UnitDomain {
     /// True when loading the unit takes root — the system domain only.
     pub fn requires_privileged_bootstrap(&self) -> bool {
         matches!(self, Self::System)
+    }
+
+    /// True when the unit's job belongs to a login rather than to the
+    /// machine: a LaunchAgent, wherever the plist sits. A host with no
+    /// graphical login has no `gui/<uid>` domain to load one into, which is
+    /// what makes this the interesting half of the classification for
+    /// [`MisdeclaredDomain`].
+    pub fn is_per_login(&self) -> bool {
+        matches!(self, Self::AnyUser | Self::User)
     }
 
     /// The `domain` column spelling; empty when the path places no domain.
@@ -205,6 +221,15 @@ pub struct ManagedService {
     pub path: String,
     /// [`KIND_LAUNCHD`] or [`KIND_SYSTEMD`].
     pub kind: String,
+    /// Absolute program the unit runs, on the host. Present when the
+    /// declaration is the source of the unit rather than a pointer at a
+    /// plist somebody installed by hand: `service ensure` renders the unit
+    /// from this and [`ManagedService::args`], so a host that lost its unit
+    /// file can be made to run the right thing again from the document
+    /// alone. Empty for a declaration that only names a path.
+    pub program: String,
+    /// The argument vector [`ManagedService::program`] is started with.
+    pub args: Vec<String>,
     /// [`SOURCE_REGISTRY`] or [`SOURCE_RECOVERY`].
     pub source: String,
     /// When the unit entered management; empty for a recovery-sourced one,
@@ -251,6 +276,17 @@ impl ManagedService {
                     Value::String(heuristic.clone()),
                 );
         }
+        // Written only when the declaration actually is the source of the
+        // unit. A record that merely points at a path keeps the shape it
+        // has always had, so adding this field rewrites no existing entry.
+        if !self.program.is_empty() {
+            let record = record.as_object_mut().expect("managed service record");
+            record.insert("program".to_string(), Value::String(self.program.clone()));
+            record.insert(
+                "args".to_string(),
+                Value::Array(self.args.iter().cloned().map(Value::String).collect()),
+            );
+        }
         if let Some(onboarding) = &self.onboarding {
             record["onboarding"] =
                 serde_json::to_value(onboarding).expect("OnboardingProduct is JSON serializable");
@@ -272,6 +308,8 @@ impl ManagedService {
             "kind": self.kind,
             "source": self.source,
             "managed_since": self.managed_since,
+            "program": self.program,
+            "args": self.args,
         });
         if let Some(onboarding) = &self.onboarding {
             record["onboarding"] =
@@ -320,6 +358,17 @@ impl ManagedService {
             kind,
             source: SOURCE_REGISTRY.to_string(),
             managed_since: text("managed_since"),
+            program: text("program"),
+            args: record
+                .get("args")
+                .and_then(Value::as_array)
+                .map(|args| {
+                    args.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default(),
             onboarding: record
                 .get("onboarding")
                 .and_then(|value| serde_json::from_value(value.clone()).ok()),
@@ -346,6 +395,8 @@ pub fn launchd_service(
         kind: KIND_LAUNCHD.to_string(),
         source: source.to_string(),
         managed_since: since.to_string(),
+        program: String::new(),
+        args: Vec::new(),
         onboarding: None,
     }
 }
@@ -368,6 +419,8 @@ pub fn systemd_service(
         kind: KIND_SYSTEMD.to_string(),
         source: source.to_string(),
         managed_since: since.to_string(),
+        program: String::new(),
+        args: Vec::new(),
         onboarding: None,
     }
 }
@@ -405,6 +458,173 @@ pub fn declared_services(target: &ComputeTarget) -> Vec<ManagedService> {
 }
 
 // ---------------------------------------------------------------------------
+// Declared domain against the domain the host can have
+// ---------------------------------------------------------------------------
+
+/// The `role` / `host_heuristic` word for a host that is expected to serve
+/// with nobody sitting at it. `charless-mac-mini` carries it in both fields.
+pub const ROLE_ALWAYS_ON: &str = "always-on";
+
+/// Does the registry itself say this host runs unattended?
+///
+/// An always-on host is a headless host: no account is logged in
+/// graphically, so launchd builds no `gui/<uid>` domain there and a
+/// LaunchAgent has nowhere to load. Read from the declaration rather than
+/// from a probe on purpose — this is the fact the document already carries,
+/// and the finding it produces has to be answerable with the store down.
+pub fn declared_always_on(target: &ComputeTarget) -> bool {
+    [target.role.as_deref(), target.host_heuristic.as_deref()]
+        .into_iter()
+        .flatten()
+        .any(|word| word == ROLE_ALWAYS_ON)
+}
+
+/// Where a launchd job that belongs to the machine lives.
+const DAEMON_DIR: &str = "/Library/LaunchDaemons";
+/// The `/Users/<account>/...` prefix a per-account agent path carries. The
+/// account is load-bearing: a LaunchAgent's job runs as its owner, and the
+/// daemon spelling of the same unit only keeps running as that owner if it
+/// carries `UserName` (`local_install::daemon_plist_text`).
+const ACCOUNTS_PREFIX: &str = "/Users/";
+
+/// A unit declared in a launchd domain the host it is declared on cannot
+/// have.
+///
+/// `com.wisent.compute.service.stado-agent-mini` was declared as a user
+/// LaunchAgent at `/Users/charles/Library/LaunchAgents/...` on
+/// `charless-mac-mini`, a host declared always-on in both `role` and
+/// `host_heuristic` and with no graphical session at all: `/dev/console` is
+/// root's, `who` prints nothing, and the login's own `launchctl list` holds
+/// no `com.wisent.*` label. `launchctl bootstrap user/501 <plist>` answers
+/// `Bootstrap failed: 5: Input/output error` there and `gui/501` does not
+/// exist, so the declaration named a domain that could never load it. Every
+/// other always-on unit on that host is a system LaunchDaemon under
+/// [`DAEMON_DIR`].
+///
+/// The declaration is checkable without going anywhere: the path says the
+/// domain and the target says the host runs unattended. So this is a
+/// registry finding, reported by `stado registry doctor` and printed under
+/// `stado service list`, rather than a surprise the next `restart` produces.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MisdeclaredDomain {
+    /// Registry target the unit is declared on.
+    pub host: String,
+    /// The host's own name for the unit — the launchd label.
+    pub unit: String,
+    /// The unit-file path the declaration carries.
+    pub path: String,
+    /// The domain that path places the unit in, as [`UnitDomain::as_str`]
+    /// spells it.
+    pub declared_domain: &'static str,
+    /// The only domain this host can load a unit into.
+    pub loadable_domain: &'static str,
+    /// Where the daemon spelling of this unit belongs.
+    pub daemon_path: String,
+    /// The account the agent's job runs as, read out of the declared path;
+    /// empty for a machine-wide `/Library/LaunchAgents` declaration, which
+    /// names no account at all.
+    pub account: String,
+}
+
+impl MisdeclaredDomain {
+    /// The finding for one declared unit, or `None` when the declaration and
+    /// the host agree.
+    ///
+    /// Registry-declared units only. A `host_recovery::MANAGED_AGENTS` entry
+    /// is carried by that fixed program and not by the document, so it is
+    /// not a registry finding and correcting the document would not move it.
+    pub fn detect(target: &ComputeTarget, service: &ManagedService) -> Option<Self> {
+        if service.source != SOURCE_REGISTRY || !declared_always_on(target) {
+            return None;
+        }
+        let declared = UnitDomain::from_path(&service.path);
+        if !declared.is_per_login() {
+            return None;
+        }
+        let unit = service.unit_id().to_string();
+        let account = service
+            .path
+            .strip_prefix(ACCOUNTS_PREFIX)
+            .and_then(|rest| rest.split('/').next())
+            .unwrap_or_default()
+            .to_string();
+        Some(Self {
+            host: target.name.clone(),
+            daemon_path: format!("{DAEMON_DIR}/{unit}.plist"),
+            unit,
+            path: service.path.clone(),
+            declared_domain: declared.as_str(),
+            loadable_domain: DOMAIN_SYSTEM,
+            account,
+        })
+    }
+
+    /// The privileged command that puts this unit in the domain the host can
+    /// load, spelled the way `ENSURE_BODY` installs a daemon
+    /// (`install -m 644 -o root -g wheel`) so the file an operator writes by
+    /// hand and the file the fleet writes have the same owner and mode.
+    ///
+    /// `UserName` rides along wherever the declared path names an account:
+    /// root reads a plist in [`DAEMON_DIR`], and a daemon without that key
+    /// would run the account's program as uid 0 against an account-owned
+    /// `~/.stado` — the exact trade `local_install::daemon_plist_text`
+    /// documents.
+    pub fn install_command(&self) -> String {
+        let install = format!(
+            "/usr/bin/install -m 644 -o root -g wheel {} {}",
+            self.path, self.daemon_path
+        );
+        if self.account.is_empty() {
+            return format!("sudo {install}");
+        }
+        format!(
+            "sudo /bin/sh -c '{install} && /usr/bin/plutil -insert UserName -string {} {}'",
+            self.account, self.daemon_path
+        )
+    }
+
+    /// The one sentence both surfaces print: the unit, the domain it
+    /// declares, the domain the host can actually load, and the command that
+    /// closes the gap.
+    pub fn sentence(&self) -> String {
+        format!(
+            "{} is declared in launchd's {} domain ({}), and {} is declared {ROLE_ALWAYS_ON}, so no \
+             account is logged in graphically there, launchd builds no gui/<uid>, and {} is the only \
+             domain that host can load a unit into; install it there with one privileged command on \
+             the host: {}",
+            self.unit,
+            self.declared_domain,
+            self.path,
+            self.host,
+            self.loadable_domain,
+            self.install_command()
+        )
+    }
+
+    pub fn to_json(&self) -> Value {
+        json!({
+            "host": self.host,
+            "unit": self.unit,
+            "path": self.path,
+            "declared_domain": self.declared_domain,
+            "loadable_domain": self.loadable_domain,
+            "daemon_path": self.daemon_path,
+            "install_command": self.install_command(),
+            "detail": self.sentence(),
+        })
+    }
+}
+
+/// Every registry-declared unit on TARGET whose declared launchd domain the
+/// host cannot have.
+pub fn misdeclared_domains(target: &ComputeTarget) -> Vec<MisdeclaredDomain> {
+    declared_services(target)
+        .iter()
+        .filter_map(|service| MisdeclaredDomain::detect(target, service))
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
 // Read side: the beacon join
 // ---------------------------------------------------------------------------
 
@@ -422,6 +642,10 @@ pub struct ServiceStatus {
     pub reported_at: String,
     /// Why the state is what it is, when that is not self-evident.
     pub detail: String,
+    /// Set when this unit's declared launchd domain is one its host cannot
+    /// have. Carried on the row rather than recomputed by each surface,
+    /// because the check needs the target's `role` and only the join has it.
+    pub misdeclared_domain: Option<MisdeclaredDomain>,
 }
 
 impl ServiceStatus {
@@ -433,6 +657,9 @@ impl ServiceStatus {
         report.insert("state".to_string(), json!(self.state));
         report.insert("reported_at".to_string(), json!(self.reported_at));
         report.insert("detail".to_string(), json!(self.detail));
+        if let Some(misdeclared) = &self.misdeclared_domain {
+            report.insert("misdeclared_domain".to_string(), misdeclared.to_json());
+        }
         Value::Object(report)
     }
 }
@@ -485,9 +712,7 @@ fn beacon_state(beacon: Option<&Map<String, Value>>, unit_id: &str) -> (String, 
 /// [`STATE_UNKNOWN`] rows instead of an error, because one silent host must
 /// not blank the fleet-wide answer.
 pub async fn list_services(store: &JobStorage) -> Result<Vec<ServiceStatus>, DeployError> {
-    let registry = targets::fetch_registry_remote()
-        .await
-        .map_err(|exc| DeployError(exc.to_string()))?;
+    let registry = super::host_channel::canonical_registry().await?;
     let mut rows: Vec<ServiceStatus> = Vec::new();
     for target in registry.local_targets() {
         let declared = declared_services(target);
@@ -507,11 +732,13 @@ pub async fn list_services(store: &JobStorage) -> Result<Vec<ServiceStatus>, Dep
             .to_string();
         for service in declared {
             let (state, detail) = beacon_state(beacon, service.unit_id());
+            let misdeclared_domain = MisdeclaredDomain::detect(target, &service);
             rows.push(ServiceStatus {
                 service,
                 state,
                 reported_at: reported_at.clone(),
                 detail,
+                misdeclared_domain,
             });
         }
     }
@@ -540,9 +767,18 @@ pub async fn find_services(
 pub struct RemoteReport {
     /// `uname -s` on the host.
     pub os: String,
-    /// The launchd domain the host resolved (`gui/<uid>` or `user/<uid>`);
-    /// empty on Linux.
+    /// The launchd domain [`DOMAIN_RESOLVER`] chose for this unit (`system`,
+    /// `gui/<uid>` or `user/<uid>`); empty on Linux, and empty on a Darwin
+    /// host that has no per-login domain at all.
     pub domain: String,
+    /// [`DOMAIN_STATUS_SYSTEM`], [`DOMAIN_STATUS_GRAPHICAL`],
+    /// [`DOMAIN_STATUS_FALLBACK`] or [`DOMAIN_STATUS_UNAVAILABLE`] — how the
+    /// resolver arrived at [`Self::domain`].
+    pub domain_status: String,
+    /// Why that domain, in the operator's words. Load-bearing for the
+    /// fallback: it is the reason a user agent cannot be loaded, and until it
+    /// was reported the fallback was a bare `user/501` note nobody read.
+    pub domain_reason: String,
     /// The unit id the remote program actually addressed. On Linux this is
     /// the `.service` spelling, which differs from the launchd label.
     pub unit: String,
@@ -569,6 +805,29 @@ pub struct RemoteReport {
     /// The probe's own words about what it found.
     pub postcondition_detail: String,
 }
+
+/// The unit is a system LaunchDaemon: launchd's `system` domain, loaded by
+/// root.
+pub const DOMAIN_STATUS_SYSTEM: &str = "system";
+/// The unit is a LaunchAgent and its user has a graphical session, so the
+/// domain is `gui/<uid>` — where a LaunchAgent actually lives.
+pub const DOMAIN_STATUS_GRAPHICAL: &str = "graphical";
+/// The unit is a LaunchAgent and nobody is logged in graphically, so the only
+/// domain there is is the background `user/<uid>`. A user agent that needs
+/// the login session cannot be loaded in it, which is why this word travels
+/// with [`RemoteReport::domain_reason`] wherever it appears.
+pub const DOMAIN_STATUS_FALLBACK: &str = "fallback";
+/// launchd has no per-login domain for this login at all.
+pub const DOMAIN_STATUS_UNAVAILABLE: &str = "unavailable";
+
+/// The host ran the action and launchd has no job under the label in the
+/// domain the action used.
+///
+/// A word of its own, and never one of the success words. `restarted` beside
+/// `postcondition unmet` is the shape that hid this defect for weeks: a
+/// report an operator reads top-down says the restart worked, and the unit is
+/// not under launchd at all.
+pub const STATUS_NOT_LOADED: &str = "not_loaded";
 
 impl RemoteReport {
     /// The host's init system, from the OS it reported.
@@ -621,16 +880,57 @@ impl RemoteReport {
         )
     }
 
+    /// True when the host ran the action and launchd has no job under the
+    /// label in the domain that action used.
+    pub fn unloaded(&self) -> bool {
+        self.status == STATUS_NOT_LOADED
+    }
+
+    /// Turn a host-side [`STATUS_NOT_LOADED`] into the sentence the operator
+    /// needs: the unit, the domain the action used, launchd's own words, and —
+    /// when that domain is the per-login fallback — why a user agent cannot be
+    /// loaded there. Composed here because the host's marker fields are cut to
+    /// 160 characters and this has to say all of it.
+    ///
+    /// `action` is the verb in the operator's tense (`restart`, `deploy`), and
+    /// it is named because the missing half of the old report was what the
+    /// command thought it had done.
+    fn name_unloaded(&mut self, unit: &str, action: &str) {
+        if !self.unloaded() {
+            return;
+        }
+        let mut detail = format!(
+            "{unit} is not loaded in {}: {}. Nothing was started outside launchd, because a \
+             process no unit owns dies with the login that spawned it and is not a {action}ed \
+             service",
+            self.domain, self.detail
+        );
+        if self.domain_status == DOMAIN_STATUS_FALLBACK {
+            detail.push_str(&format!(". {}", self.domain_reason));
+        }
+        self.detail = detail;
+    }
+
     pub fn to_json(&self) -> Value {
         let mut report = json!({
             "os": self.os,
-            "launchd_domain": self.domain,
             "unit": self.unit,
             "path": self.path,
             "status": self.status,
             "detail": self.detail,
             "exit_code": self.exit_code,
         });
+        // One object, the same one `host recover` prints, wherever a domain is
+        // named at all: the name alone was what an operator had to act on, and
+        // `user/501` alone does not say that it is a fallback or what the
+        // fallback costs.
+        if !(self.domain.is_empty() && self.domain_status.is_empty()) {
+            report["launchd_domain"] = json!({
+                "name": self.domain,
+                "status": self.domain_status,
+                "reason": self.domain_reason,
+            });
+        }
         if !self.postcondition.is_empty() {
             report["postcondition"] = json!({
                 "intent": self.postcondition,
@@ -709,6 +1009,11 @@ pub fn parse_markers(stdout: &str) -> RemoteReport {
             ["STADO_SERVICE", _unit, status, detail] => {
                 report.status = (*status).to_string();
                 report.detail = (*detail).to_string();
+            }
+            ["STADO_DOMAIN", domain, status, reason] => {
+                report.domain = (*domain).to_string();
+                report.domain_status = (*status).to_string();
+                report.domain_reason = (*reason).to_string();
             }
             ["STADO_ADOPT", file_state, unit_state] => {
                 report.file_state = (*file_state).to_string();
@@ -964,45 +1269,33 @@ uid=$(/usr/bin/id -u)
 gui=\"gui/$uid\"
 user_domain=\"user/$uid\"
 domain=\"\"
+domain_status=\"\"
+domain_reason=\"\"
+launch=/bin/launchctl
 say() {
   detail=$(printf '%s' \"$2\" | /usr/bin/tr '\t\r\n' ' ' | /usr/bin/cut -c1-160)
   printf 'STADO_SERVICE\\t%s\\t%s\\t%s\\n' \"$unit\" \"$1\" \"$detail\"
 }
-launch=/bin/launchctl
-if [ \"$os\" = \"Darwin\" ]; then
-  case \"$unit_path\" in
-    /Library/LaunchDaemons/*)
-      # A system daemon does not live in this login's domain, and every
-      # launchctl verb aimed at gui/$uid silently misses it -- which is how
-      # such a unit reaches the last-resort fallback on every restart and
-      # gets started as a bare process instead of as the job it is.
-      domain=\"system\"
-      launch=\"/usr/bin/sudo -n /bin/launchctl\"
-      ;;
-  esac
-  if [ -z \"$domain\" ]; then
-    if /bin/launchctl print \"$gui\" >/dev/null 2>&1; then
-      domain=\"$gui\"
-    elif /bin/launchctl print \"$user_domain\" >/dev/null 2>&1; then
-      domain=\"$user_domain\"
-    else
-@NO_DOMAIN@
-    fi
-  fi
-  # An unqualified label may name either this login's agent or a system
-  # daemon. Adoption looked only in the login's LaunchAgents and therefore
-  # reported a running always-on daemon as absent, which is the one class of
-  # unit this fleet keeps in the system domain.
+@DOMAIN_RESOLVER@@UNIT_STATE@if [ \"$os\" = \"Darwin\" ]; then
+  # The file first, the domain second. An unqualified label may name this
+  # login's agent or a system daemon, and which domain the unit belongs to
+  # follows from the file -- so resolving a domain before knowing which file
+  # this is, and patching it afterwards, is how one command came to act in one
+  # domain, probe another, and report a third. The search covers
+  # /Library/LaunchDaemons as well as this login's LaunchAgents because
+  # adoption used to look only in the second and reported a running always-on
+  # daemon as absent.
   if [ -z \"$unit_path\" ]; then
     if [ -f \"$HOME/Library/LaunchAgents/$unit.plist\" ]; then
       unit_path=\"$HOME/Library/LaunchAgents/$unit.plist\"
     elif [ -f \"/Library/LaunchDaemons/$unit.plist\" ]; then
       unit_path=\"/Library/LaunchDaemons/$unit.plist\"
-      domain=\"system\"
-      launch=\"/usr/bin/sudo -n /bin/launchctl\"
     else
       unit_path=\"$HOME/Library/LaunchAgents/$unit.plist\"
     fi
+  fi
+  if ! stado_domain_of \"$unit_path\"; then
+@NO_DOMAIN@
   fi
 elif [ \"$os\" = \"Linux\" ]; then
   if [ -n \"$linux_unit\" ]; then unit=\"$linux_unit\"; fi
@@ -1036,16 +1329,338 @@ else
   exit 65
 fi
 printf 'STADO_HOST\\t%s\\t%s\\t%s\\t%s\\n' \"$os\" \"$domain\" \"$unit\" \"$unit_path\"
+if [ \"$os\" = \"Darwin\" ]; then
+  printf 'STADO_DOMAIN\\t%s\\t%s\\t%s\\n' \"$domain\" \"$domain_status\" \"$(printf '%s' \"$domain_reason\" | /usr/bin/tr '\t\r\n' ' ' | /usr/bin/cut -c1-160)\"
+fi
+";
+
+/// The one answer to "which launchd domain does this unit belong to", read by
+/// every program in this module and by `host_recovery`'s recovery pass.
+///
+/// Three domains, and the difference between the last two is the defect this
+/// function exists for:
+///
+/// - `/Library/LaunchDaemons/...` is root's job: the `system` domain, reached
+///   with sudo.
+/// - A LaunchAgent of a user who has a graphical session lives in
+///   `gui/<uid>`, and an ssh login can address that domain while the session
+///   exists.
+/// - A LaunchAgent of a user who has none has only the background per-user
+///   domain `user/<uid>` — the domain an ssh login is itself placed in, and
+///   the one an agent that needs the login session cannot be loaded into.
+///
+/// The graphical session is read the way macOS exposes it, and the check was
+/// chosen against the live host rather than guessed: `/dev/console` is owned
+/// by the user holding the graphical session and by root at the login window,
+/// and launchd has a `gui/<uid>` domain only while that session exists. Both
+/// halves are required, so the reported domain is one the next `launchctl`
+/// verb can actually address.
+///
+/// What that read answers on charless-mac-mini on 2026-08-19, through
+/// `stado host exec` (read-only, allowlisted): `who` prints nothing,
+/// `loginwindow` runs as root, no `Dock`, `Finder` or `SystemUIServer`
+/// process exists for any account, and the login's own `launchctl list`
+/// holds 62 background `com.apple.*` agents and no `com.wisent.*` label.
+/// Nobody is logged in graphically there, so `gui/501` does not exist, and
+/// the honest answer for that host's agent is the `user/501` fallback —
+/// reported as the reason the agent cannot be loaded instead of papered over
+/// with a bare process.
+///
+/// Sets `$domain` (what every verb addresses and every probe reads),
+/// `$domain_status` ([`DOMAIN_STATUS_SYSTEM`], [`DOMAIN_STATUS_GRAPHICAL`],
+/// [`DOMAIN_STATUS_FALLBACK`] or [`DOMAIN_STATUS_UNAVAILABLE`]),
+/// `$domain_reason` (the operator's sentence for that choice) and `$launch`
+/// (the launchctl this domain needs). Returns non-zero only when launchd has
+/// no per-login domain at all, which is the one case a caller may answer
+/// differently.
+pub const DOMAIN_RESOLVER: &str = "stado_domain_of() {
+  domain=\"\"
+  domain_status=\"\"
+  domain_reason=\"\"
+  launch=/bin/launchctl
+  case \"$1\" in
+    /Library/LaunchDaemons/*)
+      domain='system'
+      domain_status='system'
+      domain_reason='a unit in /Library/LaunchDaemons is a system LaunchDaemon, so its job belongs to the system domain and loading it needs root'
+      launch=\"/usr/bin/sudo -n /bin/launchctl\"
+      return 0
+      ;;
+  esac
+  account=$(/usr/bin/id -un)
+  console=$(/usr/bin/stat -f%Su /dev/console 2>/dev/null | /usr/bin/tr -d ' \t\r\n')
+  if [ -z \"$console\" ]; then console='nobody'; fi
+  if [ \"$console\" = \"$account\" ] && /bin/launchctl print \"$gui\" >/dev/null 2>&1; then
+    domain=\"$gui\"
+    domain_status='graphical'
+    domain_reason=\"$account owns /dev/console and launchd has $gui, so a LaunchAgent of this login loads there\"
+    return 0
+  fi
+  if /bin/launchctl print \"$user_domain\" >/dev/null 2>&1; then
+    domain=\"$user_domain\"
+    domain_status='fallback'
+    domain_reason=\"/dev/console belongs to $console, not $account: no graphical session, so $gui does not exist and a LaunchAgent has only the background domain $user_domain\"
+    return 0
+  fi
+  domain_status='unavailable'
+  domain_reason=\"launchd has neither $gui nor $user_domain for $account\"
+  return 1
+}
+";
+
+// ---------------------------------------------------------------------------
+// The session behind the domain, asked as a question
+// ---------------------------------------------------------------------------
+
+/// Marker word the session probe frames its one answer in, in the same
+/// tab-delimited `STADO_*` family every other program on this channel speaks.
+const SESSION_MARKER: &str = "STADO_SESSION";
+
+/// `session.kind` when an account holds the screen: [`DOMAIN_RESOLVER`] found
+/// the console owned by this login and launchd holding that login's
+/// `gui/<uid>`.
+pub const SESSION_GRAPHICAL: &str = "graphical";
+/// `session.kind` when nobody holds the screen.
+///
+/// This one word is the whole of charless-mac-mini's condition, and the start
+/// of the chain nothing in this product could previously state: no graphical
+/// session, so launchd builds no `gui/<uid>`, so a LaunchAgent has nowhere to
+/// load, so the host publishes no capacity, so a job pinned to it waits.
+pub const SESSION_HEADLESS: &str = "headless";
+/// `session.kind` when the probe could not answer — the host did not answer
+/// at all, the read failed, or it is not a macOS host. Never a guess in
+/// either direction: a diagnostic that could not read a fact says so, and an
+/// unreadable session must not make a readable host look unreadable.
+pub const SESSION_UNKNOWN: &str = "unknown";
+
+/// The wall-clock cap on the session read.
+///
+/// Deliberately far under the channel's own
+/// [`host_channel::remote_timeout`]: this is four `exec`s behind an ssh hop
+/// the shared options already bound at `ConnectTimeout=15`, so thirty seconds
+/// leaves the reads fifteen of their own. A probe that has not answered by
+/// then is [`SESSION_UNKNOWN`] — a diagnostic that hangs on one of its facts
+/// is worse than one that reports that fact as unread.
+pub const SESSION_TIMEOUT_SECONDS: u64 = 30;
+
+/// The read-only half of [`DOMAIN_RESOLVER`]: who owns the console, whether
+/// launchd has a graphical domain, and nothing else.
+///
+/// `stado service restart` has performed exactly this determination since the
+/// fallback domain was named, and until now it took a restart — a write, on a
+/// host that is already the wrong shape — to see the answer. This is that
+/// same function asked as a question. It resolves a per-login path so the
+/// system branch cannot short-circuit the two checks it exists to make, and
+/// it bootstraps nothing, kickstarts nothing and loads nothing.
+///
+/// The reason is flattened over tab/CR/LF, because a marker that spans two
+/// lines desynchronises the parser — but it is deliberately NOT cut at 160
+/// characters the way the `STADO_DOMAIN` marker cuts it. The reason IS the
+/// answer here rather than a note beside one, and a truncated sentence is not
+/// the resolver's sentence.
+const SESSION_PROBE: &str = "set -u
+os=$(/usr/bin/uname -s)
+if [ \"$os\" != Darwin ]; then
+  printf 'STADO_SESSION\\t%s\\t%s\\t%s\\n' 'unsupported' '' \"$os has no console session of the kind a per-login unit needs\"
+  exit 0
+fi
+uid=$(/usr/bin/id -u)
+gui=\"gui/$uid\"
+user_domain=\"user/$uid\"
+console=''
+@DOMAIN_RESOLVER@stado_domain_of \"$HOME/Library/LaunchAgents\"
+printf 'STADO_SESSION\\t%s\\t%s\\t%s\\n' \"$domain_status\" \"$console\" \"$(printf '%s' \"$domain_reason\" | /usr/bin/tr '\t\r\n' ' ')\"
+";
+
+/// What one host answered about whether anybody is logged in on its screen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostSession {
+    /// [`SESSION_GRAPHICAL`], [`SESSION_HEADLESS`] or [`SESSION_UNKNOWN`].
+    pub kind: &'static str,
+    /// Who owns `/dev/console`: the login name while a graphical session
+    /// exists, `root` at the login window. `None` when the probe could not
+    /// answer, never an invented name.
+    pub console_owner: Option<String>,
+    /// [`DOMAIN_RESOLVER`]'s own sentence for this answer, verbatim — the
+    /// same words `stado service restart --json` prints under
+    /// `launchd_domain.reason`. When the probe could not answer, this is why.
+    pub detail: String,
+}
+
+impl HostSession {
+    /// The answer for a probe that did not produce one, carrying why.
+    pub fn unknown(detail: impl Into<String>) -> Self {
+        Self {
+            kind: SESSION_UNKNOWN,
+            console_owner: None,
+            detail: detail.into(),
+        }
+    }
+
+    /// True only for [`SESSION_HEADLESS`]. [`SESSION_UNKNOWN`] is not
+    /// headless: acting on a fact nobody read is how a diagnostic starts
+    /// inventing findings.
+    pub fn is_headless(&self) -> bool {
+        self.kind == SESSION_HEADLESS
+    }
+
+    /// The probe's one marker line, read out of its stdout.
+    pub fn parse(stdout: &str) -> Self {
+        let Some(fields) = stdout
+            .lines()
+            .map(host_channel::marker_fields)
+            .find(|fields| fields.first() == Some(&SESSION_MARKER))
+        else {
+            return Self::unknown(
+                "this host ran the session read and printed no answer to it".to_string(),
+            );
+        };
+        let [_, status, console, reason] = fields[..] else {
+            return Self::unknown(format!(
+                "this host's session answer came back in {} field(s) instead of 4",
+                fields.len()
+            ));
+        };
+        // `unavailable` is headless too, and not a failed read: launchd having
+        // no `gui/<uid>` for this login is precisely the absence of a
+        // graphical session, whatever the console says about who owns it.
+        let kind = match status {
+            DOMAIN_STATUS_GRAPHICAL => SESSION_GRAPHICAL,
+            DOMAIN_STATUS_FALLBACK | DOMAIN_STATUS_UNAVAILABLE => SESSION_HEADLESS,
+            _ => SESSION_UNKNOWN,
+        };
+        Self {
+            kind,
+            console_owner: (!console.is_empty()).then(|| console.to_string()),
+            detail: reason.to_string(),
+        }
+    }
+
+    /// The one line an operator reads first, in the words they use for it.
+    ///
+    /// No `gui/<uid>`, no domain and no bootstrap here. Those are true, they
+    /// are what the next command needs, and they belong in [`Self::detail`]
+    /// underneath — not in the sentence that answers "is anyone logged in".
+    pub fn headline(&self) -> String {
+        match (self.kind, self.console_owner.as_deref()) {
+            (SESSION_GRAPHICAL, Some(owner)) => {
+                format!("{owner} is logged in on the screen here")
+            }
+            (SESSION_GRAPHICAL, None) => "someone is logged in on the screen here".to_string(),
+            (SESSION_HEADLESS, _) => "nobody is logged in on the screen here".to_string(),
+            _ => "whether anyone is logged in on the screen here could not be read".to_string(),
+        }
+    }
+
+    pub fn to_json(&self) -> Value {
+        json!({
+            "kind": self.kind,
+            "console_owner": self.console_owner,
+            "detail": self.detail,
+        })
+    }
+}
+
+/// Ask one host whether anybody is logged in on its screen.
+///
+/// Read-only and infallible by construction: every way this can fail — an
+/// unresolvable key, a refused connection, a remote non-zero, a missing
+/// marker — comes back as [`SESSION_UNKNOWN`] carrying the failure's own
+/// words. A caller diagnosing a sick host must never lose the facts it
+/// already has because one more optional read did not land.
+pub async fn read_session(target: &ComputeTarget, runner: &Runner) -> HostSession {
+    let probe = SESSION_PROBE.replace("@DOMAIN_RESOLVER@", DOMAIN_RESOLVER);
+    match host_channel::run_script_with_timeout(
+        target,
+        &probe,
+        std::time::Duration::from_secs(SESSION_TIMEOUT_SECONDS),
+        runner,
+    )
+    .await
+    {
+        Ok(output) if output.ok() => HostSession::parse(&output.stdout),
+        Ok(output) => HostSession::unknown(host_channel::last_error_line(
+            &output,
+            "this host refused the session read and said nothing about why",
+        )),
+        Err(exc) => HostSession::unknown(exc.to_string()),
+    }
+}
+
+/// The three reads every body and every probe makes about one unit, in one
+/// place: what the unit declares it runs, which processes are running exactly
+/// that, and what launchd itself says about the label.
+///
+/// `stado_unit_pids` is the one that had to change. It used to be
+/// `pgrep -f "^$program"` against the unit's program path, and on a host
+/// where every Stado service runs one binary that pattern is every service:
+/// on 2026-08-19 a unit-scoped `stado service restart
+/// com.wisent.always-on.stado-object-api --host charless-mac-mini` ended
+/// eight processes — the object API, the host's resolver holding
+/// 17600/17601/17612/17621, and a bare agent — because every one of them runs
+/// `/Users/charles/.stado/bin/stado`, and it reported `restarted` with a met
+/// postcondition afterwards. `KeepAlive` brought them back; one non-KeepAlive
+/// sibling would have stayed down. The distinguishing fact is the argv the
+/// unit declares (`dashboard --bind 127.0.0.1 --port 8765` against `resolver
+/// serve --target <host>`), so the whole argv is matched, and where launchd
+/// will answer for the label at all its own pid is preferred to any pattern.
+const UNIT_STATE: &str = "stado_unit_argv() {
+  if [ ! -f \"$1\" ]; then return 0; fi
+  argv_read=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments' \"$1\" 2>/dev/null | /usr/bin/awk 'NR == 1 && $0 == \"Array {\" { next } $0 == \"}\" { next } { sub(/^[[:space:]]+/, \"\"); sub(/[[:space:]]+$/, \"\"); printf \"%s%s\", separator, $0; separator = \" \" }')
+  if [ -z \"$argv_read\" ]; then
+    argv_read=$(/usr/libexec/PlistBuddy -c 'Print :Program' \"$1\" 2>/dev/null)
+    # PlistBuddy answers a missing key on stdout, so a program is accepted
+    # only in the one shape a program has: an absolute path.
+    case \"$argv_read\" in /*) ;; *) argv_read='' ;; esac
+  fi
+  printf '%s' \"$argv_read\"
+}
+stado_unit_pids() {
+  pids_want=\"$1\"
+  pids_program=\"${pids_want%% *}\"
+  if [ -z \"$pids_program\" ]; then return 0; fi
+  pids_args=''
+  case \"$pids_want\" in *' '*) pids_args=\" ${pids_want#* }\" ;; esac
+  # A unit that runs .../services/NAME/current/... names a link, and a process
+  # that outlived a relink shows the version directory that link resolved to.
+  # Both spellings share the service directory, so that is what the candidate
+  # scan is widened to; the argv below is what decides.
+  pids_root=\"$pids_program\"
+  case \"$pids_program\" in */current/*) pids_root=\"${pids_program%%/current/*}/\" ;; esac
+  pids_found=''
+  for pids_pid in $(/usr/bin/pgrep -f \"^$pids_root\" 2>/dev/null); do
+    pids_have=$(/bin/ps -p \"$pids_pid\" -o command= 2>/dev/null | /usr/bin/tr -s ' ' | /usr/bin/sed 's/^ //;s/ $//')
+    if [ -z \"$pids_have\" ]; then continue; fi
+    if [ \"$pids_have\" = \"$pids_want\" ]; then
+      pids_found=\"$pids_found$pids_pid \"
+      continue
+    fi
+    pids_have_args=''
+    case \"$pids_have\" in *' '*) pids_have_args=\" ${pids_have#* }\" ;; esac
+    if [ \"$pids_have_args\" != \"$pids_args\" ]; then continue; fi
+    case \"${pids_have%% *}\" in \"$pids_root\"*) pids_found=\"$pids_found$pids_pid \" ;; esac
+  done
+  printf '%s' \"${pids_found% }\"
+}
+stado_launchd_state() {
+  pc_pid=''
+  if pc_info=$($launch print \"$domain/$unit\" 2>&1); then
+    pc_loaded=yes
+    pc_pid=$(printf '%s\\n' \"$pc_info\" | /usr/bin/awk '$1 == \"pid\" && $2 == \"=\" { print $3; exit }')
+  else
+    pc_loaded=no
+  fi
+}
 ";
 
 /// What the prelude does on a Darwin host whose per-login launchd domain does
-/// not exist, for every command that addresses a unit already installed.
+/// not exist at all, for every command that addresses an installed unit.
 ///
 /// A restart, a stop or a retire aimed at a domain that is not there has
 /// nothing to act on, and inventing one would mean installing a unit in the
 /// middle of an operation that promised only to touch an existing one.
-const NO_DOMAIN_REFUSE: &str = "      say 'no_launchd_domain' \"$gui\"
-      exit 66";
+const NO_DOMAIN_REFUSE: &str = "    say 'no_launchd_domain' \"$domain_reason\"
+    exit 66";
 
 /// What [`ensure_service`] does instead: install into the system domain.
 ///
@@ -1055,47 +1670,34 @@ const NO_DOMAIN_REFUSE: &str = "      say 'no_launchd_domain' \"$gui\"
 /// processes came to run for four days with no unit behind them. The system
 /// domain is the one that does exist on an ssh login, so the unit that gets
 /// installed is the daemon spelling of the same job, in
-/// `/Library/LaunchDaemons`, and every later command finds it through the
-/// `/Library/LaunchDaemons/*` case above.
-const NO_DOMAIN_SYSTEM: &str = "      domain=\"system\"
-      launch=\"/usr/bin/sudo -n /bin/launchctl\"
-      unit_path=\"/Library/LaunchDaemons/$unit.plist\"";
+/// `/Library/LaunchDaemons`, and [`DOMAIN_RESOLVER`] then resolves every
+/// later command to `system` from that path alone.
+const NO_DOMAIN_SYSTEM: &str = "    domain=\"system\"
+    domain_status='system'
+    domain_reason='launchd has no per-login domain on this login, so the job is installed as a system LaunchDaemon instead'
+    launch=\"/usr/bin/sudo -n /bin/launchctl\"
+    unit_path=\"/Library/LaunchDaemons/$unit.plist\"";
 
 // ---------------------------------------------------------------------------
 // The end states the lifecycle operations intend
 // ---------------------------------------------------------------------------
-
-/// What launchd currently thinks of the unit, as the two facts every
-/// lifecycle end state is decided on: `pc_loaded` (does a job exist under
-/// this label) and `pc_pid` (is anything running under it).
-///
-/// One spelling, spliced into both probes, so "running" cannot come to mean
-/// one thing when starting and another when stopping — which is how a stop
-/// that only booted out a label ever came to be reported as a stop at all.
-/// The `pid = N` line is read out of the same `launchctl print` the restart
-/// script already uses to decide whether it may kick a job in place, so the
-/// check and the operation agree on what they are looking at.
-const LAUNCHD_STATE: &str = "    pc_pid=''
-    if pc_info=$($launch print \"$domain/$unit\" 2>&1); then
-      pc_loaded=yes
-      pc_pid=$(printf '%s\\n' \"$pc_info\" | /usr/bin/awk '$1 == \"pid\" && $2 == \"=\" { print $3; exit }')
-    else
-      pc_loaded=no
-    fi
-";
 
 /// The end state a restart or a start intends.
 ///
 /// Both halves are load-bearing. A unit can be loaded with nothing running
 /// under it (launchd accepted the job and the program died on start), and a
 /// program can be running with no unit loaded — that second one is what the
-/// last-resort fallbacks in these scripts produce, and reporting it as a
-/// successful restart is how an operator comes to believe a service is
-/// under management when the next reboot will not bring it back.
+/// last-resort fallbacks in these scripts used to produce, and reporting it
+/// as a successful restart is how an operator comes to believe a service is
+/// under management when the next logout will end it.
 const RUNNING_DESCRIBE: &str = "the unit is loaded and has a pid";
 
+/// Read in the domain the action used, because that is the only domain whose
+/// answer means anything: `no job at user/501/<label>` is a failure when the
+/// action bootstrapped into `user/501` and says nothing at all about a job
+/// the action never addressed.
 const RUNNING_PROBE: &str = "  if [ \"$os\" = \"Darwin\" ]; then
-@LAUNCHD_STATE@
+    stado_launchd_state
     if [ \"$pc_loaded\" = no ]; then
       stado_post 'unmet' \"no job at $domain/$unit\"
     elif [ -n \"$pc_pid\" ]; then
@@ -1126,7 +1728,7 @@ const RUNNING_PROBE: &str = "  if [ \"$os\" = \"Darwin\" ]; then
 const STOPPED_DESCRIBE: &str = "the unit is not running";
 
 const STOPPED_PROBE: &str = "  if [ \"$os\" = \"Darwin\" ]; then
-@LAUNCHD_STATE@
+    stado_launchd_state
     if [ \"$pc_loaded\" = no ]; then
       stado_post 'met' \"no job at $domain/$unit\"
     elif [ -n \"$pc_pid\" ]; then
@@ -1141,13 +1743,166 @@ const STOPPED_PROBE: &str = "  if [ \"$os\" = \"Darwin\" ]; then
   fi
 ";
 
-/// One declared end state, with the shared launchd observation spliced in.
-fn end_state(describe: &'static str, probe: &str) -> host_channel::PostCondition {
+/// One declared end state. The probe reads the host through the same prelude
+/// vocabulary the body does — `$domain` above all — so the check cannot end
+/// up asking about a domain the operation never acted in.
+fn end_state(describe: &'static str, probe: &'static str) -> host_channel::PostCondition {
     host_channel::PostCondition {
         describe,
-        probe: probe.replace("@LAUNCHD_STATE@", LAUNCHD_STATE),
+        probe: probe.to_string(),
     }
 }
+
+/// The end state an unprivileged restart of a system LaunchDaemon intends.
+///
+/// A system daemon's job lives in launchd's `system` domain, which an
+/// unprivileged login cannot read: `launchctl print system/<label>` needs
+/// root, and the `sudo -n` this channel would need is not granted. So
+/// [`RUNNING_DESCRIBE`]'s two facts — a loaded job with a pid — are not
+/// observable here at all, and asserting them would report every successful
+/// restart of a daemon as a failure.
+///
+/// What IS observable without privilege is the process: it runs as the
+/// approved user, so this login can see its pid and its owner. The end state
+/// is therefore stated about the process, and it is the honest one for this
+/// operation — the whole point of ending a `KeepAlive` daemon's process is
+/// that launchd puts a NEW one in its place.
+const RESPAWNED_DESCRIBE: &str = "the system daemon is running under a new pid";
+
+/// Reads `daemon_argv` and `daemon_before`, which [`DAEMON_TERM_BODY`] sets.
+/// The probe is armed as an `EXIT` trap in the body's own shell
+/// (`host_channel::PostCondition::arm`), so it observes the pids that body
+/// actually signalled rather than a second, racing observation of its own.
+///
+/// It asks about the pids running the unit's whole declared argv, not the
+/// pids running its program: on a host where every service runs one binary
+/// the second question answers with every service, and this probe reported a
+/// met end state over the siblings a restart had ended.
+const RESPAWNED_PROBE: &str = "  pc_now=$(stado_unit_pids \"${daemon_argv:-}\")
+  pc_new=''
+  for pc_pid in $pc_now; do
+    case \" ${daemon_before:-} \" in
+      *\" $pc_pid \"*) ;;
+      *) pc_new=\"$pc_new$pc_pid \" ;;
+    esac
+  done
+  if [ -n \"$pc_new\" ]; then
+    stado_post 'met' \"$unit runs as pid(s) ${pc_new% }\"
+  elif [ -n \"$pc_now\" ]; then
+    stado_post 'unmet' \"$unit still runs as the pid(s) this restart ended: $pc_now\"
+  else
+    stado_post 'unmet' \"nothing runs the program of $unit; launchd did not respawn it\"
+  fi
+";
+
+/// What the host reports about a system LaunchDaemon, read without
+/// privilege and without touching anything.
+///
+/// Four facts, and each one is a gate on the only repair this channel can
+/// perform:
+///
+/// - the unit's `KeepAlive` spelling, because ending a process nothing will
+///   respawn turns a degraded control plane into a dead one;
+/// - the account this login runs as;
+/// - the pids running exactly the argv the unit declares, that THIS account
+///   owns, which are the only ones an unprivileged signal can reach;
+/// - the pids running it that some other account owns, so a refusal can say
+///   whose process it is instead of just "no".
+const DAEMON_PROBE_BODY: &str = "if [ ! -f \"$unit_path\" ]; then
+  say 'missing' \"$unit_path\"
+  exit 0
+fi
+daemon_argv=$(stado_unit_argv \"$unit_path\")
+daemon_program=\"${daemon_argv%% *}\"
+# `raw` answers the scalar spellings (`<true/>`, `<false/>`) in one word.
+# A KeepAlive dict has no raw spelling and makes plutil fail, which reads
+# identically to a key that is not there -- so the second read asks whether
+# the key exists at all, and the third separates an unreadable plist from a
+# readable one with no KeepAlive. Three answers, three different repairs.
+daemon_keep='absent'
+if daemon_raw=$(/usr/bin/plutil -extract KeepAlive raw -o - \"$unit_path\" 2>/dev/null); then
+  daemon_keep=$(printf '%s' \"$daemon_raw\" | /usr/bin/tr -d ' \t\r\n')
+elif /usr/bin/plutil -extract KeepAlive xml1 -o - \"$unit_path\" >/dev/null 2>&1; then
+  daemon_keep='conditional'
+elif ! /usr/bin/plutil -lint \"$unit_path\" >/dev/null 2>&1; then
+  daemon_keep='unreadable'
+fi
+if [ -z \"$daemon_keep\" ]; then daemon_keep='unreadable'; fi
+daemon_user=$(/usr/bin/id -un)
+daemon_owned=''
+daemon_foreign=''
+# launchd's own answer first, where the domain can be read at all: the pid
+# under the label is the one fact no pattern can widen. `sudo -n launchctl
+# print system/<label>` is refused on this channel, so a system daemon is
+# matched on the argv its unit declares -- never on the program alone, which
+# on this fleet names every other service running the same binary.
+stado_launchd_state
+daemon_pids=\"$pc_pid\"
+if [ -z \"$daemon_pids\" ]; then daemon_pids=$(stado_unit_pids \"$daemon_argv\"); fi
+for daemon_pid in $daemon_pids; do
+  daemon_owner=$(/bin/ps -o user= -p \"$daemon_pid\" 2>/dev/null | /usr/bin/tr -d ' \t\r\n')
+  if [ \"$daemon_owner\" = \"$daemon_user\" ]; then
+    daemon_owned=\"$daemon_owned$daemon_pid \"
+  elif [ -n \"$daemon_owner\" ]; then
+    daemon_foreign=\"$daemon_foreign$daemon_pid \"
+  fi
+done
+printf 'STADO_DAEMON\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"$daemon_keep\" \"$daemon_user\" \"${daemon_owned% }\" \"${daemon_foreign% }\" \"$daemon_argv\"
+say 'daemon_probed' \"KeepAlive $daemon_keep\"
+";
+
+/// End the daemon's process so launchd recreates it.
+///
+/// This is `launchctl kickstart -k` without the privilege: that verb stops
+/// the job's process and lets launchd start it again, and for a job launchd
+/// is unconditionally keeping alive, ending the process from the account
+/// that owns it produces the same sequence. It never unloads anything, so
+/// there is no window in which the job does not exist -- the property the
+/// July outage cost this fleet three commands to learn.
+///
+/// Only the pids the probe found under THIS account are signalled, and they
+/// arrive as a validated digit list from [`validate_pid_list`]; nothing here
+/// re-derives a target from a pattern, because a pattern that widened by one
+/// character would signal a process nobody chose.
+///
+/// TERM only, and no escalation. A control-plane daemon that ignores TERM is
+/// a finding to report, not a reason to try SIGKILL on the process holding
+/// the fleet's authorization state.
+const DAEMON_TERM_BODY: &str = "daemon_argv=@ARGV@
+daemon_before=@PIDS@
+for daemon_pid in $daemon_before; do /bin/kill -TERM \"$daemon_pid\" >/dev/null 2>&1 || true; done
+daemon_after=''
+daemon_fresh=''
+daemon_waited=0
+while [ \"$daemon_waited\" -lt 15 ]; do
+  /bin/sleep 1
+  daemon_waited=$((daemon_waited + 1))
+  daemon_after=$(stado_unit_pids \"$daemon_argv\")
+  daemon_fresh=''
+  for daemon_pid in $daemon_after; do
+    case \" $daemon_before \" in
+      *\" $daemon_pid \"*) ;;
+      *) daemon_fresh=\"$daemon_fresh$daemon_pid \" ;;
+    esac
+  done
+  if [ -n \"$daemon_fresh\" ]; then break; fi
+done
+daemon_left=''
+for daemon_pid in $daemon_before; do
+  case \" $daemon_after \" in
+    *\" $daemon_pid \"*) daemon_left=\"$daemon_left$daemon_pid \" ;;
+  esac
+done
+if [ -n \"$daemon_fresh\" ]; then
+  say 'restarted' \"ended pid(s) $daemon_before owned by $(/usr/bin/id -un); launchd's KeepAlive replaced it with pid(s) ${daemon_fresh% } after ${daemon_waited}s\"
+  exit 0
+fi
+if [ -n \"$daemon_left\" ]; then
+  say 'restart_failed' \"pid(s) ${daemon_left% } did not end on SIGTERM and nothing was unloaded. Run: sudo launchctl kickstart -k system/$unit\"
+  exit 0
+fi
+say 'restart_failed' \"ended pid(s) $daemon_before and launchd started nothing in ${daemon_waited}s. Run: sudo launchctl kickstart -k system/$unit\"
+";
 
 /// `service restart`: restart the unit, in place wherever launchd will allow it.
 /// Deliberately narrower than a recovery pass — no disk cleanup, no
@@ -1165,8 +1920,21 @@ fn end_state(describe: &'static str, probe: &str) -> host_channel::PostCondition
 /// So a loaded job is kicked in place first: `kickstart -k` never unloads, so
 /// there is no window in which the job does not exist and nothing orphaned to
 /// sweep. The unload-and-recreate path remains for a unit that is not loaded
-/// at all, or whose in-place kick fails, and it no longer exits leaving the
-/// unit down without saying so.
+/// at all, or whose in-place kick fails.
+///
+/// What is deliberately NOT here any more is everything that used to happen
+/// after the bootstrap failed: a second `launchctl asuser` attempt, a
+/// `launchctl submit` of a `<label>-recovery` job, and finally a `perl`-exec
+/// of the unit's argv in the background, reported as
+/// `restarted: direct process <pid>`. On 2026-08-19 that last line is what
+/// `stado service restart com.wisent.compute.service.stado-agent-mini --host
+/// charless-mac-mini` returned, beside `postcondition unmet: no job at
+/// user/501/com.wisent.compute.service.stado-agent-mini` — a bare process
+/// under the ssh session, no unit behind it, and a report an operator read as
+/// success. A process that dies with the login that spawned it is not a
+/// restarted service, so a bootstrap that leaves no job in the domain the
+/// restart used is [`STATUS_NOT_LOADED`]: the domain, launchd's own words and
+/// the reason, and nothing started outside launchd.
 const RESTART_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   if $launch print \"$domain/$unit\" >/dev/null 2>&1; then
     detail=$($launch kickstart -k \"$domain/$unit\" 2>&1)
@@ -1176,70 +1944,33 @@ const RESTART_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
       exit 0
     fi
   fi
-  if [ -f \"$unit_path\" ]; then
-    $launch bootout \"$domain/$unit\" >/dev/null 2>&1 || true
-@DISOWNED_SWEEP@
-    if [ -n \"$still\" ]; then
-      $launch enable \"$domain/$unit\" >/dev/null 2>&1 || true
-      $launch bootstrap \"$domain\" \"$unit_path\" >/dev/null 2>&1 || true
-      if $launch print \"$domain/$unit\" >/dev/null 2>&1; then
-        say 'restart_failed' \"disowned process survived: $still; unit reloaded\"
-      else
-        say 'restart_failed' \"disowned process survived: $still; unit is NOT loaded\"
-      fi
-      exit 0
-    fi
-    $launch enable \"$domain/$unit\" >/dev/null || true
-    detail=$($launch bootstrap \"$domain\" \"$unit_path\" 2>&1)
+  if [ ! -f \"$unit_path\" ]; then
+    $launch enable \"$domain/$unit\" >/dev/null 2>&1 || true
+    detail=$($launch kickstart -k \"$domain/$unit\" 2>&1)
     rc=$?
-    if ! $launch print \"$domain/$unit\" >/dev/null; then
-      detail=$(/bin/launchctl asuser \"$uid\" $launch bootstrap \"$domain\" \"$unit_path\")
-      rc=$?
-    fi
-    if ! $launch print \"$domain/$unit\" >/dev/null; then
-      set --
-      while IFS= read -r line; do
-        case \"$line\" in
-          'Array {'|'}'|'') continue ;;
-        esac
-        set -- \"$@\" \"$(printf '%s' \"$line\" | /usr/bin/sed 's/^[[:space:]]*//;s/[[:space:]]*$//')\"
-      done <<PLIST
-$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments' \"$unit_path\" 2>/dev/null)
-PLIST
-      program=${1:-}
-      if [ -n \"$program\" ]; then
-        recovery_unit=\"${unit}-recovery\"
-        detail=$(/bin/launchctl submit -l \"$recovery_unit\" -- \"$@\")
-        rc=$?
-        if $launch print \"$domain/$recovery_unit\" >/dev/null; then unit=\"$recovery_unit\"; fi
-      fi
-    fi
-    if ! $launch print \"$domain/$unit\" >/dev/null && [ -n \"$program\" ]; then
-      log=$(/usr/bin/plutil -extract StandardOutPath raw -o - \"$unit_path\")
-      if [ -z \"$log\" ]; then log=\"$HOME/.stado/logs/$unit.log\"; fi
-      /bin/mkdir -p \"$(/usr/bin/dirname \"$log\")\"
-      /usr/bin/perl -e 'my $log = shift @ARGV; open STDIN, \"<\", \"/dev/null\" or die $!; open STDOUT, \">>\", $log or die $!; open STDERR, \">&STDOUT\" or die $!; exec {$ARGV[0]} @ARGV;' \"$log\" \"$@\" &
-      direct_pid=$!
-      /bin/sleep \"${#rc}\"
-      if /bin/kill -s CONT \"$direct_pid\" >/dev/null; then
-        say 'restarted' \"direct process $direct_pid\"
-      else
-        detail=$(/usr/bin/tail -n \"${#rc}\" \"$log\")
-        say 'restart_failed' \"$detail\"
-      fi
-      exit
-    fi
-    if [ \"$rc\" -ne 0 ]; then
-      say 'bootstrap_failed' \"$rc $detail\"
-      exit 0
-    fi
-    say 'restarted' \"$domain\"
+    if [ \"$rc\" -eq 0 ]; then say 'restarted' \"$domain\"; else say 'restart_failed' \"$rc $detail\"; fi
     exit 0
   fi
+  $launch bootout \"$domain/$unit\" >/dev/null 2>&1 || true
+@DISOWNED_SWEEP@
   $launch enable \"$domain/$unit\" >/dev/null 2>&1 || true
-  detail=$($launch kickstart -k \"$domain/$unit\" 2>&1)
+  detail=$($launch bootstrap \"$domain\" \"$unit_path\" 2>&1)
   rc=$?
-  if [ \"$rc\" -eq 0 ]; then say 'restarted' \"$domain\"; else say 'restart_failed' \"$rc $detail\"; fi
+  if ! $launch print \"$domain/$unit\" >/dev/null 2>&1; then
+    # What the sweep ended goes first. A restart that could not load the unit
+    # AND ended the process that was serving without one leaves the host with
+    # nothing running this unit, and an operator who is not told that reads the
+    # refusal as \"nothing happened\". The unit and the domain are not repeated
+    # here: the report names both already.
+    say 'not_loaded' \"${left:+ended disowned process(es) $left; }${detail:-launchctl bootstrap said nothing and left no job}\"
+    exit 0
+  fi
+  if [ -n \"$still\" ]; then
+    say 'restart_failed' \"disowned process survived: $still; unit reloaded in $domain\"
+    exit 0
+  fi
+  say 'restarted' \"$domain\"
+  exit 0
 else
   systemctl_user daemon-reload >/dev/null 2>&1 || true
   detail=$(systemctl_user restart \"$unit\" 2>&1)
@@ -1247,6 +1978,7 @@ else
   if [ \"$rc\" -eq 0 ]; then say 'restarted' 'systemd --user'; else say 'restart_failed' \"$rc $detail\"; fi
 fi
 ";
+
 /// Recovery fencing: stop the unit without disabling it or changing the
 /// registry. A later restart loads the same unit after its Stado config has
 /// been atomically cut over.
@@ -1295,26 +2027,23 @@ fi
 ///
 /// Sets `left` (what was found) and `still` (what survived a TERM); reporting is
 /// the caller's, because stop and restart have different things to say about it.
-const DISOWNED_SWEEP: &str = "  program=\"\"
-  if [ -f \"$unit_path\" ]; then
-    program=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments' \"$unit_path\" 2>/dev/null | /usr/bin/sed -n '/^[[:space:]]*[/]/{s/^[[:space:]]*//;s/[[:space:]]*$//;p;q;}')
-  fi
-  # The unit points at .../services/NAME/current/..., while the process that is
-  # actually running shows the version directory that link resolved to. Matching
-  # the exact string finds nothing and reports a stop that did not happen, so
-  # match the service directory that both spellings share.
-  match=\"$program\"
-  case \"$program\" in
-    */current/*) match=\"${program%%/current/*}/\" ;;
-  esac
+///
+/// Scoped to the unit's whole declared argv, through `stado_unit_pids`. It used
+/// to sweep every process whose executable was the unit's program, and on a host
+/// where one binary runs the object API, the resolver, the agent and the beacon
+/// that is a sweep of the control plane: `stado service restart
+/// com.wisent.always-on.stado-object-api --host charless-mac-mini` on
+/// 2026-08-19 TERMed eight processes, among them the host's resolver holding
+/// 17600/17601/17612/17621, and reported one unit restarted.
+const DISOWNED_SWEEP: &str = "  sweep_argv=$(stado_unit_argv \"$unit_path\")
   left=\"\"
   still=\"\"
-  if [ -n \"$program\" ]; then
-    left=$(/usr/bin/pgrep -f \"^$match\" 2>/dev/null | /usr/bin/tr '\\n' ' ')
+  if [ -n \"$sweep_argv\" ]; then
+    left=$(stado_unit_pids \"$sweep_argv\")
     if [ -n \"$left\" ]; then
       for pid in $left; do /bin/kill -TERM \"$pid\" >/dev/null 2>&1 || true; done
       /bin/sleep 2
-      still=$(/usr/bin/pgrep -f \"^$match\" 2>/dev/null | /usr/bin/tr '\\n' ' ')
+      still=$(stado_unit_pids \"$sweep_argv\")
       # A service that serves each adapter from its own process does not go
       # away on one round of TERM: the process holding the port exits, the
       # siblings holding theirs do not, and launchd is then refused the ports
@@ -1324,27 +2053,41 @@ const DISOWNED_SWEEP: &str = "  program=\"\"
       if [ -n \"$still\" ]; then
         for pid in $still; do /bin/kill -KILL \"$pid\" >/dev/null 2>&1 || true; done
         /bin/sleep 2
-        still=$(/usr/bin/pgrep -f \"^$match\" 2>/dev/null | /usr/bin/tr '\\n' ' ')
+        still=$(stado_unit_pids \"$sweep_argv\")
       fi
     fi
   fi
 ";
 
+/// `service stop`: boot the label out of the domain the resolver chose, then end
+/// whatever is still running the unit's argv.
+///
+/// The second bootout is cleanup and not a second opinion about where the unit
+/// lives: the resolution this fix replaces bootstrapped agents into whichever
+/// per-login domain answered first, so a host can still carry the job under the
+/// spelling the resolver did not choose, and a stop that left that one loaded
+/// would be a fence with a writer behind it. Every report and every end-state
+/// probe names `$domain`.
 const STOP_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   recovery_unit=\"${unit}-recovery\"
+  other_domain=\"\"
+  case \"$domain\" in
+    \"$gui\") other_domain=\"$user_domain\" ;;
+    \"$user_domain\") other_domain=\"$gui\" ;;
+  esac
   $launch bootout \"$domain/$unit\" >/dev/null 2>&1 || true
   $launch bootout \"$domain/$recovery_unit\" >/dev/null 2>&1 || true
-  /bin/launchctl bootout \"$gui/$unit\" >/dev/null 2>&1 || true
-  /bin/launchctl bootout \"$user_domain/$unit\" >/dev/null 2>&1 || true
-  /bin/launchctl bootout \"$gui/$recovery_unit\" >/dev/null 2>&1 || true
-  /bin/launchctl bootout \"$user_domain/$recovery_unit\" >/dev/null 2>&1 || true
+  if [ -n \"$other_domain\" ]; then
+    /bin/launchctl bootout \"$other_domain/$unit\" >/dev/null 2>&1 || true
+    /bin/launchctl bootout \"$other_domain/$recovery_unit\" >/dev/null 2>&1 || true
+  fi
 @DISOWNED_SWEEP@
   if [ -n \"$left\" ]; then
     if [ -n \"$still\" ]; then
       say 'stop_failed' \"disowned process still running: $still\"
       exit 0
     fi
-    say 'stopped' \"booted out, and ended disowned process(es): $left\"
+    say 'stopped' \"booted out of $domain, and ended disowned process(es): $left\"
     exit 0
   fi
 else
@@ -1371,9 +2114,14 @@ say 'probed' \"$unit_path\"
 
 /// `service retire`: stop and forget. Files stay on disk — retiring is a
 /// management decision, not a deletion, and an operator who wants the unit
-/// gone can remove it knowing Stado will no longer fight them for it. The
-/// bootout/disable pair across both domains mirrors the way
-/// `host_recovery`'s script decommissions the obsolete coordinator.
+/// gone can remove it knowing Stado will no longer fight them for it.
+///
+/// Both per-login spellings are booted out and disabled, and this is the one
+/// place where that is right rather than a second resolver: retiring has to
+/// survive the next graphical login, when launchd builds a `gui/<uid>` domain
+/// and loads whatever is still enabled out of `~/Library/LaunchAgents`. A
+/// retire run while nobody is logged in graphically would otherwise leave the
+/// agent to come back with the next login.
 const RETIRE_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   recovery_unit=\"${unit}-recovery\"
   /bin/launchctl bootout \"$gui/$unit\" >/dev/null 2>&1 || true
@@ -1419,40 +2167,19 @@ if [ \"$os\" = \"Darwin\" ]; then
   /usr/bin/sed \"s/__STADO_HOME__/$escaped_home/g\" \"$template\" > \"$unit_path\" || exit 1
   /bin/rm -f \"$template\"
   /bin/chmod u=rw,go= \"$unit_path\" || exit 1
-  /bin/launchctl bootout \"$domain/$unit\" >/dev/null 2>&1 || true
-  detail=$(/bin/launchctl bootstrap \"$domain\" \"$unit_path\" 2>&1)
+  $launch bootout \"$domain/$unit\" >/dev/null 2>&1 || true
+  detail=$($launch bootstrap \"$domain\" \"$unit_path\" 2>&1)
   rc=$?
-  if [ \"$rc\" -ne 0 ] && [ \"$domain\" = \"$gui\" ]; then
-    /bin/launchctl bootout \"$user_domain/$unit\" >/dev/null 2>&1 || true
-    detail=$(/bin/launchctl bootstrap \"$user_domain\" \"$unit_path\" 2>&1)
-    rc=$?
-    if [ \"$rc\" -eq 0 ]; then domain=\"$user_domain\"; fi
-  fi
-  if [ \"$rc\" -ne 0 ]; then
-    /bin/launchctl bootout \"$gui/$unit\" >/dev/null 2>&1 || true
-    detail=$(/bin/launchctl asuser \"$uid\" /bin/launchctl bootstrap \"$gui\" \"$unit_path\" 2>&1)
-    rc=$?
-    if [ \"$rc\" -eq 0 ]; then domain=\"$gui\"; fi
-  fi
-  if [ \"$rc\" -ne 0 ]; then
-    recovery_unit=\"${unit}-recovery\"
-    /bin/launchctl submit -l \"$recovery_unit\" -- \"$program\" >/dev/null 2>&1 || true
-    if /bin/launchctl print \"$gui/$recovery_unit\" >/dev/null 2>&1 || /bin/launchctl print \"$user_domain/$recovery_unit\" >/dev/null 2>&1; then
-      say 'deployed' \"launchctl submit $recovery_unit\"
-      exit 0
-    fi
-    /usr/bin/nohup \"$program\" >>\"$log\" 2>&1 </dev/null &
-    direct_pid=$!
-    /bin/sleep 1
-    if /bin/kill -0 \"$direct_pid\" >/dev/null 2>&1; then
-      say 'deployed' \"direct process $direct_pid\"
-    else
-      say 'bootstrap_failed' \"$rc $detail\"
-    fi
+  # No `asuser` retry into a domain this login cannot join, no `launchctl
+  # submit` of a second label, and no `nohup` of the program: a deploy is
+  # recorded in the canonical registry by its caller, and a record naming a
+  # unit launchd never accepted is a declaration no later command can act on.
+  if ! $launch print \"$domain/$unit\" >/dev/null 2>&1; then
+    say 'not_loaded' \"${detail:-launchctl bootstrap said nothing and left no job}\"
     exit 0
   fi
-  /bin/launchctl enable \"$domain/$unit\" >/dev/null 2>&1 || true
-  /bin/launchctl kickstart -k \"$domain/$unit\" >/dev/null 2>&1 || true
+  $launch enable \"$domain/$unit\" >/dev/null 2>&1 || true
+  $launch kickstart -k \"$domain/$unit\" >/dev/null 2>&1 || true
   say 'deployed' \"$unit_path\"
 else
   /bin/mkdir -p \"$HOME/.config/systemd/user\" >/dev/null 2>&1 || true
@@ -1531,12 +2258,9 @@ declared_argv=''
 had_unit=no
 if [ \"$os\" = \"Darwin\" ]; then
   if [ -f \"$unit_path\" ]; then
-    declared_argv=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments' \"$unit_path\" 2>/dev/null | /usr/bin/awk 'NR == 1 && $0 == \"Array {\" { next } $0 == \"}\" { next } { sub(/^[[:space:]]+/, \"\"); sub(/[[:space:]]+$/, \"\"); print }' | /usr/bin/tr '\\n' ' ')
-    if [ -z \"$declared_argv\" ]; then
-      declared_argv=$(/usr/libexec/PlistBuddy -c 'Print :Program' \"$unit_path\" 2>/dev/null)
-    fi
+    declared_argv=$(stado_unit_argv \"$unit_path\")
   fi
-@LAUNCHD_STATE@
+  stado_launchd_state
   had_unit=\"$pc_loaded\"
   pid=\"$pc_pid\"
 else
@@ -1643,7 +2367,13 @@ fi
 /bin/sleep 1
 pid=''
 if [ \"$os\" = \"Darwin\" ]; then
-@LAUNCHD_STATE@
+  stado_launchd_state
+  if [ \"$pc_loaded\" = no ]; then
+    # The verb reported success and launchd has no job under the label: the
+    # same shape a `restarted: direct process <pid>` used to hide.
+    say 'not_loaded' \"${detail:-launchctl reported success and left no job}\"
+    exit 0
+  fi
   pid=\"$pc_pid\"
 else
   pid=$(systemctl_user show --property=MainPID --value \"$unit\" 2>/dev/null)
@@ -1677,7 +2407,7 @@ if [ \"$os\" = \"Darwin\" ]; then
       declared=$(/usr/libexec/PlistBuddy -c 'Print :Program' \"$unit_path\" 2>/dev/null)
     fi
   fi
-@LAUNCHD_STATE@
+  stado_launchd_state
   pid=\"$pc_pid\"
 else
   if [ -f \"$unit_path\" ]; then
@@ -1960,15 +2690,21 @@ say 'listener_stopped' \"$listener_detail\"
 ";
 
 /// The shared prelude with this unit spliced in: the vocabulary (`$unit`,
-/// `$domain`, `$launch`, `systemctl_user`, `say`) every body and every
-/// postcondition probe reads the host through.
+/// `$domain`, `$domain_status`, `$domain_reason`, `$launch`,
+/// `systemctl_user`, `say`, and the three `stado_unit_*` reads) every body and
+/// every postcondition probe reads the host through.
+///
+/// [`DOMAIN_RESOLVER`] and [`UNIT_STATE`] are spliced here and nowhere else,
+/// so no body can answer "which domain is this unit in" or "which processes
+/// are this unit" for itself. Both questions used to be answered inline, per
+/// body, and the answers disagreed.
 ///
 /// `no_domain` is what the prelude does when a Darwin host has no per-login
-/// launchd domain. It is a parameter and not a fixed refusal because the two
-/// answers are genuinely different operations: everything that addresses an
-/// installed unit has nothing to act on ([`NO_DOMAIN_REFUSE`]), while
-/// [`ensure_service`] installs the daemon spelling into the domain that does
-/// exist ([`NO_DOMAIN_SYSTEM`]).
+/// launchd domain at all. It is a parameter and not a fixed refusal because
+/// the two answers are genuinely different operations: everything that
+/// addresses an installed unit has nothing to act on ([`NO_DOMAIN_REFUSE`]),
+/// while [`ensure_service`] installs the daemon spelling into the domain that
+/// does exist ([`NO_DOMAIN_SYSTEM`]).
 fn prelude_with(
     unit: &str,
     linux_unit: &str,
@@ -1977,6 +2713,8 @@ fn prelude_with(
 ) -> Result<String, DeployError> {
     validate_unit_id(unit)?;
     Ok(REMOTE_PRELUDE
+        .replace("@DOMAIN_RESOLVER@", DOMAIN_RESOLVER)
+        .replace("@UNIT_STATE@", UNIT_STATE)
         .replace("@UNIT@", &shlex_quote(unit))
         .replace("@LINUX_UNIT@", &shlex_quote(linux_unit))
         .replace("@PATH@", &quote_unit_path(path)?)
@@ -2013,41 +2751,264 @@ pub async fn show_service(
     run_remote(target, script, runner).await
 }
 
+// ---------------------------------------------------------------------------
+// The one repair a system LaunchDaemon has that needs no privilege
+// ---------------------------------------------------------------------------
+
+/// `KeepAlive` is `<true/>`: launchd recreates the process whenever it ends,
+/// for any reason. This is the only spelling that authorizes ending the
+/// process, because it is the only one under which the answer to "will
+/// something put it back" is yes without reading further keys.
+pub const KEEP_ALIVE_ALWAYS: &str = "true";
+/// `KeepAlive` is a dict (`SuccessfulExit`, `Crashed`, `PathState`, ...).
+/// launchd may or may not respawn after a signal depending on those keys,
+/// and guessing which is not a thing to do to a control plane.
+pub const KEEP_ALIVE_CONDITIONAL: &str = "conditional";
+/// The unit declares no `KeepAlive` at all.
+pub const KEEP_ALIVE_ABSENT: &str = "absent";
+/// The plist could not be read, so nothing about respawning is known.
+pub const KEEP_ALIVE_UNREADABLE: &str = "unreadable";
+
+/// What one system LaunchDaemon looks like from the approved unprivileged
+/// login: its respawn declaration, this login's account, and which of the
+/// pids running its program that account owns.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SystemDaemon {
+    /// [`KEEP_ALIVE_ALWAYS`], [`KEEP_ALIVE_CONDITIONAL`],
+    /// [`KEEP_ALIVE_ABSENT`], [`KEEP_ALIVE_UNREADABLE`], or the literal
+    /// scalar the plist carries (`false` is the one that matters).
+    pub keep_alive: String,
+    /// The account the approved channel logs in as.
+    pub login_user: String,
+    /// Pids running exactly the argv this unit declares, that
+    /// [`Self::login_user`] owns and can therefore signal without privilege.
+    pub owned_pids: Vec<String>,
+    /// Pids running it that some other account owns.
+    pub foreign_pids: Vec<String>,
+    /// The whole argument vector the unit declares, single-spaced.
+    ///
+    /// The argv and not the program: every Stado service on charless-mac-mini
+    /// runs `/Users/charles/.stado/bin/stado`, so the program is the fleet and
+    /// the argv is the unit. A restart that resolved its pids by program TERMed
+    /// eight processes there on 2026-08-19 and reported one unit restarted.
+    pub argv: String,
+}
+
+impl SystemDaemon {
+    /// True when launchd will unconditionally put a new process in place of
+    /// one that ends.
+    pub fn respawns(&self) -> bool {
+        self.keep_alive == KEEP_ALIVE_ALWAYS
+    }
+
+    /// True when this login can perform the whole restart on its own: the
+    /// process is one it owns, and launchd is keeping the job alive.
+    pub fn restartable_unprivileged(&self) -> bool {
+        self.respawns() && !self.owned_pids.is_empty()
+    }
+
+    /// Why this daemon cannot be restarted from here, in the operator's
+    /// words. Only reached when [`Self::restartable_unprivileged`] is false,
+    /// and it always names the privileged command that does work.
+    fn refusal(&self, service: &ManagedService) -> String {
+        let reason = if !self.respawns() {
+            match self.keep_alive.as_str() {
+                KEEP_ALIVE_ABSENT => "the unit declares no KeepAlive, so ending its process would \
+                                      leave nothing to start another one and this host would go \
+                                      from degraded to down"
+                    .to_string(),
+                KEEP_ALIVE_CONDITIONAL => "the unit declares a conditional KeepAlive, so whether \
+                                           launchd respawns it after a signal depends on keys \
+                                           this channel must not guess at"
+                    .to_string(),
+                KEEP_ALIVE_UNREADABLE => "the unit's plist could not be read, so whether anything \
+                                          would start another process is unknown"
+                    .to_string(),
+                other => format!(
+                    "the unit declares KeepAlive {other}, so launchd will not start another \
+                     process when this one ends"
+                ),
+            }
+        } else if !self.foreign_pids.is_empty() {
+            format!(
+                "its process runs as another account (pid(s) {}), not as the approved user {}, so \
+                 this channel cannot signal it",
+                self.foreign_pids.join(" "),
+                self.login_user
+            )
+        } else {
+            format!(
+                "nothing on the host is running {}, so there is no process to end and launchd is \
+                 not holding the job up",
+                if self.argv.is_empty() {
+                    "the unit's declared argv"
+                } else {
+                    &self.argv
+                }
+            )
+        };
+        format!(
+            "{} on {} is a system LaunchDaemon at {}; the approved channel is unprivileged and \
+             cannot bootstrap it, and {reason}. Restarting it needs one privileged command on the \
+             host: sudo launchctl kickstart -k system/{}",
+            service.unit_id(),
+            service.host,
+            service.path,
+            service.unit_id()
+        )
+    }
+}
+
+/// The `STADO_DAEMON` marker. Absent for every path that never reached the
+/// probe (a missing unit file, an unsupported OS), which is why it is an
+/// [`Option`].
+fn parse_daemon(stdout: &str) -> Option<SystemDaemon> {
+    let words = |field: &str| -> Vec<String> {
+        field
+            .split_whitespace()
+            .map(str::to_string)
+            .collect::<Vec<String>>()
+    };
+    for line in stdout.lines() {
+        if let ["STADO_DAEMON", keep_alive, login_user, owned, foreign, argv] =
+            host_channel::marker_fields(line).as_slice()
+        {
+            return Some(SystemDaemon {
+                keep_alive: (*keep_alive).to_string(),
+                login_user: (*login_user).to_string(),
+                owned_pids: words(owned),
+                foreign_pids: words(foreign),
+                argv: (*argv).to_string(),
+            });
+        }
+    }
+    None
+}
+
+/// The pids the terminate program may signal, as one shell word list.
+///
+/// Every value here was reported by the host's own `pgrep` moments ago, but
+/// it still travels back over the channel as data, and a signal list is the
+/// last place to trust a round trip. Digits and single spaces only; anything
+/// else is refused rather than quoted, because the useful failure is "the
+/// host said something this operation does not understand", never a
+/// creatively escaped `kill` argument.
+fn validate_pid_list(pids: &[String]) -> Result<String, DeployError> {
+    for pid in pids {
+        if pid.is_empty() || !pid.chars().all(|character| character.is_ascii_digit()) {
+            return Err(DeployError(format!(
+                "the host reported {} as a process id of this unit, which is not a process id",
+                py_str_repr(pid)
+            )));
+        }
+    }
+    Ok(pids.join(" "))
+}
+
+/// Read one system LaunchDaemon's respawn declaration and process ownership.
+///
+/// Read-only: it starts nothing, stops nothing and signals nothing, so it is
+/// safe against a live production host.
+pub async fn inspect_system_daemon(
+    target: &ComputeTarget,
+    service: &ManagedService,
+    runner: &Runner,
+) -> Result<(RemoteReport, Option<SystemDaemon>), DeployError> {
+    let script = remote_script(service.unit_id(), "", &service.path, DAEMON_PROBE_BODY)?;
+    let report = run_remote(target, script, runner).await?;
+    let daemon = parse_daemon(&report.stdout);
+    Ok((report, daemon))
+}
+
 /// `service restart` on one host, with the end state it intends checked on
 /// the host before the connection closes. A restart whose own steps report
 /// success while the unit ends up unloaded is reported as the failure it
 /// is: see [`RemoteReport::succeeded`].
 ///
-/// A unit in the system domain is refused before the host is contacted at
-/// all: the approved channel is unprivileged and cannot bootstrap a system
-/// LaunchDaemon, so aiming one at the host only burns the probe budget on
-/// the way to a failure that says nothing. The refusal names the two ways
-/// forward that do work.
+/// A unit in the system domain takes a different route, because the approved
+/// channel is unprivileged and `launchctl bootstrap system` is not available
+/// to it. It is not, however, unrecoverable: every daemon this fleet installs
+/// carries `UserName`, so the process runs as the approved user even though
+/// the job is root's, and it carries `KeepAlive` `<true/>`, so launchd puts a
+/// new process in place of one that ends. Ending the process from the account
+/// that owns it is therefore the same sequence `launchctl kickstart -k`
+/// performs — the job is never unloaded, and there is no window in which it
+/// does not exist.
+///
+/// Both gates are read from the host first ([`inspect_system_daemon`]) and
+/// neither is assumed. Without them the command refuses and names the one
+/// privileged command that works, because ending a process nothing will
+/// respawn is how a degraded control plane becomes a dead one. That refusal
+/// used to be the only answer here, and it sent the operator to
+/// `stado host recover`, which does not re-bootstrap a system daemon either:
+/// on 2026-08-19 the object API answered 503 to the whole fleet for an
+/// afternoon with no product path back.
 pub async fn restart_service(
     target: &ComputeTarget,
     service: &ManagedService,
     runner: &Runner,
 ) -> Result<RemoteReport, DeployError> {
     if UnitDomain::from_path(&service.path).requires_privileged_bootstrap() {
-        return Err(DeployError(format!(
-            "{} on {} is a system LaunchDaemon at {}; the approved channel is unprivileged and cannot bootstrap it. Use `stado host recover {}` (re-bootstraps every managed unit) or load it as root on the host: launchctl bootstrap system {}",
-            service.unit_id(),
-            service.host,
-            service.path,
-            service.host,
-            service.path
-        )));
+        return restart_system_daemon(target, service, runner).await;
     }
     let body = RESTART_BODY.replace("@DISOWNED_SWEEP@", DISOWNED_SWEEP);
     let prelude = remote_prelude(service.unit_id(), "", &service.path)?;
-    run_remote_checked(
+    let mut report = run_remote_checked(
         target,
         &prelude,
         &body,
         &end_state(RUNNING_DESCRIBE, RUNNING_PROBE),
         runner,
     )
-    .await
+    .await?;
+    report.name_unloaded(service.unit_id(), "restart");
+    Ok(report)
+}
+
+/// The system-domain half of [`restart_service`]: probe, then either end the
+/// owned process and let launchd recreate it, or refuse with the privileged
+/// command named.
+async fn restart_system_daemon(
+    target: &ComputeTarget,
+    service: &ManagedService,
+    runner: &Runner,
+) -> Result<RemoteReport, DeployError> {
+    let (probe, daemon) = inspect_system_daemon(target, service, runner).await?;
+    let Some(daemon) = daemon else {
+        // No marker: the probe never got as far as reading the unit. Its own
+        // report already carries why (a missing unit file, a refused key),
+        // and that is a better answer than a refusal composed here.
+        return Ok(probe);
+    };
+    if !daemon.restartable_unprivileged() {
+        return Err(DeployError(daemon.refusal(service)));
+    }
+    let body = DAEMON_TERM_BODY
+        .replace("@ARGV@", &shlex_quote(&daemon.argv))
+        .replace("@PIDS@", &shlex_quote(&validate_pid_list(&daemon.owned_pids)?));
+    let prelude = remote_prelude(service.unit_id(), "", &service.path)?;
+    let mut report = run_remote_checked(
+        target,
+        &prelude,
+        &body,
+        &end_state(RESPAWNED_DESCRIBE, RESPAWNED_PROBE),
+        runner,
+    )
+    .await?;
+    if report.succeeded("restarted") {
+        // The host's own detail says what happened, in the 160 characters one
+        // marker field allows. Why that counts as a restart is a fixed
+        // sentence about launchd, not a fact about this host, so it is stated
+        // here instead of eating the framing budget on every pass. Without it
+        // an operator reading `restarted` beside a `kill` has to take the
+        // equivalence on trust.
+        report.detail = format!(
+            "{} — that is what `launchctl kickstart -k` does to a KeepAlive job, minus the \
+             privilege it needs: the process is replaced and the job is never unloaded",
+            report.detail
+        );
+    }
+    Ok(report)
 }
 
 /// Atomically replace one runtime secret assignment for a managed service.
@@ -2123,11 +3084,34 @@ pub async fn reset_service_listener(
 /// The fence is only a fence if the writer is actually gone, so the intended
 /// end state is checked on the host: a stop that boots out a label and
 /// leaves the program serving is reported as a failed stop, not as a stop.
+///
+/// A system LaunchDaemon is refused before the host is contacted, and unlike
+/// a restart there is no unprivileged route to add. Everything this body
+/// does to a daemon fails silently or lies: `sudo -n launchctl bootout
+/// system/<label>` is refused for want of a password, the disowned-process
+/// sweep then ends the process, launchd's `KeepAlive` starts another one
+/// within seconds, and [`STOPPED_PROBE`] reads `launchctl print
+/// system/<label>` — which an unprivileged login cannot read either — as
+/// "no job at system/<label>" and calls the end state met. So the command
+/// reported a stopped service, the fence had no writer behind it, and the
+/// daemon went on serving.
 pub async fn stop_service(
     target: &ComputeTarget,
     service: &ManagedService,
     runner: &Runner,
 ) -> Result<RemoteReport, DeployError> {
+    if UnitDomain::from_path(&service.path).requires_privileged_bootstrap() {
+        return Err(DeployError(format!(
+            "{} on {} is a system LaunchDaemon at {}; the approved channel is unprivileged and \
+             cannot boot it out, and ending its process is not a stop — launchd starts another one \
+             within seconds for a KeepAlive job. Stopping it needs one privileged command on the \
+             host: sudo launchctl bootout system/{}",
+            service.unit_id(),
+            service.host,
+            service.path,
+            service.unit_id()
+        )));
+    }
     let body = STOP_BODY.replace("@DISOWNED_SWEEP@", DISOWNED_SWEEP);
     let prelude = remote_prelude(service.unit_id(), "", &service.path)?;
     run_remote_checked(
@@ -2201,11 +3185,33 @@ const REMOTE_USER_PLACEHOLDER: &str = "__STADO_USER__";
 
 pub fn plan_deploy(name: &str, program: &str, args: &[String]) -> Result<DeployPlan, DeployError> {
     validate_service_name(name)?;
+    let label = local_install::label(DEPLOY_KIND, name);
+    plan_deploy_labelled(name, &label, program, args)
+}
+
+/// [`plan_deploy`] at a label the declaration already carries.
+///
+/// `plan_deploy` mints `com.wisent.compute.service.<name>`, which is right for
+/// a unit being created and wrong for one that already exists under another
+/// label. Rendering the minted spelling for a declaration that says the unit
+/// is `com.wisent.stado-resolver` installs a SECOND launchd job running the
+/// same program, and two resolvers competing for one stable loopback port is
+/// exactly the shape of outage this module was written after. A declaration
+/// that names its own label is rendered at that label, so a declared service
+/// is reinstallable from the document without becoming a second service.
+pub fn plan_deploy_labelled(
+    name: &str,
+    label: &str,
+    program: &str,
+    args: &[String],
+) -> Result<DeployPlan, DeployError> {
+    validate_service_name(name)?;
+    validate_service_name(label)?;
     validate_program(program)?;
     for arg in args {
         validate_unit_argument(arg)?;
     }
-    let label = local_install::label(DEPLOY_KIND, name);
+    let label = label.to_string();
     let render = |os: LocalOs| {
         let path = match os {
             LocalOs::Darwin => "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
@@ -2284,14 +3290,16 @@ pub async fn deploy_service(
     // The path is derived remotely from the unit id, which differs per OS,
     // so both spellings travel and the host picks.
     let prelude = remote_prelude(&plan.label, &plan.unit, "")?;
-    run_remote_checked(
+    let mut report = run_remote_checked(
         target,
         &prelude,
         &body,
         &end_state(RUNNING_DESCRIBE, RUNNING_PROBE),
         runner,
     )
-    .await
+    .await?;
+    report.name_unloaded(&plan.label, "deploy");
+    Ok(report)
 }
 
 // ---------------------------------------------------------------------------
@@ -2369,7 +3377,6 @@ pub async fn ensure_service(
     // marker text be rewritten into the delimiter itself.
     let body = ENSURE_BODY
         .replace("@HEREDOC@", UNIT_HEREDOC)
-        .replace("@LAUNCHD_STATE@", LAUNCHD_STATE)
         .replace("@PROGRAM@", &shlex_quote(&plan.program))
         .replace("@ARGV@", &shlex_quote(&plan.argv))
         .replace(
@@ -2379,7 +3386,7 @@ pub async fn ensure_service(
         .replace("@DARWIN_UNIT@", plan.darwin_unit.trim_end_matches('\n'))
         .replace("@LINUX_UNIT@", plan.linux_unit.trim_end_matches('\n'));
     let prelude = prelude_with(&plan.label, &plan.unit, "", NO_DOMAIN_SYSTEM)?;
-    let report = run_remote_checked(
+    let mut report = run_remote_checked(
         target,
         &prelude,
         &body,
@@ -2387,6 +3394,7 @@ pub async fn ensure_service(
         runner,
     )
     .await?;
+    report.name_unloaded(&plan.label, "ensure");
     let (domain, pid, path) = parse_ensure(&report.stdout)
         .unwrap_or_else(|| (report.domain.clone(), String::new(), report.path.clone()));
     Ok(EnsureOutcome {
@@ -2513,8 +3521,7 @@ pub async fn inspect_process(
     service: &ManagedService,
     runner: &Runner,
 ) -> Result<RunningProgram, DeployError> {
-    let body = PROCESS_BODY.replace("@LAUNCHD_STATE@", LAUNCHD_STATE);
-    let script = remote_script(service.unit_id(), "", &service.path, &body)?;
+    let script = remote_script(service.unit_id(), "", &service.path, PROCESS_BODY)?;
     let report = run_remote(target, script, runner).await?;
     if !report.succeeded("inspected") {
         return Err(DeployError(format!(

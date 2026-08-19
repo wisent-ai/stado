@@ -15,13 +15,16 @@ struct ConsoleView: View {
     /// card over the shell.
     let firstRunNotice: String?
 
-    /// The three stores that read the hosts themselves rather than the
+    /// The four stores that read the hosts themselves rather than the
     /// published snapshot, by running the product CLI. Window-scoped: unlike
     /// enrollment, nothing here spans a walk to another machine, and a
     /// claiming gate read two hours ago is not worth keeping.
     @StateObject private var gatesStore = HostGatesStore()
+    @StateObject private var linkStore = HostLinkStore()
     @StateObject private var serviceStore = ServiceTruthStore()
+    @StateObject private var fleetServiceStore = FleetServicesStore()
     @StateObject private var releaseStore = ReleaseEvidenceStore()
+    @StateObject private var buildsStore = BuildsStore()
     @StateObject private var groupStore = FleetGroupStore()
 
     @State private var showsDeploymentSetup = false
@@ -227,7 +230,7 @@ struct ConsoleView: View {
         let isSelected = router.destination == destination
         let attention = attentionCount(for: destination)
         return Button {
-            router.destination = destination
+            router.show(destination)
         } label: {
             HStack(spacing: WisentDesign.Space.x2) {
                 Image(systemName: destination.symbol)
@@ -272,12 +275,20 @@ struct ConsoleView: View {
         guard let snapshot = store.snapshot else { return nil }
         switch destination {
         case .posture:
-            let count = FleetPosture(snapshot: snapshot, report: cleanupStore.report).decisionCount
+            let count = FleetPosture(
+                snapshot: snapshot,
+                report: cleanupStore.report,
+                links: linkStore.links
+            ).decisionCount
             return count > 0 ? (count, .warning) : nil
         case .queue:
             let failed = snapshot.recentFailed.count
             return failed > 0 ? (failed, .danger) : nil
         case .hosts:
+            // A host nobody can reach outranks a host that merely published a
+            // stale report: the first is why the second happened.
+            let quiet = linkStore.needingAttention.count
+            if quiet > 0 { return (quiet, .danger) }
             let unavailable = snapshot.workers.count { $0.status == .unavailable }
             if unavailable > 0 { return (unavailable, .danger) }
             // Same rule as the Hosts screen: a declared pin is policy and only
@@ -303,6 +314,14 @@ struct ConsoleView: View {
             // answer for. Both are rollouts that never finish unattended.
             let stalled = releaseStore.attentionCount
             return stalled > 0 ? (stalled, .danger) : nil
+        case .builds:
+            // A failed build shows on the screen itself; the sidebar only
+            // counts it once this window has read the recipes at all. One
+            // recipe counts once however many of its platforms failed: the
+            // count answers "how many recipes need me", and the screen's
+            // platform rows answer which half broke.
+            let failed = buildsStore.recipes.count(where: \.hasFailedRun)
+            return failed > 0 ? (failed, .danger) : nil
         case .registry, .deployments, .fleets:
             return nil
         }
@@ -319,9 +338,11 @@ struct ConsoleView: View {
                     store: store,
                     cleanupStore: cleanupStore,
                     fleetStore: fleetStore,
+                    linkStore: linkStore,
                     scope: scopeName,
                     firstRunNotice: firstRunNotice,
-                    route: { router.destination = $0 },
+                    route: { router.show($0) },
+                    routeToHost: { router.show(.hosts, host: $0) },
                     refresh: { await refreshAll() }
                 )
             case .queue:
@@ -331,14 +352,18 @@ struct ConsoleView: View {
                     store: store,
                     fleetStore: fleetStore,
                     gatesStore: gatesStore,
+                    linkStore: linkStore,
                     enrollmentStore: enrollmentStore,
                     scope: scopeName,
-                    route: { router.destination = $0 },
+                    focusedHost: router.focusedHost,
+                    clearFocusedHost: { router.focusedHost = nil },
+                    route: { router.show($0) },
                     refresh: { await refreshAll() }
                 )
             case .services:
                 ServicesView(
                     store: serviceStore,
+                    fleetStore: fleetServiceStore,
                     hosts: StadoRegistryHosts.names(targets: fleetStore.targets, snapshot: store.snapshot),
                     scope: scopeName
                 )
@@ -346,6 +371,8 @@ struct ConsoleView: View {
                 DiskView(store: store, cleanupStore: cleanupStore, scope: scopeName)
             case .registry:
                 RegistryView(fleetStore: fleetStore, scope: scopeName)
+            case .builds:
+                BuildsView(store: buildsStore, scope: scopeName)
             case .fleets:
                 FleetsView(groupStore: groupStore, fleetStore: fleetStore, scope: scopeName)
             case .releases:

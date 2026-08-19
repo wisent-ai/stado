@@ -1253,9 +1253,7 @@ pub async fn inventory_target(
 /// Comparing a host against a directory from a different read is comparing
 /// it against a state that may never have existed.
 pub async fn inventory_host(target_name: &str, runner: &Runner) -> Result<Value, DeployError> {
-    let registry = crate::targets::fetch_registry_remote()
-        .await
-        .map_err(|exc| DeployError(exc.to_string()))?;
+    let registry = host_channel::canonical_registry().await?;
     let target = host_channel::resolve_target(&registry, target_name)?.clone();
     inventory_target(&target, registry.service_directory.as_ref(), runner).await
 }

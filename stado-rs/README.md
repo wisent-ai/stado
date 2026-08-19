@@ -28,7 +28,7 @@ the file concerned (see "Deviations" below).
 | `src/scheduler/` | `stado/scheduler/` (scheduler, dispatch, makespan, quota, cost, skip_done) |
 | `src/providers/` | `stado/providers/` (gcp, azure, aws, vast, local, box) |
 | `src/coordinator.rs`, `src/control_plane.rs` | `stado/coordinator.py`, `stado/deploy/{local,cloud}_control_plane.py` |
-| `src/dashboard/` | `stado/dashboard.py`, `stado/dashboard_summary/` |
+| `src/dashboard/` | `stado/dashboard.py` (API listener only; the HTML page and summary views are removed — the operator workspace is Stado Desktop) |
 | `src/monitor/`, `src/watchdog.rs` | `stado/monitor/`, watchdog entry point |
 | `src/coverage.rs` | `stado/coverage/` |
 | `src/failure_fixer.rs` | `stado/failure_fixer/` |
@@ -122,14 +122,11 @@ stado resources show --json
 stado resources adopt RESOURCE_ID --owner OWNER --policy-ref POLICY_VERSION --expect-revision PROVIDER_REVISION
 ```
 
-The dashboard exposes the combined queue, inventory, forecast, anomaly,
-savings, and latest-decision state through `/api/state.json`. Its operator
-workspace obtains a versioned workflow catalog from `/api/operator/catalog`
-and submits bounded argv arrays to `/api/operator/run`; the server allowlists
-finite Stado command families, never invokes a shell, caps input and output,
-and requires explicit confirmation for state-changing operations. Registry
-policy retains its generation-checked dedicated API. Canonical state lives
-below `autonomy/` in the configured queue backend.
+The combined queue, inventory, forecast, anomaly, savings, and
+latest-decision state is read with the `stado optimize` and `stado cost`
+commands above; the API listener serves no operator workspace — that is
+Stado Desktop's job. Canonical state lives below `autonomy/` in the
+configured queue backend.
 Cloud credentials are obtained only from workload identity or scoped
 Skarbiec grants; process-environment credential chains are deliberately
 disabled.
