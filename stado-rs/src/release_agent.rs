@@ -134,12 +134,42 @@ struct PublishedStatus<'a> {
     updated_at: DateTime<Utc>,
 }
 
+/// The rollout state document one product keeps on one host.
+///
+/// Spelled once because `stado release quarantine` names this file over the
+/// registry SSH channel while the agent opens it locally, and a command that
+/// reads `<product>.json` from its own second spelling is a command that reads
+/// a file no agent writes.
+pub fn host_state_path(state_dir: &str, product: &str) -> String {
+    format!("{state_dir}/{product}.json")
+}
+
 fn state_path(target: &ReleaseTargetPolicy, product: &str) -> PathBuf {
-    Path::new(&target.state_dir).join(format!("{product}.json"))
+    PathBuf::from(host_state_path(&target.state_dir, product))
 }
 
 fn proxy_state_path(target: &ReleaseTargetPolicy, product: &str) -> PathBuf {
     Path::new(&target.state_dir).join(format!("{product}-proxy.json"))
+}
+
+/// The exact bytes one document is committed as: compact JSON and one trailing
+/// newline.
+fn document_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, String> {
+    let mut bytes = serde_json::to_vec(value)
+        .map_err(|error| format!("cannot encode release state: {error}"))?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+/// The bytes [`atomic_json`] would commit for one rollout state document.
+///
+/// `stado release quarantine clear` rewrites this file from off-host, and what
+/// it sends has to be what this agent would have written: the digest the host
+/// is asked to verify after the write is taken over exactly these bytes, so an
+/// encoding that drifted from the agent's own fails that check instead of
+/// quietly leaving two shapes of the same document in the fleet.
+pub fn state_document_bytes(state: &HostReleaseState) -> Result<Vec<u8>, String> {
+    document_bytes(state)
 }
 
 fn atomic_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
@@ -153,8 +183,7 @@ fn atomic_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
         )
     })?;
     let staging = parent.join(format!(".state-{}", uuid::Uuid::new_v4().simple()));
-    let bytes = serde_json::to_vec(value)
-        .map_err(|error| format!("cannot encode release state: {error}"))?;
+    let bytes = document_bytes(value)?;
     {
         let mut file = OpenOptions::new()
             .write(true)
@@ -164,7 +193,6 @@ fn atomic_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
                 format!("cannot create state staging {}: {error}", staging.display())
             })?;
         file.write_all(&bytes)
-            .and_then(|()| file.write_all(b"\n"))
             .and_then(|()| file.sync_all())
             .map_err(|error| {
                 format!("cannot write state staging {}: {error}", staging.display())
@@ -172,6 +200,33 @@ fn atomic_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     }
     std::fs::rename(&staging, path)
         .map_err(|error| format!("cannot commit release state {}: {error}", path.display()))
+}
+
+/// Decode one rollout state document and refuse it unless it is the one that
+/// was asked for.
+///
+/// Lifted out of [`load_state`] because `stado release quarantine` reads the
+/// same document back over the registry SSH channel and then rewrites it.
+/// These three checks are all that stands between a mistyped host name and a
+/// state file overwritten with another host's rollout, so both readers make
+/// them from one place rather than from two copies that agree today. `origin`
+/// is whatever the caller can show an operator: a local path, or the remote
+/// path it read.
+pub fn parse_state_document(
+    payload: &[u8],
+    product: &str,
+    target_name: &str,
+    origin: &str,
+) -> Result<HostReleaseState, String> {
+    let state: HostReleaseState = serde_json::from_slice(payload)
+        .map_err(|error| format!("invalid release state {origin}: {error}"))?;
+    if state.schema_version != STATE_SCHEMA
+        || state.product != product
+        || state.target != target_name
+    {
+        return Err(format!("release state identity mismatch at {origin}"));
+    }
+    Ok(state)
 }
 
 fn load_state(
@@ -183,21 +238,9 @@ fn load_state(
     if !path.exists() {
         return Ok(HostReleaseState::new(product, target_name));
     }
-    let state: HostReleaseState = serde_json::from_slice(
-        &std::fs::read(&path)
-            .map_err(|error| format!("cannot read release state {}: {error}", path.display()))?,
-    )
-    .map_err(|error| format!("invalid release state {}: {error}", path.display()))?;
-    if state.schema_version != STATE_SCHEMA
-        || state.product != product
-        || state.target != target_name
-    {
-        return Err(format!(
-            "release state identity mismatch at {}",
-            path.display()
-        ));
-    }
-    Ok(state)
+    let bytes = std::fs::read(&path)
+        .map_err(|error| format!("cannot read release state {}: {error}", path.display()))?;
+    parse_state_document(&bytes, product, target_name, &path.display().to_string())
 }
 
 fn save_state(target: &ReleaseTargetPolicy, state: &mut HostReleaseState) -> Result<(), String> {
@@ -229,13 +272,25 @@ fn terminate(record: &ProcessRecord) {
     }
 }
 
+/// One release's own stdout or stderr on its host.
+///
+/// A brama candidate died inside ninety seconds and the rollout record said
+/// only `candidate did not become ready within 90s: pid 46748 is gone`, while
+/// the candidate's account of itself sat unread in
+/// `<logs_root>/brama-0.2.27.err`. The name is public so an operator-facing
+/// command reads the file the agent actually wrote rather than a second guess
+/// at this format.
+pub fn host_log_path(logs_root: &str, product: &str, version: &str, stream: &str) -> String {
+    format!("{logs_root}/{product}-{version}.{stream}")
+}
+
 fn release_log_path(
     target: &ReleaseTargetPolicy,
     product: &str,
     version: &str,
     stream: &str,
 ) -> PathBuf {
-    Path::new(&target.logs_root).join(format!("{product}-{version}.{stream}"))
+    PathBuf::from(host_log_path(&target.logs_root, product, version, stream))
 }
 
 fn release_log(
