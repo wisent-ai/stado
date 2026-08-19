@@ -108,6 +108,58 @@ pub const DEPLOY_KIND: &str = "service";
 /// already puts in front of operators.
 pub const REDACTED: &str = "[REDACTED]";
 
+/// The launchd domain a unit-file path loads into.
+///
+/// The registry declares paths, and the path alone says which domain the
+/// unit lives in — which in turn says whether the approved channel can
+/// bootstrap it at all: a system LaunchDaemon loads as root, and the
+/// channel is unprivileged. Derived here rather than on the host because
+/// the refusal has to happen before the host is contacted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnitDomain {
+    /// `/Library/LaunchDaemons/...` — loads as root.
+    System,
+    /// `/Library/LaunchAgents/...` — loads for whichever user is logged in.
+    AnyUser,
+    /// `<home>/Library/LaunchAgents/...` — loads for that user.
+    User,
+    /// Anything else: a systemd unit path, an empty path.
+    Unknown,
+}
+
+impl UnitDomain {
+    /// Classify one declared unit-file path. The registry's `$HOME/...`
+    /// idiom arrives unexpanded, so the user domain is matched on the
+    /// `Library/LaunchAgents` segment rather than on a home prefix — which
+    /// also covers `/Users/<name>/Library/LaunchAgents/...`.
+    pub fn from_path(path: &str) -> Self {
+        if path.starts_with("/Library/LaunchDaemons/") {
+            Self::System
+        } else if path.starts_with("/Library/LaunchAgents/") {
+            Self::AnyUser
+        } else if path.contains("/Library/LaunchAgents/") {
+            Self::User
+        } else {
+            Self::Unknown
+        }
+    }
+
+    /// True when loading the unit takes root — the system domain only.
+    pub fn requires_privileged_bootstrap(&self) -> bool {
+        matches!(self, Self::System)
+    }
+
+    /// The `domain` column spelling; empty when the path places no domain.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::System => DOMAIN_SYSTEM,
+            Self::AnyUser => "any-user",
+            Self::User => DOMAIN_USER,
+            Self::Unknown => "",
+        }
+    }
+}
+
 /// Remote `$HOME` prefix. Registry-declared unit paths use this idiom —
 /// `host_recovery::MANAGED_AGENTS` spells every plist that way — so it has
 /// to survive into the remote program unexpanded on our side and expanded
@@ -1965,11 +2017,27 @@ pub async fn show_service(
 /// the host before the connection closes. A restart whose own steps report
 /// success while the unit ends up unloaded is reported as the failure it
 /// is: see [`RemoteReport::succeeded`].
+///
+/// A unit in the system domain is refused before the host is contacted at
+/// all: the approved channel is unprivileged and cannot bootstrap a system
+/// LaunchDaemon, so aiming one at the host only burns the probe budget on
+/// the way to a failure that says nothing. The refusal names the two ways
+/// forward that do work.
 pub async fn restart_service(
     target: &ComputeTarget,
     service: &ManagedService,
     runner: &Runner,
 ) -> Result<RemoteReport, DeployError> {
+    if UnitDomain::from_path(&service.path).requires_privileged_bootstrap() {
+        return Err(DeployError(format!(
+            "{} on {} is a system LaunchDaemon at {}; the approved channel is unprivileged and cannot bootstrap it. Use `stado host recover {}` (re-bootstraps every managed unit) or load it as root on the host: launchctl bootstrap system {}",
+            service.unit_id(),
+            service.host,
+            service.path,
+            service.host,
+            service.path
+        )));
+    }
     let body = RESTART_BODY.replace("@DISOWNED_SWEEP@", DISOWNED_SWEEP);
     let prelude = remote_prelude(service.unit_id(), "", &service.path)?;
     run_remote_checked(

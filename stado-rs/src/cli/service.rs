@@ -25,7 +25,8 @@ use clap::Subcommand;
 use serde_json::{json, Value};
 
 use crate::deploy::service::{
-    self, ManagedService, ServiceEnv, ServiceLog, ServiceStatus, SOURCE_RECOVERY, SOURCE_REGISTRY,
+    self, ManagedService, ServiceEnv, ServiceLog, ServiceStatus, UnitDomain, SOURCE_RECOVERY,
+    SOURCE_REGISTRY,
 };
 use crate::deploy::{host_channel, host_exec, production_runner, DeployError};
 use crate::observations;
@@ -965,11 +966,18 @@ fn render_status(
             .collect();
         return print_json(&Value::Array(payload));
     }
+    // The domain column appears only when at least one row is a system
+    // LaunchDaemon: that is the one domain the approved channel cannot
+    // bootstrap, and a fleet of user-domain units should not pay for a
+    // column that says nothing.
+    let show_domain = rows
+        .iter()
+        .any(|row| UnitDomain::from_path(&row.service.path).requires_privileged_bootstrap());
     let cells: Vec<Vec<String>> = rows
         .iter()
         .map(|row| {
             let fact = observations::service_fact(&row.service.name, &row.service.host);
-            vec![
+            let mut cells = vec![
                 row.service.host.clone(),
                 row.service.name.clone(),
                 row.service.unit_id().to_string(),
@@ -978,28 +986,42 @@ fn render_status(
                 dash(&row.reported_at),
                 observations::describe_in(&seen, &fact),
                 dash(&row.detail),
-            ]
+            ];
+            if show_domain {
+                cells.insert(3, dash(UnitDomain::from_path(&row.service.path).as_str()));
+            }
+            cells
         })
         .collect();
-    table::print(
-        &[
-            "HOST",
-            "SERVICE",
-            "UNIT",
-            "SOURCE",
-            "STATE",
-            "REPORTED_AT",
-            "OBSERVED",
-            "DETAIL",
-        ],
-        &cells,
-    );
+    let mut headers = vec![
+        "HOST",
+        "SERVICE",
+        "UNIT",
+        "SOURCE",
+        "STATE",
+        "REPORTED_AT",
+        "OBSERVED",
+        "DETAIL",
+    ];
+    if show_domain {
+        headers.insert(3, "DOMAIN");
+    }
+    table::print(&headers, &cells);
     for failure in failures {
         let exit = match &failure.last_exit {
             Some(exit) => format!("last launchd exit {exit}"),
             None => "last launchd exit unknown".to_string(),
         };
         println!("failure: {} {}: {}", failure.host, failure.unit, exit);
+        // A failed system LaunchDaemon cannot be restarted over the approved
+        // channel; say so here, where the operator is reading why.
+        if rows.iter().any(|row| {
+            row.service.host == failure.host
+                && row.service.unit_id() == failure.unit.as_str()
+                && UnitDomain::from_path(&row.service.path).requires_privileged_bootstrap()
+        }) {
+            println!("  unit: system LaunchDaemon — restart requires a privileged bootstrap");
+        }
         if let Some(error_origin) = &failure.error_origin {
             println!("  stderr: {error_origin}");
         }
