@@ -9,9 +9,12 @@
 //! The engine is [`crate::deploy::service`]; this module is the operator
 //! surface over it. Two properties are worth keeping when editing:
 //!
-//! - `list` and `status` answer from the health beacons alone. No ssh, no
-//!   per-host round trip, so the fleet-wide question stays answerable when
-//!   a host is the thing that is broken.
+//! - `list` answers from the health beacons alone. No ssh, no per-host
+//!   round trip, so the fleet-wide question stays answerable when a host
+//!   is the thing that is broken. `status` answers the same way, and adds
+//!   best-effort host reads — launchd's last exit status and the stderr
+//!   tail — only for units whose beacon state is `failed`; those reads
+//!   degrade to a note, never to a failed command.
 //! - `adopt`, `retire` and `deploy` mutate the canonical registry through
 //!   `cli/registry.rs::{fetch_document, push_document}` — the validated
 //!   write path — and never hand-edit the document. `push_document`
@@ -24,7 +27,7 @@ use serde_json::{json, Value};
 use crate::deploy::service::{
     self, ManagedService, ServiceEnv, ServiceLog, ServiceStatus, SOURCE_RECOVERY, SOURCE_REGISTRY,
 };
-use crate::deploy::{host_channel, production_runner, DeployError};
+use crate::deploy::{host_channel, host_exec, production_runner, DeployError};
 use crate::observations;
 use crate::queue::JobStorage;
 use crate::targets;
@@ -746,7 +749,7 @@ fn print_json(value: &Value) -> Result<(), CmdError> {
 async fn list(json: bool) -> Result<(), CmdError> {
     let store = beacon_store().await?;
     let rows = service::list_services(&store).await.map_err(click)?;
-    render_status(&rows, json)
+    render_status(&rows, json, &[])
 }
 
 /// `service list --unowned` — product processes no unit owns, fleet-wide.
@@ -811,10 +814,132 @@ async fn status(name: &str, json: bool) -> Result<(), CmdError> {
     if rows.is_empty() {
         return Err(unmanaged(name, None));
     }
-    render_status(&rows, json)
+    // A `failed` row is the beacon saying "it died" — more often than not
+    // with an empty detail. The why lives on the host: launchd's last exit
+    // status, and the stderr the unit wrote before it went. Gather it
+    // best-effort over the read-only channels; `status` must still answer
+    // when the host cannot.
+    let runner = production_runner();
+    let mut failures: Vec<FailureEvidence> = Vec::new();
+    for row in &rows {
+        if row.state == service::STATE_FAILED {
+            failures.push(failure_evidence(row, &runner).await);
+        }
+    }
+    render_status(&rows, json, &failures)
 }
 
-fn render_status(rows: &[ServiceStatus], json: bool) -> Result<(), CmdError> {
+/// How many stderr lines one `failure:` block may carry.
+const FAILURE_STDERR_LINES: usize = 10;
+
+/// Why one `failed` unit died, gathered best-effort from the host itself.
+/// Every read can fail — the host may be the thing that is broken — so a
+/// failed read degrades to a note, never to a failed `status`.
+struct FailureEvidence {
+    host: String,
+    unit: String,
+    /// launchd's last exit status for the label, when `launchctl list`
+    /// carried it.
+    last_exit: Option<String>,
+    /// Where the stderr tail came from, or the reason there is none.
+    error_origin: Option<String>,
+    error_lines: Vec<String>,
+    /// Why gathering failed, when it did.
+    note: Option<String>,
+}
+
+impl FailureEvidence {
+    fn push_note(&mut self, note: String) {
+        match &mut self.note {
+            Some(existing) => {
+                existing.push_str("; ");
+                existing.push_str(&note);
+            }
+            None => self.note = Some(note),
+        }
+    }
+
+    fn to_json(&self) -> Value {
+        json!({
+            "last_exit": self.last_exit,
+            "error_origin": self.error_origin,
+            "error_lines": self.error_lines,
+            "note": self.note,
+        })
+    }
+}
+
+/// The `Status` column of one label in `launchctl list` output: launchd's
+/// last exit status for the job while nothing runs under it. Columns are
+/// PID, Status, Label, tab-separated; the header row never collides with a
+/// real label.
+fn launchctl_last_exit(stdout: &str, label: &str) -> Option<String> {
+    stdout.lines().find_map(|line| {
+        let mut columns = line.split('\t');
+        let _pid = columns.next()?;
+        let status = columns.next()?;
+        let name = columns.next()?;
+        (name == label).then(|| status.to_string())
+    })
+}
+
+async fn failure_evidence(row: &ServiceStatus, runner: &crate::deploy::Runner) -> FailureEvidence {
+    let unit = row.service.unit_id().to_string();
+    let mut evidence = FailureEvidence {
+        host: row.service.host.clone(),
+        unit: unit.clone(),
+        last_exit: None,
+        error_origin: None,
+        error_lines: Vec::new(),
+        note: None,
+    };
+    // The last exit status rides the approved read-only allowlist: the
+    // exact `launchctl list` entry, never a shell.
+    let words = vec!["launchctl".to_string(), "list".to_string()];
+    match host_exec::exec_host(&row.service.host, &words, runner).await {
+        Ok(report)
+            if report.get("status").and_then(Value::as_str) == Some(host_exec::OK_STATUS) =>
+        {
+            let stdout = report.get("stdout").and_then(Value::as_str).unwrap_or_default();
+            evidence.last_exit = launchctl_last_exit(stdout, &unit);
+        }
+        Ok(report) => {
+            let status = report
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            evidence.push_note(format!("last exit unreadable: {status}"));
+        }
+        Err(exc) => evidence.push_note(format!("last exit unreadable: {exc}")),
+    }
+    // The stderr tail comes from the same logs path `service logs` uses,
+    // narrowed to the lines a failure block can show.
+    match host_channel::canonical_target(&row.service.host).await {
+        Ok(target) => {
+            match service::tail_logs(&target, &row.service, 2 * FAILURE_STDERR_LINES, runner).await
+            {
+                Ok(log) => {
+                    evidence.error_origin = log.error_origin;
+                    evidence.error_lines = log
+                        .error_body
+                        .lines()
+                        .take(FAILURE_STDERR_LINES)
+                        .map(str::to_string)
+                        .collect();
+                }
+                Err(exc) => evidence.push_note(format!("stderr unreadable: {exc}")),
+            }
+        }
+        Err(exc) => evidence.push_note(format!("stderr unreadable: {exc}")),
+    }
+    evidence
+}
+
+fn render_status(
+    rows: &[ServiceStatus],
+    json: bool,
+    failures: &[FailureEvidence],
+) -> Result<(), CmdError> {
     // Read once for the whole table. The record is a file on this machine and
     // the answer is the same for every row in one rendering.
     let seen = observations::load();
@@ -829,6 +954,12 @@ fn render_status(rows: &[ServiceStatus], json: bool) -> Result<(), CmdError> {
                 // to see how old it was.
                 let fact = observations::service_fact(&row.service.name, &row.service.host);
                 entry["observed"] = json!(observations::describe_in(&seen, &fact));
+                if let Some(failure) = failures.iter().find(|failure| {
+                    failure.host == row.service.host
+                        && failure.unit == row.service.unit_id().to_string()
+                }) {
+                    entry["failure"] = failure.to_json();
+                }
                 entry
             })
             .collect();
@@ -863,6 +994,22 @@ fn render_status(rows: &[ServiceStatus], json: bool) -> Result<(), CmdError> {
         ],
         &cells,
     );
+    for failure in failures {
+        let exit = match &failure.last_exit {
+            Some(exit) => format!("last launchd exit {exit}"),
+            None => "last launchd exit unknown".to_string(),
+        };
+        println!("failure: {} {}: {}", failure.host, failure.unit, exit);
+        if let Some(error_origin) = &failure.error_origin {
+            println!("  stderr: {error_origin}");
+        }
+        for line in &failure.error_lines {
+            println!("  {line}");
+        }
+        if let Some(note) = &failure.note {
+            println!("  note: {note}");
+        }
+    }
     Ok(())
 }
 
@@ -1868,6 +2015,18 @@ async fn logs(name: &str, host: Option<&str>, lines: usize, json: bool) -> Resul
         print!("{}", tail.body);
         if !tail.body.ends_with('\n') {
             println!();
+        }
+        // stderr is its own file under launchd, so it is its own section;
+        // the origin names the file, or the reason there was nothing to
+        // show ("absent in plist", "<path> (empty)").
+        if let Some(error_origin) = &tail.error_origin {
+            println!("== {} {} stderr ({}) ==", tail.host, tail.unit, error_origin);
+            if !tail.error_body.is_empty() {
+                print!("{}", tail.error_body);
+                if !tail.error_body.ends_with('\n') {
+                    println!();
+                }
+            }
         }
     }
     Ok(())
