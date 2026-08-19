@@ -1461,6 +1461,21 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Remove one file from TARGET's home, with guards a bare `rm` over ssh
+    /// does not have: the path must live under a managed area of the approved
+    /// account's home, be a regular file owned by that account, and never be
+    /// a symlink — anything else is refused before anything is deleted.
+    #[command(name = "remove-file")]
+    RemoveFile {
+        target: String,
+        /// Absolute path on the target. Only `$HOME/Library/LaunchAgents`
+        /// and `$HOME/.stado` are deletable by this command; a system path is
+        /// refused with the privileged command that could remove it named.
+        path: String,
+        /// Emit the removal report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Deliver the checked-in Skarbiec acquisition-scope catalog to TARGET and
     /// register it against the host's fleet vault, then print the reconciled
     /// status.
@@ -1504,6 +1519,37 @@ enum HostCommands {
     #[command(name = "weles-activity")]
     WelesActivity {
         target: String,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Enqueue one batch of `generic_capture` actions on TARGET's Weles
+    /// admission API from a checked-in capture plan. The plan is refused in
+    /// full before the host is contacted, the loopback API is reached over the
+    /// registry's own encrypted SSH channel for the length of the command, and
+    /// every artifact lands in Stado storage under the plan's own prefixes.
+    #[command(name = "weles-capture")]
+    WelesCapture {
+        target: String,
+        /// Capture plan file, schema `wisent.weles-capture-plan.v1`.
+        #[arg(long)]
+        plan: String,
+        /// Use this batch id instead of the one the plan declares.
+        #[arg(long)]
+        batch: Option<String>,
+        /// Emit the enqueue report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Per-action state of one capture batch — queued, running, done or
+    /// failed — plus the artifact keys already present in Stado storage under
+    /// the batch prefix. Read-only. Retrieval is `stado storage get`.
+    #[command(name = "weles-capture-status")]
+    WelesCaptureStatus {
+        target: String,
+        /// Batch id to report on.
+        #[arg(long)]
+        batch: String,
         /// Emit the report as JSON.
         #[arg(long)]
         json: bool,
@@ -2001,6 +2047,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 executable,
                 json,
             } => host::install_file(&target, &source, &name, executable, json).await,
+            HostCommands::RemoveFile { target, path, json } => {
+                host::remove_file(&target, &path, json).await
+            }
             HostCommands::SyncAcquisitionScopes { target, source } => {
                 host::sync_acquisition_scopes(&target, &source).await
             }
@@ -2090,6 +2139,17 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::WelesActivity { target, json } => {
                 host::weles_activity(&target, json).await
             }
+            HostCommands::WelesCapture {
+                target,
+                plan,
+                batch,
+                json,
+            } => host::weles_capture(&target, &plan, batch.as_deref(), json).await,
+            HostCommands::WelesCaptureStatus {
+                target,
+                batch,
+                json,
+            } => host::weles_capture_status(&target, &batch, json).await,
             HostCommands::Release {
                 target,
                 binary,
