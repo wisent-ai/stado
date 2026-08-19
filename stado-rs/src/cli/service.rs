@@ -340,6 +340,23 @@ pub enum ServiceCommands {
         json: bool,
     },
 
+    /// Remove a service entirely: stop it, forget it, and delete its unit
+    /// file from the host — the operation an operator means by "remove this
+    /// service", which `retire` deliberately is not. The file path comes from
+    /// the registry declaration, never from operator words. Refuses before
+    /// anything moves when the unit cannot be stopped; a file the channel
+    /// may not delete leaves the service retired and says so, with the
+    /// privileged command that could remove it.
+    Remove {
+        /// launchd label or systemd unit name, as the host knows it.
+        unit: String,
+        /// Registry host that runs it.
+        #[arg(long)]
+        host: String,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Install a new unit under management: render, push, bootstrap,
     /// record.
     Deploy {
@@ -620,6 +637,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             .await
         }
         ServiceCommands::Retire { unit, host, json } => retire(&unit, &host, json).await,
+        ServiceCommands::Remove { unit, host, json } => remove(&unit, &host, json).await,
         ServiceCommands::Deploy {
             name,
             host,
@@ -1733,6 +1751,85 @@ async fn retire(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
         Some(&report.to_json()),
         json,
     )
+}
+
+/// `service remove`: the whole of "remove this service", composed from the
+/// three halves the product already owns — stop and forget on the host
+/// (`retire`), drop the registry entry, and delete the declared unit file
+/// (`host remove-file`). The file path is the declaration's, which is the
+/// only path worth trusting here: an operator-typed path would make this a
+/// delete-anything verb, and a wrong delete on someone else's machine is the
+/// failure every guard in `remove-file` exists against.
+///
+/// Partial states are said, not hidden: a stopped-and-forgotten service
+/// whose file the channel may not delete is `retired` with the file named
+/// and the privileged command beside it, and the command exits non-zero
+/// because the asked-for end state did not happen.
+async fn remove(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
+    let target = host_channel::canonical_target(host).await.map_err(click)?;
+    let declared = service::declared_services(&target);
+    let Some(found) = declared.iter().find(|candidate| candidate.matches(unit)) else {
+        return Err(unmanaged(unit, Some(host)));
+    };
+    if found.source == SOURCE_RECOVERY {
+        return Err(CmdError::click(format!(
+            "{unit} is carried by the fixed host-recovery program, not by the registry entry \
+             for {host}; it cannot be removed. Adopt it first if you need it under registry \
+             management."
+        )));
+    }
+    let path = found.path.clone();
+
+    let runner = production_runner();
+    let report = service::retire_service(&target, found, &runner)
+        .await
+        .map_err(click)?;
+    if !report.succeeded("retired") {
+        return Err(CmdError::click(format!(
+            "{host}: could not stop {unit}: {}; it is still declared in the registry, and its file was not touched",
+            report.failure()
+        )));
+    }
+
+    let mut document = registry::fetch_document().await?;
+    let removed = service::remove_service(&mut document, host, unit).map_err(click)?;
+    let generation = registry::push_document(&document).await?;
+
+    // The registry is already clean: the file half runs last, because a
+    // failed delete must leave a service the fleet can still see, not a file
+    // nobody declared. Its report is the second document of the answer.
+    let file = crate::cli::host::remove_file_document(&target.name, &path).await;
+    if json {
+        let (file_status, file_detail) = match &file {
+            Ok(outcome) => (outcome.status.clone(), outcome.detail.clone()),
+            Err(error) => ("failed".to_string(), Some(error.to_string())),
+        };
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": target.name,
+                "unit": unit,
+                "action": "removed",
+                "generation": generation,
+                "file": {
+                    "path": path,
+                    "status": file_status,
+                    "detail": file_detail,
+                },
+                "report": report.to_json(),
+            }))?
+        );
+    } else {
+        render_mutation("removed", &removed, &generation, Some(&report.to_json()), json);
+        match &file {
+            Ok(outcome) if outcome.succeeded() => {
+                println!("{}: {} {}", outcome.target, outcome.path, outcome.status)
+            }
+            Ok(outcome) => println!("{}: {} {}", outcome.target, outcome.path, outcome.status),
+            Err(error) => println!("{error}"),
+        }
+    }
+    file.map(|_| ())
 }
 
 /// One declared service name: lowercase letters and digits at the edges,

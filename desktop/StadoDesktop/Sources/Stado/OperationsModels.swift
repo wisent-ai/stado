@@ -333,18 +333,30 @@ struct HostGates: Decodable, Identifiable, Sendable {
     }
 }
 
-/// `stado host remove-file <host> <path> --json`, one document: what the
-/// host did with the file, in its own words. `status` is `removed`,
-/// `absent`, `refused` or `failed`; `detail` carries the refusal's reason —
-/// including the privileged command a system path names — verbatim, because
-/// that sentence is the answer.
-struct RemoveFileReport: Decodable, Sendable {
+/// `stado service remove <name> --host <host> --json`, one document: the
+/// whole "remove this service" outcome — registry entry dropped at
+/// `generation`, and the unit file's fate under `file`. The file half has
+/// its own status because a stopped-and-forgotten service whose file the
+/// channel may not delete is a real, nameable end state, not an error to
+/// hide: `removed`, `absent`, `refused` or `failed`, with the refusal's
+/// reason verbatim.
+struct ServiceRemoveReport: Decodable, Sendable {
     let target: String
-    let path: String
-    let status: String
-    let detail: String?
+    let unit: String
+    let generation: String
+    let file: FileOutcome
 
-    var succeeded: Bool { status == "removed" || status == "absent" }
+    struct FileOutcome: Decodable, Sendable {
+        let path: String
+        let status: String
+        let detail: String?
+    }
+
+    var succeeded: Bool { file.status == "removed" || file.status == "absent" }
+
+    var fileSentence: String {
+        file.detail.map { "\(file.status) — \($0)" } ?? file.status
+    }
 }
 
 extension FleetServiceEntry {
