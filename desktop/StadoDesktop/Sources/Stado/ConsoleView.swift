@@ -15,6 +15,14 @@ struct ConsoleView: View {
     /// card over the shell.
     let firstRunNotice: String?
 
+    /// The three stores that read the hosts themselves rather than the
+    /// published snapshot, by running the product CLI. Window-scoped: unlike
+    /// enrollment, nothing here spans a walk to another machine, and a
+    /// claiming gate read two hours ago is not worth keeping.
+    @StateObject private var gatesStore = HostGatesStore()
+    @StateObject private var serviceStore = ServiceTruthStore()
+    @StateObject private var releaseStore = ReleaseEvidenceStore()
+
     @State private var showsDeploymentSetup = false
     @State private var showsDeploymentAccess = false
     @State private var showsAccountConnection = false
@@ -271,8 +279,15 @@ struct ConsoleView: View {
         case .hosts:
             let unavailable = snapshot.workers.count { $0.status == .unavailable }
             if unavailable > 0 { return (unavailable, .danger) }
+            let silent = gatesStore.notClaiming.count
+            if silent > 0 { return (silent, .danger) }
             let stale = snapshot.workers.count { $0.status == .stale }
             return stale > 0 ? (stale, .warning) : nil
+        case .services:
+            // A process running code that is no longer on disk, and a process
+            // nothing owns. Both were invisible until somebody went looking.
+            let flagged = serviceStore.attentionCount
+            return flagged > 0 ? (flagged, .danger) : nil
         case .disk:
             guard let report = cleanupStore.report else { return nil }
             switch report.outcomePresentation.severity {
@@ -280,7 +295,12 @@ struct ConsoleView: View {
             case .warning: return (1, .warning)
             case .healthy, .neutral: return nil
             }
-        case .registry, .releases, .deployments:
+        case .releases:
+            // A rollout the fleet itself calls blocked, and one no host would
+            // answer for. Both are rollouts that never finish unattended.
+            let stalled = releaseStore.attentionCount
+            return stalled > 0 ? (stalled, .danger) : nil
+        case .registry, .deployments:
             return nil
         }
     }
@@ -307,17 +327,24 @@ struct ConsoleView: View {
                 HostsView(
                     store: store,
                     fleetStore: fleetStore,
+                    gatesStore: gatesStore,
                     enrollmentStore: enrollmentStore,
                     scope: scopeName,
                     route: { router.destination = $0 },
                     refresh: { await refreshAll() }
+                )
+            case .services:
+                ServicesView(
+                    store: serviceStore,
+                    hosts: StadoRegistryHosts.names(targets: fleetStore.targets, snapshot: store.snapshot),
+                    scope: scopeName
                 )
             case .disk:
                 DiskView(store: store, cleanupStore: cleanupStore, scope: scopeName)
             case .registry:
                 RegistryView(fleetStore: fleetStore, scope: scopeName)
             case .releases:
-                ReleasesView(fleetStore: fleetStore, scope: scopeName)
+                ReleasesView(store: releaseStore, scope: scopeName)
             case .deployments:
                 DeploymentsView(
                     deploymentStore: deploymentStore,
