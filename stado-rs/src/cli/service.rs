@@ -51,7 +51,19 @@ pub enum ServiceCommands {
     /// nothing, so `STATE` goes quiet rather than wrong -- and quiet is what
     /// read as fine for twelve days. `never` in this column means no machine
     /// has ever confirmed this service from any vantage.
+    ///
+    /// `--unowned` answers the opposite question: which product processes are
+    /// running that no launchd job or systemd unit owns. Two `stado agent`
+    /// processes ran that way for four days, executing a binary older than the
+    /// one on disk, and every answer in this group was about declared units
+    /// and so said nothing about them.
     List {
+        /// Report the product processes no unit owns instead of the declared
+        /// managed set. This is the one question in this group the beacons
+        /// cannot answer -- an unowned process is by definition in nobody's
+        /// declaration -- so it costs one read-only ssh per kind=local host.
+        #[arg(long)]
+        unowned: bool,
         #[arg(long)]
         json: bool,
     },
@@ -363,6 +375,50 @@ pub enum ServiceCommands {
         json: bool,
     },
 
+    /// Assert the unit a host must be running, over ssh, idempotently.
+    ///
+    /// `deploy` installs a unit and refuses one that is already declared, so
+    /// there was no command an operator could run twice, or run from a script,
+    /// to make a host run what it is supposed to run. This one reads what is
+    /// there first: a unit already running the declared program is reported
+    /// `already_correct` with nothing touched, a unit that exists but is not
+    /// running is kicked in place, and a host with no unit gets one.
+    ///
+    /// It also works where `deploy` cannot. An ssh login has no Aqua session,
+    /// `launchctl bootstrap gui/$uid` answers `Could not switch to audit
+    /// session ... Operation not permitted`, and `deploy` returned that having
+    /// installed nothing — which is how two `stado agent` processes came to run
+    /// for four days with no unit behind them. Where the per-login domain does
+    /// not exist, the unit is rendered for launchd's system domain and
+    /// installed as a daemon in /Library/LaunchDaemons.
+    ///
+    /// An existing unit is only ever restarted in place (`kickstart -k`), never
+    /// unloaded and bootstrapped back: that sequence took the always-on host
+    /// down once already. A loaded unit whose definition names a different
+    /// program is refused rather than overwritten, because launchd holds the
+    /// definition it bootstrapped and a rewritten file under a live job changes
+    /// nothing an operator can see.
+    Ensure {
+        /// Service name; lowercase letters, digits, '.', '-' and '_'.
+        name: String,
+        /// The single registry host that must be running it.
+        #[arg(long)]
+        host: String,
+        /// Absolute path, ON THE TARGET HOST, of the program the unit runs.
+        #[arg(long)]
+        from: String,
+        /// One argument the unit is started with; repeat for each.
+        #[arg(long = "arg")]
+        args: Vec<String>,
+        /// Why this host must run this unit. Required: `ensure` installs units
+        /// and restarts running ones, and every such change is recorded beside
+        /// the registry document it declared the unit in.
+        #[arg(long)]
+        reason: String,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Tail a managed unit's log over the approved channel.
     Logs {
         /// Service name, or the host's own name for the unit.
@@ -406,7 +462,13 @@ fn default_log_lines() -> usize {
 pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
     match command {
         ServiceCommands::Directory(sub) => crate::cli::directory::dispatch(sub).await,
-        ServiceCommands::List { json } => list(json).await,
+        ServiceCommands::List { unowned, json } => {
+            if unowned {
+                list_unowned(json).await
+            } else {
+                list(json).await
+            }
+        }
         ServiceCommands::Verify { host, local, json } => {
             if local {
                 crate::cli::service_verify::verify_local(json).await
@@ -550,6 +612,24 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             )
             .await
         }
+        ServiceCommands::Ensure {
+            name,
+            host,
+            from,
+            args,
+            reason,
+            json,
+        } => {
+            ensure(EnsureOptions {
+                name: &name,
+                host: &host,
+                from: &from,
+                args: &args,
+                reason: &reason,
+                as_json: json,
+            })
+            .await
+        }
         ServiceCommands::Logs {
             name,
             host,
@@ -667,6 +747,51 @@ async fn list(json: bool) -> Result<(), CmdError> {
     let store = beacon_store().await?;
     let rows = service::list_services(&store).await.map_err(click)?;
     render_status(&rows, json)
+}
+
+/// `service list --unowned` — product processes no unit owns, fleet-wide.
+///
+/// The one read in this group that cannot come off the beacons: a beacon
+/// reports the units the host was told about, and an unowned process is by
+/// construction in nobody's declaration. So it is one read-only ssh per
+/// kind=local host, and a host that will not answer is named on stderr rather
+/// than dropped — "no unowned processes" and "nobody looked" are the fold this
+/// whole group refuses to make.
+async fn list_unowned(json: bool) -> Result<(), CmdError> {
+    let registry = targets::fetch_registry_remote()
+        .await
+        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    let runner = production_runner();
+    let mut found: Vec<service::UnownedProcess> = Vec::new();
+    let mut failures: Vec<String> = Vec::new();
+    for target in registry.local_targets() {
+        match service::unowned_processes(target, &runner).await {
+            Ok(processes) => found.extend(processes),
+            Err(exc) => failures.push(format!("{}: {exc}", target.name)),
+        }
+    }
+    if json {
+        let payload: Vec<Value> = found.iter().map(service::UnownedProcess::to_json).collect();
+        print_json(&json!({"unowned": payload}))?;
+    } else {
+        let cells: Vec<Vec<String>> = found
+            .iter()
+            .map(|process| {
+                vec![
+                    process.host.clone(),
+                    process.pid.clone(),
+                    process.product_guess(),
+                    dash(&process.started_at),
+                    process.command.clone(),
+                ]
+            })
+            .collect();
+        table::print(
+            &["HOST", "PID", "PRODUCT_GUESS", "STARTED_AT", "COMMAND"],
+            &cells,
+        );
+    }
+    fail_if_any(&failures, "scan for unowned processes")
 }
 
 async fn onboarding_catalog() -> Result<(), CmdError> {
@@ -1473,6 +1598,197 @@ async fn deploy(
         Some(&report.to_json()),
         json,
     )
+}
+
+struct EnsureOptions<'a> {
+    name: &'a str,
+    host: &'a str,
+    from: &'a str,
+    args: &'a [String],
+    reason: &'a str,
+    as_json: bool,
+}
+
+/// `service ensure NAME --host HOST --from PATH --reason WHY`.
+///
+/// The idempotent half of `deploy`, and the only one that works on an ssh
+/// login with no Aqua session. Two facts decide everything it does, and both
+/// come from the host: what the unit on the box declares it runs, and what the
+/// process under it is actually running. See
+/// [`crate::deploy::service::ensure_service`].
+async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
+    let reason = options.reason.trim();
+    if reason.is_empty() {
+        return Err(CmdError::usage(
+            "--reason must say why this host has to run this unit; it is recorded beside the \
+             registry document this command declares the unit in",
+        ));
+    }
+    let target = host_channel::canonical_target(options.host)
+        .await
+        .map_err(click)?;
+    let host = target.name.clone();
+    let plan = service::plan_deploy(options.name, options.from, options.args).map_err(click)?;
+
+    // An existing declaration is not a refusal here, and that is the whole
+    // difference from `deploy`: asserting a unit that is already declared and
+    // already running is what makes this safe to run twice, or from a script.
+    let already = service::declared_services(&target)
+        .into_iter()
+        .find(|candidate| {
+            candidate.matches(options.name)
+                || candidate.matches(&plan.label)
+                || candidate.matches(&plan.unit)
+        });
+
+    let runner = production_runner();
+    let outcome = service::ensure_service(&target, &plan, &runner)
+        .await
+        .map_err(click)?;
+    if !outcome.succeeded() {
+        let mut detail = format!(
+            "{host}: could not ensure {}: {}",
+            options.name,
+            outcome.report.failure()
+        );
+        if !outcome.report.postcondition_held() {
+            // A unit that will not stay up on a host where the same program
+            // already runs outside any unit is the four-day incident from the
+            // other side: launchd is being asked for a port a disowned process
+            // still holds.
+            detail.push_str(
+                ". `stado service list --unowned` names a process that may still hold its port",
+            );
+        }
+        return Err(CmdError::click(detail));
+    }
+
+    let record = service::record_from_ensure(&host, options.name, &outcome, &now());
+    let generation = match &already {
+        // Declared, at the same file, by the registry: the document already
+        // says what this pass just confirmed, so nothing is written to it.
+        Some(existing)
+            if existing.source == SOURCE_REGISTRY
+                && existing.path == record.path
+                && existing.kind == record.kind =>
+        {
+            None
+        }
+        // Declared by the registry at a different file. The system-domain
+        // daemon path is not the per-login agent path, and a declaration
+        // naming a file the host does not have is one no later command can
+        // act on, so the declaration is corrected in one document write.
+        Some(existing) if existing.source == SOURCE_REGISTRY => {
+            let mut document = registry::fetch_document().await?;
+            service::remove_service(&mut document, &host, existing.unit_id()).map_err(click)?;
+            service::add_service(&mut document, &record).map_err(click)?;
+            Some(registry::push_document(&document).await?)
+        }
+        // Undeclared, or carried by the fixed host-recovery list. Both become
+        // an explicit registry declaration, which for the recovery case is
+        // exactly what `service adopt` is for.
+        _ => Some(record_declaration(&record).await?),
+    };
+
+    // Recorded only when something actually changed. An audit trail that also
+    // records the passes which changed nothing is one nobody reads.
+    let audited = if outcome.changed() || generation.is_some() {
+        Some(record_ensure_audit(&record, &outcome, &plan, reason, generation.as_deref()).await?)
+    } else {
+        None
+    };
+
+    if options.as_json {
+        // Exactly the contract's keys: a desktop client consumes this shape.
+        // Where the record landed goes to stderr rather than into the object.
+        if let Some(audited) = audited.as_deref() {
+            eprintln!("audit record {audited}");
+        }
+        return print_json(&json!({
+            "host": host,
+            "name": record.name,
+            "label": record.unit_id(),
+            "domain": outcome.domain_word(),
+            "action": outcome.action,
+            "pid": outcome.pid.trim().parse::<u32>().ok(),
+        }));
+    }
+    table::print(
+        &["HOST", "SERVICE", "LABEL", "DOMAIN", "ACTION", "PID"],
+        &[vec![
+            host,
+            record.name.clone(),
+            record.unit_id().to_string(),
+            outcome.domain_word().to_string(),
+            outcome.action.clone(),
+            dash(outcome.pid.trim()),
+        ]],
+    );
+    if let Some(audited) = audited.as_deref() {
+        println!("audit record {audited}");
+    }
+    Ok(())
+}
+
+/// Where the record of one `ensure` pass lives, relative to the canonical
+/// registry document.
+const ENSURE_AUDIT_PREFIX: &str = "service_audit";
+
+/// Append the record of one `ensure` pass beside the state it changed.
+///
+/// This command exists to be run from a script, and a change nobody typed is a
+/// change nobody remembers making: the reason the operator gave, what the host
+/// did about it, and the registry generation it produced are written as one
+/// create-only object through [`targets::RegistryStore::write_beside`] — beside
+/// the registry document, because the registry is the state that changed and on
+/// a GCS deployment the queue store is a different bucket entirely.
+async fn record_ensure_audit(
+    record: &ManagedService,
+    outcome: &service::EnsureOutcome,
+    plan: &service::DeployPlan,
+    reason: &str,
+    generation: Option<&str>,
+) -> Result<String, CmdError> {
+    let store = targets::RegistryStore::open()
+        .await
+        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    let now = chrono::Utc::now();
+    let body = serde_json::to_string_pretty(&json!({
+        "action": outcome.action,
+        "host": record.host,
+        "service": record.name,
+        "unit": record.unit_id(),
+        "kind": record.kind,
+        "path": record.path,
+        "domain": outcome.domain_word(),
+        "pid": outcome.pid.trim().parse::<u32>().ok(),
+        "program": plan.program,
+        "argv": plan.argv,
+        "reason": reason,
+        "registry_generation": generation,
+        "recorded_at": now.to_rfc3339(),
+        "actor": crate::cli::autonomy_cmd::actor(),
+    }))?;
+    // Timestamp first so one host's records sort by when they happened, and
+    // compact rather than RFC-3339 because the key is also a file name on the
+    // local-file backend.
+    let key = format!(
+        "{ENSURE_AUDIT_PREFIX}/{}/{}-{}.json",
+        record.host,
+        now.format("%Y%m%dT%H%M%S%.6fZ"),
+        record.unit_id()
+    );
+    let (path, created) = store
+        .write_beside(&key, &body)
+        .await
+        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    if !created {
+        return Err(CmdError::click(format!(
+            "{path} already exists, so this pass was not recorded; an audit record is never \
+             replaced"
+        )));
+    }
+    Ok(path)
 }
 
 /// `datetime.now(timezone.utc).isoformat()` as every other writer in the

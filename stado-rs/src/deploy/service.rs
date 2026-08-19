@@ -918,8 +918,7 @@ if [ \"$os\" = \"Darwin\" ]; then
     elif /bin/launchctl print \"$user_domain\" >/dev/null 2>&1; then
       domain=\"$user_domain\"
     else
-      say 'no_launchd_domain' \"$gui\"
-      exit 66
+@NO_DOMAIN@
     fi
   fi
   # An unqualified label may name either this login's agent or a system
@@ -970,6 +969,29 @@ else
 fi
 printf 'STADO_HOST\\t%s\\t%s\\t%s\\t%s\\n' \"$os\" \"$domain\" \"$unit\" \"$unit_path\"
 ";
+
+/// What the prelude does on a Darwin host whose per-login launchd domain does
+/// not exist, for every command that addresses a unit already installed.
+///
+/// A restart, a stop or a retire aimed at a domain that is not there has
+/// nothing to act on, and inventing one would mean installing a unit in the
+/// middle of an operation that promised only to touch an existing one.
+const NO_DOMAIN_REFUSE: &str = "      say 'no_launchd_domain' \"$gui\"
+      exit 66";
+
+/// What [`ensure_service`] does instead: install into the system domain.
+///
+/// `launchctl bootstrap gui/$uid` over ssh answers `Could not switch to audit
+/// session ... Operation not permitted`, and `stado service deploy` returned
+/// that failure having installed nothing — which is how two `stado agent`
+/// processes came to run for four days with no unit behind them. The system
+/// domain is the one that does exist on an ssh login, so the unit that gets
+/// installed is the daemon spelling of the same job, in
+/// `/Library/LaunchDaemons`, and every later command finds it through the
+/// `/Library/LaunchDaemons/*` case above.
+const NO_DOMAIN_SYSTEM: &str = "      domain=\"system\"
+      launch=\"/usr/bin/sudo -n /bin/launchctl\"
+      unit_path=\"/Library/LaunchDaemons/$unit.plist\"";
 
 // ---------------------------------------------------------------------------
 // The end states the lifecycle operations intend
@@ -1376,6 +1398,325 @@ else
 fi
 ";
 
+/// `service ensure`: the unit this host should be running, installed only
+/// where it is not already what it should be.
+///
+/// Three differences from [`DEPLOY_BODY`], each one an incident:
+///
+/// - It is idempotent. `deploy` refuses a unit that is already declared and
+///   bootstraps unconditionally otherwise, so there is no command an operator
+///   can run twice, or run from a script, to assert what a host must be
+///   running. This one reads what is there first and reports
+///   `already_correct` having touched nothing.
+/// - It installs into the domain that exists. The prelude's
+///   [`NO_DOMAIN_SYSTEM`] fallback has already chosen
+///   `/Library/LaunchDaemons` on an ssh login with no Aqua session, which is
+///   the case `deploy` fails on with `Could not switch to audit session ...
+///   Operation not permitted`, having installed nothing.
+/// - It never unloads. `deploy` boots the label out before bootstrapping;
+///   that is the sequence that took the always-on host down when launchd
+///   still held children of the old job and the bootstrap back failed
+///   (see [`RESTART_BODY`]). A loaded job is kicked in place, and a loaded
+///   job whose definition names another program is REFUSED rather than
+///   silently overwritten: launchd holds the definition it bootstrapped, so
+///   a rewritten plist under a live job changes nothing an operator can see.
+///
+/// There is deliberately no fallback to `launchctl submit` or to a bare
+/// background process. Those two are how a host comes to run a program no
+/// unit owns, which is the state `list --unowned` exists to find and this
+/// command exists to end.
+const ENSURE_BODY: &str = "program=@PROGRAM@
+argv=@ARGV@
+bail() {
+  say 'ensure_failed' \"$1\"
+  exit 0
+}
+if [ ! -f \"$program\" ]; then
+  say 'program_missing' \"$program\"
+  exit 0
+fi
+if [ ! -x \"$program\" ]; then
+  /bin/chmod u+x \"$program\" || {
+    say 'program_not_executable' \"$program\"
+    exit 0
+  }
+fi
+# What the unit on disk says it runs, as the one-line spelling `plan_deploy`
+# renders, so 'the unit already runs this' is a comparison of two spellings of
+# one list rather than a guess.
+#
+# Exactly PlistBuddy's own array framing is dropped, by matching those two
+# lines. `service show`'s character-class filter keeps the arguments only
+# because PlistBuddy indents them, and the whole of this command turns on the
+# comparison being exact: a readback that lost one argument would make a unit
+# this command installed itself read as declaring something else on the very
+# next run, and the answer would be `conflict` forever.
+declared_argv=''
+had_unit=no
+if [ \"$os\" = \"Darwin\" ]; then
+  if [ -f \"$unit_path\" ]; then
+    declared_argv=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments' \"$unit_path\" 2>/dev/null | /usr/bin/awk 'NR == 1 && $0 == \"Array {\" { next } $0 == \"}\" { next } { sub(/^[[:space:]]+/, \"\"); sub(/[[:space:]]+$/, \"\"); print }' | /usr/bin/tr '\\n' ' ')
+    if [ -z \"$declared_argv\" ]; then
+      declared_argv=$(/usr/libexec/PlistBuddy -c 'Print :Program' \"$unit_path\" 2>/dev/null)
+    fi
+  fi
+@LAUNCHD_STATE@
+  had_unit=\"$pc_loaded\"
+  pid=\"$pc_pid\"
+else
+  if [ -f \"$unit_path\" ]; then
+    had_unit=yes
+    declared_argv=$(/usr/bin/sed -n 's/^ExecStart=//p' \"$unit_path\" | /usr/bin/head -n 1)
+  fi
+  pid=$(systemctl_user show --property=MainPID --value \"$unit\" 2>/dev/null)
+  if [ \"$pid\" = 0 ]; then pid=''; fi
+fi
+declared_argv=$(printf '%s' \"$declared_argv\" | /usr/bin/tr -s ' ' | /usr/bin/sed 's/^ //;s/ $//')
+# The program the live process is executing, not the one the unit names: a
+# unit pointing at a `current` link and a process that outlived the relink
+# have the same declaration and different code.
+running=''
+if [ -n \"$pid\" ]; then running=$(/bin/ps -p \"$pid\" -o comm= 2>/dev/null); fi
+serves=no
+case \"$running\" in
+  \"$program\") serves=yes ;;
+esac
+if [ \"$serves\" = no ]; then
+  case \"$program\" in
+    */current/*)
+      case \"$running\" in
+        \"${program%%/current/*}/\"*) serves=yes ;;
+      esac
+      ;;
+  esac
+fi
+if [ \"$declared_argv\" = \"$argv\" ] && [ \"$serves\" = yes ]; then
+  printf 'STADO_ENSURE\\t%s\\t%s\\t%s\\n' \"$domain\" \"$pid\" \"$unit_path\"
+  say 'already_correct' \"$domain/$unit pid $pid\"
+  exit 0
+fi
+if [ \"$declared_argv\" != \"$argv\" ]; then
+  if [ \"$os\" = \"Darwin\" ] && [ \"$had_unit\" = yes ]; then
+    say 'conflict' \"$domain/$unit is loaded and runs [$declared_argv], not [$argv]; retire it first\"
+    exit 0
+  fi
+  if [ \"$os\" = \"Darwin\" ]; then
+    /bin/mkdir -p \"$HOME/.stado/logs\" >/dev/null 2>&1 || bail 'cannot create the log directory'
+    /bin/chmod u=rwx,go= \"$HOME/.stado/logs\" || bail 'cannot protect the log directory'
+    log=\"$HOME/.stado/logs/$unit.log\"
+    : >> \"$log\" || bail \"cannot create $log\"
+    /bin/chmod u=rw,go= \"$log\" || bail \"cannot protect $log\"
+    staged=\"$HOME/.stado/$unit.plist.$$\"
+    trap '/bin/rm -f \"$staged\" \"$staged.rendered\"' EXIT HUP INT TERM
+    if [ \"$domain\" = system ]; then
+      /bin/cat > \"$staged\" <<'@HEREDOC@'
+@DARWIN_DAEMON_UNIT@
+@HEREDOC@
+    else
+      /bin/mkdir -p \"$HOME/Library/LaunchAgents\" >/dev/null 2>&1 || bail 'cannot create LaunchAgents'
+      /bin/cat > \"$staged\" <<'@HEREDOC@'
+@DARWIN_UNIT@
+@HEREDOC@
+    fi
+    escaped_home=$(/usr/bin/printf '%s' \"$HOME\" | /usr/bin/sed 's/[\\/&]/\\\\&/g')
+    account=$(/usr/bin/id -un)
+    /usr/bin/sed -e \"s/__STADO_HOME__/$escaped_home/g\" -e \"s/__STADO_USER__/$account/g\" \"$staged\" > \"$staged.rendered\" || bail 'cannot render the unit'
+    if [ \"$domain\" = system ]; then
+      # The one write this command cannot do as the login user. A host
+      # without passwordless sudo is told exactly that, rather than left
+      # with a rendered plist nobody ever loaded.
+      /usr/bin/sudo -n /usr/bin/install -m 644 -o root -g wheel \"$staged.rendered\" \"$unit_path\" || bail \"sudo -n install $unit_path was refused\"
+    else
+      /bin/cp \"$staged.rendered\" \"$unit_path\" || bail \"cannot write $unit_path\"
+      /bin/chmod u=rw,go= \"$unit_path\" || bail \"cannot protect $unit_path\"
+    fi
+    /bin/rm -f \"$staged\" \"$staged.rendered\"
+    trap - EXIT HUP INT TERM
+  else
+    /bin/mkdir -p \"$HOME/.config/systemd/user\" >/dev/null 2>&1 || bail 'cannot create the systemd user directory'
+    /bin/cat > \"$unit_path\" <<'@HEREDOC@'
+@LINUX_UNIT@
+@HEREDOC@
+  fi
+fi
+if [ \"$os\" = \"Darwin\" ]; then
+  if [ \"$had_unit\" = yes ]; then
+    action=restarted
+    detail=$($launch kickstart -k \"$domain/$unit\" 2>&1)
+    rc=$?
+  else
+    action=created
+    $launch enable \"$domain/$unit\" >/dev/null 2>&1 || true
+    detail=$($launch bootstrap \"$domain\" \"$unit_path\" 2>&1)
+    rc=$?
+  fi
+else
+  systemctl_user daemon-reload >/dev/null 2>&1 || true
+  if [ \"$had_unit\" = yes ]; then
+    action=restarted
+    detail=$(systemctl_user restart \"$unit\" 2>&1)
+    rc=$?
+  else
+    action=created
+    detail=$(systemctl_user enable --now \"$unit\" 2>&1)
+    rc=$?
+  fi
+fi
+if [ \"$rc\" -ne 0 ]; then
+  say \"${action}_failed\" \"$rc $detail\"
+  exit 0
+fi
+/bin/sleep 1
+pid=''
+if [ \"$os\" = \"Darwin\" ]; then
+@LAUNCHD_STATE@
+  pid=\"$pc_pid\"
+else
+  pid=$(systemctl_user show --property=MainPID --value \"$unit\" 2>/dev/null)
+  if [ \"$pid\" = 0 ]; then pid=''; fi
+fi
+printf 'STADO_ENSURE\\t%s\\t%s\\t%s\\n' \"$domain\" \"$pid\" \"$unit_path\"
+say \"$action\" \"$unit_path\"
+";
+
+/// `service converge`: which artefact the live process is executing, as
+/// against the one the unit's declaration resolves to today.
+///
+/// Read-only. Two production incidents are exactly this gap, and neither is
+/// visible in any other answer this group gives: Brama's process kept running
+/// an artefact tree that `current` no longer pointed at, and the Weles worker
+/// kept serving a `dist` that was replaced 26 seconds after it started. In
+/// both cases the unit was loaded, the declaration was true, the version on
+/// disk was the declared one, and the running code was not it.
+///
+/// So the host reports facts and the verdict is computed off-host by
+/// [`RunningProgram::matches_process`]: the pid, the program the unit
+/// declares, what that declaration's `current` link resolves to now, the
+/// executable the process table says the pid is running, when the process
+/// started, and when each of those two files was last written. A judgement
+/// made in shell would be a second opinion about artefact identity.
+const PROCESS_BODY: &str = "declared=''
+if [ \"$os\" = \"Darwin\" ]; then
+  if [ -f \"$unit_path\" ]; then
+    declared=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' \"$unit_path\" 2>/dev/null)
+    if [ -z \"$declared\" ]; then
+      declared=$(/usr/libexec/PlistBuddy -c 'Print :Program' \"$unit_path\" 2>/dev/null)
+    fi
+  fi
+@LAUNCHD_STATE@
+  pid=\"$pc_pid\"
+else
+  if [ -f \"$unit_path\" ]; then
+    declared=$(/usr/bin/sed -n 's/^ExecStart=//p' \"$unit_path\" | /usr/bin/head -n 1)
+    declared=\"${declared%% *}\"
+  fi
+  pid=$(systemctl_user show --property=MainPID --value \"$unit\" 2>/dev/null)
+  if [ \"$pid\" = 0 ]; then pid=''; fi
+fi
+# A unit that runs .../current/... names a link, and the link is what every
+# release and every rollback moves. The declaration therefore stays identical
+# while the artefact under it changes, so the link has to be resolved here to
+# have anything to compare the running process against.
+resolved=\"$declared\"
+case \"$declared\" in
+  */current/*)
+    link=\"${declared%%/current/*}/current\"
+    leaf=\"${declared#*/current/}\"
+    if [ -L \"$link\" ]; then
+      dest=$(/usr/bin/readlink \"$link\")
+      case \"$dest\" in
+        /*) resolved=\"$dest/$leaf\" ;;
+        *) resolved=\"${declared%%/current/*}/$dest/$leaf\" ;;
+      esac
+    fi
+    ;;
+esac
+running=''
+started=''
+declared_written=''
+running_written=''
+if [ -n \"$pid\" ]; then
+  running=$(/bin/ps -p \"$pid\" -o comm= 2>/dev/null)
+  lstart=$(/bin/ps -p \"$pid\" -o lstart= 2>/dev/null)
+  if [ \"$os\" = \"Darwin\" ]; then
+    started=$(/bin/date -j -f '%a %b %d %T %Y' \"$lstart\" +%s 2>/dev/null)
+    if [ -f \"$resolved\" ]; then declared_written=$(/usr/bin/stat -f %m \"$resolved\" 2>/dev/null); fi
+    if [ -f \"$running\" ]; then running_written=$(/usr/bin/stat -f %m \"$running\" 2>/dev/null); fi
+  else
+    started=$(/usr/bin/date -d \"$lstart\" +%s 2>/dev/null)
+    if [ -f \"$resolved\" ]; then declared_written=$(/usr/bin/stat -c %Y \"$resolved\" 2>/dev/null); fi
+    if [ -f \"$running\" ]; then running_written=$(/usr/bin/stat -c %Y \"$running\" 2>/dev/null); fi
+  fi
+fi
+printf 'STADO_PROCESS\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"$pid\" \"$declared\" \"$resolved\" \"$running\" \"$started\" \"$declared_written\" \"$running_written\"
+say 'inspected' \"$unit\"
+";
+
+/// `service list --unowned`: product processes on one host that no unit owns.
+///
+/// Its own program rather than one more body on [`REMOTE_PRELUDE`], because it
+/// addresses no unit: there is nothing to splice, and a sentinel unit id would
+/// make the shared prelude derive a plist path for a unit that does not exist.
+/// It is read-only in the strongest sense — it starts nothing, stops nothing,
+/// signals nothing, and needs no sudo — so it is safe against a live host.
+///
+/// Two `stado agent` processes ran for four days on the always-on mac with no
+/// launchd unit behind them, executing a binary older than the one on disk,
+/// and every command in this group answered about declared units and so said
+/// nothing at all about them. Ownership is asked of launchd itself: the pids
+/// in the `services` table of each printable domain, and any descendant of one
+/// of those pids, are owned. On Linux the same question is the cgroup the
+/// kernel put the process in — a `.service` cgroup is a unit's, a `.scope` is
+/// a login session's.
+const UNOWNED_SCRIPT: &str = "set -u
+os=$(/usr/bin/uname -s)
+uid=$(/usr/bin/id -u)
+set -- @ROOTS@
+if [ \"$os\" = \"Darwin\" ]; then
+  owned=''
+  for launchd_domain in \"gui/$uid\" \"user/$uid\" system; do
+    owned=\"$owned $(/bin/launchctl print \"$launchd_domain\" 2>/dev/null | /usr/bin/awk '/services = \\{/ { inside = 1; next } inside && /^[[:space:]]*\\}/ { inside = 0 } inside && $1 ~ /^[0-9]+$/ { print $1 }' | /usr/bin/tr '\\n' ' ')\"
+  done
+  owns() {
+    walk=\"$1\"
+    while [ -n \"$walk\" ] && [ \"$walk\" != 0 ] && [ \"$walk\" != 1 ]; do
+      case \" $owned \" in *\" $walk \"*) return 0 ;; esac
+      walk=$(/bin/ps -p \"$walk\" -o ppid= 2>/dev/null | /usr/bin/tr -d ' ')
+    done
+    return 1
+  }
+else
+  owns() {
+    cgroup=$(/bin/cat \"/proc/$1/cgroup\" 2>/dev/null | /usr/bin/sed -n 's/.*\\///p')
+    case \"$cgroup\" in *.service) return 0 ;; esac
+    return 1
+  }
+fi
+seen=''
+for root in \"$@\"; do
+  for pid in $(/usr/bin/pgrep -f \"$root\" 2>/dev/null); do
+    case \" $seen \" in *\" $pid \"*) continue ;; esac
+    command=$(/bin/ps -p \"$pid\" -o command= 2>/dev/null | /usr/bin/tr '\\t\\r\\n' ' ')
+    if [ -z \"$command\" ]; then continue; fi
+    exe=$(/bin/ps -p \"$pid\" -o comm= 2>/dev/null)
+    entry=$(printf '%s' \"$command\" | /usr/bin/awk '{ print $2 }')
+    # The root has to be what the process EXECUTES, not merely a word on its
+    # command line: `pgrep -f` also matches a tail on a log under the root,
+    # and a report that names those teaches operators to ignore it. An
+    # interpreter is accepted on its entry point, which is the shape a
+    # release tree runs under.
+    under=no
+    case \"$exe\" in \"$root\"*) under=yes ;; esac
+    case \"$entry\" in \"$root\"*) under=yes ;; esac
+    if [ \"$under\" = no ]; then continue; fi
+    if owns \"$pid\"; then continue; fi
+    seen=\"$seen $pid\"
+    started=$(/bin/ps -p \"$pid\" -o lstart= 2>/dev/null | /usr/bin/tr '\\t\\r\\n' ' ')
+    printf 'STADO_UNOWNED\\t%s\\t%s\\t%s\\n' \"$pid\" \"$started\" \"$command\"
+  done
+done
+";
+
 /// `service logs`: tail the unit's own log. On launchd the log path comes
 /// from the unit file itself, so an adopted unit keeps its chosen destination.
 /// A unit without one falls back to the account's owner-only Stado log path.
@@ -1527,12 +1868,29 @@ say 'listener_stopped' \"$listener_detail\"
 /// The shared prelude with this unit spliced in: the vocabulary (`$unit`,
 /// `$domain`, `$launch`, `systemctl_user`, `say`) every body and every
 /// postcondition probe reads the host through.
-fn remote_prelude(unit: &str, linux_unit: &str, path: &str) -> Result<String, DeployError> {
+///
+/// `no_domain` is what the prelude does when a Darwin host has no per-login
+/// launchd domain. It is a parameter and not a fixed refusal because the two
+/// answers are genuinely different operations: everything that addresses an
+/// installed unit has nothing to act on ([`NO_DOMAIN_REFUSE`]), while
+/// [`ensure_service`] installs the daemon spelling into the domain that does
+/// exist ([`NO_DOMAIN_SYSTEM`]).
+fn prelude_with(
+    unit: &str,
+    linux_unit: &str,
+    path: &str,
+    no_domain: &str,
+) -> Result<String, DeployError> {
     validate_unit_id(unit)?;
     Ok(REMOTE_PRELUDE
         .replace("@UNIT@", &shlex_quote(unit))
         .replace("@LINUX_UNIT@", &shlex_quote(linux_unit))
-        .replace("@PATH@", &quote_unit_path(path)?))
+        .replace("@PATH@", &quote_unit_path(path)?)
+        .replace("@NO_DOMAIN@", no_domain))
+}
+
+fn remote_prelude(unit: &str, linux_unit: &str, path: &str) -> Result<String, DeployError> {
+    prelude_with(unit, linux_unit, path, NO_DOMAIN_REFUSE)
 }
 
 /// Assemble a remote program: the shared prelude with this unit spliced in,
@@ -1693,8 +2051,8 @@ pub async fn probe_service(
     run_remote(target, script, runner).await
 }
 
-/// The rendered unit pair for a deployed service, plus the label the two
-/// spellings share.
+/// The rendered unit spellings for a deployed service, plus the label they
+/// share.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeployPlan {
     /// The launchd label, and the stem of the systemd unit name.
@@ -1703,17 +2061,33 @@ pub struct DeployPlan {
     pub unit: String,
     /// Absolute program path on the target host.
     pub program: String,
+    /// The argument vector the unit declares, in the one-line spelling the
+    /// host reads back out of an installed unit. [`ensure_service`] compares
+    /// the two, and comparing two renderings of the same list is the only way
+    /// "the unit already runs this" can be a fact rather than a hope.
+    pub argv: String,
+    /// The launchd agent, for a host whose per-login domain exists.
     pub darwin_unit: String,
+    /// The same job as a launchd daemon, for the system domain — the only one
+    /// an ssh login without an Aqua session can bootstrap into. Carries
+    /// [`REMOTE_USER_PLACEHOLDER`] as well as [`REMOTE_HOME_PLACEHOLDER`].
+    pub darwin_daemon_unit: String,
     pub linux_unit: String,
 }
 
-/// Render both unit spellings for a new managed service.
+/// Render every unit spelling for a new managed service.
 ///
-/// Both come from `local_install::InstallPlan`, the renderer used by
-/// `stado bootstrap --local`. The Darwin spelling carries a reserved
+/// All of them come from `local_install::InstallPlan`, the renderer used by
+/// `stado bootstrap --local`. The Darwin spellings carry a reserved
 /// home placeholder that the remote installer replaces before launchd reads
 /// the plist; this keeps logs in the remote account's owner-only Stado directory.
 const REMOTE_HOME_PLACEHOLDER: &str = "__STADO_HOME__";
+
+/// The account a system daemon runs as, resolved on the host: a plist in
+/// `/Library/LaunchDaemons` is read by root, and a job with no `UserName`
+/// would run the fleet's control binary as uid 0 against an account-owned
+/// `~/.stado`.
+const REMOTE_USER_PLACEHOLDER: &str = "__STADO_USER__";
 
 pub fn plan_deploy(name: &str, program: &str, args: &[String]) -> Result<DeployPlan, DeployError> {
     validate_service_name(name)?;
@@ -1747,14 +2121,29 @@ pub fn plan_deploy(name: &str, program: &str, args: &[String]) -> Result<DeployP
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| label.clone());
     let remote_home = Path::new(REMOTE_HOME_PLACEHOLDER);
+    let mut exec_args = Vec::with_capacity(args.len() + 1);
+    exec_args.push(program.to_string());
+    exec_args.extend(args.iter().cloned());
     let plan = DeployPlan {
-        label,
+        label: label.clone(),
         unit,
         program: program.to_string(),
+        argv: exec_args.join(" "),
         darwin_unit: darwin.content(remote_home),
+        darwin_daemon_unit: local_install::daemon_plist_text(
+            &label,
+            &exec_args,
+            &darwin.env,
+            &remote_home
+                .join(".stado")
+                .join("logs")
+                .join(format!("{label}.log")),
+            REMOTE_USER_PLACEHOLDER,
+        ),
         linux_unit: linux.content(remote_home),
     };
     guard_heredoc(&plan.darwin_unit)?;
+    guard_heredoc(&plan.darwin_daemon_unit)?;
     guard_heredoc(&plan.linux_unit)?;
     Ok(plan)
 }
@@ -1793,6 +2182,396 @@ pub async fn deploy_service(
         runner,
     )
     .await
+}
+
+// ---------------------------------------------------------------------------
+// Ensure: the unit a host must be running, asserted rather than installed
+// ---------------------------------------------------------------------------
+
+/// The unit was not there and this pass installed it.
+pub const ACTION_CREATED: &str = "created";
+/// The unit was there and this pass kicked it in place.
+pub const ACTION_RESTARTED: &str = "restarted";
+/// The unit was there, running the declared program, and nothing was touched.
+pub const ACTION_ALREADY_CORRECT: &str = "already_correct";
+
+/// launchd's system domain: `/Library/LaunchDaemons`, reached with sudo, and
+/// the only domain that exists on an ssh login with no Aqua session.
+pub const DOMAIN_SYSTEM: &str = "system";
+/// The per-login domain (`gui/<uid>` or `user/<uid>`), and `systemd --user`.
+pub const DOMAIN_USER: &str = "user";
+
+/// What one `ensure` pass found and did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnsureOutcome {
+    /// [`ACTION_CREATED`], [`ACTION_RESTARTED`] or
+    /// [`ACTION_ALREADY_CORRECT`]; any other word is a failure the remote
+    /// program named.
+    pub action: String,
+    /// The domain the unit ended up in, as launchd spells it.
+    pub domain: String,
+    /// The pid running under the unit after the pass, empty when none is.
+    pub pid: String,
+    /// The unit file the pass settled on. The body picks the domain, and
+    /// therefore the path, after the prelude has already printed the one it
+    /// derived, so this is the authority and not `STADO_HOST`'s field.
+    pub path: String,
+    pub report: RemoteReport,
+}
+
+impl EnsureOutcome {
+    /// True when the pass reached one of the three intended actions AND the
+    /// host was observed with the unit loaded and running afterwards.
+    pub fn succeeded(&self) -> bool {
+        matches!(
+            self.action.as_str(),
+            ACTION_CREATED | ACTION_RESTARTED | ACTION_ALREADY_CORRECT
+        ) && self.report.postcondition_held()
+    }
+
+    /// The two-valued domain an operator acts on: a unit in the system domain
+    /// needs sudo and survives a logout, a unit in the per-login one does
+    /// neither. `systemd --user` is the same answer as launchd's per-login
+    /// domain, because it is the same fact about who owns the job.
+    pub fn domain_word(&self) -> &'static str {
+        if self.domain == DOMAIN_SYSTEM {
+            DOMAIN_SYSTEM
+        } else {
+            DOMAIN_USER
+        }
+    }
+
+    /// True when this pass changed the host.
+    pub fn changed(&self) -> bool {
+        self.action != ACTION_ALREADY_CORRECT
+    }
+}
+
+/// `service ensure` on one host: install the unit only where the host is not
+/// already running it, and never unload anything.
+pub async fn ensure_service(
+    target: &ComputeTarget,
+    plan: &DeployPlan,
+    runner: &Runner,
+) -> Result<EnsureOutcome, DeployError> {
+    // Delimiter first, for the reason [`deploy_service`] gives: substituting
+    // it after the unit bodies would let a rendered unit containing the
+    // marker text be rewritten into the delimiter itself.
+    let body = ENSURE_BODY
+        .replace("@HEREDOC@", UNIT_HEREDOC)
+        .replace("@LAUNCHD_STATE@", LAUNCHD_STATE)
+        .replace("@PROGRAM@", &shlex_quote(&plan.program))
+        .replace("@ARGV@", &shlex_quote(&plan.argv))
+        .replace(
+            "@DARWIN_DAEMON_UNIT@",
+            plan.darwin_daemon_unit.trim_end_matches('\n'),
+        )
+        .replace("@DARWIN_UNIT@", plan.darwin_unit.trim_end_matches('\n'))
+        .replace("@LINUX_UNIT@", plan.linux_unit.trim_end_matches('\n'));
+    let prelude = prelude_with(&plan.label, &plan.unit, "", NO_DOMAIN_SYSTEM)?;
+    let report = run_remote_checked(
+        target,
+        &prelude,
+        &body,
+        &end_state(RUNNING_DESCRIBE, RUNNING_PROBE),
+        runner,
+    )
+    .await?;
+    let (domain, pid, path) = parse_ensure(&report.stdout)
+        .unwrap_or_else(|| (report.domain.clone(), String::new(), report.path.clone()));
+    Ok(EnsureOutcome {
+        action: report.status.clone(),
+        domain,
+        pid,
+        path,
+        report,
+    })
+}
+
+/// The `STADO_ENSURE` marker: the domain, pid and unit path the body settled
+/// on. Absent for every failure path, which is why it is an [`Option`].
+fn parse_ensure(stdout: &str) -> Option<(String, String, String)> {
+    stdout
+        .lines()
+        .find_map(|line| match host_channel::marker_fields(line).as_slice() {
+            ["STADO_ENSURE", domain, pid, path] => Some((
+                (*domain).to_string(),
+                (*pid).to_string(),
+                (*path).to_string(),
+            )),
+            _ => None,
+        })
+}
+
+/// The managed-service record an `ensure` should be declared under.
+///
+/// [`record_from_report`] with the ensured path substituted: the record has to
+/// name the file the unit was actually installed at, and for a system daemon
+/// that is `/Library/LaunchDaemons/<label>.plist` rather than the per-login
+/// agent path the prelude derived before the body chose a domain. A record
+/// naming a file the host does not have is a declaration no later command can
+/// act on.
+pub fn record_from_ensure(
+    host: &str,
+    name: &str,
+    outcome: &EnsureOutcome,
+    managed_since: &str,
+) -> ManagedService {
+    let mut record = record_from_report(host, None, name, &outcome.report, managed_since);
+    if !outcome.path.is_empty() {
+        record.path = outcome.path.clone();
+    }
+    record
+}
+
+// ---------------------------------------------------------------------------
+// Which artefact the live process is executing
+// ---------------------------------------------------------------------------
+
+/// What one unit's live process is running, as the host reported it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RunningProgram {
+    /// The unit id the host addressed.
+    pub unit: String,
+    /// The pid under the unit, empty when nothing runs under it.
+    pub pid: String,
+    /// The program the unit's own file declares.
+    pub declared: String,
+    /// What that declaration resolves to today, once a `current` link in it
+    /// has been followed.
+    pub resolved: String,
+    /// The executable the process table says the pid is running.
+    pub running: String,
+    /// When the process started.
+    pub started_epoch: Option<i64>,
+    /// When the declared program was last written.
+    pub declared_written_epoch: Option<i64>,
+    /// When the running executable was last written.
+    pub running_written_epoch: Option<i64>,
+}
+
+impl RunningProgram {
+    /// The executable path, or `None` when no process was found to ask about.
+    pub fn running_binary(&self) -> Option<&str> {
+        if self.running.is_empty() {
+            None
+        } else {
+            Some(self.running.as_str())
+        }
+    }
+
+    /// Whether the process is executing the artefact the unit's declaration
+    /// resolves to, or `None` when that could not be established.
+    ///
+    /// Two ways for a loaded unit at the declared version to be running code
+    /// nobody shipped, and both are production incidents:
+    ///
+    /// - The executable is not what the declaration resolves to. Brama's
+    ///   process kept running an artefact tree that `current` no longer
+    ///   pointed at, so the unit, the version on disk and the release were all
+    ///   correct and the live process was none of them.
+    /// - The file was written after the process started. The Weles worker kept
+    ///   serving a `dist` that was replaced 26 seconds into its run: the path
+    ///   still matches, and the artefact the process loaded is gone.
+    ///
+    /// `None` is never folded into either answer, for the reason
+    /// `service converge` keeps `unknown` apart from `drifted`: a unit with
+    /// nothing running under it, or a host that would not say when a file was
+    /// written, has produced no evidence about artefact identity, and
+    /// answering `true` there would be the report this field exists to
+    /// replace.
+    pub fn matches_process(&self) -> Option<bool> {
+        if self.running.is_empty() || self.declared.is_empty() {
+            return None;
+        }
+        if self.running != self.declared && self.running != self.resolved {
+            return Some(false);
+        }
+        let started = self.started_epoch?;
+        let written = match (self.declared_written_epoch, self.running_written_epoch) {
+            (Some(declared), Some(running)) => declared.max(running),
+            (Some(epoch), None) | (None, Some(epoch)) => epoch,
+            (None, None) => return None,
+        };
+        Some(written <= started)
+    }
+}
+
+/// Ask one host what the live process under one managed unit is executing.
+pub async fn inspect_process(
+    target: &ComputeTarget,
+    service: &ManagedService,
+    runner: &Runner,
+) -> Result<RunningProgram, DeployError> {
+    let body = PROCESS_BODY.replace("@LAUNCHD_STATE@", LAUNCHD_STATE);
+    let script = remote_script(service.unit_id(), "", &service.path, &body)?;
+    let report = run_remote(target, script, runner).await?;
+    if !report.succeeded("inspected") {
+        return Err(DeployError(format!(
+            "{}: could not inspect the process under {}: {}",
+            target.name,
+            service.unit_id(),
+            report.failure()
+        )));
+    }
+    let mut program = parse_process(&report.stdout);
+    program.unit = report.unit.clone();
+    Ok(program)
+}
+
+/// The `STADO_PROCESS` marker. An epoch the host could not read arrives empty
+/// and stays `None`: a missing timestamp is the absence of a fact, and zero
+/// would compare as 1970 and call every process stale.
+fn parse_process(stdout: &str) -> RunningProgram {
+    let mut program = RunningProgram::default();
+    for line in stdout.lines() {
+        if let ["STADO_PROCESS", pid, declared, resolved, running, started, declared_written, running_written] =
+            host_channel::marker_fields(line).as_slice()
+        {
+            program.pid = (*pid).to_string();
+            program.declared = (*declared).to_string();
+            program.resolved = (*resolved).to_string();
+            program.running = (*running).to_string();
+            program.started_epoch = started.trim().parse().ok();
+            program.declared_written_epoch = declared_written.trim().parse().ok();
+            program.running_written_epoch = running_written.trim().parse().ok();
+        }
+    }
+    program
+}
+
+// ---------------------------------------------------------------------------
+// Product processes no unit owns
+// ---------------------------------------------------------------------------
+
+/// Where `service deploy --from-artifact` installs the programs it renders
+/// units around. Not a product root — the product declaration cannot name it,
+/// because what lands there is whatever an operator deployed — and a program
+/// running out of it is this fleet's program all the same.
+pub const DEPLOYED_SERVICES_ROOT: &str = "$HOME/.stado/services";
+
+/// What [`product_guess`] says about a command line that matches a managed
+/// root and no product in the declaration.
+pub const UNKNOWN_PRODUCT: &str = "unknown";
+
+/// The `$HOME`-relative roots a managed program can execute out of: every
+/// declared product's install root, plus [`DEPLOYED_SERVICES_ROOT`].
+///
+/// This is the whole definition of "a product process" for
+/// [`unowned_processes`]. It comes off the shipped product declaration rather
+/// than a list in this file, so a product added there is scanned for without a
+/// matching edit here.
+pub fn managed_roots() -> Result<Vec<String>, DeployError> {
+    let mut roots = vec![DEPLOYED_SERVICES_ROOT.to_string()];
+    for product in super::products::declared()? {
+        let root = product.root().to_string();
+        if !roots.contains(&root) {
+            roots.push(root);
+        }
+    }
+    Ok(roots)
+}
+
+/// Which product a command line belongs to.
+///
+/// The host reports absolute paths and the declaration is `$HOME`-relative, so
+/// both are matched on the tail they share. A program product is identified by
+/// its own file name and not by its root: `stado` and `skarbiec` install into
+/// the same `$HOME/.stado/bin`, and reporting a four-day-old unowned agent as
+/// possibly-skarbiec would be worse than saying nothing.
+pub fn product_guess(command: &str) -> String {
+    let tail = |root: &str| root.strip_prefix(HOME_PREFIX).unwrap_or(root).to_string();
+    let deployed = format!("{}/", tail(DEPLOYED_SERVICES_ROOT));
+    if let Some((_, rest)) = command.split_once(deployed.as_str()) {
+        let name = rest.split(['/', ' ']).next().unwrap_or_default();
+        if !name.is_empty() {
+            return name.to_string();
+        }
+    }
+    let products = super::products::declared().unwrap_or_default();
+    for product in products {
+        if command.contains(&format!("{}/{}", tail(product.root()), product.name)) {
+            return product.name.clone();
+        }
+    }
+    for product in products {
+        if command.contains(&format!("{}/", tail(product.root()))) {
+            return product.name.clone();
+        }
+    }
+    UNKNOWN_PRODUCT.to_string()
+}
+
+/// One product process on one host that no unit owns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnownedProcess {
+    pub host: String,
+    pub pid: String,
+    /// The full command line, tabs and newlines flattened on the host so one
+    /// process can never span two marker lines.
+    pub command: String,
+    /// The host's own `ps` start stamp. Kept verbatim: four days is the fact
+    /// that mattered on the always-on mac, and a reformatting that failed
+    /// would report a process with no age at all.
+    pub started_at: String,
+}
+
+impl UnownedProcess {
+    pub fn product_guess(&self) -> String {
+        product_guess(&self.command)
+    }
+
+    pub fn to_json(&self) -> Value {
+        json!({
+            "host": self.host,
+            "pid": self.pid,
+            "command": self.command,
+            "started_at": self.started_at,
+            "product_guess": self.product_guess(),
+        })
+    }
+}
+
+/// Every product process on one host that no launchd job or systemd unit owns.
+///
+/// Read-only: it starts nothing, stops nothing and signals nothing, so it is
+/// safe to run against a live production host.
+pub async fn unowned_processes(
+    target: &ComputeTarget,
+    runner: &Runner,
+) -> Result<Vec<UnownedProcess>, DeployError> {
+    let mut roots = Vec::new();
+    for root in managed_roots()? {
+        // The roots keep `$HOME` unexpanded on this side and expanded on
+        // theirs, so the same rule `quote_unit_path` applies to a declared
+        // unit path applies to them: a vetted charset inside double quotes.
+        roots.push(format!("\"{}\"", quote_unit_path(&root)?));
+    }
+    let script = UNOWNED_SCRIPT.replace("@ROOTS@", &roots.join(" "));
+    let output = host_channel::run_script(target, &script, runner).await?;
+    if !output.ok() {
+        return Err(DeployError(host_channel::last_error_line(
+            &output,
+            "the unowned-process scan did not complete",
+        )));
+    }
+    Ok(parse_unowned(&target.name, &output.stdout))
+}
+
+/// The `STADO_UNOWNED` marker lines, in the order the host printed them.
+fn parse_unowned(host: &str, stdout: &str) -> Vec<UnownedProcess> {
+    stdout
+        .lines()
+        .filter_map(|line| match host_channel::marker_fields(line).as_slice() {
+            ["STADO_UNOWNED", pid, started, command] => Some(UnownedProcess {
+                host: host.to_string(),
+                pid: (*pid).to_string(),
+                command: (*command).trim().to_string(),
+                started_at: (*started).trim().to_string(),
+            }),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The managed-service record a completed deploy or adopt should be
@@ -2512,4 +3291,186 @@ fn split_words(value: &str) -> Vec<String> {
         words.push(current);
     }
     words
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The declaration and the process agree, and nothing has been written
+    /// since the process started: the running code is the shipped code.
+    #[test]
+    fn an_untouched_artefact_matches_its_process() {
+        let program = RunningProgram {
+            unit: "com.wisent.brama".to_string(),
+            pid: "412".to_string(),
+            declared: "/Users/c/.stado/services/brama/current/bin/brama".to_string(),
+            resolved: "/Users/c/.stado/services/brama/0.2.27/bin/brama".to_string(),
+            running: "/Users/c/.stado/services/brama/0.2.27/bin/brama".to_string(),
+            started_epoch: Some(1_700_000_500),
+            declared_written_epoch: Some(1_700_000_000),
+            running_written_epoch: Some(1_700_000_000),
+        };
+        assert_eq!(program.matches_process(), Some(true));
+        assert_eq!(
+            program.running_binary(),
+            Some("/Users/c/.stado/services/brama/0.2.27/bin/brama")
+        );
+    }
+
+    /// Brama's incident: the unit, the installed version and the release were
+    /// all correct, and the live process was executing a version directory
+    /// `current` no longer pointed at.
+    #[test]
+    fn a_process_under_an_old_version_directory_does_not_match() {
+        let program = RunningProgram {
+            declared: "/Users/c/.stado/services/brama/current/bin/brama".to_string(),
+            resolved: "/Users/c/.stado/services/brama/0.2.27/bin/brama".to_string(),
+            running: "/Users/c/.stado/services/brama/0.2.26/bin/brama".to_string(),
+            started_epoch: Some(1_700_000_500),
+            declared_written_epoch: Some(1_700_000_000),
+            running_written_epoch: Some(1_700_000_000),
+            ..RunningProgram::default()
+        };
+        assert_eq!(program.matches_process(), Some(false));
+    }
+
+    /// The Weles incident: the path still matches and the artefact the process
+    /// loaded was replaced 26 seconds into its run.
+    #[test]
+    fn an_artefact_replaced_after_the_process_started_does_not_match() {
+        let program = RunningProgram {
+            declared: "/Users/c/weles/dist/worker".to_string(),
+            resolved: "/Users/c/weles/dist/worker".to_string(),
+            running: "/Users/c/weles/dist/worker".to_string(),
+            started_epoch: Some(1_700_000_000),
+            declared_written_epoch: Some(1_700_000_026),
+            running_written_epoch: Some(1_700_000_026),
+            ..RunningProgram::default()
+        };
+        assert_eq!(program.matches_process(), Some(false));
+    }
+
+    /// Nothing running under the unit, and a host that would not say when a
+    /// file was written, are both "nobody looked" — never `true`, and never
+    /// `false` either.
+    #[test]
+    fn an_unobservable_process_is_neither_answer() {
+        let nothing_running = RunningProgram {
+            declared: "/Users/c/weles/dist/worker".to_string(),
+            ..RunningProgram::default()
+        };
+        assert_eq!(nothing_running.matches_process(), None);
+        assert_eq!(nothing_running.running_binary(), None);
+
+        let no_timestamps = RunningProgram {
+            declared: "/Users/c/weles/dist/worker".to_string(),
+            resolved: "/Users/c/weles/dist/worker".to_string(),
+            running: "/Users/c/weles/dist/worker".to_string(),
+            started_epoch: Some(1_700_000_000),
+            ..RunningProgram::default()
+        };
+        assert_eq!(no_timestamps.matches_process(), None);
+    }
+
+    /// The four-day incident, as the report reads it: a `stado agent` process
+    /// under the owner-only bin root, attributed to the product whose file it
+    /// is rather than to the root it shares with skarbiec.
+    #[test]
+    fn an_unowned_agent_is_attributed_to_its_own_product() {
+        let processes = parse_unowned(
+            "control-host",
+            "STADO_HOST\tDarwin\tgui/501\tx\ty\n\
+             STADO_UNOWNED\t46748\tMon Aug 11 09:12:33 2026\t/Users/c/.stado/bin/stado agent\n",
+        );
+        assert_eq!(processes.len(), 1);
+        assert_eq!(processes[0].host, "control-host");
+        assert_eq!(processes[0].pid, "46748");
+        assert_eq!(processes[0].started_at, "Mon Aug 11 09:12:33 2026");
+        assert_eq!(processes[0].product_guess(), "stado");
+    }
+
+    /// A deployed service is named by the directory it was installed under,
+    /// which is the name `service deploy` created it with; a release tree is
+    /// named by the product that declares its root.
+    #[test]
+    fn a_command_under_a_managed_root_names_what_it_belongs_to() {
+        assert_eq!(
+            product_guess("/Users/c/.stado/services/brama/current/bin/brama serve"),
+            "brama"
+        );
+        assert_eq!(
+            product_guess("/opt/homebrew/bin/node /Users/c/weles/dist/worker.js"),
+            "weles-worker"
+        );
+        assert_eq!(
+            product_guess("/usr/bin/tail -f /var/log/system.log"),
+            UNKNOWN_PRODUCT
+        );
+    }
+
+    /// The system-domain spelling names the account it must run as, so launchd
+    /// does not run the fleet's control binary as root, and it is a different
+    /// file from the agent spelling of the same job.
+    #[test]
+    fn the_daemon_spelling_names_its_account() {
+        let plan = plan_deploy(
+            "weles-api",
+            "/Users/c/.stado/bin/stado",
+            &["agent".to_string()],
+        )
+        .expect("plan renders");
+        assert_eq!(plan.argv, "/Users/c/.stado/bin/stado agent");
+        assert!(plan.darwin_daemon_unit.contains("<key>UserName</key>"));
+        assert!(plan.darwin_daemon_unit.contains(REMOTE_USER_PLACEHOLDER));
+        assert!(!plan.darwin_unit.contains("<key>UserName</key>"));
+        assert!(plan.darwin_daemon_unit.contains(&plan.label));
+    }
+
+    /// The ensure marker is the authority on where the unit ended up: the body
+    /// picks the domain after the prelude has already printed the path it
+    /// derived, and a record naming the wrong file is one no later command can
+    /// act on.
+    #[test]
+    fn the_ensure_marker_carries_the_domain_it_settled_on() {
+        let stdout = "STADO_HOST\tDarwin\tgui/501\tcom.wisent.stado.service.weles-api\t/Users/c/Library/LaunchAgents/x.plist\n\
+                      STADO_ENSURE\tsystem\t908\t/Library/LaunchDaemons/com.wisent.stado.service.weles-api.plist\n\
+                      STADO_SERVICE\tcom.wisent.stado.service.weles-api\tcreated\tx\n";
+        let (domain, pid, path) = parse_ensure(stdout).expect("marker present");
+        assert_eq!(domain, DOMAIN_SYSTEM);
+        assert_eq!(pid, "908");
+        assert_eq!(
+            path,
+            "/Library/LaunchDaemons/com.wisent.stado.service.weles-api.plist"
+        );
+        let outcome = EnsureOutcome {
+            action: ACTION_CREATED.to_string(),
+            domain,
+            pid,
+            path: path.clone(),
+            report: parse_markers(stdout),
+        };
+        assert_eq!(outcome.domain_word(), DOMAIN_SYSTEM);
+        assert!(outcome.changed());
+        assert_eq!(
+            record_from_ensure("control-host", "weles-api", &outcome, "now").path,
+            path
+        );
+    }
+
+    /// `already_correct` is the one action that changed nothing, which is what
+    /// decides whether a pass is recorded at all.
+    #[test]
+    fn an_already_correct_pass_changed_nothing() {
+        let outcome = EnsureOutcome {
+            action: ACTION_ALREADY_CORRECT.to_string(),
+            domain: "gui/501".to_string(),
+            pid: "412".to_string(),
+            path: "/Users/c/Library/LaunchAgents/x.plist".to_string(),
+            report: RemoteReport::default(),
+        };
+        assert!(!outcome.changed());
+        assert_eq!(outcome.domain_word(), DOMAIN_USER);
+        assert!(outcome.succeeded());
+    }
 }

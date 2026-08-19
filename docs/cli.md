@@ -1472,6 +1472,7 @@ an arbitrary, per-host, declared set.
 | Subcommand | Behavior |
 |---|---|
 | `list [--json]` | Every managed service on every host, with its state. |
+| `list --unowned [--json]` | Product processes running on any host that no launchd job or systemd unit owns. |
 | `status NAME [--json]` | One service everywhere it is managed. |
 | `converge TARGET [SERVICE] [--apply] [--json]` | Declared revision against the revision the host reports. |
 | `restart NAME [--host TARGET] [--json]` | Restart one unit; no recovery pass. |
@@ -1484,6 +1485,7 @@ an arbitrary, per-host, declared set.
 | `update NAME --host TARGET --from-artifact REF [--json]` | Move a unit already managed onto a new version. |
 | `update NAME --host TARGET --from-archive PATH [--json]` | The same, from a local bundle no store carries yet. |
 | `update NAME --host TARGET --rollback-to VERSION [--json]` | Point `current` back at a version already on the host. |
+| `ensure NAME --host TARGET --from PATH [--arg A]... --reason WHY [--json]` | Assert the unit that host must be running. Idempotent, works where the per-user launchd domain does not exist, and never unloads a unit. |
 | `directory show [--json]` | The service directory: active host, per-caller endpoint, consumers. |
 | `directory profiles [--json]` | Placement profiles: services, start/stop order, hosts, required state. |
 | `directory endpoint NAME [--target T] [--json]` | The address the directory declares for a target. |
@@ -1649,6 +1651,164 @@ rubber stamp.
 stado service converge control-host
 stado service converge control-host stado --apply
 ```
+
+### Which artefact is the live process actually running?
+
+Every column above is about what is INSTALLED, and an installed version says
+nothing about a process that started before it. Two incidents sat in exactly
+that gap with every other column correct: Brama's process kept running an
+artefact tree `current` no longer pointed at, and the Weles worker kept serving
+a `dist` that was replaced 26 seconds after it started. `converge` therefore
+carries two more facts per unit.
+
+| Field | Meaning |
+|---|---|
+| `running_binary` | The executable the host's process table says the pid under that unit is running. `null` when nothing runs under the unit. |
+| `binary_matches_process` | `true` when that executable is what the unit's declaration resolves to today AND neither file has been written since the process started; `false` when either is untrue; `null` when it could not be established. |
+
+The `PROCESS` column prints `matches`, `differs` or `unknown` for those three
+states, and a `differs` row also names the running path on stderr, because the
+path is what an operator acts on and is far too long for a column. `unknown` is
+never folded into either answer, for the same reason the verdict column keeps
+its own `unknown`: a unit with nothing running under it has produced no
+evidence about artefact identity, and `true` there is the report this field
+exists to replace.
+
+Both facts come from one extra read-only round trip per unit, on the same
+channel: the unit's own file for what it declares, `readlink` for what its
+`current` link resolves to now, the process table for the executable and the
+start time, and `stat` for when each file was last written. The verdict is
+computed in the CLI from those facts, never in the remote shell, so there is
+one opinion about artefact identity. A unit the reporter names but the registry
+does not declare is not asked about at all — locating its unit file would mean
+guessing a path for a unit nobody adopted.
+
+A row can read `in-sync` and `differs` at once, and that combination is the
+whole point: the version on disk is the declared one and the running code is
+not it. The remedy is `stado service restart NAME --host TARGET`.
+
+```bash
+stado service converge control-host --json | jq '.binaries[]
+  | {binary, installed_version, running_binary, binary_matches_process}'
+```
+
+### Processes no unit owns
+
+Two `stado agent` processes ran on the always-on mac for four days with no
+launchd unit behind them, executing a binary older than the one on disk. Every
+other answer in this group is about declared units, so none of them could name
+those processes, and `service deploy` could not replace them because it
+bootstraps into the per-user launchd domain, which does not exist over ssh.
+
+```bash
+stado service list --unowned
+```
+
+```
+HOST               PID    PRODUCT_GUESS  STARTED_AT                COMMAND
+control-host  46748  stado          Fri Aug 14 09:12:33 2026  /Users/charles/.stado/bin/stado agent
+```
+
+A process counts as a product process when the executable it runs, or the entry
+point an interpreter was handed, lives under a managed root: the install root of
+every product in `stado-rs/data/products.json`, plus `~/.stado/services`, where
+`service deploy --from-artifact` installs. Merely mentioning such a path is not
+enough — a `tail` on a log under the root would match `pgrep -f` — and a report
+that names those is a report operators learn to ignore.
+
+Ownership is asked of the init system rather than assumed. On macOS the pids in
+the `services` table of every printable launchd domain are owned, and so is any
+descendant of one, which is why a job's own child processes never appear here.
+On Linux the answer is the cgroup the kernel put the process in: a `.service`
+cgroup belongs to a unit, a `.scope` to a login session that has since gone.
+
+This is the one read in the group that cannot come off the beacons — an unowned
+process is by construction in nobody's declaration — so it costs one read-only
+ssh per `kind=local` host. It starts nothing, stops nothing and signals nothing,
+and a host that will not answer is named on stderr with a non-zero exit rather
+than dropped, because "no unowned processes" and "nobody looked" are not the
+same answer. `--json` prints
+`{"unowned":[{"host","pid","command","started_at","product_guess"}]}`.
+
+`product_guess` names the product whose own file is being executed, not the root
+it sits in: `stado` and `skarbiec` share `~/.stado/bin`, and reporting a
+four-day-old unowned agent as possibly-skarbiec would be worse than saying
+nothing. A program under `~/.stado/services/NAME/` is named by `NAME`, the name
+`service deploy` created it with.
+
+### Asserting a unit, where the per-user domain does not exist
+
+`deploy` installs a unit and refuses one that is already declared, so nothing
+could be run twice — or run from a script — to make a host run what it is
+supposed to run. And on an ssh login there is no Aqua session:
+`launchctl bootstrap gui/$uid` answers
+`Could not switch to audit session ... Operation not permitted`, and `deploy`
+returned that failure having installed nothing. That is how the two unowned
+agents above came to exist.
+
+```bash
+stado service ensure weles-api --host control-host \
+  --from /Users/charles/.stado/bin/stado --arg agent --arg --auto \
+  --reason 'the queue agent has run with no unit behind it since 2026-08-14'
+```
+
+```
+HOST               SERVICE    LABEL                                  DOMAIN  ACTION   PID
+control-host  weles-api  com.wisent.stado.service.weles-api     system  created  908
+audit record service_audit/control-host/20260818T142530.114203Z-com.wisent.stado.service.weles-api.json
+```
+
+| Action | When |
+|---|---|
+| `already_correct` | The unit declares exactly this argument vector and a live process under it is running that program. Nothing is touched at all. |
+| `restarted` | The unit was already loaded and was kicked in place. |
+| `created` | There was no unit, so one was rendered, written and bootstrapped. |
+
+`domain` is `system` or `user`. Where the per-login launchd domain exists the
+unit is a LaunchAgent in `~/Library/LaunchAgents`; where it does not, the same
+job is rendered as a launchd **daemon** in `/Library/LaunchDaemons` with a
+`UserName` naming the account it must run as — without that key launchd would
+run the fleet's control binary as root against an account-owned `~/.stado`. The
+daemon file is the one write this command cannot do as the login user, so a host
+without passwordless sudo is told exactly that rather than left with a rendered
+plist nobody loaded. `systemd --user` on Linux reports `user`.
+
+An existing unit is only ever restarted **in place** (`kickstart -k`). It is
+never unloaded and bootstrapped back: that sequence took the always-on host down
+once, when launchd still held children of the old job, the bootstrap back failed
+and the unit was left unloaded with its listeners gone. For the same reason a
+loaded unit whose definition names a different argument vector is refused rather
+than overwritten — launchd holds the definition it bootstrapped, so a rewritten
+plist under a live job changes nothing an operator can see. Retire it first.
+
+There is also no fallback to `launchctl submit` or to a bare background process,
+which `deploy` still has: those two are how a host comes to run a program no
+unit owns, which is the state `list --unowned` finds and this command exists to
+end. A unit that will not stay up is reported as the failure it is, with
+`stado service list --unowned` named, because the usual cause is a disowned
+process still holding the port.
+
+`--reason` is required and a blank one is refused. When a pass changes anything
+— the host, the registry, or both — the reason is written as one create-only
+object beside the canonical registry document, at
+`service_audit/<host>/<UTC>-<label>.json`, carrying the action, the resolved
+unit and its path, the domain, the pid, the program and argument vector, the
+registry generation the write produced and who ran it. Beside the registry
+rather than in the queue store because the registry is the state that changed,
+and on a GCS deployment those are different buckets. A pass that reports
+`already_correct` on an already-declared unit changed nothing and records
+nothing: an audit trail that also records the passes which changed nothing is
+one nobody reads.
+
+The unit is recorded in the registry as managed, through the same validated
+write path `adopt` and `deploy` use, so every other command in this group can
+address it afterwards. A declaration that names a different file than the unit
+was installed at — the agent path where the daemon path is now in force — is
+corrected in one document write.
+
+`--json` prints `{"host","name","label","domain","action","pid"}` and nothing
+else; where the audit record landed goes to stderr, so the document stays
+exactly that shape.
 
 ### Everything else rides one ssh channel
 
