@@ -117,6 +117,89 @@ pub async fn publish_capacity(
         .await
 }
 
+/// One consumer's publication and the instant it says it was made.
+///
+/// Carries the stamp separately from the payload because every consumer of a
+/// publication asks the same second question — how old is this — and reading
+/// `published_at` out of the body at each site is how two surfaces end up
+/// disagreeing about whether a row is stale.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Publication {
+    /// The row exactly as its author wrote it.
+    pub payload: Value,
+    /// `published_at` from the body, falling back to the object's own
+    /// timestamp for a body that predates the field or carries an
+    /// unparseable one, so a row can never be reported as ageless.
+    pub stamp: Option<DateTime<Utc>>,
+}
+
+impl Publication {
+    /// Seconds since this row was published, or `None` when neither the body
+    /// nor the object could say when that was.
+    pub fn age_seconds(&self, now: DateTime<Utc>) -> Option<i64> {
+        self.stamp.map(|stamp| (now - stamp).num_seconds())
+    }
+
+    /// Past [`CAPACITY_STALE_SECONDS`], the horizon every live-capacity
+    /// reader in the fleet filters on. An undateable row is NOT stale: it is
+    /// a row of unknown age, and calling it stale would invent a fact.
+    pub fn stale(&self, now: DateTime<Utc>) -> bool {
+        self.age_seconds(now)
+            .is_some_and(|age| age > CAPACITY_STALE_SECONDS as i64)
+    }
+}
+
+/// Return {consumer_id: publication} for EVERY row under
+/// [`CAPACITY_PREFIX`], stale ones included, deleting nothing.
+///
+/// The reader for reports, never for a tick. [`read_consumer_capacity`] is
+/// the scheduler's reader and is wrong for anything that has to explain a
+/// silent fleet twice over: it drops every row past the staleness horizon,
+/// and it DELETES every row past the GC horizon — so an operator command
+/// built on it destroys the evidence that a host went quiet an hour ago and
+/// then reports that the host never said anything at all.
+///
+/// The cost that justified the GC-ing reader's metadata prefilter does not
+/// apply here: that was a 60s Cloud Function tick against 1900+ accumulated
+/// rows, and the tick still runs that reader and still collects them. A
+/// report runs once, on an operator's keystroke, against whatever the tick
+/// has left.
+pub async fn read_publications(
+    store: &JobStorage,
+) -> Result<BTreeMap<String, Publication>, StorageError> {
+    let mut rows: BTreeMap<String, Publication> = BTreeMap::new();
+    for blob in store.list_blobs_with_meta(CAPACITY_PREFIX).await? {
+        let Some(stem) = blob
+            .name
+            .strip_prefix(CAPACITY_PREFIX)
+            .and_then(|name| name.strip_suffix(".json"))
+        else {
+            continue;
+        };
+        // Race: an agent can self-delete its own broadcast, or a scheduler
+        // tick can sweep it, between the listing above and the download
+        // below. A missing blob is the one case dropped; every other error
+        // propagates so a broken store never reads as a quiet fleet.
+        let Some(raw) = store.download_text(&blob.name).await? else {
+            continue;
+        };
+        let payload: Value = serde_json::from_str(&raw)?;
+        let consumer_id = payload
+            .get("consumer_id")
+            .and_then(Value::as_str)
+            .unwrap_or(stem)
+            .to_string();
+        let stamp = payload
+            .get("published_at")
+            .and_then(Value::as_str)
+            .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
+            .map(|stamp| stamp.with_timezone(&Utc))
+            .or(blob.updated);
+        rows.insert(consumer_id, Publication { payload, stamp });
+    }
+    Ok(rows)
+}
+
 /// Return {consumer_id: payload} for every live (non-stale) consumer.
 /// Python `read_consumer_capacity`.
 pub async fn read_consumer_capacity(
