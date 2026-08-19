@@ -751,15 +751,9 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
             .await
             .map_err(CmdError::click),
         ReleaseCommands::Status(args) => status(&args).await,
-        ReleaseCommands::Logs(args) => {
-            crate::cli::release_evidence::dispatch_logs(&args).await
-        }
-        ReleaseCommands::Doctor(args) => {
-            crate::cli::release_evidence::dispatch_doctor(&args).await
-        }
-        ReleaseCommands::Quarantine(sub) => {
-            crate::cli::release_quarantine::dispatch(sub).await
-        }
+        ReleaseCommands::Logs(args) => crate::cli::release_evidence::dispatch_logs(&args).await,
+        ReleaseCommands::Doctor(args) => crate::cli::release_evidence::dispatch_doctor(&args).await,
+        ReleaseCommands::Quarantine(sub) => crate::cli::release_quarantine::dispatch(sub).await,
         ReleaseCommands::Rollback(args) => rollback(&args).await,
     }
 }
