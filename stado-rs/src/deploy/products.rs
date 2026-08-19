@@ -135,6 +135,26 @@ pub struct Product {
     /// The unit that runs it, or `None` for a product no unit owns.
     #[serde(default)]
     pub unit: Option<Unit>,
+    /// Roots where an EARLIER delivery mechanism of this product staged one
+    /// directory per version, and where those directories are still sitting.
+    ///
+    /// Declared rather than discovered, and declared here rather than spelled
+    /// inside a reclamation, because the path is a fact about this product's
+    /// history: `control-host` carries 20 `weles-worker` versions
+    /// (0.5.2 … 0.5.21, 9.7 GiB) under `$HOME/.local/share/weles-worker`, put
+    /// there by the installer that predates
+    /// [`crate::deploy::artifact_install`], while the worker itself runs from
+    /// its own checkout — inert trees no delivery will ever look at again and,
+    /// until this field existed, nothing in the product could see.
+    /// [`crate::deploy::host_reclaim`]'s `delivered_trees` stage sweeps these
+    /// under exactly the rules it applies to `$HOME/.stado/services`.
+    ///
+    /// NOT the same thing as [`Install::root`]: for a `tree` product that root
+    /// IS the live installation (`$HOME/weles`, whose children are `scripts`,
+    /// `recordings` and `var`, not versions), and pointing a sweep at it would
+    /// be pointing it at the running worker.
+    #[serde(default)]
+    pub superseded_roots: Vec<String>,
 }
 
 /// Where the artefact comes from.
