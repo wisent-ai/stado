@@ -90,6 +90,8 @@ printf 'STADO_QUARANTINE_BASE64\t%s\n' "$(@BODY@ | /usr/bin/openssl base64 -A)"
 
 const READ_WHOLE_BODY: &str = r#"/usr/bin/head -c @LIMIT@ "$path""#;
 
+const READ_TAIL_BODY: &str = r#"/usr/bin/tail -n @LINES@ "$path" | /usr/bin/head -c @LIMIT@"#;
+
 /// Replace one quarantine map, and leave the evidence that it happened.
 ///
 /// Every guard here exists because the file being rewritten is the one the
@@ -300,6 +302,26 @@ pub(crate) async fn remote_read(
     String::from_utf8(file.content)
         .map(Some)
         .map_err(|error| CmdError::click(format!("{}: {path} is not valid UTF-8: {error}", host.name)))
+}
+
+/// The last `lines` lines of a file on a registry host, with the file's FULL
+/// size beside them so a caller reports a tail as a tail instead of implying it
+/// has the whole thing. Lossy UTF-8: a product's log is whatever the product
+/// wrote, and a stray byte must not hide the lines around it.
+pub(crate) async fn remote_read_tail(
+    host: &ComputeTarget,
+    path: &str,
+    lines: usize,
+) -> Result<Option<(String, u64)>, CmdError> {
+    let body = READ_TAIL_BODY
+        .replace("@LINES@", &lines.to_string())
+        .replace("@LIMIT@", &REMOTE_READ_LIMIT_BYTES.to_string());
+    Ok(read_remote(host, path, &body).await?.map(|file| {
+        (
+            String::from_utf8_lossy(&file.content).into_owned(),
+            file.bytes,
+        )
+    }))
 }
 
 /// One host's rollout state for one product, identity-checked against the host
