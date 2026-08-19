@@ -146,7 +146,6 @@ impl ArmClient {
 
     /// Bind to an explicit base URL without auth (loopback mocks in
     /// tests) and with a near-zero LRO poll interval.
-
     fn assemble(subscription: &str, base_url: &str, auth: bool, poll_interval: Duration) -> Self {
         ArmClient {
             inner: Arc::new(ArmInner {
@@ -682,7 +681,6 @@ impl AzureProvider {
     }
 
     /// Bind an explicit client (tests).
-
     async fn state(&self) -> Result<&AzureState, ProviderError> {
         self.state
             .get_or_try_init(|| async {
