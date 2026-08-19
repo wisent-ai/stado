@@ -1,0 +1,120 @@
+{
+  "schemaVersion": 1,
+  "product": "Stado",
+  "audience": "Infrastructure operators who need one place to admit machines, control mutations, observe health, pause work, recover state, and account for cost across a growing AI compute fleet.",
+  "problem": "AI compute fleets grow as disconnected local workstations, long-lived servers, cloud VMs, provider consoles, scripts, queues, artifact stores, and billing dashboards, so expensive capacity ends up difficult to schedule, difficult to recover, and dangerous to automate.",
+  "promise": "Stado Is the AI DevOps and Infrastructure Hire You Needed.",
+  "primaryAction": {
+    "label": "Start the local onboarding path",
+    "kind": "url",
+    "target": "https://github.com/wisent-ai/stado/blob/main/docs/onboarding.md"
+  },
+  "secondaryAction": {
+    "label": "Read the CLI reference",
+    "purpose": "Lower-commitment product explanation: the exact command families, arguments, and exit semantics before any install.",
+    "target": "https://github.com/wisent-ai/stado/blob/main/docs/cli.md"
+  },
+  "approvedClaims": [
+    {
+      "claim": "Stado is a harness for managing compute and storage across local, GCP, AWS, and Azure infrastructure.",
+      "evidence": "README.md#Stado: The Easiest Harness for Managing Compute and Storage Across Local, GCP, AWS, and Azure Infrastructure"
+    },
+    {
+      "claim": "Describe the workload, required capacity, deadline, data, and budget; Stado decides where and when to run it, then records what happened.",
+      "evidence": "README.md#Problem and intended users"
+    },
+    {
+      "claim": "Stado replaces ad hoc orchestration with a provider-neutral product contract: one queue, one job lifecycle, and one result contract.",
+      "evidence": "README.md#Problem and intended users"
+    },
+    {
+      "claim": "Leases, fencing, and compare-and-swap revisions prevent two workers or coordinators from owning the same transition.",
+      "evidence": "README.md#Share one queue across a fleet"
+    },
+    {
+      "claim": "Pause and drain are durable control state, not a best-effort process signal on one machine, so maintenance never deletes queued work.",
+      "evidence": "README.md#Pause and drain safely"
+    },
+    {
+      "claim": "Storage migration previews and executes a fenced copy, verifies names, metadata, and bodies, never allows two active writers, and never silently treats an unavailable backend as an empty queue.",
+      "evidence": "README.md#Recover from a storage outage"
+    },
+    {
+      "claim": "A worker resolves immutable inputs, executes the workload, and publishes output plus SHA-256 evidence; secret plaintext is materialized only inside the trusted workload process and is excluded from durable job JSON.",
+      "evidence": "README.md#Run with reproducible inputs and bounded secrets"
+    },
+    {
+      "claim": "Automation and AI agents use versioned `stado machine` JSON for authorized mutations or read-only `stado-mcp` for inspection; neither interface provides unrestricted shell access or cloud-administrator credentials.",
+      "evidence": "README.md#Give automation safe compute access"
+    },
+    {
+      "claim": "The local quick start requires no cloud account, cloud credential, Skarbiec, GPU, or Python.",
+      "evidence": "README.md#Quick start"
+    },
+    {
+      "claim": "`stado capabilities --json` is the source of truth for the installed build, and an implementation status does not promote an integration to stable.",
+      "evidence": "README.md#Capability status"
+    },
+    {
+      "claim": "Stado 0.5 is in release-candidate validation, and stable 0.5 support is intentionally limited to the local execution and local filesystem contracts.",
+      "evidence": "README.md#Project status and support"
+    },
+    {
+      "claim": "Every cloud adapter remains preview until its own release-scoped live acceptance matrix passes; missing evidence is not promoted to stable support.",
+      "evidence": "README.md#Project status and support"
+    },
+    {
+      "claim": "Stado is not a general Kubernetes replacement or a container platform, and it does not manage arbitrary networks, load balancers, registries, or application platforms.",
+      "evidence": "README.md#Explicit non-goals for 0.5"
+    },
+    {
+      "claim": "Stado does not promise identical capabilities for every provider, and it does not provision physical machines or install their operating systems, GPU drivers, or workload runtimes.",
+      "evidence": "README.md#Explicit non-goals for 0.5"
+    }
+  ],
+  "requiredProof": [
+    "A real terminal transcript of the minimal local configuration: `stado config init` then `stado config validate`, printing `~/.stado/config.json` and `config ok (~/.stado/config.json)`.",
+    "A real terminal transcript of the local job path: `stado local-control-plane`, then `stado submit \"printf 'hello from Stado\\n'\"`, `stado status JOB_ID`, and `stado results JOB_ID ./results` reaching `completed` with result evidence on disk.",
+    "The documented human CLI command families printed as real command text: `stado submit|status|results|cancel`, `stado queue pause|status|drain|resume`, `stado storage ls|stat|copy|verify`, `stado doctor`, and `stado capabilities --json`.",
+    "The capability status vocabulary as `stado capabilities --json` reports it — `implemented`, `partial`, `external`, `planned`, `unsupported` — with the statement that implementation status does not mean stable support.",
+    "The supported environments matrix: macOS arm64 and Linux amd64 as supported candidates with a stable local scope, Linux arm64 not yet supported, and cloud adapters preview."
+  ],
+  "brand": {
+    "canonicalAssets": [
+      "assets/readme-banner.webp",
+      "assets/readme-banner.svg"
+    ],
+    "rules": [
+      "Type comes from the three families in wisent-components/tokens.json: `font.expanded` ('Hubot Sans Expanded') for display headings, `font.sans` ('Hubot Sans') for body and UI, `font.mono` ('IBM Plex Mono') for every command, transcript, and code artifact. No fourth family.",
+      "One dominant foreground/background relationship: `color.background` #f8fdfb behind `color.ink` #2d3130 body copy, with `color.canvasMuted` #ecf2f0 as the only alternating section band.",
+      "Headings and deep surfaces use `color.forest` / `color.brand900` #273329; supporting copy uses `color.secondaryText` #59605d and `color.mutedText` #8b9290.",
+      "The accent role is restrained and reserved for the single primary action: `color.brand` / `color.brand500` #9ecca0 with `color.brandHover` #8dbb8f, and `color.brandLink` #769978 for inline links. Tints `color.brand50` #f9fff9 through `color.brand400` #bae6bd are for quiet surfaces only, never for large filled blocks.",
+      "Rules, card edges, and table borders use `color.border` #dee4e2 and `color.borderStrong` #c1c8c6; `color.subtleBorder` #eeeeee for the lightest dividers.",
+      "`color.success` #15803d, `color.warning` #b45309, and `color.danger` #b91c1c are reserved for real product status — for example `implemented` versus `preview` versus `unsupported` — never for decoration.",
+      "Spacing and section rhythm use the `space` scale (2px through 40px); corners use the `radius` scale (6px through 22px); depth uses `shadow.surface` and `shadow.raised` only.",
+      "Motion stays inside `motion.fast` 150ms and `motion.standard` 180ms, must explain state, sequence, or causality, and must respect reduced-motion preferences.",
+      "Use the canonical banner from this repository as the brand image; the terminal evidence is real captured output rendered in `font.mono`, never a drawn window."
+    ],
+    "forbidden": [
+      "Interchangeable AI gradients, floating glass cards, excessive rounded rectangles, and decorative grids.",
+      "Fake terminal chrome or any drawn, dressed-up, or retyped terminal that is not real captured Stado output.",
+      "Motion that does not explain state, sequence, or causality.",
+      "Inventing a new logo, font, palette, or claim because a canonical asset is inconvenient to locate.",
+      "Copying another company's copy, layout, illustration, product UI, or brand assets.",
+      "Invented social proof or performance numbers: no customer names, no adoption counts, no throughput, cost-saving, or uptime figures.",
+      "Generic slogans that omit the product or the outcome.",
+      "Multiple equal-weight primary CTAs.",
+      "Placeholder product screenshots presented as real.",
+      "Desktop-only evaluation.",
+      "Publishing before the CTA destination and analytics ownership are known.",
+      "Treating a visual-model score as proof of functional correctness."
+    ]
+  },
+  "analyticsOwner": "Wisent product and design maintainers",
+  "notes": [
+    "primaryAction.kind is url, so target is the approved absolute URL: the onboarding path the README links from its Quick start section. Stado publishes no signup or hosted account flow, so no signup URL may be used.",
+    "Preview status is load-bearing copy, not a caveat to hide: any cloud provider named on the page must be labelled preview until its release-scoped live acceptance evidence is recorded.",
+    "Provider status printed by the installed build is authoritative; the page must not restate capability status as if it were fixed.",
+    "Build and deploy settings for the generated site live in landing.config.json, never in this brief."
+  ]
+}
