@@ -11,7 +11,7 @@ final class FleetControlStore: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var lastUpdated: Date?
     @Published private(set) var mutation: WisentMutationOutcome = .idle
-    @Published private(set) var releaseStatusOutput: String?
+    @Published private(set) var releaseStatus: ReleaseStatusSnapshot?
     @Published private(set) var releaseStatusError: String?
     @Published private(set) var isLoadingReleaseStatus = false
     @Published private(set) var releaseStatusUpdated: Date?
@@ -133,10 +133,10 @@ final class FleetControlStore: ObservableObject {
         }
     }
 
-    /// `stado release status` through the dashboard's allowlisted command
-    /// bridge: desired vs observed per product target, then the newest
-    /// pipeline runs with their persisted failures. Read-only; the text is
-    /// shown verbatim so the GUI and the CLI read one source.
+    /// `stado release status --json` through the dashboard's allowlisted
+    /// command bridge: desired vs observed per product target, then the
+    /// newest pipeline runs with their persisted failures. Read-only; the
+    /// CLI, the web operator console, and this screen read one command.
     func refreshReleaseStatus() async {
         guard !isLoadingReleaseStatus else { return }
         guard let address else {
@@ -147,17 +147,21 @@ final class FleetControlStore: ObservableObject {
         defer { isLoadingReleaseStatus = false }
         do {
             let result = try await client.run(
-                arguments: ["release", "status"],
+                arguments: ["release", "status", "--json"],
                 confirmsMutation: false,
                 at: address,
                 authorizationToken: authorizationToken
             )
-            if result.ok {
-                releaseStatusOutput = result.standardOutput
-                releaseStatusError = nil
-            } else {
+            guard result.ok else {
                 releaseStatusError = result.message
+                return
             }
+            guard let data = result.standardOutput.data(using: .utf8) else {
+                releaseStatusError = "The release status payload was not readable text."
+                return
+            }
+            releaseStatus = try JSONDecoder().decode(ReleaseStatusSnapshot.self, from: data)
+            releaseStatusError = nil
             releaseStatusUpdated = Date()
         } catch {
             releaseStatusError = Self.describe(error)
