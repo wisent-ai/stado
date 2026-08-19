@@ -242,6 +242,13 @@ pub fn compat_accel_types(local_vram_gb: i64) -> Vec<String> {
 /// shared workstation never picks up stray queue backlog. Pin matching is
 /// case-insensitive: registry hostnames are stored normalized while
 /// consumer_id carries the machine's verbatim gethostname() casing.
+///
+/// NEW (0.7.9): job.platform_os/job.architecture are a hard machine
+/// constraint, not a preference. A native build job produces binaries for
+/// exactly one platform, so a darwin-arm64 build claimed by a Linux agent
+/// compiles the wrong artifact under the right name — or, more often, fails
+/// halfway and reports it as the commit's fault. Either field empty is no
+/// constraint, which is every job submitted before build fan-out existed.
 #[allow(clippy::too_many_arguments)]
 pub fn job_eligible(
     job: &Job,
@@ -265,6 +272,17 @@ pub fn job_eligible(
         return false;
     }
     if job.exclusive && active_slot_count > 0 {
+        return false;
+    }
+    // This host's own release platform, from the one place the rest of the
+    // build learns it — the same word the registry records as the target's
+    // `release_platform`. Alias-tolerant on the way in: the fleet spells this
+    // machine "darwin"/"macos" and "arm64"/"aarch64", "amd64"/"x86_64".
+    if !crate::targets::platform_accepts_job(
+        crate::self_update::platform_triple_short().unwrap_or_default(),
+        &job.platform_os,
+        &job.architecture,
+    ) {
         return false;
     }
     if crate::capabilities::execution_adapter(kind)

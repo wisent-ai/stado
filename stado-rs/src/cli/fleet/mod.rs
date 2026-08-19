@@ -4,9 +4,8 @@
 //! This is the whole implementation, not a wrapper: the `stado_fleet` binary
 //! parses the same [`FleetCommands`] and calls the same [`run`]. Adding a
 //! machine used to live only in that separate binary, which meant the one
-//! command an operator needs first was invisible to `stado --help`, to the
-//! dashboard's operator console (it executes `stado`, and only `stado`), and
-//! to anything else built on the main CLI. One implementation behind two
+//! command an operator needs first was invisible to `stado --help` and to
+//! anything built on the main CLI. One implementation behind two
 //! entry points is the fix; a second copy of the enrollment logic would
 //! reintroduce exactly the drift that made the `stado_fleet` binary two minor
 //! versions stale while nobody noticed.

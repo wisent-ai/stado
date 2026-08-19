@@ -27,6 +27,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use serde_json::{json, Map, Value};
 
 use crate::capabilities::{Consumer, DeclarationSurface, DeclaredField, SiblingCondition};
+use crate::deploy::service;
 use crate::monitor::host_health;
 use crate::queue::{capacity, JobStorage};
 use crate::targets::{
@@ -303,7 +304,7 @@ pub async fn pull() -> Result<(), CmdError> {
 /// and exits, on every respawn, forever.
 pub async fn self_target(name_only: bool) -> Result<(), CmdError> {
     let hostname = crate::providers::vast::system_hostname();
-    let registry = fetch_registry().await?;
+    let registry = read_registry().await?;
     let found = registry
         .lookup_self(&hostname)
         .map_err(|exc| CmdError::click(exc.to_string()))?
@@ -528,14 +529,23 @@ fn declared_units(target: &ComputeTarget) -> Vec<DeclaredUnit> {
         .collect()
 }
 
-/// The canonical registry, or the reason it could not be READ. An
-/// unreachable store is an error here, never an empty registry: `doctor`
-/// reporting "every host is unmanaged" because the store was down is the
-/// exact confusion `targets::RegistryFetchError` exists to prevent.
-async fn fetch_registry() -> Result<Registry, CmdError> {
-    targets::fetch_registry_remote()
+/// The canonical registry for a read-only command, the last-known-good copy
+/// when the authority does not answer, or the reason neither could be READ.
+///
+/// Never an empty registry: `doctor` reporting "every host is unmanaged"
+/// because the store was down is the exact confusion
+/// `targets::RegistryFetchError` exists to prevent. Never a silent copy
+/// either — the copy's age goes to stderr in one sentence, because a
+/// diagnostic that dies with the thing it diagnoses is worthless, and a
+/// diagnostic that answers from a copy without saying so is worse.
+pub(crate) async fn read_registry() -> Result<Registry, CmdError> {
+    let (registry, notice) = targets::fetch_registry_or_last_good()
         .await
-        .map_err(|exc| CmdError::click(exc.to_string()))
+        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    if let Some(notice) = notice {
+        targets::report_registry_notice(&notice);
+    }
+    Ok(registry)
 }
 
 // ---------------------------------------------------------------------------
@@ -1194,7 +1204,7 @@ fn unread_configuration() -> Vec<Finding> {
 /// plus the bodies it finds.
 #[allow(clippy::too_many_lines)]
 pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
-    let registry = fetch_registry().await?;
+    let registry = read_registry().await?;
     let store = JobStorage::new().await?;
     let beacons = load_beacons(&store).await?;
     let consumers = capacity::read_consumer_capacity(&store).await?;
@@ -1210,6 +1220,21 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
         // "vast" targets are dispatcher pools, not boxes.
         if !target.is_provider(crate::capabilities::ProviderId::Local) {
             continue;
+        }
+        // The document against itself, before any beacon is consulted: a
+        // launchd domain the host cannot have is wrong whether or not the
+        // host is answering, and it is the reason its beacon will never
+        // report the unit.
+        for misdeclared in service::misdeclared_domains(target) {
+            let unit = misdeclared.unit.clone();
+            findings.push(
+                Finding::new(
+                    "misdeclared-domain",
+                    &target.name,
+                    misdeclared.sentence(),
+                )
+                .about(unit),
+            );
         }
         let Some(beacon) = slugs.iter().find_map(|slug| beacons.get(slug)) else {
             findings.push(Finding::new(
@@ -1455,10 +1480,15 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
     // One cause, one row. A unit the beacon does not report on a host that cannot
     // satisfy what the unit needs is already reported as `capability-unsatisfied`,
     // and the `missing-plist` row for the same label is that finding's symptom:
-    // installing the plist would not make the host able to run it.
+    // installing the plist would not make the host able to run it. A unit
+    // declared in a domain its host cannot have is the same relationship —
+    // `misdeclared-domain` is why nothing loads it and why no beacon reports
+    // it, and installing the plist where it is declared would change neither.
     let caused: Vec<(String, String)> = findings
         .iter()
-        .filter(|finding| finding.kind == "capability-unsatisfied")
+        .filter(|finding| {
+            matches!(finding.kind, "capability-unsatisfied" | "misdeclared-domain")
+        })
         .filter_map(|finding| {
             finding
                 .unit
@@ -1586,7 +1616,7 @@ pub(crate) fn human_age(age: TimeDelta) -> String {
 /// reporting is exactly what this table exists to surface, and a row that
 /// is absent surfaces nothing.
 pub async fn beacon_age(as_json: bool) -> Result<(), CmdError> {
-    let registry = fetch_registry().await?;
+    let registry = read_registry().await?;
     let store = JobStorage::new().await?;
     let beacons = load_beacons(&store).await?;
     let now = Utc::now();

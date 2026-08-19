@@ -229,7 +229,7 @@ fn service<'a>(block: &'a Map<String, Value>, name: &str) -> Result<&'a Value, C
 /// name differs from its own idea of itself.
 async fn this_target() -> Result<String, CmdError> {
     let hostname = crate::providers::vast::system_hostname();
-    let registry = targets::fetch_registry_remote()
+    let registry = registry::read_registry()
         .await
         .map_err(|exc| click(format!("cannot resolve this target: {exc}")))?;
     registry
@@ -401,9 +401,7 @@ async fn bind(name: &str, target: Option<String>, as_json: bool) -> Result<(), C
             "{name} is placed on {active}, not on {asking}; only the placed host serves it"
         )));
     }
-    let registry = targets::fetch_registry_remote()
-        .await
-        .map_err(|exc| click(exc.to_string()))?;
+    let registry = registry::read_registry().await?;
     let placed = registry
         .targets
         .iter()
@@ -478,9 +476,7 @@ async fn connect(
     let url = if asking == active {
         format!("{scheme}://127.0.0.1:{port}")
     } else {
-        let registry = targets::fetch_registry_remote()
-            .await
-            .map_err(|exc| click(exc.to_string()))?;
+        let registry = registry::read_registry().await?;
         let placed = registry
             .targets
             .iter()

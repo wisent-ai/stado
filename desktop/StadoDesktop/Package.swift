@@ -30,6 +30,21 @@ let package = Package(
             dependencies: ["Stado"],
             path: "tests/fleet"
         ),
-
+        .testTarget(
+            name: "LinkTests",
+            dependencies: [
+                "Stado",
+                .product(name: "WisentDesignSystem", package: "wisent-components"),
+            ],
+            path: "tests/link"
+        ),
+        .testTarget(
+            name: "ServiceTests",
+            dependencies: [
+                "Stado",
+                .product(name: "WisentDesignSystem", package: "wisent-components"),
+            ],
+            path: "tests/service"
+        ),
     ]
 )
