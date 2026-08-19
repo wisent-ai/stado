@@ -709,6 +709,7 @@ fn prepare_owner_log(home: &Path, label: &str) -> Result<PathBuf, DeployError> {
         }
         Err(error) => return Err(DeployError(error.to_string())),
     }
+    #[allow(clippy::unnecessary_cast)] // mode_t is u16 on macOS, u32 on Linux
     let directory_mode = nix::libc::S_IRWXU as u32;
     fs::set_permissions(&directory, fs::Permissions::from_mode(directory_mode))
         .map_err(|error| DeployError(error.to_string()))?;
@@ -725,6 +726,7 @@ fn prepare_owner_log(home: &Path, label: &str) -> Result<PathBuf, DeployError> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(DeployError(error.to_string())),
     }
+    #[allow(clippy::unnecessary_cast)] // mode_t is u16 on macOS, u32 on Linux
     let file_mode = (nix::libc::S_IRUSR | nix::libc::S_IWUSR) as u32;
     OpenOptions::new()
         .create(true)

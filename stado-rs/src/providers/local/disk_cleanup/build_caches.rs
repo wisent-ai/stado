@@ -87,6 +87,7 @@ enum Progress {
 /// The one identity comparison this module needs: a directory opened with
 /// `O_NOFOLLOW` must be the exact object the preceding `fstatat` described,
 /// or something replaced it between the two calls.
+#[allow(clippy::unnecessary_cast)] // libc field widths differ per OS; the cast is required on macOS
 fn same_object(first: &FileStat, second: &FileStat) -> bool {
     first.st_dev == second.st_dev
         && first.st_ino == second.st_ino
@@ -231,6 +232,7 @@ impl<'a> Walk<'a> {
             let Ok(info) = safefs::fstatat_nofollow(dir_fd, &name) else {
                 continue;
             };
+            #[allow(clippy::unnecessary_cast)] // st_mode is u16 on macOS, u32 on Linux
             if ifmt(info.st_mode as u32) == IFDIR && info.st_dev == self.root_dev {
                 if depth + 1 > MAX_DEPTH {
                     continue;
