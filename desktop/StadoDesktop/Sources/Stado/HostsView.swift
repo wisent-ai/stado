@@ -627,9 +627,29 @@ struct HostsView: View {
                     : (gates.pinnedByDesign ? "Only work addressed to this host" : "No"),
                 tone: gates.claiming || gates.pinnedByDesign ? .success : .danger
             )
+            if gates.pinnedByDesign {
+                // The pin is the explanation, not a failure: say in one place
+                // what claiming looks like on this host, why the row is calm,
+                // and where the policy is changed. Without this sentence a
+                // "No" reads as a broken agent, and it has been misread twice.
+                Text("Registry policy pins this host (pinned_only): it takes only jobs explicitly routed to it, and unpinned queue work goes to open hosts by design. Jobs pinned to this host still run here, so nothing is lost — the alarm above appears only when pinned work is actually waiting. Change the pin under Registry → this host → Change policy.")
+                    .font(WisentTypeScale.caption())
+                    .foregroundStyle(WisentDesign.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !gates.waitingJobs.isEmpty {
+                    Text("The pin is currently costing work: the queue holds jobs addressed to this host.")
+                        .font(WisentTypeScale.caption())
+                        .foregroundStyle(WisentDesign.danger)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
             WisentField(
                 label: "Blockers",
-                value: gates.blockers.isEmpty ? "None reported" : gates.blockers.joined(separator: "\n"),
+                value: gates.blockers.isEmpty
+                    ? "None reported"
+                    : (gates.pinnedByDesign
+                        ? "Pinned by the registry (agent word: pinned_only)"
+                        : gates.blockers.joined(separator: "\n")),
                 tone: gates.blockers.isEmpty || (gates.pinnedByDesign && gates.waitingJobs.isEmpty) ? .neutral : .danger
             )
             WisentField(
