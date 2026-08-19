@@ -128,6 +128,8 @@ pub const BUILD_SCRATCH_STAGE: &str = "build_scratch";
 pub const DELIVERED_TREES_STAGE: &str = "delivered_trees";
 /// The stage name for the macOS per-launch Chromium bundle clones.
 pub const CHROMIUM_CLONES_STAGE: &str = "chromium_clones";
+/// The stage name for terminal queue-job workdirs and bootstrap scratch.
+pub const QUEUE_WORKDIRS_STAGE: &str = "queue_workdirs";
 
 /// The only prefix a macOS temporary container has, and the guard on the one
 /// root this module does not spell itself.
@@ -162,6 +164,11 @@ const WC_WORDS_MARK: &str = "@WC_WORDS@";
 const SERVICES_ROOT_MARK: &str = "@SERVICES_ROOT@";
 const BUILD_WORK_MARK: &str = "@BUILD_WORK@";
 const AGE_DAYS_MARK: &str = "@AGE_DAYS@";
+const LIVE_JOBS_MARK: &str = "@LIVE_JOBS@";
+const WORK_ROOTS_MARK: &str = "@WORK_ROOTS@";
+/// Where queue workdirs live in production: the fixed POSIX temp root plus
+/// whatever the login shell's TMPDIR names (the macOS per-user container).
+pub const DEFAULT_WORK_ROOTS: &str = "/tmp \"${TMPDIR:-}\"";
 const CLONE_CONTAINER_MARK: &str = "@CLONE_CONTAINER@";
 const CLONE_ROOT_MARK: &str = "@CLONE_ROOT@";
 const CLONE_PREFIX_MARK: &str = "@CLONE_PREFIX@";
@@ -237,6 +244,27 @@ if [ -d "$scratch" ]; then
   done
 fi
 printf 'STADO_RECLAIM_STAGE\tbuild_scratch\t%s\t%s\n' "$before" "$(free_kb)"
+
+before=$(free_kb)
+# Workdirs of queue jobs that are neither queued nor running: a terminal job
+# never returns to its workdir, so age is irrelevant and the keep-list is the
+# small live set the operator side read from the queue store. Bootstrap
+# scratch (stado-bootstrap-*) is one-off provisioning debris by definition.
+# On 2026-08-19 these trees filled the linux builder to 0 GiB free and the
+# fleet starved on a host that looked merely busy.
+for workroot in @WORK_ROOTS@; do
+  [ -n "$workroot" ] && [ -d "$workroot" ] || continue
+  for entry in "$workroot"/wc-* "$workroot"/stado-bootstrap-*; do
+    [ -d "$entry" ] || continue
+    id=$(basename "$entry")
+    id="${id#wc-}"
+    case " @LIVE_JOBS@ " in
+      *" $id "*) continue ;;
+    esac
+    reclaim "$entry" queue_workdirs
+  done
+done
+printf 'STADO_RECLAIM_STAGE\tqueue_workdirs\t%s\t%s\n' "$before" "$(free_kb)"
 
 before=$(free_kb)
 # One directory of versions: keep what `current` resolves to, keep the newest,
@@ -385,10 +413,23 @@ fn superseded_words() -> String {
 /// The stado candidates are quoted exactly the way
 /// [`crate::deploy::host_recovery::remote_script`] quotes them, so `$HOME`
 /// still expands on the remote side while the word stays one word.
-pub fn remote_script(apply: bool) -> String {
+/// `work_roots` is substituted verbatim into the queue-workdirs sweep;
+/// production callers pass [`DEFAULT_WORK_ROOTS`], tests pass their scratch
+/// directory so an executed apply can never leave the fixture.
+pub fn remote_script(apply: bool, live_jobs: &[String], work_roots: &str) -> String {
     let wc_words = WC_CANDIDATES
         .iter()
         .map(|value| format!("\"{value}\""))
+        .collect::<Vec<String>>()
+        .join(" ");
+    // Job ids are hex identifiers; anything else is dropped rather than
+    // spliced into a shell word. Losing a malformed id from the KEEP list is
+    // fail-safe only because held() still protects a workdir some live
+    // process names in its argv.
+    let live_words = live_jobs
+        .iter()
+        .filter(|id| !id.is_empty() && id.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-'))
+        .cloned()
         .collect::<Vec<String>>()
         .join(" ");
     REMOTE_SCRIPT_TEMPLATE
@@ -397,6 +438,8 @@ pub fn remote_script(apply: bool) -> String {
         .replace(SERVICES_ROOT_MARK, SERVICES_ROOT)
         .replace(BUILD_WORK_MARK, BUILD_WORK_ROOT)
         .replace(AGE_DAYS_MARK, MIN_AGE_DAYS)
+        .replace(LIVE_JOBS_MARK, &live_words)
+        .replace(WORK_ROOTS_MARK, work_roots)
         .replace(CONTAINER_PREFIX_MARK, CONTAINER_PREFIX)
         .replace(CLONE_CONTAINER_MARK, chromium_clones::CLONE_CONTAINER)
         .replace(CLONE_ROOT_MARK, chromium_clones::CLONE_ROOT_NAME)
@@ -649,7 +692,42 @@ pub async fn reclaim_host(
     runner: &Runner,
 ) -> Result<(ComputeTarget, Reclamation), DeployError> {
     let target = host_channel::canonical_target(target_name).await?;
-    let output = host_channel::run_script(&target, &remote_script(apply), runner).await?;
+    // The keep-list for the queue_workdirs stage: jobs still queued or
+    // running are the only ones that may return to their workdirs. Read
+    // best-effort — an unreadable queue store must not turn a disk repair
+    // into an outage — but a read failure keeps EVERY workdir (empty
+    // keep-list would keep none), so the stage fails closed.
+    let live_jobs = match crate::queue::JobStorage::new().await {
+        Ok(store) => {
+            let mut ids = Vec::new();
+            let mut readable = true;
+            for state in ["queue", "running"] {
+                match store.list_jobs(state, 0).await {
+                    Ok(jobs) => ids.extend(jobs.into_iter().map(|job| job.job_id)),
+                    Err(_) => readable = false,
+                }
+            }
+            if readable {
+                Some(ids)
+            } else {
+                None
+            }
+        }
+        Err(_) => None,
+    };
+    let Some(live_jobs) = live_jobs else {
+        return Err(DeployError(
+            "the queue store is unreadable, so the terminal-workdir keep-list cannot be built; \
+             refusing to reclaim workdirs blind"
+                .to_string(),
+        ));
+    };
+    let output = host_channel::run_script(
+        &target,
+        &remote_script(apply, &live_jobs, DEFAULT_WORK_ROOTS),
+        runner,
+    )
+    .await?;
     if !output.ok() {
         return Err(DeployError(host_channel::last_error_line(
             &output,
@@ -695,7 +773,7 @@ mod tests {
             .stdin
             .take()
             .expect("stdin")
-            .write_all(remote_script(apply).as_bytes())
+            .write_all(remote_script(apply, &[], "\"$HOME/.stado-test-workroot\"").as_bytes())
             .expect("the program reached the shell");
         let output = child.wait_with_output().expect("bash finished");
         assert!(
@@ -1189,8 +1267,8 @@ mod tests {
     /// walks the paths an apply removes.
     #[test]
     fn both_modes_run_the_same_program() {
-        let preview = remote_script(false);
-        let apply = remote_script(true);
+        let preview = remote_script(false, &[], DEFAULT_WORK_ROOTS);
+        let apply = remote_script(true, &[], DEFAULT_WORK_ROOTS);
         assert_eq!(preview.replace("apply=0", "apply=1"), apply);
         // Every root the program touches is a crate constant, spliced in.
         assert!(apply.contains(BUILD_WORK_ROOT));
@@ -1213,7 +1291,7 @@ mod tests {
     /// `apply` branch and the flag is off.
     #[test]
     fn a_dry_run_program_deletes_nothing() {
-        let preview = remote_script(false);
+        let preview = remote_script(false, &[], DEFAULT_WORK_ROOTS);
         assert!(preview.contains("apply=0"));
         let removal = preview
             .find("/bin/rm")
