@@ -22,6 +22,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
     case services
     case disk
     case registry
+    case builds
     case releases
     case deployments
 
@@ -36,6 +37,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         case .services: "Services"
         case .disk: "Disk"
         case .registry: "Registry"
+        case .builds: "Builds"
         case .releases: "Releases"
         case .deployments: "Deployments"
         }
@@ -50,6 +52,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         case .services: "gearshape.2"
         case .disk: "externaldrive"
         case .registry: "book.closed"
+        case .builds: "hammer"
         case .releases: "shippingbox"
         case .deployments: "point.3.connected.trianglepath.dotted"
         }
@@ -64,6 +67,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         case .services: "What each declared unit runs, and which processes nothing owns"
         case .disk: "Disk pressure, what the last pass reclaimed, and the next pass"
         case .registry: "Canonical fleet policy and the generation it was read at"
+        case .builds: "Which repositories the control plane builds on new commits, and what the last build produced"
         case .releases: "What each product should run, what its host runs, and what is holding the rollout"
         case .deployments: "Which Stado backend this console reads, and who else may read it"
         }
@@ -73,7 +77,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         switch self {
         case .posture, .queue: .work
         case .hosts, .fleets, .disk, .services: .fleet
-        case .registry, .releases, .deployments: .system
+        case .registry, .builds, .releases, .deployments: .system
         }
     }
 
