@@ -357,19 +357,16 @@ contract.
 `stado-mcp` is a read-only stdio JSON-RPC server for AI agents. Mutations stay
 behind the authenticated CLI or machine boundary.
 
-### Dashboard
+### API listener
 
-The dashboard is the authenticated operator workspace over canonical state.
-It combines queue, agent, artifact, cleanup, registry-policy, FinOps, and
-failure evidence with structured controls for jobs, inference, queue
-maintenance, hosts, services, the complete registry, releases, schedules,
-costs, recovery, diagnostics, alerts, identities, credentials, and cloud
-providers. Every operation is a bounded argv array executed by the installed
-Stado release; the browser never exposes a shell. Mutating operations require
-the dashboard's `operate` permission, an explicit confirmation, and the same
-policy checks as the CLI. Local onboarding binds the dashboard to loopback.
-Remote exposure additionally requires authenticated deployment configuration
-and a trusted reverse proxy.
+`stado dashboard` is the authenticated API listener over canonical state:
+the product object data plane (`/api/object`), the public release channel
+(`/api/release/object`), the machine API (`/api/machine/*`), the
+managed-service API (`/api/service/*`), route-scoped host-health beacons,
+and the shared rate limiter. It serves no HTML page — the operator
+workspace is Stado Desktop. Local onboarding binds the listener to
+loopback. Remote exposure additionally requires authenticated deployment
+configuration and a trusted reverse proxy.
 
 Three enrollment routes sit beside that surface and outside its operator
 identity, because the machine being invited has one credential and it is not an
@@ -379,7 +376,7 @@ nothing. None of the three can write the registry — they hand out the fleet's
 public key and record a pending request, and the registry write happens later
 under operator authority in `stado fleet approve`. All three serve the `invite`
 method's one-line mode, and therefore only a machine that can reach this
-dashboard — which a loopback binding does not allow; the method's offline mode
+listener — which a loopback binding does not allow; the method's offline mode
 exists so that adding a machine never depends on them. See
 [the invite endpoints](docs/cli.md#invite-endpoints-on-the-dashboard) and
 [the control-point check](docs/cli.md#the-control-point-check).
