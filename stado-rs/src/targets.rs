@@ -26,8 +26,8 @@
 //!
 //! DEVIATION from Python: the fetch follows `WC_STORAGE_BACKEND` instead of
 //! hardcoding GCS. Python reads GCS unconditionally, so on an Azure-only
-//! deployment the dashboard compare-and-swaps `registry.json` into the
-//! Azure container (`dashboard/policy.rs`, the WRITE side, which already
+//! deployment the write side compare-and-swaps `registry.json` into the
+//! Azure container (`cli::registry` — `stado registry push`, which already
 //! goes through the configured store) while every reader consults a GCS
 //! object nobody writes. The "gcs" read path is unchanged.
 //!
@@ -35,12 +35,24 @@
 //! empty registry, because "the store is unreachable" and "the registry
 //! does not list you" drive opposite decisions in the coordinator's
 //! rogue-daemon kill switch.
+//!
+//! A reader is not required to die with the authority. Every canonical read
+//! that parses is copied to `~/.stado/cache/registry-last-good.json` with a
+//! dated sidecar, and [`fetch_registry_or_last_good`] serves that copy —
+//! carrying its age in [`Registry::staleness_seconds`] and one sentence for
+//! the operator — when the store does not answer. The bundled snapshot stays
+//! BELOW the cache, reachable only through [`load_registry_auto`]. What does
+//! not change is the kill switch's authority: [`fetch_registry_remote`] still
+//! fails rather than answer from a copy, because "the registry no longer
+//! lists you" may only be concluded from the registry itself.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
+use chrono::{DateTime, SecondsFormat, Utc};
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -1448,6 +1460,12 @@ pub struct Service {
     /// the unverifiable declaration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verify: Option<VerifyDescriptor>,
+    /// The deployable half of the declaration: where the bytes come from and
+    /// what the unit runs. Absent on entries declared before the contract
+    /// existed; older builds keep it verbatim in `extra`, so no writer drops
+    /// it silently.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declaration: Option<crate::declaration::ServiceDeclaration>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -1686,6 +1704,215 @@ pub struct PlacementProfile {
 }
 
 // ---------------------------------------------------------------------------
+// registry.json — native build recipes
+// ---------------------------------------------------------------------------
+
+/// Top-level registry key holding the fleet's build recipes. Unmodelled by
+/// [`Registry`] itself, so the array round-trips through [`Registry::extra`]
+/// and a writer of any vintage keeps it.
+pub const BUILDS_KEY: &str = "builds";
+
+/// Top-level registry key that, when `true`, halts all build polling
+/// fleet-wide (the scheduler's kill switch).
+pub const BUILDS_DISABLED_KEY: &str = "builds_disabled";
+
+fn default_build_interval_seconds() -> u64 {
+    300
+}
+
+/// One release platform's job-routing coordinates: every spelling of its
+/// operating system and architecture the fleet writes down, canonical first.
+///
+/// Two spellings for one machine is not a hypothetical: enrollment reads
+/// `uname` (`Darwin`/`arm64`), Rust reads `std::env::consts` (`macos`/
+/// `aarch64`), the sandbox box declares `x86_64` and the cloud optimizer
+/// accepts `amd64`. A router that knows one of them refuses jobs that name
+/// the same host by another word, so every spelling this repository writes
+/// belongs in one table rather than at each comparison.
+struct PlatformRouting {
+    platform: &'static str,
+    /// [`Job::platform_os`] spellings; the first is what a build job declares.
+    os: &'static [&'static str],
+    /// [`Job::architecture`] spellings; the first is what a build job declares.
+    arch: &'static [&'static str],
+}
+
+/// The platform words of [`crate::deploy::products::PLATFORMS`], each with
+/// the job fields that route work to it.
+const PLATFORM_ROUTING: [PlatformRouting; 2] = [
+    PlatformRouting {
+        platform: "darwin-arm64",
+        os: &["darwin", "macos"],
+        arch: &["arm64", "aarch64"],
+    },
+    PlatformRouting {
+        platform: "linux-amd64",
+        os: &["linux"],
+        arch: &["amd64", "x86_64"],
+    },
+];
+
+/// A platform the installer knows but nothing can route work to is a build
+/// that submits jobs no host will ever claim. Fail the build of whoever adds
+/// the platform word instead.
+const _: () = assert!(PLATFORM_ROUTING.len() == crate::deploy::products::PLATFORMS.len());
+
+fn platform_routing(platform: &str) -> Option<&'static PlatformRouting> {
+    PLATFORM_ROUTING
+        .iter()
+        .find(|entry| entry.platform == platform)
+}
+
+/// The `(platform_os, architecture)` a job must declare to be routed to
+/// `platform`, or `None` when the word is not a release platform.
+///
+/// The one place a platform word becomes job fields: the build poller and
+/// `stado builds run` submit byte-identical routing, and the claiming agent
+/// reads the same table back through [`platform_accepts_job`].
+pub fn platform_job_os_arch(platform: &str) -> Option<(&'static str, &'static str)> {
+    let routing = platform_routing(platform)?;
+    Some((routing.os[0], routing.arch[0]))
+}
+
+/// Whether a host running `platform` may run a job declaring `platform_os`
+/// and `architecture`.
+///
+/// An empty job field is no constraint — every job submitted before platform
+/// routing existed carries two of them, and they stay claimable everywhere.
+/// An unknown `platform` accepts nothing constrained: a host the release
+/// pipeline does not publish for cannot be the intended target of a job that
+/// names a platform.
+pub fn platform_accepts_job(platform: &str, platform_os: &str, architecture: &str) -> bool {
+    if platform_os.is_empty() && architecture.is_empty() {
+        return true;
+    }
+    let Some(routing) = platform_routing(platform) else {
+        return false;
+    };
+    let names = |spellings: &[&str], value: &str| {
+        value.is_empty()
+            || spellings
+                .iter()
+                .any(|spelling| spelling.eq_ignore_ascii_case(value))
+    };
+    names(routing.os, platform_os) && names(routing.arch, architecture)
+}
+
+/// The recorded outcome of one platform's most recent build job.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuildRun {
+    /// "succeeded" | "failed" | "running".
+    pub status: String,
+    /// RFC3339 timestamp of when the run was recorded.
+    pub at: String,
+    /// Queue job id of the build job.
+    pub job_id: String,
+    /// Store-relative URIs of the uploaded artifacts, empty while running.
+    #[serde(default)]
+    pub artifact_uris: Vec<String>,
+    /// Exact semantic version the built commit carries, when the sha is
+    /// tagged; `None` for an untagged commit, which is most of them. A build
+    /// never invents one: an untagged commit produces artifacts and no
+    /// version, and nothing downstream may be declared from it.
+    #[serde(default)]
+    pub version: Option<String>,
+    /// Whether this run's [`BuildRun::version`] was declared as the fleet's
+    /// managed version for this platform (`auto_declare`).
+    #[serde(default)]
+    pub declared: bool,
+}
+
+/// One native build recipe: a repository the control plane polls, the
+/// platforms it builds for, and the command it runs in a fresh shallow
+/// checkout on each of them when the branch head moves.
+///
+/// Boundary: a build produces artifacts under each job's canonical results
+/// URI and, with `auto_declare`, a managed-version declaration for the hosts
+/// on the run's platform. It NEVER writes `release_control.products` — a
+/// signed release is promoted by `stado release promote`, which verifies the
+/// manifest and its signature against a release key. Building a
+/// commit is evidence that it compiles; promoting it is a deliberate act on
+/// verified artifacts, and collapsing the two would let a poller publish an
+/// unsigned release to the fleet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuildRecipe {
+    /// Unique kebab-case recipe name.
+    pub name: String,
+    /// HTTPS clone URL of the repository to build.
+    pub repo: String,
+    /// Branch the poller watches.
+    #[serde(rename = "ref")]
+    pub branch: String,
+    /// Single POSIX sh build command run in the checkout.
+    pub command: String,
+    /// Paths in the checkout to upload as build artifacts.
+    #[serde(default)]
+    pub artifacts: Vec<String>,
+    /// Release platforms this recipe builds for, one job each. Words from
+    /// [`crate::deploy::products::PLATFORMS`]; a recipe with none builds
+    /// nothing, and `stado builds add` requires at least one.
+    ///
+    /// Null-tolerant like every other registry collection: a recipe entry
+    /// that does not parse is dropped from [`read_build_recipes`] silently,
+    /// so one hand-written `null` would take a recipe out of the poller AND
+    /// out of every listing with nothing said.
+    #[serde(default, deserialize_with = "de_null_as_default")]
+    pub platforms: Vec<String>,
+    /// Explicit opt-in: a freshly added recipe never builds until enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Declare a succeeded run's version as the managed version for every
+    /// host on that run's platform. Off by default: a repository that builds
+    /// on every commit must not move the fleet on every commit.
+    #[serde(default)]
+    pub auto_declare: bool,
+    /// Poll cadence in seconds.
+    #[serde(default = "default_build_interval_seconds")]
+    pub interval_seconds: u64,
+    /// Branch head the poller last enqueued builds for.
+    #[serde(default)]
+    pub last_seen_ref: Option<String>,
+    /// Most recent run per platform, keyed by the platform word. Absent for
+    /// a recipe that has never built. See [`BuildRecipe::platforms`] for why
+    /// an explicit null reads as empty.
+    #[serde(default, deserialize_with = "de_null_as_default")]
+    pub runs: BTreeMap<String, BuildRun>,
+}
+
+/// The registry's build recipes. An absent `builds` key and entries that do
+/// not parse both yield nothing: a recipe this build cannot model must not
+/// stop the ones it can.
+///
+/// Absent keys are absent values, never a refusal — a recipe written before
+/// `platforms`, `auto_declare` or `runs` existed parses with them empty (and
+/// so builds nothing until an operator names its platforms), and a key this
+/// build no longer models is dropped on the next write rather than blocking
+/// the read.
+pub fn read_build_recipes(registry: &Registry) -> Vec<BuildRecipe> {
+    registry
+        .extra
+        .get(BUILDS_KEY)
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| serde_json::from_value(entry.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Replace the registry's build recipes. The key lives in
+/// [`Registry::extra`], so [`Registry::to_document`] carries it into the
+/// canonical document like any other unmodelled block.
+pub fn write_build_recipes(registry: &mut Registry, recipes: &[BuildRecipe]) {
+    registry.extra.insert(
+        BUILDS_KEY.to_string(),
+        serde_json::to_value(recipes).expect("build recipes serialize infallibly"),
+    );
+}
+
+// ---------------------------------------------------------------------------
 // __init__.py — loaders (local file, GCS fetch with TTL, source selection)
 // ---------------------------------------------------------------------------
 
@@ -1694,8 +1921,8 @@ pub struct PlacementProfile {
 /// [`REGISTRY_BLOB`] from the store `config::wc_storage_backend()` selects.
 pub const GCS_REGISTRY_URI: &str = "gs://wisent-compute/registry.json";
 /// Store-relative path of the registry document, identical on every
-/// backend. `dashboard/policy.rs` compare-and-swaps this exact path through
-/// the configured store, so the read and write sides address one object.
+/// backend. `cli::registry` compare-and-swaps this exact path through the
+/// configured store, so the read and write sides address one object.
 pub const REGISTRY_BLOB: &str = "registry.json";
 /// Re-fetch the registry at most this often (Python `_GCS_TTL_SEC`).
 pub const GCS_REGISTRY_TTL_SEC: u64 = 30;
@@ -1743,6 +1970,18 @@ pub struct Registry {
     pub placement_profiles: Vec<PlacementProfile>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+    /// How old the document a reader is holding is, in seconds, or `None`
+    /// when it did not come from the on-disk last-known-good cache — either
+    /// the authority answered, or [`load_registry_auto`] fell all the way
+    /// through to the bundled snapshot and said so in its own sentence.
+    ///
+    /// Skipped by the serializer deliberately. [`Registry::to_document`] is
+    /// what a writer pushes back, and a reader-side observation is not part
+    /// of the registry: serialized once, it would come back inside
+    /// [`Registry::extra`] on the next read and from there into the
+    /// canonical document, which is how `channels` and `fleets` were lost.
+    #[serde(skip)]
+    pub staleness_seconds: Option<i64>,
 }
 
 /// Top-level registry keys this build models; everything else round-trips
@@ -1852,6 +2091,7 @@ pub fn load_registry_from_str(text: &str) -> Result<Registry, RegistryError> {
         service_directory: parse_service_directory(&data)?,
         placement_profiles: parse_placement_profiles(&data)?,
         extra: parse_extra(&data),
+        staleness_seconds: None,
     })
 }
 
@@ -1881,11 +2121,17 @@ pub fn load_bundled_registry() -> Result<Registry, RegistryError> {
 static REGISTRY_CACHE: LazyLock<Mutex<Option<(Instant, Registry)>>> =
     LazyLock::new(|| Mutex::new(None));
 
-/// Store-relative `registry.json` download: `Ok(Some(text))` = fetched,
-/// `Ok(None)` = blob absent (Python `blob.generation is None`), `Err(msg)` =
-/// the store could not be reached at all.
+/// Store-relative `registry.json` download: `Ok(Some(text))` = fetched with
+/// the store's generation token, `Ok(None)` = blob absent (Python
+/// `blob.generation is None`), `Err(msg)` = the store could not be reached
+/// at all.
+///
+/// The generation travels with the text because the last-known-good cache
+/// records WHICH document it is holding ([`RegistryCacheMeta::generation`]):
+/// a cache that can only say "some registry, once" cannot be compared with
+/// the authority when the authority comes back.
 pub type RegistryDownloader =
-    Arc<dyn Fn() -> BoxFuture<'static, Result<Option<String>, String>> + Send + Sync>;
+    Arc<dyn Fn() -> BoxFuture<'static, Result<Option<VersionedText>, String>> + Send + Sync>;
 
 /// Test seam replacing the production download (loopback mocks).
 static REGISTRY_DOWNLOADER: LazyLock<Mutex<Option<RegistryDownloader>>> =
@@ -2038,16 +2284,16 @@ impl RegistryStore {
 /// workstation's gsutil broke after a pip upgrade and knocked the agent
 /// offline. The GCS SDK was already a hard dependency; using it directly
 /// removes the gsutil binary as a single point of failure.
-async fn download_registry_blob() -> Result<Option<String>, String> {
+async fn download_registry_blob() -> Result<Option<VersionedText>, String> {
     // One seam for both directions: [`RegistryStore`] resolves the same
     // object `cli/registry.rs::push` writes and `dashboard/policy.rs`
     // compare-and-swaps, so a reader can never sit on a dead object while
     // the writer edits a live one.
     let store = RegistryStore::open().await.map_err(|exc| exc.to_string())?;
-    store.read_text().await.map_err(|exc| exc.to_string())
+    store.read_versioned().await.map_err(|exc| exc.to_string())
 }
 
-async fn download_registry() -> Result<Option<String>, String> {
+async fn download_registry() -> Result<Option<VersionedText>, String> {
     let downloader = REGISTRY_DOWNLOADER
         .lock()
         .expect("registry downloader lock")
@@ -2116,6 +2362,197 @@ pub fn registry_location() -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// last-known-good cache — what a reader answers with when the store is down
+// ---------------------------------------------------------------------------
+
+/// Reader-side copy of the last registry document the authority served.
+pub const REGISTRY_LAST_GOOD_FILE: &str = "registry-last-good.json";
+/// Sidecar dating [`REGISTRY_LAST_GOOD_FILE`] and naming which document it
+/// is. Kept beside the copy rather than inside it so the copy stays
+/// byte-identical to what the authority served.
+pub const REGISTRY_LAST_GOOD_META_FILE: &str = "registry-last-good.meta.json";
+
+/// When the cached registry was read, and which document it is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RegistryCacheMeta {
+    /// RFC3339 instant the authority answered with this document.
+    pub read_at: String,
+    /// The store's generation/ETag for that document.
+    pub generation: String,
+}
+
+/// `~/.stado/cache`, or `None` when `HOME` is unset — a daemon started with
+/// no environment still reads the registry, it just gets no cache rather
+/// than a cache in whatever directory it happened to start in.
+fn registry_cache_dir() -> Option<PathBuf> {
+    Some(
+        Path::new(&std::env::var_os("HOME")?)
+            .join(".stado")
+            .join("cache"),
+    )
+}
+
+/// Path of the last-known-good registry document.
+pub fn registry_last_good_path() -> Option<PathBuf> {
+    Some(registry_cache_dir()?.join(REGISTRY_LAST_GOOD_FILE))
+}
+
+/// Path of the sidecar that dates the last-known-good document.
+pub fn registry_last_good_meta_path() -> Option<PathBuf> {
+    Some(registry_cache_dir()?.join(REGISTRY_LAST_GOOD_META_FILE))
+}
+
+/// Write `content` through a per-process temp file and one rename, so a
+/// crash leaves the previous file rather than half of the next one.
+fn write_atomic(path: &Path, content: &str) -> std::io::Result<()> {
+    let mut temp = path.to_path_buf();
+    // Per-process, because two stado invocations refreshing the cache in the
+    // same second must not interleave their bytes in one temp file. The
+    // rename can still be lost by the other writer — both wrote the same
+    // document, so losing it costs nothing.
+    temp.set_extension(format!("{}.tmp", std::process::id()));
+    std::fs::write(&temp, content)?;
+    match std::fs::rename(&temp, path) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = std::fs::remove_file(&temp);
+            Err(error)
+        }
+    }
+}
+
+/// Record a document the authority served AND this build validated.
+///
+/// The gate is the registry-v2 contract ([`validate_registry`]), not the
+/// loader's tolerance. [`load_registry_from_str`] SKIPS what it cannot model:
+/// a `targets` value that is the string `"not-a-list"` leaves it holding zero
+/// targets and no complaint, so gating the copy on the loader alone recorded
+/// that string as the fleet's last known good registry and then served it —
+/// an empty fleet — for as long as the store stayed down. Confirmed by hand
+/// on 2026-08-19 against this exact code before the gate moved here.
+///
+/// A document that fails the contract is reported and not recorded: the copy
+/// already on disk is worth more than the newest thing the store happened to
+/// hold, and a cache nobody can trust is a cache nobody may use.
+///
+/// Document first, sidecar second. A crash between the two leaves a new
+/// document dated by the older sidecar, which OVERSTATES the age; the other
+/// order understates it, and a registry that reads fresher than it is, is
+/// the exact lie this cache exists to prevent.
+fn store_last_good(text: &str, generation: &str) {
+    let (Some(document), Some(meta)) = (registry_last_good_path(), registry_last_good_meta_path())
+    else {
+        return;
+    };
+    let report = |error: &dyn std::fmt::Display| {
+        eprintln!(
+            "[registry-cache] not recording the last-known-good registry in {}: {error}",
+            document.display()
+        );
+    };
+    match serde_json::from_str::<Value>(text) {
+        Ok(data) => {
+            if let Err(error) = validate_registry(&data) {
+                report(&error);
+                return;
+            }
+        }
+        Err(error) => {
+            report(&error);
+            return;
+        }
+    }
+    if let Some(directory) = document.parent() {
+        if let Err(error) = std::fs::create_dir_all(directory) {
+            report(&error);
+            return;
+        }
+    }
+    let sidecar = serde_json::to_string(&RegistryCacheMeta {
+        read_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+        generation: generation.to_string(),
+    })
+    .expect("registry cache metadata serialization is infallible");
+    if let Err(error) = write_atomic(&document, text) {
+        report(&error);
+        return;
+    }
+    if let Err(error) = write_atomic(&meta, &sidecar) {
+        report(&error);
+    }
+}
+
+/// The cached document with the age of what it is, or `None` when there is
+/// no usable pair on disk.
+///
+/// Both files or neither: the age is part of the answer, and a document
+/// nobody can date is indistinguishable from a document from last year. The
+/// contract was checked on the way in ([`store_last_good`]); on the way out
+/// the loader is the gate, so a copy truncated by a full disk is skipped
+/// rather than served as an empty fleet.
+fn load_last_good() -> Option<(Registry, RegistryCacheMeta, i64)> {
+    let meta: RegistryCacheMeta =
+        serde_json::from_str(&std::fs::read_to_string(registry_last_good_meta_path()?).ok()?)
+            .ok()?;
+    let read_at = DateTime::parse_from_rfc3339(&meta.read_at)
+        .ok()?
+        .with_timezone(&Utc);
+    let text = std::fs::read_to_string(registry_last_good_path()?).ok()?;
+    let mut registry = load_registry_from_str(&text).ok()?;
+    let age = (Utc::now() - read_at).num_seconds().max(0);
+    registry.staleness_seconds = Some(age);
+    Some((registry, meta, age))
+}
+
+/// Whether this process has already told the operator it is reading a copy.
+static REGISTRY_NOTICE_REPORTED: AtomicBool = AtomicBool::new(false);
+
+/// Print a fallback notice to stderr, once per process.
+///
+/// Once, because a fleet sweep resolves twenty hosts through one dead
+/// authority: twenty copies of the same sentence bury the twenty answers the
+/// operator asked for, and the sentence is about the process, not the host.
+pub fn report_registry_notice(notice: &str) {
+    if !REGISTRY_NOTICE_REPORTED.swap(true, Ordering::Relaxed) {
+        eprintln!("{notice}");
+    }
+}
+
+/// The registry for a reader that must keep answering when the authority
+/// does not: the canonical document first, then the last-known-good copy.
+///
+/// The second element is the one sentence the caller MUST put in front of
+/// the operator when the answer came from the copy. It names the age of what
+/// is being read and keeps the authority's own error text, because "this
+/// registry is 412 s old" and "the store is unreachable" send an operator to
+/// two different places — and the behavior this replaces sent them to
+/// neither: every host command died with one line about the store while the
+/// question was which host went silent.
+///
+/// A `Some` sentence and `Registry::staleness_seconds` move together. `Err`
+/// means the authority failed and there is no usable copy; the bundled
+/// snapshot is below this, in [`load_registry_auto`].
+pub async fn fetch_registry_or_last_good() -> Result<(Registry, Option<String>), RegistryFetchError>
+{
+    let authority = match fetch_registry_remote().await {
+        Ok(registry) => return Ok((registry, None)),
+        Err(error) => error,
+    };
+    match load_last_good() {
+        Some((registry, meta, age)) => {
+            let notice = format!(
+                "reading the last-known-good registry copy from {age}s ago ({}, read_at {}, generation {}) because the authority did not answer: {authority}",
+                registry_last_good_path().unwrap_or_default().display(),
+                meta.read_at,
+                meta.generation,
+            );
+            Ok((registry, Some(notice)))
+        }
+        None => Err(authority),
+    }
+}
+
 /// Fetch the canonical registry from the configured store (Python
 /// `_load_from_gcs`, `source="gcs"`): the authority for fleet-survival
 /// decisions — the coordinator's rogue-daemon kill switch and host-health
@@ -2144,12 +2581,18 @@ pub async fn fetch_registry_remote() -> Result<Registry, RegistryFetchError> {
 async fn fetch_registry_remote_uncached() -> Result<Registry, RegistryFetchError> {
     let location = registry_location();
     match download_registry().await {
-        // The `[_load_from_gcs]` prefix is Python's function name, kept
-        // verbatim so existing operator log greps still match.
-        Ok(Some(text)) => load_registry_from_str(&text).map_err(|source| {
-            eprintln!("[_load_from_gcs] failed: {source}");
-            RegistryFetchError::Invalid { location, source }
-        }),
+        Ok(Some(document)) => match load_registry_from_str(&document.content) {
+            Ok(registry) => {
+                store_last_good(&document.content, &document.version);
+                Ok(registry)
+            }
+            // The `[_load_from_gcs]` prefix is Python's function name, kept
+            // verbatim so existing operator log greps still match.
+            Err(source) => {
+                eprintln!("[_load_from_gcs] failed: {source}");
+                Err(RegistryFetchError::Invalid { location, source })
+            }
+        },
         // Ok(None) = blob absent (Python `blob.generation is None`).
         Ok(None) => Err(RegistryFetchError::Absent { location }),
         Err(detail) => {
@@ -2159,13 +2602,30 @@ async fn fetch_registry_remote_uncached() -> Result<Registry, RegistryFetchError
     }
 }
 
-/// The registry document, configured store first with the bundled file as
-/// fallback (Python `load_targets` / `load_coordinators` with
-/// `source="auto"`). Every [`RegistryFetchError`] falls back.
+/// The registry document, authority first, then the last-known-good copy,
+/// then the file bundled with this binary (Python `load_targets` /
+/// `load_coordinators` with `source="auto"`). Every [`RegistryFetchError`]
+/// falls through.
+///
+/// Announces which of the three it read whenever that is not the authority:
+/// the bundled snapshot is a build artifact that can be months old, and
+/// answering out of it in silence is how a decommissioned host stayed
+/// "declared" for a fortnight.
 pub async fn load_registry_auto() -> Result<Registry, RegistryError> {
-    match fetch_registry_remote().await {
-        Ok(registry) => Ok(registry),
-        Err(_) => load_bundled_registry(),
+    match fetch_registry_or_last_good().await {
+        Ok((registry, notice)) => {
+            if let Some(notice) = notice {
+                report_registry_notice(&notice);
+            }
+            Ok(registry)
+        }
+        Err(authority) => {
+            report_registry_notice(&format!(
+                "reading the registry snapshot bundled with this binary because the authority did not answer and there is no last-known-good copy at {}: {authority}",
+                registry_last_good_path().unwrap_or_default().display(),
+            ));
+            load_bundled_registry()
+        }
     }
 }
 

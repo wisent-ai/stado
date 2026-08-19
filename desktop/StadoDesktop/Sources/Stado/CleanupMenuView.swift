@@ -76,7 +76,7 @@ struct CleanupMenuView: View {
         HStack(spacing: WisentDesign.Space.x2) {
             WisentActionButton(
                 action: WisentAction("Open Disk", symbol: "externaldrive", kind: .primary) {
-                    router.destination = .disk
+                    router.show(.disk)
                     openWindow(id: "operations-console")
                 }
             )

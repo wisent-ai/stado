@@ -45,6 +45,20 @@
 //! programs on the channel, so "nothing activates before it verified" is
 //! visible at the [`Runner`] seam rather than promised inside one script.
 //!
+//! [`host_link`] is not a command at all: it is the connectivity block a
+//! host collects about ITSELF and publishes inside its health beacon, so
+//! that "why did this machine go quiet" has an answer in the product
+//! instead of in an operator's shell history.
+//!
+//! [`fleet_claim`] is not a command either: it is the fleet-level half of
+//! [`host_gates`], reported wherever queued work is shown. `host gates`
+//! answers "why is THIS host claiming nothing", one ssh round trip at a
+//! time, which is only reachable by an operator who already suspects a
+//! specific host. `fleet_claim` answers "can ANYTHING claim this queue" from
+//! the store alone, in the same words, so `stado status` and `stado
+//! overview` can state the one fact a queue listing cannot show: that a
+//! queue with no claimant looks exactly like an empty one.
+//!
 //! Every subprocess is orchestrated through the [`Runner`] seam so tests
 //! can inject a fake command runner and never spawn real
 //! ssh/launchctl/systemctl. The production runner is
@@ -62,6 +76,7 @@ use futures::future::BoxFuture;
 
 pub mod artifact_install;
 pub mod bootstrap;
+pub mod fleet_claim;
 pub mod fleet_vaults;
 pub mod host_build_caches;
 pub mod host_channel;
@@ -71,6 +86,7 @@ pub mod host_exec;
 pub mod host_gates;
 pub mod host_gui_automation;
 pub mod host_inventory;
+pub mod host_link;
 pub mod host_ping;
 pub mod host_precheck_runner;
 pub mod host_reboot;
@@ -89,6 +105,7 @@ pub mod reconcile;
 pub mod service;
 pub mod ssh_key;
 pub mod stream;
+pub mod weles_capture;
 
 /// Deploy-layer failure carrying the exact Python exception message
 /// (RuntimeError / ValueError / LookupError text). The CLI maps it to a

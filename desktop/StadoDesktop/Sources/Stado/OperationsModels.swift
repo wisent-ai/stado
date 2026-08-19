@@ -1,4 +1,5 @@
 import Foundation
+import WisentDesignSystem
 
 struct DashboardSnapshot: Decodable, Sendable {
     let ready: Bool
@@ -608,6 +609,256 @@ struct UnownedProcess: Decodable, Identifiable, Sendable {
         }
         guard let number = try? values.decode(Int.self, forKey: key) else { return "" }
         return String(number)
+    }
+}
+
+// MARK: - Fleet services
+
+/// Which launchd domain a declared unit-file path places the unit in.
+///
+/// The same classification the CLI's `UnitDomain::from_path` performs, done
+/// client-side because `service list --json` carries the path and not the
+/// verdict: `/Library/LaunchDaemons` loads as root, `/Library/LaunchAgents`
+/// loads for whichever user is logged in, a home `Library/LaunchAgents` loads
+/// for that user, and anything else — a systemd path, an empty path — is
+/// unknown. The registry's `$HOME/...` idiom arrives unexpanded, so the user
+/// domain is matched on the segment, not on a home prefix.
+enum ServiceDomain: String, Sendable {
+    case system
+    case anyUser = "any-user"
+    case user
+    case unknown
+
+    init(path: String) {
+        if path.hasPrefix("/Library/LaunchDaemons/") {
+            self = .system
+        } else if path.hasPrefix("/Library/LaunchAgents/") {
+            self = .anyUser
+        } else if path.contains("/Library/LaunchAgents/") {
+            self = .user
+        } else {
+            self = .unknown
+        }
+    }
+
+    /// True when loading the unit takes root. The approved channel is
+    /// unprivileged, so a system LaunchDaemon gets no restart button — the
+    /// CLI itself refuses the same request with the same reason.
+    var requiresPrivilegedBootstrap: Bool { self == .system }
+}
+
+/// Why one `failed` unit died, gathered best-effort from the host itself.
+///
+/// `stado service status <name> --json` attaches this to failed entries; the
+/// fields are optional because the evidence is gathered over a channel that
+/// may itself be the thing that is down.
+struct ServiceFailure: Decodable, Sendable {
+    /// The last launchd exit status, as a string exactly as `launchctl list`
+    /// carried it.
+    let lastExit: String?
+    /// Where the stderr tail came from, or the reason there is none.
+    let errorOrigin: String?
+    let errorLines: [String]
+    let note: String?
+
+    enum CodingKeys: String, CodingKey {
+        case note
+        case lastExit = "last_exit"
+        case errorOrigin = "error_origin"
+        case errorLines = "error_lines"
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        lastExit = operationalMetadata(try values.decodeIfPresent(String.self, forKey: .lastExit))
+        errorOrigin = operationalMetadata(try values.decodeIfPresent(String.self, forKey: .errorOrigin))
+        errorLines = try values.decodeIfPresent([String].self, forKey: .errorLines) ?? []
+        note = operationalMetadata(try values.decodeIfPresent(String.self, forKey: .note))
+    }
+}
+
+/// The `misdeclared_domain` object a `stado service list --json` row carries
+/// when the unit is declared in a launchd domain its host cannot have.
+///
+/// The finding is checkable without going anywhere: the unit-file path says
+/// which domain the declaration asks for, and the registry says the host runs
+/// unattended. `control-host` carries three of them, and the first is why
+/// the fleet's own agent has never loaded there — which is why that host
+/// publishes no capacity, which is why a job pinned to it waited 122 hours.
+/// Nothing on any screen reported any of that.
+///
+/// `detail` is the one sentence `stado service list` and `stado registry
+/// doctor` both print; the Rust accessor is `sentence()` and the wire key is
+/// `detail`, deliberately, so two surfaces do not disagree about the name of
+/// one fact. It is carried verbatim, like every other backend sentence here:
+/// a console that rewords it becomes a second opinion about why a unit cannot
+/// load.
+struct MisdeclaredDomain: Decodable, Sendable {
+    let host: String
+    /// The launchd label, as the host names the unit.
+    let unit: String
+    /// The unit-file path the declaration carries.
+    let path: String
+    /// The domain that path asks for — `user` for a home LaunchAgent,
+    /// `any-user` for a machine-wide one.
+    let declaredDomain: String
+    /// The only domain this host can load a unit into.
+    let loadableDomain: String
+    /// Where the daemon spelling of this unit belongs.
+    let daemonPath: String
+    /// The one privileged command that closes the gap, verbatim. Never
+    /// composed here: an install command this console assembled itself is a
+    /// command nobody has ever run.
+    let installCommand: String
+    /// The finding, in the CLI's own sentence.
+    let detail: String
+
+    enum CodingKeys: String, CodingKey {
+        case host, unit, path, detail
+        case declaredDomain = "declared_domain"
+        case loadableDomain = "loadable_domain"
+        case daemonPath = "daemon_path"
+        case installCommand = "install_command"
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        host = try values.decodeIfPresent(String.self, forKey: .host) ?? ""
+        unit = try values.decodeIfPresent(String.self, forKey: .unit) ?? ""
+        path = try values.decodeIfPresent(String.self, forKey: .path) ?? ""
+        declaredDomain = try values.decodeIfPresent(String.self, forKey: .declaredDomain) ?? ""
+        loadableDomain = try values.decodeIfPresent(String.self, forKey: .loadableDomain) ?? ""
+        daemonPath = try values.decodeIfPresent(String.self, forKey: .daemonPath) ?? ""
+        installCommand = try values.decodeIfPresent(String.self, forKey: .installCommand) ?? ""
+        detail = try values.decodeIfPresent(String.self, forKey: .detail) ?? ""
+    }
+}
+
+/// `stado service list --json`: one registry-managed service on one host,
+/// with the state the host's latest health beacon reports.
+///
+/// The read is beacon-only — no ssh, no per-host round trip — so it stays
+/// answerable while a host is wedged, and a host that never published a
+/// beacon arrives as `unknown` rows whose detail says so, not as an absent
+/// answer. Every field decodes leniently: the beacon and the registry
+/// document are both operator-facing state, and a half-filled record should
+/// read as a listed service with blanks rather than vanish from the list.
+struct FleetServiceEntry: Decodable, Identifiable, Sendable {
+    let host: String
+    /// The name the CLI addresses the service by.
+    let name: String
+    /// systemd unit name; empty for a launchd service.
+    let unit: String
+    /// launchd label; empty for a systemd service.
+    let label: String
+    /// The host's own name for the unit: the label, or the systemd unit.
+    let unitID: String
+    /// The declared unit-file path, `$HOME`-relative where the declaration is.
+    let path: String
+    let kind: String
+    /// The state word the beacon reported: `active`, `inactive`, `failed`,
+    /// `missing`, `unknown` — or whatever other word the host used.
+    let state: String
+    /// The beacon's `reported_at`, verbatim: a confident-looking `active`
+    /// from a five-day-old beacon is visibly five days old.
+    let reportedAt: String
+    /// Why the state is what it is, when that is not self-evident.
+    let detail: String
+    /// The registry finding for this row, when the row carries one: the unit
+    /// is declared in a launchd domain its host cannot have, so no beacon will
+    /// ever report it running. Absent — not null — on every row where the
+    /// declaration and the host agree, which is 19 of the 22 rows the fleet
+    /// answers with today.
+    let misdeclaredDomain: MisdeclaredDomain?
+    /// Failure evidence, merged in by the store from `service status --json`;
+    /// `service list --json` itself does not carry it.
+    var failure: ServiceFailure?
+
+    var id: String { "\(host)/\(unitID.isEmpty ? name : unitID)" }
+
+    var domain: ServiceDomain { ServiceDomain(path: path) }
+
+    var isFailed: Bool { state == "failed" }
+
+    enum CodingKeys: String, CodingKey {
+        case host, name, unit, label, path, kind, state, detail, failure
+        case unitID = "unit_id"
+        case reportedAt = "reported_at"
+        case misdeclaredDomain = "misdeclared_domain"
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        host = try values.decodeIfPresent(String.self, forKey: .host) ?? ""
+        name = try values.decodeIfPresent(String.self, forKey: .name) ?? ""
+        unit = try values.decodeIfPresent(String.self, forKey: .unit) ?? ""
+        label = try values.decodeIfPresent(String.self, forKey: .label) ?? ""
+        unitID = try values.decodeIfPresent(String.self, forKey: .unitID) ?? ""
+        path = try values.decodeIfPresent(String.self, forKey: .path) ?? ""
+        kind = try values.decodeIfPresent(String.self, forKey: .kind) ?? ""
+        state = try values.decodeIfPresent(String.self, forKey: .state) ?? ""
+        reportedAt = try values.decodeIfPresent(String.self, forKey: .reportedAt) ?? ""
+        detail = try values.decodeIfPresent(String.self, forKey: .detail) ?? ""
+        failure = try values.decodeIfPresent(ServiceFailure.self, forKey: .failure)
+        misdeclaredDomain = try values.decodeIfPresent(MisdeclaredDomain.self, forKey: .misdeclaredDomain)
+    }
+}
+
+/// One element of the `stado service restart <name> --host <host> --json`
+/// payload: the remote program's own markers, plus the postcondition probe
+/// the host ran before the connection closed.
+struct ServiceRestartReport: Decodable, Sendable {
+    let host: String
+    let unit: String
+    /// The outcome word from the `STADO_SERVICE` marker; `restarted` is the
+    /// one this command wants.
+    let status: String
+    let detail: String
+    let postcondition: Postcondition?
+
+    struct Postcondition: Decodable, Sendable {
+        let intent: String
+        /// `met`, `unmet`, or `unobserved`.
+        let state: String
+        let detail: String
+
+        enum CodingKeys: String, CodingKey {
+            case intent, state, detail
+        }
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            intent = try values.decodeIfPresent(String.self, forKey: .intent) ?? ""
+            state = try values.decodeIfPresent(String.self, forKey: .state) ?? ""
+            detail = try values.decodeIfPresent(String.self, forKey: .detail) ?? ""
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case host, unit, status, detail, postcondition
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        host = try values.decodeIfPresent(String.self, forKey: .host) ?? ""
+        unit = try values.decodeIfPresent(String.self, forKey: .unit) ?? ""
+        status = try values.decodeIfPresent(String.self, forKey: .status) ?? ""
+        detail = try values.decodeIfPresent(String.self, forKey: .detail) ?? ""
+        postcondition = try values.decodeIfPresent(Postcondition.self, forKey: .postcondition)
+    }
+
+    /// The CLI's success rule, mirrored: the outcome word AND the host
+    /// observed in the state the restart intended. A step that succeeds is
+    /// not the same fact as a machine that works.
+    var succeeded: Bool {
+        status == "restarted" && (postcondition == nil || postcondition?.state == "met")
+    }
+
+    /// The one-line failure, in the same shape the CLI prints.
+    var failureText: String {
+        let reported = detail.isEmpty ? status : "\(status): \(detail)"
+        guard let postcondition, postcondition.state != "met" else { return reported }
+        return "\(reported); postcondition \(postcondition.state): \(postcondition.intent) (\(postcondition.detail))"
     }
 }
 
@@ -1247,5 +1498,373 @@ struct ReleaseRow: Identifiable, Sendable {
             }
         }
         return software?.failed == true ? min(rollout, 1) : rollout
+    }
+}
+
+// MARK: - Connectivity, sleep and silence
+
+/// `stado host link <host> --json`.
+///
+/// The reading that did not exist on 2026-08-19, when `control-host` went
+/// unreachable for six minutes and the only evidence anywhere was an operator's
+/// two ping packets: the product recorded nothing, and the reader-side refusals
+/// went to a log file nobody was watching. Every field here is the CLI's own
+/// answer. Nothing is derived from a second source, and nothing absent is
+/// rendered as a zero — a host whose beacon carries no `link` block has not
+/// reported its path, which is a different fact from reporting `unknown`.
+struct HostLink: Decodable, Identifiable, Sendable {
+    let host: String
+    /// How old the newest beacon for this host is. `nil` when no beacon has
+    /// ever been published, which is not the same as "0 s ago".
+    let beaconAgeSeconds: Int?
+    let sshReachable: Bool
+    /// `direct`, `relay` or `unknown` as the beacon's link block spelled it;
+    /// `nil` when the beacon carried no link block at all.
+    let pathKind: HostLinkPathKind?
+    let endpoint: String?
+    let lastSleepAt: String?
+    let lastWakeAt: String?
+    let interfaceChanges: [HostLinkInterfaceChange]
+    /// Newest first, as the command orders them.
+    let silences: [HostSilenceRecord]
+    let readerRefusals: HostReaderRefusals?
+    /// Whether anybody is logged in on the screen of that machine. `nil` when
+    /// the command carried no `session` object at all, which is the same
+    /// answer to an operator as a reported `unknown`: nobody said.
+    let session: HostLinkSession?
+    let verdict: HostLinkVerdict
+    /// Verbatim. A blocker paraphrased here is a second opinion about why a
+    /// host went quiet.
+    let blockers: [String]
+
+    /// The one line the Link section renders for the session fact.
+    ///
+    /// An absent object and a reported `unknown` both read "Not reported". A
+    /// console that guessed "nobody is logged in" from silence would be
+    /// asserting the fact this reading exists to establish.
+    var sessionLine: String {
+        session?.headline ?? "Not reported"
+    }
+
+    var id: String { host }
+
+    /// Whether the beacon carried a link block at all.
+    ///
+    /// `stado host link` prints `path_kind: "unknown"` with every other link
+    /// field empty when there was no block to read — checked against the live
+    /// answer for `control-host` — so a bare `unknown` is the absence of a
+    /// report, not a report of an unknown path. The distinction decides whether
+    /// an operator chases the network or the collector, and the command states
+    /// which one it is in its own blocker sentence.
+    var linkReported: Bool {
+        if endpoint != nil || lastSleepAt != nil || lastWakeAt != nil || !interfaceChanges.isEmpty {
+            return true
+        }
+        guard let pathKind else { return false }
+        return pathKind != .unknown
+    }
+
+    /// The silence that has not ended. At most one: a silence closes on the
+    /// first fresher beacon, so an open one is the current gap.
+    var openSilence: HostSilenceRecord? {
+        silences.first { $0.isOpen }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case host, endpoint, silences, verdict, blockers, session
+        case beaconAgeSeconds = "beacon_age_seconds"
+        case sshReachable = "ssh_reachable"
+        case pathKind = "path_kind"
+        case lastSleepAt = "last_sleep_at"
+        case lastWakeAt = "last_wake_at"
+        case interfaceChanges = "interface_changes"
+        case readerRefusals = "reader_refusals"
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        host = try values.decodeIfPresent(String.self, forKey: .host) ?? ""
+        beaconAgeSeconds = try values.decodeIfPresent(Int.self, forKey: .beaconAgeSeconds)
+        sshReachable = try values.decodeIfPresent(Bool.self, forKey: .sshReachable) ?? false
+        pathKind = (try values.decodeIfPresent(String.self, forKey: .pathKind))
+            .map(HostLinkPathKind.init)
+        endpoint = try values.decodeIfPresent(String.self, forKey: .endpoint)
+        lastSleepAt = try values.decodeIfPresent(String.self, forKey: .lastSleepAt)
+        lastWakeAt = try values.decodeIfPresent(String.self, forKey: .lastWakeAt)
+        interfaceChanges =
+            try values.decodeIfPresent([HostLinkInterfaceChange].self, forKey: .interfaceChanges) ?? []
+        silences = try values.decodeIfPresent([HostSilenceRecord].self, forKey: .silences) ?? []
+        readerRefusals = try values.decodeIfPresent(HostReaderRefusals.self, forKey: .readerRefusals)
+        session = try values.decodeIfPresent(HostLinkSession.self, forKey: .session)
+        verdict = HostLinkVerdict(try values.decodeIfPresent(String.self, forKey: .verdict) ?? "")
+        blockers = try values.decodeIfPresent([String].self, forKey: .blockers) ?? []
+    }
+}
+
+/// The `session` block of `stado host link <host> --json`: whether anybody is
+/// logged in on the screen of that machine.
+///
+/// The fact lived only in CLI output until now, and the GUI was silent about
+/// the single reason `control-host` can take no work. Nobody at the
+/// screen of an always-on box is the normal state for an always-on box, so
+/// nothing here is coloured: what is wrong, when something is, arrives as one
+/// of the command's own blockers beside this line.
+struct HostLinkSession: Decodable, Sendable {
+    let kind: HostLinkSessionKind
+    /// Who owns `/dev/console`, as the host reports it: `root` where nobody is
+    /// logged in, the login name where somebody is. `nil` only where the probe
+    /// could not answer.
+    let consoleOwner: String?
+    /// The resolver's own sentence, verbatim. It names the console device and
+    /// the domain launchd did or did not build — the machine detail, which
+    /// belongs beneath the plain words rather than in them.
+    let detail: String
+
+    /// The plain words an operator reads first.
+    ///
+    /// A graphical session that named no console owner still says somebody is
+    /// there: the kind is the host's answer, and the owner is the name for it.
+    var headline: String {
+        switch kind {
+        case .graphical:
+            guard let consoleOwner, !consoleOwner.isEmpty else { return "Somebody is logged in" }
+            return "Logged in as \(consoleOwner)"
+        case .headless:
+            return "Nobody logged in (headless)"
+        case .unknown:
+            return "Not reported"
+        case let .unrecognised(raw):
+            return raw.humanizedIdentifier
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case kind, detail
+        case consoleOwner = "console_owner"
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        kind = HostLinkSessionKind(try values.decodeIfPresent(String.self, forKey: .kind) ?? "")
+        consoleOwner = try values.decodeIfPresent(String.self, forKey: .consoleOwner)
+        detail = try values.decodeIfPresent(String.self, forKey: .detail) ?? ""
+    }
+}
+
+/// Whether the host has a graphical session, in the command's own word.
+///
+/// `unknown` is the probe's answer for "ran and could not tell", so it is a
+/// case rather than an absence, and an unrecognised spelling is carried
+/// through rather than folded into `headless` — reading an unfamiliar word as
+/// "nobody is logged in" would invent the fact this reading reports.
+enum HostLinkSessionKind: Hashable, Sendable {
+    case graphical
+    case headless
+    case unknown
+    case unrecognised(String)
+
+    init(_ raw: String) {
+        switch raw {
+        case "graphical": self = .graphical
+        case "headless": self = .headless
+        case "unknown": self = .unknown
+        default: self = .unrecognised(raw)
+        }
+    }
+}
+
+/// Which way the packets went when the beacon was collected.
+///
+/// `unknown` is the beacon's own word for "the collector ran and could not
+/// tell", so it is a case rather than an absence, and an unrecognised spelling
+/// is carried through instead of folded into `unknown`.
+enum HostLinkPathKind: Hashable, Sendable {
+    case direct
+    case relay
+    case unknown
+    case unrecognised(String)
+
+    init(_ raw: String) {
+        switch raw {
+        case "direct": self = .direct
+        case "relay": self = .relay
+        case "unknown": self = .unknown
+        default: self = .unrecognised(raw)
+        }
+    }
+
+    /// The beacon's own word, never a translation of it.
+    var word: String {
+        switch self {
+        case .direct: "direct"
+        case .relay: "relay"
+        case .unknown: "unknown"
+        case let .unrecognised(raw): raw
+        }
+    }
+
+    /// A relay path is slower but working, and the collector failing to tell is
+    /// not an outage either. Neither is coloured: this is a fact about the
+    /// route, not a severity.
+    var tone: WisentTone {
+        .neutral
+    }
+}
+
+/// One `link.interface_changes` entry: when the machine's interfaces moved, and
+/// the collector's own description of the move.
+struct HostLinkInterfaceChange: Decodable, Identifiable, Sendable {
+    let at: String
+    let detail: String
+
+    var id: String { "\(at)|\(detail)" }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        at = try values.decodeIfPresent(String.self, forKey: .at) ?? ""
+        detail = try values.decodeIfPresent(String.self, forKey: .detail) ?? ""
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case at, detail
+    }
+}
+
+/// One recorded gap in a host's beacon stream — `host_silence/<host>/<at>.json`
+/// read back.
+///
+/// `endedAt` nil is the live case and the one the Posture screen exists to
+/// raise: the host is quiet right now.
+struct HostSilenceRecord: Decodable, Identifiable, Sendable {
+    let host: String
+    let startedAt: String
+    let endedAt: String?
+    let durationSeconds: Int?
+    /// The first refusal a reader hit while the host was quiet, in that
+    /// component's own sentence.
+    let firstReaderError: String?
+    /// Which components noticed — resolver, cli, dashboard.
+    let observedBy: [String]
+
+    var id: String { "\(host)|\(startedAt)" }
+
+    var isOpen: Bool { endedAt == nil }
+
+    /// How long the gap lasted, or has lasted so far. The record's own figure
+    /// when it carries one; otherwise measured from `startedAt`, because an
+    /// open silence has no recorded duration until it closes.
+    var elapsedSeconds: Double? {
+        if let durationSeconds { return Double(durationSeconds) }
+        guard let started = StadoFormat.date(startedAt) else { return nil }
+        let ended = endedAt.flatMap(StadoFormat.date) ?? Date()
+        let seconds = ended.timeIntervalSince(started)
+        return seconds >= 0 ? seconds : nil
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case host
+        case startedAt = "started_at"
+        case endedAt = "ended_at"
+        case durationSeconds = "duration_seconds"
+        case firstReaderError = "first_reader_error"
+        case observedBy = "observed_by"
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        host = try values.decodeIfPresent(String.self, forKey: .host) ?? ""
+        startedAt = try values.decodeIfPresent(String.self, forKey: .startedAt) ?? ""
+        endedAt = try values.decodeIfPresent(String.self, forKey: .endedAt)
+        durationSeconds = try values.decodeIfPresent(Int.self, forKey: .durationSeconds)
+        firstReaderError = try values.decodeIfPresent(String.self, forKey: .firstReaderError)
+        observedBy = try values.decodeIfPresent([String].self, forKey: .observedBy) ?? []
+    }
+}
+
+/// How often a reader refused to answer about this host inside the window, and
+/// under which stable reason tokens.
+///
+/// The tokens are the product's, not this console's: `directory_cache_stale`,
+/// `authority_unreachable`, `beacon_stale`. Their verbatim sentences live in
+/// the refusal blobs; the count and the tokens are what a screen can aggregate.
+struct HostReaderRefusals: Decodable, Sendable {
+    let windowSeconds: Int
+    let count: Int
+    let reasons: [String: Int]
+
+    /// Descending by count, then by token, so the same reading orders the same
+    /// way twice.
+    var rankedReasons: [(reason: String, count: Int)] {
+        reasons
+            .map { (reason: $0.key, count: $0.value) }
+            .sorted { $0.count == $1.count ? $0.reason < $1.reason : $0.count > $1.count }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case count, reasons
+        case windowSeconds = "window_seconds"
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        windowSeconds = try values.decodeIfPresent(Int.self, forKey: .windowSeconds) ?? 0
+        count = try values.decodeIfPresent(Int.self, forKey: .count) ?? 0
+        reasons = try values.decodeIfPresent([String: Int].self, forKey: .reasons) ?? [:]
+    }
+}
+
+/// The one word the Link section colours on.
+///
+/// `silent` and `degraded` are both failures the command exits 1 for, so both
+/// get a panel. An unrecognised verdict is carried through rather than folded
+/// into `healthy`: a link this console cannot classify must never read as fine.
+enum HostLinkVerdict: Hashable, Sendable {
+    case healthy
+    case silent
+    case degraded
+    case unrecognised(String)
+
+    init(_ raw: String) {
+        switch raw {
+        case "healthy": self = .healthy
+        case "silent": self = .silent
+        case "degraded": self = .degraded
+        default: self = .unrecognised(raw)
+        }
+    }
+
+    /// The CLI's own word, never a translation of it.
+    var word: String {
+        switch self {
+        case .healthy: "healthy"
+        case .silent: "silent"
+        case .degraded: "degraded"
+        case let .unrecognised(raw): raw.isEmpty ? "unreported" : raw
+        }
+    }
+
+    /// Severity is the layout: a healthy link is one line, and everything else
+    /// is a panel carrying the command's own blockers.
+    var tone: WisentTone {
+        switch self {
+        case .healthy: .neutral
+        case .silent, .degraded: .danger
+        case .unrecognised: .warning
+        }
+    }
+
+    var needsAttention: Bool {
+        if case .healthy = self { return false }
+        return true
+    }
+
+    /// The sentence the inspector and the facet rail both label this with.
+    var label: String {
+        switch self {
+        case .healthy: "Healthy"
+        case .silent: "Silent"
+        case .degraded: "Degraded"
+        case let .unrecognised(raw): raw.isEmpty ? "Not reported" : raw.humanizedIdentifier
+        }
     }
 }

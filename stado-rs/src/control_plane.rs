@@ -90,6 +90,10 @@ async fn coordinator_loop(
             Ok(scheduled) => log(&format!("tick scheduled={scheduled}")),
             Err(exc) => log(&format!("tick failed: {exc}")),
         }
+        // Native-build poller: watch registry build recipes for new commits
+        // and enqueue build jobs. Self-rate-limited to one pass per minute;
+        // per-recipe failures are logged inside, never raised.
+        crate::scheduler::builds::poll_build_recipes(&|msg: &str| log(msg)).await;
         match crate::queue::copy::replicate_configured_backup().await {
             Ok(Some(report)) if report.is_clean() => log("disaster-recovery replication clean"),
             Ok(Some(report)) => log(&format!(
@@ -104,7 +108,7 @@ async fn coordinator_loop(
 }
 
 /// Single-device Stado control plane used by desktop onboarding (Python
-/// `deploy.local_control_plane.run`): dashboard, scheduler, and worker on
+/// `deploy.local_control_plane.run`): API listener, scheduler, and worker on
 /// this device.
 pub async fn run_local(host: &str, port: i64, interval: i64) -> Result<(), ControlPlaneError> {
     let store = JobStorage::new().await?;
@@ -140,7 +144,7 @@ pub async fn run_local(host: &str, port: i64, interval: i64) -> Result<(), Contr
     Ok(())
 }
 
-/// Cloud-hosted Stado coordinator and authenticated dashboard (Python
+/// Cloud-hosted Stado coordinator and authenticated API listener (Python
 /// `deploy.cloud_control_plane.run`).
 pub async fn run_cloud(host: &str, port: i64, interval: i64) -> Result<(), ControlPlaneError> {
     let store = JobStorage::new().await?;

@@ -742,6 +742,10 @@ pub async fn run(target: Option<&str>, once: bool) -> Result<i32, String> {
             .await
             .map_err(|exc| exc.to_string())?;
         log(&format!("tick scheduled={n}"));
+        // Native-build poller: watch registry build recipes for new commits
+        // and enqueue build jobs. Self-rate-limited to one pass per minute;
+        // per-recipe failures are logged inside, never raised.
+        crate::scheduler::builds::poll_build_recipes(&log).await;
         match crate::queue::copy::replicate_configured_backup().await {
             Ok(Some(report)) if report.is_clean() => log("disaster-recovery replication clean"),
             Ok(Some(report)) => log(&format!(

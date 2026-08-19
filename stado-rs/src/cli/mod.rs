@@ -19,6 +19,7 @@ pub mod azure;
 pub mod billing;
 pub mod blast_radius;
 pub mod bootstrap;
+pub mod builds;
 pub mod cancel;
 pub mod capabilities;
 pub mod cloudflare;
@@ -211,8 +212,6 @@ The worker host must already have the shell, runtime, and GPU driver required by
 3. Start the local control plane:
    stado local-control-plane
 
-Open http://127.0.0.1:8765
-
 Submit your first job:
    stado submit \"printf 'hello from Stado\\n'\"
 
@@ -382,11 +381,12 @@ enum Commands {
         once: bool,
     },
 
-    /// Run the read-only HTTP dashboard for the wisent-compute queue.
+    /// Run the Stado API listener for the wisent-compute queue.
     ///
-    /// Renders queue counts, per-model breakdown, live agent capacity, recent
-    /// failures, and a throughput-based completion projection at GET / with
-    /// auto-refresh, and the same data as JSON at GET /api/state.json.
+    /// Serves the authenticated object, release, machine, service and
+    /// host-health routes plus the three enrollment routes over loopback
+    /// HTTP. It serves no HTML page; the operator workspace is Stado
+    /// Desktop.
     ///
     /// With --enrollment-only the listener serves nothing but the three
     /// enrollment routes, which is the only shape safe to publish.
@@ -404,7 +404,7 @@ enum Commands {
         enrollment_only: bool,
     },
 
-    /// Run a device-local dashboard, scheduler, and worker.
+    /// Run a device-local API listener, scheduler, and worker.
     #[command(name = "local-control-plane", hide = true)]
     LocalControlPlane {
         #[arg(long, default_value = "127.0.0.1")]
@@ -415,7 +415,7 @@ enum Commands {
         interval: i64,
     },
 
-    /// Run a cloud-hosted coordinator and dashboard.
+    /// Run a cloud-hosted coordinator and API listener.
     #[command(name = "cloud-control-plane", hide = true)]
     CloudControlPlane {
         #[arg(long, default_value = "localhost")]
@@ -474,6 +474,10 @@ enum Commands {
     /// Manage the canonical compute-target registry in configured Stado storage.
     #[command(subcommand)]
     Registry(RegistryCommands),
+
+    /// Manage native build recipes: poll a repo, build on new commits.
+    #[command(subcommand)]
+    Builds(builds::BuildsCommands),
 
     /// Add machines to the fleet, group them, hold their SSH keys, and
     /// diagnose the workers: enroll, join/approve, key, doctor.
@@ -536,6 +540,11 @@ enum Commands {
     #[command(subcommand)]
     Resolver(resolver::ResolverCommands),
     /// Plan, deploy, route and operate local OpenAI-compatible inference.
+    ///
+    /// Being replaced by the service declaration contract: a model server is
+    /// a service like any other, declared once with `stado service declare`
+    /// and deployed with `stado service deploy`. This plane keeps working
+    /// while its declarations migrate; add nothing new to it.
     #[command(subcommand)]
     Inference(inference::InferenceCommands),
     /// Provision and operate an interactive display session on a host, and
@@ -1091,10 +1100,17 @@ enum HostCommands {
         json: bool,
     },
     /// Publish one locally collected beacon through the scoped Stado health API.
+    ///
+    /// The `link` block (tailnet path, sleep/wake, interface changes) is
+    /// collected here, on the host, and merged into the document about this
+    /// machine before it is published.
     #[command(name = "publish-beacon")]
     PublishBeacon {
         /// JSON beacon file, or '-' for stdin.
         source: String,
+        /// Print the document that would be published; publish nothing.
+        #[arg(long)]
+        print: bool,
     },
     /// Recover a registry-managed macOS host through its approved channel.
     Recover {
@@ -1181,6 +1197,19 @@ enum HostCommands {
     Gates {
         host: String,
         /// Emit the gates as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Why TARGET went quiet: beacon age, the path and endpoint it published,
+    /// its last sleep and wake, its interface changes, the silences recorded
+    /// against it, and what readers refused because of them.
+    ///
+    /// Read-only and safe against a live host. control-host was
+    /// unreachable from 18:29 to 18:35 UTC on 2026-08-19 and came back on a
+    /// direct path; nothing in this product carried a trace of it.
+    Link {
+        target: String,
+        /// Emit the link report as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -1432,6 +1461,21 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Remove one file from TARGET's home, with guards a bare `rm` over ssh
+    /// does not have: the path must live under a managed area of the approved
+    /// account's home, be a regular file owned by that account, and never be
+    /// a symlink — anything else is refused before anything is deleted.
+    #[command(name = "remove-file")]
+    RemoveFile {
+        target: String,
+        /// Absolute path on the target. Only `$HOME/Library/LaunchAgents`
+        /// and `$HOME/.stado` are deletable by this command; a system path is
+        /// refused with the privileged command that could remove it named.
+        path: String,
+        /// Emit the removal report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Deliver the checked-in Skarbiec acquisition-scope catalog to TARGET and
     /// register it against the host's fleet vault, then print the reconciled
     /// status.
@@ -1475,6 +1519,37 @@ enum HostCommands {
     #[command(name = "weles-activity")]
     WelesActivity {
         target: String,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Enqueue one batch of `generic_capture` actions on TARGET's Weles
+    /// admission API from a checked-in capture plan. The plan is refused in
+    /// full before the host is contacted, the loopback API is reached over the
+    /// registry's own encrypted SSH channel for the length of the command, and
+    /// every artifact lands in Stado storage under the plan's own prefixes.
+    #[command(name = "weles-capture")]
+    WelesCapture {
+        target: String,
+        /// Capture plan file, schema `wisent.weles-capture-plan.v1`.
+        #[arg(long)]
+        plan: String,
+        /// Use this batch id instead of the one the plan declares.
+        #[arg(long)]
+        batch: Option<String>,
+        /// Emit the enqueue report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Per-action state of one capture batch — queued, running, done or
+    /// failed — plus the artifact keys already present in Stado storage under
+    /// the batch prefix. Read-only. Retrieval is `stado storage get`.
+    #[command(name = "weles-capture-status")]
+    WelesCaptureStatus {
+        target: String,
+        /// Batch id to report on.
+        #[arg(long)]
+        batch: String,
         /// Emit the report as JSON.
         #[arg(long)]
         json: bool,
@@ -1700,6 +1775,7 @@ fn failure_service(matches: &clap::ArgMatches) -> &'static str {
         "fleet"
         | "host"
         | "registry"
+        | "builds"
         | "service"
         | "instances"
         | "resources"
@@ -1849,6 +1925,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             }) => registry::host_add(&host, &ssh, &kind, &release_platform).await,
             RegistryCommands::BeaconAge { json } => registry::beacon_age(json).await,
         },
+        Commands::Builds(sub) => builds::run(sub).await,
         Commands::Fleet(sub) => fleet::run(sub).await,
         Commands::Identity(sub) => match sub {
             IdentityCommands::List { json } => identity::list(json).await,
@@ -1860,7 +1937,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         },
         Commands::Host(sub) => match sub {
             HostCommands::Health { target, json } => host::health(&target, json).await,
-            HostCommands::PublishBeacon { source } => host::publish_beacon(&source).await,
+            HostCommands::PublishBeacon { source, print } => {
+                host::publish_beacon(&source, print).await
+            }
             HostCommands::Recover {
                 target,
                 bundled_registry,
@@ -1932,6 +2011,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 json,
             } => host::cleanup(&target, dry_run, json).await,
             HostCommands::Gates { host: target, json } => host::gates(&target, json).await,
+            HostCommands::Link { target, json } => host::link(&target, json).await,
             // `--dry-run` is the default and needs no argument: `--apply` is
             // the only flag that changes anything, and clap already refuses
             // the two together.
@@ -1967,6 +2047,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 executable,
                 json,
             } => host::install_file(&target, &source, &name, executable, json).await,
+            HostCommands::RemoveFile { target, path, json } => {
+                host::remove_file(&target, &path, json).await
+            }
             HostCommands::SyncAcquisitionScopes { target, source } => {
                 host::sync_acquisition_scopes(&target, &source).await
             }
@@ -2056,6 +2139,17 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::WelesActivity { target, json } => {
                 host::weles_activity(&target, json).await
             }
+            HostCommands::WelesCapture {
+                target,
+                plan,
+                batch,
+                json,
+            } => host::weles_capture(&target, &plan, batch.as_deref(), json).await,
+            HostCommands::WelesCaptureStatus {
+                target,
+                batch,
+                json,
+            } => host::weles_capture_status(&target, &batch, json).await,
             HostCommands::Release {
                 target,
                 binary,

@@ -52,6 +52,13 @@ pub struct SubmitOptions {
     pub gpu_type: String,
     pub vram_gb: i64,
     pub machine_type: String,
+    /// Operating system the job requires (`Job::platform_os`). Empty is no
+    /// constraint; a native build declares the one platform whose binaries it
+    /// can produce, and only a host of that platform claims it.
+    pub platform_os: String,
+    /// Architecture the job requires (`Job::architecture`). Empty is no
+    /// constraint. See [`SubmitOptions::platform_os`].
+    pub architecture: String,
     pub pre_command: String,
     pub apt_packages: Vec<String>,
     pub output_uri: String,
@@ -89,6 +96,8 @@ impl Default for SubmitOptions {
             gpu_type: String::new(),
             vram_gb: 0,
             machine_type: String::new(),
+            platform_os: String::new(),
+            architecture: String::new(),
             pre_command: String::new(),
             apt_packages: vec![],
             output_uri: String::new(),
@@ -371,6 +380,8 @@ async fn submit_to_queue(command: &str, options: &SubmitOptions) -> Result<Job, 
     job.gpu_mem_gb = gpu_mem;
     job.gpu_type = accel_type;
     job.machine_type = machine_type;
+    job.platform_os = options.platform_os.clone();
+    job.architecture = options.architecture.clone();
     job.provider = options.provider.clone();
     job.batch_id = options.batch_id.clone();
     job.preemptible = options.preemptible;
