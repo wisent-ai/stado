@@ -1704,6 +1704,98 @@ pub struct PlacementProfile {
 }
 
 // ---------------------------------------------------------------------------
+// registry.json — native build recipes
+// ---------------------------------------------------------------------------
+
+/// Top-level registry key holding the fleet's build recipes. Unmodelled by
+/// [`Registry`] itself, so the array round-trips through [`Registry::extra`]
+/// and a writer of any vintage keeps it.
+pub const BUILDS_KEY: &str = "builds";
+
+/// Top-level registry key that, when `true`, halts all build polling
+/// fleet-wide (the scheduler's kill switch).
+pub const BUILDS_DISABLED_KEY: &str = "builds_disabled";
+
+fn default_build_interval_seconds() -> u64 {
+    300
+}
+
+/// The recorded outcome of a recipe's most recent build job.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuildRun {
+    /// "succeeded" | "failed" | "running".
+    pub status: String,
+    /// RFC3339 timestamp of when the run was recorded.
+    pub at: String,
+    /// Queue job id of the build job.
+    pub job_id: String,
+    /// Store-relative URIs of the uploaded artifacts, empty while running.
+    #[serde(default)]
+    pub artifact_uris: Vec<String>,
+}
+
+/// One native build recipe: a repository the control plane polls and the
+/// command it runs in a fresh shallow checkout when the branch head moves.
+///
+/// v1 boundary: a build produces artifacts under the job's canonical
+/// results URI and nothing else. Version declaration and fleet delivery
+/// remain manual (`stado host declare-version`, `converge --apply`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuildRecipe {
+    /// Unique kebab-case recipe name.
+    pub name: String,
+    /// HTTPS clone URL of the repository to build.
+    pub repo: String,
+    /// Branch the poller watches.
+    #[serde(rename = "ref")]
+    pub branch: String,
+    /// Single POSIX sh build command run in the checkout.
+    pub command: String,
+    /// Paths in the checkout to upload as build artifacts.
+    #[serde(default)]
+    pub artifacts: Vec<String>,
+    /// Explicit opt-in: a freshly added recipe never builds until enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Poll cadence in seconds.
+    #[serde(default = "default_build_interval_seconds")]
+    pub interval_seconds: u64,
+    /// Branch head the poller last enqueued a build for.
+    #[serde(default)]
+    pub last_seen_ref: Option<String>,
+    /// Most recent build run, if any.
+    #[serde(default)]
+    pub last_run: Option<BuildRun>,
+}
+
+/// The registry's build recipes. An absent `builds` key and entries that do
+/// not parse both yield nothing: a recipe this build cannot model must not
+/// stop the ones it can.
+pub fn read_build_recipes(registry: &Registry) -> Vec<BuildRecipe> {
+    registry
+        .extra
+        .get(BUILDS_KEY)
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| serde_json::from_value(entry.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Replace the registry's build recipes. The key lives in
+/// [`Registry::extra`], so [`Registry::to_document`] carries it into the
+/// canonical document like any other unmodelled block.
+pub fn write_build_recipes(registry: &mut Registry, recipes: &[BuildRecipe]) {
+    registry.extra.insert(
+        BUILDS_KEY.to_string(),
+        serde_json::to_value(recipes).expect("build recipes serialize infallibly"),
+    );
+}
+
+// ---------------------------------------------------------------------------
 // __init__.py — loaders (local file, GCS fetch with TTL, source selection)
 // ---------------------------------------------------------------------------
 
