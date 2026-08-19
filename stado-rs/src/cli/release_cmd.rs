@@ -619,9 +619,7 @@ async fn agent(args: &ReleaseAgentArgs) -> Result<(), CmdError> {
 /// no `managed_versions` entry and in no `$HOME/.stado/bin` listing. A status
 /// command that did not resolve this path could compare the desired version
 /// against nothing at all — which is what `observed=unreported` was.
-fn product_binary(
-    policy: &ProductReleasePolicy,
-) -> crate::host_software::ProductBinary {
+fn product_binary(policy: &ProductReleasePolicy) -> crate::host_software::ProductBinary {
     let path = format!(
         "{}/{}",
         policy.install_root.trim_end_matches('/'),
@@ -693,11 +691,8 @@ async fn status(args: &ReleaseStatusArgs) -> Result<(), CmdError> {
                 .find(|entry| &entry.name == target)
                 .map(|entry| entry.managed_versions.clone())
                 .unwrap_or_default();
-            let finding = crate::host_software::judge(
-                &software,
-                &declared,
-                Some(&product_binary(policy)),
-            );
+            let finding =
+                crate::host_software::judge(&software, &declared, Some(&product_binary(policy)));
             if finding.failed {
                 failures = failures.saturating_add(1);
             }
