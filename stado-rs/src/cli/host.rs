@@ -4362,7 +4362,11 @@ fn release_product_programs(
                 policy.binary.trim_start_matches('/')
             );
             crate::host_software::ProductBinary {
-                name: path.rsplit('/').next().unwrap_or(&policy.binary).to_string(),
+                name: path
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(&policy.binary)
+                    .to_string(),
                 path,
                 desired: policy
                     .desired
