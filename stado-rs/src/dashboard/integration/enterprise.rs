@@ -180,13 +180,39 @@ async fn host_health(store: &JobStorage) -> HandlerResult {
     Ok(json!({"hosts": hosts}))
 }
 
-async fn registry(store: &JobStorage, state: &Value) -> HandlerResult {
+async fn registry(store: &JobStorage) -> HandlerResult {
     let beacons = read_json_objects(store, "install_status/").await?;
-    let artifacts = state
-        .get("artifacts")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    // The same projection the retired dashboard snapshot cached: one record
+    // per artifact manifest, computed on demand for this authenticated
+    // caller instead of by a background refresh loop nobody else reads.
+    let registry = crate::artifacts::registry::ArtifactRegistry::with_store(store.clone());
+    let manifests = registry
+        .list("", "", "", &[])
+        .await
+        .map_err(|_| HandlerError::UpstreamFailure)?;
+    let mut artifacts = Vec::with_capacity(manifests.len());
+    for manifest in manifests {
+        let primary = manifest
+            .locations
+            .iter()
+            .find(|location| location.role == "primary")
+            .map(|location| location.uri.clone())
+            .unwrap_or_default();
+        let aliases = registry
+            .aliases_for(&manifest.ref_)
+            .await
+            .map_err(|_| HandlerError::UpstreamFailure)?;
+        artifacts.push(json!({
+            "ref": manifest.ref_.to_string(),
+            "title": manifest.title,
+            "aliases": aliases,
+            "verification": manifest.verification.result,
+            "run_id": manifest.producer.run_id,
+            "primary_uri": primary,
+            "summary": manifest.summary,
+            "created_at": manifest.created_at,
+        }));
+    }
     Ok(json!({"beacons": beacons, "artifacts": artifacts}))
 }
 
@@ -194,14 +220,13 @@ pub(super) async fn handle(
     action: &str,
     body: &[u8],
     store: &JobStorage,
-    state: &Value,
 ) -> HandlerResult {
     empty_request(body)?;
     match action {
         "jobs.snapshot" => snapshot(store).await,
         "jobs.timeseries" => timeseries(store).await,
         "fleet.host-health" => host_health(store).await,
-        "fleet.registry" => registry(store, state).await,
+        "fleet.registry" => registry(store).await,
         _ => Err(HandlerError::BadRequest),
     }
 }

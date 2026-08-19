@@ -211,8 +211,6 @@ The worker host must already have the shell, runtime, and GPU driver required by
 3. Start the local control plane:
    stado local-control-plane
 
-Open http://127.0.0.1:8765
-
 Submit your first job:
    stado submit \"printf 'hello from Stado\\n'\"
 
@@ -382,11 +380,12 @@ enum Commands {
         once: bool,
     },
 
-    /// Run the read-only HTTP dashboard for the wisent-compute queue.
+    /// Run the Stado API listener for the wisent-compute queue.
     ///
-    /// Renders queue counts, per-model breakdown, live agent capacity, recent
-    /// failures, and a throughput-based completion projection at GET / with
-    /// auto-refresh, and the same data as JSON at GET /api/state.json.
+    /// Serves the authenticated object, release, machine, service and
+    /// host-health routes plus the three enrollment routes over loopback
+    /// HTTP. It serves no HTML page; the operator workspace is Stado
+    /// Desktop.
     ///
     /// With --enrollment-only the listener serves nothing but the three
     /// enrollment routes, which is the only shape safe to publish.
@@ -404,7 +403,7 @@ enum Commands {
         enrollment_only: bool,
     },
 
-    /// Run a device-local dashboard, scheduler, and worker.
+    /// Run a device-local API listener, scheduler, and worker.
     #[command(name = "local-control-plane", hide = true)]
     LocalControlPlane {
         #[arg(long, default_value = "127.0.0.1")]
@@ -415,7 +414,7 @@ enum Commands {
         interval: i64,
     },
 
-    /// Run a cloud-hosted coordinator and dashboard.
+    /// Run a cloud-hosted coordinator and API listener.
     #[command(name = "cloud-control-plane", hide = true)]
     CloudControlPlane {
         #[arg(long, default_value = "localhost")]
@@ -536,6 +535,11 @@ enum Commands {
     #[command(subcommand)]
     Resolver(resolver::ResolverCommands),
     /// Plan, deploy, route and operate local OpenAI-compatible inference.
+    ///
+    /// Being replaced by the service declaration contract: a model server is
+    /// a service like any other, declared once with `stado service declare`
+    /// and deployed with `stado service deploy`. This plane keeps working
+    /// while its declarations migrate; add nothing new to it.
     #[command(subcommand)]
     Inference(inference::InferenceCommands),
     /// Provision and operate an interactive display session on a host, and

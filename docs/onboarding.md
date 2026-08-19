@@ -41,7 +41,7 @@ Expected results:
 stado local-control-plane
 ```
 
-Expected result: the process starts the queue coordinator, local worker, and loopback dashboard. Leave it running. Open the loopback address printed by the process from the same machine; do not expose it publicly without the documented deployment authorization boundary.
+Expected result: the process starts the queue coordinator, local worker, and loopback API listener. Leave it running; do not expose it publicly without the documented deployment authorization boundary. The listener serves no page — inspect the fleet with `stado overview` or Stado Desktop.
 
 ## Submit and inspect one job
 
@@ -242,7 +242,7 @@ skarbiec token-mint stado-host-health-beacon --scopes 'read:stado-host-health-ap
 
 ### The same four methods without a terminal
 
-Stado Desktop offers all four: **Fleet › Hosts**, the **Add a Machine** action, then a chooser that lists `invite`, `adopt`, `join` and `declare` with the same requirements and the same registry verdict `stado fleet methods` reports, and one sheet per method. It issues the `stado fleet …` commands documented here through the dashboard's authenticated command bridge rather than carrying its own enrollment logic, so the CLI remains the canonical surface and the two cannot disagree. The `stado_fleet` binary still exists for compatibility over the same implementation; new instructions should use `stado fleet`.
+Stado Desktop offers all four: **Fleet › Hosts**, the **Add a Machine** action, then a chooser that lists `invite`, `adopt`, `join` and `declare` with the same requirements and the same registry verdict `stado fleet methods` reports, and one sheet per method. It issues the `stado fleet …` commands documented here rather than carrying its own enrollment logic, so the CLI remains the canonical surface and the two cannot disagree. The `stado_fleet` binary still exists for compatibility over the same implementation; new instructions should use `stado fleet`.
 
 If the machine belongs to somebody else, hand them [Add your own machine](add-your-machine.md), which is written for their side of `invite` and nothing more.
 
@@ -269,7 +269,7 @@ Once a machine reports, three screens answer the questions that used to need an 
 - storage unreachable: stop submission, preserve the source, and follow `stado storage backup`, `stado storage verify`, or the outage recovery procedure. Unreachable storage is never treated as an empty queue.
 - job remains queued: confirm an eligible worker is running, the queue is not paused, capacity fits, and the workload deadline has not expired.
 - worker rejects or fails a job: install the requested shell/runtime/driver on that worker or change the workload. Stado does not silently supply workload dependencies.
-- dashboard authorization error: use the deployment-bound operator credential. Do not bypass or disable the authorization boundary.
+- API authorization error: each route family (object, release, machine, service, host-health) resolves its own scoped bearer; check the grant for the route being called. Do not bypass or disable the authorization boundary.
 - immutable release collision or digest failure: stop. Publish a new version; never overwrite the existing coordinate.
 
 ## Uninstall and local reset

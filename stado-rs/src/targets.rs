@@ -26,8 +26,8 @@
 //!
 //! DEVIATION from Python: the fetch follows `WC_STORAGE_BACKEND` instead of
 //! hardcoding GCS. Python reads GCS unconditionally, so on an Azure-only
-//! deployment the dashboard compare-and-swaps `registry.json` into the
-//! Azure container (`dashboard/policy.rs`, the WRITE side, which already
+//! deployment the write side compare-and-swaps `registry.json` into the
+//! Azure container (`cli::registry` — `stado registry push`, which already
 //! goes through the configured store) while every reader consults a GCS
 //! object nobody writes. The "gcs" read path is unchanged.
 //!
@@ -1460,6 +1460,12 @@ pub struct Service {
     /// the unverifiable declaration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verify: Option<VerifyDescriptor>,
+    /// The deployable half of the declaration: where the bytes come from and
+    /// what the unit runs. Absent on entries declared before the contract
+    /// existed; older builds keep it verbatim in `extra`, so no writer drops
+    /// it silently.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declaration: Option<crate::declaration::ServiceDeclaration>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -1706,8 +1712,8 @@ pub struct PlacementProfile {
 /// [`REGISTRY_BLOB`] from the store `config::wc_storage_backend()` selects.
 pub const GCS_REGISTRY_URI: &str = "gs://wisent-compute/registry.json";
 /// Store-relative path of the registry document, identical on every
-/// backend. `dashboard/policy.rs` compare-and-swaps this exact path through
-/// the configured store, so the read and write sides address one object.
+/// backend. `cli::registry` compare-and-swaps this exact path through the
+/// configured store, so the read and write sides address one object.
 pub const REGISTRY_BLOB: &str = "registry.json";
 /// Re-fetch the registry at most this often (Python `_GCS_TTL_SEC`).
 pub const GCS_REGISTRY_TTL_SEC: u64 = 30;
