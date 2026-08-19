@@ -757,6 +757,24 @@ async fn status(args: &ReleaseStatusArgs) -> Result<(), CmdError> {
                 run["state"].as_str().unwrap_or("-"),
                 run["updated_at"].as_str().unwrap_or("-"),
             );
+            // Each platform on its own line: the run-level state alone reads
+            // as a promise, while "linux-amd64 submitted job=4ffae52f
+            // [running]" is a fact an operator can go and watch.
+            for (platform, record) in run["platforms"].as_object().into_iter().flatten() {
+                let mut line = format!(
+                    "  {platform} {} job={}",
+                    record["state"].as_str().unwrap_or("-"),
+                    &record["job_id"].as_str().unwrap_or("-")
+                        [..8.min(record["job_id"].as_str().unwrap_or("-").len())],
+                );
+                if let Some(job_state) = record["job_state"].as_str() {
+                    line.push_str(&format!(" [{job_state}]"));
+                }
+                println!("{line}");
+                if let Some(failure) = record["failure"].as_str() {
+                    println!("    failure: {}", failure.lines().next().unwrap_or(failure));
+                }
+            }
             if let Some(failure) = run["failure"].as_str() {
                 // One line of evidence, not the whole log: the first line
                 // names the failing step and host; `submit --json` carries

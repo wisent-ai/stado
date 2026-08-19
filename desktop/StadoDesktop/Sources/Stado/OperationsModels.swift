@@ -586,16 +586,95 @@ struct UnownedProcess: Decodable, Identifiable, Sendable {
 /// `unmanaged` means.
 struct ReleaseInventory: Decodable, Sendable {
     let entries: [ReleaseInventoryEntry]
+    /// The newest pipeline runs, exactly as `release status --json` reports
+    /// them: identity, state, per-platform job states, and the persisted
+    /// failure of anything that died. Absent in older CLI payloads.
+    let runs: [ReleasePipelineRunRecord]
 
     var pairs: [ReleaseInventoryPair] { entries.map(\.pair) }
 
     enum CodingKeys: String, CodingKey {
         case entries = "targets"
+        case runs
     }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         entries = try values.decodeIfPresent([ReleaseInventoryEntry].self, forKey: .entries) ?? []
+        runs = try values.decodeIfPresent([ReleasePipelineRunRecord].self, forKey: .runs) ?? []
+    }
+}
+
+/// One release-pipeline run: what was submitted, where it stands, and — when a
+/// platform or the whole run died — the recorded failure with the job's own
+/// last output lines. This mirrors the run object the pipeline persists, so
+/// the screen shows the store's truth, not a paraphrase.
+struct ReleasePipelineRunRecord: Decodable, Sendable, Identifiable {
+    let runID: String
+    let product: String
+    let version: String
+    let channel: String
+    let state: String
+    let updatedAt: String
+    let failure: String?
+    let platforms: [String: PlatformLeg]
+
+    var id: String { runID }
+
+    enum CodingKeys: String, CodingKey {
+        case runID = "run_id"
+        case product
+        case version
+        case channel
+        case state
+        case updatedAt = "updated_at"
+        case failure
+        case platforms
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        runID = try values.decodeIfPresent(String.self, forKey: .runID) ?? ""
+        product = try values.decodeIfPresent(String.self, forKey: .product) ?? ""
+        version = try values.decodeIfPresent(String.self, forKey: .version) ?? ""
+        channel = try values.decodeIfPresent(String.self, forKey: .channel) ?? ""
+        state = try values.decodeIfPresent(String.self, forKey: .state) ?? ""
+        updatedAt = try values.decodeIfPresent(String.self, forKey: .updatedAt) ?? ""
+        failure = try values.decodeIfPresent(String.self, forKey: .failure)
+        platforms =
+            try values.decodeIfPresent([String: PlatformLeg].self, forKey: .platforms) ?? [:]
+    }
+
+    struct PlatformLeg: Decodable, Sendable {
+        let state: String
+        let jobID: String
+        /// The queue's live word on the platform's build job, attached by the
+        /// CLI only while the run is in flight.
+        let jobState: String?
+        let failure: String?
+
+        enum CodingKeys: String, CodingKey {
+            case state
+            case jobID = "job_id"
+            case jobState = "job_state"
+            case failure
+        }
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            state = try values.decodeIfPresent(String.self, forKey: .state) ?? ""
+            jobID = try values.decodeIfPresent(String.self, forKey: .jobID) ?? ""
+            jobState = try values.decodeIfPresent(String.self, forKey: .jobState)
+            failure = try values.decodeIfPresent(String.self, forKey: .failure)
+        }
+    }
+
+    var updated: Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: updatedAt) { return date }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: updatedAt)
     }
 }
 

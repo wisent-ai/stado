@@ -602,6 +602,10 @@ final class ReleaseEvidenceStore: ObservableObject {
     /// The audit record the last clearance wrote, kept on screen so the
     /// operator can name the backup file without going to the host.
     @Published private(set) var clearance: ReleaseQuarantineClearance?
+    /// The newest pipeline runs, straight from the same inventory read. A run
+    /// in flight shows where each platform stands; a failed one carries its
+    /// recorded failure, so an operator learns why here, not in a terminal.
+    @Published private(set) var pipelineRuns: [ReleasePipelineRunRecord] = []
 
     private let cli: StadoCLI
     private var refreshGeneration = 0
@@ -703,6 +707,7 @@ final class ReleaseEvidenceStore: ObservableObject {
                     software[entry.pair] = report
                 }
             }
+            pipelineRuns = inventory.runs
             pairs = entries.map(\.pair)
         } catch {
             guard generation == refreshGeneration else { return }

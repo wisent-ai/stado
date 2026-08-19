@@ -66,7 +66,10 @@ else
 fi
 
 IDENTITY_HELPER="$BUNDLE/Contents/Helpers/WisentIdentityKeychainHelper"
-"$ROOT/.build/checkouts/wisent-desktop-auth/scripts/build-keychain-helper.sh" "$IDENTITY_HELPER"
+# The checkouts live in the scratch path, which STADO_BUILD_DIR moves; a
+# hardcoded $ROOT/.build worked only in checkouts that had once been built
+# in place, and failed in every fresh worktree.
+"$BUILD_DIR/checkouts/wisent-desktop-auth/scripts/build-keychain-helper.sh" "$IDENTITY_HELPER"
 
 print "→ signing with $IDENTITY"
 codesign "${SIGN_ARGS[@]}" --identifier ai.wisent.identity.keychain-helper "$IDENTITY_HELPER"
