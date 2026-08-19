@@ -1191,6 +1191,19 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Why TARGET went quiet: beacon age, the path and endpoint it published,
+    /// its last sleep and wake, its interface changes, the silences recorded
+    /// against it, and what readers refused because of them.
+    ///
+    /// Read-only and safe against a live host. control-host was
+    /// unreachable from 18:29 to 18:35 UTC on 2026-08-19 and came back on a
+    /// direct path; nothing in this product carried a trace of it.
+    Link {
+        target: String,
+        /// Emit the link report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Reclaim disk on HOST in declared stages, measuring each one.
     ///
     /// Previews by default: the host's own janitor pass, the release build
@@ -1941,6 +1954,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 json,
             } => host::cleanup(&target, dry_run, json).await,
             HostCommands::Gates { host: target, json } => host::gates(&target, json).await,
+            HostCommands::Link { target, json } => host::link(&target, json).await,
             // `--dry-run` is the default and needs no argument: `--apply` is
             // the only flag that changes anything, and clap already refuses
             // the two together.

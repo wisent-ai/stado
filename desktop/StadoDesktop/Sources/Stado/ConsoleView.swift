@@ -228,7 +228,7 @@ struct ConsoleView: View {
         let isSelected = router.destination == destination
         let attention = attentionCount(for: destination)
         return Button {
-            router.destination = destination
+            router.show(destination)
         } label: {
             HStack(spacing: WisentDesign.Space.x2) {
                 Image(systemName: destination.symbol)
