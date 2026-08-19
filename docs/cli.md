@@ -1104,8 +1104,8 @@ stado service logs com.wisent.weles-api --lines 40
 
 ```bash
 stado resolver resolve stado://service/brama \
-  --consumer wisent-backend --json
-stado resolver serve --target ubuntu-server-rtx-pro-6000
+  --consumer example-backend --json
+stado resolver serve --target gpu-host-1
 ```
 
 `resolve` discovers the registry authority from the local bootstrap registry,
