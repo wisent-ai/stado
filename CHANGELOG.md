@@ -46,6 +46,22 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   can reach. Every call still goes through `POST /api/operator/run` with a
   `fleet` argv array and the mutation confirmation, and the two proofs now run
   for a machine added by any method rather than only for the hand-carried key.
+- Stado Desktop reads a command's payload before it reads its exit status.
+  `host gates` exits non-zero when a host is claiming nothing, `service
+  converge` when a binary has drifted and `release status` when a host never
+  reported its software — each after printing the complete `--json` answer —
+  and the console turned all three into an error pane on the exact screen built
+  to show them. The Hosts screen said "3 hosts did not answer whether they are
+  claiming work" while the CLI was answering for every one of them. The exit
+  status is still what a failed read reports, but only when there is no payload
+  to read.
+- The Releases screen lists a host's quarantined digests with the one the
+  registry desires first and the rest newest first. The host answers in digest
+  order, which put the digest actually blocking brama on charless-mac-mini
+  seventh of seven, below six refusals that were already history.
+- Documented the Releases, Hosts and Services screens in the README and the
+  onboarding guide with screenshots of the live fleet, under
+  `desktop/StadoDesktop/docs/screenshots/`.
 
 ### Host operations
 

@@ -601,7 +601,7 @@ struct ReleasesView: View {
                         .font(WisentTypeScale.caption())
                         .foregroundStyle(WisentDesign.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    ForEach(held) { entry in
+                    ForEach(held.desiredFirst) { entry in
                         VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
                             Text(entry.digest)
                                 .font(WisentTypeScale.identifier())
@@ -632,7 +632,7 @@ struct ReleasesView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
                     VStack(spacing: WisentDesign.Space.x2) {
-                        ForEach(report.entries) { entry in
+                        ForEach(report.entries.desiredFirst) { entry in
                             quarantineRow(entry, pair: row.pair)
                         }
                     }

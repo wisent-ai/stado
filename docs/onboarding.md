@@ -246,6 +246,22 @@ Stado Desktop offers all four: **Fleet › Hosts**, the **Add a Machine** action
 
 If the machine belongs to somebody else, hand them [Add your own machine](add-your-machine.md), which is written for their side of `invite` and nothing more.
 
+## Reading the fleet from Stado Desktop
+
+Once a machine reports, three screens answer the questions that used to need an SSH session. Each one runs the `stado` commands documented in [the CLI reference](cli.md) and shows their answers; build the app with `desktop/StadoDesktop/scripts/build-app.sh`. The screenshots are live reads of the Wisent fleet.
+
+![Stado Desktop Hosts screen: two hosts claiming no work, their blockers and disk policy, and the inspector for charless-mac-mini](../desktop/StadoDesktop/docs/screenshots/hosts.png)
+
+*Hosts — read why a host is claiming no work: the blockers its own agent publishes, its free space against the enforced watermark and the age of its capacity report (`stado host gates`), and preview-first disk reclamation (`stado host reclaim`).*
+
+![Stado Desktop Services screen: declared units per host with their running binary, two marked as serving replaced code, and the inspector for the drifted skarbiec unit](../desktop/StadoDesktop/docs/screenshots/services.png)
+
+*Services — read what the host is actually running against what it declares, including the binary each process is really executing (`stado service converge`), and the product processes no unit owns (`stado service list --unowned`).*
+
+![Stado Desktop Releases screen: brama on charless-mac-mini blocked, its blockers, the candidate's stderr tail, and the quarantined digest the registry desires](../desktop/StadoDesktop/docs/screenshots/releases.png)
+
+*Releases — read why a rollout is stuck: the verdict and blockers (`stado release doctor`), the candidate's own stderr off the host (`stado release logs`), and the quarantined digests with the desired one first, which is where a digest is cleared with a typed reason (`stado release quarantine list|clear`).*
+
 ## Failure guidance
 
 - `config file already exists`: validate or migrate it; do not overwrite it implicitly.
