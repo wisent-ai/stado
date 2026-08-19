@@ -261,6 +261,11 @@ async fn report_value(store: &JobStorage, name: &str) -> Result<Option<Value>, C
     Ok(crate::autonomy::storage::read_json(store, &format!("autonomy/cost/{name}.json")).await?)
 }
 
-fn actor() -> String {
+/// Who a recorded mutation is attributed to.
+///
+/// Shared with `cli/service.rs`, which stamps the audit record of a
+/// `service ensure` pass: one spelling of "who did this" across everything in
+/// this binary that writes an operator's name into durable state.
+pub(crate) fn actor() -> String {
     std::env::var("USER").unwrap_or_else(|_| "operator".to_string())
 }
