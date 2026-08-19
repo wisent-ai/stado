@@ -87,6 +87,17 @@ release success. GitHub may be one such optional adapter, but no GitHub-hosted
 step is part of the source, qualification, publication, promotion, or
 reconciliation contract.
 
+A delivery that installs software on a fleet host declares that host in its
+optional `target` field and is pinned to run ON it, where
+`stado release install-local` verifies the delivered archive against the
+contract digest (`WISENT_RELEASE_ARCHIVE`, `WISENT_RELEASE_SHA256`), extracts
+the named member, and installs it under `$HOME/.stado/bin` by rename with a
+dated backup. Installation is a local file operation: no delivery needs ssh,
+Remote Login, or any other login service, and a failed delivery is
+re-enqueued on resume — a recorded failure never lets a run complete past a
+required delivery. A resumed submit retries exactly the failed legs and
+deliveries; published platforms are verified, never rebuilt.
+
 `promotion.reconcile:true` is reserved for registry-hosted runtime products and
 requires a runtime contract. Package, web, mobile, source, and archive products
 use `reconcile:false`, omit runtime fields, and complete through their required
