@@ -156,6 +156,15 @@ impl UnitDomain {
         matches!(self, Self::System)
     }
 
+    /// True when the unit's job belongs to a login rather than to the
+    /// machine: a LaunchAgent, wherever the plist sits. A host with no
+    /// graphical login has no `gui/<uid>` domain to load one into, which is
+    /// what makes this the interesting half of the classification for
+    /// [`MisdeclaredDomain`].
+    pub fn is_per_login(&self) -> bool {
+        matches!(self, Self::AnyUser | Self::User)
+    }
+
     /// The `domain` column spelling; empty when the path places no domain.
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -449,6 +458,173 @@ pub fn declared_services(target: &ComputeTarget) -> Vec<ManagedService> {
 }
 
 // ---------------------------------------------------------------------------
+// Declared domain against the domain the host can have
+// ---------------------------------------------------------------------------
+
+/// The `role` / `host_heuristic` word for a host that is expected to serve
+/// with nobody sitting at it. `control-host` carries it in both fields.
+pub const ROLE_ALWAYS_ON: &str = "always-on";
+
+/// Does the registry itself say this host runs unattended?
+///
+/// An always-on host is a headless host: no account is logged in
+/// graphically, so launchd builds no `gui/<uid>` domain there and a
+/// LaunchAgent has nowhere to load. Read from the declaration rather than
+/// from a probe on purpose — this is the fact the document already carries,
+/// and the finding it produces has to be answerable with the store down.
+pub fn declared_always_on(target: &ComputeTarget) -> bool {
+    [target.role.as_deref(), target.host_heuristic.as_deref()]
+        .into_iter()
+        .flatten()
+        .any(|word| word == ROLE_ALWAYS_ON)
+}
+
+/// Where a launchd job that belongs to the machine lives.
+const DAEMON_DIR: &str = "/Library/LaunchDaemons";
+/// The `/Users/<account>/...` prefix a per-account agent path carries. The
+/// account is load-bearing: a LaunchAgent's job runs as its owner, and the
+/// daemon spelling of the same unit only keeps running as that owner if it
+/// carries `UserName` (`local_install::daemon_plist_text`).
+const ACCOUNTS_PREFIX: &str = "/Users/";
+
+/// A unit declared in a launchd domain the host it is declared on cannot
+/// have.
+///
+/// `com.wisent.compute.service.stado-agent-mini` was declared as a user
+/// LaunchAgent at `/Users/charles/Library/LaunchAgents/...` on
+/// `control-host`, a host declared always-on in both `role` and
+/// `host_heuristic` and with no graphical session at all: `/dev/console` is
+/// root's, `who` prints nothing, and the login's own `launchctl list` holds
+/// no `com.wisent.*` label. `launchctl bootstrap user/501 <plist>` answers
+/// `Bootstrap failed: 5: Input/output error` there and `gui/501` does not
+/// exist, so the declaration named a domain that could never load it. Every
+/// other always-on unit on that host is a system LaunchDaemon under
+/// [`DAEMON_DIR`].
+///
+/// The declaration is checkable without going anywhere: the path says the
+/// domain and the target says the host runs unattended. So this is a
+/// registry finding, reported by `stado registry doctor` and printed under
+/// `stado service list`, rather than a surprise the next `restart` produces.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MisdeclaredDomain {
+    /// Registry target the unit is declared on.
+    pub host: String,
+    /// The host's own name for the unit — the launchd label.
+    pub unit: String,
+    /// The unit-file path the declaration carries.
+    pub path: String,
+    /// The domain that path places the unit in, as [`UnitDomain::as_str`]
+    /// spells it.
+    pub declared_domain: &'static str,
+    /// The only domain this host can load a unit into.
+    pub loadable_domain: &'static str,
+    /// Where the daemon spelling of this unit belongs.
+    pub daemon_path: String,
+    /// The account the agent's job runs as, read out of the declared path;
+    /// empty for a machine-wide `/Library/LaunchAgents` declaration, which
+    /// names no account at all.
+    pub account: String,
+}
+
+impl MisdeclaredDomain {
+    /// The finding for one declared unit, or `None` when the declaration and
+    /// the host agree.
+    ///
+    /// Registry-declared units only. A `host_recovery::MANAGED_AGENTS` entry
+    /// is carried by that fixed program and not by the document, so it is
+    /// not a registry finding and correcting the document would not move it.
+    pub fn detect(target: &ComputeTarget, service: &ManagedService) -> Option<Self> {
+        if service.source != SOURCE_REGISTRY || !declared_always_on(target) {
+            return None;
+        }
+        let declared = UnitDomain::from_path(&service.path);
+        if !declared.is_per_login() {
+            return None;
+        }
+        let unit = service.unit_id().to_string();
+        let account = service
+            .path
+            .strip_prefix(ACCOUNTS_PREFIX)
+            .and_then(|rest| rest.split('/').next())
+            .unwrap_or_default()
+            .to_string();
+        Some(Self {
+            host: target.name.clone(),
+            daemon_path: format!("{DAEMON_DIR}/{unit}.plist"),
+            unit,
+            path: service.path.clone(),
+            declared_domain: declared.as_str(),
+            loadable_domain: DOMAIN_SYSTEM,
+            account,
+        })
+    }
+
+    /// The privileged command that puts this unit in the domain the host can
+    /// load, spelled the way `ENSURE_BODY` installs a daemon
+    /// (`install -m 644 -o root -g wheel`) so the file an operator writes by
+    /// hand and the file the fleet writes have the same owner and mode.
+    ///
+    /// `UserName` rides along wherever the declared path names an account:
+    /// root reads a plist in [`DAEMON_DIR`], and a daemon without that key
+    /// would run the account's program as uid 0 against an account-owned
+    /// `~/.stado` — the exact trade `local_install::daemon_plist_text`
+    /// documents.
+    pub fn install_command(&self) -> String {
+        let install = format!(
+            "/usr/bin/install -m 644 -o root -g wheel {} {}",
+            self.path, self.daemon_path
+        );
+        if self.account.is_empty() {
+            return format!("sudo {install}");
+        }
+        format!(
+            "sudo /bin/sh -c '{install} && /usr/bin/plutil -insert UserName -string {} {}'",
+            self.account, self.daemon_path
+        )
+    }
+
+    /// The one sentence both surfaces print: the unit, the domain it
+    /// declares, the domain the host can actually load, and the command that
+    /// closes the gap.
+    pub fn sentence(&self) -> String {
+        format!(
+            "{} is declared in launchd's {} domain ({}), and {} is declared {ROLE_ALWAYS_ON}, so no \
+             account is logged in graphically there, launchd builds no gui/<uid>, and {} is the only \
+             domain that host can load a unit into; install it there with one privileged command on \
+             the host: {}",
+            self.unit,
+            self.declared_domain,
+            self.path,
+            self.host,
+            self.loadable_domain,
+            self.install_command()
+        )
+    }
+
+    pub fn to_json(&self) -> Value {
+        json!({
+            "host": self.host,
+            "unit": self.unit,
+            "path": self.path,
+            "declared_domain": self.declared_domain,
+            "loadable_domain": self.loadable_domain,
+            "daemon_path": self.daemon_path,
+            "install_command": self.install_command(),
+            "detail": self.sentence(),
+        })
+    }
+}
+
+/// Every registry-declared unit on TARGET whose declared launchd domain the
+/// host cannot have.
+pub fn misdeclared_domains(target: &ComputeTarget) -> Vec<MisdeclaredDomain> {
+    declared_services(target)
+        .iter()
+        .filter_map(|service| MisdeclaredDomain::detect(target, service))
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
 // Read side: the beacon join
 // ---------------------------------------------------------------------------
 
@@ -466,6 +642,10 @@ pub struct ServiceStatus {
     pub reported_at: String,
     /// Why the state is what it is, when that is not self-evident.
     pub detail: String,
+    /// Set when this unit's declared launchd domain is one its host cannot
+    /// have. Carried on the row rather than recomputed by each surface,
+    /// because the check needs the target's `role` and only the join has it.
+    pub misdeclared_domain: Option<MisdeclaredDomain>,
 }
 
 impl ServiceStatus {
@@ -477,6 +657,9 @@ impl ServiceStatus {
         report.insert("state".to_string(), json!(self.state));
         report.insert("reported_at".to_string(), json!(self.reported_at));
         report.insert("detail".to_string(), json!(self.detail));
+        if let Some(misdeclared) = &self.misdeclared_domain {
+            report.insert("misdeclared_domain".to_string(), misdeclared.to_json());
+        }
         Value::Object(report)
     }
 }
@@ -549,11 +732,13 @@ pub async fn list_services(store: &JobStorage) -> Result<Vec<ServiceStatus>, Dep
             .to_string();
         for service in declared {
             let (state, detail) = beacon_state(beacon, service.unit_id());
+            let misdeclared_domain = MisdeclaredDomain::detect(target, &service);
             rows.push(ServiceStatus {
                 service,
                 state,
                 reported_at: reported_at.clone(),
                 detail,
+                misdeclared_domain,
             });
         }
     }
