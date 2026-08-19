@@ -237,22 +237,13 @@ fn phase_is_rolling(phase: RolloutPhase) -> bool {
     )
 }
 
-/// Read one release log's tail off the host.
+/// Turn what the host said about one log into the report's own account of it.
 ///
-/// The path is the one [`crate::release_agent`]'s `release_log` opens,
-/// spelled by `release_agent::host_log_path` itself rather than retyped, so
-/// the reader cannot look somewhere the writer does not write.
-async fn stream_report(
-    target: &crate::targets::ComputeTarget,
-    logs_root: &str,
-    product: &str,
-    version: &str,
-    extension: &'static str,
-    lines: usize,
-) -> Result<StreamReport, CmdError> {
-    let path = host_log_path(logs_root, product, version, extension);
-    let read = remote_read_tail(target, &path, lines).await?;
-    Ok(match read {
+/// Split from the read so the three-way distinction can be exercised without
+/// a host: `missing`, `empty` and `read` are the whole point of the command,
+/// and folding two of them together is the regression worth a test.
+fn classify(path: String, extension: &'static str, read: Option<(String, u64)>) -> StreamReport {
+    match read {
         None => StreamReport {
             stream: extension,
             path,
@@ -274,7 +265,25 @@ async fn stream_report(
             lines: tail.lines().map(str::to_string).collect(),
             state: STREAM_READ,
         },
-    })
+    }
+}
+
+/// Read one release log's tail off the host.
+///
+/// The path is the one [`crate::release_agent`]'s `release_log` opens,
+/// spelled by `release_agent::host_log_path` itself rather than retyped, so
+/// the reader cannot look somewhere the writer does not write.
+async fn stream_report(
+    target: &crate::targets::ComputeTarget,
+    logs_root: &str,
+    product: &str,
+    version: &str,
+    extension: &'static str,
+    lines: usize,
+) -> Result<StreamReport, CmdError> {
+    let path = host_log_path(logs_root, product, version, extension);
+    let read = remote_read_tail(target, &path, lines).await?;
+    Ok(classify(path, extension, read))
 }
 
 async fn logs(args: &ReleaseLogsArgs) -> Result<(), CmdError> {
@@ -415,7 +424,10 @@ async fn candidate_section(
 /// digest that nobody desires is history, and the one that matches desired
 /// state is a rollout that will be skipped on every pass until someone
 /// clears it.
-fn quarantine_entries(state: Option<&HostReleaseState>, desired_digest: Option<&str>) -> Vec<Value> {
+fn quarantine_entries(
+    state: Option<&HostReleaseState>,
+    desired_digest: Option<&str>,
+) -> Vec<Value> {
     state.map_or_else(Vec::new, |state| {
         state
             .quarantined
@@ -429,6 +441,79 @@ fn quarantine_entries(state: Option<&HostReleaseState>, desired_digest: Option<&
                 })
             })
             .collect()
+    })
+}
+
+/// Every fact the verdict is computed from, so the rule itself holds no I/O
+/// and can be exercised against the exact state the incident left behind.
+struct Facts<'a> {
+    product: &'a str,
+    target: &'a str,
+    desired_version: Option<&'a str>,
+    observed_version: Option<&'a str>,
+    phase: &'a str,
+    detail: &'a str,
+    candidate: Value,
+    quarantined: Vec<Value>,
+    gates: Value,
+    /// The blockers the host's own queue agent published, in its words.
+    gate_blockers: Vec<String>,
+    disk_pressure_unresolved: bool,
+    /// A candidate is recorded, or the phase says one is being staged.
+    in_flight: bool,
+}
+
+/// The verdict and the report around it.
+///
+/// `blocked` is the only verdict that says the rollout will not move on its
+/// own, and it has exactly two causes: the agent refuses a quarantined
+/// desired digest on every pass, and a host with an unresolved disk gate
+/// fails admission closed and claims nothing at all. Everything short of
+/// converged is `rolling`, because the agent's next tick is what advances it.
+fn diagnosis(facts: &Facts<'_>) -> Value {
+    let mut blockers = facts.gate_blockers.clone();
+    let desired_quarantined = facts
+        .quarantined
+        .iter()
+        .any(|entry| entry["is_desired_digest"] == Value::Bool(true));
+    if desired_quarantined {
+        blockers.push(BLOCKER_DESIRED_DIGEST_QUARANTINED.to_string());
+    }
+    // A candidate that answers nothing is listed even while the verdict stays
+    // `rolling`: the rollout is still inside its readiness window, and the
+    // next thing that happens to it is the quarantine this command exists to
+    // explain.
+    if facts.candidate["health_status"]
+        .as_str()
+        .is_some_and(|status| {
+            status != HEALTH_OK && status != HEALTH_NO_CANDIDATE && status != HEALTH_UNPROBED
+        })
+    {
+        blockers.push(BLOCKER_CANDIDATE_NOT_READY.to_string());
+    }
+    blockers.sort();
+    blockers.dedup();
+    let converged =
+        facts.observed_version.is_some() && facts.observed_version == facts.desired_version;
+    let verdict = if desired_quarantined || facts.disk_pressure_unresolved {
+        VERDICT_BLOCKED
+    } else if facts.in_flight || !converged {
+        VERDICT_ROLLING
+    } else {
+        VERDICT_SETTLED
+    };
+    json!({
+        "product": facts.product,
+        "target": facts.target,
+        "desired_version": facts.desired_version,
+        "observed_version": facts.observed_version,
+        "phase": facts.phase,
+        "detail": facts.detail,
+        "candidate": facts.candidate,
+        "quarantined": facts.quarantined,
+        "gates": facts.gates,
+        "verdict": verdict,
+        "blockers": blockers,
     })
 }
 
@@ -478,11 +563,7 @@ async fn doctor(args: &ReleaseDoctorArgs) -> Result<(), CmdError> {
         .as_ref()
         .and_then(|state| state.active.as_ref())
         .map(|record| record.version.clone())
-        .or_else(|| {
-            published["active_version"]
-                .as_str()
-                .map(str::to_string)
-        });
+        .or_else(|| published["active_version"].as_str().map(str::to_string));
     let phase = state.as_ref().map_or_else(
         || {
             published["phase"]
@@ -492,16 +573,15 @@ async fn doctor(args: &ReleaseDoctorArgs) -> Result<(), CmdError> {
         |state| phase_word(state.phase),
     );
     let detail = state.as_ref().map_or_else(
-        || {
-            published["detail"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string()
-        },
+        || published["detail"].as_str().unwrap_or_default().to_string(),
         |state| state.detail.clone(),
     );
-    let candidate =
-        candidate_section(&compute, state.as_ref(), target_policy.readiness_path.as_deref()).await?;
+    let candidate = candidate_section(
+        &compute,
+        state.as_ref(),
+        target_policy.readiness_path.as_deref(),
+    )
+    .await?;
     let quarantined = quarantine_entries(state.as_ref(), desired_digest);
     // A failed gate read is a failed diagnosis, not a diagnosis with one
     // field missing. The Mac mini stopped claiming for hours on a gate
@@ -511,48 +591,21 @@ async fn doctor(args: &ReleaseDoctorArgs) -> Result<(), CmdError> {
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
 
-    let mut blockers: Vec<String> = gates.blockers.clone();
-    if quarantined
-        .iter()
-        .any(|entry| entry["is_desired_digest"] == Value::Bool(true))
-    {
-        blockers.push(BLOCKER_DESIRED_DIGEST_QUARANTINED.to_string());
-    }
-    if candidate["health_status"].as_str().is_some_and(|status| {
-        status != HEALTH_OK && status != HEALTH_NO_CANDIDATE && status != HEALTH_UNPROBED
-    }) {
-        blockers.push(BLOCKER_CANDIDATE_NOT_READY.to_string());
-    }
-    blockers.sort();
-    blockers.dedup();
-
-    let quarantine_blocks = blockers
-        .iter()
-        .any(|blocker| blocker == BLOCKER_DESIRED_DIGEST_QUARANTINED);
-    let in_flight = state
-        .as_ref()
-        .is_some_and(|state| state.candidate.is_some() || phase_is_rolling(state.phase));
-    let converged = observed_version.is_some() && observed_version.as_deref() == desired_version;
-    let verdict = if quarantine_blocks || gates.disk_pressure_unresolved {
-        VERDICT_BLOCKED
-    } else if in_flight || !converged {
-        VERDICT_ROLLING
-    } else {
-        VERDICT_SETTLED
-    };
-
-    let report = json!({
-        "product": args.product,
-        "target": target_name,
-        "desired_version": desired_version,
-        "observed_version": observed_version,
-        "phase": phase,
-        "detail": detail,
-        "candidate": candidate,
-        "quarantined": quarantined,
-        "gates": host_gates::gates_section(&gates),
-        "verdict": verdict,
-        "blockers": blockers,
+    let report = diagnosis(&Facts {
+        product: &args.product,
+        target: &target_name,
+        desired_version,
+        observed_version: observed_version.as_deref(),
+        phase: &phase,
+        detail: &detail,
+        candidate,
+        quarantined,
+        gates: host_gates::gates_section(&gates),
+        gate_blockers: gates.blockers.clone(),
+        disk_pressure_unresolved: gates.disk_pressure_unresolved,
+        in_flight: state
+            .as_ref()
+            .is_some_and(|state| state.candidate.is_some() || phase_is_rolling(state.phase)),
     });
     if args.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -583,7 +636,11 @@ async fn doctor(args: &ReleaseDoctorArgs) -> Result<(), CmdError> {
         cell(&report["gates"]["free_gb"]),
         cell(&report["gates"]["low_watermark_gb"])
     );
-    println!("verdict           {verdict}");
+    println!("verdict           {}", cell(&report["verdict"]));
+    let blockers: Vec<String> = report["blockers"]
+        .as_array()
+        .map(|blockers| blockers.iter().map(cell).collect())
+        .unwrap_or_default();
     println!(
         "blockers          {}",
         if blockers.is_empty() {
@@ -592,6 +649,10 @@ async fn doctor(args: &ReleaseDoctorArgs) -> Result<(), CmdError> {
             blockers.join(", ")
         }
     );
+    let quarantined = report["quarantined"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
     if !quarantined.is_empty() {
         super::table::print(
             &["DIGEST", "DESIRED", "QUARANTINED AT", "REASON"],
@@ -611,7 +672,7 @@ async fn doctor(args: &ReleaseDoctorArgs) -> Result<(), CmdError> {
     // The command that finishes the diagnosis, spelled out. In the incident
     // the state file's one sentence was the end of the trail; the log the
     // operator needed had a name nobody had written down.
-    if verdict != VERDICT_SETTLED {
+    if report["verdict"] != *VERDICT_SETTLED {
         if let Some(version) = desired_version {
             println!(
                 "\nnext: stado release logs {} --target {target_name} --version {version} \
@@ -635,11 +696,15 @@ pub async fn dispatch_doctor(args: &ReleaseDoctorArgs) -> Result<(), CmdError> {
 mod tests {
     use super::*;
 
+    /// The bindings the probe carries, and the proof that a readiness path
+    /// with a shell character in it cannot escape its assignment.
     #[test]
-    fn probe_script_quotes_the_declared_readiness_path() {
+    fn probe_script_binds_typed_values_and_quotes_the_declared_path() {
         let script = candidate_probe_script(46748, 18080, "/health");
-        assert!(script.starts_with("pid=46748\nport=18080\nreadiness_path='/health'\n"));
+        assert!(script.starts_with("pid=46748\nport=18080\nreadiness_path=/health\n"));
         assert!(script.contains("kill -0 \"$pid\""));
+        let hostile = candidate_probe_script(1, 2, "/health;rm -rf ~");
+        assert!(hostile.contains("readiness_path='/health;rm -rf ~'\n"));
     }
 
     #[test]
@@ -649,9 +714,162 @@ mod tests {
 
     #[test]
     fn phase_word_matches_the_published_vocabulary() {
-        assert_eq!(phase_word(RolloutPhase::CandidateRunning), "candidate_running");
+        assert_eq!(
+            phase_word(RolloutPhase::CandidateRunning),
+            "candidate_running"
+        );
         assert!(phase_is_rolling(RolloutPhase::CandidateRunning));
         assert!(!phase_is_rolling(RolloutPhase::Quarantined));
         assert!(!phase_is_rolling(RolloutPhase::Committed));
+    }
+
+    /// A settled host: observed equals desired, no candidate, gates clear.
+    fn settled() -> Facts<'static> {
+        Facts {
+            product: "brama",
+            target: "control-host",
+            desired_version: Some("0.2.27"),
+            observed_version: Some("0.2.27"),
+            phase: "committed",
+            detail: "",
+            candidate: json!({
+                "port": Value::Null,
+                "health_status": HEALTH_NO_CANDIDATE,
+                "pid_alive": Value::Null,
+            }),
+            quarantined: Vec::new(),
+            gates: json!({
+                "disk_pressure_unresolved": false,
+                "free_gb": 84.2,
+                "low_watermark_gb": 55,
+            }),
+            gate_blockers: Vec::new(),
+            disk_pressure_unresolved: false,
+            in_flight: false,
+        }
+    }
+
+    #[test]
+    fn report_carries_every_contracted_key() {
+        let report = diagnosis(&settled());
+        for key in [
+            "product",
+            "target",
+            "desired_version",
+            "observed_version",
+            "phase",
+            "detail",
+            "candidate",
+            "quarantined",
+            "gates",
+            "verdict",
+            "blockers",
+        ] {
+            assert!(report.get(key).is_some(), "missing {key}");
+        }
+        assert_eq!(report["verdict"], json!(VERDICT_SETTLED));
+        assert_eq!(report["blockers"], json!([]));
+    }
+
+    /// The incident's own state: the desired digest is quarantined, so the
+    /// agent will skip this release on every pass and nothing said so.
+    #[test]
+    fn a_quarantined_desired_digest_blocks() {
+        let mut facts = settled();
+        facts.observed_version = Some("0.2.26");
+        facts.phase = "quarantined";
+        facts.detail = "candidate did not become ready within 90s: pid 46748 is gone";
+        facts.quarantined = vec![json!({
+            "digest": "119f93dd",
+            "reason": "candidate did not become ready within 90s: pid 46748 is gone",
+            "quarantined_at": "2026-08-17T09:14:02+00:00",
+            "is_desired_digest": true,
+        })];
+        let report = diagnosis(&facts);
+        assert_eq!(report["verdict"], json!(VERDICT_BLOCKED));
+        assert_eq!(
+            report["blockers"],
+            json!([BLOCKER_DESIRED_DIGEST_QUARANTINED])
+        );
+    }
+
+    /// A quarantined digest nobody desires is history, not a blocker.
+    #[test]
+    fn a_stale_quarantined_digest_does_not_block() {
+        let mut facts = settled();
+        facts.quarantined = vec![json!({
+            "digest": "deadbeef",
+            "reason": "candidate refused the connection",
+            "quarantined_at": "2026-07-02T11:00:00+00:00",
+            "is_desired_digest": false,
+        })];
+        assert_eq!(diagnosis(&facts)["verdict"], json!(VERDICT_SETTLED));
+    }
+
+    #[test]
+    fn an_unresolved_disk_gate_blocks_even_at_the_desired_version() {
+        let mut facts = settled();
+        facts.disk_pressure_unresolved = true;
+        facts.gate_blockers = vec!["disk_pressure_unresolved".to_string()];
+        let report = diagnosis(&facts);
+        assert_eq!(report["verdict"], json!(VERDICT_BLOCKED));
+        assert_eq!(report["blockers"], json!(["disk_pressure_unresolved"]));
+    }
+
+    #[test]
+    fn a_staged_candidate_is_rolling_and_a_silent_one_is_named() {
+        let mut facts = settled();
+        facts.in_flight = true;
+        facts.observed_version = Some("0.2.26");
+        facts.candidate = json!({
+            "port": 18080,
+            "health_status": HEALTH_UNREACHABLE,
+            "pid_alive": false,
+        });
+        let report = diagnosis(&facts);
+        assert_eq!(report["verdict"], json!(VERDICT_ROLLING));
+        assert_eq!(report["blockers"], json!([BLOCKER_CANDIDATE_NOT_READY]));
+    }
+
+    /// A host that has never reported cannot be called settled just because
+    /// nothing is in flight on it.
+    #[test]
+    fn an_unreported_host_is_not_settled() {
+        let mut facts = settled();
+        facts.observed_version = None;
+        facts.phase = PHASE_UNREPORTED;
+        assert_eq!(diagnosis(&facts)["verdict"], json!(VERDICT_ROLLING));
+    }
+
+    #[test]
+    fn a_missing_log_is_not_an_empty_one() {
+        let missing = classify("/logs/brama-0.2.27.err".to_string(), "err", None);
+        assert_eq!(missing.state, STREAM_MISSING);
+        assert_eq!(missing.to_value()["bytes"], Value::Null);
+        let empty = classify(
+            "/logs/brama-0.2.27.out".to_string(),
+            "out",
+            Some((String::new(), 0)),
+        );
+        assert_eq!(empty.state, STREAM_EMPTY);
+        assert_eq!(empty.to_value()["bytes"], json!(0));
+        assert_eq!(empty.to_value()["lines"], json!([]));
+    }
+
+    /// The tail is reported as a tail: `bytes` is the whole file, not what
+    /// came back, so nobody reads 40 lines as the entire log.
+    #[test]
+    fn a_tail_reports_the_whole_file_size() {
+        let read = classify(
+            "/logs/brama-0.2.27.err".to_string(),
+            "err",
+            Some(("first\nsecond\n".to_string(), 4392)),
+        );
+        assert_eq!(read.state, STREAM_READ);
+        let value = read.to_value();
+        assert_eq!(value["bytes"], json!(4392));
+        assert_eq!(value["lines"], json!(["first", "second"]));
+        assert_eq!(value["stream"], json!("err"));
+        assert_eq!(value["path"], json!("/logs/brama-0.2.27.err"));
     }
 }
