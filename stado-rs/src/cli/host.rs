@@ -4369,7 +4369,7 @@ async fn print_reports(hosts: &[String], json: bool) -> Result<(), CmdError> {
         let finding = crate::host_software::judge(&report, &declared, None);
         if json {
             let mut object = report.json();
-            object["software"] = finding.json();
+            finding.merge_into(&mut object);
             payload.push(object);
             continue;
         }
