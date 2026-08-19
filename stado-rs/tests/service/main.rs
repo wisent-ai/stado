@@ -170,9 +170,8 @@ fn declare_refuses_a_host_outside_the_registry() {
 fn declare_refuses_a_service_without_consumers() {
     let fleet = Fleet::new();
     let body = valid_declaration().replace(
-        r#"    "consumers": {"example-backend": {"capabilities": ["model-routing"]}}
-"#,
-        "",
+        "    \"run\": {\"args\": [\"serve\"]},\n    \"consumers\": {\"example-backend\": {\"capabilities\": [\"model-routing\"]}}\n",
+        "    \"run\": {\"args\": [\"serve\"]}\n",
     );
 
     let out = fleet.declare(&body);
