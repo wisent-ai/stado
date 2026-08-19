@@ -1257,6 +1257,29 @@ The LaunchDaemon drops to `RUN_AS_USER` before reading or writing canonical
 storage and uses non-interactive `sudo` only for system launchd cutover and the
 declared candidate account.
 
+
+### `stado release install-local`
+
+The delivery contract's local endpoint. A delivery declaring a `target` in the
+product manifest is pinned to run on that registry host; there this command
+verifies the delivered archive against the digest the delivery worker provides
+(`WISENT_RELEASE_ARCHIVE`, `WISENT_RELEASE_SHA256`), extracts the member named
+by `--member` (default `bin/stado`), and installs it under `$HOME/.stado/bin`
+by rename with a dated backup. Installation is a local file operation on the
+host receiving the software, so no delivery needs ssh or Remote Login — the
+release that installed over ssh died on the first host without it. It replaced
+the last load-bearing script of the 137 retired on 2026-08-19.
+
+### `stado release status` shows the pipeline itself
+
+Below the per-target rollout rows, the command lists the newest pipeline runs:
+identity, state, each platform leg with its job id, the queue's live word on a
+job in flight, and — for a running build — crates compiled so far against the
+previous run of the same platform, labelled the estimate it is. A failed run
+or platform carries its persisted failure with the job's own last output
+lines. The Releases screen in Stado Desktop renders the same `--json` payload,
+so the CLI and the GUI cannot disagree.
+
 ### `stado release logs`
 
 The command that ends the guessing. A brama candidate died in under ninety
