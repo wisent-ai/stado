@@ -347,7 +347,14 @@ pub(crate) async fn recent_runs(
             let Some(job_id) = record["job_id"].as_str().map(str::to_owned) else {
                 continue;
             };
-            for state in ["running", "queue", "completed", "uploaded", "failed", "cancelled"] {
+            for state in [
+                "running",
+                "queue",
+                "completed",
+                "uploaded",
+                "failed",
+                "cancelled",
+            ] {
                 match store.read_job(state, &job_id).await {
                     Ok(Some(_)) => {
                         record["job_state"] = Value::String(state.to_string());
@@ -911,7 +918,14 @@ async fn run_deliveries(
 ) -> Result<(), CmdError> {
     let store = JobStorage::new().await?;
     for d in &m.deliveries {
-        if !run.deliveries.contains_key(&d.name) {
+        // A failed delivery is re-enqueued the same way a failed platform is
+        // re-built: the record's existence is not the work's existence. Until
+        // 2026-08-19 a resumed run skipped every recorded delivery whatever
+        // its state, so a run whose required deliveries had all failed
+        // marked itself Completed — done without checking the world.
+        if !run.deliveries.contains_key(&d.name)
+            || run.deliveries[&d.name].state == DeliveryRunState::Failed
+        {
             let a = &artifacts[&d.platform];
             let request = DeliveryRequest {
                 schema_version: 1,
@@ -997,7 +1011,7 @@ async fn run_deliveries(
             save(run).await?;
         }
         let current = run.deliveries[&d.name].clone();
-        if current.state != DeliveryRunState::Submitted {
+        if current.state == DeliveryRunState::Passed {
             continue;
         }
         let job = terminal(&store, &current.job_id).await?;
@@ -1021,7 +1035,11 @@ async fn run_deliveries(
         updated.failure = if ok {
             None
         } else {
-            Some(job.error.unwrap_or(job.state))
+            Some(format!(
+                "{}{}",
+                job.error.clone().unwrap_or_else(|| job.state.clone()),
+                job_output_tail(&store, &current.job_id).await
+            ))
         };
         if d.required && !ok {
             return Err(CmdError::click(format!(
