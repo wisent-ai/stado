@@ -27,8 +27,8 @@
 //!   drifted   the host runs a different version. This is the state that hid
 //!             behind a passing `service list` for as long as it took somebody
 //!             to notice the behaviour was old.
-//!   unknown   the host said nothing usable: the reporting helper is not
-//!             installed, the channel refused, or the artefact carries no
+//!   unknown   the host said nothing usable: the reporter could not run, the
+//!             channel refused, or the artefact carries no
 //!             version metadata at all. Kept apart from `drifted` for the same
 //!             reason [`crate::cli::service_verify`] keeps `unverified` apart
 //!             from `unreachable` — "I did not look" and "I looked and it is
@@ -66,9 +66,8 @@ use std::collections::BTreeMap;
 
 use serde_json::{json, Value};
 
-use crate::deploy::{
-    host_channel, host_release, production_runner, shlex_quote, DeployError, Runner,
-};
+use crate::deploy::service;
+use crate::deploy::{host_channel, host_release, production_runner, DeployError, Runner};
 use crate::targets::ComputeTarget;
 
 use super::{CmdError, CLICK_ERROR_CODE};
@@ -80,29 +79,30 @@ pub const DRIFTED: &str = "drifted";
 /// Nothing usable came back, so drift is neither confirmed nor ruled out.
 pub const UNKNOWN: &str = "unknown";
 
-/// The helper that reads every managed binary on the host and prints the
-/// version it is actually installed at.
+/// The reporter that reads every managed binary on the host and prints the
+/// version it is actually installed at, embedded in this binary and run as one
+/// fixed remote script.
 ///
 /// One program answering the same question for every binary on the box: a
 /// per-product reporter would be a per-product opinion about what "the
 /// installed version" means, and the whole point of `managed_versions` is that
-/// there is one. It takes no arguments — `host run-helper` carries none — and
-/// finds its own hostname in the canonical registry the same way this command
-/// finds the host's declarations.
-const VERSION_HELPER: &str = "report-installed-versions";
+/// there is one. It takes no arguments and finds its own hostname in the
+/// canonical registry the same way this command finds the host's declarations.
+/// Kept as a checked-in file rather than a string literal so it is reviewed and
+/// read as the shell program it is.
+const VERSION_PROBE: &str = include_str!("../../scripts/report-installed-versions.sh");
 
-/// Where [`VERSION_HELPER`] comes from in this repository, so a host missing it
-/// is told the exact command that fixes that rather than the fact alone.
-const VERSION_HELPER_SOURCE: &str = "scripts/report-installed-versions.sh";
+/// The reporter's name, for sentences that need to name it.
+const VERSION_HELPER: &str = "report-installed-versions";
 
 /// What the reporter prints for an artefact whose version it could not read,
 /// and what this command prints back.
 ///
-/// Spelled out because it is a wire value: the helper must be able to say "I
+/// Spelled out because it is a wire value: the reporter must be able to say "I
 /// looked and could not tell" in a line that still names the binary, and a
 /// blank, a dash or a truncated string would each be silently readable as
 /// something else. Any value that is not an exact version lands as [`UNKNOWN`]
-/// regardless; this constant is the one the helper is documented to send.
+/// regardless; this constant is the one the reporter is documented to send.
 const UNKNOWN_VERSION: &str = "unknown";
 
 /// What the reporter prints for a column that genuinely has no value — a
@@ -110,6 +110,16 @@ const UNKNOWN_VERSION: &str = "unknown";
 /// [`UNKNOWN_VERSION`]: "there is no unit" is a fact, "I could not read the
 /// version" is the absence of one.
 const NONE: &str = "none";
+
+/// The process column's word for a live process executing the artefact the
+/// unit's declaration resolves to.
+const PROCESS_MATCHES: &str = "matches";
+
+/// The process column's word for a live process executing something else. The
+/// verdict beside it can be `in-sync` at the same time, and that combination is
+/// the whole reason the column exists: the version on disk is the declared one
+/// and the running code is not it.
+const PROCESS_DIFFERS: &str = "differs";
 
 /// One declared binary, checked against what the host reported.
 struct Row {
@@ -125,6 +135,20 @@ struct Row {
     unit: String,
     /// What launchd (or systemd) says about that unit.
     state: String,
+    /// The executable the live process under `unit` is running, or `None` when
+    /// no process was found to ask about.
+    running_binary: Option<String>,
+    /// Whether that process is executing the artefact the unit's declaration
+    /// resolves to; `None` when it could not be established.
+    ///
+    /// Every other answer in this command is about what is INSTALLED, and an
+    /// installed version says nothing about a process that started before it.
+    /// Two production incidents sat in that gap with every other column
+    /// correct: Brama's process kept running an artefact tree `current` no
+    /// longer pointed at, and the Weles worker kept serving a `dist` replaced
+    /// 26 seconds after it started. See
+    /// [`crate::deploy::service::RunningProgram::matches_process`].
+    binary_matches_process: Option<bool>,
     verdict: &'static str,
     detail: String,
 }
@@ -138,6 +162,8 @@ impl Row {
             "root": self.root,
             "unit": self.unit,
             "state": self.state,
+            "running_binary": self.running_binary,
+            "binary_matches_process": self.binary_matches_process,
             "verdict": self.verdict,
             "detail": self.detail,
         })
@@ -147,12 +173,23 @@ impl Row {
     fn installed_cell(&self) -> &str {
         self.installed.as_deref().unwrap_or(UNKNOWN_VERSION)
     }
+
+    /// The process cell. [`UNKNOWN`] for a unit nothing could be observed
+    /// about, never folded into either of the other two words, for the same
+    /// reason the verdict column keeps its own `unknown`.
+    fn process_cell(&self) -> &'static str {
+        match self.binary_matches_process {
+            Some(true) => PROCESS_MATCHES,
+            Some(false) => PROCESS_DIFFERS,
+            None => UNKNOWN,
+        }
+    }
 }
 
 /// What the reporter said about one binary.
 #[derive(Default)]
 struct Installed {
-    /// `None` when the helper printed [`UNKNOWN_VERSION`], printed nothing
+    /// `None` when the reporter printed [`UNKNOWN_VERSION`], printed nothing
     /// usable, or printed something that is not an exact version.
     version: Option<String>,
     root: String,
@@ -226,7 +263,8 @@ pub async fn converge(
     let runner = production_runner();
 
     let reported = read_installed(&resolved, &runner).await;
-    let rows = verdict_rows(&declared, &reported);
+    let mut rows = verdict_rows(&declared, &reported);
+    attach_processes(&resolved, &mut rows, &runner).await;
     if !apply {
         emit(&resolved.name, None, &rows, json_output)?;
         return report_gate(&rows);
@@ -240,7 +278,12 @@ pub async fn converge(
     // produced the drift finding, so a successful delivery and a confirmed
     // convergence are not the same claim.
     let reported = read_installed(&resolved, &runner).await;
-    let rows = verdict_rows(&declared, &reported);
+    let mut rows = verdict_rows(&declared, &reported);
+    // Asked again after the delivery for the same reason the versions are: a
+    // release ends in a restart, and whether the restarted process is executing
+    // the artefact that was just installed is exactly the claim `--apply` is
+    // being asked to prove.
+    attach_processes(&resolved, &mut rows, &runner).await;
     emit(&resolved.name, Some(&pass), &rows, json_output)?;
     apply_gate(&rows, &pass)
 }
@@ -313,22 +356,20 @@ fn declaring(
 /// sentence belongs on every row rather than one row carrying the detail and
 /// the rest carrying a blank.
 ///
-/// The script is built by [`host_channel::installed_helper_script`] — the same
-/// one `host run-helper` sends — so where a helper may live, and what makes one
-/// acceptable to execute, is decided in exactly one place for both callers. No
-/// arguments are appended at all: `run-helper` accepts UUIDs and nothing else,
-/// and a helper reached from here has no correlation id to hand it, so the
-/// argument string is empty and the helper reads the canonical registry to
-/// learn which host it is reporting on. Reading a version is a status read and
-/// nothing else, so it runs under the channel's ordinary read bound.
+/// The reporter is [`VERSION_PROBE`], embedded in this binary — the script
+/// travels with stado, so there is nothing to install on the host and the
+/// failure text is the remote's own words, never a remedy for a delivery
+/// channel that no longer exists. No arguments are appended at all: the probe
+/// reads the canonical registry to learn which host it is reporting on.
+/// Reading a version is a status read and nothing else, so it runs under the
+/// channel's ordinary read bound.
 async fn read_installed(
     target: &ComputeTarget,
     runner: &Runner,
 ) -> Result<BTreeMap<String, Installed>, String> {
-    let script = host_channel::installed_helper_script(&shlex_quote(VERSION_HELPER), "");
     let output = host_channel::run_script_with_timeout(
         target,
-        &script,
+        VERSION_PROBE,
         host_channel::remote_timeout(),
         runner,
     )
@@ -339,43 +380,25 @@ async fn read_installed(
         } else {
             Err(DeployError(host_channel::last_error_line(
                 &output,
-                "the installed helper did not complete",
+                "the version reporter did not complete",
             )))
         }
     });
     match output {
         Ok(output) => Ok(parse_report(&output.stdout)),
-        Err(error) => Err(helper_failure(&target.name, error)),
+        Err(error) => Err(error.to_string()),
     }
-}
-
-/// The reporter's own words, or the install line when it is simply not there.
-///
-/// A host that was never given the helper is the common case on the way in, and
-/// "missing executable regular Stado helper: /Users/x/.stado/bin/..." tells an
-/// operator what happened without telling them what to do about it. The install
-/// command is the remedy, spelled out in full so it can be pasted.
-fn helper_failure(target: &str, error: DeployError) -> String {
-    let detail = error.to_string();
-    if !detail.contains(host_channel::HELPER_MISSING) {
-        return detail;
-    }
-    format!(
-        "{VERSION_HELPER} is not installed on {target}; install it with \
-         `stado host install-helper {target} {VERSION_HELPER_SOURCE} {VERSION_HELPER}`"
-    )
 }
 
 /// The reporter's stdout, as a binary-to-report map.
 ///
-/// Line-oriented `key=value` rather than JSON because the same output has to be
-/// readable by an operator who ran the helper by hand on the box, and because a
-/// shell script that has to emit valid JSON emits invalid JSON the first time a
-/// path contains a quote. Blank lines and `#` comments are skipped, unknown
-/// keys are ignored so the helper can add fields without a matching release
-/// here, and only an exact version is kept: `version=unknown` — or anything
-/// else that is not a semantic version — is the helper saying it could not
-/// tell, which is [`UNKNOWN`] and never a comparison.
+/// Line-oriented `key=value` rather than JSON because a shell script that has
+/// to emit valid JSON emits invalid JSON the first time a path contains a
+/// quote. Blank lines and `#` comments are skipped, unknown keys are ignored so
+/// the reporter can add fields without a matching release here, and only an
+/// exact version is kept: `version=unknown` — or anything else that is not a
+/// semantic version — is the reporter saying it could not tell, which is
+/// [`UNKNOWN`] and never a comparison.
 fn parse_report(stdout: &str) -> BTreeMap<String, Installed> {
     let mut reported = BTreeMap::new();
     for line in stdout.lines() {
@@ -457,7 +480,7 @@ fn verdict_rows(
                         ),
                         None => format!(
                             "{VERSION_HELPER} reported nothing for this binary; it is \
-                             not installed on this host, or the helper could not find it"
+                             not installed on this host, or the reporter could not find it"
                         ),
                     },
                 ),
@@ -473,11 +496,57 @@ fn verdict_rows(
                 root: cell(entry.map(|entry| entry.root.as_str())),
                 unit: cell(entry.map(|entry| entry.unit.as_str())),
                 state: cell(entry.map(|entry| entry.state.as_str())),
+                // Filled by [`attach_processes`], which asks the host a second
+                // question. Left empty here so the version comparison — the
+                // answer this command exists for — never depends on a process
+                // lookup having succeeded.
+                running_binary: None,
+                binary_matches_process: None,
                 verdict,
                 detail,
             }
         })
         .collect()
+}
+
+/// Ask the host which artefact the live process under each named unit is
+/// executing, and fill the two process fields of every row it answers for.
+///
+/// A second read on the same channel rather than two more fields on the version
+/// reporter, because they are two different questions: the reporter answers what
+/// is INSTALLED, this answers what is RUNNING, and the incidents that motivate
+/// this column are precisely the cases where those two disagree while every
+/// other column is correct.
+///
+/// One round trip per distinct unit, and only for units a row actually names: a
+/// declared binary no unit runs has no process to ask about. A lookup that fails
+/// leaves both fields `None` and nothing else changes — refusing to print the
+/// version comparison because a secondary read failed would trade this
+/// command's whole purpose against an addition to it.
+async fn attach_processes(target: &ComputeTarget, rows: &mut [Row], runner: &Runner) {
+    let declared = service::declared_services(target);
+    let mut asked: BTreeMap<String, Option<service::RunningProgram>> = BTreeMap::new();
+    for row in rows.iter_mut() {
+        if row.unit.is_empty() || row.unit == NONE {
+            continue;
+        }
+        if !asked.contains_key(&row.unit) {
+            // A unit the reporter named and the registry does not declare is
+            // not asked about at all: locating its unit file would mean
+            // guessing a path for a unit nobody adopted, which is the one
+            // thing `service adopt` exists to stop.
+            let found = declared.iter().find(|candidate| candidate.matches(&row.unit));
+            let program = match found {
+                Some(service) => service::inspect_process(target, service, runner).await.ok(),
+                None => None,
+            };
+            asked.insert(row.unit.clone(), program);
+        }
+        if let Some(Some(program)) = asked.get(&row.unit) {
+            row.running_binary = program.running_binary().map(str::to_string);
+            row.binary_matches_process = program.matches_process();
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -588,19 +657,32 @@ fn emit(
         return Ok(());
     }
     println!(
-        "{:<20} {:<12} {:<12} {:<9} {:<40} {:<10} DETAIL",
-        "BINARY", "DECLARED", "INSTALLED", "VERDICT", "ROOT", "STATE"
+        "{:<20} {:<12} {:<12} {:<9} {:<40} {:<10} {:<8} DETAIL",
+        "BINARY", "DECLARED", "INSTALLED", "VERDICT", "ROOT", "STATE", "PROCESS"
     );
     for row in rows {
         println!(
-            "{:<20} {:<12} {:<12} {:<9} {:<40} {:<10} {}",
+            "{:<20} {:<12} {:<12} {:<9} {:<40} {:<10} {:<8} {}",
             row.binary,
             row.declared,
             row.installed_cell(),
             row.verdict,
             row.root,
             row.state,
+            row.process_cell(),
             row.detail
+        );
+    }
+    // The path is what an operator acts on and is far too long for a column, so
+    // it is named here — and only for the rows where it contradicts the
+    // declaration, which are the rows that would otherwise read as fine.
+    for row in rows.iter().filter(|row| row.process_cell() == PROCESS_DIFFERS) {
+        eprintln!(
+            "{}: the process under {} is running {} — not the artefact this \
+             unit's declaration resolves to; restart it to pick up what is installed",
+            row.binary,
+            row.unit,
+            row.running_binary.as_deref().unwrap_or(UNKNOWN)
         );
     }
     for entry in pass.releases.iter().filter(|entry| entry.status == FAILED) {
@@ -704,6 +786,35 @@ mod tests {
             .collect()
     }
 
+    /// Every row carries the two process keys whether or not a process could
+    /// be inspected, because a desktop client reads this document and a key
+    /// that appears only on the hosts that answered is a key nobody can rely
+    /// on. Unobserved is `null` in both, never `false` and never an empty
+    /// string.
+    #[test]
+    fn every_row_carries_the_process_keys() {
+        let reported = Ok(parse_report(
+            "binary=stado version=0.6.0 root=/Users/c/.stado/bin/stado \
+             unit=com.wisent.compute.agent.mini state=running\n",
+        ));
+        let rows = verdict_rows(&declared(&[("stado", "0.6.0")]), &reported);
+        let document = rows[0].to_json();
+        assert_eq!(document["verdict"], IN_SYNC);
+        assert!(document["running_binary"].is_null());
+        assert!(document["binary_matches_process"].is_null());
+        assert_eq!(rows[0].process_cell(), UNKNOWN);
+
+        let mut running = rows;
+        running[0].running_binary = Some("/Users/c/.stado/bin/stado".to_string());
+        running[0].binary_matches_process = Some(false);
+        assert_eq!(running[0].process_cell(), PROCESS_DIFFERS);
+        assert_eq!(
+            running[0].to_json()["running_binary"],
+            "/Users/c/.stado/bin/stado"
+        );
+        assert_eq!(running[0].to_json()["binary_matches_process"], false);
+    }
+
     /// The reporter's contract, exercised on the three shapes one host really
     /// produces at once: a binary at its declared version, a binary at another
     /// one, and an artefact whose metadata carries no version at all.
@@ -759,28 +870,21 @@ mod tests {
         assert!(apply_gate(&rows[2..], &AppliedPass::default()).is_err());
     }
 
-    /// A host that never answered leaves every row unknown, carrying the same
-    /// sentence — including the install line for a helper that is not there.
+    /// A host whose reporter could not run leaves every row unknown, carrying
+    /// the same sentence — the remote's own words, verbatim. The reporter is
+    /// embedded in this binary, so there is no install remedy left to print:
+    /// what the channel said is the whole of what there is to say.
     #[test]
-    fn an_unanswered_host_is_unknown_everywhere_with_the_install_line() {
-        let failure = helper_failure(
-            "control-host",
-            DeployError(format!(
-                "{}: /Users/charles/.stado/bin/{VERSION_HELPER}",
-                host_channel::HELPER_MISSING
-            )),
-        );
+    fn an_unanswered_host_is_unknown_everywhere_with_the_remotes_words() {
+        let failure = "missing executable Stado binary: /Users/charles/.stado/bin/stado".to_string();
         let rows = verdict_rows(
             &declared(&[("skarbiec", "0.1.3"), ("stado", "0.6.0")]),
-            &Err(failure),
+            &Err(failure.clone()),
         );
         assert!(rows.iter().all(|row| row.verdict == UNKNOWN));
         assert!(
-            rows[0].detail.contains(&format!(
-                "stado host install-helper control-host {VERSION_HELPER_SOURCE} \
-                 {VERSION_HELPER}"
-            )),
-            "the remedy must be pasteable: {}",
+            rows.iter().all(|row| row.detail == failure),
+            "every row carries the remote's own words: {}",
             rows[0].detail
         );
         assert!(report_gate(&rows).is_ok());

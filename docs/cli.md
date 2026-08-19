@@ -396,6 +396,8 @@ unavailable.
 | `stado host ping <target>` | One verdict from two signals: ssh reachability and health-beacon age. The worse signal decides, so a box answering ssh with a stale beacon fails. |
 | `stado host disk <target>` | Disk usage plus the registry cleanup policy and the janitor's own state: last pass, bytes freed, next scheduled pass. |
 | `stado host cleanup <target> --dry-run` | Preview what the registry cleanup would delete. `--dry-run` is mandatory; it drives the janitor's own planning phase and writes no state. |
+| `stado host gates <host>` | Why this host is claiming nothing: the blockers its own agent publishes, the disk policy behind them, and its declared slots against its published free ones. Read-only. Exits non-zero when the host is not claiming. |
+| `stado host reclaim <host> [--dry-run\|--apply --reason TEXT]` | Reclaim disk in three declared stages — the host's own janitor pass, the release build scratch tree, and delivered product trees no `current` link and no live process references. Previews by default; `--apply` needs `--reason` and appends an audit record on the host. |
 | `stado host exec <target> -- CMD` | Run one approved read-only command. An allowlist, not a shell: the operator's words select a fixed argv entry and never join the command line. A refusal prints the allowlist. |
 | `stado host inventory <target>` | The stado-managed binaries under `$HOME/.stado/bin`, the `$HOME/.stado/forwards/*.url` markers, the listening loopback TCP ports, the Skarbiec vault files under `$HOME/.stado` as metadata, whether the installed `stado` knows a fixed set of subcommands — and, the point of the command, whether each forward marker still matches a live listener. |
 | `stado host release <target> --binary NAME --version X.Y.Z` | Put one registry-declared managed binary on the host: fetch the exact coordinate, verify the operator's configured SHA-256, check the layout, stage it under a versioned directory, and only then atomically repoint the active binary and restart its declared unit. The write counterpart of `host inventory`. `--dry-run` probes read-only and reports the plan. |
@@ -686,6 +688,111 @@ What it deliberately does not do:
   refuses to read through a symlink and would otherwise report the active
   binary as unreadable.
 
+### `stado host gates` and `stado host reclaim`
+
+One incident, two commands. The Mac mini's data volume sat at roughly 2 GiB
+free against a registry policy that wants 55 GiB. The queue agent computes
+`disk_pressure_unresolved` every tick, publishes that word in its capacity
+broadcast, and fails admission CLOSED while it is true — zero free slots, no
+claim, deliberately. So the host claimed nothing for hours, every release build
+queued behind it, the Brama candidate could not even start, and no command in
+this CLI said any of it out loud: `host disk` printed the free bytes and the
+policy but never the admission verdict, `registry doctor` listed the host as
+broadcasting normally, and the fact that mattered lived only in
+`capacity/<consumer>.json`, which nothing read. The space eventually came back
+by hand, over ssh, from a script written during the outage.
+
+`gates` is the read half. It joins three sources and re-derives none of them:
+the host's own capacity publication, whose `diag` words are reported verbatim
+so a blocker an operator reads here is greppable in the agent that published
+it; the registry target's declared `slots` and `disk_cleanup` policy; and
+`df -Pk /` plus the janitor's state file, read with the exact script `host
+disk` sends, so the two commands cannot disagree about how much space a host
+has. `claiming` is false when any blocker is present, and the exit status
+follows it, the way `host ping`'s follows its combined verdict.
+
+```bash
+stado host gates control-host
+```
+
+```
+host:     control-host
+claiming: no
+blockers: disk_pressure_unresolved
+disk:     2 GiB free, low watermark 55 GiB, target 80 GiB, policy enforce
+capacity: 0 free slot(s) of 2 declared, published 24s ago (2026-08-18T09:14:02+00:00)
+```
+
+Busy slots are deliberately NOT a blocker: a host running work claims nothing
+more and is perfectly healthy, and calling that blocked would make the command
+cry wolf on every loaded box. A publication that is missing entirely, or older
+than the staleness horizon every live-capacity reader in the fleet filters on,
+IS a blocker — the scheduler cannot see such a host at all. A stale row is
+still reported, with its age, because "the agent said this an hour ago" and
+"nobody ever said anything" send an operator to different places; its verdict
+is recomputed from the numbers the command just measured rather than trusted.
+
+`reclaim` is the write half, and it previews by default. Three stages run in
+this order, and nothing else runs:
+
+1. `registry_cleanup` — the host's OWN janitor, invoked exactly the way `host
+   cleanup --dry-run` invokes it, so the policy stays the one the registry
+   declares and the command contains no cleanup policy of its own. The item
+   count is the janitor's: eligible items in a preview, deleted items in an
+   apply.
+2. `build_scratch` — `$HOME/.stado/build-work`, the release build scratch tree
+   the checked-in build helpers work in and never clean up.
+3. `delivered_trees` — the version directories under `$HOME/.stado/services`,
+   where every `service deploy` and every artifact install stages one tree per
+   version and keeps the previous one beside it as `current.before-<version>`
+   so a rollback is a rename. Nothing ever removed the ones a rollback will
+   never reach.
+
+Four rules are encoded in the command rather than left to whoever is at the
+keyboard. Nothing outside those two roots is touched: every candidate is
+produced by globbing or `find`-ing one of them, and no path arrives from the
+registry or from the operator. Nothing a live process holds is removed: one
+`ps` snapshot is taken before any stage and every candidate is checked against
+it, taken once into a variable because `ps | grep <path>` matches the grep's
+own argv and would report every candidate as held. The newest tree of a
+product and whatever `current` resolves to are always kept, even when they are
+the largest thing there, and nothing younger than a day is a candidate at all
+— which is what makes the stage safe against a delivery that is mid-flight,
+since its tree is both the newest and the youngest. And the same program runs
+in both modes with the removal itself behind the mode flag, so a preview walks
+exactly the paths an apply would take rather than a second implementation's
+guess at them.
+
+```bash
+stado host reclaim control-host
+stado host reclaim control-host --apply \
+  --reason 'queue agent has published disk_pressure_unresolved since 08:10'
+```
+
+```
+DRY RUN — nothing on control-host is deleted. Re-run with --apply --reason <text> to remove what follows.
+STAGE             FREE BEFORE  FREE AFTER  ITEMS
+registry_cleanup  2 GiB        2 GiB       7
+build_scratch     2 GiB        2 GiB       3
+delivered_trees   2 GiB        2 GiB       4
+  build_scratch /Users/charles/.stado/build-work/stado
+  delivered_trees /Users/charles/.stado/services/weles-worker/0.4.9
+
+free: 2 GiB -> 2 GiB
+```
+
+`--apply` is the only thing that deletes, and it refuses to run without
+`--reason`: the record it appends to `$HOME/.stado/audit/host-reclaim.jsonl` on
+the host is the only account of why several tens of gigabytes left that
+machine. The record is written after the stages, because the measurements have
+to exist before it can be true, and it lives on the machine whose disk changed
+rather than in a central ledger — the operator who reclaimed the space may
+never touch this control plane again, and a record kept anywhere else is a
+record that can be missing exactly when someone asks what happened to that box.
+A stage the host could not run at all is reported under its own name with the
+`_unavailable` suffix and null measurements, never as a stage that freed
+nothing.
+
 ## `stado fleet`
 
 Enrollment and the SSH channel it rides. Four methods add a machine — `invite`,
@@ -949,6 +1056,8 @@ beacon is expected. The "has not reported in days" detector.
 | `promote PRODUCT VERSION --channel candidate|stable` | Re-fetch every platform, verify exact bytes, signature and passed qualification, then compare-and-swap one `desired` registry generation. It never rebuilds. |
 | `agent --target TARGET [--once]` | Reconcile canonical desired state on a host: verify, stage immutably, start a private candidate, check readiness, switch the stable proxy, drain, monitor and commit or roll back. |
 | `status [PRODUCT] [--json]` | Join central desired/previous state with each host's observed rollout state. A host that has not published status is `unreported`, never healthy by assumption. |
+| `logs PRODUCT --target TARGET [--version V] [--stream out\|err\|both] [--lines N] [--json]` | Read the candidate's own `stdout`/`stderr` off the target host: `{logs_root}/{product}-{version}.{out,err}`, the exact files the release agent opens for a candidate it spawns. Read-only, over the registry ssh channel. Defaults to both streams and the last 40 lines of each, and reports a file that is missing separately from one that is present and empty. |
+| `doctor PRODUCT [--target TARGET] [--json]` | One verdict — `settled`, `rolling` or `blocked` — over desired versus observed release, the rollout phase and its detail, the candidate's port, liveness and readiness answer, the host's quarantine map with the desired digest called out, and the host's claiming gates. Read-only: it starts nothing, stops nothing and writes nothing. |
 | `quarantine list PRODUCT [--target TARGET] [--json]` | The digests this host refuses to roll out again, each with the agent's own reason, when it was quarantined, and whether it is the digest the registry currently wants. Read-only. |
 | `quarantine clear PRODUCT --target TARGET --digest SHA256 --reason TEXT [--json]` | Retire exactly one quarantined digest so the agent retries it. Backs the state file up, rewrites it atomically, and appends an audit line. Starts, stops and restarts nothing. |
 | `rollback PRODUCT [--json]` | Atomically swap the previous exact release back into desired state with a new rollout generation. |
@@ -967,6 +1076,71 @@ deploy/install_release_agent.sh TARGET RUN_AS_USER HOME STADO_BIN STADO_CONFIG
 The LaunchDaemon drops to `RUN_AS_USER` before reading or writing canonical
 storage and uses non-interactive `sudo` only for system launchd cutover and the
 declared candidate account.
+
+### `stado release logs`
+
+The command that ends the guessing. A brama candidate died in under ninety
+seconds and the rollout state said only
+`candidate did not become ready within 90s: pid 46748 is gone` — the outside
+view of a process that had already written down why it exited, in
+`/Users/charles/.stado/logs/brama-0.2.27.err` on the host, where nothing in the
+CLI would read it.
+
+```bash
+stado release logs brama --target control-host --version 0.2.27 --stream err --lines 40
+```
+
+`--version` defaults to the desired version, which is the version any candidate
+on the host is running; name it explicitly to read the logs of a release that
+has since been rolled back. `--json` prints
+`{"product","target","version","streams":[{"stream","path","bytes","lines","state"}]}`,
+where `state` is `read`, `empty` or `missing`. Those last two are not the same
+finding and are never collapsed: `empty` means the agent opened the file, so the
+spawn happened and the product said nothing, while `missing` means the rollout
+never got as far as opening it. `bytes` is the whole file's size, so a 40-line
+tail never reads as the whole log.
+
+### `stado release doctor`
+
+Every fact in the paragraph above was individually visible before this command
+and none of them were ever assembled, so answering "will this rollout land, and
+if not, what is holding it" meant reading a registry document, an object in the
+store, a JSON file on the host and a capacity row, in that order, by hand.
+
+```bash
+stado release doctor brama --target control-host
+```
+
+```
+product           brama
+target            control-host
+desired           0.2.27
+observed          0.2.26
+phase             quarantined
+detail            candidate did not become ready within 90s: pid 46748 is gone
+candidate         port=- health=no_candidate pid_alive=-
+gates             disk_pressure_unresolved=true free_gb=2.1 low_watermark_gb=15
+verdict           blocked
+blockers          desired_digest_quarantined, disk_pressure_unresolved
+
+next: stado release logs brama --target control-host --version 0.2.27 --stream err
+```
+
+The verdict is `blocked` when the desired artefact's digest sits in the host's
+quarantine map — the agent then skips that exact release on every pass until
+`stado release quarantine clear` runs or a new version is promoted — or when the
+host's disk gate is unresolved, which is the state in which the queue agent
+claims nothing at all. It is `rolling` while a candidate is staged or running or
+while observed still differs from desired, and `settled` only when the host's
+observed release equals the desired one with nothing in flight.
+
+A gate that cannot be read is an error, not a missing field: a verdict computed
+as though the gate were fine is exactly how a host that had stopped claiming for
+hours read as healthy. `--json` prints
+`{"product","target","desired_version","observed_version","phase","detail","candidate":{"port","health_status","pid_alive"},"quarantined":[{"digest","reason","quarantined_at","is_desired_digest"}],"gates":{"disk_pressure_unresolved","free_gb","low_watermark_gb"},"verdict","blockers"}`.
+`health_status` is `ok`, `http_<code>`, `unreachable`, `no_candidate` (the state
+names no candidate to probe) or `unprobed` (the target declares no readiness
+path).
 
 ### `stado release quarantine`
 
@@ -1419,13 +1593,14 @@ one with `stado host declare-version TARGET --binary NAME --version X.Y.Z`;
 |---|---|
 | `in-sync` | The host runs exactly the declared version. |
 | `drifted` | The host runs a different version. |
-| `unknown` | Nothing usable came back: the reporting helper is not installed, the channel refused, the binary is not installed, or the artefact carries no version metadata. |
+| `unknown` | Nothing usable came back: the reporter could not run, the channel refused, the binary is not installed, or the artefact carries no version metadata. |
 
-The installed version comes from `report-installed-versions`, installed with
-`stado host install-helper TARGET scripts/report-installed-versions.sh
-report-installed-versions`; a host without it reports `unknown` with that exact
-command in the detail column. The helper is read-only — it fetches nothing,
-restarts nothing, and prints one
+The installed version comes from `report-installed-versions`
+(`stado-rs/scripts/report-installed-versions.sh`), a read-only script embedded
+in the stado binary itself and run as one fixed remote script — nothing is
+installed on the host to produce the answer, and a host whose reporter cannot
+run reports `unknown` with the remote's own words in the detail column. It
+fetches nothing, restarts nothing, and prints one
 `binary=<name> version=<installed|unknown> root=<path> unit=<label|none>
 state=<launchd state>` line per declared binary. It reads a version from, in
 order: the program itself for an owner-only Stado binary under
@@ -1435,7 +1610,7 @@ artefact's own `package.json` `/version`, then `.weles-release`, then
 
 **A product whose artefact carries none of those reports `unknown`, and an
 `unknown` is never silently treated as `in-sync`.** It is printed as its own
-verdict, named again on stderr with the path the helper looked in, and after
+verdict, named again on stderr with the path the reporter looked in, and after
 `--apply` it fails the command. The remedy is to make the product stamp its
 artefact, not to re-run `converge`.
 
@@ -1449,16 +1624,16 @@ Exit codes follow the same rule `service verify` follows, for the same reason:
 | `--apply`, every binary confirmed `in-sync` afterwards | 0 |
 | `--apply`, anything not `in-sync` afterwards | 1 |
 
-Reporting fails on drift alone, so an uninstalled reporter cannot masquerade as
-drift — the same way a missing probe is never allowed to masquerade as an
-outage. After `--apply`, `unknown` *is* a failure: an operator who asked for
-convergence is owed proof of it, and "the reporter is not installed" is not
-proof.
+Reporting fails on drift alone, so a reporter that could not run cannot
+masquerade as drift — the same way a missing probe is never allowed to
+masquerade as an outage. After `--apply`, `unknown` *is* a failure: an operator
+who asked for convergence is owed proof of it, and "the reporter could not
+answer" is not proof.
 
 `--apply` delivers the declared version of every drifted binary by calling
 `stado host release --binary NAME --version X.Y.Z TARGET` in-process, and then
-**re-reads** the installed versions through the helper. A delivery that reports
-`released` has testified about its own work; the exit code of this command is
+**re-reads** the installed versions through the same embedded reporter. A
+delivery that reports `released` has testified about its own work; the exit code of this command is
 decided by what the host says afterwards. There is no second delivery path: a
 binary the product declaration does not carry is reported as
 undeliverable, never attempted, and `unknown` rows are never delivered to —
