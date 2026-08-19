@@ -27,6 +27,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use serde_json::{json, Map, Value};
 
 use crate::capabilities::{Consumer, DeclarationSurface, DeclaredField, SiblingCondition};
+use crate::deploy::service;
 use crate::monitor::host_health;
 use crate::queue::{capacity, JobStorage};
 use crate::targets::{
@@ -1220,6 +1221,21 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
         if !target.is_provider(crate::capabilities::ProviderId::Local) {
             continue;
         }
+        // The document against itself, before any beacon is consulted: a
+        // launchd domain the host cannot have is wrong whether or not the
+        // host is answering, and it is the reason its beacon will never
+        // report the unit.
+        for misdeclared in service::misdeclared_domains(target) {
+            let unit = misdeclared.unit.clone();
+            findings.push(
+                Finding::new(
+                    "misdeclared-domain",
+                    &target.name,
+                    misdeclared.sentence(),
+                )
+                .about(unit),
+            );
+        }
         let Some(beacon) = slugs.iter().find_map(|slug| beacons.get(slug)) else {
             findings.push(Finding::new(
                 "no-heartbeat",
@@ -1464,10 +1480,15 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
     // One cause, one row. A unit the beacon does not report on a host that cannot
     // satisfy what the unit needs is already reported as `capability-unsatisfied`,
     // and the `missing-plist` row for the same label is that finding's symptom:
-    // installing the plist would not make the host able to run it.
+    // installing the plist would not make the host able to run it. A unit
+    // declared in a domain its host cannot have is the same relationship —
+    // `misdeclared-domain` is why nothing loads it and why no beacon reports
+    // it, and installing the plist where it is declared would change neither.
     let caused: Vec<(String, String)> = findings
         .iter()
-        .filter(|finding| finding.kind == "capability-unsatisfied")
+        .filter(|finding| {
+            matches!(finding.kind, "capability-unsatisfied" | "misdeclared-domain")
+        })
         .filter_map(|finding| {
             finding
                 .unit
