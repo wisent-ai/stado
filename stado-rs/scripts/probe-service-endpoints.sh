@@ -1,17 +1,14 @@
 #!/bin/sh
 # Report which of this host's declared service endpoints actually answer.
 #
-# Install:
-#   stado host install-helper <target> \
-#     stado-rs/scripts/probe-service-endpoints.sh probe-service-endpoints
-#
-# `stado service verify` runs this on every host that holds a declaration and
-# merges the answers into one table. It takes no arguments on purpose: the
-# fleet channel restricts helper argv to correlation identifiers, and a helper
+# This script is embedded in the stado binary itself
+# (`service_verify::PROBE_SCRIPT`, via include_str!). `stado service verify`
+# runs it as one fixed remote script on every host that holds a declaration and
+# merges the answers into one table. It takes no arguments on purpose: a probe
 # that accepted a URL would be a remote fetcher with the audit trail removed.
 # Everything it probes comes from the registry this host already resolves.
 #
-# A host without this helper is reported `unverified`, never `observed` and
+# A host whose probe cannot run is reported `unverified`, never `observed` and
 # never `unreachable`. That is the whole point of the third state.
 set -eu
 

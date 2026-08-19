@@ -14,10 +14,10 @@
 # first is an observation; the other two are the probe admitting its limit, which is
 # the distinction the whole thing exists to make.
 #
-# Install and run it through the registry channel:
-#   stado host install-helper <target> stado-rs/scripts/probe-apple-account-holders.sh \
-#     probe-apple-account-holders
-#   stado host run-helper <target> probe-apple-account-holders
+# This script is embedded in the stado binary itself
+# (`identity::APPLE_ACCOUNT_PROBE`, via include_str!) and run by
+# `stado identity verify` as one fixed remote script -- nothing is installed on
+# the host and nothing is left behind.
 #
 # Read-only throughout: it opens preference files and writes nothing anywhere.
 set -eu

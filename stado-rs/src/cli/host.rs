@@ -1089,6 +1089,199 @@ pub async fn cleanup(target: &str, dry_run: bool, json: bool) -> Result<(), CmdE
     report_outcome(&report, expected)
 }
 
+/// `stado host gates HOST [--json]` — why this host is claiming nothing, in
+/// one payload.
+///
+/// The exit status follows `claiming`, the way `host ping`'s follows its
+/// combined verdict, so `stado host reclaim mini --apply --reason … && stado
+/// host gates mini` is a usable sentence and a blocked host cannot be
+/// mistaken for a healthy one by a script that only reads status codes.
+///
+/// The Mac mini sat at roughly 2 GiB free against a 55 GiB policy, its agent
+/// published `disk_pressure_unresolved` every tick, it claimed nothing for
+/// hours, every release build queued behind it — and no command in this CLI
+/// said any of it. This is that sentence.
+pub async fn gates(host: &str, json: bool) -> Result<(), CmdError> {
+    let runner = crate::deploy::production_runner();
+    let gates = crate::deploy::host_gates::read_host_gates(host, &runner)
+        .await
+        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    let report = Value::Object(crate::deploy::host_gates::to_report(&gates));
+    if json {
+        print_json(&report);
+        return claiming_outcome(&gates);
+    }
+    println!("host:     {}", gates.host);
+    println!(
+        "claiming: {}",
+        if gates.claiming { "yes" } else { "no" }
+    );
+    if gates.claiming {
+        println!("blockers: none");
+    } else {
+        // The agent's own words, unabridged: whatever is printed here has to
+        // be greppable in the code that published it.
+        println!("blockers: {}", gates.blockers.join(", "));
+    }
+    println!(
+        "disk:     {} free, low watermark {}, target {}, policy {}",
+        gigabytes(gates.free_gb),
+        gigabytes(gates.low_watermark_gb.map(|gb| gb as f64)),
+        gigabytes(gates.target_free_gb.map(|gb| gb as f64)),
+        gates.policy_mode.as_deref().unwrap_or("none declared"),
+    );
+    match gates.published_at.as_deref() {
+        Some(published) => println!(
+            "capacity: {} free slot(s) of {} declared, published {} ({})",
+            gates
+                .free_slots
+                .map_or_else(|| "-".to_string(), |slots| slots.to_string()),
+            gates.slots_declared,
+            gates
+                .age_seconds
+                .map_or_else(|| "at an unknown time".to_string(), |age| format!(
+                    "{} ago",
+                    super::registry::human_age(chrono::TimeDelta::seconds(age))
+                )),
+            published,
+        ),
+        None => println!(
+            "capacity: nothing published for this host, so the scheduler cannot \
+             see it at all ({} slot(s) declared)",
+            gates.slots_declared
+        ),
+    }
+    claiming_outcome(&gates)
+}
+
+/// GiB with one decimal, or a dash for a number this host did not answer with.
+fn gigabytes(value: Option<f64>) -> String {
+    value.map_or_else(|| "-".to_string(), |gb| format!("{gb} GiB"))
+}
+
+/// A host that is not claiming is a failed verdict, not a failed command: the
+/// read succeeded either way, and the message names the blockers rather than
+/// repeating that something is wrong.
+fn claiming_outcome(gates: &crate::deploy::host_gates::HostGates) -> Result<(), CmdError> {
+    if gates.claiming {
+        return Ok(());
+    }
+    Err(CmdError::click(format!(
+        "{} is claiming nothing: {}",
+        gates.host,
+        gates.blockers.join(", ")
+    )))
+}
+
+/// `stado host reclaim HOST [--dry-run|--apply --reason TEXT] [--json]` — get
+/// the space back, in declared stages, measuring each one.
+///
+/// Previewing is the default and `--apply` is the only thing that deletes,
+/// because the alternative — a flag that has to be remembered to make the
+/// command safe — is a flag that will be forgotten on the one host where it
+/// mattered. `--apply` additionally refuses to run without `--reason`: the
+/// record it appends on the host is the only account of why several tens of
+/// gigabytes left that machine, and a record whose reason is blank is a record
+/// nobody can act on six months later.
+pub async fn reclaim(
+    host: &str,
+    apply: bool,
+    reason: Option<&str>,
+    json: bool,
+) -> Result<(), CmdError> {
+    let reason = reason.map(str::trim).filter(|text| !text.is_empty());
+    if apply && reason.is_none() {
+        return Err(CmdError::usage(
+            "host reclaim --apply removes files and needs --reason <text>; the reason is \
+             appended to the host's own audit log beside the disk it changed. Run without \
+             --apply to see what each stage would remove",
+        ));
+    }
+    let runner = crate::deploy::production_runner();
+    let (target, reclamation) = crate::deploy::host_reclaim::reclaim_host(host, apply, &runner)
+        .await
+        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    let audited = match reason {
+        Some(reason) if apply => Some(
+            crate::deploy::host_reclaim::record_audit(&target, &reclamation, reason, &runner)
+                .await
+                .map_err(|exc| CmdError::click(exc.to_string()))?,
+        ),
+        _ => None,
+    };
+    let report = Value::Object(crate::deploy::host_reclaim::to_report(
+        &target,
+        &reclamation,
+    ));
+    if json {
+        print_json(&report);
+        return Ok(());
+    }
+    if apply {
+        println!("APPLIED — {} lost the files named below.", target.name);
+    } else {
+        // Said before the table, not after it: an operator reading a list of
+        // paths has to know which of the two things they are looking at.
+        println!(
+            "DRY RUN — nothing on {} is deleted. Re-run with --apply --reason <text> \
+             to remove what follows.",
+            target.name
+        );
+    }
+    let rows: Vec<Vec<String>> = reclamation
+        .stages
+        .iter()
+        .map(|stage| {
+            vec![
+                stage.stage.clone(),
+                gigabytes(stage.free_kb_before.map(gib)),
+                gigabytes(stage.free_kb_after.map(gib)),
+                stage.items.to_string(),
+            ]
+        })
+        .collect();
+    super::table::print(&["STAGE", "FREE BEFORE", "FREE AFTER", "ITEMS"], &rows);
+    for stage in &reclamation.stages {
+        if let Some(detail) = &stage.detail {
+            println!("{}: {detail}", stage.stage);
+        }
+        for path in &stage.paths {
+            println!("  {} {path}", stage.stage);
+        }
+    }
+    if let Some(plan) = &reclamation.janitor_plan {
+        let cleaners: Vec<Vec<String>> = crate::deploy::host_cleanup::cleaner_plans(plan)
+            .iter()
+            .map(|cleaner| {
+                vec![
+                    cleaner.name.clone(),
+                    cleaner.scanned_items.to_string(),
+                    cleaner.eligible_items.to_string(),
+                    cleaner.deleted_items.to_string(),
+                ]
+            })
+            .collect();
+        if !cleaners.is_empty() {
+            println!("\nthe host's own janitor, per declared cleaner:");
+            super::table::print(&["CLEANER", "SCANNED", "ELIGIBLE", "DELETED"], &cleaners);
+        }
+    }
+    println!(
+        "\nfree: {} -> {}",
+        gigabytes(reclamation.free_kb_before.map(gib)),
+        gigabytes(reclamation.free_kb_after.map(gib)),
+    );
+    if let Some(audited) = audited {
+        println!("audited: {audited} on {}", target.name);
+    }
+    Ok(())
+}
+
+/// `df -Pk` blocks as GiB, through the one conversion `host disk` owns.
+fn gib(blocks: i64) -> f64 {
+    crate::deploy::host_disk::gib_from_blocks(blocks as f64)
+}
+
 /// `stado host exec TARGET [--json] -- CMD…` — run one approved read-only
 /// command (`docs/missing-commands.md` item six).
 pub async fn exec(target: &str, words: Vec<String>, json: bool) -> Result<(), CmdError> {
@@ -2068,81 +2261,6 @@ pub async fn release(
     report_outcome(&report, expected)
 }
 
-/// `stado host install-helper TARGET SOURCE NAME` — transfer one bounded,
-/// owner-executable operator helper without opening an arbitrary remote shell.
-pub async fn install_helper(
-    target: &str,
-    source: &str,
-    name: &str,
-    json: bool,
-) -> Result<(), CmdError> {
-    if name.is_empty()
-        || name
-            .bytes()
-            .any(|byte| !(byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')))
-    {
-        return Err(CmdError::usage(
-            "helper name must be a non-empty basename containing only letters, digits, '.', '_' or '-'",
-        ));
-    }
-    let bytes = std::fs::read(source)?;
-    if bytes.is_empty() || bytes.len() > usize::from(u16::MAX) {
-        return Err(CmdError::click(
-            "host helper must contain between one and 65535 bytes",
-        ));
-    }
-    let payload = STANDARD.encode(&bytes);
-    let remote_name = crate::deploy::shlex_quote(name);
-    let script = format!(
-        r#"set -euo pipefail
-name={remote_name}
-case "$name" in
-  ""|*[!A-Za-z0-9._-]*) printf '%s\n' 'invalid helper name' >&2; exit 1 ;;
-esac
-dir="$HOME/.stado/bin"
-tmp="$dir/.${{name}}.stado-install.$$"
-trap 'rm -f "$tmp"' EXIT
-/bin/mkdir -p "$dir"
-/bin/chmod 700 "$dir"
-if [ "$(/usr/bin/uname -s)" = "Darwin" ]; then decode=-D; else decode=--decode; fi
-printf '%s' '{payload}' | /usr/bin/base64 "$decode" > "$tmp"
-/bin/chmod 700 "$tmp"
-/bin/mv "$tmp" "$dir/$name"
-trap - EXIT
-printf '%s\n' "$dir/$name"
-"#
-    );
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let runner = crate::deploy::production_runner();
-    let output = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    if !output.ok() {
-        return Err(CmdError::click(format!(
-            "{target}: helper installation failed: {}",
-            crate::deploy::host_channel::last_error_line(&output, "remote helper write failed")
-        )));
-    }
-    let path = format!("$HOME/.stado/bin/{name}");
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": target,
-                "source": source,
-                "path": path,
-                "bytes": bytes.len(),
-                "status": "installed",
-            }))?
-        );
-    } else {
-        println!("{target}: installed {path} ({} bytes)", bytes.len());
-    }
-    Ok(())
-}
-
 /// Where a delivered file lands, relative to the target account's home.
 ///
 /// Separate from `.stado` itself so a delivery can never take the name of a
@@ -2152,11 +2270,11 @@ const DELIVERED_FILES_DIR: &str = ".stado/files";
 /// `stado host install-file TARGET SOURCE NAME [--executable]` — deliver one
 /// file of any size to a registry host through the approved channel.
 ///
-/// The gap this closes: `install-helper` caps a delivery at what fits inside a
-/// script, and `install-secret` is for credentials and lands them unreadable
-/// and unexecutable by design. Anything else — a built binary, a bundle, a
-/// configuration file an operator produced elsewhere — had no channel at all,
-/// which is how a private `scp` ends up standing in for the audited one.
+/// The gap this closes: `install-secret` is for credentials and lands them
+/// unreadable and unexecutable by design. Anything else — a built binary, a
+/// bundle, a configuration file an operator produced elsewhere — had no
+/// channel at all, which is how a private `scp` ends up standing in for the
+/// audited one.
 pub async fn install_file(
     target: &str,
     source: &str,
@@ -2399,102 +2517,6 @@ printf '%s\n' "$dir/$name"
     ))
 }
 
-/// The shape of a UUID, written out rather than counted: every `x` is one hex digit
-/// and the dashes fall where they fall. A template compares as exactly as a length
-/// arithmetic would and stays legible at the callsite.
-const UUID_SHAPE: &str = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx";
-
-/// Is this string a UUID, and therefore free of anything a shell could act on?
-fn is_uuid(value: &str) -> bool {
-    value.len() == UUID_SHAPE.len()
-        && value
-            .bytes()
-            .zip(UUID_SHAPE.bytes())
-            .all(|(byte, shape)| match shape {
-                b'-' => byte == b'-',
-                _ => byte.is_ascii_hexdigit(),
-            })
-}
-
-/// Run one helper previously placed in the remote owner-only Stado directory.
-///
-/// Arguments are accepted only as UUIDs. That is not a stylistic limit: the reason
-/// this refused every argument was that operator words become a shell escape, and a
-/// UUID cannot be a path, a flag, a glob, a redirection or a metacharacter -- there is
-/// nothing in the grammar to escape with. The helper stays the reviewed program; the
-/// UUID only tells it which of the operator's own records to act on.
-///
-/// Refusing outright is what pushed callers into private ssh invocations with their
-/// own key files and their own known_hosts, which is the same action with the audit
-/// trail removed. A correlation id is the smallest thing that lets those callers come
-/// back through the registry channel.
-pub async fn run_helper(
-    target: &str,
-    name: &str,
-    uuids: &[String],
-    bundled_registry: bool,
-    json: bool,
-) -> Result<(), CmdError> {
-    release_component("helper name", name)?;
-    let mut arguments = String::new();
-    for uuid in uuids {
-        if !is_uuid(uuid) {
-            return Err(CmdError::click(format!(
-                "{uuid:?} is not a UUID; `host run-helper` carries correlation \
-                 identifiers and nothing else, because anything with shell grammar in \
-                 it would make the helper a remote shell"
-            )));
-        }
-        arguments.push(' ');
-        arguments.push_str(uuid);
-    }
-    let resolved = if bundled_registry {
-        let registry = crate::targets::load_bundled_registry()
-            .map_err(|error| CmdError::click(error.to_string()))?;
-        crate::deploy::host_channel::resolve_target(&registry, target)
-            .cloned()
-            .map_err(|error| CmdError::click(error.to_string()))?
-    } else {
-        crate::deploy::host_channel::canonical_target(target)
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?
-    };
-    let remote_name = crate::deploy::shlex_quote(name);
-    let script = crate::deploy::host_channel::installed_helper_script(&remote_name, &arguments);
-    let runner = crate::deploy::production_runner();
-    let output = crate::deploy::host_channel::run_script_with_timeout(
-        &resolved,
-        &script,
-        std::time::Duration::from_secs(crate::monitor::billing::SECONDS_PER_HOUR),
-        &runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": target,
-                "helper": name,
-                "status": if output.ok() { "completed" } else { "failed" },
-                "exit_code": output.code,
-                "stdout": output.stdout,
-                "stderr": output.stderr,
-            }))?
-        );
-    } else {
-        print!("{}", output.stdout);
-        eprint!("{}", output.stderr);
-    }
-    if !output.ok() {
-        return Err(CmdError::click(format!(
-            "{target}: helper {name} failed: {}",
-            crate::deploy::host_channel::last_error_line(&output, "remote helper failed")
-        )));
-    }
-    Ok(())
-}
-
 /// The exact removal `host remove-helper` performs, for one named helper on an
 /// already-resolved target.
 ///
@@ -2552,10 +2574,11 @@ fi
     Ok(output.stdout.trim().to_string())
 }
 
-/// Remove one previously installed helper. Installing a helper is how Stado
-/// runs what the exec allowlist refuses, which makes every diagnostic a file
-/// left behind on someone else's machine; without this the fleet accumulates
-/// them and nothing but the operator's memory says what they were for.
+/// Remove one previously installed helper. The helper channel that installed
+/// these is retired — nothing in stado installs scripts into `$HOME/.stado/bin`
+/// any more — so this command exists to reap what the channel left behind on
+/// someone else's machine; without it nothing but the operator's memory says
+/// what those files were for.
 pub async fn remove_helper(target: &str, name: &str, json: bool) -> Result<(), CmdError> {
     release_component("helper name", name)?;
     let resolved = crate::deploy::host_channel::canonical_target(target)
@@ -2578,12 +2601,11 @@ pub async fn remove_helper(target: &str, name: &str, json: bool) -> Result<(), C
     Ok(())
 }
 
-/// The helper that inventories `$HOME/.stado/bin` on a target.
-///
-/// Installed with
-/// `stado host install-helper <target> stado-rs/scripts/report-stale-helpers.sh
-/// report-stale-helpers`.
-const INVENTORY_HELPER: &str = "report-stale-helpers";
+/// The inventory of leftover helper scripts in `$HOME/.stado/bin`, embedded in
+/// this binary and run as one fixed remote script — the same channel `host
+/// provenance` reads with, and the shape every read on this channel takes now
+/// that nothing installs scripts on hosts to be run later.
+const INVENTORY_SCRIPT: &str = include_str!("../../scripts/report-stale-helpers.sh");
 
 /// One installed helper script, as the remote inventory reported it.
 struct InstalledHelper {
@@ -2637,26 +2659,24 @@ fn removal_outcome(target: &str, failed: usize) -> Result<(), CmdError> {
 }
 
 /// `stado host helpers TARGET [--older-than-days N] [--prune] [--json]` — every
-/// helper script this host carries, oldest first.
+/// leftover helper script this host carries, oldest first.
 ///
-/// `install-helper` has a writer and no reaper. control-host carries 553
-/// installed helper scripts beside 16 binaries: each was delivered to settle
-/// one incident, none was ever withdrawn, and `host provenance` can only print
-/// the count as a footnote because nothing enumerated them. This is the
-/// enumeration -- name, age and size, which is the least an operator needs to
-/// decide whether a script from an incident nobody remembers may go.
+/// The retired helper channel had a writer and no reaper. control-host
+/// carries 553 installed helper scripts beside 16 binaries: each was delivered
+/// to settle one incident, none was ever withdrawn, and `host provenance` can
+/// only print the count as a footnote because nothing enumerated them. This is
+/// the enumeration -- name, age and size, which is the least an operator needs
+/// to decide whether a script from an incident nobody remembers may go.
 ///
 /// Removal is under `--prune` and never otherwise, and `--prune` demands an
 /// explicit `--older-than-days`: a sweep with no threshold means "remove
 /// everything", which is never the intent on a directory whose 553 entries
 /// include the ones three products currently run.
 ///
-/// The inventory comes from the installed helper rather than from a shell
-/// one-liner, and every removal goes back through the same audited channel
-/// `host remove-helper` uses, one named helper at a time. A host without the
-/// inventory helper is an error naming the install command, never an empty
-/// table: "nobody looked" rendered as "nothing is there" is the fold this
-/// fleet has already paid for.
+/// The inventory is one fixed read-only script embedded in this binary, run
+/// over the same audited channel as every other read, and every removal goes
+/// back through the same audited channel `host remove-helper` uses, one named
+/// helper at a time.
 pub async fn helpers(
     target: &str,
     older_than_days: Option<u32>,
@@ -2666,18 +2686,17 @@ pub async fn helpers(
     if prune && older_than_days.is_none() {
         return Err(CmdError::usage(
             "--prune requires --older-than-days: removing every helper is never the intent, \
-             and this directory holds the scripts three products currently run",
+             and a sweep with no threshold cannot tell a fossil from a file an operator \
+             placed there yesterday",
         ));
     }
     let runner = crate::deploy::production_runner();
     let inventory =
-        crate::deploy::host_channel::run_installed_helper(target, INVENTORY_HELPER, &runner)
+        crate::deploy::host_channel::run_fixed_script(target, INVENTORY_SCRIPT, &runner)
             .await
             .map_err(|error| {
                 CmdError::click(format!(
-                    "{target}: cannot read the helper inventory: {error}; install it with \
-                     `stado host install-helper {target} \
-                     stado-rs/scripts/report-stale-helpers.sh {INVENTORY_HELPER}`"
+                    "{target}: cannot read the helper inventory: {error}"
                 ))
             })?;
 
@@ -3751,13 +3770,13 @@ if [ -d "$bin" ]; then
     [ -f "$program" ] || continue
     case "${program##*/}" in .*|*.previous) continue ;; esac
     # A release artifact is a compiled program; a helper is a checked-in script
-    # delivered by `host install-helper`. Both live in this directory and only
-    # the first is something a release pipeline produces, so reporting them in
-    # one list buries the question being asked. control-host carries dozens
-    # of helpers accumulated over months -- helpers have a writer and no reaper,
-    # the same accretion that fills ~/.stado/forwards with markers for services
-    # that were renamed years of incidents ago. The shebang is the honest
-    # discriminator and it is readable without executing anything.
+    # left over from the retired helper channel. Both live in this directory and
+    # only the first is something a release pipeline produces, so reporting them
+    # in one list buries the question being asked. control-host carries
+    # dozens of helpers accumulated over months -- the channel had a writer and
+    # no reaper, the same accretion that fills ~/.stado/forwards with markers
+    # for services that were renamed years of incidents ago. The shebang is the
+    # honest discriminator and it is readable without executing anything.
     kind=binary
     case "$(/usr/bin/head -c 2 "$program" 2>/dev/null)" in '#!') kind=script ;; esac
     # The manifest is a claim about specific bytes. Reporting its commit without
