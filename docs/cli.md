@@ -949,6 +949,8 @@ beacon is expected. The "has not reported in days" detector.
 | `promote PRODUCT VERSION --channel candidate|stable` | Re-fetch every platform, verify exact bytes, signature and passed qualification, then compare-and-swap one `desired` registry generation. It never rebuilds. |
 | `agent --target TARGET [--once]` | Reconcile canonical desired state on a host: verify, stage immutably, start a private candidate, check readiness, switch the stable proxy, drain, monitor and commit or roll back. |
 | `status [PRODUCT] [--json]` | Join central desired/previous state with each host's observed rollout state. A host that has not published status is `unreported`, never healthy by assumption. |
+| `quarantine list PRODUCT [--target TARGET] [--json]` | The digests this host refuses to roll out again, each with the agent's own reason, when it was quarantined, and whether it is the digest the registry currently wants. Read-only. |
+| `quarantine clear PRODUCT --target TARGET --digest SHA256 --reason TEXT [--json]` | Retire exactly one quarantined digest so the agent retries it. Backs the state file up, rewrites it atomically, and appends an audit line. Starts, stops and restarts nothing. |
 | `rollback PRODUCT [--json]` | Atomically swap the previous exact release back into desired state with a new rollout generation. |
 
 `prepare` accepts only an externally produced qualification record. It does not
@@ -965,6 +967,74 @@ deploy/install_release_agent.sh TARGET RUN_AS_USER HOME STADO_BIN STADO_CONFIG
 The LaunchDaemon drops to `RUN_AS_USER` before reading or writing canonical
 storage and uses non-interactive `sudo` only for system launchd cutover and the
 declared candidate account.
+
+### `stado release quarantine`
+
+The way back. The agent quarantines a digest that failed to become ready and
+then never tries it again, which is right — a candidate that dies in ninety
+seconds must not be respawned in a loop — but until this command existed there
+were exactly two ways to retry one: open an editor on
+`{state_dir}/<product>.json` on the host, or publish a new version number so the
+digest changes. The first is an unaudited write to the file a rollout is driven
+from, the second burns a version to say "try again", and the operator refused
+both.
+
+Read what the host is refusing, then retire the one entry:
+
+```bash
+stado release quarantine list brama --target charless-mac-mini
+stado release quarantine clear brama --target charless-mac-mini \
+  --digest 119f93dd06634e9249eef8ae633d2bc02139c588f19fe05f1c7864224182c9ef \
+  --reason 'stderr named a missing config key; fixed and republished in 0.2.28'
+```
+
+```
+cleared 119f93dd06634e9249eef8ae633d2bc02139c588f19fe05f1c7864224182c9ef for brama on charless-mac-mini
+  it was quarantined at 2026-08-17T09:14:02.113+00:00 because: candidate did not become ready within 90s: pid 46748 is gone
+  previous state backed up to /Users/charles/.stado/release-state/brama.json.quarantine-backup-20260818T142530Z
+  audited in /Users/charles/.stado/release-state/brama.quarantine-audit.jsonl
+  nothing was started, stopped or restarted; the release agent rolls this digest out on its next tick
+```
+
+`--reason` and `--digest` are both required and neither is ever defaulted: a
+blank reason is refused, and the digest must be the 64-character hex string
+`quarantine list` prints, so a clear cannot be aimed by guessing. `--target` is
+required for `clear` because the command rewrites that host's rollout state;
+`list` may omit it only while the product rolls out to a single host.
+
+`clear` removes one map entry and nothing else. It does not restart the service,
+cycle a unit, kill a process or touch the desired version, and it deliberately
+leaves `phase` and `updated_at` exactly as the agent left them — those are the
+agent's account of its own last tick, and no tick happened. On its next pass the
+agent finds the desired digest no longer quarantined and rolls it out by the
+ordinary path.
+
+Every guard exists because the agent is writing this same file every fifteen
+seconds. The live file's digest must still be the digest the command read, or the
+write is refused rather than discarding another writer's work; the previous bytes
+are copied to `<product>.json.quarantine-backup-<UTC>` beside the state before
+anything is written; the audit trail is proven appendable before the state is
+touched, because an unaudited mutation is worse than a refused one; and the new
+document is hashed *after* it lands on the host's disk and compared against what
+the command built, so a short or interrupted transfer is discarded instead of
+renamed over a working rollout. Only then does one `mv` inside one directory
+publish it. The staging file is a copy of the live one truncated in place, so the
+mode and owner the agent gave its state file survive the rewrite.
+
+The audit trail is `{state_dir}/<product>.quarantine-audit.jsonl`, mode `0600`,
+one JSON object per line: `actor`, `host`, `product`, `digest`, `reason`,
+`audited_at`, `state_backup`, plus the `quarantine_reason` and `quarantined_at`
+the entry carried — clearing an entry deletes those from the state file, and an
+audit trail that destroys the evidence for the change it records is decoration.
+It lives beside the document it describes so the next reader of that state file
+finds the account of why it looks the way it does without leaving the directory.
+
+`list --json` prints
+`{"product","target","entries":[{"digest","reason","quarantined_at","is_desired_digest"}]}`,
+and an absent state file is an empty `entries` with the human rendering saying so
+by path: the agent has never reconciled this product on that host, which is a
+different problem from nothing being quarantined. `clear --json` prints
+`{"product","target","digest","cleared","reason","audited_at","state_backup"}`.
 
 ## `stado storage`
 

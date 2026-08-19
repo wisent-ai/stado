@@ -90,6 +90,19 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   nothing; `rolling` while a candidate is in flight; `settled` only when
   observed equals desired. A gate that cannot be read fails the command
   instead of being assumed healthy.
+- `stado release quarantine list PRODUCT` shows the digests a host refuses to
+  roll out again with the agent's own reason for each and the desired digest
+  called out, and `stado release quarantine clear PRODUCT --target HOST
+  --digest SHA256 --reason TEXT` retires exactly one of them. Retrying a
+  quarantined digest previously required hand-editing
+  `{state_dir}/<product>.json` on the host or burning a version number to
+  change the digest; there was no command. Clearing starts, stops and restarts
+  nothing — it removes one map entry and the agent rolls the digest out on its
+  next tick. Both `--digest` and `--reason` are required, the previous state is
+  copied to a timestamped backup beside it, the rewrite is refused if another
+  writer moved the file or if the document does not hash correctly after
+  landing on the host's disk, and every clear appends an actor-stamped line to
+  `{state_dir}/<product>.quarantine-audit.jsonl`.
 
 ### Onboarding platform
 
