@@ -84,6 +84,17 @@ pub struct DiskUsage {
     pub mounted_on: String,
 }
 
+/// `df -Pk` 1024-byte blocks as GiB, one decimal.
+///
+/// This module owns the unit because it owns the `df` invocation, and both
+/// [`crate::deploy::host_gates`] and [`crate::deploy::host_reclaim`] report
+/// free space in GiB against a registry policy that declares its watermarks in
+/// GiB (`low_free_gb * `[`disk_cleanup::GIB`]). Three spellings of the same
+/// division would eventually be three different numbers on one host.
+pub fn gib_from_blocks(blocks: f64) -> f64 {
+    (blocks / (1024.0 * 1024.0) * 10.0).round() / 10.0
+}
+
 /// What the host's janitor state file says about the last and next pass.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CleanupState {
@@ -102,6 +113,17 @@ pub struct CleanupState {
     /// is signed and reported as measured rather than clamped.
     pub freed_bytes: Option<i64>,
     pub next_pass_at: Option<String>,
+    /// The low watermark the janitor VALIDATED on its last pass, in bytes, or
+    /// `None` when the recorded report does not identify a canonical policy.
+    ///
+    /// Read through the janitor's own
+    /// [`disk_cleanup::validated_report_low_bytes`], which is the same
+    /// function the queue agent resolves `disk_low_bytes` with. It matters
+    /// here because it, and not the registry declaration, is the number
+    /// admission is gated on when a host cannot read the registry — the Mac
+    /// mini published `disk_pressure_unresolved` for hours and the CLI could
+    /// not show what threshold that verdict was measured against.
+    pub low_bytes: Option<i64>,
     /// The state document was there but did not parse.
     pub error: Option<String>,
 }
@@ -195,6 +217,7 @@ pub fn parse_state(payload: &str, policy_interval_seconds: Option<i64>) -> Clean
             _ => None,
         },
         next_pass_at,
+        low_bytes: report.and_then(disk_cleanup::validated_report_low_bytes),
         error: None,
     }
 }
@@ -238,6 +261,7 @@ pub fn to_report(target: &ComputeTarget, reading: &DiskReading) -> Map<String, V
             "free_bytes_after": state.free_bytes_after,
             "freed_bytes": state.freed_bytes,
             "next_pass_at": state.next_pass_at,
+            "low_bytes": state.low_bytes,
             "error": state.error,
         }),
     );

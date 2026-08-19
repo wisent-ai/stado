@@ -1112,10 +1112,7 @@ pub async fn gates(host: &str, json: bool) -> Result<(), CmdError> {
         return claiming_outcome(&gates);
     }
     println!("host:     {}", gates.host);
-    println!(
-        "claiming: {}",
-        if gates.claiming { "yes" } else { "no" }
-    );
+    println!("claiming: {}", if gates.claiming { "yes" } else { "no" });
     if gates.claiming {
         println!("blockers: none");
     } else {
@@ -1137,12 +1134,13 @@ pub async fn gates(host: &str, json: bool) -> Result<(), CmdError> {
                 .free_slots
                 .map_or_else(|| "-".to_string(), |slots| slots.to_string()),
             gates.slots_declared,
-            gates
-                .age_seconds
-                .map_or_else(|| "at an unknown time".to_string(), |age| format!(
+            gates.age_seconds.map_or_else(
+                || "at an unknown time".to_string(),
+                |age| format!(
                     "{} ago",
                     super::registry::human_age(chrono::TimeDelta::seconds(age))
-                )),
+                )
+            ),
             published,
         ),
         None => println!(
