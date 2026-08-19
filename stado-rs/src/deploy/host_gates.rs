@@ -37,7 +37,8 @@ use serde_json::{json, Map, Value};
 use super::host_channel;
 use super::{host_disk, DeployError, Runner};
 use crate::providers::local::disk_cleanup;
-use crate::queue::{capacity, JobStorage};
+use crate::queue::capacity::{self, Publication};
+use crate::queue::JobStorage;
 use crate::targets::{ComputeTarget, Registry};
 
 /// The agent's own word for "I cannot prove there is room, so I claim
@@ -133,11 +134,15 @@ pub struct WaitingJob {
     pub age_seconds: Option<i64>,
 }
 
-/// One capacity publication, with the instant it was made.
-struct Publication {
-    payload: Value,
-    stamp: Option<DateTime<Utc>>,
-}
+/// The word this command reports when a host declares a queue agent and its
+/// newest health beacon does not report that unit running.
+///
+/// Not the agent's word either — a unit that was never loaded publishes
+/// nothing — but the registry's and the beacon's, joined. It exists because
+/// [`NO_CAPACITY_PUBLICATION`] states only that a host is silent, and the
+/// commonest cause of that silence in this fleet is a declaration naming a
+/// unit no launchd or systemd on that host is running.
+pub const AGENT_DECLARED_NOT_LOADED: &str = "agent_declared_not_loaded";
 
 /// Read every gate that decides whether `host` claims.
 ///
@@ -354,60 +359,50 @@ fn free_slots(payload: &Value, gpu_type: Option<&str>) -> i64 {
 /// everything past the staleness horizon and garbage-collects what is past the
 /// GC horizon, which is correct for a scheduler and exactly wrong for the
 /// question being asked. A host whose agent went quiet an hour ago is the case
-/// this command has to be able to report, not the case it deletes.
+/// this command has to be able to report, not the case it deletes. So the read
+/// goes through [`capacity::read_publications`], the one GC-free reader of
+/// that prefix, shared with [`super::fleet_claim`] — two readers of
+/// `capacity/<consumer>.json` would eventually give two answers to one
+/// question, and the operator would believe whichever they ran first.
 ///
 /// The consumer id is `<kind>-<hostname>`
 /// ([`crate::providers::local::agent`]), and the hostname a host publishes is
 /// its own, which need not be its registry name. So the identity is put back
 /// through [`Registry::lookup_self`] — the fleet's one hostname-to-target
-/// resolution — and only the row that resolves to THIS target is downloaded.
+/// resolution — and only the row that resolves to THIS target is kept.
 async fn publication(
     registry: &Registry,
     target: &ComputeTarget,
     store: &JobStorage,
 ) -> Result<Option<Publication>, DeployError> {
-    let prefix = format!("{}-", target.kind);
-    let blobs = store
-        .list_blobs_with_meta(capacity::CAPACITY_PREFIX)
+    let rows = capacity::read_publications(store)
         .await
         .map_err(|exc| DeployError(exc.to_string()))?;
-    for blob in blobs {
-        let Some(identity) = blob
-            .name
-            .strip_prefix(capacity::CAPACITY_PREFIX)
-            .and_then(|name| name.strip_suffix(".json"))
-            .and_then(|stem| stem.strip_prefix(prefix.as_str()))
-        else {
-            continue;
-        };
-        let mine = registry
-            .lookup_self(identity)
-            .map_err(|exc| DeployError(exc.to_string()))?
-            .is_some_and(|found| found.name == target.name);
-        if !mine {
-            continue;
+    for (consumer_id, row) in rows {
+        if resolves_to(registry, target, &consumer_id)? {
+            return Ok(Some(row));
         }
-        let Some(raw) = store
-            .download_text(&blob.name)
-            .await
-            .map_err(|exc| DeployError(exc.to_string()))?
-        else {
-            continue;
-        };
-        let payload: Value = serde_json::from_str(&raw)
-            .map_err(|exc| DeployError(format!("{} is not a capacity row: {exc}", blob.name)))?;
-        // The row says when it was made; the object's own timestamp is the
-        // fallback for a body that predates the field or carries an
-        // unparseable one, so a row can never be reported as ageless.
-        let stamp = payload
-            .get("published_at")
-            .and_then(Value::as_str)
-            .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
-            .map(|stamp| stamp.with_timezone(&Utc))
-            .or(blob.updated);
-        return Ok(Some(Publication { payload, stamp }));
     }
     Ok(None)
+}
+
+/// Whether `consumer_id` — a `<kind>-<hostname>` publication key — names
+/// `target`.
+///
+/// Exported for [`super::fleet_claim`], which asks the same question of every
+/// declared host at once and must answer it by exactly this rule.
+pub(super) fn resolves_to(
+    registry: &Registry,
+    target: &ComputeTarget,
+    consumer_id: &str,
+) -> Result<bool, DeployError> {
+    let Some(identity) = consumer_id.strip_prefix(&format!("{}-", target.kind)) else {
+        return Ok(false);
+    };
+    Ok(registry
+        .lookup_self(identity)
+        .map_err(|exc| DeployError(exc.to_string()))?
+        .is_some_and(|found| found.name == target.name))
 }
 
 /// The `--json` report, in the exact shape the operator console consumes.
