@@ -162,9 +162,11 @@ printf 'STADO_QUARANTINE\taudited\t%s\n' "$audit"
 /// shell-quoted by the caller; nothing operator-supplied reaches the shell
 /// unquoted.
 fn splice(template: &str, marks: &[(&str, &str)]) -> String {
-    marks.iter().fold(template.to_string(), |script, (mark, value)| {
-        script.replace(mark, value)
-    })
+    marks
+        .iter()
+        .fold(template.to_string(), |script, (mark, value)| {
+            script.replace(mark, value)
+        })
 }
 
 /// The registry's release control plane, or the reason there is none.
@@ -196,8 +198,7 @@ pub(crate) fn resolve_target<'a>(
             match (names.next(), names.next()) {
                 (Some(only), None) => only.clone(),
                 (Some(_), Some(_)) => {
-                    let declared: Vec<&str> =
-                        policy.targets.keys().map(String::as_str).collect();
+                    let declared: Vec<&str> = policy.targets.keys().map(String::as_str).collect();
                     return Err(CmdError::usage(format!(
                         "{product} rolls out to {}; name one with --target",
                         declared.join(", ")
@@ -276,9 +277,12 @@ async fn read_remote(
     } else {
         use base64::engine::general_purpose::STANDARD as BASE64;
         use base64::Engine;
-        BASE64
-            .decode(encoded)
-            .map_err(|error| CmdError::click(format!("{}: {path} came back unreadable: {error}", host.name)))?
+        BASE64.decode(encoded).map_err(|error| {
+            CmdError::click(format!(
+                "{}: {path} came back unreadable: {error}",
+                host.name
+            ))
+        })?
     };
     Ok(Some(RemoteFile { bytes, content }))
 }
@@ -299,9 +303,9 @@ pub(crate) async fn remote_read(
             host.name, file.bytes
         )));
     }
-    String::from_utf8(file.content)
-        .map(Some)
-        .map_err(|error| CmdError::click(format!("{}: {path} is not valid UTF-8: {error}", host.name)))
+    String::from_utf8(file.content).map(Some).map_err(|error| {
+        CmdError::click(format!("{}: {path} is not valid UTF-8: {error}", host.name))
+    })
 }
 
 /// The last `lines` lines of a file on a registry host, with the file's FULL
@@ -468,13 +472,9 @@ async fn clear(args: &QuarantineClearArgs) -> Result<(), CmdError> {
             "{target_name} has no rollout state at {path}: nothing is quarantined there"
         ))
     })?;
-    let mut state = release_agent::parse_state_document(
-        payload.as_bytes(),
-        &args.product,
-        &target_name,
-        &path,
-    )
-    .map_err(CmdError::click)?;
+    let mut state =
+        release_agent::parse_state_document(payload.as_bytes(), &args.product, &target_name, &path)
+            .map_err(CmdError::click)?;
     let Some(record) = state.quarantined.remove(&digest) else {
         return Err(CmdError::click(format!(
             "{digest} is not quarantined for {} on {target_name}",
@@ -520,7 +520,10 @@ async fn clear(args: &QuarantineClearArgs) -> Result<(), CmdError> {
             ("@BACKUP@", &shlex_quote(&backup)),
             ("@STAGING@", &shlex_quote(&staging)),
             ("@AUDIT@", &shlex_quote(&audit)),
-            ("@EXPECTED_LIVE@", &shlex_quote(&sha256_bytes(payload.as_bytes()))),
+            (
+                "@EXPECTED_LIVE@",
+                &shlex_quote(&sha256_bytes(payload.as_bytes())),
+            ),
             ("@EXPECTED_NEXT@", &shlex_quote(&sha256_bytes(&document))),
             ("@DOCUMENT@", &shlex_quote(&BASE64.encode(&document))),
             ("@RECORD@", &shlex_quote(&BASE64.encode(&line))),

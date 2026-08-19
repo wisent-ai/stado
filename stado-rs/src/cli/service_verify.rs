@@ -535,12 +535,11 @@ async fn remote_findings(host: &str, declared: &[(String, String)]) -> Vec<Findi
             })
             .collect()
     };
-    let output = match crate::deploy::host_channel::run_fixed_script(host, PROBE_SCRIPT, &runner)
-        .await
-    {
-        Ok(output) => output,
-        Err(error) => return unverified(root_cause(&error)),
-    };
+    let output =
+        match crate::deploy::host_channel::run_fixed_script(host, PROBE_SCRIPT, &runner).await {
+            Ok(output) => output,
+            Err(error) => return unverified(root_cause(&error)),
+        };
     let parsed: Value = match serde_json::from_str(output.trim()) {
         Ok(parsed) => parsed,
         Err(error) => return unverified(format!("probe returned no usable JSON: {error}")),
