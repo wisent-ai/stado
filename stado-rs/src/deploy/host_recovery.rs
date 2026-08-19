@@ -336,4 +336,3 @@ pub fn to_sorted_pretty(value: &Value) -> String {
     }
     serde_json::to_string_pretty(&sorted(value)).expect("report serializes")
 }
-

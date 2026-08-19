@@ -1318,4 +1318,3 @@ pub async fn advance_slot(
     }
     Ok(SlotOutcome::Done)
 }
-

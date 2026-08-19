@@ -629,4 +629,3 @@ pub fn validate(declaration: &Declaration) -> Result<(), String> {
     }
     Ok(())
 }
-

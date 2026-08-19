@@ -379,4 +379,3 @@ pub(crate) async fn upload_artifacts(
     }
     Ok(())
 }
-

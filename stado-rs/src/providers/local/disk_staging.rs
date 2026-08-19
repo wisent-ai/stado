@@ -384,4 +384,3 @@ pub async fn setup_agent_staging(log_fn: &mut dyn FnMut(&str)) -> Option<String>
     ));
     Some(target)
 }
-

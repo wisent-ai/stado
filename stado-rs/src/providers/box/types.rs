@@ -332,4 +332,3 @@ pub fn parse_box_info(payload: &Map<String, Value>) -> Result<BoxInfo, BoxError>
         last_snapshot_status: jstr(boxed.get("lastSnapshotStatus")),
     })
 }
-

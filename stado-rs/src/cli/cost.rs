@@ -70,4 +70,3 @@ pub(crate) async fn dispatch(sub: &CostCommands) -> Result<(), CmdError> {
     }
     Ok(())
 }
-

@@ -575,4 +575,3 @@ impl Provider for AwsProvider {
         self.api().await?.running_agent_refs_with_age().await
     }
 }
-

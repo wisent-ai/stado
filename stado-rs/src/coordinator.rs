@@ -757,4 +757,3 @@ pub async fn run(target: Option<&str>, once: bool) -> Result<i32, String> {
         tokio::time::sleep(Duration::from_secs(interval)).await;
     }
 }
-

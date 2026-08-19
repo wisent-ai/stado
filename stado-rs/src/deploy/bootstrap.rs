@@ -627,4 +627,3 @@ pub async fn run_bootstrap(
 pub fn empty_hf_fetcher() -> TokenFetcher {
     Arc::new(|| Box::pin(async { Ok(String::new()) }) as BoxFuture<'static, Result<String, String>>)
 }
-

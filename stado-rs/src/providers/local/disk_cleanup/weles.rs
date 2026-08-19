@@ -306,4 +306,3 @@ pub fn scan_weles(
         report.add_error("weles_recordings", &exc);
     }
 }
-

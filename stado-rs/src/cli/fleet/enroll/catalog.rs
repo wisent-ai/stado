@@ -340,4 +340,3 @@ pub async fn catalog(as_json: bool) -> Result<bool, String> {
     }
     Ok(true)
 }
-

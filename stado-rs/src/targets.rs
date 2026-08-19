@@ -2269,4 +2269,3 @@ impl Registry {
         Ok(matches.into_iter().next())
     }
 }
-

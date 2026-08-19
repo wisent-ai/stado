@@ -315,4 +315,3 @@ pub const DEFAULT_TIMEOUT: f64 = DEFAULT_TIMEOUT_SECONDS;
 /// Default base URL (re-exported so `super::BoxProvider` mirrors the
 /// Python constructor defaults).
 pub const DEFAULT_BASE_URL: &str = DEFAULT_BOX_API_URL;
-

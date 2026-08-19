@@ -771,4 +771,3 @@ pub fn install_directory(
         .join(&manifest.version)
         .join(&manifest.platform)
 }
-

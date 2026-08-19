@@ -151,4 +151,3 @@ pub async fn backfill_priority_markers(
     write_sentinel(store, &new_cursor, is_done).await?;
     Ok(is_done)
 }
-
