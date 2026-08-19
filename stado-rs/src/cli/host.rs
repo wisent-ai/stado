@@ -51,14 +51,30 @@ pub async fn health(target: &str, json: bool) -> Result<(), CmdError> {
     }
     Ok(())
 }
-/// `stado host publish-beacon FILE` — publish a locally collected health
-/// document through the dedicated, route-scoped Stado control API.
+/// `stado host publish-beacon FILE [--print]` — publish a locally collected
+/// health document through the dedicated, route-scoped Stado control API.
 ///
 /// This command deliberately has no direct-storage mode and does not consult
 /// provider credentials. Missing URL/token configuration, an insecure remote
 /// URL, an over-broad token file, malformed JSON, and an inconsistent server
 /// acknowledgement all fail closed.
-pub async fn publish_beacon(source: &str) -> Result<(), CmdError> {
+///
+/// The `link` block is collected HERE rather than by the collector scripts,
+/// because it is the one part of a beacon that cannot be assembled with `df`
+/// and `launchctl`: it reads the power log and the tailnet, and a host that
+/// went silent has to publish that account of itself or the silence leaves no
+/// trace at all (see [`crate::deploy::host_link`]). Collection never blocks
+/// the publish — every probe is capped and degrades to a null.
+///
+/// It is injected only into a document about THIS host. The macOS collector
+/// also relays beacons for hosts that cannot publish for themselves, and
+/// stamping this machine's connectivity onto another machine's document would
+/// invent the very evidence the block exists to provide.
+///
+/// `--print` writes the document that would be published and publishes
+/// nothing, so the collection can be inspected on a host without a beacon
+/// grant and without touching the fleet's store.
+pub async fn publish_beacon(source: &str, print: bool) -> Result<(), CmdError> {
     let bytes = if source == "-" {
         let mut bytes = Vec::new();
         std::io::stdin().lock().read_to_end(&mut bytes)?;
@@ -71,14 +87,15 @@ pub async fn publish_beacon(source: &str) -> Result<(), CmdError> {
             "host beacon must contain between one and 65535 bytes",
         ));
     }
-    let document: Value = serde_json::from_slice(&bytes)
+    let mut document: Value = serde_json::from_slice(&bytes)
         .map_err(|error| CmdError::click(format!("host beacon is not valid JSON: {error}")))?;
     let host = document
         .as_object()
         .and_then(|value| value.get("host"))
         .and_then(Value::as_str)
-        .ok_or_else(|| CmdError::click("host beacon must be an object with a string host"))?;
-    if !valid_beacon_host(host) {
+        .ok_or_else(|| CmdError::click("host beacon must be an object with a string host"))?
+        .to_string();
+    if !valid_beacon_host(&host) {
         return Err(CmdError::click(
             "host beacon host must be a lowercase DNS label",
         ));
@@ -94,6 +111,21 @@ pub async fn publish_beacon(source: &str) -> Result<(), CmdError> {
         ));
     }
 
+    if beacon_is_this_host(&host) {
+        let link =
+            crate::deploy::host_link::collect_link(&crate::deploy::production_runner()).await;
+        if let Some(object) = document.as_object_mut() {
+            object.insert("link".to_string(), serde_json::to_value(&link)?);
+        }
+    }
+    // The merged document is what gets published, so the bytes on the wire
+    // are the bytes just validated plus the block collected here.
+    let bytes = serde_json::to_vec(&document)?;
+    if print {
+        println!("{}", serde_json::to_string_pretty(&document)?);
+        return Ok(());
+    }
+
     let mut endpoint = host_health_api_url()?;
     {
         let mut segments = endpoint.path_segments_mut().map_err(|()| {
@@ -103,7 +135,7 @@ pub async fn publish_beacon(source: &str) -> Result<(), CmdError> {
         segments.push("api");
         segments.push("host-health");
     }
-    endpoint.query_pairs_mut().append_pair("host", host);
+    endpoint.query_pairs_mut().append_pair("host", &host);
 
     let token = host_health_api_token().await?;
     let response = crate::cli::storage::fleet_https_client()
@@ -134,7 +166,7 @@ pub async fn publish_beacon(source: &str) -> Result<(), CmdError> {
     // from the control plane's -- the client was asserting an internal detail
     // it has no way to know.
     let stored = payload.get("state").and_then(Value::as_str) == Some("stored")
-        && payload.get("host").and_then(Value::as_str) == Some(host)
+        && payload.get("host").and_then(Value::as_str) == Some(host.as_str())
         && payload
             .get("path")
             .and_then(Value::as_str)
@@ -156,6 +188,19 @@ fn valid_beacon_host(host: &str) -> bool {
         && bytes
             .iter()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+}
+
+/// Is this beacon document about the machine running this command?
+///
+/// The beacon slug is the leading hostname label, lowercased — exactly how
+/// the collector scripts spell it (`hostname -s | tr '[:upper:]' '[:lower:]'`)
+/// and how the readers resolve a target back to its beacon object. A host
+/// whose name cannot be read at all matches nothing, which keeps the relay
+/// path from being mistaken for a self-publish.
+fn beacon_is_this_host(host: &str) -> bool {
+    let local = crate::targets::normalize_hostname(&crate::providers::vast::system_hostname());
+    let slug = local.split('.').next().unwrap_or_default();
+    !slug.is_empty() && slug == host
 }
 
 fn host_health_api_url() -> Result<url::Url, CmdError> {

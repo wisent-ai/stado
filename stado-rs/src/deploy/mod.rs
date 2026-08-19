@@ -45,6 +45,11 @@
 //! programs on the channel, so "nothing activates before it verified" is
 //! visible at the [`Runner`] seam rather than promised inside one script.
 //!
+//! [`host_link`] is not a command at all: it is the connectivity block a
+//! host collects about ITSELF and publishes inside its health beacon, so
+//! that "why did this machine go quiet" has an answer in the product
+//! instead of in an operator's shell history.
+//!
 //! Every subprocess is orchestrated through the [`Runner`] seam so tests
 //! can inject a fake command runner and never spawn real
 //! ssh/launchctl/systemctl. The production runner is
@@ -71,6 +76,7 @@ pub mod host_exec;
 pub mod host_gates;
 pub mod host_gui_automation;
 pub mod host_inventory;
+pub mod host_link;
 pub mod host_ping;
 pub mod host_precheck_runner;
 pub mod host_reboot;
