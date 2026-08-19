@@ -1279,6 +1279,7 @@ previous run of the same platform, labelled the estimate it is. A failed run
 or platform carries its persisted failure with the job's own last output
 lines. The Releases screen in Stado Desktop renders the same `--json` payload,
 so the CLI and the GUI cannot disagree.
+
 ### `stado release logs`
 
 The command that ends the guessing. A brama candidate died in under ninety
