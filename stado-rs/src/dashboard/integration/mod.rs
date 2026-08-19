@@ -89,10 +89,9 @@ async fn dispatch(
     action: &str,
     body: &[u8],
     store: &crate::queue::JobStorage,
-    state: &Value,
 ) -> HandlerResult {
     match domain {
-        "enterprise" => enterprise::handle(action, body, store, state).await,
+        "enterprise" => enterprise::handle(action, body, store).await,
 
         _ => Err(HandlerError::BadRequest),
     }
@@ -172,7 +171,6 @@ pub(super) async fn handle(
     request: &Request,
     verifier_available: bool,
     store: &crate::queue::JobStorage,
-    state: &Value,
 ) -> Response {
     let Some((domain, action)) = parse_path(&request.path) else {
         return envelope_uncapped(
@@ -220,7 +218,7 @@ pub(super) async fn handle(
         }
         Err(()) => return unavailable(),
     }
-    match dispatch(domain, action, &request.body, store, state).await {
+    match dispatch(domain, action, &request.body, store).await {
         Ok(value) => envelope(
             http_status("200"),
             json!({"ok": true, "result": value}),

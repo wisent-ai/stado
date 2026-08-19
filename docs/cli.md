@@ -969,10 +969,9 @@ kind. A `.local` destination limits every channel-opening command to that
 network; it does not limit `stado registry beacon-age` or `stado host health`,
 because the host publishes its beacon outward.
 
-Stado Desktop reaches this family through the dashboard's authenticated
-operator-command bridge instead of carrying its own enrollment logic, so its
-**Fleet › Hosts › Add a Machine** chooser offers the same four methods and
-performs exactly the commands above. The separate `stado_fleet` binary remains
+Stado Desktop performs exactly the commands above, so its
+**Fleet › Hosts › Add a Machine** chooser offers the same four methods.
+The separate `stado_fleet` binary remains
 for compatibility over the same implementation; `stado fleet` is the documented
 surface.
 
@@ -1075,9 +1074,9 @@ one-liner already handed out, which is why there is no `restart` subcommand —
 
 The `invite` method needs three routes on the dashboard, because the machine
 being added has no Stado binary, no store credential and no operator identity —
-it has one token. All three are served by the same authenticated dashboard
-process that serves `/api/object`, `/api/machine/*` and `/api/operator/run`, and
-all three sit outside that surface's operator authorization: they accept **only**
+it has one token. All three are served by the same authenticated listener
+process that serves `/api/object` and `/api/machine/*`, and
+all three sit outside that surface's route authorization: they accept **only**
 an invite token, and **none of them can write the registry.** The registry write
 happens later, in `stado fleet approve`, under operator authority. All three are
 useful only where that dashboard is reachable **from the machine being added**,
@@ -1685,6 +1684,7 @@ an arbitrary, per-host, declared set.
 | `retire UNIT --host TARGET [--json]` | Bootout/disable and forget; files kept. |
 | `deploy NAME --host TARGET --from PATH [--json]` | Render, push, bootstrap, record. |
 | `deploy NAME --host TARGET --from-artifact REF [--json]` | Install one published version, then the above. |
+| `declare --file PATH [--json]` | Write a user-authored service declaration into the service directory; `deploy` then needs no flags beyond the name. |
 | `update NAME --host TARGET --from-artifact REF [--json]` | Move a unit already managed onto a new version. |
 | `update NAME --host TARGET --from-archive PATH [--json]` | The same, from a local bundle no store carries yet. |
 | `update NAME --host TARGET --rollback-to VERSION [--json]` | Point `current` back at a version already on the host. |
@@ -1717,6 +1717,52 @@ so a rollback is a relink rather than a redeploy.
 
 Exactly one source is accepted. Neither is a safe default: a path deploys
 whatever happens to be on the host, with no version anybody can name.
+
+### Declaring a service once, by contract
+
+Stado ships no list of services and no schema per service kind. A service is
+whatever its author declares against the one contract — `service declare`
+writes it into the service directory, and the lifecycle reads it from there —
+`deploy` installs from it with no flags beyond the name, `verify` checks the
+service the way the declaration says, and the directory answers callers from
+the same entry:
+
+```json
+{
+  "name": "example-serving",
+  "host": "gpu-host-1",
+  "port": 8001,
+  "source": {
+    "artifact": "stado://releases/example-serving/1.0.0/linux-amd64",
+    "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  },
+  "run": {"args": ["serve", "--max-model-len", "32768"]},
+  "verify": {"kind": "http"},
+  "consumers": {"example-backend": {"capabilities": ["model-routing"]}}
+}
+```
+
+```bash
+stado service declare --file example-serving.json
+stado service deploy example-serving --host gpu-host-1
+```
+
+The contract is five ideas and nothing kind-specific: an immutable `source`
+(the artifact and the digest its bytes must match), an opaque `run` spec the
+unit is rendered from, `verify` saying how the service is observed,
+`consumers` saying who may call it, and where it answers (`endpoints`, or
+`port` as the loopback shorthand for the declared host). Anything the service
+knows about itself — model, engine, flags, GPU — lives inside the artifact and
+the run spec, which Stado deliberately never parses.
+
+`declare` also writes the `managed_service` link and a placeholder record on
+the target. Declared-but-not-yet-deployed is a designed state: the registry
+says what should run, the beacons say what does, and `deploy` replaces the
+placeholder with the real record when it installs the unit. Every refusal —
+a digest that is not 64 lowercase hex, a host outside the registry, no
+consumers, a `verify.kind` this build does not implement, no endpoint for the
+declared host — names its cause and leaves the document untouched.
+
 
 ### The service directory answers "where is X"
 
