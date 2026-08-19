@@ -105,6 +105,7 @@ pub mod reconcile;
 pub mod service;
 pub mod ssh_key;
 pub mod stream;
+pub mod weles_capture;
 
 /// Deploy-layer failure carrying the exact Python exception message
 /// (RuntimeError / ValueError / LookupError text). The CLI maps it to a
