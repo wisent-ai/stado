@@ -38,6 +38,19 @@ def safe_extract_member(bundle: tarfile.TarFile, basename: str, destination: pat
     destination.write_bytes(payload.read())
     destination.chmod(0o755)
 
+def stado_binary() -> str:
+    """The stado CLI as the delivery host actually carries it.
+
+    A delivery job runs under an agent whose PATH is the supervisor's minimal
+    one, so the bare word `stado` raised FileNotFoundError and the fleet's
+    own release could not deliver itself. The owner install is the canonical
+    location; PATH remains the fallback for operator shells.
+    """
+    owner = pathlib.Path.home() / ".stado" / "bin" / "stado"
+    if owner.is_file() and os.access(owner, os.X_OK):
+        return str(owner)
+    return "stado"
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -53,7 +66,7 @@ def main() -> None:
             safe_extract_member(bundle, "bin/stado", binary)
         for target in args.target:
             subprocess.run(
-                ["stado", "host", "install-binary", target, "--from", str(binary), "--name", "stado", "--json"],
+                [stado_binary(), "host", "install-binary", target, "--from", str(binary), "--name", "stado", "--json"],
                 check=True,
             )
 
