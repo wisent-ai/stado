@@ -191,19 +191,23 @@ actor FleetControlClient {
     private let session: URLSession
     private let maximumResponseBytes = 2 * 1_024 * 1_024
 
-    init() {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.httpCookieStorage = nil
-        configuration.httpShouldSetCookies = false
-        configuration.urlCredentialStorage = nil
-        configuration.timeoutIntervalForRequest = 30
-        // The resource ceiling has to clear the longest command the bridge
-        // allows (300 s) — `fleet ingress up` and `fleet enroll --bootstrap`
-        // legitimately run for minutes and print nothing until they finish.
-        // Short reads keep their 30 s idle limit above; run() raises its own
-        // request interval per call instead.
-        configuration.timeoutIntervalForResource = 360
-        session = URLSession(configuration: configuration)
+    init(session: URLSession? = nil) {
+        guard let session else {
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.httpCookieStorage = nil
+            configuration.httpShouldSetCookies = false
+            configuration.urlCredentialStorage = nil
+            configuration.timeoutIntervalForRequest = 30
+            // The resource ceiling has to clear the longest command the bridge
+            // allows (300 s) — `fleet ingress up` and `fleet enroll --bootstrap`
+            // legitimately run for minutes and print nothing until they finish.
+            // Short reads keep their 30 s idle limit above; run() raises its own
+            // request interval per call instead.
+            configuration.timeoutIntervalForResource = 360
+            self.session = URLSession(configuration: configuration)
+            return
+        }
+        self.session = session
     }
 
     func policy(

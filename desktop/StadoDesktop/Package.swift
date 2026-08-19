@@ -25,6 +25,11 @@ let package = Package(
             path: "Sources/Stado",
             resources: [.process("Resources")]
         ),
+        .testTarget(
+            name: "FleetTests",
+            dependencies: ["Stado"],
+            path: "tests/fleet"
+        ),
 
     ]
 )
