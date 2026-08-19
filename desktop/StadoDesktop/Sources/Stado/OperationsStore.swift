@@ -413,6 +413,178 @@ final class HostGatesStore: ObservableObject {
     }
 }
 
+/// Every registry-managed service with the state its host's latest health
+/// beacon reports, plus the one write an operator is allowed from here:
+/// restarting a user-domain unit.
+///
+/// The read is one fleet-wide `service list --json` — beacon-only, so it
+/// stays answerable while a host is wedged — followed by one `service status
+/// --json` per failed service name, because the list does not carry failure
+/// evidence and a red word with no reason behind it sends the operator to a
+/// terminal. When the fleet-wide read itself fails, every host that was
+/// asked contributes an unavailable row: one broken read must not blank the
+/// screen, and it must not read as a fleet with nothing declared.
+@MainActor
+final class FleetServicesStore: ObservableObject {
+    @Published private(set) var entries: [FleetServiceEntry] = []
+    /// Host name -> the command's own sentence, set for every host that was
+    /// asked when the fleet-wide read produced no answer at all.
+    @Published private(set) var failures: [String: String] = [:]
+    @Published private(set) var isRefreshing = false
+    @Published private(set) var lastUpdated: Date?
+    @Published private(set) var mutation: WisentMutationOutcome = .idle
+
+    private let cli: StadoCLI
+    private var refreshGeneration = 0
+    private var lastHosts: [String] = []
+
+    init(cli: StadoCLI = StadoCLI()) {
+        self.cli = cli
+    }
+
+    /// Failed units first, then by host and unit: the rows that need a
+    /// decision read before the ones that do not.
+    var services: [FleetServiceEntry] {
+        entries.sorted { lhs, rhs in
+            lhs.isFailed == rhs.isFailed ? lhs.id < rhs.id : lhs.isFailed
+        }
+    }
+
+    var failedServices: [FleetServiceEntry] {
+        entries.filter(\.isFailed)
+    }
+
+    nonisolated static func listArguments() -> [String] {
+        ["service", "list", "--json"]
+    }
+
+    nonisolated static func statusArguments(name: String) -> [String] {
+        ["service", "status", name, "--json"]
+    }
+
+    nonisolated static func restartArguments(name: String, host: String) -> [String] {
+        ["service", "restart", name, "--host", host, "--json"]
+    }
+
+    func refresh(hosts: [String]) async {
+        guard !isRefreshing else { return }
+        refreshGeneration += 1
+        let generation = refreshGeneration
+        lastHosts = hosts
+        isRefreshing = true
+        defer {
+            if generation == refreshGeneration {
+                isRefreshing = false
+            }
+        }
+
+        let reading = await Self.read(using: cli)
+        guard generation == refreshGeneration else { return }
+        switch reading {
+        case let .listed(listed):
+            let failedNames = Array(Set(listed.filter(\.isFailed).map(\.name))).sorted()
+            let evidence = await Self.failureEvidence(for: failedNames, using: cli)
+            entries = listed.map { entry in
+                var entry = entry
+                entry.failure = evidence[entry.id]
+                return entry
+            }
+            failures = [:]
+        case let .failed(problem):
+            entries = []
+            failures = Dictionary(uniqueKeysWithValues: hosts.map { ($0, problem) })
+        }
+        lastUpdated = Date()
+    }
+
+    /// `stado service restart <name> --host <host>` through the CLI runner.
+    ///
+    /// The CLI refuses a system LaunchDaemon with its own sentence; the view
+    /// never shows this button for one, and the refusal is still what a
+    /// failure reports if the declaration moved under the screen. A restart
+    /// that exits zero but left the host outside the intended state is read
+    /// off the payload's postcondition, in the same words the CLI prints.
+    func restart(_ entry: FleetServiceEntry) async {
+        let unit = entry.unitID.isEmpty ? entry.name : entry.unitID
+        mutation = .working("Restarting \(unit) on \(entry.host)")
+        do {
+            let reports = try await cli.json(
+                [ServiceRestartReport].self,
+                arguments: Self.restartArguments(name: entry.name, host: entry.host)
+            )
+            if let failed = reports.first(where: { !$0.succeeded }) {
+                mutation = .failed("\(failed.host): \(failed.failureText)")
+            } else {
+                mutation = .succeeded("Restarted \(unit) on \(entry.host).")
+            }
+        } catch {
+            mutation = .failed(Self.message(for: error))
+        }
+        // Whatever happened, the beacon's next word is the one worth reading:
+        // a succeeded restart shows as active, a refused one as the state it
+        // was refused in.
+        await refresh(hosts: lastHosts)
+    }
+
+    func clearMutation() {
+        mutation = .idle
+    }
+
+    private enum ListReading: Sendable {
+        case listed([FleetServiceEntry])
+        case failed(String)
+    }
+
+    private nonisolated static func read(using cli: StadoCLI) async -> ListReading {
+        do {
+            return .listed(try await cli.json(FleetServiceList.self, arguments: listArguments()))
+        } catch {
+            return .failed(message(for: error))
+        }
+    }
+
+    /// One `service status --json` per failed name, concurrently, keyed by
+    /// the entry id the failure belongs to. A status read that fails costs
+    /// that unit its evidence line, never the list it was annotating.
+    private nonisolated static func failureEvidence(
+        for names: [String],
+        using cli: StadoCLI
+    ) async -> [String: ServiceFailure] {
+        guard !names.isEmpty else { return [:] }
+        return await withTaskGroup(of: [String: ServiceFailure].self) { group in
+            for name in names {
+                group.addTask {
+                    guard let rows = try? await cli.json(
+                        FleetServiceList.self,
+                        arguments: statusArguments(name: name)
+                    ) else { return [:] }
+                    var evidence: [String: ServiceFailure] = [:]
+                    for row in rows where row.failure != nil {
+                        evidence[row.id] = row.failure
+                    }
+                    return evidence
+                }
+            }
+            var merged: [String: ServiceFailure] = [:]
+            for await evidence in group {
+                merged.merge(evidence) { _, new in new }
+            }
+            return merged
+        }
+    }
+
+    /// `service list --json` prints a bare array; naming the type keeps the
+    /// decode site reading like the command it runs.
+    private typealias FleetServiceList = [FleetServiceEntry]
+
+    private nonisolated static func message(for error: Error) -> String {
+        if let localized = error as? LocalizedError, let description = localized.errorDescription {
+            return description
+        }
+        return error.localizedDescription
+    }
+}
+
 /// Why a host went quiet, per registry host.
 ///
 /// The reading that did not exist during the six-minute gap on

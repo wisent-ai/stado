@@ -22,6 +22,7 @@ struct ConsoleView: View {
     @StateObject private var gatesStore = HostGatesStore()
     @StateObject private var linkStore = HostLinkStore()
     @StateObject private var serviceStore = ServiceTruthStore()
+    @StateObject private var fleetServiceStore = FleetServicesStore()
     @StateObject private var releaseStore = ReleaseEvidenceStore()
     @StateObject private var groupStore = FleetGroupStore()
 
@@ -353,6 +354,7 @@ struct ConsoleView: View {
             case .services:
                 ServicesView(
                     store: serviceStore,
+                    fleetStore: fleetServiceStore,
                     hosts: StadoRegistryHosts.names(targets: fleetStore.targets, snapshot: store.snapshot),
                     scope: scopeName
                 )

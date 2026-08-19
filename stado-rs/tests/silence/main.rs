@@ -12,7 +12,11 @@
 //! the assertions are against real blobs on a real disk and the operator's
 //! registry, vault and running services are never touched. Blob paths are
 //! asserted as literal file names because those paths are the contract that
-//! `stado host link`, the resolver and the desktop console all read.
+//! `stado host link`, the resolver and the desktop console all read — and
+//! because the first cut of them was unwritable: the object API rejected
+//! every `host_silence/...` key with `401 unauthorized or non-immutable
+//! release write`, so the records live under the authorized, canonical
+//! `state/` root and a literal assertion is what keeps them there.
 //!
 //! The last test drives the built binary (`CARGO_BIN_EXE_stado`) end to end
 //! with WC_STORAGE_BACKEND=local + WC_LOCAL_STORAGE_PATH=<TempDir> and a
@@ -115,7 +119,7 @@ async fn a_silence_opens_on_the_crossing_and_closes_on_the_fresher_beacon() {
 
     // 18:29:00 is the last beacon the Mac mini published before it went.
     let last_beacon = at("2026-08-19T18:29:00Z");
-    let blob = "host_silence/charless-mac-mini/20260819T182900.000000Z.json";
+    let blob = "state/host_silence/charless-mac-mini/20260819T182900.000000Z.json";
 
     // 18:31 — two minutes of quiet. Inside the 300s threshold, so nothing is
     // recorded: one missed publication is not an outage.
@@ -132,7 +136,7 @@ async fn a_silence_opens_on_the_crossing_and_closes_on_the_fresher_beacon() {
     .unwrap();
     assert!(quiet.is_none(), "a two-minute gap wrote {quiet:?}");
     assert!(
-        blob_names(dir.path(), "host_silence/charless-mac-mini").is_empty(),
+        blob_names(dir.path(), "state/host_silence/charless-mac-mini").is_empty(),
         "a two-minute gap left a blob behind"
     );
 
@@ -184,7 +188,7 @@ async fn a_silence_opens_on_the_crossing_and_closes_on_the_fresher_beacon() {
     assert_eq!(merged.observed_by, vec!["resolver", "cli"]);
     assert_eq!(merged.first_reader_error.as_deref(), Some(AUTHORITY_SENTENCE));
     assert_eq!(
-        blob_names(dir.path(), "host_silence/charless-mac-mini"),
+        blob_names(dir.path(), "state/host_silence/charless-mac-mini"),
         vec!["20260819T182900.000000Z.json"],
         "the second observer opened a second record"
     );
@@ -231,7 +235,7 @@ async fn a_silence_opens_on_the_crossing_and_closes_on_the_fresher_beacon() {
         })
     );
     assert_eq!(
-        blob_names(dir.path(), "host_silence/charless-mac-mini"),
+        blob_names(dir.path(), "state/host_silence/charless-mac-mini"),
         vec!["20260819T182900.000000Z.json"],
         "the whole outage is one record"
     );
@@ -280,7 +284,7 @@ async fn a_host_that_never_published_starts_its_silence_at_the_observation() {
     assert_eq!(
         on_disk(
             dir.path(),
-            "host_silence/ubuntu-server-rtx-pro-6000/20260819T183430.000000Z.json"
+            "state/host_silence/ubuntu-server-rtx-pro-6000/20260819T183430.000000Z.json"
         )["started_at"],
         "2026-08-19T18:34:30Z"
     );
@@ -402,7 +406,7 @@ async fn refusals_aggregate_per_reason_over_a_window() {
 
     // The path a reader writes is the path an aggregator reads.
     assert_eq!(
-        blob_names(dir.path(), "reader_refusals/charless-mac-mini"),
+        blob_names(dir.path(), "state/reader_refusals/charless-mac-mini"),
         vec![
             "20260819T172000.000000Z.json",
             "20260819T183011.000000Z.json",
@@ -414,7 +418,7 @@ async fn refusals_aggregate_per_reason_over_a_window() {
     assert_eq!(
         on_disk(
             dir.path(),
-            "reader_refusals/charless-mac-mini/20260819T183011.000000Z.json"
+            "state/reader_refusals/charless-mac-mini/20260819T183011.000000Z.json"
         ),
         json!({
             "host": "charless-mac-mini",
@@ -496,7 +500,7 @@ async fn recent_silences_returns_the_newest_five_newest_first() {
         .expect("each gap closes");
     }
     assert_eq!(
-        blob_names(dir.path(), "host_silence/charless-mac-mini").len(),
+        blob_names(dir.path(), "state/host_silence/charless-mac-mini").len(),
         7
     );
 
@@ -537,11 +541,11 @@ async fn a_published_refusal_is_bounded_and_verbatim() {
     )
     .await;
 
-    let names = blob_names(dir.path(), "reader_refusals/silence-bounded-host");
+    let names = blob_names(dir.path(), "state/reader_refusals/silence-bounded-host");
     assert_eq!(names.len(), 1, "the throttle let a duplicate through: {names:?}");
     let record = on_disk(
         dir.path(),
-        &format!("reader_refusals/silence-bounded-host/{}", names[0]),
+        &format!("state/reader_refusals/silence-bounded-host/{}", names[0]),
     );
     assert_eq!(record["reader"], "resolver");
     assert_eq!(record["reason"], "directory_cache_stale");
@@ -560,7 +564,7 @@ async fn a_published_refusal_is_bounded_and_verbatim() {
     )
     .await;
     assert_eq!(
-        blob_names(dir.path(), "reader_refusals/silence-bounded-host").len(),
+        blob_names(dir.path(), "state/reader_refusals/silence-bounded-host").len(),
         2
     );
 }
@@ -667,7 +671,7 @@ fn an_unreachable_authority_publishes_its_own_sentence_as_a_refusal() {
         "the command did not reach the authority read: {printed}"
     );
 
-    let names = blob_names(storage, "reader_refusals/silence-test-authority");
+    let names = blob_names(storage, "state/reader_refusals/silence-test-authority");
     assert_eq!(
         names.len(),
         1,
@@ -675,7 +679,7 @@ fn an_unreachable_authority_publishes_its_own_sentence_as_a_refusal() {
     );
     let record = on_disk(
         storage,
-        &format!("reader_refusals/silence-test-authority/{}", names[0]),
+        &format!("state/reader_refusals/silence-test-authority/{}", names[0]),
     );
     assert_eq!(
         record["host"], "silence-test-authority",
