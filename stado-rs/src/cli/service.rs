@@ -699,9 +699,7 @@ pub(crate) async fn declared_matching(
         // the registry's own precise refusal rather than "no such service".
         host_channel::canonical_target(host).await.map_err(click)?;
     }
-    let registry = targets::fetch_registry_remote()
-        .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    let registry = registry::read_registry().await?;
     let mut found: Vec<ManagedService> = Vec::new();
     for target in registry.local_targets() {
         if host.is_some_and(|host| target.name != host) {
@@ -762,9 +760,7 @@ async fn list(json: bool) -> Result<(), CmdError> {
 /// than dropped — "no unowned processes" and "nobody looked" are the fold this
 /// whole group refuses to make.
 async fn list_unowned(json: bool) -> Result<(), CmdError> {
-    let registry = targets::fetch_registry_remote()
-        .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    let registry = registry::read_registry().await?;
     let runner = production_runner();
     let mut found: Vec<service::UnownedProcess> = Vec::new();
     let mut failures: Vec<String> = Vec::new();

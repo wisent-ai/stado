@@ -59,7 +59,7 @@ use super::{
 };
 use crate::monitor::host_health::{self, HostHealthError};
 use crate::queue::JobStorage;
-use crate::targets::{self, ComputeTarget};
+use crate::targets::ComputeTarget;
 
 // ---------------------------------------------------------------------------
 // Vocabulary
@@ -485,9 +485,7 @@ fn beacon_state(beacon: Option<&Map<String, Value>>, unit_id: &str) -> (String, 
 /// [`STATE_UNKNOWN`] rows instead of an error, because one silent host must
 /// not blank the fleet-wide answer.
 pub async fn list_services(store: &JobStorage) -> Result<Vec<ServiceStatus>, DeployError> {
-    let registry = targets::fetch_registry_remote()
-        .await
-        .map_err(|exc| DeployError(exc.to_string()))?;
+    let registry = super::host_channel::canonical_registry().await?;
     let mut rows: Vec<ServiceStatus> = Vec::new();
     for target in registry.local_targets() {
         let declared = declared_services(target);
