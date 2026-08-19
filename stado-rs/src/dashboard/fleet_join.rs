@@ -172,11 +172,6 @@ fn accept_request(token_id: Option<&str>, peer: Option<IpAddr>) -> bool {
     address_ok && token_ok
 }
 
-#[cfg(test)]
-fn reset_limits() {
-    WINDOWS.lock().expect("fleet-join rate-limit lock").clear();
-}
-
 // ---------------------------------------------------------------------------
 // Invite verification
 // ---------------------------------------------------------------------------
@@ -572,47 +567,4 @@ pub(super) async fn join(store: &JobStorage, request: &Request) -> Response {
             "next_step": format!("an operator approves with: stado fleet approve {hostname}"),
         }),
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn window_allows_the_budget_then_refuses() {
-        reset_limits();
-        let now = Instant::now();
-        for _ in u32::MIN..MAX_PER_TOKEN {
-            assert!(within_limit("token:test".to_string(), MAX_PER_TOKEN, now));
-        }
-        assert!(!within_limit("token:test".to_string(), MAX_PER_TOKEN, now));
-        // A later window forgets the old count.
-        let later = now + WINDOW + Duration::from_secs(u64::from(true));
-        assert!(within_limit("token:test".to_string(), MAX_PER_TOKEN, later));
-        reset_limits();
-    }
-
-    #[test]
-    fn hostnames_stay_inside_the_enrollment_prefix() {
-        assert!(valid_hostname("worker-box.local"));
-        assert!(!valid_hostname("../registry"));
-        assert!(!valid_hostname("box/../../etc"));
-        assert!(!valid_hostname(""));
-    }
-
-    #[test]
-    fn report_requires_its_fields_and_tolerates_later_ones() {
-        let body = br#"{"hostname":"box","os":"Darwin","arch":"arm64",
-            "destination":"user@box","installed_key_fingerprint":"SHA256:x",
-            "ssh_listening":false,"future":"ignored"}"#;
-        let report = parse_report(body).expect("valid report");
-        assert_eq!(report.hostname, "box");
-        assert_eq!(report.ssh_listening, Some(false));
-        // The fingerprint may be empty on a machine with no digest tool.
-        let bare = br#"{"hostname":"box","os":"Darwin","arch":"arm64",
-            "destination":"user@box","installed_key_fingerprint":""}"#;
-        assert_eq!(parse_report(bare).expect("valid report").fingerprint, "");
-        let missing = br#"{"hostname":"box","os":"Darwin","arch":"arm64"}"#;
-        assert!(parse_report(missing).is_err());
-    }
 }

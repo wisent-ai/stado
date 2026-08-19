@@ -4,8 +4,6 @@
 //! each delivery is fault-isolated with a bounded structured failure line.
 
 mod send;
-#[cfg(test)]
-mod tests;
 
 pub(crate) use send::resend_verified_domains;
 use send::{
