@@ -785,4 +785,3 @@ pub async fn read_capacity_snapshot(store: &JobStorage, hostname: &str) -> Value
         Err(exc) => json!({"error": format!("{exc}")}),
     }
 }
-

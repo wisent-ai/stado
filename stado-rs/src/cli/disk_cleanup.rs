@@ -76,4 +76,3 @@ pub async fn install() -> Result<(), CmdError> {
     .await
     .map_err(|exc| CmdError::click(exc.to_string()))
 }
-

@@ -79,4 +79,3 @@ pub(crate) fn run_capture(argv: &[String], timeout: Duration) -> std::io::Result
         }
     }
 }
-

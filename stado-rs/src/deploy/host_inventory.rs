@@ -1259,4 +1259,3 @@ pub async fn inventory_host(target_name: &str, runner: &Runner) -> Result<Value,
     let target = host_channel::resolve_target(&registry, target_name)?.clone();
     inventory_target(&target, registry.service_directory.as_ref(), runner).await
 }
-

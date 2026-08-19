@@ -184,4 +184,3 @@ pub fn get_provider(name: &str) -> Result<Arc<dyn Provider>, ProviderError> {
         ))),
     }
 }
-

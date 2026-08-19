@@ -278,4 +278,3 @@ pub fn format_host_health(report: &HostHealthReport) -> String {
     lines.push(py_or_dash(get("last_log")));
     lines.join("\n")
 }
-

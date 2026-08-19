@@ -328,4 +328,3 @@ pub fn scan_chromium_clones(
         report.add_error(CLEANER, &exc);
     }
 }
-

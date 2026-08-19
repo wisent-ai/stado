@@ -441,4 +441,3 @@ pub fn format_report(rep: &Report) -> Vec<String> {
     }
     lines
 }
-

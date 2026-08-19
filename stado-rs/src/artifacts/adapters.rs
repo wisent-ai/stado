@@ -751,4 +751,3 @@ pub fn build_activation_manifest(
     ]);
     Ok(manifest)
 }
-

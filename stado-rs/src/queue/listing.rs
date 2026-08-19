@@ -268,4 +268,3 @@ pub async fn list_fitting(
     }
     Ok(out)
 }
-

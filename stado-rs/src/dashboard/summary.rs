@@ -443,4 +443,3 @@ pub async fn summarize(store: &JobStorage) -> Result<Value, StorageError> {
         },
     }))
 }
-

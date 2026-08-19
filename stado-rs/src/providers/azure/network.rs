@@ -103,4 +103,3 @@ pub async fn delete_nic(client: &ArmClient, rg: &str, name: &str) {
         ));
     }
 }
-

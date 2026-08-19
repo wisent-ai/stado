@@ -491,4 +491,3 @@ pub fn gates_section(gates: &HostGates) -> Value {
         "low_watermark_gb": gates.low_watermark_gb,
     })
 }
-

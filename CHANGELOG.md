@@ -179,6 +179,25 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
 
 ### Release control
 
+- Stado 0.7.9 is the first release the pipeline carried end to end onto its
+  own fleet: both platforms built, gated, signed, and published, and every
+  host installed the release's own bytes. Deliveries are pinned to the
+  registry target they install on (new optional delivery `target` field) and
+  run `stado release install-local`, so no delivery needs ssh or a login
+  service anywhere.
+- All 137 operator python scripts were retired on the operator's order. The
+  one load-bearing script — the fleet delivery installer — became
+  `stado release install-local`; the version-check and deploy workflows still
+  name `scripts/surface.py` and `scripts/baseline.py` and stay red until that
+  gate's logic is ported, deliberately unremoved.
+- A resumed run retries failed deliveries instead of completing past them,
+  a running platform leg reports crates compiled against the previous run in
+  the CLI and the Releases screen, job inputs naming `stado://releases/...`
+  read the public release channel instead of the job store's namespace, the
+  release worker resolves programs from `~/.stado/bin` and `~/.local/bin`,
+  and `host reclaim` gained `queue_workdirs` (terminal job workdirs, keyed on
+  the live queue set) and `foreign_home_trees` (macOS-style `/Users` debris
+  on Linux hosts) stages.
 - `stado release status` no longer exits zero on silence. It printed
   `brama target=control-host desired=0.2.27 observed=unreported` and
   succeeded, which made a host that had never once said what it runs

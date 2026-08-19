@@ -349,4 +349,3 @@ pub async fn disk_host(target_name: &str, runner: &Runner) -> Result<Value, Depl
     host_channel::finish_report(&mut report, &output, OK_STATUS, "ssh failed");
     Ok(Value::Object(report))
 }
-
