@@ -65,6 +65,9 @@
           ".work"
         ]
       },
+      "superseded_roots": [
+        "$HOME/.local/share/weles-worker"
+      ],
       "version": {
         "kind": "json_file",
         "path": "package.json",

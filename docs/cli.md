@@ -394,10 +394,10 @@ unavailable.
 | `stado host gpu-power-limit <target> <watts>` | Persist the NVIDIA board power cap on the canonical registry target, apply it immediately over the approved host channel, and report the driver's effective limits. The local agent reasserts the declaration every five minutes and after restart; it advertises zero free capacity when reconciliation fails. |
 | `stado host uptime <target>` | Uptime, load averages and logged-in users. Load is read from the kernel, not scraped from the `uptime` line, whose shape differs between macOS and Linux. |
 | `stado host ping <target>` | One verdict from two signals: ssh reachability and health-beacon age. The worse signal decides, so a box answering ssh with a stale beacon fails. |
-| `stado host disk <target>` | Disk usage plus the registry cleanup policy and the janitor's own state: last pass, bytes freed, next scheduled pass. |
+| `stado host disk <target>` | Disk usage plus the registry cleanup policy and the janitor's own state: last pass, bytes freed, next scheduled pass. Also names the host's local APFS snapshots, which hold space no stado command reclaims. |
 | `stado host cleanup <target> --dry-run` | Preview what the registry cleanup would delete. `--dry-run` is mandatory; it drives the janitor's own planning phase and writes no state. |
 | `stado host gates <host>` | Why this host is claiming nothing: the blockers its own agent publishes, the disk policy behind them, and its declared slots against its published free ones. Read-only. Exits non-zero when the host is not claiming. |
-| `stado host reclaim <host> [--dry-run\|--apply --reason TEXT]` | Reclaim disk in three declared stages — the host's own janitor pass, the release build scratch tree, and delivered product trees no `current` link and no live process references. Previews by default; `--apply` needs `--reason` and appends an audit record on the host. |
+| `stado host reclaim <host> [--dry-run\|--apply --reason TEXT]` | Reclaim disk in four declared stages — the host's own janitor pass, the release build scratch tree, delivered product trees no `current` link and no live process references, and the macOS per-launch Chromium code-sign clones. Previews by default; `--apply` needs `--reason` and appends an audit record on the host. |
 | `stado host exec <target> -- CMD` | Run one approved read-only command. An allowlist, not a shell: the operator's words select a fixed argv entry and never join the command line. A refusal prints the allowlist. |
 | `stado host inventory <target>` | The stado-managed binaries under `$HOME/.stado/bin`, the `$HOME/.stado/forwards/*.url` markers, the listening loopback TCP ports, the Skarbiec vault files under `$HOME/.stado` as metadata, whether the installed `stado` knows a fixed set of subcommands — and, the point of the command, whether each forward marker still matches a live listener. |
 | `stado host software [<target>] [--json]` | What a host actually runs: one row per program with its version, its SHA-256 and whether those exact bytes came out of a release Stado published. Naming a target takes the report over the audited channel and persists it as an observation; omitting the target prints what every host has already reported, ages included. The read counterpart of `host release`, and the evidence `stado release status` gates on. |
@@ -804,7 +804,7 @@ still reported, with its age, because "the agent said this an hour ago" and
 "nobody ever said anything" send an operator to different places; its verdict
 is recomputed from the numbers the command just measured rather than trusted.
 
-`reclaim` is the write half, and it previews by default. Three stages run in
+`reclaim` is the write half, and it previews by default. Four stages run in
 this order, and nothing else runs:
 
 1. `registry_cleanup` — the host's OWN janitor, invoked exactly the way `host
@@ -817,23 +817,55 @@ this order, and nothing else runs:
 3. `delivered_trees` — the version directories under `$HOME/.stado/services`,
    where every `service deploy` and every artifact install stages one tree per
    version and keeps the previous one beside it as `current.before-<version>`
-   so a rollback is a rename. Nothing ever removed the ones a rollback will
-   never reach.
+   so a rollback is a rename; **and** every superseded delivery root the
+   product catalog declares (`superseded_roots` in
+   `stado-rs/data/products.json`). The mini carries 20 `weles-worker` versions
+   — 0.5.2 through 0.5.21, 9.7 GiB — under `$HOME/.local/share/weles-worker`,
+   staged by the installer that predates the artifact install path, while the
+   worker itself runs from its own checkout: trees no rollback will ever reach
+   and, until that root was declared, trees no command could even report. The
+   roots come from declarations so the next time a delivery path moves it is a
+   data change; a product's LIVE install root is never swept, because for a
+   `tree` product that root IS the running installation.
+4. `chromium_clones` — `org.chromium.Chromium.code_sign_clone` under this
+   account's macOS temporary container. macOS clones the whole browser bundle
+   on EVERY launch so it can validate a signature against an object nobody can
+   swap underneath it; Weles drives Chromium for browser automation, and a run
+   that is killed leaves its clone behind. On the mini the day this landed: 137
+   clones, 130 of them untouched for more than a day, and until then neither
+   the janitor nor any command removed or reported one of them. The container's
+   name carries a per-account hash, so it is the OS's own answer (`$TMPDIR`,
+   with `getconf DARWIN_USER_TEMP_DIR` behind it) and the stage refuses any
+   value that is not under `/var/folders`. Only entries macOS itself named
+   (`code_sign_clone.*`) are candidates, and the newest clone in the root is
+   kept whatever its age: macOS records nothing about which process owns which
+   clone, so a browser that has been up longer than the age gate is exactly the
+   owner of the most recent one.
+
+The same eviction lives in the janitor as the `chromium_clones` cleaner, so a
+host whose registry policy declares it reclaims these on its own interval —
+same age gate, same live-process snapshot, same newest-clone rule, plus the
+janitor's per-pass byte and item caps — and `host disk` and `host cleanup
+--dry-run` report its counts beside the other cleaners. The registry floors its
+`min_age_seconds` at a day. The stage is for the hosts and the moments where
+the policy has not declared it.
 
 Four rules are encoded in the command rather than left to whoever is at the
-keyboard. Nothing outside those two roots is touched: every candidate is
+keyboard. Nothing outside those declared roots is touched: every candidate is
 produced by globbing or `find`-ing one of them, and no path arrives from the
-registry or from the operator. Nothing a live process holds is removed: one
-`ps` snapshot is taken before any stage and every candidate is checked against
-it, taken once into a variable because `ps | grep <path>` matches the grep's
-own argv and would report every candidate as held. The newest tree of a
-product and whatever `current` resolves to are always kept, even when they are
-the largest thing there, and nothing younger than a day is a candidate at all
-— which is what makes the stage safe against a delivery that is mid-flight,
-since its tree is both the newest and the youngest. And the same program runs
-in both modes with the removal itself behind the mode flag, so a preview walks
-exactly the paths an apply would take rather than a second implementation's
-guess at them.
+registry or from the operator — the one value that comes from outside is the
+macOS temporary container, which the OS itself reports and which is refused
+unless it sits under `/var/folders`. Nothing a live process holds is removed:
+one `ps` snapshot is taken before any stage and every candidate is checked
+against it, taken once into a variable because `ps | grep <path>` matches the
+grep's own argv and would report every candidate as held. The newest tree of a
+product, the newest clone in a root, and whatever `current` resolves to are
+always kept, even when they are the largest thing there, and nothing younger
+than a day is a candidate at all — which is what makes the stages safe against
+a delivery or a browser session that is in flight, since its directory is both
+the newest and the youngest. And the same program runs in both modes with the
+removal itself behind the mode flag, so a preview walks exactly the paths an
+apply would take rather than a second implementation's guess at them.
 
 ```bash
 stado host reclaim charless-mac-mini
@@ -846,9 +878,11 @@ DRY RUN — nothing on charless-mac-mini is deleted. Re-run with --apply --reaso
 STAGE             FREE BEFORE  FREE AFTER  ITEMS
 registry_cleanup  2 GiB        2 GiB       7
 build_scratch     2 GiB        2 GiB       3
-delivered_trees   2 GiB        2 GiB       4
+delivered_trees   2 GiB        2 GiB       98
+chromium_clones   2 GiB        2 GiB       130
   build_scratch /Users/charles/.stado/build-work/stado
   delivered_trees /Users/charles/.stado/services/weles-worker/0.4.9
+  chromium_clones /var/folders/zy/l0_0w9dn0k94n1b7xnt7kpv80000gn/X/org.chromium.Chromium.code_sign_clone/code_sign_clone.lovzyd
 
 free: 2 GiB -> 2 GiB
 ```
@@ -866,6 +900,26 @@ record that can be missing exactly when someone asks what happened to that box.
 A stage the host could not run at all is reported under its own name with the
 `_unavailable` suffix and null measurements, never as a stage that freed
 nothing.
+
+What no stage can give back is reported rather than left as a hole in the
+arithmetic: `host disk` names the host's local APFS snapshots, and `host gates`
+adds a `local_snapshots_unreclaimable` NOTE — never a blocker, so it cannot
+change `claiming` or the exit status — while the disk is the reason a host is
+claiming nothing. Their blocks are inside the `used` figure `df` reports, no
+stado command removes them (dropping a snapshot is dropping a restore point,
+which is an operator's decision about that machine's recovery), and macOS
+publishes no size for one: `tmutil`, `diskutil apfs listSnapshots` and
+`diskutil info` each name them and none of them measures them, so the count and
+the host's own snapshot names are reported and no byte figure is invented from
+them. `tmutil thinlocalsnapshots` is the tool that reclaims them, and it stays
+in the operator's hands.
+
+```
+local APFS snapshots: 3 — their blocks are inside USED above, no stado command removes them, and macOS reports no size for them. Thin them with tmutil if the space is needed:
+  com.apple.os.update-DEDECEC55622993FB7EF1CB6A97E976433E7F84ECCE5514C9C380AF59534732D
+  com.apple.os.update-FE6B60577C481C0803254FA3E9B1ED789ECB0A02B601EFA2F42A756BCACCF7B59887777727FAC21DD5EAE2AFC3E2C69F
+  com.apple.os.update-MSUPrepareUpdate
+```
 
 ## `stado fleet`
 
