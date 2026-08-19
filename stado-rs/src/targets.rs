@@ -1984,6 +1984,30 @@ impl RegistryStore {
             .compare_and_swap_text(&self.blob, expected_version, content)
             .await
     }
+
+    /// Create one object beside the registry document, never replacing one.
+    ///
+    /// "Beside" literally: the key is derived from the registry blob's own
+    /// prefix on whichever store [`RegistryStore::open`] resolved, so the
+    /// record of a registry mutation cannot end up in a different bucket from
+    /// the document it is about — which on a GCS deployment, where the
+    /// registry has its own bucket and [`crate::queue::JobStorage`] does not,
+    /// is exactly what writing it through the queue store would do.
+    ///
+    /// Create-only, because an audit record that a later write can replace is
+    /// not an audit record. Returns the full key and whether it was created.
+    pub async fn write_beside(
+        &self,
+        relative: &str,
+        content: &str,
+    ) -> Result<(String, bool), StorageError> {
+        let key = match self.blob.rsplit_once('/') {
+            Some((prefix, _)) => format!("{prefix}/{relative}"),
+            None => relative.to_string(),
+        };
+        let created = self.backend.upload_text_if_absent(&key, content).await?;
+        Ok((key, created))
+    }
 }
 
 /// Production download of the registry document through the store

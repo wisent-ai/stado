@@ -465,13 +465,49 @@ pub fn install_env(
     env
 }
 
-/// Render a launchd plist with an explicit owner-controlled log path.
+/// Render a launchd agent plist with an explicit owner-controlled log path.
 pub fn plist_text(
     label: &str,
     exec_args: &[String],
     env: &[(String, String)],
     log: &Path,
 ) -> String {
+    plist_document(label, exec_args, env, log, None)
+}
+
+/// The same job rendered for launchd's **system** domain, running as `user`.
+///
+/// The per-user domain does not exist on an ssh login with no Aqua session:
+/// `launchctl bootstrap gui/$uid` answers `Could not switch to audit session`
+/// and `stado service deploy` came back having installed nothing, which is how
+/// two `stado agent` processes ran for four days with no unit behind them. A
+/// daemon in `/Library/LaunchDaemons` is the domain that does exist over ssh,
+/// and `UserName` is what keeps the process out of root: without it launchd
+/// would run the fleet's own control binary as uid 0 against an account-owned
+/// `~/.stado`.
+pub fn daemon_plist_text(
+    label: &str,
+    exec_args: &[String],
+    env: &[(String, String)],
+    log: &Path,
+    user: &str,
+) -> String {
+    plist_document(label, exec_args, env, log, Some(user))
+}
+
+/// One renderer for both domains, so an agent and the daemon spelling of the
+/// same unit cannot come to disagree about anything but the account.
+fn plist_document(
+    label: &str,
+    exec_args: &[String],
+    env: &[(String, String)],
+    log: &Path,
+    user: Option<&str>,
+) -> String {
+    let user_xml = match user {
+        Some(user) => format!("    <key>UserName</key>\n    <string>{user}</string>\n"),
+        None => String::new(),
+    };
     let args_xml: String = exec_args
         .iter()
         .map(|a| format!("        <string>{a}</string>\n"))
@@ -493,7 +529,7 @@ pub fn plist_text(
     <key>ProgramArguments</key>
     <array>
 {args_xml}    </array>
-    <key>RunAtLoad</key>
+{user_xml}    <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
