@@ -196,13 +196,13 @@ stable compatibility adapters for workloads on that host:
           "operator-host": {"url": "http://127.0.0.1:8080"}
         },
         "consumers": {
-          "wisent-backend": {"capabilities": ["model-routing"]}
+          "example-backend": {"capabilities": ["model-routing"]}
         }
       }
     }
   },
   "targets": [{
-    "name": "gpu-host",
+    "name": "gpu-host-1",
     "kind": "local",
     "service_resolver": {
       "api_bind": "127.0.0.1:17600",
@@ -211,7 +211,7 @@ stable compatibility adapters for workloads on that host:
       "adapters": [{
         "service": "brama",
         "bind": "127.0.0.1:17601",
-        "consumer": "wisent-backend"
+        "consumer": "example-backend"
       }]
     }
   }]
@@ -272,34 +272,34 @@ stado inference init-credential
 Bootstrap the gateway snapshot before Brama's first managed start:
 
 ```sh
-stado inference route set example-client/chat/primary \
-  --to example-provider/example-model --expected absent --gateway gpu-host
+stado inference route set example/chat \
+  --to example-provider/example-model --expected absent --gateway gpu-host-1
 ```
 
 ```sh
-stado inference plan chat-primary \
-  --host gpu-host \
+stado inference plan example-serving \
+  --host gpu-host-1 \
   --image 'vllm/vllm-openai@sha256:770fe65b2c73ee74a5c42165cf3433de4048cc2cd9c57a937ca4e35aba5aa87b' \
-  --cache-dir /mnt/wd16tb/stado/inference/chat-primary \
-  --model 'TheDrummer/Cydonia-24B-v4.3' \
-  --revision 'db0426d39d4bd4a6d34fdc71db97569da68f55e1'
+  --cache-dir /srv/stado/inference/example-serving \
+  --model 'example-org/example-24b-instruct' \
+  --revision '0123456789abcdef0123456789abcdef01234567'
 stado inference apply <plan-id>
-stado inference doctor chat-primary
-stado inference verify chat-primary
-stado inference route set example-client/chat/primary \
-  --to chat-primary --fallback example-provider/example-model \
-  --expected example-provider/example-model --gateway gpu-host
+stado inference doctor example-serving
+stado inference verify example-serving
+stado inference route set example/chat \
+  --to example-serving --fallback example-provider/example-model \
+  --expected example-provider/example-model --gateway gpu-host-1
 ```
-The pinned BF16 Cydonia-24B is the chat model for the registered
-RTX Pro 6000 Blackwell with 96 GB VRAM. The immutable Hugging Face revision and
-amd64 vLLM image digest above prevent silent model or runtime replacement.
+The immutable Hugging Face revision and
+amd64 vLLM image digest above prevent silent model or runtime replacement:
+the fleet reproduces exactly the declared weights on the registered GPU host.
 
 If `plan` or `apply` reports an unmanaged GPU workload, inspect it through the
 same target-scoped host channel instead of opening an ad hoc SSH session:
 
 ```sh
-stado inference blockers --host gpu-host
-stado inference release --host gpu-host \
+stado inference blockers --host gpu-host-1
+stado inference release --host gpu-host-1 \
   --identity <PID:START_TICKS>
 ```
 
@@ -343,7 +343,7 @@ registry data. Route changes require `--expected`, probe the destination first,
 stage an owner-only route snapshot on the gateway, compare-and-swap the
 registry, and then atomically commit the snapshot. Brama reloads that file per
 request, so cutover needs no backend restart. Ordered `--fallback` destinations
-are attempted when the primary provider fails; the featherless Cydonia route
+are attempted when the primary provider fails; the external provider route
 therefore preserves service while local vLLM is unavailable. `rollback` reinstalls the
 recorded prior deployment; `retire` refuses while any primary or fallback route
 still selects the deployment and retains model cache unless `--purge-cache` is
