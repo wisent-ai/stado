@@ -51,12 +51,11 @@ pub fn ssh_reboot_argv(ssh_target: &str) -> Vec<String> {
 }
 
 /// `stado host reboot TARGET` — request a graceful reboot on one canonical
-/// registry host (the canonical remote registry, the fleet-survival
-/// authority; an unreachable store is an error, never an empty registry).
+/// registry host, resolved through [`super::host_channel::canonical_registry`]
+/// (the canonical store, or the last-known-good copy with its age announced;
+/// never an empty registry, and an unknown name still fails).
 pub async fn reboot_host(target_name: &str, runner: &Runner) -> Result<Value, DeployError> {
-    let registry = crate::targets::fetch_registry_remote()
-        .await
-        .map_err(|exc| DeployError(exc.to_string()))?;
+    let registry = super::host_channel::canonical_registry().await?;
     let target = resolve_target(&registry, target_name)?;
     let output = runner(CommandSpec {
         argv: ssh_reboot_argv(target.ssh.as_deref().unwrap_or("")),
