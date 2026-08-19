@@ -302,6 +302,19 @@ struct HostGates: Decodable, Identifiable, Sendable {
 
     var id: String { host }
 
+    /// The registry pinned this host on purpose: it claims only work
+    /// addressed to it. Absence by choice is not an incident, so a
+    /// `pinned_only` refusal alone is policy — red when it is costing work,
+    /// which is exactly when `waitingJobs` is non-empty.
+    var pinnedByDesign: Bool {
+        !claiming && !blockers.isEmpty && blockers.allSatisfy { $0 == "pinned_only" }
+    }
+
+    /// Claiming nothing in a way that is not declared policy.
+    var refusingUnpinned: Bool {
+        !claiming && !pinnedByDesign
+    }
+
     enum CodingKeys: String, CodingKey {
         case host, claiming, blockers, disk, capacity
         case waitingJobs = "waiting_jobs"
