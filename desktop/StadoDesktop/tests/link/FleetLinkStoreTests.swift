@@ -126,6 +126,42 @@ final class FleetLinkStoreTests: XCTestCase {
         XCTAssertTrue(link.blockers.isEmpty)
     }
 
+    /// A healthy verdict can still carry sentences, and they must not be
+    /// dropped. Copied from the live `stado host link lukasz-macbook --json`
+    /// answer on 2026-08-19, which exits 0 and still names one blocker: an old
+    /// beacon format that predates the link block is not the host's ill health,
+    /// so the command reports it without failing the verdict over it.
+    ///
+    /// It is also the only sentence explaining why the path, sleep, wake and
+    /// interface-change fields below it read "Not reported", which is exactly
+    /// why the inspector keeps it — neutral, beside the one healthy line.
+    func testAHealthyVerdictKeepsTheBlockersItCameWith() throws {
+        let link: HostLink = try XCTUnwrap(
+            HostLinkStore.decode(
+                from: """
+                {"host": "lukasz-macbook", "beacon_age_seconds": 286, "ssh_reachable": true,
+                 "path_kind": "unknown", "endpoint": null, "last_sleep_at": null,
+                 "last_wake_at": null, "interface_changes": [], "silences": [],
+                 "reader_refusals": {"window_seconds": 3600, "count": 0, "reasons": {}},
+                 "verdict": "healthy",
+                 "blockers": ["this host's beacon carries no link block, so its path, its sleep and wake times and its interface changes are unknown here"]}
+                """
+            )
+        )
+        XCTAssertEqual(link.verdict, .healthy)
+        XCTAssertFalse(link.verdict.needsAttention, "a healthy link earns one line, not a panel")
+        XCTAssertEqual(link.verdict.tone, .neutral, "a sentence on a healthy verdict is never red")
+        XCTAssertEqual(
+            link.blockers,
+            [
+                "this host's beacon carries no link block, so its path, its sleep and wake times and its interface changes are unknown here",
+            ],
+            "carried verbatim; dropping it loses the only explanation of the Not reported fields"
+        )
+        XCTAssertFalse(link.linkReported)
+        XCTAssertNil(link.openSilence)
+    }
+
     /// A host that has never published a beacon at all. `beacon_age_seconds`
     /// null must not read as "reported 0 s ago".
     func testANullBeaconAgeStaysNull() throws {

@@ -895,6 +895,21 @@ struct HostsView: View {
                     value: healthyLinkLine(link),
                     tone: .neutral
                 )
+                if !link.blockers.isEmpty {
+                    // A healthy verdict can still carry sentences: an old
+                    // beacon format that predates the link block is not the
+                    // host's ill health, and the command says so rather than
+                    // failing the verdict over it. Neutral, because absence by
+                    // choice is never red — but never dropped either, because
+                    // the alternative is a console that quietly loses the one
+                    // sentence explaining why the fields below read "Not
+                    // reported".
+                    WisentField(
+                        label: "Blockers",
+                        value: link.blockers.joined(separator: "\n"),
+                        tone: .neutral
+                    )
+                }
             }
             WisentField(
                 label: "Newest beacon",
