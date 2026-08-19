@@ -65,6 +65,26 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
 
 ### Host operations
 
+- `stado host link TARGET [--json]` now says whether anybody is logged in on
+  that host's screen. An operator asking where to see this in the GUI was
+  answered "nowhere": the fact existed only inside `stado service restart`,
+  which had to write to a host that is already the wrong shape before it would
+  print `launchd_domain: {status: fallback}` and the sentence underneath it.
+  The same resolver is now also a read-only probe, and the document carries
+  `session: {kind, console_owner, detail}` — `headless` with `console_owner:
+  root` on `control-host`, `graphical` with the login's own name on a mac
+  somebody is sitting at, and `unknown`, never a guess, when the read did not
+  land. `detail` is the resolver's own sentence, unabridged: `/dev/console
+  belongs to root, not charles: no graphical session, so gui/501 does not exist
+  and a LaunchAgent has only the background domain user/501`. A headless host
+  is not by itself unhealthy and the verdict rules are unchanged. A headless
+  host that also declares a per-login unit gets one blocker per unit, in the
+  words the question was asked in — `nobody is logged in on the screen here,
+  and <unit> is registered as a user service, so this machine cannot start it`
+  — followed by the one privileged command that installs it where the machine
+  can load it. That is the chain nothing in this product could state: no
+  session, so no per-login domain, so the unit cannot be loaded, so the host
+  publishes no capacity, so the job pinned to it waits.
 - Added `stado host software [TARGET] [--json]`: what a host actually runs, one
   row per program with its version, its SHA-256 and whether those exact bytes
   came out of a release Stado published. Every other read in the pack asks about
