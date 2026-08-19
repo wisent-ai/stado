@@ -216,53 +216,28 @@ pub async fn run_script_with_timeout(
     .map_err(DeployError)
 }
 
-/// The stderr line [`installed_helper_script`] emits when the named helper is
-/// not an executable regular file under `$HOME/.stado/bin`.
+/// Run one FIXED script on a named target and hand back what it printed.
 ///
-/// Public and spelled once because it is the difference between two operator
-/// answers: a helper that failed has the remote's own words to report, while a
-/// helper that was never delivered needs an `install-helper` command instead of
-/// a diagnosis. `cli/service_converge.rs` decides which of those to print by
-/// matching this text, so the sentence the script emits and the sentence a
-/// caller looks for cannot drift apart.
-pub const HELPER_MISSING: &str = "missing executable regular Stado helper";
-
-/// The script that runs one installed owner-only helper, with its fixed UUID
-/// arguments already appended.
+/// For a caller that wants the remote's answer rather than a report to
+/// display: `stado identity verify` asks a host which of its users hold Apple
+/// accounts, and needs the lines, not a rendering of them.
 ///
-/// One place builds this, because `host run-helper` and any in-process caller that
-/// wants a helper's output must agree exactly on where helpers live and what makes
-/// one acceptable to run. Two copies of those three checks would be two policies.
-pub fn installed_helper_script(remote_name: &str, arguments: &str) -> String {
-    format!(
-        r#"set -euo pipefail
-helper="$HOME/.stado/bin/"{remote_name}
-if [ ! -f "$helper" ] || [ -L "$helper" ] || [ ! -x "$helper" ]; then
-  printf '%s\n' "{HELPER_MISSING}: $helper" > /dev/stderr
-  false
-fi
-exec "$helper"{arguments}
-"#
-    )
-}
-
-/// Run an installed helper and hand back what it printed.
-///
-/// For a caller that wants the helper's answer rather than a report to display:
-/// `stado identity verify` asks a host which of its users hold Apple accounts, and
-/// needs the lines, not a rendering of them.
-pub async fn run_installed_helper(
+/// The script is a compile-time constant of the calling module, embedded in
+/// this binary — this is the channel the retired helper-install-and-run pair
+/// used to be the long way around. The program travels with stado itself, so
+/// there is nothing to install on the host, nothing left behind after the
+/// read, and nothing an operator can point at a different program.
+pub async fn run_fixed_script(
     target_name: &str,
-    helper: &str,
+    script: &str,
     runner: &Runner,
 ) -> Result<String, DeployError> {
     let target = canonical_target(target_name).await?;
-    let script = installed_helper_script(&crate::deploy::shlex_quote(helper), "");
-    let output = run_script(&target, &script, runner).await?;
+    let output = run_script(&target, script, runner).await?;
     if !output.ok() {
         return Err(DeployError(last_error_line(
             &output,
-            "the installed helper did not complete",
+            "the remote read did not complete",
         )));
     }
     Ok(output.stdout)

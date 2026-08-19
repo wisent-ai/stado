@@ -25,6 +25,12 @@ use crate::targets::{load_registry_auto, ComputeTarget, IdentityBinding};
 
 const APPLE_ACCOUNT: &str = "apple-account";
 
+/// The per-user Apple-account probe, embedded in this binary and run as one
+/// fixed remote script by [`observe_user_apple_accounts`]. Kept as a checked-in
+/// file rather than a string literal so it is reviewed and read as the shell
+/// program it is.
+const APPLE_ACCOUNT_PROBE: &str = include_str!("../../scripts/probe-apple-account-holders.sh");
+
 /// Read a host's live Apple-account bindings through Stado's own approved channel.
 ///
 /// Not `ssh`. A one-liner over ssh is the same action with the audit trail removed,
@@ -72,7 +78,8 @@ async fn observe_apple_accounts(target_name: &str) -> Option<Vec<String>> {
     }
 }
 
-/// Ask the host which of its users hold Apple accounts, via the installed probe.
+/// Ask the host which of its users hold Apple accounts, via the probe embedded
+/// in this binary.
 ///
 /// `defaults read` answers only for the user the channel logs in as, so a binding
 /// naming anyone else could never be anything but `unknown`. That word covered two
@@ -80,20 +87,17 @@ async fn observe_apple_accounts(target_name: &str) -> Option<Vec<String>> {
 /// to look -- and an operator acts differently on each. The probe reports them
 /// apart: an account list, `none`, or `unreadable`.
 ///
-/// It is optional on purpose. A host without it falls back to the login-user read
-/// and still says `unknown` for anyone else, which is the honest answer when nothing
-/// on that host can produce a better one. Install it with
-/// `stado host install-helper <target> stado-rs/scripts/probe-apple-account-holders.sh
-/// probe-apple-account-holders`.
+/// The probe travels with stado and runs as one fixed read-only remote script --
+/// the channel the retired helper pair used to be the long way around -- so a host
+/// that cannot answer is one the channel itself could not reach, and the answer
+/// stays `unknown`, which is the honest answer when nothing on that host can
+/// produce a better one.
 async fn observe_user_apple_accounts(target_name: &str, user: &str) -> Option<Vec<String>> {
     let runner = crate::deploy::production_runner();
-    let report = crate::deploy::host_channel::run_installed_helper(
-        target_name,
-        "probe-apple-account-holders",
-        &runner,
-    )
-    .await
-    .ok()?;
+    let report =
+        crate::deploy::host_channel::run_fixed_script(target_name, APPLE_ACCOUNT_PROBE, &runner)
+            .await
+            .ok()?;
     for line in report.lines() {
         let mut columns = line.split('\t');
         let named = columns.next()?;

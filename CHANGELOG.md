@@ -47,6 +47,43 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   `fleet` argv array and the mutation confirmation, and the two proofs now run
   for a machine added by any method rather than only for the hand-carried key.
 
+### Host operations
+
+- Removed `stado host install-helper` and `stado host run-helper`. The helper
+  channel — deliver a checked-in script into `$HOME/.stado/bin`, then execute it
+  by name — was the source of recurring ad-hoc-script damage on hosts, and
+  everything stado itself asked through it now travels inside the binary: the
+  service-endpoint probe (`service verify`), the Apple-account-holders probe
+  (`identity verify`), the placement-policy apply pass (`host
+  publish-placement-policy`), the installed-version reporter (`service
+  converge`), and the leftover inventory (`host helpers`) are embedded
+  fixed scripts run over the same audited channel, so there is nothing to
+  install on a host and nothing left behind. `host remove-helper` and
+  `host helpers --prune` remain to reap what the channel already delivered;
+  `host install-file`, `host install-secret`, and the allowlisted `host exec`
+  are the surviving delivery and read channels.
+- `stado host gates <host>` answers "why is this host claiming nothing" in one
+  payload. It joins the blockers the host's own queue agent publishes with the
+  disk policy behind them and the slots the registry declares, and reports the
+  agent's words verbatim. The Mac mini sat at roughly 2 GiB free against a
+  55 GiB policy, published `disk_pressure_unresolved` every tick, failed
+  admission closed and claimed nothing for hours while every release build
+  queued behind it — and no command said so, because the one fact that mattered
+  lived only in its capacity broadcast. Read-only, safe against a live host, and
+  it exits non-zero when the host is not claiming.
+- `stado host reclaim <host>` reclaims the space in three declared stages — the
+  host's own janitor pass, the release build scratch tree, and delivered product
+  trees no `current` link and no live process references — measuring free space
+  and counting items either side of each one. It previews by default; `--apply`
+  is the only thing that deletes, it refuses to run without `--reason`, and the
+  reason is appended to an audit log on the host whose disk changed. Nothing
+  outside those declared roots is touched, nothing a live process holds is
+  removed, and the newest tree of a product is always kept. This replaces the
+  hand-written ssh script the outage was actually settled with.
+- `stado host disk --json` now also reports the low watermark the host's janitor
+  last validated, which is the threshold admission is really gated on when a
+  host cannot read the registry.
+
 ### Release control
 
 - A failed release job now reports its own last words: `release submit` reads
