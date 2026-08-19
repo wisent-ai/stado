@@ -378,7 +378,7 @@ fn fleet_services_script() -> &'static str {
 (() => {
   const status = document.getElementById('services-status');
   const tbody = document.querySelector('#services-table tbody');
-  const SYSTEM_HINT = "this unit is a LaunchDaemon in launchd's system domain (/Library/LaunchDaemons); the approved channel is an unprivileged user, so stado service restart cannot bootstrap it — restarting it needs sudo on the host";
+  const SYSTEM_HINT = "this unit is a LaunchDaemon in launchd's system domain (/Library/LaunchDaemons); the approved channel is an unprivileged user, so stado service restart cannot bootstrap it — it ends the process and lets launchd's KeepAlive replace it, which needs the unit to declare KeepAlive and to run as the approved user. Loading or booting it out needs sudo on the host";
   async function load() {
     status.textContent = 'Loading fleet services.';
     tbody.textContent = '';
