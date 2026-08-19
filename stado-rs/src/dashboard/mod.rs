@@ -1,15 +1,10 @@
-//! HTTP operator dashboard for the wisent-compute queue and disk cleanup.
-//! Port of `stado/dashboard.py` (ThreadingHTTPServer read-only dashboard).
+//! The Stado API listener: the authenticated object, release, machine,
+//! service, host-health and enrollment HTTP surface. Port of
+//! `stado/dashboard.py` (ThreadingHTTPServer) with the HTML operator
+//! dashboard removed — the operator workspace is Stado Desktop, and this
+//! listener serves no page.
 //!
-//! GET /                  - HTML overview (auto-refresh)
-//! GET /api/state.json    - queue dashboard data plus the per-boundary
-//!                          authorization verdicts, as JSON
-//! GET /api/cleanup.json  - sanitized current cleanup state
-//! GET /api/artifacts.json / GET /api/artifact.json?ref=
-//! GET /api/registry.json - policy-safe canonical registry projection
-//! GET /api/services.json - managed fleet services with launchd domain and restartability
-//! POST /api/cleanup/run  - one parameterless registry-controlled cleanup pass
-//! POST /api/registry/policy - whitelisted generation-checked policy mutation
+
 //! GET/PUT/DELETE /api/object?uri=stado://... - product object data plane
 //! GET /api/object/list?namespace=...&prefix=... - product object listing
 //! GET /api/object/stat?uri=stado://... - product object metadata
@@ -22,8 +17,6 @@
 //! POST /api/service/restart?name=... - restart one managed service on every declared host
 //! POST /api/rate-limit/consume - authenticated shared atomic rate-limit consume
 //! POST /api/integration/enterprise/<action> - authenticated read-only fleet projection
-//! GET /api/operator/catalog - structured operator workflow and command catalog
-//! POST /api/operator/run - authenticated bounded execution of one catalog command
 //! GET /api/fleet/invite/key - invite-token-authenticated public channel key
 //! POST /api/fleet/join - invite-token-authenticated pending enrollment request
 //! GET /join.sh           - machine-side enrollment bootstrap script (public)
@@ -35,16 +28,13 @@
 //! `POST /api/fleet/join` — and answers 404 to every other path and method
 //! before authorization, the store or the vault is touched. That mode exists
 //! so the enrollment routes can be published through a tunnel without
-//! publishing `POST /api/operator/run` with them. See `ENROLLMENT_ROUTES`.
+//! publishing the object, machine or service planes with them. See
+//! `ENROLLMENT_ROUTES`.
 //!
 //! The application plane was extracted into the private `wisent-backend`
 //! service; Stado keeps only the generic object plane. The product
 //! integrations (Stripe, Resend, SendGrid, GitHub, HuggingFace, captcha
 //! proxies) were extracted into the private `wisent-integrations` service.
-//!
-//! Summary and rendering helpers live in `dashboard/summary.rs` +
-//! `dashboard/web_view.rs` (Python `dashboard_summary/`). This module holds
-//! only the HTTP plumbing and the refresh loop.
 //!
 //! DEVIATIONS from Python (deliberate):
 //! - Hand-rolled minimal HTTP/1.1 on `tokio::net::TcpListener`, one task per
@@ -52,18 +42,9 @@
 //!   spec forbids adding a web-framework dependency. Python's implicit
 //!   `Server:`/`Date:` response headers and its error-page HTML bodies are
 //!   not reproduced (status codes and JSON bodies match).
-//! - Registry policy writes use the storage backend's generation/version CAS
-//!   rather than a process-local lock, so concurrent dashboard revisions
-//!   cannot overwrite each other.
 
 mod fleet_join;
 mod integration;
-mod operator_auth;
-mod operator_console;
-pub mod policy;
-mod services;
-pub mod summary;
-pub mod web_view;
 
 use futures::stream::{FuturesUnordered, StreamExt};
 use std::io::Write;
@@ -75,33 +56,25 @@ use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::artifacts::registry::{ArtifactRegistry, RegistryError as ArtifactRegistryError};
-use crate::artifacts_models::ArtifactRef;
 use crate::config;
 use crate::deploy::{host_channel, production_runner, service};
 use crate::machine::{MachineError, MachineFacade, SCHEMA_VERSION as MACHINE_SCHEMA_VERSION};
 use crate::models::isoformat_utc;
-use crate::providers::local::disk_cleanup::{
-    read_cleanup_state, run_cleanup_once, sanitize_cleanup_report,
-};
 use crate::queue::submit::json_dumps_sorted_compact;
-use crate::queue::{python_json_dumps, JobStorage, StorageError};
+use crate::queue::{JobStorage, StorageError};
 use crate::rate_limit::{self, ConsumeRequest, RateLimitError, RateLimiter};
 use crate::targets;
 
-/// Dashboard serve/refresh failure.
+/// Dashboard serve failure.
 #[derive(Debug, thiserror::Error)]
 pub enum DashboardError {
-    /// Storage failures from the summarizer / artifact listing.
+    /// Storage failures from the data-plane routes.
     #[error(transparent)]
     Storage(#[from] StorageError),
     /// Listener/socket failures.
     #[error(transparent)]
     Io(#[from] std::io::Error),
-    /// Artifact registry failures (corrupt manifests, alias resolution).
-    #[error(transparent)]
-    Artifacts(#[from] ArtifactRegistryError),
-    /// Cleanup-state read failures and port validation.
+    /// Port validation and other serve failures.
     #[error("{0}")]
     Other(String),
 }
@@ -138,7 +111,7 @@ impl Boundary {
         Boundary::Integration,
     ];
 
-    /// The key this boundary carries in `/healthz` and `/api/state.json`.
+    /// The key this boundary carries in `/healthz`.
     /// Unchanged from the flat booleans `/healthz` has always served.
     fn key(self) -> &'static str {
         match self {
@@ -172,29 +145,15 @@ impl Boundary {
 /// so a single slow or reset vault read shut a boundary until somebody
 /// restarted the unit — and `object` shutting answers `503 object
 /// authorization unavailable` to the whole fleet. Recovery is a property of
-/// this state now: `checked_at` says when the verdict was reached,
-/// `last_error` says in the verifier's own words why it is closed, and
-/// `attempted_at` is the cooldown anchor an inline revalidation claims
-/// before it runs.
+/// this state now: `attempted_at` is the cooldown anchor an inline
+/// revalidation claims before it runs.
 #[derive(Clone, Default)]
 struct BoundaryVerdict {
     ready: bool,
-    checked_at: Option<String>,
-    last_error: Option<String>,
-    /// The monotonic clock of the last validation attempt — not the wall
-    /// clock in `checked_at`, because a clock step must not be able to skip
-    /// the cooldown or stretch it past the next request.
+    /// The monotonic clock of the last validation attempt. Not a wall clock:
+    /// a clock step must not be able to skip the cooldown or stretch it past
+    /// the next request.
     attempted_at: Option<Instant>,
-}
-
-impl BoundaryVerdict {
-    fn json(&self) -> Value {
-        json!({
-            "ready": self.ready,
-            "checked_at": self.checked_at,
-            "last_error": self.last_error,
-        })
-    }
 }
 
 #[derive(Clone, Default)]
@@ -224,17 +183,6 @@ impl BoundaryAvailability {
             Boundary::ALL
                 .iter()
                 .map(|boundary| (boundary.key().to_string(), json!(self.ready(*boundary))))
-                .collect(),
-        )
-    }
-
-    /// The per-boundary `{ready, checked_at, last_error}` document, for the
-    /// authorized `/api/state.json` projection.
-    fn detail_json(&self) -> Value {
-        Value::Object(
-            Boundary::ALL
-                .iter()
-                .map(|boundary| (boundary.key().to_string(), self.verdict(*boundary).json()))
                 .collect(),
         )
     }
@@ -301,9 +249,9 @@ fn object_boundary(namespace: &str, key: &str) -> Boundary {
 
 /// The exact (method, path) pairs `--enrollment-only` serves.
 ///
-/// This is an ALLOWLIST, and it must stay one. A denylist of the operator
-/// surfaces (`/api/operator/run`, `/api/object`, `/api/state.json`, ...) goes
-/// stale the moment somebody adds a route: the new route is published by
+/// This is an ALLOWLIST, and it must stay one. A denylist of the sensitive
+/// surfaces (`/api/object`, `/api/machine/submit`, ...) goes stale the
+/// moment somebody adds a route: the new route is published by
 /// default, and the mistake is invisible until the wrong thing answers on a
 /// public tunnel. With an allowlist a new route is unreachable in this mode
 /// until it is named here on purpose, so forgetting fails closed.
@@ -343,111 +291,25 @@ fn enrollment_route_allowed(method: &str, path: &str) -> bool {
 #[derive(Clone)]
 pub struct Dashboard {
     store: JobStorage,
-    /// Background refresh state (Python `_CACHE_STATE`): populated by the
-    /// refresh task and read by the request handlers. The slow path
-    /// (`_summarize`) downloads every job blob, so it never runs inline with
-    /// a request; we serve the last cached snapshot and refresh in the
-    /// background.
-    state: Arc<RwLock<Value>>,
+
     rate_limiter: RateLimiter,
     /// Every boundary's live verdict. Written by startup validation and by
     /// the inline recheck a request runs when it finds its boundary closed.
     boundaries: Arc<RwLock<BoundaryAvailability>>,
-    refresh_seconds: i64,
     /// Serve only [`ENROLLMENT_ROUTES`]; every other request is refused
     /// before authorization, before the store and before the vault.
     enrollment_only: bool,
 }
 
-/// The Python `_CACHE_STATE` initial shape.
-fn initial_state(bucket: &str) -> Value {
-    json!({
-        "ready": false,
-        "now": Value::Null,
-        "bucket": bucket,
-        "counts": {"queue": 0, "running": 0, "completed": 0, "failed": 0},
-        "by_model_state": {},
-        "live_agents": [],
-        "stale_agents": [],
-        "workers": [],
-        "recent_failed": [],
-        "completed_recent": [],
-        "artifacts": [],
-        "throughput": {
-            "avg_wall_seconds_per_completed_job": Value::Null,
-            "samples": 0,
-            "live_total_free_slots": 0,
-            "projected_remaining_seconds": Value::Null,
-        },
-        "last_refresh_seconds": Value::Null,
-    })
-}
-
-async fn autonomy_summary(store: &JobStorage) -> Value {
-    let result = async {
-        let policy = crate::autonomy::storage::load_policy(store).await?;
-        let control = crate::autonomy::storage::load_control(store).await?;
-        let inventory = crate::autonomy::storage::load_latest_inventory(store).await?;
-        let decisions = crate::autonomy::storage::list_decisions(store).await?;
-        let forecast =
-            crate::autonomy::storage::read_json::<Value>(store, "autonomy/cost/forecast.json")
-                .await?;
-        let anomalies =
-            crate::autonomy::storage::read_json::<Value>(store, "autonomy/cost/anomalies.json")
-                .await?;
-        let savings =
-            crate::autonomy::storage::read_json::<Value>(store, "autonomy/cost/savings.json")
-                .await?;
-        let circuit_open = control.circuit_open_at(chrono::Utc::now());
-        Ok::<Value, crate::queue::StorageError>(json!({
-            "mode": policy.mode,
-            "policy_version": policy.policy_version,
-            "emergency_paused": policy.emergency_paused || control.emergency_paused,
-            "pause_reason": control.reason,
-            "circuit_open": circuit_open,
-            "circuit_open_until": control.circuit_open_until,
-            "consecutive_mutation_failures": control.consecutive_mutation_failures,
-            "last_mutation_error": control.last_mutation_error,
-            "inventory": inventory.map(|snapshot| json!({
-                "snapshot_id": snapshot.snapshot_id,
-                "created_at": snapshot.created_at,
-                "complete": snapshot.complete,
-                "resources": snapshot.resources.len(),
-                "sources": snapshot.sources.iter().map(|source| json!({
-                    "provider": source.provider,
-                    "state": source.state,
-                    "error": source.upstream_error,
-                })).collect::<Vec<_>>(),
-            })),
-            "decisions": decisions.len(),
-            "forecast": forecast,
-            "anomalies": anomalies,
-            "savings": savings,
-        }))
-    }
-    .await;
-    result.unwrap_or_else(|error| json!({"error": error.to_string()}))
-}
-
 impl Dashboard {
-    /// Bind the dashboard to a storage facade. The auto-refresh interval
-    /// comes from `config::dashboard_refresh_seconds()`.
+    /// Bind the listener to a storage facade.
     pub fn new(store: JobStorage) -> Self {
         Self {
             rate_limiter: RateLimiter::new(store.clone()),
             boundaries: Arc::new(RwLock::new(BoundaryAvailability::default())),
-            state: Arc::new(RwLock::new(initial_state(store.bucket_name()))),
             store,
-            refresh_seconds: config::dashboard_refresh_seconds(),
             enrollment_only: false,
         }
-    }
-
-    /// Override the auto-refresh interval (tests; Python passes
-    /// DASHBOARD_REFRESH_SECONDS to the refresher thread).
-    pub fn with_refresh_seconds(mut self, seconds: i64) -> Self {
-        self.refresh_seconds = seconds;
-        self
     }
 
     /// Serve only the enrollment routes (`stado dashboard
@@ -456,91 +318,6 @@ impl Dashboard {
     pub fn with_enrollment_only(mut self, enrollment_only: bool) -> Self {
         self.enrollment_only = enrollment_only;
         self
-    }
-
-    /// Current cached snapshot (Python `dict(_CACHE_STATE)`).
-    pub fn snapshot(&self) -> Value {
-        self.state.read().expect("dashboard state lock").clone()
-    }
-
-    /// One refresh pass (Python `_refresh_loop` body): fast counts first so
-    /// /api/state.json can return SOMETHING quickly, then the artifact list,
-    /// then the full per-job summary.
-    pub async fn refresh_once(&self) -> Result<(), DashboardError> {
-        let t0 = Instant::now();
-        let counts = summary::fast_counts(&self.store).await?;
-        {
-            let mut state = self.state.write().expect("dashboard state lock");
-            let state = state.as_object_mut().expect("state object");
-            if let Some(target) = state.get_mut("counts").and_then(Value::as_object_mut) {
-                target.extend(counts);
-            }
-            state.insert("now".to_string(), json!(isoformat_utc(chrono::Utc::now())));
-            state.insert("ready".to_string(), json!(true));
-        }
-        let registry = ArtifactRegistry::with_store(self.store.clone());
-        let mut artifacts = Vec::new();
-        for manifest in registry.list("", "", "", &[]).await? {
-            let primary = manifest
-                .locations
-                .iter()
-                .find(|location| location.role == "primary")
-                .map(|location| location.uri.clone())
-                .unwrap_or_default();
-            artifacts.push(json!({
-                "ref": manifest.ref_.to_string(),
-                "title": manifest.title,
-                "aliases": registry.aliases_for(&manifest.ref_).await?,
-                "verification": manifest.verification.result,
-                "run_id": manifest.producer.run_id,
-                "primary_uri": primary,
-                "summary": manifest.summary,
-                "created_at": manifest.created_at,
-            }));
-        }
-        {
-            let mut state = self.state.write().expect("dashboard state lock");
-            state
-                .as_object_mut()
-                .expect("state object")
-                .insert("artifacts".to_string(), Value::Array(artifacts));
-        }
-        let autonomy = autonomy_summary(&self.store).await;
-        {
-            let mut state = self.state.write().expect("dashboard state lock");
-            state
-                .as_object_mut()
-                .expect("state object")
-                .insert("autonomy".to_string(), autonomy);
-        }
-        let full = summary::summarize(&self.store).await?;
-        let mut state = self.state.write().expect("dashboard state lock");
-        let state = state.as_object_mut().expect("state object");
-        // Python `_CACHE_STATE.update(full)`.
-        if let Value::Object(full) = full {
-            state.extend(full);
-        }
-        state.insert(
-            "last_refresh_seconds".to_string(),
-            json!(t0.elapsed().as_secs_f64()),
-        );
-        state.insert("ready".to_string(), json!(true));
-        Ok(())
-    }
-
-    /// Python `_refresh_loop`: refresh every `interval_seconds`. Refresh
-    /// failures crash the loop — the task dies and the HTTP handlers keep
-    /// serving the last good cached snapshot until the operator restarts
-    /// the dashboard. (Python previously logged-and-continued, silently
-    /// producing a stale dashboard indefinitely.)
-    pub async fn run_refresh_loop(self, interval_seconds: u64) {
-        loop {
-            if let Err(exc) = self.refresh_once().await {
-                eprintln!("[dashboard] refresh loop died: {exc}");
-                return;
-            }
-            tokio::time::sleep(Duration::from_secs(interval_seconds)).await;
-        }
     }
 
     /// Run exactly one boundary's verifier once, bounded by
@@ -576,8 +353,6 @@ impl Dashboard {
     fn record_boundary(&self, boundary: Boundary, outcome: Result<(), String>) {
         let verdict = BoundaryVerdict {
             ready: outcome.is_ok(),
-            checked_at: Some(isoformat_utc(chrono::Utc::now())),
-            last_error: outcome.err(),
             attempted_at: Some(Instant::now()),
         };
         *self
@@ -679,7 +454,7 @@ impl Dashboard {
         true
     }
 
-    /// Start the refresh daemon and serve HTTP on loopback. This server does
+    /// Start the boundary checks and serve HTTP on loopback. This server does
     /// not terminate TLS, so binding it to a non-loopback interface would
     /// expose bearer-authenticated routes over plaintext. Production ingress
     /// must terminate TLS in a reverse proxy and forward to this listener.
@@ -700,12 +475,9 @@ impl Dashboard {
             //   all of which are refused by the allowlist. Skipping them also
             //   means this listener needs no vault at all, which is the point:
             //   it can run where the operator plane cannot.
-            // * the refresh loop only fills the `/api/state.json` and `/`
-            //   snapshot, also refused. Left running it would download every
-            //   job blob on a timer for nobody.
             //
-            // `boundaries` therefore stays all-false and `state` stays the
-            // initial shape; no served route reads either.
+            // `boundaries` therefore stays all-false; no served route reads
+            // it.
             //
             // This log is the operator's only confirmation of what they are
             // about to publish, so it names every served pair verbatim.
@@ -717,7 +489,7 @@ impl Dashboard {
                 eprintln!("[dashboard]   {method} {path}");
             }
             eprintln!(
-                "[dashboard] no operator, object, machine, service, state or integration route is served here"
+                "[dashboard] no object, machine, service, host-health or integration route is served here"
             );
             return self.serve_on(listener).await;
         }
@@ -757,29 +529,14 @@ impl Dashboard {
             // Only `object` used to report why it failed, so every other
             // boundary said "unavailable" and left the operator guessing which
             // grant, item set or endpoint was at fault. The verdict is useless
-            // without it, and the same sentence is what `last_error` keeps for
-            // `/api/state.json`.
+            // without the reason, so the log carries the verifier's own words.
             if let Err(error) = &outcome {
                 eprintln!("[dashboard] {} boundary error: {error}", boundary.label());
                 eprintln!("[dashboard] {} boundary unavailable", boundary.label());
             }
             self.record_boundary(boundary, outcome);
         }
-        // The refresh loop's future trips a `&str` lifetime-generalization
-        // issue in the artifact-listing chain (Send "not general enough"),
-        // so — like Python's daemon refresher thread — it runs on its own
-        // OS thread with a current-thread runtime instead of tokio::spawn.
-        let refresher = self.clone();
-        let interval = self.refresh_seconds.max(1) as u64;
-        std::thread::Builder::new()
-            .name("dashboard-refresh".to_string())
-            .spawn(move || {
-                let runtime = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .expect("dashboard refresh runtime");
-                runtime.block_on(refresher.run_refresh_loop(interval));
-            })?;
+
         eprintln!("[dashboard] listening on http://{local_addr}");
         self.serve_on(listener).await
     }
@@ -865,8 +622,7 @@ impl Dashboard {
             let available = self
                 .boundaries_available(&[Boundary::Integration])
                 .await;
-            let state = self.snapshot();
-            return integration::handle(request, available, &self.store, &state).await;
+            return integration::handle(request, available, &self.store).await;
         }
         match request.method.as_str() {
             "" => empty_response(400, "Bad Request"),
@@ -939,22 +695,17 @@ impl Dashboard {
 
     async fn do_get(&self, request: &Request) -> Response {
         let path_no_query = request.path.split('?').next().unwrap_or("");
-        let control_route =
-            path_no_query == "/api/machine/status" || path_no_query == "/api/service/status";
         if !self.trusted_request_host(request.header("host"), request.header("x-forwarded-proto")) {
             if path_no_query == "/api/machine/status" {
                 return machine_result_response(Err(MachineError::new("FORBIDDEN", "forbidden")));
             }
-            return if control_route {
-                send_json(http_status("403"), &json!({"error": "forbidden"}))
-            } else {
-                cleanup_failure(http_status("403"))
-            };
+            return send_json(http_status("403"), &json!({"error": "forbidden"}));
         }
         if path_no_query == "/healthz" || path_no_query == "/livez" {
             // Liveness answers before authorization, so it publishes the flat
-            // readiness booleans only. The per-boundary reason lives in the
-            // authorized `/api/state.json` projection.
+            // readiness booleans only: a boundary's reason names vault items,
+            // grants and endpoints, and an unauthenticated probe has no
+            // business reading those. The startup log carries the reason.
             let (degraded, boundaries) = {
                 let boundaries = self
                     .boundaries
@@ -1084,17 +835,10 @@ impl Dashboard {
                         )
                     }
                 }
-            } else if path_no_query != "/api/machine/status"
-                && !self.authorized(request, "view").await
-            {
-                return send_json(http_status("401"), &json!({"error": "unauthorized"}));
             }
         }
         match self.get_routes(request).await {
             Ok(response) => response,
-            // Python: a failing /api/cleanup.json answers the safe cleanup
-            // envelope; every other route answers 500 "dashboard error".
-            Err(_) if request.path == "/api/cleanup.json" => cleanup_failure(http_status("500")),
             Err(_) => Response::text(
                 http_status("500"),
                 "Internal Server Error",
@@ -1104,7 +848,6 @@ impl Dashboard {
     }
 
     async fn get_routes(&self, request: &Request) -> Result<Response, DashboardError> {
-        let state = self.snapshot();
         let (path, query) = match request.path.split_once('?') {
             Some((path, query)) => (path, query),
             None => (request.path.as_str(), ""),
@@ -1153,91 +896,7 @@ impl Dashboard {
         if path == "/api/service/status" {
             return Ok(self.get_service_status(request, query).await);
         }
-        if path == "/api/artifacts.json" {
-            let artifacts = state.get("artifacts").cloned().unwrap_or_else(|| json!([]));
-            let body = python_json_dumps(&artifacts)
-                .map_err(|exc| DashboardError::Other(exc.to_string()))?;
-            return Ok(Response::json(200, &body));
-        }
-        if path == "/api/artifact.json" {
-            let ref_value = parse_qs(query)
-                .into_iter()
-                .filter(|(key, value)| key == "ref" && !value.is_empty())
-                .map(|(_, value)| value)
-                .next()
-                .unwrap_or_default();
-            if ref_value.is_empty() {
-                return Ok(empty_response(400, "Bad Request"));
-            }
-            let registry = ArtifactRegistry::with_store(self.store.clone());
-            let reference = ArtifactRef::parse(&ref_value).map_err(ArtifactRegistryError::from)?;
-            let manifest = registry.resolve_manifest(&reference).await?;
-            let mut value = manifest.to_dict();
-            let map = value.as_object_mut().expect("manifest object");
-            map.insert("requested_ref".to_string(), json!(ref_value));
-            map.insert(
-                "aliases".to_string(),
-                json!(registry.aliases_for(&manifest.ref_).await?),
-            );
-            return Ok(Response::json(
-                200,
-                &python_json_dumps(&value).map_err(|exc| DashboardError::Other(exc.to_string()))?,
-            ));
-        }
-        if request.path == "/api/state.json" {
-            // The operator's read of the authorization boundaries. This
-            // document already requires the `view` permission (loopback
-            // clients hold it implicitly, remote ones through Supabase), so it
-            // is the one place a `last_error` naming a vault item, grant or
-            // endpoint can be published without inventing an unauthenticated
-            // route for it.
-            let mut document = state;
-            document["boundaries"] = self
-                .boundaries
-                .read()
-                .expect("dashboard boundary state lock")
-                .detail_json();
-            return Ok(send_json(200, &document));
-        }
-        if request.path == "/api/registry.json" {
-            return Ok(
-                match policy::policy_view(self.store.backend().as_ref()).await {
-                    Ok(value) => send_json(http_status("200"), &value),
-                    Err(error) => send_json(error.status(), &json!({"error": error.to_string()})),
-                },
-            );
-        }
-        if path == "/api/services.json" {
-            // The same beacon-only read `stado service list` makes; a failed
-            // registry fetch is a 503 with the reason, never a blank page.
-            return Ok(match service::list_services(&self.store).await {
-                Ok(rows) => send_json(http_status("200"), &services::services_payload(&rows)),
-                Err(error) => {
-                    send_json(http_status("503"), &json!({"error": error.to_string()}))
-                }
-            });
-        }
-        if request.path == "/api/operator/catalog" {
-            return Ok(send_json(http_status("200"), &operator_console::catalog()));
-        }
-        if request.path == "/api/cleanup.json" {
-            let report =
-                read_cleanup_state().map_err(|exc| DashboardError::Other(exc.to_string()))?;
-            let payload = web_view::cleanup_envelope(&report);
-            let status = if payload["service"] == "busy" {
-                409
-            } else {
-                200
-            };
-            return Ok(send_json(status, &payload));
-        }
-        if request.path == "/" || request.path == "/index.html" {
-            let report =
-                read_cleanup_state().map_err(|exc| DashboardError::Other(exc.to_string()))?;
-            let cleanup = web_view::cleanup_envelope(&report);
-            let body = web_view::render_html(&state, &cleanup, self.refresh_seconds);
-            return Ok(Response::html(200, &body));
-        }
+
         Ok(empty_response(404, "Not Found"))
     }
 
@@ -1847,11 +1506,7 @@ impl Dashboard {
             if matches!(path, "/api/machine/submit" | "/api/machine/cancel") {
                 return machine_result_response(Err(MachineError::new("FORBIDDEN", "forbidden")));
             }
-            return if control_route {
-                send_json(http_status("403"), &json!({"error": "forbidden"}))
-            } else {
-                cleanup_failure(http_status("403"))
-            };
+            return send_json(http_status("403"), &json!({"error": "forbidden"}));
         }
         // Enrollment by invite: authorized by the invite token alone, before
         // any operator authorization is reached, and never by it.
@@ -1906,26 +1561,7 @@ impl Dashboard {
                 self.post_machine_cancel(request, query).await
             };
         }
-        if !self.authorized(request, "operate").await {
-            return send_json(http_status("401"), &json!({"error": "unauthorized"}));
-        }
-        if path == "/api/registry/policy" {
-            return self.post_registry_policy(request).await;
-        }
-        if path == "/api/operator/run" {
-            return self.post_operator_run(request).await;
-        }
-        if request.path != "/api/cleanup/run" {
-            return if path == "/api/cleanup/run" {
-                cleanup_failure(http_status("400"))
-            } else {
-                empty_response(http_status("404"), "Not Found")
-            };
-        }
-        match self.post_cleanup_run(request).await {
-            Ok(response) => response,
-            Err(_) => cleanup_failure(http_status("500")),
-        }
+        empty_response(http_status("404"), "Not Found")
     }
 
     async fn do_put(&self, request: &Request) -> Response {
@@ -2038,7 +1674,7 @@ impl Dashboard {
     }
 
     async fn put_host_health(&self, request: &Request, query: &str) -> Response {
-        if !self.authorized(request, "host-health:publish").await {
+        if !authorize_host_health(request).await {
             return send_json(http_status("401"), &json!({"error": "unauthorized"}));
         }
         let values = parse_qs(query);
@@ -2113,92 +1749,8 @@ impl Dashboard {
         }
     }
 
-    async fn post_operator_run(&self, request: &Request) -> Response {
-        if request.path != "/api/operator/run"
-            || request.header("x-stado-action") != Some("operator-command")
-        {
-            return send_json(
-                http_status("403"),
-                &json!({"ok": false, "error": "forbidden"}),
-            );
-        }
-        let content_type = request
-            .header("content-type")
-            .unwrap_or("")
-            .split(';')
-            .next()
-            .unwrap_or("")
-            .trim();
-        let content_length = request
-            .header("content-length")
-            .and_then(|value| value.parse::<usize>().ok());
-        if content_type != "application/json"
-            || request.header("transfer-encoding").is_some()
-            || content_length != Some(request.body.len())
-        {
-            return send_json(
-                http_status("400"),
-                &json!({"ok": false, "error": "invalid JSON request framing"}),
-            );
-        }
-        match operator_console::run(&request.body).await {
-            Ok(result) => send_json(http_status("200"), &result),
-            Err(error) => send_json(error.status, &json!({"ok": false, "error": error.message})),
-        }
-    }
-
-    async fn post_registry_policy(&self, request: &Request) -> Response {
-        if request.path != "/api/registry/policy"
-            || request.header("x-stado-action") != Some("registry-policy")
-        {
-            return send_json(
-                http_status("403"),
-                &json!({"ok": false, "error": "forbidden"}),
-            );
-        }
-        let content_type = request
-            .header("content-type")
-            .unwrap_or("")
-            .split(';')
-            .next()
-            .unwrap_or("")
-            .trim();
-        let content_length = request
-            .header("content-length")
-            .and_then(|value| value.parse::<usize>().ok());
-        if content_type != "application/json"
-            || request.header("transfer-encoding").is_some()
-            || content_length != Some(request.body.len())
-        {
-            return send_json(
-                http_status("400"),
-                &json!({"ok": false, "error": "invalid JSON request framing"}),
-            );
-        }
-        let payload: Value = match serde_json::from_slice(&request.body) {
-            Ok(payload) => payload,
-            Err(error) => {
-                return send_json(
-                    http_status("400"),
-                    &json!({"ok": false, "error": format!("invalid JSON: {error}")}),
-                )
-            }
-        };
-        match policy::update_policy(self.store.backend().as_ref(), &payload).await {
-            Ok(value) => send_json(http_status("200"), &value),
-            Err(error) => send_json(
-                error.status(),
-                &json!({"ok": false, "error": error.to_string()}),
-            ),
-        }
-    }
     fn deployment_id(&self) -> String {
         config::stado_deployment_id()
-    }
-
-    fn direct_loopback_request(&self, request: &Request) -> bool {
-        request.header("x-forwarded-proto").is_none()
-            && trusted_request_host(request.header("host"), None, false)
     }
 
     fn trusted_request_host(&self, value: Option<&str>, forwarded_proto: Option<&str>) -> bool {
@@ -2206,126 +1758,10 @@ impl Dashboard {
             config::dashboard_trust_https_proxy() || !self.deployment_id().is_empty();
         trusted_request_host(value, forwarded_proto, reverse_proxy_enabled)
     }
-
-    async fn operator_auth_metadata(&self) -> Result<(url::Url, String), ()> {
-        operator_auth::operator_auth_metadata()
-            .await
-            .map_err(|_| ())
-    }
-
-    /// Validate host-health publication or a Wisent session/deployment grant.
-    /// Machine clients are authorized separately through exact client policies;
-    /// this path has no global machine bearer.
-    async fn authorized(&self, request: &Request, permission: &str) -> bool {
-        if permission == "host-health:publish" {
-            let expected =
-                match crate::skarbiec::read_string("stado-host-health-api", "token").await {
-                    Ok(Some(value)) => value,
-                    Ok(None) | Err(_) => String::new(),
-                };
-            let authorization = request.header("authorization").unwrap_or("").trim();
-            let supplied = authorization.strip_prefix("Bearer ").unwrap_or_default();
-            return !expected.is_empty()
-                && constant_time_eq(expected.as_bytes(), supplied.as_bytes());
-        }
-        if self.direct_loopback_request(request) {
-            // The listener is loopback-only and the Host parser rejects DNS
-            // rebinding. Local Desktop and CLI clients need no Supabase grant.
-            return true;
-        }
-        let deployment_id = self.deployment_id();
-        if deployment_id.is_empty() {
-            // A trusted HTTPS proxy may carry object, machine, and service
-            // credentials, but it never turns an unbound dashboard public.
-            return false;
-        }
-        let (supabase_url, anon_key) = match self.operator_auth_metadata().await {
-            Ok(metadata) => metadata,
-            Err(()) => return false,
-        };
-        let authorization = request.header("authorization").unwrap_or("").trim();
-        if !authorization.starts_with("Bearer ") {
-            return false;
-        }
-        let body = json!({
-            "target_deployment_id": deployment_id,
-            "requested_permission": permission,
-        });
-        let endpoint = match supabase_url.join("/rest/v1/rpc/stado_can_access") {
-            Ok(endpoint) => endpoint,
-            Err(_) => return false,
-        };
-        let result = reqwest::Client::new()
-            .post(endpoint)
-            .header("apikey", anon_key)
-            .header("Authorization", authorization)
-            .header("Content-Type", "application/json")
-            .body(body.to_string())
-            .timeout(Duration::from_secs(
-                "5".parse::<u64>().expect("static auth timeout"),
-            ))
-            .send()
-            .await;
-        let Ok(response) = result else { return false };
-        if response.status() != reqwest::StatusCode::OK {
-            return false;
-        }
-        response
-            .json::<Value>()
-            .await
-            .map(|value| value == Value::Bool(true))
-            .unwrap_or(false)
-    }
-
-    async fn post_cleanup_run(&self, request: &Request) -> Result<Response, DashboardError> {
-        if request.header("x-stado-action") != Some("cleanup") {
-            return Ok(cleanup_failure(403));
-        }
-        let content_length: i64 = match request
-            .header("content-length")
-            .unwrap_or("0")
-            .trim()
-            .parse()
-        {
-            Ok(n) => n,
-            Err(_) => return Ok(cleanup_failure(400)),
-        };
-        if content_length != 0 || request.header("transfer-encoding").is_some() {
-            return Ok(cleanup_failure(400));
-        }
-        // run_cleanup_once holds a `&mut dyn FnMut` logger across awaits,
-        // which makes its future non-Send — so the pass runs on a dedicated
-        // thread with its own current-thread runtime instead of inline in
-        // the connection task. One thread per operator click, matching
-        // Python's ThreadingHTTPServer handler thread.
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        std::thread::Builder::new()
-            .name("dashboard-cleanup-run".to_string())
-            .spawn(move || {
-                let runtime = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .expect("cleanup runtime");
-                let mut log_fn = |msg: &str| eprintln!("[dashboard] {msg}");
-                let report = runtime.block_on(run_cleanup_once(0, true, &mut log_fn));
-                let _ = tx.send(report);
-            })?;
-        let report = rx
-            .await
-            .map_err(|_| DashboardError::Other("cleanup pass thread died".to_string()))?;
-        let report = sanitize_cleanup_report(&report);
-        let payload = web_view::cleanup_envelope(&report);
-        let status = if payload["service"] == "busy" {
-            409
-        } else {
-            200
-        };
-        Ok(send_json(status, &payload))
-    }
 }
 
-/// Python `serve(host=None, port=None)`: run the dashboard HTTP server.
-/// Blocks until killed. Defaults from `config::dashboard_bind()` /
+/// Python `serve(host=None, port=None)`: run the API listener. Blocks until
+/// killed. Defaults from `config::dashboard_bind()` /
 /// `config::dashboard_port()`; storage from `config::bucket()`.
 ///
 /// `enrollment_only` narrows the listener to `ENROLLMENT_ROUTES` — the mode
@@ -2464,8 +1900,6 @@ async fn read_request(stream: &mut TcpStream) -> std::io::Result<Option<Request>
     };
     let max_body_bytes = if object_put {
         crate::object_store::max_object_bytes()
-    } else if method == "POST" && path == "/api/operator/run" {
-        operator_console::MAX_REQUEST_BYTES
     } else {
         MAX_HEAD_BYTES
     };
@@ -2534,10 +1968,6 @@ impl Response {
             _ => "OK",
         };
         Self::new(status, reason, "application/json", body.as_bytes())
-    }
-
-    fn html(status: u16, body: &str) -> Self {
-        Self::new(status, "OK", "text/html; charset=utf-8", body.as_bytes())
     }
 
     fn text(status: u16, reason: &str, body: &str) -> Self {
@@ -2732,15 +2162,6 @@ fn validate_remote_machine_request(request: &Value) -> Result<(), MachineError> 
     Ok(())
 }
 
-/// Python `_cleanup_failure`.
-fn cleanup_failure(status: u16) -> Response {
-    let report = sanitize_cleanup_report(&json!({"outcome": "invalid_or_unavailable_policy"}));
-    send_json(
-        status,
-        &json!({"ok": false, "service": "error", "report": report}),
-    )
-}
-
 /// Python `parse_qs(urlsplit(self.path).query)`: `&`-separated `key=value`
 /// pairs, percent-decoded with `+` as space.
 fn parse_qs(query: &str) -> Vec<(String, String)> {
@@ -2831,7 +2252,7 @@ fn url_decode(input: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Host-header DNS-rebinding guard + Supabase RLS auth
+// Host-header DNS-rebinding guard
 // ---------------------------------------------------------------------------
 
 /// Accept loopback Host values for direct local access. A configured HTTPS
@@ -2939,6 +2360,20 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 /// reported separately so the route can return a redacted 503.
 fn release_object_namespace(namespace: &str) -> bool {
     matches!(namespace, "releases" | "sources")
+}
+
+/// Route-scoped host beacon publication: the bearer stored as
+/// `stado-host-health-api/token` and nothing else. Machine clients are
+/// authorized separately through exact client policies; there is no global
+/// dashboard bearer.
+async fn authorize_host_health(request: &Request) -> bool {
+    let expected = match crate::skarbiec::read_string("stado-host-health-api", "token").await {
+        Ok(Some(value)) => value,
+        Ok(None) | Err(_) => String::new(),
+    };
+    let authorization = request.header("authorization").unwrap_or("").trim();
+    let supplied = authorization.strip_prefix("Bearer ").unwrap_or_default();
+    !expected.is_empty() && constant_time_eq(expected.as_bytes(), supplied.as_bytes())
 }
 
 async fn authorize_object(

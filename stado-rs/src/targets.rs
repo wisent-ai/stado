@@ -26,8 +26,8 @@
 //!
 //! DEVIATION from Python: the fetch follows `WC_STORAGE_BACKEND` instead of
 //! hardcoding GCS. Python reads GCS unconditionally, so on an Azure-only
-//! deployment the dashboard compare-and-swaps `registry.json` into the
-//! Azure container (`dashboard/policy.rs`, the WRITE side, which already
+//! deployment the write side compare-and-swaps `registry.json` into the
+//! Azure container (`cli::registry` — `stado registry push`, which already
 //! goes through the configured store) while every reader consults a GCS
 //! object nobody writes. The "gcs" read path is unchanged.
 //!
@@ -1712,8 +1712,8 @@ pub struct PlacementProfile {
 /// [`REGISTRY_BLOB`] from the store `config::wc_storage_backend()` selects.
 pub const GCS_REGISTRY_URI: &str = "gs://wisent-compute/registry.json";
 /// Store-relative path of the registry document, identical on every
-/// backend. `dashboard/policy.rs` compare-and-swaps this exact path through
-/// the configured store, so the read and write sides address one object.
+/// backend. `cli::registry` compare-and-swaps this exact path through the
+/// configured store, so the read and write sides address one object.
 pub const REGISTRY_BLOB: &str = "registry.json";
 /// Re-fetch the registry at most this often (Python `_GCS_TTL_SEC`).
 pub const GCS_REGISTRY_TTL_SEC: u64 = 30;

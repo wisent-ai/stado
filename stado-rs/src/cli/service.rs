@@ -1034,14 +1034,18 @@ fn render_status(
             None => "last launchd exit unknown".to_string(),
         };
         println!("failure: {} {}: {}", failure.host, failure.unit, exit);
-        // A failed system LaunchDaemon cannot be restarted over the approved
-        // channel; say so here, where the operator is reading why.
+        // A failed system LaunchDaemon has exactly one repair over the
+        // approved channel, and it has conditions; say which, here, where the
+        // operator is reading why.
         if rows.iter().any(|row| {
             row.service.host == failure.host
                 && row.service.unit_id() == failure.unit.as_str()
                 && UnitDomain::from_path(&row.service.path).requires_privileged_bootstrap()
         }) {
-            println!("  unit: system LaunchDaemon — restart requires a privileged bootstrap");
+            println!(
+                "  unit: system LaunchDaemon — `service restart` can only end its process and let \
+                 launchd's KeepAlive replace it; loading it takes sudo on the host"
+            );
         }
         if let Some(error_origin) = &failure.error_origin {
             println!("  stderr: {error_origin}");
