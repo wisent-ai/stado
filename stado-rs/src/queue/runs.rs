@@ -265,4 +265,3 @@ pub async fn list_runs(store: &JobStorage) -> Result<Vec<String>, StorageError> 
         .map(|name| name[..name.len() - 5].to_string())
         .collect())
 }
-

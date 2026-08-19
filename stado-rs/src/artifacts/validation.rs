@@ -138,4 +138,3 @@ pub fn validate_manifest(manifest: &ArtifactManifest) -> Vec<String> {
     }
     issues
 }
-

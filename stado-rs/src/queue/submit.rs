@@ -428,4 +428,3 @@ pub async fn default_store(bucket: &str) -> Result<JobStorage, StorageError> {
     };
     JobStorage::with_bucket(bucket).await
 }
-

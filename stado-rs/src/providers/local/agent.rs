@@ -1491,4 +1491,3 @@ pub async fn run_agent(gpu_type: &str, idle_shutdown: bool, kind: &str) -> anyho
         tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_S)).await;
     }
 }
-

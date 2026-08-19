@@ -235,4 +235,3 @@ pub(crate) async fn identity_bearer_token(
 ) -> Result<String, TokenError> {
     bearer_token(http, scope, resource).await
 }
-

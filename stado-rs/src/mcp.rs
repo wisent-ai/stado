@@ -503,4 +503,3 @@ pub fn serve<R: BufRead, W: Write>(reader: R, writer: &mut W) {
         }
     }
 }
-

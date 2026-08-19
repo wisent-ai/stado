@@ -4569,4 +4569,3 @@ async fn print_reports(hosts: &[String], json: bool) -> Result<(), CmdError> {
     );
     Err(CmdError::silent(super::CLICK_ERROR_CODE))
 }
-

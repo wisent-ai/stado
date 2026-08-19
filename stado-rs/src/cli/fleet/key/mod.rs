@@ -626,4 +626,3 @@ pub async fn check(runner: &Runner, target: &str) -> Result<bool, String> {
     );
     Ok(true)
 }
-
