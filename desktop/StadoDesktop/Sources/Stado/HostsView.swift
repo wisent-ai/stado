@@ -922,6 +922,17 @@ struct HostsView: View {
                 value: link.sshReachable ? "Yes" : "No",
                 tone: link.sshReachable ? .neutral : .danger
             )
+            // Whether anybody is logged in on the screen there, which had no
+            // surface anywhere in the product: `ssh_reachable` above answers
+            // "can this machine be reached", and this answers "is there a
+            // login session on it" — the fact that decides whether launchd on
+            // that host has a domain to load a per-login unit into at all.
+            //
+            // Neutral in every kind. An always-on box with nobody at its
+            // screen is the normal state for an always-on box, and the reason
+            // that matters to this host arrives as one of the command's own
+            // blockers, rendered verbatim above.
+            WisentField(label: "Screen session", value: sessionDescription(link))
             WisentField(label: "Network path", value: pathDescription(link))
             WisentField(label: "Last sleep", value: stampDescription(link.lastSleepAt))
             WisentField(label: "Last wake", value: stampDescription(link.lastWakeAt))
@@ -993,6 +1004,18 @@ struct HostsView: View {
         guard let kind = link.pathKind else { return "Not reported" }
         guard let endpoint = link.endpoint, !endpoint.isEmpty else { return kind.word }
         return "\(kind.word) \(endpoint)"
+    }
+
+    /// The plain words first, then the host's own evidence for them.
+    ///
+    /// The headline is what an operator asked for: is anybody logged in there.
+    /// The command's sentence beneath it names the console device and the
+    /// launchd domain, which is what an operator needs the moment they doubt
+    /// the headline — and dropping it would leave this console asserting a
+    /// fact with the evidence removed.
+    private func sessionDescription(_ link: HostLink) -> String {
+        guard let session = link.session, !session.detail.isEmpty else { return link.sessionLine }
+        return "\(session.headline)\n\(session.detail)"
     }
 
     /// The stamp the collector recorded and how long ago that was. The stamp
