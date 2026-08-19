@@ -137,6 +137,14 @@ pub struct Delivery {
     pub required: bool,
     #[serde(default)]
     pub secret_env: BTreeMap<String, String>,
+    /// Registry target this delivery must run ON. A delivery that installs
+    /// software on a host used to run on whatever builder was live and reach
+    /// its target over ssh — and the first host without Remote Login broke
+    /// the whole release. Pinned to its target, a delivery installs locally
+    /// and no delivery needs a login service at all. Empty keeps the old
+    /// builder placement for deliveries that publish elsewhere.
+    #[serde(default)]
+    pub target: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
