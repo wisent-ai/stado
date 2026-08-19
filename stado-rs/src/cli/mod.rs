@@ -1468,6 +1468,17 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// What TARGET's Weles worker is doing: its staged and installed releases,
+    /// whether its worker API answers, and its newest recorded runs with each
+    /// run's own verdict. Counts and timestamps only; recordings stay on the
+    /// host.
+    #[command(name = "weles-activity")]
+    WelesActivity {
+        target: String,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Deliver one registry-declared managed binary to TARGET.
     Release {
         target: String,
@@ -2042,6 +2053,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::Inventory { target, json } => host::inventory(&target, json).await,
             HostCommands::Software { target, json } => host::software(target, json).await,
             HostCommands::Provenance { target, json } => host::provenance(&target, json).await,
+            HostCommands::WelesActivity { target, json } => {
+                host::weles_activity(&target, json).await
+            }
             HostCommands::Release {
                 target,
                 binary,
