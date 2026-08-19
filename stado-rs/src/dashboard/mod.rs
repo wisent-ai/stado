@@ -4,6 +4,7 @@
 //! dashboard removed — the operator workspace is Stado Desktop, and this
 //! listener serves no page.
 //!
+
 //! GET/PUT/DELETE /api/object?uri=stado://... - product object data plane
 //! GET /api/object/list?namespace=...&prefix=... - product object listing
 //! GET /api/object/stat?uri=stado://... - product object metadata
@@ -48,7 +49,7 @@ mod integration;
 use futures::stream::{FuturesUnordered, StreamExt};
 use std::io::Write;
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -78,41 +79,171 @@ pub enum DashboardError {
     Other(String),
 }
 
-/// Skarbiec boundary verdicts, recorded once at startup: every gated route
-/// reads them to answer 503 (instead of hanging on a vault) when its
-/// authorization boundary is down.
-#[derive(Clone, Copy, Default)]
+/// One authorization boundary this listener gates its routes on.
+///
+/// An enum rather than seven named booleans because the recovery path needs
+/// to name a boundary as a value: claim its cooldown, run exactly its
+/// verifier, record exactly its verdict. Seven fields could only be reached
+/// by seven copies of that sequence, which is how the startup block came to
+/// hold seven near-identical macro expansions.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Boundary {
+    Object,
+    Release,
+    Machine,
+    Service,
+    RateLimitVerifier,
+    RateLimitState,
+    Integration,
+}
+
+impl Boundary {
+    /// Every boundary, in the deterministic order startup validates them.
+    /// Also the order the served documents list them in, so an operator
+    /// comparing a health document with a startup log reads one sequence.
+    const ALL: [Boundary; 7] = [
+        Boundary::Object,
+        Boundary::Release,
+        Boundary::Machine,
+        Boundary::Service,
+        Boundary::RateLimitVerifier,
+        Boundary::RateLimitState,
+        Boundary::Integration,
+    ];
+
+    /// The key this boundary carries in `/healthz`.
+    /// Unchanged from the flat booleans `/healthz` has always served.
+    fn key(self) -> &'static str {
+        match self {
+            Boundary::Object => "object",
+            Boundary::Release => "release",
+            Boundary::Machine => "machine",
+            Boundary::Service => "service",
+            Boundary::RateLimitVerifier => "rate_limit_verifier",
+            Boundary::RateLimitState => "rate_limit_state",
+            Boundary::Integration => "integration",
+        }
+    }
+
+    /// The name the dashboard logs use, and the incident vocabulary with it.
+    fn label(self) -> &'static str {
+        match self {
+            Boundary::Object => "object authorization",
+            Boundary::Release => "release publication",
+            Boundary::Machine => "machine authorization",
+            Boundary::Service => "service authorization",
+            Boundary::RateLimitVerifier => "rate-limit authorization",
+            Boundary::RateLimitState => "rate-limit state",
+            Boundary::Integration => "integration authorization",
+        }
+    }
+}
+
+/// One boundary's live verdict.
+///
+/// This used to be a bare `bool` decided once at startup and never revisited,
+/// so a single slow or reset vault read shut a boundary until somebody
+/// restarted the unit — and `object` shutting answers `503 object
+/// authorization unavailable` to the whole fleet. Recovery is a property of
+/// this state now: `attempted_at` is the cooldown anchor an inline
+/// revalidation claims before it runs.
+#[derive(Clone, Default)]
+struct BoundaryVerdict {
+    ready: bool,
+    /// The monotonic clock of the last validation attempt. Not a wall clock:
+    /// a clock step must not be able to skip the cooldown or stretch it past
+    /// the next request.
+    attempted_at: Option<Instant>,
+}
+
+#[derive(Clone, Default)]
 struct BoundaryAvailability {
-    object: bool,
-    release: bool,
-    machine: bool,
-    service: bool,
-    rate_limit_verifier: bool,
-    rate_limit_state: bool,
-    integration: bool,
+    verdicts: [BoundaryVerdict; 7],
 }
 
 impl BoundaryAvailability {
-    fn json(self) -> Value {
-        json!({
-            "object": self.object,
-            "release": self.release,
-            "machine": self.machine,
-            "service": self.service,
-            "rate_limit_verifier": self.rate_limit_verifier,
-            "rate_limit_state": self.rate_limit_state,
-            "integration": self.integration,
-        })
+    fn verdict(&self, boundary: Boundary) -> &BoundaryVerdict {
+        &self.verdicts[boundary as usize]
     }
 
-    fn all_ready(self) -> bool {
-        self.object
-            && self.release
-            && self.machine
-            && self.service
-            && self.rate_limit_verifier
-            && self.rate_limit_state
-            && self.integration
+    fn verdict_mut(&mut self, boundary: Boundary) -> &mut BoundaryVerdict {
+        &mut self.verdicts[boundary as usize]
+    }
+
+    fn ready(&self, boundary: Boundary) -> bool {
+        self.verdict(boundary).ready
+    }
+
+    /// The flat booleans `/healthz` has always published. That route answers
+    /// before authorization, so it stays booleans: a `last_error` names vault
+    /// items, grants and endpoints, and an unauthenticated liveness probe has
+    /// no business reading those.
+    fn ready_json(&self) -> Value {
+        Value::Object(
+            Boundary::ALL
+                .iter()
+                .map(|boundary| (boundary.key().to_string(), json!(self.ready(*boundary))))
+                .collect(),
+        )
+    }
+
+    fn all_ready(&self) -> bool {
+        Boundary::ALL.iter().all(|boundary| self.ready(*boundary))
+    }
+}
+
+/// What a request is allowed to do about a boundary it found closed.
+enum Recheck {
+    /// Already open; proceed.
+    Ready,
+    /// Closed, and this request owns the one revalidation attempt.
+    Claimed,
+    /// Closed, and an attempt inside the cooldown already answered for it.
+    CoolingDown,
+}
+
+/// How long one boundary validation attempt may run, at startup and on an
+/// inline recheck alike.
+///
+/// Each boundary reads every item its policy names, and each read is a gpg
+/// decryption in the broker. Seventeen object namespaces against a real vault
+/// with a cold gpg-agent exceeded the previous 15s and the object API then
+/// answered 503 to the entire fleet until someone restarted it -- a cold
+/// agent is a slow start, not a broken grant.
+fn boundary_timeout() -> Duration {
+    Duration::from_secs(
+        std::env::var("WC_DASHBOARD_BOUNDARY_TIMEOUT_SECONDS")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .filter(|seconds| *seconds > 0)
+            .unwrap_or(90),
+    )
+}
+
+/// The shortest interval between two inline revalidations of the same
+/// boundary. Long enough that a fleet hammering a shut boundary produces one
+/// vault sweep per cooldown rather than one per request, short enough that a
+/// transient reset costs seconds of 503 instead of a privileged restart.
+fn boundary_recheck_cooldown() -> Duration {
+    Duration::from_secs(
+        std::env::var("WC_DASHBOARD_BOUNDARY_RECHECK_SECONDS")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .filter(|seconds| *seconds > 0)
+            .unwrap_or(30),
+    )
+}
+
+/// Which boundary authorizes one object address: a software release travels on
+/// the release publication grant, every private product namespace on the
+/// object grant. The object routes all decide it this way, and they must
+/// decide it identically — reading one boundary and then authorizing against
+/// the other is how a shut boundary would refuse the wrong half of the plane.
+fn object_boundary(namespace: &str, key: &str) -> Boundary {
+    if crate::object_store::release_policy_key(namespace, key).is_some() {
+        Boundary::Release
+    } else {
+        Boundary::Object
     }
 }
 
@@ -160,7 +291,10 @@ fn enrollment_route_allowed(method: &str, path: &str) -> bool {
 #[derive(Clone)]
 pub struct Dashboard {
     store: JobStorage,
+
     rate_limiter: RateLimiter,
+    /// Every boundary's live verdict. Written by startup validation and by
+    /// the inline recheck a request runs when it finds its boundary closed.
     boundaries: Arc<RwLock<BoundaryAvailability>>,
     /// Serve only [`ENROLLMENT_ROUTES`]; every other request is refused
     /// before authorization, before the store and before the vault.
@@ -184,6 +318,140 @@ impl Dashboard {
     pub fn with_enrollment_only(mut self, enrollment_only: bool) -> Self {
         self.enrollment_only = enrollment_only;
         self
+    }
+
+    /// Run exactly one boundary's verifier once, bounded by
+    /// [`boundary_timeout`], and flatten every failure shape — refusal,
+    /// timeout, misconfiguration — into the one sentence an operator reads in
+    /// the log and in `last_error`.
+    async fn validate_boundary(&self, boundary: Boundary) -> Result<(), String> {
+        let timeout = boundary_timeout();
+        macro_rules! bounded {
+            ($call:expr) => {
+                match tokio::time::timeout(timeout, $call).await {
+                    Ok(Ok(_)) => Ok(()),
+                    Ok(Err(error)) => Err(error.to_string()),
+                    Err(_) => Err(format!(
+                        "validation did not settle within {} seconds",
+                        timeout.as_secs()
+                    )),
+                }
+            };
+        }
+        match boundary {
+            Boundary::Object => bounded!(crate::skarbiec::validate_object_verifier()),
+            Boundary::Release => bounded!(crate::skarbiec::validate_release_verifier()),
+            Boundary::Machine => bounded!(crate::skarbiec::validate_machine_verifier()),
+            Boundary::Service => bounded!(crate::skarbiec::validate_service_verifier()),
+            Boundary::RateLimitVerifier => bounded!(rate_limit::validate_verifier()),
+            Boundary::RateLimitState => bounded!(self.rate_limiter.restore()),
+            Boundary::Integration => bounded!(integration::validate_startup()),
+        }
+    }
+
+    /// Record one validation outcome as this boundary's current verdict.
+    fn record_boundary(&self, boundary: Boundary, outcome: Result<(), String>) {
+        let verdict = BoundaryVerdict {
+            ready: outcome.is_ok(),
+            attempted_at: Some(Instant::now()),
+        };
+        *self
+            .boundaries
+            .write()
+            .expect("dashboard boundary state lock")
+            .verdict_mut(boundary) = verdict;
+    }
+
+    /// Whether `boundary` is open right now. Never touches the vault, so this
+    /// is what every request on a healthy listener pays: one read lock.
+    fn boundary_ready(&self, boundary: Boundary) -> bool {
+        self.boundaries
+            .read()
+            .expect("dashboard boundary state lock")
+            .ready(boundary)
+    }
+
+    /// Decide what this request may do about `boundary`, and — when it may
+    /// revalidate — claim the attempt by stamping `attempted_at` before the
+    /// vault is touched. Claiming under the write lock is what keeps a fleet
+    /// hammering a shut boundary to one vault sweep per cooldown instead of
+    /// one per request.
+    fn claim_boundary_recheck(&self, boundary: Boundary) -> Recheck {
+        if self.boundary_ready(boundary) {
+            return Recheck::Ready;
+        }
+        let now = Instant::now();
+        let cooldown = boundary_recheck_cooldown();
+        let mut boundaries = self
+            .boundaries
+            .write()
+            .expect("dashboard boundary state lock");
+        let verdict = boundaries.verdict_mut(boundary);
+        if verdict.ready {
+            return Recheck::Ready;
+        }
+        if verdict
+            .attempted_at
+            .is_some_and(|attempted_at| now.duration_since(attempted_at) < cooldown)
+        {
+            return Recheck::CoolingDown;
+        }
+        verdict.attempted_at = Some(now);
+        Recheck::Claimed
+    }
+
+    /// Ready-or-recover for one boundary: revalidate a closed boundary inline,
+    /// at most once per cooldown, and answer whether the request may proceed.
+    ///
+    /// This is the recovery half of the startup sweep. Before it, a boundary
+    /// closed by one slow or reset read stayed closed until a privileged unit
+    /// restart — and for `com.wisent.always-on.stado-object-api` that restart
+    /// is exactly the thing the fleet cannot do for itself.
+    async fn recover_boundary(&self, boundary: Boundary) -> bool {
+        match self.claim_boundary_recheck(boundary) {
+            Recheck::Ready => return true,
+            Recheck::CoolingDown => return false,
+            Recheck::Claimed => {}
+        }
+        eprintln!(
+            "[dashboard] {} boundary is closed; revalidating inline",
+            boundary.label()
+        );
+        let outcome = self.validate_boundary(boundary).await;
+        match &outcome {
+            Ok(()) => eprintln!(
+                "[dashboard] {} boundary recovered without a restart",
+                boundary.label()
+            ),
+            Err(error) => eprintln!(
+                "[dashboard] {} boundary revalidation failed: {error}",
+                boundary.label()
+            ),
+        }
+        let ready = outcome.is_ok();
+        self.record_boundary(boundary, outcome);
+        ready
+    }
+
+    /// Whether every boundary a route needs is open, revalidating at most one
+    /// closed boundary. One per request on purpose: a single request must not
+    /// be able to turn into a fan of vault sweeps, and the first closed
+    /// boundary is the one the refusal already names.
+    async fn boundaries_available(&self, required: &[Boundary]) -> bool {
+        let mut attempted = false;
+        for &boundary in required {
+            if self.boundary_ready(boundary) {
+                continue;
+            }
+            if attempted {
+                return false;
+            }
+            attempted = true;
+            if !self.recover_boundary(boundary).await {
+                return false;
+            }
+        }
+        true
     }
 
     /// Start the boundary checks and serve HTTP on loopback. This server does
@@ -225,119 +493,50 @@ impl Dashboard {
             );
             return self.serve_on(listener).await;
         }
-        // Each boundary reads every item its policy names, and each read is a
-        // gpg decryption in the broker. Seventeen object namespaces against a
-        // real vault with a cold gpg-agent exceeded the previous 15s and the
-        // object API then answered 503 to the entire fleet until someone
-        // restarted it -- a cold agent is a slow start, not a broken grant.
-        let startup_timeout = Duration::from_secs(
-            std::env::var("WC_DASHBOARD_BOUNDARY_TIMEOUT_SECONDS")
-                .ok()
-                .and_then(|value| value.trim().parse::<u64>().ok())
-                .filter(|seconds| *seconds > 0)
-                .unwrap_or(90),
-        );
         // Every verifier reads shared Skarbiec vault/audit state. Starting all
         // boundaries together can overwhelm the listener and fail the whole
         // control plane on a transient connection reset, so validate them in
-        // deterministic order with an independent timeout per boundary.
+        // deterministic order with an independent timeout per boundary
+        // ([`boundary_timeout`]).
         //
-        // A verdict is also recorded once and never revisited, so one slow or
-        // reset read shuts a boundary until somebody restarts the unit -- and
-        // `object` shutting means `503 object authorization unavailable` for the
-        // whole fleet. That happened four times in one afternoon, each time
-        // cured by an identical retry, so the retry belongs here instead of in
-        // the operator's hands.
+        // A verdict used to be recorded once and never revisited, so one slow
+        // or reset read shut a boundary until somebody restarted the unit --
+        // and `object` shutting means `503 object authorization unavailable`
+        // for the whole fleet. That happened four times in one afternoon, each
+        // time cured by an identical retry, so the retry belongs here instead
+        // of in the operator's hands. The eager sweep below is that retry; the
+        // inline recheck in [`Dashboard::recover_boundary`] is the other half,
+        // because a boundary that resets an hour after startup never reaches
+        // this code again.
         let attempts = std::env::var("WC_DASHBOARD_BOUNDARY_ATTEMPTS")
             .ok()
             .and_then(|value| value.trim().parse::<usize>().ok())
             .filter(|count| *count > 0)
             .unwrap_or(3);
         let retry_pause = Duration::from_secs(2);
-        macro_rules! validate {
-            ($name:literal, $call:expr) => {{
-                let mut outcome = tokio::time::timeout(startup_timeout, $call).await;
-                let mut attempt = 1;
-                while attempt < attempts && !matches!(outcome, Ok(Ok(_))) {
-                    eprintln!(
-                        "[dashboard] {} boundary attempt {attempt} of {attempts} did not settle; retrying",
-                        $name
-                    );
-                    tokio::time::sleep(retry_pause).await;
-                    outcome = tokio::time::timeout(startup_timeout, $call).await;
-                    attempt += 1;
-                }
-                outcome
-            }};
-        }
-        let object = validate!(
-            "object authorization",
-            crate::skarbiec::validate_object_verifier()
-        );
-        let release = validate!(
-            "release publication",
-            crate::skarbiec::validate_release_verifier()
-        );
-        let machine = validate!(
-            "machine authorization",
-            crate::skarbiec::validate_machine_verifier()
-        );
-        let service = validate!(
-            "service authorization",
-            crate::skarbiec::validate_service_verifier()
-        );
-        let rate_verifier = validate!("rate-limit authorization", rate_limit::validate_verifier());
-        let rate_state = validate!("rate-limit state", self.rate_limiter.restore());
-        let integration = validate!("integration authorization", integration::validate_startup());
-        // Only `object` used to report why it failed, so every other boundary
-        // said "unavailable" and left the operator guessing which grant, item
-        // set or endpoint was at fault. The verdict is useless without it.
-        macro_rules! explain {
-            ($outcome:expr, $name:literal) => {
-                match &$outcome {
-                    Ok(Err(error)) => {
-                        eprintln!("[dashboard] {} boundary error: {error:?}", $name)
-                    }
-                    Err(error) => {
-                        eprintln!("[dashboard] {} boundary timed out: {error:?}", $name)
-                    }
-                    Ok(Ok(_)) => {}
-                }
-            };
-        }
-        explain!(object, "object authorization");
-        explain!(release, "release publication");
-        explain!(machine, "machine authorization");
-        explain!(service, "service authorization");
-        explain!(rate_verifier, "rate-limit authorization");
-        explain!(rate_state, "rate-limit state");
-        explain!(integration, "integration authorization");
-        let boundaries = BoundaryAvailability {
-            object: matches!(object, Ok(Ok(_))),
-            release: matches!(release, Ok(Ok(_))),
-            machine: matches!(machine, Ok(Ok(_))),
-            service: matches!(service, Ok(Ok(_))),
-            rate_limit_verifier: matches!(rate_verifier, Ok(Ok(_))),
-            rate_limit_state: matches!(rate_state, Ok(Ok(_))),
-            integration: matches!(integration, Ok(Ok(()))),
-        };
-        for (ready, name) in [
-            (boundaries.object, "object authorization"),
-            (boundaries.release, "release publication"),
-            (boundaries.machine, "machine authorization"),
-            (boundaries.service, "service authorization"),
-            (boundaries.rate_limit_verifier, "rate-limit authorization"),
-            (boundaries.rate_limit_state, "rate-limit state"),
-            (boundaries.integration, "integration authorization"),
-        ] {
-            if !ready {
-                eprintln!("[dashboard] {name} boundary unavailable");
+        for boundary in Boundary::ALL {
+            let mut outcome = self.validate_boundary(boundary).await;
+            let mut attempt = 1;
+            while attempt < attempts && outcome.is_err() {
+                eprintln!(
+                    "[dashboard] {} boundary attempt {attempt} of {attempts} did not settle; retrying",
+                    boundary.label()
+                );
+                tokio::time::sleep(retry_pause).await;
+                outcome = self.validate_boundary(boundary).await;
+                attempt += 1;
             }
+            // Only `object` used to report why it failed, so every other
+            // boundary said "unavailable" and left the operator guessing which
+            // grant, item set or endpoint was at fault. The verdict is useless
+            // without the reason, so the log carries the verifier's own words.
+            if let Err(error) = &outcome {
+                eprintln!("[dashboard] {} boundary error: {error}", boundary.label());
+                eprintln!("[dashboard] {} boundary unavailable", boundary.label());
+            }
+            self.record_boundary(boundary, outcome);
         }
-        *self
-            .boundaries
-            .write()
-            .expect("dashboard boundary state lock") = boundaries;
+
         eprintln!("[dashboard] listening on http://{local_addr}");
         self.serve_on(listener).await
     }
@@ -421,10 +620,8 @@ impl Dashboard {
                 return send_json(http_status("403"), &json!({"error": "forbidden"}));
             }
             let available = self
-                .boundaries
-                .read()
-                .expect("dashboard boundary state lock")
-                .integration;
+                .boundaries_available(&[Boundary::Integration])
+                .await;
             return integration::handle(request, available, &self.store).await;
         }
         match request.method.as_str() {
@@ -455,18 +652,10 @@ impl Dashboard {
             Ok(object) => object,
             Err(response) => return Some(response),
         };
-        let boundary_ready = {
-            let boundaries = self
-                .boundaries
-                .read()
-                .expect("dashboard boundary state lock");
-            if crate::object_store::release_policy_key(object.namespace(), object.key()).is_some() {
-                boundaries.release
-            } else {
-                boundaries.object
-            }
-        };
-        if !boundary_ready {
+        if !self
+            .boundaries_available(&[object_boundary(object.namespace(), object.key())])
+            .await
+        {
             return Some(send_json(
                 http_status("503"),
                 &json!({"error": "object authorization unavailable"}),
@@ -513,16 +702,23 @@ impl Dashboard {
             return send_json(http_status("403"), &json!({"error": "forbidden"}));
         }
         if path_no_query == "/healthz" || path_no_query == "/livez" {
-            let boundaries = *self
-                .boundaries
-                .read()
-                .expect("dashboard boundary state lock");
+            // Liveness answers before authorization, so it publishes the flat
+            // readiness booleans only: a boundary's reason names vault items,
+            // grants and endpoints, and an unauthenticated probe has no
+            // business reading those. The startup log carries the reason.
+            let (degraded, boundaries) = {
+                let boundaries = self
+                    .boundaries
+                    .read()
+                    .expect("dashboard boundary state lock");
+                (!boundaries.all_ready(), boundaries.ready_json())
+            };
             return send_json(
                 http_status("200"),
                 &json!({
                     "ok": true,
-                    "degraded": !boundaries.all_ready(),
-                    "boundaries": boundaries.json(),
+                    "degraded": degraded,
+                    "boundaries": boundaries,
                 }),
             );
         }
@@ -561,18 +757,10 @@ impl Dashboard {
                 Ok(scope) => scope,
                 Err(response) => return response,
             };
-            let boundary_ready = {
-                let boundaries = self
-                    .boundaries
-                    .read()
-                    .expect("dashboard boundary state lock");
-                if crate::object_store::release_policy_key(&namespace, &key_or_prefix).is_some() {
-                    boundaries.release
-                } else {
-                    boundaries.object
-                }
-            };
-            if !boundary_ready {
+            if !self
+                .boundaries_available(&[object_boundary(&namespace, &key_or_prefix)])
+                .await
+            {
                 return send_json(
                     http_status("503"),
                     &json!({"error": "object authorization unavailable"}),
@@ -607,17 +795,19 @@ impl Dashboard {
                 }
             }
         } else if !release_object_route {
-            let boundaries = *self
-                .boundaries
-                .read()
-                .expect("dashboard boundary state lock");
-            if path_no_query == "/api/service/status" && !boundaries.service {
+            // At most one of these two paths matches, so at most one boundary
+            // is ever revalidated here.
+            if path_no_query == "/api/service/status"
+                && !self.boundaries_available(&[Boundary::Service]).await
+            {
                 return send_json(
                     http_status("503"),
                     &json!({"error": "service authorization unavailable"}),
                 );
             }
-            if path_no_query == "/api/machine/status" && !boundaries.machine {
+            if path_no_query == "/api/machine/status"
+                && !self.boundaries_available(&[Boundary::Machine]).await
+            {
                 return machine_result_response(Err(MachineError::retryable(
                     "AUTH_UNAVAILABLE",
                     "machine authorization unavailable",
@@ -706,6 +896,7 @@ impl Dashboard {
         if path == "/api/service/status" {
             return Ok(self.get_service_status(request, query).await);
         }
+
         Ok(empty_response(404, "Not Found"))
     }
 
@@ -1322,15 +1513,13 @@ impl Dashboard {
         if path == "/api/fleet/join" {
             return fleet_join::join(&self.store, request).await;
         }
-        let boundaries = *self
-            .boundaries
-            .read()
-            .expect("dashboard boundary state lock");
-        let unavailable = (path == "/api/rate-limit/consume"
-            && (!boundaries.rate_limit_verifier || !boundaries.rate_limit_state))
-            || (matches!(path, "/api/machine/submit" | "/api/machine/cancel")
-                && !boundaries.machine)
-            || (path == "/api/service/restart" && !boundaries.service);
+        let required: &[Boundary] = match path {
+            "/api/rate-limit/consume" => &[Boundary::RateLimitVerifier, Boundary::RateLimitState],
+            "/api/machine/submit" | "/api/machine/cancel" => &[Boundary::Machine],
+            "/api/service/restart" => &[Boundary::Service],
+            _ => &[],
+        };
+        let unavailable = !self.boundaries_available(required).await;
         if unavailable {
             if matches!(path, "/api/machine/submit" | "/api/machine/cancel") {
                 return machine_result_response(Err(MachineError::retryable(
@@ -1393,18 +1582,10 @@ impl Dashboard {
             Ok(object) => object,
             Err(response) => return response,
         };
-        let boundary_ready = {
-            let boundaries = self
-                .boundaries
-                .read()
-                .expect("dashboard boundary state lock");
-            if crate::object_store::release_policy_key(object.namespace(), object.key()).is_some() {
-                boundaries.release
-            } else {
-                boundaries.object
-            }
-        };
-        if !boundary_ready {
+        if !self
+            .boundaries_available(&[object_boundary(object.namespace(), object.key())])
+            .await
+        {
             return send_json(
                 http_status("503"),
                 &json!({"error": "object authorization unavailable"}),
@@ -1466,12 +1647,7 @@ impl Dashboard {
                 &json!({"error": "release objects are immutable and cannot be deleted"}),
             );
         }
-        if !self
-            .boundaries
-            .read()
-            .expect("dashboard boundary state lock")
-            .object
-        {
+        if !self.boundaries_available(&[Boundary::Object]).await {
             return send_json(
                 http_status("503"),
                 &json!({"error": "object authorization unavailable"}),

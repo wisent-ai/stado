@@ -409,9 +409,14 @@ pub enum ServiceCommands {
         #[arg(long)]
         host: String,
         /// Absolute path, ON THE TARGET HOST, of the program the unit runs.
+        /// Omit it to render the unit from the service's own declaration,
+        /// which is what makes a declared service reinstallable from the
+        /// document instead of from a plist somebody installed by hand.
         #[arg(long)]
-        from: String,
-        /// One argument the unit is started with; repeat for each.
+        from: Option<String>,
+        /// One argument the unit is started with; repeat for each. Only with
+        /// `--from`: the declared argument vector belongs to the declared
+        /// program and the two are never mixed.
         #[arg(long = "arg")]
         args: Vec<String>,
         /// Why this host must run this unit. Required: `ensure` installs units
@@ -627,7 +632,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             ensure(EnsureOptions {
                 name: &name,
                 host: &host,
-                from: &from,
+                from: from.as_deref(),
                 args: &args,
                 reason: &reason,
                 as_json: json,
@@ -699,9 +704,7 @@ pub(crate) async fn declared_matching(
         // the registry's own precise refusal rather than "no such service".
         host_channel::canonical_target(host).await.map_err(click)?;
     }
-    let registry = targets::fetch_registry_remote()
-        .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    let registry = registry::read_registry().await?;
     let mut found: Vec<ManagedService> = Vec::new();
     for target in registry.local_targets() {
         if host.is_some_and(|host| target.name != host) {
@@ -762,9 +765,7 @@ async fn list(json: bool) -> Result<(), CmdError> {
 /// than dropped — "no unowned processes" and "nobody looked" are the fold this
 /// whole group refuses to make.
 async fn list_unowned(json: bool) -> Result<(), CmdError> {
-    let registry = targets::fetch_registry_remote()
-        .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    let registry = registry::read_registry().await?;
     let runner = production_runner();
     let mut found: Vec<service::UnownedProcess> = Vec::new();
     let mut failures: Vec<String> = Vec::new();
@@ -1013,14 +1014,18 @@ fn render_status(
             None => "last launchd exit unknown".to_string(),
         };
         println!("failure: {} {}: {}", failure.host, failure.unit, exit);
-        // A failed system LaunchDaemon cannot be restarted over the approved
-        // channel; say so here, where the operator is reading why.
+        // A failed system LaunchDaemon has exactly one repair over the
+        // approved channel, and it has conditions; say which, here, where the
+        // operator is reading why.
         if rows.iter().any(|row| {
             row.service.host == failure.host
                 && row.service.unit_id() == failure.unit.as_str()
                 && UnitDomain::from_path(&row.service.path).requires_privileged_bootstrap()
         }) {
-            println!("  unit: system LaunchDaemon — restart requires a privileged bootstrap");
+            println!(
+                "  unit: system LaunchDaemon — `service restart` can only end its process and let \
+                 launchd's KeepAlive replace it; loading it takes sudo on the host"
+            );
         }
         if let Some(error_origin) = &failure.error_origin {
             println!("  stderr: {error_origin}");
@@ -1772,13 +1777,90 @@ async fn deploy(
 struct EnsureOptions<'a> {
     name: &'a str,
     host: &'a str,
-    from: &'a str,
+    from: Option<&'a str>,
     args: &'a [String],
     reason: &'a str,
     as_json: bool,
 }
 
-/// `service ensure NAME --host HOST --from PATH --reason WHY`.
+/// What a unit runs, and which declaration said so.
+struct UnitProgram {
+    program: String,
+    args: Vec<String>,
+    /// `"flag"`, `"registry"` or `"shipped"`.
+    source: &'static str,
+}
+
+/// The launchd label a declaration carries, or a systemd unit name without
+/// its suffix — the spelling `deploy::service::plan_deploy_labelled` renders
+/// at.
+fn declared_label(service: &ManagedService) -> Option<&str> {
+    let unit_id = service.unit_id();
+    Some(unit_id.strip_suffix(".service").unwrap_or(unit_id)).filter(|label| !label.is_empty())
+}
+
+/// The program and argument vector `ensure` renders the unit from.
+///
+/// Flags win, because an operator correcting a wrong declaration has to be
+/// able to. Absent them, the host's own `services[]` entry answers: a
+/// declaration that carries its program is one this command can reinstall
+/// from the document alone, which is the whole difference between a declared
+/// service and a plist somebody installed by hand — the resolver and the
+/// local dashboard on `lukasz-macbook` were the second kind, and nothing in
+/// the product knew their restart policy. Last, the declaration shipped in
+/// this build ([`targets::load_bundled_registry`]), which is how a unit
+/// declared in a release reaches a canonical document published before it:
+/// the first `ensure` writes it there.
+fn unit_program(
+    host: &str,
+    name: &str,
+    from: Option<&str>,
+    args: &[String],
+    declared: Option<&ManagedService>,
+) -> Result<UnitProgram, CmdError> {
+    if let Some(from) = from {
+        return Ok(UnitProgram {
+            program: from.to_string(),
+            args: args.to_vec(),
+            source: "flag",
+        });
+    }
+    if !args.is_empty() {
+        return Err(CmdError::usage(
+            "--arg needs --from: an argument vector without the program it belongs to would be \
+             appended to a declared program the caller never named",
+        ));
+    }
+    if let Some(declared) = declared.filter(|candidate| !candidate.program.is_empty()) {
+        return Ok(UnitProgram {
+            program: declared.program.clone(),
+            args: declared.args.clone(),
+            source: "registry",
+        });
+    }
+    let bundled =
+        targets::load_bundled_registry().map_err(|error| CmdError::click(error.to_string()))?;
+    let shipped = bundled
+        .lookup(host)
+        .map(service::declared_services)
+        .unwrap_or_default()
+        .into_iter()
+        .find(|candidate| candidate.matches(name) && !candidate.program.is_empty());
+    if let Some(shipped) = shipped {
+        return Ok(UnitProgram {
+            program: shipped.program,
+            args: shipped.args,
+            source: "shipped",
+        });
+    }
+    Err(CmdError::usage(format!(
+        "nothing declares what {name} runs on {host}: pass --from PATH (repeating --arg for each \
+         argument), or give its registry services[] entry a \"program\" and \"args\" so the \
+         declaration is the source of the unit"
+    )))
+}
+
+/// `service ensure NAME --host HOST [--from PATH] --reason WHY`.
 ///
 /// The idempotent half of `deploy`, and the only one that works on an ssh
 /// login with no Aqua session. Two facts decide everything it does, and both
@@ -1797,18 +1879,44 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
         .await
         .map_err(click)?;
     let host = target.name.clone();
-    let plan = service::plan_deploy(options.name, options.from, options.args).map_err(click)?;
+
+    // The declaration is looked up twice on purpose. This one answers what the
+    // unit runs and so has to precede the plan; the one below decides whether
+    // the document needs writing and matches the rendered label and unit name
+    // as well as the operator's NAME.
+    let declared = service::declared_services(&target);
+    let existing = declared
+        .iter()
+        .find(|candidate| candidate.matches(options.name));
+    let unit = unit_program(&host, options.name, options.from, options.args, existing)?;
+    if unit.source == "shipped" {
+        eprintln!(
+            "{host} declares no program for {}; rendering the unit from the declaration shipped \
+             with this build: {} {}",
+            options.name,
+            unit.program,
+            unit.args.join(" ")
+        );
+    }
+    // At the label the declaration already carries, when it carries one. A
+    // minted label for a unit that exists under another one is a second unit,
+    // not this one.
+    let plan = match existing.and_then(declared_label) {
+        Some(label) => {
+            service::plan_deploy_labelled(options.name, label, &unit.program, &unit.args)
+        }
+        None => service::plan_deploy(options.name, &unit.program, &unit.args),
+    }
+    .map_err(click)?;
 
     // An existing declaration is not a refusal here, and that is the whole
     // difference from `deploy`: asserting a unit that is already declared and
     // already running is what makes this safe to run twice, or from a script.
-    let already = service::declared_services(&target)
-        .into_iter()
-        .find(|candidate| {
-            candidate.matches(options.name)
-                || candidate.matches(&plan.label)
-                || candidate.matches(&plan.unit)
-        });
+    let already = declared.into_iter().find(|candidate| {
+        candidate.matches(options.name)
+            || candidate.matches(&plan.label)
+            || candidate.matches(&plan.unit)
+    });
 
     let runner = production_runner();
     let outcome = service::ensure_service(&target, &plan, &runner)
@@ -1832,14 +1940,19 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
         return Err(CmdError::click(detail));
     }
 
-    let record = service::record_from_ensure(&host, options.name, &outcome, &now());
+    let mut record = service::record_from_ensure(&host, options.name, &outcome, &now());
+    record.program = unit.program;
+    record.args = unit.args;
     let generation = match &already {
-        // Declared, at the same file, by the registry: the document already
-        // says what this pass just confirmed, so nothing is written to it.
+        // Declared, at the same file and running the same program, by the
+        // registry: the document already says what this pass just confirmed,
+        // so nothing is written to it.
         Some(existing)
             if existing.source == SOURCE_REGISTRY
                 && existing.path == record.path
-                && existing.kind == record.kind =>
+                && existing.kind == record.kind
+                && existing.program == record.program
+                && existing.args == record.args =>
         {
             None
         }

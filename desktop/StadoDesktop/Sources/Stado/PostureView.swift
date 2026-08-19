@@ -14,10 +14,16 @@ struct FleetPosture {
         let detail: String
         let meta: String
         let destination: ConsoleDestination
+        /// The host this decision is about, when it is about one. The route
+        /// carries it so the Hosts table opens on that row instead of on twelve.
+        var host: String?
     }
 
     let snapshot: DashboardSnapshot
     let report: CleanupReport?
+    /// What `stado host link` said about each registry host. Read here rather
+    /// than re-derived: the verdict and the blockers are the command's.
+    let links: [HostLink]
 
     var liveHosts: [WorkerNode] { snapshot.workers.filter { $0.status == .live } }
     var staleHosts: [WorkerNode] { snapshot.workers.filter { $0.status == .stale } }
@@ -30,8 +36,47 @@ struct FleetPosture {
 
     var newestFailure: FailedJob? { snapshot.recentFailed.first }
 
+    /// Hosts with a silence record that has not closed, longest quiet first.
+    ///
+    /// A silence opens when the newest beacon for a host is older than the
+    /// declared threshold and closes on the first fresher beacon, so an open one
+    /// is a machine that is quiet right now.
+    var openSilences: [(link: HostLink, silence: HostSilenceRecord)] {
+        links
+            .compactMap { link in link.openSilence.map { (link: link, silence: $0) } }
+            .sorted { lhs, rhs in
+                let left = lhs.silence.elapsedSeconds ?? 0
+                let right = rhs.silence.elapsedSeconds ?? 0
+                return left == right ? lhs.link.host < rhs.link.host : left > right
+            }
+    }
+
+    /// The command every silence row reproduces, named once under the section
+    /// rather than repeated on each row.
+    var silenceCommand: String? {
+        openSilences.first.map { HostLinkStore.commandLine(host: $0.link.host) }
+    }
+
     var decisions: [Decision] {
         var items: [Decision] = []
+        // First: a host nobody can reach is why the rows under it look the way
+        // they do, and it is the one state that left no trace at all before
+        // silence records existed.
+        for entry in openSilences {
+            items.append(
+                Decision(
+                    id: "silent-\(entry.link.host)-\(entry.silence.startedAt)",
+                    symbol: "wifi.slash",
+                    tone: .danger,
+                    title: "\(entry.link.host) has been silent for \(StadoFormat.duration(entry.silence.elapsedSeconds))",
+                    detail: entry.silence.firstReaderError
+                        ?? (entry.link.blockers.first ?? "No beacon has arrived since \(entry.silence.startedAt)."),
+                    meta: entry.link.sshReachable ? "ssh answers" : "ssh silent too",
+                    destination: .hosts,
+                    host: entry.link.host
+                )
+            )
+        }
         for host in unavailableHosts {
             items.append(
                 Decision(
@@ -171,9 +216,13 @@ struct PostureView: View {
     @ObservedObject var store: OperationsStore
     @ObservedObject var cleanupStore: CleanupStore
     @ObservedObject var fleetStore: FleetControlStore
+    @ObservedObject var linkStore: HostLinkStore
     let scope: String
     let firstRunNotice: String?
     let route: (ConsoleDestination) -> Void
+    /// Hosts, with one host already selected. A decision row about one machine
+    /// that lands on a table of twelve has asked the operator to find it twice.
+    let routeToHost: (String) -> Void
     let refresh: () async -> Void
 
     var body: some View {
@@ -182,8 +231,15 @@ struct PostureView: View {
             scope: scope,
             freshness: "Read \(ConsoleFormat.relative(store.lastUpdated))",
             actions: [
-                WisentAction("Refresh", symbol: "arrow.clockwise", isEnabled: !store.isRefreshing) {
-                    Task { await refresh() }
+                WisentAction(
+                    "Refresh",
+                    symbol: "arrow.clockwise",
+                    isEnabled: !store.isRefreshing && !linkStore.isRefreshing
+                ) {
+                    Task {
+                        await refresh()
+                        await linkStore.refresh(hosts: linkHostNames)
+                    }
                 }
             ]
         ) {
@@ -226,11 +282,18 @@ struct PostureView: View {
                 )
             }
         }
+        .task(id: linkHostNames) {
+            await linkStore.refresh(hosts: linkHostNames)
+        }
     }
 
     @ViewBuilder
     private func body(for snapshot: DashboardSnapshot) -> some View {
-        let posture = FleetPosture(snapshot: snapshot, report: cleanupStore.report)
+        let posture = FleetPosture(
+            snapshot: snapshot,
+            report: cleanupStore.report,
+            links: linkStore.links
+        )
 
         if posture.queueBlocked {
             WisentAlertPanel(
@@ -312,14 +375,33 @@ struct PostureView: View {
                                 detail: decision.detail,
                                 meta: decision.meta,
                                 action: WisentAction(decision.destination.title, symbol: decision.destination.symbol) {
-                                    route(decision.destination)
+                                    if let host = decision.host {
+                                        routeToHost(host)
+                                    } else {
+                                        route(decision.destination)
+                                    }
                                 }
                             )
                         }
                     }
                 }
             }
+            if let command = posture.silenceCommand {
+                // The footer, once, under every row that reproduces from it —
+                // rather than the same command repeated on each row.
+                Text(command)
+                    .font(WisentTypeScale.identifierSmall())
+                    .foregroundStyle(WisentDesign.muted)
+                    .textSelection(.enabled)
+                    .padding(.top, WisentDesign.Space.x2)
+            }
         }
+    }
+
+    /// The same declared registry projection the Hosts screen asks, so the two
+    /// screens never disagree about which hosts were even asked.
+    private var linkHostNames: [String] {
+        StadoRegistryHosts.names(targets: fleetStore.targets, snapshot: store.snapshot)
     }
 
     private func signals(_ posture: FleetPosture) -> [WisentSignal] {

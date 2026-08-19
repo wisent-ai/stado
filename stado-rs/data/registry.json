@@ -843,7 +843,24 @@
           "label": "com.wisent.compute.service.com.wisent.stado-dashboard",
           "path": "/Users/lukaszbartoszcze/Library/LaunchAgents/com.wisent.compute.service.com.wisent.stado-dashboard.plist",
           "kind": "launchd",
-          "managed_since": "2026-08-13T05:03:28.689793+00:00"
+          "managed_since": "2026-08-13T05:03:28.689793+00:00",
+          "program": "/Users/lukaszbartoszcze/.stado/stado-dashboard-launcher",
+          "args": []
+        },
+        {
+          "name": "com.wisent.stado-resolver",
+          "unit": "",
+          "label": "com.wisent.stado-resolver",
+          "path": "/Users/lukaszbartoszcze/Library/LaunchAgents/com.wisent.stado-resolver.plist",
+          "kind": "launchd",
+          "managed_since": "2026-08-19T12:00:00+00:00",
+          "program": "/Users/lukaszbartoszcze/.stado/bin/stado",
+          "args": [
+            "resolver",
+            "serve",
+            "--target",
+            "lukasz-macbook"
+          ]
         },
         {
           "name": "com.wisent.transcript-lake-stream",

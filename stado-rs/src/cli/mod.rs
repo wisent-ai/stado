@@ -1090,10 +1090,17 @@ enum HostCommands {
         json: bool,
     },
     /// Publish one locally collected beacon through the scoped Stado health API.
+    ///
+    /// The `link` block (tailnet path, sleep/wake, interface changes) is
+    /// collected here, on the host, and merged into the document about this
+    /// machine before it is published.
     #[command(name = "publish-beacon")]
     PublishBeacon {
         /// JSON beacon file, or '-' for stdin.
         source: String,
+        /// Print the document that would be published; publish nothing.
+        #[arg(long)]
+        print: bool,
     },
     /// Recover a registry-managed macOS host through its approved channel.
     Recover {
@@ -1180,6 +1187,19 @@ enum HostCommands {
     Gates {
         host: String,
         /// Emit the gates as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Why TARGET went quiet: beacon age, the path and endpoint it published,
+    /// its last sleep and wake, its interface changes, the silences recorded
+    /// against it, and what readers refused because of them.
+    ///
+    /// Read-only and safe against a live host. charless-mac-mini was
+    /// unreachable from 18:29 to 18:35 UTC on 2026-08-19 and came back on a
+    /// direct path; nothing in this product carried a trace of it.
+    Link {
+        target: String,
+        /// Emit the link report as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -1859,7 +1879,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         },
         Commands::Host(sub) => match sub {
             HostCommands::Health { target, json } => host::health(&target, json).await,
-            HostCommands::PublishBeacon { source } => host::publish_beacon(&source).await,
+            HostCommands::PublishBeacon { source, print } => {
+                host::publish_beacon(&source, print).await
+            }
             HostCommands::Recover {
                 target,
                 bundled_registry,
@@ -1931,6 +1953,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 json,
             } => host::cleanup(&target, dry_run, json).await,
             HostCommands::Gates { host: target, json } => host::gates(&target, json).await,
+            HostCommands::Link { target, json } => host::link(&target, json).await,
             // `--dry-run` is the default and needs no argument: `--apply` is
             // the only flag that changes anything, and clap already refuses
             // the two together.
