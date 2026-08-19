@@ -1350,4 +1350,3 @@ pub async fn revoke_invite(id: &str) -> Result<bool, String> {
     );
     Ok(true)
 }
-

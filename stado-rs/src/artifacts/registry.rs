@@ -481,4 +481,3 @@ fn stringify_json_scalar(value: &Value) -> String {
         other => other.to_string(),
     }
 }
-

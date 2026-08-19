@@ -827,4 +827,3 @@ fn gce_error_kind(exc: &GceError) -> &'static str {
         GceError::Api(_) => "GoogleAPICallError",
     }
 }
-

@@ -475,4 +475,3 @@ async fn run_inner(command: FixCommands) -> Result<i32, FixError> {
         }
     }
 }
-

@@ -108,4 +108,3 @@ pub async fn maybe_drain_or_upgrade(
     }
     DriftOutcome::DriftDetected
 }
-

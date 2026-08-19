@@ -248,4 +248,3 @@ pub fn log_failure(point: &str, service: &str, code: FailureCode, detail: &str) 
         code.operator_summary()
     );
 }
-

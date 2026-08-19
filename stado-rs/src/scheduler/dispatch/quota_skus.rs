@@ -724,4 +724,3 @@ pub async fn azure_request_all_families(new_limit: i64, locations: &[String]) ->
     }
     out
 }
-

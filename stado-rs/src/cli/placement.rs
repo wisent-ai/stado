@@ -1530,4 +1530,3 @@ pub async fn publish_placement_policy(
     }
     Ok(())
 }
-

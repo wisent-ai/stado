@@ -843,4 +843,3 @@ pub fn render_html(state: &Value, cleanup: &Value, refresh: i64) -> String {
     out.push_str("</body></html>");
     out
 }
-

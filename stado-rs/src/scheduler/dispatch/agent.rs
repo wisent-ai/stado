@@ -934,4 +934,3 @@ pub async fn dispatch_agent_vms_with_template(
     }
     Ok(created)
 }
-

@@ -705,4 +705,3 @@ pub fn judge(
 
     finding
 }
-

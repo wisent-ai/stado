@@ -1626,4 +1626,3 @@ pub async fn release_host(
     };
     release_target(&target, &request, self_store, runner).await
 }
-
