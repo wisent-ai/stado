@@ -47,6 +47,11 @@ pub enum ReleaseCommands {
     Proxy(ReleaseProxyArgs),
     /// Show desired and observed rollout state.
     Status(ReleaseStatusArgs),
+    /// Read a release candidate's own stdout/stderr off the target host.
+    Logs(crate::cli::release_evidence::ReleaseLogsArgs),
+    /// One verdict over desired state, the candidate, quarantine and the
+    /// host's claiming gates.
+    Doctor(crate::cli::release_evidence::ReleaseDoctorArgs),
     /// List and retire the digests a host refuses to roll out again.
     #[command(subcommand)]
     Quarantine(crate::cli::release_quarantine::QuarantineCommands),
@@ -746,6 +751,12 @@ pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
             .await
             .map_err(CmdError::click),
         ReleaseCommands::Status(args) => status(&args).await,
+        ReleaseCommands::Logs(args) => {
+            crate::cli::release_evidence::dispatch_logs(&args).await
+        }
+        ReleaseCommands::Doctor(args) => {
+            crate::cli::release_evidence::dispatch_doctor(&args).await
+        }
         ReleaseCommands::Quarantine(sub) => {
             crate::cli::release_quarantine::dispatch(sub).await
         }
