@@ -103,6 +103,8 @@ pub struct ResolverAdapter {
     pub consumer: String,
     #[serde(default = "default_adapter_idle_seconds")]
     pub idle_seconds: u64,
+    #[serde(default = "default_adapter_connect_seconds")]
+    pub connect_seconds: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,6 +138,18 @@ fn default_max_stale_seconds() -> u64 {
 /// everything.
 fn default_adapter_idle_seconds() -> u64 {
     default_max_stale_seconds().saturating_add(default_max_stale_seconds())
+}
+
+/// Budget for the first upstream byte on a freshly proxied connection.
+///
+/// Establishment is the one window where `idle_seconds` cannot help: nothing
+/// has flowed yet, so a dead backend would otherwise hold the client until the
+/// idle window lapses. Ten seconds is generous for a healthy TCP connect plus
+/// SSH channel open, and adapters fronting a service that legitimately answers
+/// slowly declare a larger budget per adapter, the same way they declare
+/// `idle_seconds`.
+fn default_adapter_connect_seconds() -> u64 {
+    10
 }
 
 fn identifier(value: &str) -> bool {
@@ -295,6 +309,11 @@ fn validate_resolver_config(
         validate_identifier(&adapter.consumer, &format!("{adapter_location}.consumer"))?;
         if adapter.idle_seconds == 0 {
             return Err(format!("{adapter_location}.idle_seconds: must be positive"));
+        }
+        if adapter.connect_seconds == 0 {
+            return Err(format!(
+                "{adapter_location}.connect_seconds: must be positive"
+            ));
         }
         let bind: std::net::SocketAddr = adapter
             .bind
