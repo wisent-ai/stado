@@ -1,5 +1,8 @@
 //! `stado status [FILTER_ID]`: provider-neutral Stado queue status.
 
+use chrono::Utc;
+
+use crate::deploy::fleet_claim;
 use crate::models::Job;
 use crate::queue::submit::default_store;
 
@@ -77,6 +80,7 @@ async fn status_queue(filter_id: Option<&str>) -> Result<(), CmdError> {
 
     // Slow path: no filter, or filter is a batch_id — must scan all blobs.
     let all_jobs = store.list_all_jobs().await?;
+    let mut queued_listed = false;
     for state in STATES.iter().copied() {
         for job in &all_jobs[state] {
             if let Some(filter) = filter_id {
@@ -84,6 +88,7 @@ async fn status_queue(filter_id: Option<&str>) -> Result<(), CmdError> {
                     continue;
                 }
             }
+            queued_listed |= state == "queue";
             print_job_row(job, state);
         }
     }
@@ -96,5 +101,27 @@ async fn status_queue(filter_id: Option<&str>) -> Result<(), CmdError> {
         all_jobs["failed"].len(),
         all_jobs["cancelled"].len(),
     );
+
+    // Why the queue is not moving, under the queue it is not moving. A row
+    // that says `queue` and a count that says "1 queued" are the same
+    // sentence an empty fleet and a busy one both print; job 2c4a47aa sat
+    // here for 121 hours while nothing in the product said that not one host
+    // was publishing capacity. Printed only when work is queued AND nothing
+    // can take it, and never as a failure: this listing is a report, so the
+    // exit status stays zero either way.
+    // The LISTING's queued rows, not the store's: a filtered listing that
+    // shows no queued work is not the surface this verdict explains.
+    if !queued_listed {
+        return Ok(());
+    }
+    let registry = crate::targets::load_registry_auto()
+        .await
+        .map_err(|err| CmdError::click(err.to_string()))?;
+    let claim = fleet_claim::read_fleet_claim(&store, &registry, Utc::now())
+        .await
+        .map_err(|err| CmdError::click(err.to_string()))?;
+    for line in claim.lines() {
+        println!("{line}");
+    }
     Ok(())
 }
