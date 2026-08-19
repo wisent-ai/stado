@@ -327,6 +327,38 @@ pub(crate) async fn recent_runs(
             .cmp(a["updated_at"].as_str().unwrap_or(""))
     });
     runs.truncate(limit);
+    // An in-flight run says only "publishing", which reads as a promise. The
+    // run object already names each platform's queue job, and the queue knows
+    // exactly where that job stands, so the two are joined here: every
+    // platform of a live run carries the job's current queue state. Terminal
+    // runs are left alone — their platform states are already the answer.
+    for run in &mut runs {
+        let live = matches!(
+            run["state"].as_str(),
+            Some("submitting" | "waiting" | "publishing" | "delivering")
+        );
+        if !live {
+            continue;
+        }
+        let Some(platforms) = run["platforms"].as_object_mut() else {
+            continue;
+        };
+        for record in platforms.values_mut() {
+            let Some(job_id) = record["job_id"].as_str().map(str::to_owned) else {
+                continue;
+            };
+            for state in ["running", "queue", "completed", "uploaded", "failed", "cancelled"] {
+                match store.read_job(state, &job_id).await {
+                    Ok(Some(_)) => {
+                        record["job_state"] = Value::String(state.to_string());
+                        break;
+                    }
+                    Ok(None) => continue,
+                    Err(_) => break,
+                }
+            }
+        }
+    }
     Ok(runs)
 }
 fn identity(
