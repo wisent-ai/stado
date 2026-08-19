@@ -130,6 +130,8 @@ pub const DELIVERED_TREES_STAGE: &str = "delivered_trees";
 pub const CHROMIUM_CLONES_STAGE: &str = "chromium_clones";
 /// The stage name for terminal queue-job workdirs and bootstrap scratch.
 pub const QUEUE_WORKDIRS_STAGE: &str = "queue_workdirs";
+/// The stage name for macOS-style home trees found on a Linux host.
+pub const FOREIGN_HOME_TREES_STAGE: &str = "foreign_home_trees";
 
 /// The only prefix a macOS temporary container has, and the guard on the one
 /// root this module does not spell itself.
@@ -265,6 +267,20 @@ for workroot in @WORK_ROOTS@; do
   done
 done
 printf 'STADO_RECLAIM_STAGE\tqueue_workdirs\t%s\t%s\n' "$before" "$(free_kb)"
+
+before=$(free_kb)
+# macOS-style home trees on a Linux host. `/Users/<name>` exists on Linux only
+# as debris of a job or delivery that carried a hard-wired Mac path — on
+# 2026-08-19 one such tree held 10.9 GiB of build cache on the GPU builder.
+# The uname gate makes this stage a no-op on every macOS host, where /Users is
+# the real home root; held() still protects a tree a live process names.
+if [ "$(/usr/bin/uname 2>/dev/null || /bin/uname)" = "Linux" ] && [ -d /Users ]; then
+  for entry in /Users/*; do
+    [ -d "$entry" ] || continue
+    reclaim "$entry" foreign_home_trees
+  done
+fi
+printf 'STADO_RECLAIM_STAGE\tforeign_home_trees\t%s\t%s\n' "$before" "$(free_kb)"
 
 before=$(free_kb)
 # One directory of versions: keep what `current` resolves to, keep the newest,
