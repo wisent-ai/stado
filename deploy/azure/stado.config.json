@@ -176,6 +176,7 @@
       "trading-autonomy": {"item": "trading-autonomy-object-api", "prefixes": ["agents/", "billing/", "media/"], "actions": ["delete", "get", "put"]},
       "trading-tools": {"item": "trading-tools-object-api", "prefixes": ["stock-context/"], "actions": ["delete", "get", "list", "put", "stat"]},
       "weles": {"item": "weles-object-api", "prefixes": ["recordings/"], "actions": ["delete", "get", "list", "put", "stat"]},
+      "weles-captures": {"item": "weles-object-api", "prefixes": [""], "actions": ["get", "list", "put", "stat"]},
       "wisent-app": {"item": "wisent-app-object-api", "prefixes": ["character-previews/", "character-videos/", "characters/", "classifiers/", "dual-video/", "generation-inputs/", "generation-jobs/", "lora_tests/", "loras/", "manual-jobs/", "media/", "processing/", "rooms/", "training-inputs/", "verification/"], "actions": ["delete", "get", "list", "put"]},
       "wisent-backend": {"item": "wisent-backend-object-client", "prefixes": ["__healthcheck__", "activations/", "benchmarks/", "characters/", "contrastive_pairs/", "control_vectors/", "datasets/", "evaluation_results/", "images/", "optimization/", "personas/", "profiles/", "representations/", "state/", "traits/", "unique_personas/", "vector_stores/"], "actions": ["delete", "get", "list", "put", "stat"]},
       "wisent-images": {"item": "wisent-images-object-api", "prefixes": ["images/generated/", "models/base/sha256/", "models/loras/sha256/"], "actions": ["get", "put", "stat"]},
