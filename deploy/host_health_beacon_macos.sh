@@ -147,26 +147,45 @@ relay_targets=${WC_BEACON_RELAY_TARGETS:-$("$STADO_BIN" registry pull | "$PYTHON
 # Seconds after which a reader calls a host health document stale. A host inside
 # this window is reporting for itself and must not be spoken over.
 READ_FRESH_SECONDS="${WC_BEACON_RELAY_FRESH_SECONDS:-180}"
-READ_FRESH='import json,sys
-limit = float(sys.argv[1])
+RELAY_TOKEN=$(/bin/cat "${STADO_HOST_HEALTH_API_TOKEN_FILE:-$HOME/.stado/wisent-queue-object-api-token}" 2>/dev/null || printf '')
+# Which hosts is nobody reporting? Ask the store this beacon publishes to, not
+# `registry beacon-age`: that command reads through the CLI's storage layer,
+# which falls back to a same-disk mirror when the fleet endpoint hiccups and then
+# reports hours-old ages for documents that are seconds old. A relay driven off
+# those numbers speaks over healthy hosts with a thinner unit list than they
+# publish for themselves. A target and its beacon file are also spelled
+# differently on a machine named twice, so try the name and every hostname the
+# registry declares for it.
+READ_STALE='import datetime, json, sys, urllib.parse, urllib.request
+base, token, limit = sys.argv[1].rstrip("/"), sys.argv[2], float(sys.argv[3])
 document = json.load(sys.stdin)
-rows = document.get("hosts", []) if isinstance(document, dict) else document
-fresh = []
-for row in rows:
-    age = row.get("age_seconds")
-    if isinstance(age, (int, float)) and age < limit:
-        fresh.append(str(row.get("host") or ""))
-print(" ".join(name for name in fresh if name))'
-fresh_targets=$("$STADO_BIN" registry beacon-age --json 2>/dev/null \
-    | "$PYTHON_BIN" -c "$READ_FRESH" "$READ_FRESH_SECONDS" 2>/dev/null || printf '')
+now = datetime.datetime.now(datetime.timezone.utc)
+def age(slug):
+    uri = "stado://probierz/host_health/%s.json" % slug
+    url = "%s/api/object?uri=%s" % (base, urllib.parse.quote(uri, safe=""))
+    request = urllib.request.Request(url, headers={"Authorization": "Bearer %s" % token})
+    try:
+        body = json.load(urllib.request.urlopen(request, timeout=10))
+        stamp = (body.get("reported_at") or "").replace("Z", "+00:00")
+        return (now - datetime.datetime.fromisoformat(stamp)).total_seconds()
+    except Exception:
+        return None
+stale = []
+for entry in document.get("targets", []):
+    name = entry.get("name") or ""
+    spellings = [name] + [h.lower().removesuffix(".local") for h in entry.get("hostnames", []) or []]
+    ages = [value for value in (age(slug) for slug in dict.fromkeys(spellings)) if value is not None]
+    if not ages or min(ages) >= limit:
+        stale.append(name)
+print(" ".join(stale))'
+stale_targets=$("$STADO_BIN" registry pull 2>/dev/null \
+    | "$PYTHON_BIN" -c "$READ_STALE" "$STADO_HOST_HEALTH_API_URL" "$RELAY_TOKEN" "$READ_FRESH_SECONDS" 2>/dev/null || printf '')
 for relay in $relay_targets; do
     [ "$relay" != "$this_target" ] || continue
-    # Somebody is already reporting this host inside the read window: speaking
-    # over it can only make the fleet's picture older than it is.
-    case " $fresh_targets " in
-        *" $relay "*)
-            continue
-            ;;
+    # Reporting for itself: leave it alone.
+    case " $stale_targets " in
+        *" $relay "*) ;;
+        *) continue ;;
     esac
     # A host that publishes for itself has no collector under this name, and
     # the failure it returns is expected rather than interesting. Keep the one
