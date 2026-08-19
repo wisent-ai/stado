@@ -1226,11 +1226,28 @@ it stays a deliberate, separate step. Collapsing the two would let a poller
 publish an unverified build to the fleet. `stado host converge --apply` still
 does the delivery.
 
+**Editing a recipe.** `stado builds edit` takes the same flags as `add`,
+every one optional: a flag not given leaves its field alone, and
+`--artifact`/`--platform` given at all REPLACE the recorded list. The state
+semantics decide whether the recipe re-fires. A changed `--repo` or
+`--branch` is a *different source*, so the edit clears `last_seen_ref` and
+every recorded run — the runs describe commits of the old source, and a
+retained head would leave the new source's current head unbuilt until it
+happened to move. A changed `--command`, artifact set, platform set,
+interval or auto-declare flag says how the *same* source is built, so
+`last_seen_ref` and the runs are kept: this head was already built, and the
+poller only fires when it moves. An edit naming no flag at all is refused,
+and an edit whose values already stand writes nothing and says so.
+`enabled` is not editable here — `enable` and `disable` own it, because
+whether a recipe builds is a decision, never a side effect of correcting a
+build command.
+
 | Subcommand | Behavior |
 |---|---|
 | `stado builds list [--json]` | Every recipe: source, enabled flag, auto-declare flag, last seen commit, then one run row per platform (platform, status, version, declared, when). `--json` emits the recipe array verbatim. |
-| `stado builds add --name N --repo URL --branch B --command C --artifact PATH... --platform P... [--auto-declare] [--interval-seconds N]` | Add a recipe, validated (kebab-case name, `https://` repo, relative artifact paths, known platform words; a platform named twice is built once). Recipes start **disabled**: polling a repository is explicit opt-in, never a side effect of writing it down. |
-| `stado builds remove NAME` | Delete the recipe. |
+| `stado builds add --name N --repo URL --branch B --command C --artifact PATH... --platform P... [--auto-declare] [--interval-seconds N] [--json]` | Add a recipe, validated (kebab-case name, `https://` repo, relative artifact paths, known platform words; a platform named twice is built once). Recipes start **disabled**: polling a repository is explicit opt-in, never a side effect of writing it down. `--json` emits the created recipe. |
+| `stado builds edit NAME [--repo URL] [--branch B] [--command C] [--artifact PATH...] [--platform P...] [--auto-declare | --no-auto-declare] [--interval-seconds N] [--json]` | Change the named fields in place; absent flags leave their fields alone, lists given at all replace. Changing the source clears `last_seen_ref` and the runs; changing anything else keeps them. `--json` emits the updated recipe. |
+| `stado builds remove NAME [--json]` | Delete the recipe. `--json` emits `{"name": ..., "removed": true}`. |
 | `stado builds enable NAME [--json]` | Start polling the recipe. |
 | `stado builds disable NAME [--json]` | Stop polling without deleting; `last_seen_ref` survives, so re-enabling does not rebuild a commit already built. |
 | `stado builds run NAME [--json]` | Enqueue one build job per declared platform now, cadence and enable flag notwithstanding — how a recipe is vetted before it is enabled. |

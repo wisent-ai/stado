@@ -5,7 +5,7 @@
 //! built for. The control-plane poller (`scheduler::builds`) enqueues one
 //! build job PER PLATFORM whenever the branch head moves, and records the
 //! outcome per platform under the recipe's `runs` map; this command family is
-//! the operator surface for the recipes themselves: list, add, remove,
+//! the operator surface for the recipes themselves: list, add, edit, remove,
 //! enable, disable, run-now and status.
 //!
 //! A run's `version` is the exact git tag at the built commit (leading `v`
@@ -82,9 +82,57 @@ pub enum BuildsCommands {
         /// Poll cadence in seconds (default 300).
         #[arg(long, default_value_t = 300)]
         interval_seconds: u64,
+        /// Emit the created recipe as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Change a recipe's source or build definition in place. Every flag is
+    /// optional and a flag not given leaves its field alone; `--artifact` and
+    /// `--platform`, when given at all, REPLACE the recorded list. `enabled`
+    /// is not editable here: `enable` and `disable` own it.
+    Edit {
+        name: String,
+        /// HTTPS clone URL of the repository to build. Changing it clears the
+        /// last seen ref and the recorded runs.
+        #[arg(long)]
+        repo: Option<String>,
+        /// Branch the poller watches. Changing it clears the last seen ref
+        /// and the recorded runs.
+        #[arg(long)]
+        branch: Option<String>,
+        /// Single POSIX sh build command run in the checkout.
+        #[arg(long)]
+        command: Option<String>,
+        /// Path in the checkout to upload as a build artifact (repeatable);
+        /// the paths given replace the recorded ones.
+        #[arg(long = "artifact")]
+        artifacts: Vec<String>,
+        /// Release platform to build for (repeatable); the platforms given
+        /// replace the recorded ones. A newly named platform simply has no
+        /// run yet.
+        #[arg(long = "platform")]
+        platforms: Vec<String>,
+        /// Declare a successful run's tag version on every registry host of
+        /// that platform. Never promotes a signed release.
+        #[arg(long = "auto-declare", overrides_with = "no_auto_declare")]
+        auto_declare: bool,
+        /// Stop declaring versions from successful runs.
+        #[arg(long = "no-auto-declare", overrides_with = "auto_declare")]
+        no_auto_declare: bool,
+        /// Poll cadence in seconds.
+        #[arg(long)]
+        interval_seconds: Option<u64>,
+        /// Emit the updated recipe as JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Remove a build recipe.
-    Remove { name: String },
+    Remove {
+        name: String,
+        /// Emit `{"name": ..., "removed": true}` as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Enable a recipe: the control-plane poller starts building it.
     Enable {
         name: String,
@@ -128,6 +176,7 @@ pub async fn run(command: BuildsCommands) -> Result<(), CmdError> {
             platforms,
             auto_declare,
             interval_seconds,
+            json,
         } => {
             add(
                 &name,
@@ -138,10 +187,47 @@ pub async fn run(command: BuildsCommands) -> Result<(), CmdError> {
                 platforms,
                 auto_declare,
                 interval_seconds,
+                json,
             )
             .await
         }
-        BuildsCommands::Remove { name } => remove(&name).await,
+        BuildsCommands::Edit {
+            name,
+            repo,
+            branch,
+            command,
+            artifacts,
+            platforms,
+            auto_declare,
+            no_auto_declare,
+            interval_seconds,
+            json,
+        } => {
+            edit(
+                &name,
+                RecipeEdit {
+                    repo,
+                    branch,
+                    command,
+                    // An empty repeatable is the flag never given; the
+                    // operator cannot ask for an empty list, only for a
+                    // different one.
+                    artifacts: (!artifacts.is_empty()).then_some(artifacts),
+                    platforms: (!platforms.is_empty()).then_some(platforms),
+                    // `overrides_with` in both directions leaves at most one
+                    // of the pair set, so neither set is "leave it alone".
+                    auto_declare: match (auto_declare, no_auto_declare) {
+                        (true, false) => Some(true),
+                        (false, true) => Some(false),
+                        _ => None,
+                    },
+                    interval_seconds,
+                },
+                json,
+            )
+            .await
+        }
+        BuildsCommands::Remove { name, json } => remove(&name, json).await,
         BuildsCommands::Enable { name, json } => set_enabled(&name, true, json).await,
         BuildsCommands::Disable { name, json } => set_enabled(&name, false, json).await,
         BuildsCommands::Run { name, json } => run_now(&name, json).await,
@@ -160,6 +246,113 @@ fn is_recipe_name(value: &str) -> bool {
             bytes.iter().all(|&byte| inner_ok(byte))
         }
         _ => false,
+    }
+}
+
+/// One check per recipe field, so `add` — which sets every field — and
+/// `edit` — which replaces the fields it was given — accept and refuse
+/// exactly the same words. A checker never rewrites what it accepts: a
+/// recipe stores the repo, branch, command and paths the operator typed.
+fn check_repo(repo: &str) -> Result<(), CmdError> {
+    if repo.starts_with("https://") {
+        return Ok(());
+    }
+    Err(CmdError::usage("--repo must be an https:// clone URL"))
+}
+
+fn check_branch(branch: &str) -> Result<(), CmdError> {
+    if branch.trim().is_empty() {
+        return Err(CmdError::usage("--branch must name a branch"));
+    }
+    Ok(())
+}
+
+fn check_command(command: &str) -> Result<(), CmdError> {
+    if command.trim().is_empty() {
+        return Err(CmdError::usage("--command must be a build command"));
+    }
+    Ok(())
+}
+
+/// Artifact paths name something the checkout left behind: relative, inside
+/// it, and not empty. An absolute path or a `..` hop would upload a file the
+/// build did not produce.
+fn check_artifacts(artifacts: &[String]) -> Result<(), CmdError> {
+    if artifacts.iter().any(|path| {
+        let path = path.trim();
+        path.is_empty() || path.starts_with('/') || path.split('/').any(|part| part == "..")
+    }) {
+        return Err(CmdError::usage(
+            "--artifact paths must be relative to the checkout, without '..'",
+        ));
+    }
+    Ok(())
+}
+
+fn check_interval_seconds(interval_seconds: u64) -> Result<(), CmdError> {
+    if interval_seconds == 0 {
+        return Err(CmdError::usage("--interval-seconds must be positive"));
+    }
+    Ok(())
+}
+
+/// The recipe fields `stado builds edit` may replace. `None` is "the
+/// operator did not name this flag, leave the field alone", which is why
+/// every field is optional even though a stored recipe carries all of them.
+///
+/// `enabled` is absent deliberately: `enable` and `disable` own it. Whether
+/// a recipe builds is a decision an operator takes on purpose, never a side
+/// effect of correcting a build command.
+struct RecipeEdit {
+    repo: Option<String>,
+    branch: Option<String>,
+    command: Option<String>,
+    /// Given at all, the paths REPLACE the recorded list.
+    artifacts: Option<Vec<String>>,
+    /// Given at all, the platforms REPLACE the recorded list.
+    platforms: Option<Vec<String>>,
+    auto_declare: Option<bool>,
+    interval_seconds: Option<u64>,
+}
+
+impl RecipeEdit {
+    /// Whether the operator named no field at all. An `edit` that names none
+    /// is a mistake, not a request to rewrite an entry with what it already
+    /// says.
+    fn names_nothing(&self) -> bool {
+        self.repo.is_none()
+            && self.branch.is_none()
+            && self.command.is_none()
+            && self.artifacts.is_none()
+            && self.platforms.is_none()
+            && self.auto_declare.is_none()
+            && self.interval_seconds.is_none()
+    }
+
+    /// Every named field validated as `add` validates it, with `--platform`
+    /// words canonicalized. Validation runs before the registry is read, so
+    /// a rejected flag never opens a fenced write.
+    fn checked(self) -> Result<Self, CmdError> {
+        if let Some(repo) = self.repo.as_deref() {
+            check_repo(repo)?;
+        }
+        if let Some(branch) = self.branch.as_deref() {
+            check_branch(branch)?;
+        }
+        if let Some(command) = self.command.as_deref() {
+            check_command(command)?;
+        }
+        if let Some(artifacts) = self.artifacts.as_deref() {
+            check_artifacts(artifacts)?;
+        }
+        if let Some(interval_seconds) = self.interval_seconds {
+            check_interval_seconds(interval_seconds)?;
+        }
+        let platforms = match self.platforms.as_deref() {
+            Some(platforms) => Some(canonical_platforms(platforms)?),
+            None => None,
+        };
+        Ok(Self { platforms, ..self })
     }
 }
 
@@ -342,33 +535,19 @@ async fn add(
     platforms: Vec<String>,
     auto_declare: bool,
     interval_seconds: u64,
+    json: bool,
 ) -> Result<(), CmdError> {
     if !is_recipe_name(name) {
         return Err(CmdError::usage(
             "--name must be kebab-case: lowercase letters, digits and '-'",
         ));
     }
-    if !repo.starts_with("https://") {
-        return Err(CmdError::usage("--repo must be an https:// clone URL"));
-    }
-    if branch.trim().is_empty() {
-        return Err(CmdError::usage("--branch must name a branch"));
-    }
-    if command.trim().is_empty() {
-        return Err(CmdError::usage("--command must be a build command"));
-    }
-    if artifacts.iter().any(|path| {
-        let path = path.trim();
-        path.is_empty() || path.starts_with('/') || path.split('/').any(|part| part == "..")
-    }) {
-        return Err(CmdError::usage(
-            "--artifact paths must be relative to the checkout, without '..'",
-        ));
-    }
+    check_repo(repo)?;
+    check_branch(branch)?;
+    check_command(command)?;
+    check_artifacts(&artifacts)?;
     let platforms = canonical_platforms(&platforms)?;
-    if interval_seconds == 0 {
-        return Err(CmdError::usage("--interval-seconds must be positive"));
-    }
+    check_interval_seconds(interval_seconds)?;
     let (mut document, generation) = super::registry::fetch_versioned_document().await?;
     let entries = builds_array(&mut document)?;
     if entries.iter().any(|entry| entry_name(entry) == Some(name)) {
@@ -376,7 +555,7 @@ async fn add(
             "build recipe {name:?} already exists"
         )));
     }
-    entries.push(serde_json::to_value(BuildRecipe {
+    let created = recipe_json(&BuildRecipe {
         name: name.to_string(),
         repo: repo.to_string(),
         branch: branch.to_string(),
@@ -388,22 +567,262 @@ async fn add(
         interval_seconds,
         last_seen_ref: None,
         runs: BTreeMap::new(),
-    })?);
+    })?;
+    entries.push(created.clone());
     super::registry::push_document_if(&document, &generation).await?;
+    if json {
+        return print_json(&created);
+    }
     println!(
         "{name}: added for {} (disabled; enable with `stado builds enable {name}`)",
         platforms.join(", ")
     );
     if auto_declare {
-        println!(
-            "{name}: auto-declare on — a successful tagged build declares that version on every \
-             matching host (signed promotion stays `stado release promote`)"
-        );
+        println!("{name}: {AUTO_DECLARE_ON}");
     }
     Ok(())
 }
 
-async fn remove(name: &str) -> Result<(), CmdError> {
+/// What turning `auto_declare` on means, said the same way by `add` and
+/// `edit` so the operator reads one sentence about one behaviour.
+const AUTO_DECLARE_ON: &str = "auto-declare on — a successful tagged build declares that version \
+                               on every matching host (signed promotion stays `stado release \
+                               promote`)";
+
+/// Change a stored recipe's source or build definition in place, one fenced
+/// read-modify-write like every other mutation here.
+///
+/// The state semantics are the substance of this command, because they decide
+/// whether the recipe re-fires:
+///
+/// * a changed `repo` or `branch` is a DIFFERENT source, so `last_seen_ref`
+///   and every recorded run are cleared. The runs describe commits of the old
+///   source, and a retained head would leave the current head of the new one
+///   unbuilt until it happened to move.
+/// * a changed command, artifact set, platform set, interval or auto-declare
+///   flag says how the SAME source is built, so `last_seen_ref` and the runs
+///   are kept: this head has already been built, and the poller only fires
+///   when it moves. A newly named platform simply has no run yet; build it
+///   now with `stado builds run`.
+///
+/// A value re-typed as it already stands is not a change: it neither prints
+/// as one nor clears anything, and an `edit` in which nothing at all changed
+/// does not spend a registry write.
+async fn edit(name: &str, fields: RecipeEdit, json: bool) -> Result<(), CmdError> {
+    if fields.names_nothing() {
+        return Err(CmdError::usage(format!(
+            "{name}: nothing to edit — name at least one of --repo, --branch, --command, \
+             --artifact, --platform, --interval-seconds, --auto-declare, --no-auto-declare \
+             (whether a recipe builds is `stado builds enable`/`disable`)"
+        )));
+    }
+    let fields = fields.checked()?;
+    let (mut document, generation) = super::registry::fetch_versioned_document().await?;
+    let entry = find_entry(builds_array(&mut document)?, name)?;
+    let object = entry
+        .as_object_mut()
+        .ok_or_else(|| CmdError::click(format!("build recipe {name:?} must be an object")))?;
+    let mut changes: Vec<String> = Vec::new();
+    // Which halves of the source moved, for one sentence naming both when
+    // both did.
+    let mut source: Vec<&str> = Vec::new();
+    if let Some(repo) = fields.repo {
+        if let Some(change) = replace_field(object, "repo", "repo", Value::String(repo)) {
+            source.push("repo");
+            changes.push(change);
+        }
+    }
+    // `branch` is the `ref` key on the wire; see `BuildRecipe::branch`.
+    if let Some(branch) = fields.branch {
+        if let Some(change) = replace_field(object, "ref", "branch", Value::String(branch)) {
+            source.push("branch");
+            changes.push(change);
+        }
+    }
+    if let Some(command) = fields.command {
+        changes.extend(replace_field(
+            object,
+            "command",
+            "command",
+            Value::String(command),
+        ));
+    }
+    if let Some(artifacts) = fields.artifacts {
+        changes.extend(replace_field(
+            object,
+            "artifacts",
+            "artifacts",
+            json!(artifacts),
+        ));
+    }
+    // A platform the recipe did not declare before has nothing recorded for
+    // it, which is worth saying: the operator asked for a build there.
+    let mut gained: Vec<String> = Vec::new();
+    if let Some(platforms) = fields.platforms {
+        let previous = string_list(object.get("platforms"));
+        gained = platforms
+            .iter()
+            .filter(|platform| !previous.contains(*platform))
+            .cloned()
+            .collect();
+        changes.extend(replace_field(
+            object,
+            "platforms",
+            "platforms",
+            json!(platforms),
+        ));
+    }
+    if let Some(auto_declare) = fields.auto_declare {
+        changes.extend(replace_field(
+            object,
+            "auto_declare",
+            "auto-declare",
+            Value::Bool(auto_declare),
+        ));
+    }
+    if let Some(interval_seconds) = fields.interval_seconds {
+        changes.extend(replace_field(
+            object,
+            "interval_seconds",
+            "interval-seconds",
+            json!(interval_seconds),
+        ));
+    }
+    // The recorded state, counted before a source change spends it.
+    let recorded_ref = object
+        .get("last_seen_ref")
+        .and_then(Value::as_str)
+        .map(short_ref);
+    let recorded_runs = object
+        .get("runs")
+        .and_then(Value::as_object)
+        .map_or(0, Map::len);
+    if !source.is_empty() {
+        // Shaped exactly like a freshly added recipe: the new source has been
+        // seen at no head and built by no run.
+        object.insert("last_seen_ref".to_string(), Value::Null);
+        object.insert("runs".to_string(), Value::Object(Map::new()));
+    }
+    let updated = normalized_recipe_json(entry);
+    if changes.is_empty() {
+        // Every value given is already what the entry says. Saying so beats
+        // spending a compare-and-swap on a document that would not differ.
+        if json {
+            return print_json(&updated);
+        }
+        println!("{name}: unchanged — every value given is already recorded");
+        return Ok(());
+    }
+    super::registry::push_document_if(&document, &generation).await?;
+    if json {
+        return print_json(&updated);
+    }
+    for change in &changes {
+        println!("{name}: {change}");
+    }
+    let state = match (&recorded_ref, recorded_runs) {
+        (None, 0) => None,
+        (sha, runs) => Some(format!(
+            "{} and {}",
+            sha.as_deref().map_or_else(
+                || "no last_seen_ref".to_string(),
+                |sha| format!("last_seen_ref {sha}")
+            ),
+            runs_phrase(runs)
+        )),
+    };
+    match (source.is_empty(), state) {
+        (true, None) => println!(
+            "{name}: same source, nothing built yet — the next poll builds the current head"
+        ),
+        (true, Some(state)) => println!(
+            "{name}: same source — kept {state}; the next poll builds only when the head moves, \
+             so build it now with `stado builds run {name}`"
+        ),
+        (false, None) => println!(
+            "{name}: {} changed — there was no last_seen_ref and no recorded run to clear; the \
+             next poll builds the current head",
+            source.join(" and ")
+        ),
+        (false, Some(state)) => println!(
+            "{name}: {} changed — cleared {state}; the next poll builds the current head of the \
+             new source",
+            source.join(" and ")
+        ),
+    }
+    for platform in &gained {
+        println!("{name}: {platform} is new and has no run yet");
+    }
+    if fields.auto_declare == Some(true) {
+        println!("{name}: {AUTO_DECLARE_ON}");
+    }
+    Ok(())
+}
+
+/// Replace `key` with `value` unless the entry already says exactly that,
+/// returning the sentence naming the change. `None` is "nothing moved": an
+/// operator who re-types the current value has changed nothing, and nothing
+/// is what gets reported — and, for the source, what gets cleared.
+fn replace_field(
+    object: &mut Map<String, Value>,
+    key: &str,
+    label: &str,
+    value: Value,
+) -> Option<String> {
+    let current = object.get(key);
+    if current == Some(&value) {
+        return None;
+    }
+    let before = current.map_or_else(|| "-".to_string(), display_field);
+    let after = display_field(&value);
+    object.insert(key.to_string(), value);
+    Some(format!("{label} {before} → {after}"))
+}
+
+/// A recipe field as one human phrase: a string bare, a list joined, anything
+/// else as the JSON it is.
+fn display_field(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        Value::Array(items) => items
+            .iter()
+            .map(display_field)
+            .collect::<Vec<_>>()
+            .join(", "),
+        other => other.to_string(),
+    }
+}
+
+/// The strings of a raw JSON array field, ignoring entries that are not
+/// strings — a hand-written recipe is not trusted to be well typed.
+fn string_list(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A recorded-run count as words, so a sentence about one run does not read
+/// "1 recorded runs".
+fn runs_phrase(count: usize) -> String {
+    match count {
+        0 => "no recorded run".to_string(),
+        1 => "1 recorded run".to_string(),
+        many => format!("{many} recorded runs"),
+    }
+}
+
+/// A commit sha at the length `builds list` prints it.
+fn short_ref(sha: &str) -> String {
+    sha.chars().take(8).collect()
+}
+
+async fn remove(name: &str, json: bool) -> Result<(), CmdError> {
     let (mut document, generation) = super::registry::fetch_versioned_document().await?;
     let entries = builds_array(&mut document)?;
     let before = entries.len();
@@ -414,6 +833,9 @@ async fn remove(name: &str) -> Result<(), CmdError> {
         )));
     }
     super::registry::push_document_if(&document, &generation).await?;
+    if json {
+        return print_json(&json!({ "name": name, "removed": true }));
+    }
     println!("{name}: removed");
     Ok(())
 }
