@@ -90,6 +90,10 @@ async fn coordinator_loop(
             Ok(scheduled) => log(&format!("tick scheduled={scheduled}")),
             Err(exc) => log(&format!("tick failed: {exc}")),
         }
+        // Native-build poller: watch registry build recipes for new commits
+        // and enqueue build jobs. Self-rate-limited to one pass per minute;
+        // per-recipe failures are logged inside, never raised.
+        crate::scheduler::builds::poll_build_recipes(&|msg: &str| log(msg)).await;
         match crate::queue::copy::replicate_configured_backup().await {
             Ok(Some(report)) if report.is_clean() => log("disaster-recovery replication clean"),
             Ok(Some(report)) => log(&format!(

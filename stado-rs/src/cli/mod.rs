@@ -19,6 +19,7 @@ pub mod azure;
 pub mod billing;
 pub mod blast_radius;
 pub mod bootstrap;
+pub mod builds;
 pub mod cancel;
 pub mod capabilities;
 pub mod cloudflare;
@@ -473,6 +474,10 @@ enum Commands {
     /// Manage the canonical compute-target registry in configured Stado storage.
     #[command(subcommand)]
     Registry(RegistryCommands),
+
+    /// Manage native build recipes: poll a repo, build on new commits.
+    #[command(subcommand)]
+    Builds(builds::BuildsCommands),
 
     /// Add machines to the fleet, group them, hold their SSH keys, and
     /// diagnose the workers: enroll, join/approve, key, doctor.
@@ -1719,6 +1724,7 @@ fn failure_service(matches: &clap::ArgMatches) -> &'static str {
         "fleet"
         | "host"
         | "registry"
+        | "builds"
         | "service"
         | "instances"
         | "resources"
@@ -1868,6 +1874,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             }) => registry::host_add(&host, &ssh, &kind, &release_platform).await,
             RegistryCommands::BeaconAge { json } => registry::beacon_age(json).await,
         },
+        Commands::Builds(sub) => builds::run(sub).await,
         Commands::Fleet(sub) => fleet::run(sub).await,
         Commands::Identity(sub) => match sub {
             IdentityCommands::List { json } => identity::list(json).await,
