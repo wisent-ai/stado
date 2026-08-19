@@ -205,7 +205,10 @@ struct HostsView: View {
         let live = hosts.count { $0.status == .live }
         let declared = hosts.count { $0.declared }
         let pinned = hosts.count { fleetStore.target(named: $0.targetName)?.pinnedOnly == true }
+        // Only a refusal that is not declared registry policy is danger; a
+        // host pinned on purpose renders its pin in its own facet below.
         let notClaiming = gatesStore.notClaiming.count
+        let refusing = gatesStore.notClaiming.count { $0.refusingUnpinned || !$0.waitingJobs.isEmpty }
         return [
             // First, because it is the only question on this screen whose wrong
             // answer is silent: a host that takes no work looks exactly like a
@@ -214,7 +217,7 @@ struct HostsView: View {
                 "Claiming work",
                 facets: [
                     facetRow(.all, "All hosts", hosts.count, .neutral),
-                    facetRow(.notClaiming, "Not claiming", notClaiming, notClaiming > 0 ? .danger : .neutral),
+                    facetRow(.notClaiming, "Not claiming", notClaiming, refusing > 0 ? .danger : .neutral),
                 ]
             ),
             WisentFacetGroup(
@@ -531,7 +534,9 @@ struct HostsView: View {
     /// this console reports it.
     @ViewBuilder
     private var gateAlarms: some View {
-        let silent = gatesStore.notClaiming
+        // A pinned host with nothing pinned to it is policy, not an alarm; it
+        // still costs a pinned job when the queue says so.
+        let silent = gatesStore.notClaiming.filter { $0.refusingUnpinned || !$0.waitingJobs.isEmpty }
         let unreadable = gatesStore.failures
         VStack(spacing: WisentDesign.Space.x3) {
             if !silent.isEmpty {
@@ -605,7 +610,7 @@ struct HostsView: View {
     @ViewBuilder
     private func gateSection(for host: WorkerNode) -> some View {
         if let gates = hostGates(host) {
-            if !gates.claiming {
+            if !gates.claiming, !(gates.pinnedByDesign && gates.waitingJobs.isEmpty) {
                 WisentAlertPanel(
                     tone: .danger,
                     title: "This host is claiming no work",
@@ -617,13 +622,15 @@ struct HostsView: View {
             }
             WisentField(
                 label: "Claiming work",
-                value: gates.claiming ? "Yes" : "No",
-                tone: gates.claiming ? .success : .danger
+                value: gates.claiming
+                    ? "Yes"
+                    : (gates.pinnedByDesign ? "Only work addressed to this host" : "No"),
+                tone: gates.claiming || gates.pinnedByDesign ? .success : .danger
             )
             WisentField(
                 label: "Blockers",
                 value: gates.blockers.isEmpty ? "None reported" : gates.blockers.joined(separator: "\n"),
-                tone: gates.blockers.isEmpty ? .neutral : .danger
+                tone: gates.blockers.isEmpty || (gates.pinnedByDesign && gates.waitingJobs.isEmpty) ? .neutral : .danger
             )
             WisentField(
                 label: "Waiting pinned jobs",
@@ -689,12 +696,16 @@ struct HostsView: View {
         guard let gates = hostGates(host) else {
             return gateFailure(host) == nil ? "Not read" : "Unreadable"
         }
-        return gates.claiming ? "Yes" : "No"
+        if gates.claiming { return "Yes" }
+        return gates.pinnedByDesign && gates.waitingJobs.isEmpty ? "Pinned" : "No"
     }
 
     private func claimingTone(_ host: WorkerNode) -> WisentTone {
         guard let gates = hostGates(host) else { return .warning }
-        return gates.claiming ? .success : .danger
+        if gates.claiming { return .success }
+        // The declared pin is neutral until it starves a job addressed to this
+        // host; every other refusal is a failure.
+        return gates.pinnedByDesign && gates.waitingJobs.isEmpty ? .neutral : .danger
     }
 
     private func gateReason(_ host: WorkerNode) -> String {
@@ -708,6 +719,11 @@ struct HostsView: View {
                 : "Not a declared registry target"
         }
         if gates.claiming { return "" }
+        if gates.pinnedByDesign {
+            return gates.waitingJobs.isEmpty
+                ? "Pinned by the registry: claims only work addressed to this host"
+                : "Pinned by the registry, and pinned work is waiting"
+        }
         return gates.blockers.isEmpty
             ? "Claiming nothing, and the host named no blocker"
             : gates.blockers.joined(separator: " · ")
