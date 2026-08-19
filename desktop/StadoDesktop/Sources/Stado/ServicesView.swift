@@ -5,6 +5,7 @@ private enum ServiceFacet: String, Hashable {
     case units
     case replaced
     case unowned
+    case fleet
 }
 
 /// What is running, as opposed to what is declared.
@@ -18,6 +19,9 @@ private enum ServiceFacet: String, Hashable {
 /// stop them — that is a list of its own, not a footnote under the units.
 struct ServicesView: View {
     @ObservedObject var store: ServiceTruthStore
+    /// The beacon-read fleet list with the restart write; kept out of
+    /// `store`, which is documented and tested as read-only.
+    @ObservedObject var fleetStore: FleetServicesStore
     /// The registry hosts to ask. `service converge` reports per host, so the
     /// screen reads one host at a time and the host travels with every row.
     let hosts: [String]
@@ -25,22 +29,31 @@ struct ServicesView: View {
 
     @State private var facet: ServiceFacet = .units
     @State private var selection: String?
+    @State private var restartCandidate: FleetServiceEntry?
+
+    private var isRefreshing: Bool {
+        store.isRefreshing || fleetStore.isRefreshing
+    }
+
+    private var lastRead: Date? {
+        [store.lastUpdated, fleetStore.lastUpdated].compactMap { $0 }.max()
+    }
 
     var body: some View {
         WisentScreen(
             title: "Services",
             scope: scope,
-            freshness: "Read \(ConsoleFormat.relative(store.lastUpdated))",
+            freshness: "Read \(ConsoleFormat.relative(lastRead))",
             actions: [
-                WisentAction("Refresh", symbol: "arrow.clockwise", isEnabled: !store.isRefreshing) {
-                    Task { await store.refresh(hosts: hosts) }
+                WisentAction("Refresh", symbol: "arrow.clockwise", isEnabled: !isRefreshing) {
+                    Task { await refresh() }
                 },
             ],
             scrolls: false,
             constrainsWidth: false
         ) {
             VStack(spacing: 0) {
-                if store.lastUpdated == nil, store.isRefreshing {
+                if store.lastUpdated == nil, fleetStore.lastUpdated == nil, isRefreshing {
                     placeholder
                         .padding(WisentDesign.Space.x6)
                     Spacer(minLength: 0)
@@ -49,13 +62,22 @@ struct ServicesView: View {
                 }
             }
         }
-        .task { await store.refresh(hosts: hosts) }
+        .task { await refresh() }
+        .sheet(item: $restartCandidate) { entry in
+            restartDialog(entry)
+        }
+    }
+
+    private func refresh() async {
+        async let truth: Void = store.refresh(hosts: hosts)
+        async let fleet: Void = fleetStore.refresh(hosts: hosts)
+        _ = await (truth, fleet)
     }
 
     private var placeholder: some View {
         WisentLoadingPanel(
             title: "Reading declared units on \(hosts.count.formatted(.number)) hosts",
-            detail: "stado service converge per host in report mode, and stado service list --unowned once. Neither writes anything."
+            detail: "stado service converge per host in report mode, stado service list --unowned once, and the fleet-wide stado service list from the health beacons. None of them writes anything."
         )
     }
 
@@ -81,7 +103,7 @@ struct ServicesView: View {
         if hosts.isEmpty {
             return "No registry hosts"
         }
-        let failed = store.failures.count
+        let failed = store.failures.count + fleetStore.failures.count
         return failed == 0
             ? "\(hosts.count.formatted(.number)) hosts"
             : "\(hosts.count.formatted(.number)) hosts · \(failed.formatted(.number)) unreadable"
@@ -90,12 +112,24 @@ struct ServicesView: View {
     private var facetGroups: [WisentFacetGroup] {
         let units = store.units
         let replaced = store.mismatched.count
+        let fleetFailed = fleetStore.failedServices.count
         return [
             WisentFacetGroup(
                 "Declared units",
                 facets: [
                     facetRow(.units, "All units", units.count, .neutral),
                     facetRow(.replaced, "Serving replaced code", replaced, replaced > 0 ? .danger : .neutral),
+                ]
+            ),
+            WisentFacetGroup(
+                "Fleet, from beacons",
+                facets: [
+                    facetRow(
+                        .fleet,
+                        "Managed services",
+                        fleetStore.services.count,
+                        fleetFailed > 0 ? .danger : .neutral
+                    ),
                 ]
             ),
             WisentFacetGroup(
@@ -131,6 +165,25 @@ struct ServicesView: View {
     @ViewBuilder
     private var alarms: some View {
         VStack(spacing: WisentDesign.Space.x3) {
+            WisentMutationBar(outcome: fleetStore.mutation) { fleetStore.clearMutation() }
+            if !fleetStore.failedServices.isEmpty {
+                WisentAlertPanel(
+                    tone: .danger,
+                    title: fleetStore.failedServices.count == 1
+                        ? "One managed service reports failed"
+                        : "\(fleetStore.failedServices.count.formatted(.number)) managed services report failed",
+                    detail: fleetStore.failedServices
+                        .map { "\($0.host) \($0.unitID.isEmpty ? $0.name : $0.unitID)" }
+                        .joined(separator: "\n"),
+                    command: "stado service status \(fleetStore.failedServices.first?.name ?? "NAME") --json",
+                    actions: [
+                        WisentAction("Show them", symbol: "arrow.down.right") {
+                            facet = .fleet
+                            selection = fleetStore.failedServices.first?.id
+                        },
+                    ]
+                )
+            }
             if !store.mismatched.isEmpty {
                 WisentAlertPanel(
                     tone: .danger,
@@ -160,6 +213,24 @@ struct ServicesView: View {
                     ]
                 )
             }
+            if !fleetStore.failures.isEmpty {
+                WisentAlertPanel(
+                    tone: .warning,
+                    title: fleetStore.failures.count == 1
+                        ? "One host's services are unavailable"
+                        : "\(fleetStore.failures.count.formatted(.number)) hosts' services are unavailable",
+                    detail: fleetStore.failures
+                        .sorted { $0.key < $1.key }
+                        .map { "\($0.key): \($0.value)" }
+                        .joined(separator: "\n"),
+                    command: "stado service list --json",
+                    actions: [
+                        WisentAction("Retry", symbol: "arrow.clockwise", isEnabled: !isRefreshing) {
+                            Task { await refresh() }
+                        },
+                    ]
+                )
+            }
             if !store.failures.isEmpty {
                 WisentAlertPanel(
                     tone: .warning,
@@ -176,6 +247,7 @@ struct ServicesView: View {
         }
         .padding(.horizontal, WisentDesign.Space.x4)
         .padding(.top, store.mismatched.isEmpty && store.failures.isEmpty && store.unownedProblem == nil
+            && fleetStore.failedServices.isEmpty && fleetStore.failures.isEmpty && fleetStore.mutation == .idle
             ? 0
             : WisentDesign.Space.x4)
     }
@@ -196,9 +268,154 @@ struct ServicesView: View {
         switch facet {
         case .units, .replaced:
             unitsTable
+        case .fleet:
+            fleetTable
         case .unowned:
             unownedTable
         }
+    }
+
+    /// One row in the fleet facet: a managed service, or a host whose
+    /// services could not be read at all. The second is a row rather than an
+    /// error state for the whole view, because one unreadable host is not a
+    /// reason to hide what every other host reported.
+    private enum FleetRow: Identifiable {
+        case service(FleetServiceEntry)
+        case unavailable(host: String, problem: String)
+
+        var id: String {
+            switch self {
+            case let .service(entry): entry.id
+            case let .unavailable(host, _): "unavailable/\(host)"
+            }
+        }
+    }
+
+    private var fleetRows: [FleetRow] {
+        let services = fleetStore.services.map(FleetRow.service)
+        let unavailable = fleetStore.failures
+            .sorted { $0.key < $1.key }
+            .map { FleetRow.unavailable(host: $0.key, problem: $0.value) }
+        return unavailable + services
+    }
+
+    @ViewBuilder
+    private var fleetTable: some View {
+        let rows = fleetRows
+        if rows.isEmpty {
+            emptyFleet
+        } else {
+            ConsoleTable(head: [
+                ConsoleHeaderCell("Host", width: 150),
+                ConsoleHeaderCell("Service", width: 200),
+                ConsoleHeaderCell("State", width: 92),
+                ConsoleHeaderCell("Domain", width: 90),
+                ConsoleHeaderCell("Beacon reported", width: 190),
+                ConsoleHeaderCell("Unit file"),
+            ]) {
+                ForEach(rows) { row in
+                    switch row {
+                    case let .service(entry):
+                        ConsoleTableRow(isSelected: selection == row.id, select: { selection = row.id }) {
+                            ConsoleCell(text: entry.host, width: 150, identifier: true, strong: true)
+                            ConsoleCell(
+                                text: entry.unitID.isEmpty ? entry.name : entry.unitID,
+                                width: 200,
+                                identifier: true
+                            )
+                            ConsoleCell(
+                                text: entry.state.isEmpty ? "Not reported" : entry.state,
+                                width: 92,
+                                tone: entry.isFailed ? .danger : .neutral
+                            )
+                            ConsoleCell(text: entry.domain.rawValue, width: 90)
+                            ConsoleCell(
+                                text: entry.reportedAt.isEmpty ? "Not reported" : entry.reportedAt,
+                                width: 190,
+                                identifier: true
+                            )
+                            ConsoleCell(text: entry.path.isEmpty ? "Not reported" : entry.path, identifier: true)
+                        }
+                        if entry.isFailed, let evidence = failureEvidenceLine(entry) {
+                            fleetFailureLine(evidence)
+                        }
+                    case let .unavailable(host, _):
+                        ConsoleTableRow(isSelected: selection == row.id, select: { selection = row.id }) {
+                            ConsoleCell(text: host, width: 150, identifier: true, strong: true)
+                            ConsoleCell(text: "host unavailable", width: 200, tone: .warning)
+                            ConsoleCell(text: "unknown", width: 92, tone: .warning)
+                            ConsoleCell(text: "", width: 90)
+                            ConsoleCell(text: "Not reported", width: 190)
+                            ConsoleCell(text: "stado service list gave no answer for this host")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The failure evidence under a failed row: the last launchd exit and
+    /// the stderr tail, in the same order the CLI's `failure:` block prints
+    /// them. `nil` when the host offered no evidence at all — the red state
+    /// word already says what is known, and an empty detail line would only
+    /// imply evidence was hidden.
+    private func failureEvidenceLine(_ entry: FleetServiceEntry) -> String? {
+        var parts: [String] = []
+        if let failure = entry.failure {
+            parts.append(failure.lastExit.map { "last launchd exit \($0)" } ?? "last launchd exit unknown")
+            if let origin = failure.errorOrigin {
+                parts.append("stderr: \(origin)")
+            }
+            parts.append(contentsOf: failure.errorLines.prefix(3))
+            if let note = failure.note {
+                parts.append("note: \(note)")
+            }
+        }
+        if parts.isEmpty, !entry.detail.isEmpty {
+            parts.append(entry.detail)
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " — ")
+    }
+
+    private func fleetFailureLine(_ text: String) -> some View {
+        Text(text)
+            .font(WisentTypeScale.identifierSmall())
+            .foregroundStyle(WisentDesign.danger)
+            .lineLimit(2)
+            .truncationMode(.tail)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, WisentDesign.Space.x4)
+            .padding(.vertical, WisentDesign.Space.x2)
+            .background(WisentDesign.danger.opacity(0.06))
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(WisentDesign.border.opacity(0.6))
+                    .frame(height: WisentDesign.hairline)
+            }
+    }
+
+    @ViewBuilder
+    private var emptyFleet: some View {
+        VStack {
+            if hosts.isEmpty {
+                WisentEmptyPanel(
+                    title: "No registry hosts to ask",
+                    detail: "The canonical registry projection lists no target, so no beacon was read for managed services. Nothing here is inferred from local configuration.",
+                    symbol: "gearshape.2"
+                )
+            } else {
+                WisentEmptyPanel(
+                    title: "No managed services",
+                    detail: "The registry declares no managed service on any host, so there is no unit for a beacon to report on. A product nobody declared is a product nothing supervises.",
+                    symbol: "checkmark.seal",
+                    action: WisentAction("Retry", symbol: "arrow.clockwise", isEnabled: !isRefreshing) {
+                        Task { await refresh() }
+                    }
+                )
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(WisentDesign.surface)
     }
 
     @ViewBuilder
@@ -370,9 +587,12 @@ struct ServicesView: View {
 
     @ViewBuilder
     private var inspector: some View {
-        if facet == .unowned, let process = store.unownedProcesses.first(where: { $0.id == selection }) {
+        if facet == .fleet, let row = fleetRows.first(where: { $0.id == selection }) {
+            fleetInspector(row)
+        } else if facet == .unowned, let process = store.unownedProcesses.first(where: { $0.id == selection }) {
             unownedInspector(process)
-        } else if let row = (facet == .replaced ? store.mismatched : store.units).first(where: { $0.id == selection }) {
+        } else if facet != .fleet,
+                  let row = (facet == .replaced ? store.mismatched : store.units).first(where: { $0.id == selection }) {
             unitInspector(row)
         } else {
             WisentInspector(eyebrow: "Selection", title: "No row selected") {
@@ -381,6 +601,139 @@ struct ServicesView: View {
                     .foregroundStyle(WisentDesign.secondary)
             }
         }
+    }
+
+    @ViewBuilder
+    private func fleetInspector(_ row: FleetRow) -> some View {
+        switch row {
+        case let .service(entry):
+            fleetServiceInspector(entry)
+        case let .unavailable(host, problem):
+            WisentInspector(
+                eyebrow: "Host unreadable",
+                title: host,
+                badges: [("host unavailable", .warning)]
+            ) {
+                WisentAlertPanel(
+                    tone: .warning,
+                    title: "This host's services could not be read",
+                    detail: problem,
+                    command: "stado service list --json",
+                    actions: [
+                        WisentAction("Retry", symbol: "arrow.clockwise", isEnabled: !isRefreshing) {
+                            Task { await refresh() }
+                        },
+                    ]
+                )
+            }
+        }
+    }
+
+    private func fleetServiceInspector(_ entry: FleetServiceEntry) -> some View {
+        let unit = entry.unitID.isEmpty ? entry.name : entry.unitID
+        var badges: [(String, WisentTone)] = [(entry.domain.rawValue, .neutral)]
+        if !entry.state.isEmpty {
+            badges.append((entry.state, entry.isFailed ? .danger : .neutral))
+        }
+        return WisentInspector(eyebrow: "Managed service", title: unit, badges: badges) {
+            if entry.isFailed {
+                WisentAlertPanel(
+                    tone: .danger,
+                    title: "The beacon reports this unit as failed",
+                    detail: fleetFailureDetail(entry),
+                    command: "stado service status \(entry.name) --json"
+                )
+            }
+            WisentField(label: "Host", value: entry.host)
+            WisentField(label: "Service name", value: entry.name.isEmpty ? "Not reported" : entry.name)
+            WisentField(label: "Unit", value: unit)
+            WisentField(
+                label: "State",
+                value: entry.state.isEmpty ? "Not reported" : entry.state,
+                tone: entry.isFailed ? .danger : .neutral
+            )
+            WisentField(label: "Domain", value: entry.domain.rawValue)
+            WisentField(
+                label: "Beacon reported",
+                value: entry.reportedAt.isEmpty ? "Not reported" : entry.reportedAt
+            )
+            WisentField(label: "Unit file", value: entry.path.isEmpty ? "Not reported" : entry.path)
+            WisentField(label: "Kind", value: entry.kind.isEmpty ? "Not reported" : entry.kind)
+            if !entry.detail.isEmpty {
+                WisentField(label: "Detail", value: entry.detail, tone: entry.isFailed ? .danger : .neutral)
+            }
+            restartAffordance(entry)
+        }
+    }
+
+    /// The failure evidence, composed as the CLI's `failure:` block composes
+    /// it: the last launchd exit, then where the stderr tail came from, then
+    /// the tail itself.
+    private func fleetFailureDetail(_ entry: FleetServiceEntry) -> String {
+        guard let failure = entry.failure else {
+            return entry.detail.isEmpty
+                ? "The host reported the failure without evidence; stado service status could not read the last exit or the stderr tail."
+                : entry.detail
+        }
+        var lines = [failure.lastExit.map { "last launchd exit \($0)" } ?? "last launchd exit unknown"]
+        if let origin = failure.errorOrigin {
+            lines.append("stderr: \(origin)")
+        }
+        lines.append(contentsOf: failure.errorLines)
+        if let note = failure.note {
+            lines.append("note: \(note)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// The one write this screen allows, and an honest sentence where it is
+    /// not allowed: a system LaunchDaemon loads as root, the approved channel
+    /// is unprivileged, and a button that can only be refused is a lie.
+    @ViewBuilder
+    private func restartAffordance(_ entry: FleetServiceEntry) -> some View {
+        if entry.domain.requiresPrivilegedBootstrap {
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
+                Text("Privileged bootstrap required")
+                    .font(WisentTypeScale.bodyStrong())
+                    .foregroundStyle(WisentDesign.secondary)
+                Text("This is a system LaunchDaemon; the approved channel is unprivileged and cannot bootstrap it. Use stado host recover \(entry.host), or load it as root on the host itself.")
+                    .font(WisentTypeScale.body())
+                    .foregroundStyle(WisentDesign.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        } else {
+            WisentActionButton(
+                action: WisentAction(
+                    "Restart…",
+                    symbol: "arrow.clockwise",
+                    kind: .primary,
+                    isEnabled: !fleetStore.mutation.isWorking
+                ) {
+                    restartCandidate = entry
+                }
+            )
+        }
+    }
+
+    private func restartDialog(_ entry: FleetServiceEntry) -> some View {
+        let unit = entry.unitID.isEmpty ? entry.name : entry.unitID
+        return WisentDecisionDialog(
+            tone: .warning,
+            title: "Restart \(unit) on \(entry.host)?",
+            lines: [
+                "Stado restarts the unit over the approved channel and reads the host's state before the connection closes: the restart is only reported as done if the unit is left running.",
+                "Whatever the unit was serving is interrupted until it is back.",
+            ],
+            footnote: "Runs \(StadoCLI.commandLine(FleetServicesStore.restartArguments(name: entry.name, host: entry.host))).",
+            actions: [
+                WisentAction("Keep it running as is", kind: .primary) { restartCandidate = nil },
+                WisentAction("Restart", symbol: "arrow.clockwise", kind: .destructive) {
+                    let candidate = entry
+                    restartCandidate = nil
+                    Task { await fleetStore.restart(candidate) }
+                },
+            ]
+        )
     }
 
     private func unitInspector(_ row: ServiceUnitRow) -> some View {
