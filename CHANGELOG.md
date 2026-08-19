@@ -487,6 +487,59 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
 
 ### Service delivery
 
+- `stado service converge` now also reports, per unit, `running_binary` and
+  `binary_matches_process`: the executable the host's process table says the
+  live process is running, and whether that is the artefact the unit's
+  declaration resolves to today with neither file written since the process
+  started. Every other column that command prints is about what is INSTALLED,
+  and two incidents sat in that gap with all of them correct — Brama's process
+  kept running an artefact tree `current` no longer pointed at, and the Weles
+  worker kept serving a `dist` replaced 26 seconds after it started. The facts
+  come from one extra read-only round trip per declared unit (the unit file,
+  `readlink` on its `current` link, the process table, and `stat` on both
+  files); the verdict is computed in the CLI so there is one opinion about
+  artefact identity. A unit nothing runs under, or a host that would not say
+  when a file was written, reports `null` in both and `unknown` in the new
+  `PROCESS` column — never `true`, and never `false` either. A row may read
+  `in-sync` and `differs` at once, which is the point.
+- `stado service list --unowned` names the product processes on every
+  `kind=local` host that no launchd job or systemd unit owns, with pid, command,
+  start time and the product they belong to. Two `stado agent` processes ran on
+  the always-on mac for four days with no unit behind them, executing a binary
+  older than the one on disk, and every answer in this group was about declared
+  units, so nothing surfaced them. A process counts when the executable it runs,
+  or the entry point an interpreter was handed, lives under a managed root — the
+  install root of every product in `stado-rs/data/products.json` plus
+  `~/.stado/services` — so a `tail` on a log under such a root is not reported.
+  Ownership is asked of the init system rather than assumed: the pids in each
+  printable launchd domain's `services` table and their descendants on macOS,
+  the `.service`-versus-`.scope` cgroup on Linux. It is the one read in this
+  group the beacons cannot answer, so it costs one read-only ssh per host; it
+  starts, stops and signals nothing, and a host that will not answer is named
+  with a non-zero exit instead of being dropped from the list.
+- `stado service ensure NAME --host HOST --from PATH [--arg A]... --reason WHY`
+  asserts the unit a host must be running, idempotently and over ssh. `deploy`
+  refuses a unit that is already declared and bootstraps into the per-user
+  launchd domain, which does not exist on an ssh login: it answered
+  `Could not switch to audit session ... Operation not permitted` and installed
+  nothing, which is how the two unowned agents above came to exist. `ensure`
+  reads what is there first and reports `already_correct` with nothing touched
+  when the unit declares this exact argument vector and a live process under it
+  runs that program, `restarted` when an existing unit was kicked in place, and
+  `created` when there was no unit. Where the per-login domain is absent the same
+  job is rendered as a launchd daemon in `/Library/LaunchDaemons` with a
+  `UserName` naming the account it must run as, so the fleet's control binary is
+  not run as root; a host without passwordless sudo is told that rather than left
+  with a plist nobody loaded. An existing unit is only ever restarted in place
+  (`kickstart -k`), never unloaded and bootstrapped back — that sequence took the
+  always-on host down once — and a loaded unit whose definition names a different
+  argument vector is refused rather than overwritten, because launchd holds the
+  definition it bootstrapped. There is deliberately no fallback to
+  `launchctl submit` or to a bare background process. The unit is recorded in the
+  registry through the same validated write path `adopt` uses, `--reason` is
+  required and refused blank, and any pass that changed something appends a
+  create-only audit object beside the canonical registry document at
+  `service_audit/<host>/<UTC>-<label>.json`.
 - `stado service converge TARGET [BINARY]` reports the version
   `targets[].managed_versions` declares for each managed binary on that host
   against the version the host actually runs. Nothing could answer that

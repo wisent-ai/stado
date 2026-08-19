@@ -535,7 +535,9 @@ async fn attach_processes(target: &ComputeTarget, rows: &mut [Row], runner: &Run
             // not asked about at all: locating its unit file would mean
             // guessing a path for a unit nobody adopted, which is the one
             // thing `service adopt` exists to stop.
-            let found = declared.iter().find(|candidate| candidate.matches(&row.unit));
+            let found = declared
+                .iter()
+                .find(|candidate| candidate.matches(&row.unit));
             let program = match found {
                 Some(service) => service::inspect_process(target, service, runner).await.ok(),
                 None => None,
@@ -676,7 +678,10 @@ fn emit(
     // The path is what an operator acts on and is far too long for a column, so
     // it is named here — and only for the rows where it contradicts the
     // declaration, which are the rows that would otherwise read as fine.
-    for row in rows.iter().filter(|row| row.process_cell() == PROCESS_DIFFERS) {
+    for row in rows
+        .iter()
+        .filter(|row| row.process_cell() == PROCESS_DIFFERS)
+    {
         eprintln!(
             "{}: the process under {} is running {} — not the artefact this \
              unit's declaration resolves to; restart it to pick up what is installed",
@@ -876,7 +881,8 @@ mod tests {
     /// what the channel said is the whole of what there is to say.
     #[test]
     fn an_unanswered_host_is_unknown_everywhere_with_the_remotes_words() {
-        let failure = "missing executable Stado binary: /Users/charles/.stado/bin/stado".to_string();
+        let failure =
+            "missing executable Stado binary: /Users/charles/.stado/bin/stado".to_string();
         let rows = verdict_rows(
             &declared(&[("skarbiec", "0.1.3"), ("stado", "0.6.0")]),
             &Err(failure.clone()),
