@@ -22,9 +22,9 @@
 //!    own. `--dry-run` runs its planning phase; `--apply` runs the enforcing
 //!    pass. The item count is the janitor's own.
 //! 2. `build_scratch` — `$HOME/`[`BUILD_WORK_ROOT`], the release build scratch
-//!    tree. `scripts/build-stado-linux-host.sh` works there and does not remove
-//!    what it wrote; a from-scratch release build leaves its checkout and its
-//!    vendored sources behind every time.
+//!    tree. `scripts/build-stado-linux-host.sh` and the reproduce helper both
+//!    work there and neither removes what it wrote; a from-scratch release
+//!    build leaves its checkout and its vendored sources behind every time.
 //! 3. `delivered_trees` — the version directories under `$HOME/`[`SERVICES_ROOT`],
 //!    where every `service deploy` and every artifact install stages one tree
 //!    per version and keeps the previous one beside it as
@@ -76,9 +76,9 @@ use crate::targets::ComputeTarget;
 /// The release build scratch tree, relative to the target account's home.
 ///
 /// Its own root under `.stado`, and the one the fleet's checked-in build
-/// helper already uses (`scripts/build-stado-linux-host.sh`): a stage that
-/// reclaimed a directory that helper does not write would be reclaiming
-/// something else.
+/// helpers already use (`scripts/build-stado-linux-host.sh`,
+/// `scripts/reproduce-release-build-host.sh`): a stage that reclaimed a
+/// directory those helpers do not write would be reclaiming something else.
 pub const BUILD_WORK_ROOT: &str = ".stado/build-work";
 
 /// Nothing younger than this is a candidate, in any stage.
@@ -464,22 +464,16 @@ printf 'STADO_RECLAIM_AUDITED\t%s\n' "$log"
 /// reclamation actually did: the measurements have to exist before the record
 /// can be true, and a record written up front would be a record of an
 /// intention.
-///
-/// `actor` arrives from the caller rather than being read here, so that this
-/// binary has ONE spelling of "who did this" — `cli/autonomy_cmd::actor`, the
-/// same one `service ensure` stamps its own record with.
 pub async fn record_audit(
     target: &ComputeTarget,
     reclamation: &Reclamation,
     reason: &str,
-    actor: &str,
     runner: &Runner,
 ) -> Result<String, DeployError> {
     let record = json!({
         "at": crate::models::isoformat_utc(chrono::Utc::now()),
         "command": "stado host reclaim",
         "mode": reclamation.mode,
-        "actor": actor,
         "reason": reason,
         "free_gb_before": reclamation.free_kb_before.map(|kb| gib_from_blocks(kb as f64)),
         "free_gb_after": reclamation.free_kb_after.map(|kb| gib_from_blocks(kb as f64)),
