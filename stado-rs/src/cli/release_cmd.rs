@@ -770,6 +770,17 @@ async fn status(args: &ReleaseStatusArgs) -> Result<(), CmdError> {
                 if let Some(job_state) = record["job_state"].as_str() {
                     line.push_str(&format!(" [{job_state}]"));
                 }
+                // An estimate and labelled as one: crates compiled so far
+                // against this platform's previous run, because cargo
+                // publishes no total of its own.
+                if let Some(compiled) = record["compile_progress"]["compiled"].as_u64() {
+                    match record["compile_progress"]["percent"].as_u64() {
+                        Some(percent) => line.push_str(&format!(
+                            " compiled {compiled} crates (~{percent}% of the previous run)"
+                        )),
+                        None => line.push_str(&format!(" compiled {compiled} crates")),
+                    }
+                }
                 println!("{line}");
                 if let Some(failure) = record["failure"].as_str() {
                     println!("    failure: {}", failure.lines().next().unwrap_or(failure));
