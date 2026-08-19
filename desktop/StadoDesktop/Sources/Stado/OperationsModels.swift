@@ -241,6 +241,27 @@ enum StadoFormat {
         return (try? fractionalDateStrategy.parse(value)) ?? (try? dateStrategy.parse(value))
     }
 
+    /// A `ps` start stamp as a host prints it — `Mon Aug 11 09:12:33 2026`.
+    ///
+    /// `stado service list --unowned` carries that field verbatim rather than
+    /// normalising it, so the only way an age appears beside a four-day-old
+    /// process is for this app to read the host's own spelling. Fixed locale
+    /// and the host's own zone: `ps` prints in the machine's local time, and a
+    /// French-locale laptop must not fail to read an English month name.
+    static func processStart(_ value: String?) -> Date? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return nil
+        }
+        return processStartFormatter.date(from: value) ?? date(value)
+    }
+
+    private static let processStartFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "EEE MMM d HH:mm:ss yyyy"
+        return formatter
+    }()
+
     static func duration(_ seconds: Double?) -> String {
         guard let seconds, seconds.isFinite, seconds >= 0 else { return "Unavailable" }
         if seconds < 60 {
@@ -374,7 +395,10 @@ struct HostReclaimPass: Decodable, Sendable {
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         host = try values.decodeIfPresent(String.self, forKey: .host) ?? ""
-        mode = try values.decodeIfPresent(String.self, forKey: .mode) ?? "dry-run"
+        // `dry_run`, the spelling `stado host reclaim` prints, so a report that
+        // arrived without the field cannot read as a different mode than the
+        // command's own.
+        mode = try values.decodeIfPresent(String.self, forKey: .mode) ?? "dry_run"
         stages = try values.decodeIfPresent([HostReclaimStage].self, forKey: .stages) ?? []
         freeGBBefore = try values.decodeIfPresent(Double.self, forKey: .freeGBBefore)
         freeGBAfter = try values.decodeIfPresent(Double.self, forKey: .freeGBAfter)
@@ -496,8 +520,14 @@ struct UnownedProcessReport: Decodable, Sendable {
 
 struct UnownedProcess: Decodable, Identifiable, Sendable {
     let host: String
-    let pid: Int
+    /// A pid as the fleet reports it: `stado service list --unowned` carries it
+    /// as a string, because it comes off the host's own `ps` output and is an
+    /// identifier to quote back, never a number to do arithmetic on.
+    let pid: String
     let command: String
+    /// The host's `ps` start stamp, verbatim — `Mon Aug 11 09:12:33 2026`. Kept
+    /// as text because it is the fact that mattered: reformatting it and
+    /// failing would report a four-day-old process with no age at all.
     let startedAt: String?
     /// What the fleet guesses this process belongs to. A guess is labelled as
     /// one on screen: nothing declared this process, so nothing knows.
@@ -505,8 +535,11 @@ struct UnownedProcess: Decodable, Identifiable, Sendable {
 
     var id: String { "\(host)#\(pid)" }
 
+    /// Only when the stamp parses. `nil` means "the host said when, and this
+    /// app could not read it", which is why the stamp itself is what the screen
+    /// shows and the age is the extra.
     var age: Double? {
-        guard let started = StadoFormat.date(startedAt) else { return nil }
+        guard let started = StadoFormat.processStart(startedAt) else { return nil }
         return Date().timeIntervalSince(started)
     }
 
@@ -519,10 +552,24 @@ struct UnownedProcess: Decodable, Identifiable, Sendable {
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         host = try values.decodeIfPresent(String.self, forKey: .host) ?? ""
-        pid = try values.decodeIfPresent(Int.self, forKey: .pid) ?? 0
+        pid = Self.identifier(in: values, forKey: .pid)
         command = try values.decodeIfPresent(String.self, forKey: .command) ?? ""
-        startedAt = try values.decodeIfPresent(String.self, forKey: .startedAt)
-        productGuess = try values.decodeIfPresent(String.self, forKey: .productGuess)
+        startedAt = operationalMetadata(try values.decodeIfPresent(String.self, forKey: .startedAt))
+        productGuess = operationalMetadata(try values.decodeIfPresent(String.self, forKey: .productGuess))
+    }
+
+    /// A pid that arrives as a JSON number is still a pid. Accepting both
+    /// spellings costs four lines and saves the whole list from failing to
+    /// decode over one of them.
+    private static func identifier(
+        in values: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) -> String {
+        if let text = try? values.decode(String.self, forKey: key) {
+            return text
+        }
+        guard let number = try? values.decode(Int.self, forKey: key) else { return "" }
+        return String(number)
     }
 }
 

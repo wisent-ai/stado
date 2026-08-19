@@ -322,7 +322,8 @@ struct ServicesView: View {
                 ConsoleTable(head: [
                     ConsoleHeaderCell("Host", width: 150),
                     ConsoleHeaderCell("PID", width: 78, trailing: true),
-                    ConsoleHeaderCell("Started", width: 128, trailing: true),
+                    ConsoleHeaderCell("Running for", width: 108, trailing: true),
+                    ConsoleHeaderCell("Started", width: 190),
                     ConsoleHeaderCell("Product guess", width: 150),
                     ConsoleHeaderCell("Command"),
                 ]) {
@@ -333,21 +334,31 @@ struct ServicesView: View {
                         ) {
                             ConsoleCell(text: process.host, width: 150, identifier: true, strong: true)
                             ConsoleCell(
-                                text: process.pid.formatted(.number.grouping(.never)),
+                                text: value(process.pid),
                                 width: 78,
                                 trailing: true,
                                 identifier: true,
                                 digits: true
                             )
+                            // The age when the host's stamp parsed, and the
+                            // stamp itself beside it either way: four days is
+                            // the fact that mattered, and an unparsed stamp
+                            // must not read as a process with no age.
                             ConsoleCell(
-                                text: ConsoleFormat.age(process.age),
-                                width: 128,
+                                text: process.age == nil ? "—" : StadoFormat.duration(process.age),
+                                width: 108,
                                 trailing: true,
                                 digits: true,
-                                tone: process.age.map { $0 > 86_400 } == true ? .warning : .neutral
+                                tone: isLongLived(process) ? .warning : .neutral
+                            )
+                            ConsoleCell(
+                                text: process.startedAt ?? "Not reported",
+                                width: 190,
+                                identifier: true,
+                                tone: isLongLived(process) ? .warning : .neutral
                             )
                             ConsoleCell(text: process.productGuess ?? "No guess", width: 150)
-                            ConsoleCell(text: process.command, identifier: true)
+                            ConsoleCell(text: value(process.command), identifier: true)
                         }
                     }
                 }
@@ -421,7 +432,7 @@ struct ServicesView: View {
         WisentInspector(
             eyebrow: "Owned by no unit",
             title: process.productGuess ?? "Unidentified process",
-            badges: [("PID \(process.pid.formatted(.number.grouping(.never)))", .warning)]
+            badges: [("PID \(value(process.pid))", .warning)]
         ) {
             WisentAlertPanel(
                 tone: .warning,
@@ -430,19 +441,32 @@ struct ServicesView: View {
                 command: "stado service list --unowned --json"
             )
             WisentField(label: "Host", value: process.host)
-            WisentField(label: "PID", value: process.pid.formatted(.number.grouping(.never)))
+            WisentField(label: "PID", value: value(process.pid))
             WisentField(
                 label: "Started",
                 value: process.startedAt ?? "Not reported",
-                tone: process.age.map { $0 > 86_400 } == true ? .warning : .neutral
+                tone: isLongLived(process) ? .warning : .neutral
             )
-            WisentField(label: "Running for", value: StadoFormat.duration(process.age))
+            WisentField(
+                label: "Running for",
+                value: process.age == nil
+                    ? "The host's start stamp could not be read here, so the age is unknown — the stamp above is what it said"
+                    : StadoFormat.duration(process.age),
+                tone: isLongLived(process) ? .warning : .neutral
+            )
             WisentField(
                 label: "Product guess",
                 value: process.productGuess ?? "Nothing declared this process, so nothing knows what it is"
             )
             WisentField(label: "Command", value: value(process.command))
         }
+    }
+
+    /// A day. The four-day agent processes are the case this screen was built
+    /// for, and a process nothing owns that has been up since yesterday is
+    /// already past the point where somebody meant to start it by hand.
+    private func isLongLived(_ process: UnownedProcess) -> Bool {
+        (process.age ?? 0) > 86_400
     }
 
     private func badges(for unit: ServiceUnit) -> [(String, WisentTone)] {
