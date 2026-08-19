@@ -6,6 +6,7 @@
 //! GET /api/cleanup.json  - sanitized current cleanup state
 //! GET /api/artifacts.json / GET /api/artifact.json?ref=
 //! GET /api/registry.json - policy-safe canonical registry projection
+//! GET /api/services.json - managed fleet services with launchd domain and restartability
 //! POST /api/cleanup/run  - one parameterless registry-controlled cleanup pass
 //! POST /api/registry/policy - whitelisted generation-checked policy mutation
 //! GET/PUT/DELETE /api/object?uri=stado://... - product object data plane
@@ -59,6 +60,7 @@ mod integration;
 mod operator_auth;
 mod operator_console;
 pub mod policy;
+mod services;
 pub mod summary;
 pub mod web_view;
 
@@ -974,6 +976,16 @@ impl Dashboard {
                     Err(error) => send_json(error.status(), &json!({"error": error.to_string()})),
                 },
             );
+        }
+        if path == "/api/services.json" {
+            // The same beacon-only read `stado service list` makes; a failed
+            // registry fetch is a 503 with the reason, never a blank page.
+            return Ok(match service::list_services(&self.store).await {
+                Ok(rows) => send_json(http_status("200"), &services::services_payload(&rows)),
+                Err(error) => {
+                    send_json(http_status("503"), &json!({"error": error.to_string()}))
+                }
+            });
         }
         if request.path == "/api/operator/catalog" {
             return Ok(send_json(http_status("200"), &operator_console::catalog()));
