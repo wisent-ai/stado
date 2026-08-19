@@ -59,7 +59,7 @@ use super::{
 };
 use crate::monitor::host_health::{self, HostHealthError};
 use crate::queue::JobStorage;
-use crate::targets::{self, ComputeTarget};
+use crate::targets::ComputeTarget;
 
 // ---------------------------------------------------------------------------
 // Vocabulary
@@ -205,6 +205,15 @@ pub struct ManagedService {
     pub path: String,
     /// [`KIND_LAUNCHD`] or [`KIND_SYSTEMD`].
     pub kind: String,
+    /// Absolute program the unit runs, on the host. Present when the
+    /// declaration is the source of the unit rather than a pointer at a
+    /// plist somebody installed by hand: `service ensure` renders the unit
+    /// from this and [`ManagedService::args`], so a host that lost its unit
+    /// file can be made to run the right thing again from the document
+    /// alone. Empty for a declaration that only names a path.
+    pub program: String,
+    /// The argument vector [`ManagedService::program`] is started with.
+    pub args: Vec<String>,
     /// [`SOURCE_REGISTRY`] or [`SOURCE_RECOVERY`].
     pub source: String,
     /// When the unit entered management; empty for a recovery-sourced one,
@@ -251,6 +260,17 @@ impl ManagedService {
                     Value::String(heuristic.clone()),
                 );
         }
+        // Written only when the declaration actually is the source of the
+        // unit. A record that merely points at a path keeps the shape it
+        // has always had, so adding this field rewrites no existing entry.
+        if !self.program.is_empty() {
+            let record = record.as_object_mut().expect("managed service record");
+            record.insert("program".to_string(), Value::String(self.program.clone()));
+            record.insert(
+                "args".to_string(),
+                Value::Array(self.args.iter().cloned().map(Value::String).collect()),
+            );
+        }
         if let Some(onboarding) = &self.onboarding {
             record["onboarding"] =
                 serde_json::to_value(onboarding).expect("OnboardingProduct is JSON serializable");
@@ -272,6 +292,8 @@ impl ManagedService {
             "kind": self.kind,
             "source": self.source,
             "managed_since": self.managed_since,
+            "program": self.program,
+            "args": self.args,
         });
         if let Some(onboarding) = &self.onboarding {
             record["onboarding"] =
@@ -320,6 +342,17 @@ impl ManagedService {
             kind,
             source: SOURCE_REGISTRY.to_string(),
             managed_since: text("managed_since"),
+            program: text("program"),
+            args: record
+                .get("args")
+                .and_then(Value::as_array)
+                .map(|args| {
+                    args.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default(),
             onboarding: record
                 .get("onboarding")
                 .and_then(|value| serde_json::from_value(value.clone()).ok()),
@@ -346,6 +379,8 @@ pub fn launchd_service(
         kind: KIND_LAUNCHD.to_string(),
         source: source.to_string(),
         managed_since: since.to_string(),
+        program: String::new(),
+        args: Vec::new(),
         onboarding: None,
     }
 }
@@ -368,6 +403,8 @@ pub fn systemd_service(
         kind: KIND_SYSTEMD.to_string(),
         source: source.to_string(),
         managed_since: since.to_string(),
+        program: String::new(),
+        args: Vec::new(),
         onboarding: None,
     }
 }
@@ -485,9 +522,7 @@ fn beacon_state(beacon: Option<&Map<String, Value>>, unit_id: &str) -> (String, 
 /// [`STATE_UNKNOWN`] rows instead of an error, because one silent host must
 /// not blank the fleet-wide answer.
 pub async fn list_services(store: &JobStorage) -> Result<Vec<ServiceStatus>, DeployError> {
-    let registry = targets::fetch_registry_remote()
-        .await
-        .map_err(|exc| DeployError(exc.to_string()))?;
+    let registry = super::host_channel::canonical_registry().await?;
     let mut rows: Vec<ServiceStatus> = Vec::new();
     for target in registry.local_targets() {
         let declared = declared_services(target);
@@ -1148,6 +1183,148 @@ fn end_state(describe: &'static str, probe: &str) -> host_channel::PostCondition
         probe: probe.replace("@LAUNCHD_STATE@", LAUNCHD_STATE),
     }
 }
+
+/// The end state an unprivileged restart of a system LaunchDaemon intends.
+///
+/// A system daemon's job lives in launchd's `system` domain, which an
+/// unprivileged login cannot read: `launchctl print system/<label>` needs
+/// root, and the `sudo -n` this channel would need is not granted. So
+/// [`RUNNING_DESCRIBE`]'s two facts — a loaded job with a pid — are not
+/// observable here at all, and asserting them would report every successful
+/// restart of a daemon as a failure.
+///
+/// What IS observable without privilege is the process: it runs as the
+/// approved user, so this login can see its pid and its owner. The end state
+/// is therefore stated about the process, and it is the honest one for this
+/// operation — the whole point of ending a `KeepAlive` daemon's process is
+/// that launchd puts a NEW one in its place.
+const RESPAWNED_DESCRIBE: &str = "the system daemon is running under a new pid";
+
+/// Reads `daemon_program` and `daemon_before`, which [`DAEMON_TERM_BODY`]
+/// sets. The probe is armed as an `EXIT` trap in the body's own shell
+/// (`host_channel::PostCondition::arm`), so it observes the pids that body
+/// actually signalled rather than a second, racing observation of its own.
+const RESPAWNED_PROBE: &str = "  pc_now=$(/usr/bin/pgrep -f \"^${daemon_program:-}\" 2>/dev/null | /usr/bin/tr '\\n' ' ')
+  pc_new=''
+  for pc_pid in $pc_now; do
+    case \" ${daemon_before:-} \" in
+      *\" $pc_pid \"*) ;;
+      *) pc_new=\"$pc_new$pc_pid \" ;;
+    esac
+  done
+  if [ -n \"$pc_new\" ]; then
+    stado_post 'met' \"$unit runs as pid(s) ${pc_new% }\"
+  elif [ -n \"$pc_now\" ]; then
+    stado_post 'unmet' \"$unit still runs as the pid(s) this restart ended: ${pc_now% }\"
+  else
+    stado_post 'unmet' \"nothing runs the program of $unit; launchd did not respawn it\"
+  fi
+";
+
+/// What the host reports about a system LaunchDaemon, read without
+/// privilege and without touching anything.
+///
+/// Four facts, and each one is a gate on the only repair this channel can
+/// perform:
+///
+/// - the unit's `KeepAlive` spelling, because ending a process nothing will
+///   respawn turns a degraded control plane into a dead one;
+/// - the account this login runs as;
+/// - the pids running the unit's declared program that THIS account owns,
+///   which are the only ones an unprivileged signal can reach;
+/// - the pids running it that some other account owns, so a refusal can say
+///   whose process it is instead of just "no".
+const DAEMON_PROBE_BODY: &str = "if [ ! -f \"$unit_path\" ]; then
+  say 'missing' \"$unit_path\"
+  exit 0
+fi
+daemon_program=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' \"$unit_path\" 2>/dev/null)
+if [ -z \"$daemon_program\" ]; then
+  daemon_program=$(/usr/libexec/PlistBuddy -c 'Print :Program' \"$unit_path\" 2>/dev/null)
+fi
+# `raw` answers the scalar spellings (`<true/>`, `<false/>`) in one word.
+# A KeepAlive dict has no raw spelling and makes plutil fail, which reads
+# identically to a key that is not there -- so the second read asks whether
+# the key exists at all, and the third separates an unreadable plist from a
+# readable one with no KeepAlive. Three answers, three different repairs.
+daemon_keep='absent'
+if daemon_raw=$(/usr/bin/plutil -extract KeepAlive raw -o - \"$unit_path\" 2>/dev/null); then
+  daemon_keep=$(printf '%s' \"$daemon_raw\" | /usr/bin/tr -d ' \t\r\n')
+elif /usr/bin/plutil -extract KeepAlive xml1 -o - \"$unit_path\" >/dev/null 2>&1; then
+  daemon_keep='conditional'
+elif ! /usr/bin/plutil -lint \"$unit_path\" >/dev/null 2>&1; then
+  daemon_keep='unreadable'
+fi
+if [ -z \"$daemon_keep\" ]; then daemon_keep='unreadable'; fi
+daemon_user=$(/usr/bin/id -un)
+daemon_owned=''
+daemon_foreign=''
+if [ -n \"$daemon_program\" ]; then
+  for daemon_pid in $(/usr/bin/pgrep -f \"^$daemon_program\" 2>/dev/null); do
+    daemon_owner=$(/bin/ps -o user= -p \"$daemon_pid\" 2>/dev/null | /usr/bin/tr -d ' \t\r\n')
+    if [ \"$daemon_owner\" = \"$daemon_user\" ]; then
+      daemon_owned=\"$daemon_owned$daemon_pid \"
+    elif [ -n \"$daemon_owner\" ]; then
+      daemon_foreign=\"$daemon_foreign$daemon_pid \"
+    fi
+  done
+fi
+printf 'STADO_DAEMON\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"$daemon_keep\" \"$daemon_user\" \"${daemon_owned% }\" \"${daemon_foreign% }\" \"$daemon_program\"
+say 'daemon_probed' \"KeepAlive $daemon_keep\"
+";
+
+/// End the daemon's process so launchd recreates it.
+///
+/// This is `launchctl kickstart -k` without the privilege: that verb stops
+/// the job's process and lets launchd start it again, and for a job launchd
+/// is unconditionally keeping alive, ending the process from the account
+/// that owns it produces the same sequence. It never unloads anything, so
+/// there is no window in which the job does not exist -- the property the
+/// July outage cost this fleet three commands to learn.
+///
+/// Only the pids the probe found under THIS account are signalled, and they
+/// arrive as a validated digit list from [`validate_pid_list`]; nothing here
+/// re-derives a target from a pattern, because a pattern that widened by one
+/// character would signal a process nobody chose.
+///
+/// TERM only, and no escalation. A control-plane daemon that ignores TERM is
+/// a finding to report, not a reason to try SIGKILL on the process holding
+/// the fleet's authorization state.
+const DAEMON_TERM_BODY: &str = "daemon_program=@PROGRAM@
+daemon_before=@PIDS@
+for daemon_pid in $daemon_before; do /bin/kill -TERM \"$daemon_pid\" >/dev/null 2>&1 || true; done
+daemon_after=''
+daemon_fresh=''
+daemon_waited=0
+while [ \"$daemon_waited\" -lt 15 ]; do
+  /bin/sleep 1
+  daemon_waited=$((daemon_waited + 1))
+  daemon_after=$(/usr/bin/pgrep -f \"^$daemon_program\" 2>/dev/null | /usr/bin/tr '\\n' ' ')
+  daemon_fresh=''
+  for daemon_pid in $daemon_after; do
+    case \" $daemon_before \" in
+      *\" $daemon_pid \"*) ;;
+      *) daemon_fresh=\"$daemon_fresh$daemon_pid \" ;;
+    esac
+  done
+  if [ -n \"$daemon_fresh\" ]; then break; fi
+done
+daemon_left=''
+for daemon_pid in $daemon_before; do
+  case \" $daemon_after \" in
+    *\" $daemon_pid \"*) daemon_left=\"$daemon_left$daemon_pid \" ;;
+  esac
+done
+if [ -n \"$daemon_fresh\" ]; then
+  say 'restarted' \"ended pid(s) $daemon_before owned by $(/usr/bin/id -un); launchd's KeepAlive replaced it with pid(s) ${daemon_fresh% } after ${daemon_waited}s\"
+  exit 0
+fi
+if [ -n \"$daemon_left\" ]; then
+  say 'restart_failed' \"pid(s) ${daemon_left% } did not end on SIGTERM and nothing was unloaded. Run: sudo launchctl kickstart -k system/$unit\"
+  exit 0
+fi
+say 'restart_failed' \"ended pid(s) $daemon_before and launchd started nothing in ${daemon_waited}s. Run: sudo launchctl kickstart -k system/$unit\"
+";
 
 /// `service restart`: restart the unit, in place wherever launchd will allow it.
 /// Deliberately narrower than a recovery pass — no disk cleanup, no
@@ -2013,30 +2190,200 @@ pub async fn show_service(
     run_remote(target, script, runner).await
 }
 
+// ---------------------------------------------------------------------------
+// The one repair a system LaunchDaemon has that needs no privilege
+// ---------------------------------------------------------------------------
+
+/// `KeepAlive` is `<true/>`: launchd recreates the process whenever it ends,
+/// for any reason. This is the only spelling that authorizes ending the
+/// process, because it is the only one under which the answer to "will
+/// something put it back" is yes without reading further keys.
+pub const KEEP_ALIVE_ALWAYS: &str = "true";
+/// `KeepAlive` is a dict (`SuccessfulExit`, `Crashed`, `PathState`, ...).
+/// launchd may or may not respawn after a signal depending on those keys,
+/// and guessing which is not a thing to do to a control plane.
+pub const KEEP_ALIVE_CONDITIONAL: &str = "conditional";
+/// The unit declares no `KeepAlive` at all.
+pub const KEEP_ALIVE_ABSENT: &str = "absent";
+/// The plist could not be read, so nothing about respawning is known.
+pub const KEEP_ALIVE_UNREADABLE: &str = "unreadable";
+
+/// What one system LaunchDaemon looks like from the approved unprivileged
+/// login: its respawn declaration, this login's account, and which of the
+/// pids running its program that account owns.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SystemDaemon {
+    /// [`KEEP_ALIVE_ALWAYS`], [`KEEP_ALIVE_CONDITIONAL`],
+    /// [`KEEP_ALIVE_ABSENT`], [`KEEP_ALIVE_UNREADABLE`], or the literal
+    /// scalar the plist carries (`false` is the one that matters).
+    pub keep_alive: String,
+    /// The account the approved channel logs in as.
+    pub login_user: String,
+    /// Pids running the unit's program that [`Self::login_user`] owns, and
+    /// can therefore signal without privilege.
+    pub owned_pids: Vec<String>,
+    /// Pids running it that some other account owns.
+    pub foreign_pids: Vec<String>,
+    /// The program the unit declares.
+    pub program: String,
+}
+
+impl SystemDaemon {
+    /// True when launchd will unconditionally put a new process in place of
+    /// one that ends.
+    pub fn respawns(&self) -> bool {
+        self.keep_alive == KEEP_ALIVE_ALWAYS
+    }
+
+    /// True when this login can perform the whole restart on its own: the
+    /// process is one it owns, and launchd is keeping the job alive.
+    pub fn restartable_unprivileged(&self) -> bool {
+        self.respawns() && !self.owned_pids.is_empty()
+    }
+
+    /// Why this daemon cannot be restarted from here, in the operator's
+    /// words. Only reached when [`Self::restartable_unprivileged`] is false,
+    /// and it always names the privileged command that does work.
+    fn refusal(&self, service: &ManagedService) -> String {
+        let reason = if !self.respawns() {
+            match self.keep_alive.as_str() {
+                KEEP_ALIVE_ABSENT => "the unit declares no KeepAlive, so ending its process would \
+                                      leave nothing to start another one and this host would go \
+                                      from degraded to down"
+                    .to_string(),
+                KEEP_ALIVE_CONDITIONAL => "the unit declares a conditional KeepAlive, so whether \
+                                           launchd respawns it after a signal depends on keys \
+                                           this channel must not guess at"
+                    .to_string(),
+                KEEP_ALIVE_UNREADABLE => "the unit's plist could not be read, so whether anything \
+                                          would start another process is unknown"
+                    .to_string(),
+                other => format!(
+                    "the unit declares KeepAlive {other}, so launchd will not start another \
+                     process when this one ends"
+                ),
+            }
+        } else if !self.foreign_pids.is_empty() {
+            format!(
+                "its process runs as another account (pid(s) {}), not as the approved user {}, so \
+                 this channel cannot signal it",
+                self.foreign_pids.join(" "),
+                self.login_user
+            )
+        } else {
+            format!(
+                "nothing on the host is running {}, so there is no process to end and launchd is \
+                 not holding the job up",
+                if self.program.is_empty() {
+                    "the unit's program"
+                } else {
+                    &self.program
+                }
+            )
+        };
+        format!(
+            "{} on {} is a system LaunchDaemon at {}; the approved channel is unprivileged and \
+             cannot bootstrap it, and {reason}. Restarting it needs one privileged command on the \
+             host: sudo launchctl kickstart -k system/{}",
+            service.unit_id(),
+            service.host,
+            service.path,
+            service.unit_id()
+        )
+    }
+}
+
+/// The `STADO_DAEMON` marker. Absent for every path that never reached the
+/// probe (a missing unit file, an unsupported OS), which is why it is an
+/// [`Option`].
+fn parse_daemon(stdout: &str) -> Option<SystemDaemon> {
+    let words = |field: &str| -> Vec<String> {
+        field
+            .split_whitespace()
+            .map(str::to_string)
+            .collect::<Vec<String>>()
+    };
+    for line in stdout.lines() {
+        if let ["STADO_DAEMON", keep_alive, login_user, owned, foreign, program] =
+            host_channel::marker_fields(line).as_slice()
+        {
+            return Some(SystemDaemon {
+                keep_alive: (*keep_alive).to_string(),
+                login_user: (*login_user).to_string(),
+                owned_pids: words(owned),
+                foreign_pids: words(foreign),
+                program: (*program).to_string(),
+            });
+        }
+    }
+    None
+}
+
+/// The pids the terminate program may signal, as one shell word list.
+///
+/// Every value here was reported by the host's own `pgrep` moments ago, but
+/// it still travels back over the channel as data, and a signal list is the
+/// last place to trust a round trip. Digits and single spaces only; anything
+/// else is refused rather than quoted, because the useful failure is "the
+/// host said something this operation does not understand", never a
+/// creatively escaped `kill` argument.
+fn validate_pid_list(pids: &[String]) -> Result<String, DeployError> {
+    for pid in pids {
+        if pid.is_empty() || !pid.chars().all(|character| character.is_ascii_digit()) {
+            return Err(DeployError(format!(
+                "the host reported {} as a process id of this unit, which is not a process id",
+                py_str_repr(pid)
+            )));
+        }
+    }
+    Ok(pids.join(" "))
+}
+
+/// Read one system LaunchDaemon's respawn declaration and process ownership.
+///
+/// Read-only: it starts nothing, stops nothing and signals nothing, so it is
+/// safe against a live production host.
+pub async fn inspect_system_daemon(
+    target: &ComputeTarget,
+    service: &ManagedService,
+    runner: &Runner,
+) -> Result<(RemoteReport, Option<SystemDaemon>), DeployError> {
+    let script = remote_script(service.unit_id(), "", &service.path, DAEMON_PROBE_BODY)?;
+    let report = run_remote(target, script, runner).await?;
+    let daemon = parse_daemon(&report.stdout);
+    Ok((report, daemon))
+}
+
 /// `service restart` on one host, with the end state it intends checked on
 /// the host before the connection closes. A restart whose own steps report
 /// success while the unit ends up unloaded is reported as the failure it
 /// is: see [`RemoteReport::succeeded`].
 ///
-/// A unit in the system domain is refused before the host is contacted at
-/// all: the approved channel is unprivileged and cannot bootstrap a system
-/// LaunchDaemon, so aiming one at the host only burns the probe budget on
-/// the way to a failure that says nothing. The refusal names the two ways
-/// forward that do work.
+/// A unit in the system domain takes a different route, because the approved
+/// channel is unprivileged and `launchctl bootstrap system` is not available
+/// to it. It is not, however, unrecoverable: every daemon this fleet installs
+/// carries `UserName`, so the process runs as the approved user even though
+/// the job is root's, and it carries `KeepAlive` `<true/>`, so launchd puts a
+/// new process in place of one that ends. Ending the process from the account
+/// that owns it is therefore the same sequence `launchctl kickstart -k`
+/// performs — the job is never unloaded, and there is no window in which it
+/// does not exist.
+///
+/// Both gates are read from the host first ([`inspect_system_daemon`]) and
+/// neither is assumed. Without them the command refuses and names the one
+/// privileged command that works, because ending a process nothing will
+/// respawn is how a degraded control plane becomes a dead one. That refusal
+/// used to be the only answer here, and it sent the operator to
+/// `stado host recover`, which does not re-bootstrap a system daemon either:
+/// on 2026-08-19 the object API answered 503 to the whole fleet for an
+/// afternoon with no product path back.
 pub async fn restart_service(
     target: &ComputeTarget,
     service: &ManagedService,
     runner: &Runner,
 ) -> Result<RemoteReport, DeployError> {
     if UnitDomain::from_path(&service.path).requires_privileged_bootstrap() {
-        return Err(DeployError(format!(
-            "{} on {} is a system LaunchDaemon at {}; the approved channel is unprivileged and cannot bootstrap it. Use `stado host recover {}` (re-bootstraps every managed unit) or load it as root on the host: launchctl bootstrap system {}",
-            service.unit_id(),
-            service.host,
-            service.path,
-            service.host,
-            service.path
-        )));
+        return restart_system_daemon(target, service, runner).await;
     }
     let body = RESTART_BODY.replace("@DISOWNED_SWEEP@", DISOWNED_SWEEP);
     let prelude = remote_prelude(service.unit_id(), "", &service.path)?;
@@ -2048,6 +2395,52 @@ pub async fn restart_service(
         runner,
     )
     .await
+}
+
+/// The system-domain half of [`restart_service`]: probe, then either end the
+/// owned process and let launchd recreate it, or refuse with the privileged
+/// command named.
+async fn restart_system_daemon(
+    target: &ComputeTarget,
+    service: &ManagedService,
+    runner: &Runner,
+) -> Result<RemoteReport, DeployError> {
+    let (probe, daemon) = inspect_system_daemon(target, service, runner).await?;
+    let Some(daemon) = daemon else {
+        // No marker: the probe never got as far as reading the unit. Its own
+        // report already carries why (a missing unit file, a refused key),
+        // and that is a better answer than a refusal composed here.
+        return Ok(probe);
+    };
+    if !daemon.restartable_unprivileged() {
+        return Err(DeployError(daemon.refusal(service)));
+    }
+    let body = DAEMON_TERM_BODY
+        .replace("@PROGRAM@", &shlex_quote(&daemon.program))
+        .replace("@PIDS@", &shlex_quote(&validate_pid_list(&daemon.owned_pids)?));
+    let prelude = remote_prelude(service.unit_id(), "", &service.path)?;
+    let mut report = run_remote_checked(
+        target,
+        &prelude,
+        &body,
+        &end_state(RESPAWNED_DESCRIBE, RESPAWNED_PROBE),
+        runner,
+    )
+    .await?;
+    if report.succeeded("restarted") {
+        // The host's own detail says what happened, in the 160 characters one
+        // marker field allows. Why that counts as a restart is a fixed
+        // sentence about launchd, not a fact about this host, so it is stated
+        // here instead of eating the framing budget on every pass. Without it
+        // an operator reading `restarted` beside a `kill` has to take the
+        // equivalence on trust.
+        report.detail = format!(
+            "{} — that is what `launchctl kickstart -k` does to a KeepAlive job, minus the \
+             privilege it needs: the process is replaced and the job is never unloaded",
+            report.detail
+        );
+    }
+    Ok(report)
 }
 
 /// Atomically replace one runtime secret assignment for a managed service.
@@ -2123,11 +2516,34 @@ pub async fn reset_service_listener(
 /// The fence is only a fence if the writer is actually gone, so the intended
 /// end state is checked on the host: a stop that boots out a label and
 /// leaves the program serving is reported as a failed stop, not as a stop.
+///
+/// A system LaunchDaemon is refused before the host is contacted, and unlike
+/// a restart there is no unprivileged route to add. Everything this body
+/// does to a daemon fails silently or lies: `sudo -n launchctl bootout
+/// system/<label>` is refused for want of a password, the disowned-process
+/// sweep then ends the process, launchd's `KeepAlive` starts another one
+/// within seconds, and [`STOPPED_PROBE`] reads `launchctl print
+/// system/<label>` — which an unprivileged login cannot read either — as
+/// "no job at system/<label>" and calls the end state met. So the command
+/// reported a stopped service, the fence had no writer behind it, and the
+/// daemon went on serving.
 pub async fn stop_service(
     target: &ComputeTarget,
     service: &ManagedService,
     runner: &Runner,
 ) -> Result<RemoteReport, DeployError> {
+    if UnitDomain::from_path(&service.path).requires_privileged_bootstrap() {
+        return Err(DeployError(format!(
+            "{} on {} is a system LaunchDaemon at {}; the approved channel is unprivileged and \
+             cannot boot it out, and ending its process is not a stop — launchd starts another one \
+             within seconds for a KeepAlive job. Stopping it needs one privileged command on the \
+             host: sudo launchctl bootout system/{}",
+            service.unit_id(),
+            service.host,
+            service.path,
+            service.unit_id()
+        )));
+    }
     let body = STOP_BODY.replace("@DISOWNED_SWEEP@", DISOWNED_SWEEP);
     let prelude = remote_prelude(service.unit_id(), "", &service.path)?;
     run_remote_checked(
@@ -2201,11 +2617,33 @@ const REMOTE_USER_PLACEHOLDER: &str = "__STADO_USER__";
 
 pub fn plan_deploy(name: &str, program: &str, args: &[String]) -> Result<DeployPlan, DeployError> {
     validate_service_name(name)?;
+    let label = local_install::label(DEPLOY_KIND, name);
+    plan_deploy_labelled(name, &label, program, args)
+}
+
+/// [`plan_deploy`] at a label the declaration already carries.
+///
+/// `plan_deploy` mints `com.wisent.compute.service.<name>`, which is right for
+/// a unit being created and wrong for one that already exists under another
+/// label. Rendering the minted spelling for a declaration that says the unit
+/// is `com.wisent.stado-resolver` installs a SECOND launchd job running the
+/// same program, and two resolvers competing for one stable loopback port is
+/// exactly the shape of outage this module was written after. A declaration
+/// that names its own label is rendered at that label, so a declared service
+/// is reinstallable from the document without becoming a second service.
+pub fn plan_deploy_labelled(
+    name: &str,
+    label: &str,
+    program: &str,
+    args: &[String],
+) -> Result<DeployPlan, DeployError> {
+    validate_service_name(name)?;
+    validate_service_name(label)?;
     validate_program(program)?;
     for arg in args {
         validate_unit_argument(arg)?;
     }
-    let label = local_install::label(DEPLOY_KIND, name);
+    let label = label.to_string();
     let render = |os: LocalOs| {
         let path = match os {
             LocalOs::Darwin => "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",

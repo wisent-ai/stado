@@ -51,14 +51,30 @@ pub async fn health(target: &str, json: bool) -> Result<(), CmdError> {
     }
     Ok(())
 }
-/// `stado host publish-beacon FILE` — publish a locally collected health
-/// document through the dedicated, route-scoped Stado control API.
+/// `stado host publish-beacon FILE [--print]` — publish a locally collected
+/// health document through the dedicated, route-scoped Stado control API.
 ///
 /// This command deliberately has no direct-storage mode and does not consult
 /// provider credentials. Missing URL/token configuration, an insecure remote
 /// URL, an over-broad token file, malformed JSON, and an inconsistent server
 /// acknowledgement all fail closed.
-pub async fn publish_beacon(source: &str) -> Result<(), CmdError> {
+///
+/// The `link` block is collected HERE rather than by the collector scripts,
+/// because it is the one part of a beacon that cannot be assembled with `df`
+/// and `launchctl`: it reads the power log and the tailnet, and a host that
+/// went silent has to publish that account of itself or the silence leaves no
+/// trace at all (see [`crate::deploy::host_link`]). Collection never blocks
+/// the publish — every probe is capped and degrades to a null.
+///
+/// It is injected only into a document about THIS host. The macOS collector
+/// also relays beacons for hosts that cannot publish for themselves, and
+/// stamping this machine's connectivity onto another machine's document would
+/// invent the very evidence the block exists to provide.
+///
+/// `--print` writes the document that would be published and publishes
+/// nothing, so the collection can be inspected on a host without a beacon
+/// grant and without touching the fleet's store.
+pub async fn publish_beacon(source: &str, print: bool) -> Result<(), CmdError> {
     let bytes = if source == "-" {
         let mut bytes = Vec::new();
         std::io::stdin().lock().read_to_end(&mut bytes)?;
@@ -71,14 +87,15 @@ pub async fn publish_beacon(source: &str) -> Result<(), CmdError> {
             "host beacon must contain between one and 65535 bytes",
         ));
     }
-    let document: Value = serde_json::from_slice(&bytes)
+    let mut document: Value = serde_json::from_slice(&bytes)
         .map_err(|error| CmdError::click(format!("host beacon is not valid JSON: {error}")))?;
     let host = document
         .as_object()
         .and_then(|value| value.get("host"))
         .and_then(Value::as_str)
-        .ok_or_else(|| CmdError::click("host beacon must be an object with a string host"))?;
-    if !valid_beacon_host(host) {
+        .ok_or_else(|| CmdError::click("host beacon must be an object with a string host"))?
+        .to_string();
+    if !valid_beacon_host(&host) {
         return Err(CmdError::click(
             "host beacon host must be a lowercase DNS label",
         ));
@@ -94,6 +111,21 @@ pub async fn publish_beacon(source: &str) -> Result<(), CmdError> {
         ));
     }
 
+    if beacon_is_this_host(&host) {
+        let link =
+            crate::deploy::host_link::collect_link(&crate::deploy::production_runner()).await;
+        if let Some(object) = document.as_object_mut() {
+            object.insert("link".to_string(), serde_json::to_value(&link)?);
+        }
+    }
+    // The merged document is what gets published, so the bytes on the wire
+    // are the bytes just validated plus the block collected here.
+    let bytes = serde_json::to_vec(&document)?;
+    if print {
+        println!("{}", serde_json::to_string_pretty(&document)?);
+        return Ok(());
+    }
+
     let mut endpoint = host_health_api_url()?;
     {
         let mut segments = endpoint.path_segments_mut().map_err(|()| {
@@ -103,7 +135,7 @@ pub async fn publish_beacon(source: &str) -> Result<(), CmdError> {
         segments.push("api");
         segments.push("host-health");
     }
-    endpoint.query_pairs_mut().append_pair("host", host);
+    endpoint.query_pairs_mut().append_pair("host", &host);
 
     let token = host_health_api_token().await?;
     let response = crate::cli::storage::fleet_https_client()
@@ -134,7 +166,7 @@ pub async fn publish_beacon(source: &str) -> Result<(), CmdError> {
     // from the control plane's -- the client was asserting an internal detail
     // it has no way to know.
     let stored = payload.get("state").and_then(Value::as_str) == Some("stored")
-        && payload.get("host").and_then(Value::as_str) == Some(host)
+        && payload.get("host").and_then(Value::as_str) == Some(host.as_str())
         && payload
             .get("path")
             .and_then(Value::as_str)
@@ -156,6 +188,19 @@ fn valid_beacon_host(host: &str) -> bool {
         && bytes
             .iter()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+}
+
+/// Is this beacon document about the machine running this command?
+///
+/// The beacon slug is the leading hostname label, lowercased — exactly how
+/// the collector scripts spell it (`hostname -s | tr '[:upper:]' '[:lower:]'`)
+/// and how the readers resolve a target back to its beacon object. A host
+/// whose name cannot be read at all matches nothing, which keeps the relay
+/// path from being mistaken for a self-publish.
+fn beacon_is_this_host(host: &str) -> bool {
+    let local = crate::targets::normalize_hostname(&crate::providers::vast::system_hostname());
+    let slug = local.split('.').next().unwrap_or_default();
+    !slug.is_empty() && slug == host
 }
 
 fn host_health_api_url() -> Result<url::Url, CmdError> {
@@ -288,6 +333,12 @@ async fn host_health_api_token() -> Result<String, CmdError> {
 /// The canonical remote registry remains the default and fleet-survival
 /// authority. `bundled_registry` is an explicit break-glass path for repairing
 /// the storage or authorization outage that made that authority unreadable.
+///
+/// `host_recovery::STATUS_BLOCKED` reaches that same exit 1: a pass that ran
+/// to its last line while leaving a managed unit unloaded is not a recovery,
+/// and the `skipped` and `blockers` arrays of the printed document say which
+/// unit and what to run. Exit 0 from this command means every managed unit is
+/// loaded.
 pub async fn recover(target: &str, bundled_registry: bool) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
     let report = if bundled_registry {
@@ -302,7 +353,9 @@ pub async fn recover(target: &str, bundled_registry: bool) -> Result<(), CmdErro
         "{}",
         crate::deploy::host_recovery::to_sorted_pretty(&report)
     );
-    if report.get("status").and_then(Value::as_str) != Some("ok") {
+    if report.get("status").and_then(Value::as_str)
+        != Some(crate::deploy::host_recovery::STATUS_OK)
+    {
         // click.exceptions.Exit(1): nothing more to print.
         return Err(CmdError::silent(1));
     }
@@ -328,9 +381,7 @@ pub async fn reboot(target: &str) -> Result<(), CmdError> {
 /// Resolve TARGET in the canonical registry, the same source
 /// `host weles-recordings-dir` writes back to.
 async fn registry_target(target: &str) -> Result<ComputeTarget, CmdError> {
-    let registry = crate::targets::fetch_registry_remote()
-        .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    let registry = super::registry::read_registry().await?;
     registry
         .targets
         .iter()
@@ -1236,6 +1287,420 @@ fn claiming_outcome(gates: &crate::deploy::host_gates::HostGates) -> Result<(), 
     )))
 }
 
+/// How many silence records `stado host link` carries in its document.
+///
+/// Five, newest first: enough that a host which has been dropping off every
+/// afternoon shows a pattern rather than a single incident, and few enough that
+/// the document stays readable on a terminal during the outage it describes.
+/// The full history stays in the store under `host_silence/<host>/`.
+const NEWEST_SILENCES: usize = 5;
+
+/// How far back `stado host link` counts what readers refused.
+///
+/// One hour rather than the silence threshold. The refusals a gap produces land
+/// AROUND it, not inside it: on 2026-08-19 the resolver refused twice while the
+/// beacon was still inside its tolerance, so a window as narrow as the
+/// threshold would report the gap with none of the refusals it caused. An hour
+/// is the span an operator asking "why did this host go quiet" has in mind, and
+/// every refusal record keeps its own timestamp for any question longer than
+/// that.
+const REFUSAL_WINDOW_SECONDS: i64 = 60 * 60;
+
+/// The beacon is fresh and nothing refused.
+const LINK_HEALTHY: &str = "healthy";
+/// Nothing has been heard from this host since the silence threshold.
+const LINK_SILENT: &str = "silent";
+/// Readers refused inside the window, or the host answers ssh while its own
+/// beacon is stale.
+const LINK_DEGRADED: &str = "degraded";
+
+/// What a host publishes no path for. Never a fabricated `direct`: "we do not
+/// know how this host is reachable" is the answer that sends an operator to
+/// look, and a guess is the answer that does not.
+const PATH_KIND_UNKNOWN: &str = "unknown";
+
+/// `stado host link TARGET [--json]` — why this host went quiet, in one
+/// payload.
+///
+/// The incident: between 18:29 and 18:35 UTC on 2026-08-19 charless-mac-mini
+/// answered no ping and no ssh, then came back on `direct 10.0.0.253:41641`.
+/// Six minutes of a host being unreachable left no trace anywhere in this
+/// product. The only evidence was two ping packets an operator happened to
+/// send, and the reader-side refusals it caused — "service directory cache is
+/// stale", "registry authority exited: ssh connect Operation timed out" — went
+/// to `~/.stado/logs/stado-resolver.err` and nowhere a person would look. This
+/// command is the trace: the host's own account of its path and its sleep and
+/// wake times, the silences recorded against it, and what refused because of
+/// them.
+///
+/// Everything here is read. Opening and closing a silence belongs to the
+/// observer path in [`crate::monitor::host_silence`]; a diagnostic that
+/// recorded a silence every time an operator looked would make the count it
+/// prints a function of how often it was run.
+///
+/// The exit status follows `verdict`, the way `host gates`' follows `claiming`,
+/// so `stado host link mini && ...` is a usable sentence and a silent host
+/// cannot be mistaken for a healthy one by a script that reads only status
+/// codes.
+pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
+    let runner = crate::deploy::production_runner();
+    let store = beacon_store().await?;
+    let mut blockers: Vec<String> = Vec::new();
+
+    // The registry through the last-known-good cache, not the authority alone.
+    // This is the command an operator runs while the control plane is the thing
+    // that is sick: on 2026-08-19 every host command died on the same refused
+    // ssh the operator was trying to diagnose, which is a diagnostic that dies
+    // with its subject.
+    let (registry, notice) = crate::targets::fetch_registry_or_last_good()
+        .await
+        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    if let Some(sentence) = notice {
+        // On stderr so `--json` stays exactly one document on stdout, and in
+        // the blockers so the cache's age reaches whoever reads the document
+        // instead of the terminal.
+        eprintln!("{sentence}");
+        blockers.push(sentence);
+    }
+    let resolved = crate::deploy::host_channel::resolve_target(&registry, target)
+        .map_err(|exc| CmdError::click(exc.to_string()))?;
+
+    // The ssh half, through the same channel and the same fixed program
+    // `host ping` sends, so the two commands can never disagree about whether
+    // a host answers. A refused connection is this command's answer, not its
+    // failure: "does not answer ssh" is precisely what was asked.
+    let ssh = crate::deploy::host_channel::run_program(
+        resolved,
+        crate::deploy::host_ping::REMOTE_PROGRAM,
+        &runner,
+    )
+    .await;
+    let (ssh_reachable, ssh_error) = match &ssh {
+        Ok(output) if output.ok() => (true, None),
+        Ok(output) => (
+            false,
+            Some(crate::deploy::host_channel::last_error_line(
+                output,
+                "ssh failed",
+            )),
+        ),
+        Err(exc) => (false, Some(exc.to_string())),
+    };
+
+    // The beacon half, aged by the one rule `host ping` ages every beacon in
+    // this fleet with, and the `link` block the host published inside it.
+    let now = chrono::Utc::now();
+    let (signal, published) =
+        match crate::monitor::host_health::load_host_health(&store, &resolved.name).await {
+            Ok(report) => {
+                let published = crate::deploy::host_link::BeaconLink::from_beacon(&report.beacon)
+                    .map(serde_json::to_value)
+                    .transpose()?;
+                (
+                    crate::deploy::host_ping::grade_beacon(&report, now),
+                    published,
+                )
+            }
+            Err(exc) => (
+                crate::deploy::host_ping::BeaconSignal::unreadable(exc.to_string()),
+                None,
+            ),
+        };
+    let from_link = |key: &str| {
+        published
+            .as_ref()
+            .and_then(|block| block.get(key).cloned())
+            .unwrap_or(Value::Null)
+    };
+
+    let threshold = crate::monitor::host_silence::silence_threshold_seconds();
+    // No age at all — no beacon object, an unparseable one, an unreadable store
+    // — counts as past the threshold. An absent beacon is the strongest form of
+    // "nothing has been heard from this host", not an exemption from it.
+    let stale = signal.age_seconds.is_none_or(|age| age > threshold);
+
+    if let Some(detail) = &signal.error {
+        blockers.push(detail.clone());
+    }
+    if let (true, Some(age)) = (stale, signal.age_seconds) {
+        blockers.push(format!(
+            "this host's newest beacon is {age}s old, past the {threshold}s silence threshold"
+        ));
+    }
+    if let Some(detail) = &ssh_error {
+        blockers.push(detail.clone());
+    }
+    if published.is_none() {
+        blockers.push(
+            "this host's beacon carries no link block, so its path, its sleep and wake \
+             times and its interface changes are unknown here"
+                .to_string(),
+        );
+    }
+
+    // Looking at a beacon IS the observation the silence record is made of,
+    // and [`crate::monitor::host_silence::observe_beacon_age`] is the one
+    // entry point for the transition: whichever component notices the
+    // threshold crossing writes it, and three observers of one gap produce one
+    // record carrying three names. An operator running this command during an
+    // outage is exactly that — the observer who noticed — and on 2026-08-19
+    // nothing recorded what they saw. The instant is the beacon's own, recovered
+    // with the same parser that aged it: a silence's `started_at` is when the
+    // host was last heard from, and deriving it from the rounded age would
+    // misdate every record by up to a second.
+    let newest_beacon_at = signal
+        .reported_at
+        .as_deref()
+        .and_then(crate::deploy::host_ping::parse_timestamp);
+    if let Err(exc) = crate::monitor::host_silence::observe_beacon_age(
+        &store,
+        &resolved.name,
+        newest_beacon_at,
+        crate::monitor::host_silence::READER_CLI,
+        signal.error.as_deref(),
+    )
+    .await
+    {
+        blockers.push(exc.to_string());
+    }
+
+    // A store that will not answer for the silences is reported as a blocker
+    // and never as a failed command. Refusing to print the half that was read
+    // is the exact behaviour this command exists to end.
+    let silences =
+        match crate::monitor::host_silence::recent_silences(&store, &resolved.name, NEWEST_SILENCES)
+            .await
+        {
+            Ok(records) => records,
+            Err(exc) => {
+                blockers.push(exc.to_string());
+                Vec::new()
+            }
+        };
+    let refusals = match crate::monitor::host_silence::refusal_summary(
+        &store,
+        &resolved.name,
+        REFUSAL_WINDOW_SECONDS,
+    )
+    .await
+    {
+        Ok(summary) => summary,
+        Err(exc) => {
+            blockers.push(exc.to_string());
+            crate::monitor::host_silence::RefusalSummary::empty(REFUSAL_WINDOW_SECONDS)
+        }
+    };
+    let refused = refusals.count > usize::MIN;
+    if refused {
+        blockers.push(format!(
+            "readers refused {} time(s) in the last {}s: {}",
+            refusals.count,
+            refusals.window_seconds,
+            reason_counts(&refusals),
+        ));
+    }
+    // The open record's own first reader error, verbatim: it is what a reader
+    // wrote down at the moment the host stopped answering, and once the host is
+    // back it is the only account of the gap that exists.
+    if let Some(open) = silences.iter().find(|record| record.ended_at.is_none()) {
+        let mut sentence = format!(
+            "a silence opened at {} is still open",
+            silence_instant(open.started_at)
+        );
+        if let Some(detail) = &open.first_reader_error {
+            sentence.push_str(&format!("; first reader error: {detail}"));
+        }
+        blockers.push(sentence);
+    }
+
+    let verdict = if stale {
+        // A box that answers ssh while nothing has heard from its agent is not
+        // silent: it is running and not reporting, which is a different repair
+        // and the exact state that ran for five days in July.
+        if ssh_reachable {
+            LINK_DEGRADED
+        } else {
+            LINK_SILENT
+        }
+    } else if refused {
+        LINK_DEGRADED
+    } else {
+        LINK_HEALTHY
+    };
+
+    let path_kind = match from_link("path_kind") {
+        Value::Null => Value::String(PATH_KIND_UNKNOWN.to_string()),
+        kind => kind,
+    };
+    let changes = match from_link("interface_changes") {
+        Value::Array(changes) => changes,
+        _ => Vec::new(),
+    };
+    let recorded = silences
+        .iter()
+        .map(serde_json::to_value)
+        .collect::<Result<Vec<Value>, _>>()?;
+    let report = json!({
+        "host": resolved.name,
+        "beacon_age_seconds": signal.age_seconds,
+        "ssh_reachable": ssh_reachable,
+        "path_kind": path_kind,
+        "endpoint": from_link("endpoint"),
+        "last_sleep_at": from_link("last_sleep_at"),
+        "last_wake_at": from_link("last_wake_at"),
+        "interface_changes": changes,
+        "silences": recorded,
+        "reader_refusals": {
+            "window_seconds": refusals.window_seconds,
+            "count": refusals.count,
+            "reasons": refusals.reasons,
+        },
+        "verdict": verdict,
+        "blockers": blockers,
+    });
+    if json {
+        print_json(&report);
+        return link_outcome(&resolved.name, verdict, blockers.len());
+    }
+
+    // The same facts in the shape `host gates` prints, so an operator reading
+    // one of these two commands can read the other without relearning it.
+    println!("host:     {}", resolved.name);
+    println!("verdict:  {verdict}");
+    if blockers.is_empty() {
+        println!("blockers: none");
+    } else {
+        // One per line, unabridged. These are whole sentences from the reader,
+        // the channel and the host's own agent; comma-joining them made three
+        // accounts read as one.
+        for (index, blocker) in blockers.iter().enumerate() {
+            let label = if index == usize::MIN {
+                "blockers:"
+            } else {
+                "         "
+            };
+            println!("{label} {blocker}");
+        }
+    }
+    match (signal.age_seconds, signal.reported_at.as_deref()) {
+        (Some(age), Some(reported)) => println!(
+            "beacon:   {} old, reported {reported}",
+            super::registry::human_age(chrono::TimeDelta::seconds(age))
+        ),
+        _ => println!("beacon:   nothing readable for this host"),
+    }
+    println!(
+        "ssh:      {}",
+        match &ssh_error {
+            None => "answered".to_string(),
+            Some(detail) => format!("did not answer: {detail}"),
+        }
+    );
+    // "unknown" alone, not "unknown via -": a host that published no endpoint
+    // has one fact to report, and a dash standing in for a second one reads as
+    // a field that failed rather than a field that does not apply.
+    println!(
+        "path:     {}",
+        match published.as_ref().and_then(|block| block.get("endpoint")) {
+            Some(Value::String(endpoint)) => format!("{} via {endpoint}", cell(Some(&path_kind))),
+            _ => cell(Some(&path_kind)),
+        }
+    );
+    println!(
+        "sleep:    last slept {}, last woke {}",
+        cell(published.as_ref().and_then(|block| block.get("last_sleep_at"))),
+        cell(published.as_ref().and_then(|block| block.get("last_wake_at"))),
+    );
+    if changes.is_empty() {
+        println!("changes:  none recorded");
+    } else {
+        println!("changes:  {} recorded", changes.len());
+        for change in &changes {
+            println!(
+                "          {} {}",
+                cell(change.get("at")),
+                cell(change.get("detail"))
+            );
+        }
+    }
+    if refused {
+        println!(
+            "refusals: {} in the last {}s: {}",
+            refusals.count,
+            refusals.window_seconds,
+            reason_counts(&refusals)
+        );
+    } else {
+        println!(
+            "refusals: none in the last {}s",
+            refusals.window_seconds
+        );
+    }
+    if silences.is_empty() {
+        println!("silences: none recorded for this host");
+    } else {
+        println!("silences: {} recorded, newest first", silences.len());
+        for record in &silences {
+            println!(
+                "          {} -> {} ({}){}",
+                silence_instant(record.started_at),
+                record.ended_at.map_or_else(
+                    || "still open".to_string(),
+                    silence_instant
+                ),
+                record.duration_seconds.map_or_else(
+                    || "-".to_string(),
+                    |seconds| format!("{seconds}s")
+                ),
+                record.first_reader_error.as_deref().map_or_else(
+                    String::new,
+                    |detail| format!(", first reader error: {detail}")
+                ),
+            );
+        }
+    }
+    link_outcome(&resolved.name, verdict, blockers.len())
+}
+
+/// One silence instant, spelled the way the record on disk spells it.
+///
+/// `AutoSi` and a `Z`, which is what `chrono`'s own serialization writes into
+/// the blob: the report is a pointer into `host_silence/<host>/`, and an
+/// operator who copies the instant out of this report has to be able to find
+/// the record it names. `to_rfc3339`'s `+00:00` would not match it.
+fn silence_instant(at: chrono::DateTime<chrono::Utc>) -> String {
+    at.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
+}
+
+/// `token=count` pairs for one refusal summary, in the stable order the
+/// summary's own map holds them.
+fn reason_counts(refusals: &crate::monitor::host_silence::RefusalSummary) -> String {
+    refusals
+        .reasons
+        .iter()
+        .map(|(reason, count)| format!("{reason}={count}"))
+        .collect::<Vec<String>>()
+        .join(", ")
+}
+
+/// A host whose link is not healthy is a failed verdict, not a failed command:
+/// the read succeeded either way.
+///
+/// The blockers stay in the report and deliberately out of this sentence. They
+/// carry the reader's and the channel's own words — "ssh connect Operation
+/// timed out" among them — and [`crate::failure::classify_message`] reads
+/// "timed out" in a command's failure message as a retryable failure, which
+/// would remap this command's exit status away from the 1 that every
+/// non-healthy verdict owes its caller.
+fn link_outcome(host: &str, verdict: &str, blockers: usize) -> Result<(), CmdError> {
+    if verdict == LINK_HEALTHY {
+        return Ok(());
+    }
+    Err(CmdError::click(format!(
+        "{host} link verdict is {verdict}, with {blockers} blocker(s) named in the report above"
+    )))
+}
+
 /// `stado host reclaim HOST [--dry-run|--apply --reason TEXT] [--json]` — get
 /// the space back, in declared stages, measuring each one.
 ///
@@ -1396,9 +1861,7 @@ pub async fn vaults(target: Option<String>, json: bool) -> Result<(), CmdError> 
     let names: Vec<String> = match target {
         Some(name) => vec![name],
         None => {
-            let registry = crate::targets::fetch_registry_remote()
-                .await
-                .map_err(|error| CmdError::click(error.to_string()))?;
+            let registry = super::registry::read_registry().await?;
             registry
                 .targets
                 .iter()
@@ -1716,9 +2179,7 @@ pub async fn reconcile(
     json_output: bool,
 ) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
-    let registry = crate::targets::fetch_registry_remote()
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let registry = super::registry::read_registry().await?;
     let names: Vec<String> = match target {
         Some(name) => {
             if registry.targets.iter().all(|entry| entry.name != name) {
@@ -4501,7 +4962,7 @@ async fn print_reports(hosts: &[String], json: bool) -> Result<(), CmdError> {
     // and not whatever a local copy last said. One fetch for every row: the
     // question "what does this host declare" is asked once per host and the
     // answer is one document.
-    let registry = crate::targets::fetch_registry_remote().await.ok();
+    let registry = super::registry::read_registry().await.ok();
     let mut payload: Vec<Value> = Vec::new();
     let mut failures = usize::default();
     for host in hosts {
