@@ -296,11 +296,15 @@ struct HostGates: Decodable, Identifiable, Sendable {
     let blockers: [String]
     let disk: HostGatesDisk?
     let capacity: HostGatesCapacity?
+    /// Queued jobs pinned to this host, oldest first — the refusal's own
+    /// consequence, so "not claiming" arrives with a size and an age.
+    let waitingJobs: [HostGatesWaitingJob]
 
     var id: String { host }
 
     enum CodingKeys: String, CodingKey {
         case host, claiming, blockers, disk, capacity
+        case waitingJobs = "waiting_jobs"
     }
 
     init(from decoder: Decoder) throws {
@@ -310,6 +314,27 @@ struct HostGates: Decodable, Identifiable, Sendable {
         blockers = try values.decodeIfPresent([String].self, forKey: .blockers) ?? []
         disk = try values.decodeIfPresent(HostGatesDisk.self, forKey: .disk)
         capacity = try values.decodeIfPresent(HostGatesCapacity.self, forKey: .capacity)
+        waitingJobs =
+            try values.decodeIfPresent([HostGatesWaitingJob].self, forKey: .waitingJobs) ?? []
+    }
+}
+
+/// One queued job a non-claiming host is starving.
+struct HostGatesWaitingJob: Decodable, Sendable, Identifiable {
+    let jobID: String
+    let ageSeconds: Int?
+
+    var id: String { jobID }
+
+    enum CodingKeys: String, CodingKey {
+        case jobID = "job_id"
+        case ageSeconds = "age_seconds"
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        jobID = try values.decodeIfPresent(String.self, forKey: .jobID) ?? ""
+        ageSeconds = try values.decodeIfPresent(Int.self, forKey: .ageSeconds)
     }
 }
 
