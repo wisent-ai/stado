@@ -1387,6 +1387,20 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
         Err(exc) => (false, Some(exc.to_string())),
     };
 
+    // The one fact neither surface could state, and the reason the mini takes
+    // no work: whether anybody is logged in on its screen. Asked only of a
+    // host that just answered, so an unreachable box costs one connect attempt
+    // here rather than two, and answered by the same resolver
+    // `stado service restart` uses, so a diagnostic and a repair cannot
+    // disagree about the session underneath them.
+    let session = match &ssh_error {
+        None => crate::deploy::service::read_session(resolved, &runner).await,
+        Some(detail) => crate::deploy::service::HostSession::unknown(format!(
+            "this host did not answer, so nobody could ask it whether anyone is logged in on its \
+             screen: {detail}"
+        )),
+    };
+
     // The beacon half, aged by the one rule `host ping` ages every beacon in
     // this fleet with, and the `link` block the host published inside it.
     let now = chrono::Utc::now();
@@ -1436,6 +1450,26 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
              times and its interface changes are unknown here"
                 .to_string(),
         );
+    }
+
+    // A headless host is not a fault, and the verdict rules do not learn about
+    // this one. A headless host carrying a unit that only a logged-in screen
+    // can start IS the fault, and it is the fault that stops work:
+    // control-host has three of them and a job that has waited days for
+    // the capacity they would publish. The declaration half is
+    // `deploy::service::misdeclared_domains` rather than a second opinion
+    // about it; what is added here is the half that had to be read from the
+    // host. One blocker per unit, because each needs its own command run.
+    if session.is_headless() {
+        for misdeclared in crate::deploy::service::misdeclared_domains(resolved) {
+            blockers.push(format!(
+                "nobody is logged in on the screen here, and {} is registered as a user service, \
+                 so this machine cannot start it; install it as a machine service with one \
+                 privileged command on the host: {}",
+                misdeclared.unit,
+                misdeclared.install_command()
+            ));
+        }
     }
 
     // Looking at a beacon IS the observation the silence record is made of,
@@ -1544,6 +1578,7 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
         "host": resolved.name,
         "beacon_age_seconds": signal.age_seconds,
         "ssh_reachable": ssh_reachable,
+        "session": session.to_json(),
         "path_kind": path_kind,
         "endpoint": from_link("endpoint"),
         "last_sleep_at": from_link("last_sleep_at"),
@@ -1596,6 +1631,11 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
             Some(detail) => format!("did not answer: {detail}"),
         }
     );
+    // The headline in the operator's words first, the resolver's own sentence
+    // under it. Reversing those two is how `gui/501` becomes the answer to
+    // "is anyone logged in on that host".
+    println!("session:  {}", session.headline());
+    println!("          {}", session.detail);
     // "unknown" alone, not "unknown via -": a host that published no endpoint
     // has one fact to report, and a dash standing in for a second one reads as
     // a field that failed rather than a field that does not apply.
