@@ -3245,6 +3245,117 @@ pub async fn remove_helper(target: &str, name: &str, json: bool) -> Result<(), C
     Ok(())
 }
 
+/// Remove one file from TARGET's home: the path Stado never had a way to
+/// delete, so a retired or broken unit left its plist on disk forever and the
+/// only answer was a bare `rm` over ssh, which nothing bounds and nobody
+/// audits. This is that answer as a product verb. The guards are on the host,
+/// not on the client, because the file is what the host says it is, not what
+/// the operator believes:
+///
+/// - the path must be absolute, contain no `..`, and live under
+///   `$HOME/Library/LaunchAgents` or `$HOME/.stado` of the approved account —
+///   a system path is not refused because it is dangerous, it is refused
+///   because this channel has no right there, and the refusal names the
+///   privileged command that does have one;
+/// - it must be a regular file owned by that account — a symlink under an
+///   allowed root can point anywhere, a directory would make this a recursive
+///   delete, and somebody else's file is not this login's to remove.
+///
+/// Absence is reported as `absent`, not invented into a success.
+pub async fn remove_file(target: &str, path: &str, json: bool) -> Result<(), CmdError> {
+    if !path.starts_with('/') || path.contains("..") || path.contains('\0') {
+        return Err(CmdError::usage(
+            "path must be absolute, contain no '..', and carry no NUL",
+        ));
+    }
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let quoted = crate::deploy::shlex_quote(path);
+    let script = format!(
+        r#"set -u
+path={quoted}
+report() {{ printf 'STADO_REMOVE_FILE\t%s\t%s\n' "$1" "$2"; }}
+case "$path" in
+  "$HOME/Library/LaunchAgents/"*|"$HOME/.stado/"*) ;;
+  *) report refused "outside the managed home areas; remove it on the host with: sudo rm -- $path"; exit 0 ;;
+esac
+if [ -L "$path" ]; then
+  report refused "a symlink points outside the managed area; remove it by hand: rm -- $path"
+elif [ -d "$path" ]; then
+  report refused "a directory is not removed by a single-file command"
+elif [ ! -e "$path" ]; then
+  report absent ""
+elif [ ! -O "$path" ]; then
+  report refused "not owned by this account; remove it on the host with: sudo rm -- $path"
+elif [ ! -f "$path" ]; then
+  report refused "not a regular file"
+else
+  rm -f -- "$path"
+  if [ -e "$path" ]; then
+    report failed "rm succeeded and the path is still there"
+  else
+    report removed ""
+  fi
+fi
+"#
+    );
+    let output = crate::deploy::host_channel::run_script_with_timeout(
+        &resolved,
+        &script,
+        std::time::Duration::from_secs(60),
+        &crate::deploy::production_runner(),
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    let (state, detail) = output
+        .stdout
+        .lines()
+        .find_map(|line| {
+            crate::deploy::host_channel::marker_fields(line)
+                .as_slice()
+                .split_first()
+                .and_then(|(marker, rest)| {
+                    (*marker == "STADO_REMOVE_FILE")
+                        .then(|| (rest[0].to_string(), rest.get(1).map(|s| s.to_string())))
+                })
+        })
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{}: the host answered without a removal report: {}",
+                resolved.name,
+                crate::deploy::host_channel::last_error_line(&output, "no marker in output")
+            ))
+        })?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": resolved.name,
+                "path": path,
+                "status": state,
+                "detail": detail,
+            }))?
+        );
+    } else {
+        match &detail {
+            Some(detail) if !detail.is_empty() => {
+                println!("{}: {path} {state} — {detail}", resolved.name)
+            }
+            _ => println!("{}: {path} {state}", resolved.name),
+        }
+    }
+    if state == "removed" || state == "absent" {
+        Ok(())
+    } else {
+        Err(CmdError::click(format!(
+            "{}: {path} {state}{}",
+            resolved.name,
+            detail.map(|d| format!(" — {d}")).unwrap_or_default()
+        )))
+    }
+}
+
 /// The retag this binary carries, run as one fixed remote script — the same
 /// channel every other host action takes now that nothing installs scripts on
 /// hosts to be run later.
@@ -3689,6 +3800,159 @@ pub async fn weles_activity(target: &str, json: bool) -> Result<(), CmdError> {
             run["id"].as_str().unwrap_or("-"),
             run["updated_at"].as_str().unwrap_or("-"),
         );
+    }
+    Ok(())
+}
+
+/// `stado host weles-capture TARGET --plan PLAN.json [--batch ID] [--json]` —
+/// enqueue one batch of `generic_capture` actions on TARGET's Weles admission
+/// API.
+///
+/// The plan is validated in full before the host is contacted: one bad capture
+/// refuses the whole plan, because a half-enqueued batch still renders pages
+/// and still writes artifacts, and nothing downstream can tell those from the
+/// ones somebody planned.
+pub async fn weles_capture(
+    target: &str,
+    plan: &str,
+    batch: Option<&str>,
+    json: bool,
+) -> Result<(), CmdError> {
+    let plan = crate::deploy::weles_capture::parse_plan(plan, target, batch)
+        .map_err(|error| CmdError::usage(error.to_string()))?;
+    let admission = crate::deploy::weles_capture::resolve_admission(target)
+        .await
+        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+    let channel = crate::deploy::weles_capture::open_channel(&admission)
+        .await
+        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+    let accepted = crate::deploy::weles_capture::enqueue(&channel, &plan)
+        .await
+        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+    if json {
+        print_json(&json!({
+            "target": target,
+            "batch": plan.batch,
+            "action": crate::deploy::weles_capture::CAPTURE_ACTION,
+            "endpoint": admission.declared_url,
+            "transport": channel.transport(),
+            "admission_token": channel.token_state(),
+            "enqueued": accepted.len(),
+            "actions": accepted
+                .iter()
+                .map(|action| json!({
+                    "action_id": action.action_id,
+                    "site_slug": action.site_slug,
+                    "axis": action.axis,
+                    "artifact_prefix": action.artifact_prefix,
+                }))
+                .collect::<Vec<Value>>(),
+            "status": "enqueued",
+        }));
+        return Ok(());
+    }
+    println!(
+        "{target}: enqueued {} {} action(s) for batch {} on {}",
+        accepted.len(),
+        crate::deploy::weles_capture::CAPTURE_ACTION,
+        plan.batch,
+        admission.declared_url,
+    );
+    for action in &accepted {
+        println!(
+            "  {:<38} {:<24} {:<13} {}",
+            action.action_id, action.site_slug, action.axis, action.artifact_prefix,
+        );
+    }
+    Ok(())
+}
+
+/// `stado host weles-capture-status TARGET --batch ID [--json]` — per-action
+/// state of one capture batch, and the artifact keys already in Stado storage
+/// under that batch's prefix. Read-only.
+///
+/// The exit status answers whether the batch is KNOWN, not whether every
+/// capture succeeded: a runner polls this in a loop and a failed capture is a
+/// row to read, not an error to retry. A batch nobody enqueued exits non-zero,
+/// after printing the report, because that is the one question the report
+/// cannot answer by being empty.
+pub async fn weles_capture_status(target: &str, batch: &str, json: bool) -> Result<(), CmdError> {
+    let admission = crate::deploy::weles_capture::resolve_admission(target)
+        .await
+        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+    let channel = crate::deploy::weles_capture::open_channel(&admission)
+        .await
+        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+    let batch_status = crate::deploy::weles_capture::status(&channel, batch)
+        .await
+        .map_err(|error| CmdError::click(format!("{target}: {error}")))?;
+    let states = batch_status.captures;
+    let totals = crate::deploy::weles_capture::totals(&states);
+    let stored: usize = states.iter().map(|state| state.artifacts.len()).sum();
+    if json {
+        print_json(&json!({
+            "target": target,
+            "batch": batch,
+            "action": crate::deploy::weles_capture::CAPTURE_ACTION,
+            "endpoint": admission.declared_url,
+            "transport": channel.transport(),
+            "artifacts_unreachable": batch_status.artifacts_unreachable,
+            "actions": states
+                .iter()
+                .map(|state| json!({
+                    "action_id": state.action_id,
+                    "site_slug": state.site_slug,
+                    "axis": state.axis,
+                    "state": state.state,
+                    "error": state.error,
+                    "artifact_prefix": state.artifact_prefix,
+                    "artifacts": state.artifacts,
+                }))
+                .collect::<Vec<Value>>(),
+            "totals": totals
+                .iter()
+                .map(|(state, count)| (state.clone(), Value::from(*count)))
+                .collect::<serde_json::Map<String, Value>>(),
+            "artifacts_stored": stored,
+        }));
+    } else {
+        println!(
+            "{target}: batch {batch} carries {} {} action(s), {}",
+            states.len(),
+            crate::deploy::weles_capture::CAPTURE_ACTION,
+            totals
+                .iter()
+                .map(|(state, count)| format!("{count} {state}"))
+                .collect::<Vec<String>>()
+                .join(", "),
+        );
+        if let Some(unreachable) = &batch_status.artifacts_unreachable {
+            println!("{target}: artifact listing unreadable: {unreachable}");
+        }
+        for state in &states {
+            println!(
+                "  {:<9} {:<24} {:<13} {:>3} artifact(s)  {}{}",
+                state.state,
+                state.site_slug,
+                state.axis,
+                state.artifacts.len(),
+                state.action_id,
+                state
+                    .error
+                    .as_deref()
+                    .map_or_else(String::new, |error| format!("  {error}")),
+            );
+        }
+        println!(
+            "{target}: {stored} object(s) under stado://{}/{batch}/",
+            crate::deploy::weles_capture::ARTIFACT_NAMESPACE
+        );
+    }
+    if states.is_empty() {
+        return Err(CmdError::click(format!(
+            "{target}: no {} action carries batch {batch}, so nothing was ever enqueued under that id",
+            crate::deploy::weles_capture::CAPTURE_ACTION
+        )));
     }
     Ok(())
 }
