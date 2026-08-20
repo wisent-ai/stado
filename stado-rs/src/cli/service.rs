@@ -2341,11 +2341,20 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
         .find(|candidate| candidate.matches(options.name));
     let mut unit = unit_program(&host, options.name, options.from, options.args, existing)?;
     if unit.source == "catalog" {
-        unit.program = crate::deploy::service_catalog::resolve_program(
-            &unit.program,
+        let entry = crate::deploy::service_catalog::CatalogService {
+            name: options.name.to_string(),
+            summary: String::new(),
+            program: unit.program.clone(),
+            args: unit.args.clone(),
+        };
+        let (program, args) = crate::deploy::service_catalog::resolve_entry(
+            &entry,
             &crate::deploy::service_catalog::home_for(&target),
             Some(&target.release_platform),
+            &target.name,
         );
+        unit.program = program;
+        unit.args = args;
         eprintln!(
             "{host} declares no program for {}; rendering the unit from the Wisent service \
              catalog this build ships: {} {}",

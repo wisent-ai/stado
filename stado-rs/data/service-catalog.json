@@ -23,6 +23,18 @@
       "summary": "The local Stado agent: claims queued jobs and publishes this host's capacity.",
       "program": "$HOME/.stado/bin/stado",
       "args": ["agent", "--auto"]
+    },
+    {
+      "name": "stado-object-api",
+      "summary": "The Stado API listener: authenticated object, release, machine, service and host-health routes on loopback.",
+      "program": "$HOME/.stado/bin/stado",
+      "args": ["dashboard", "--bind", "127.0.0.1", "--port", "8765"]
+    },
+    {
+      "name": "stado-resolver",
+      "summary": "The service resolver: loopback adapters that route each consumer to its declared service.",
+      "program": "$HOME/.stado/bin/stado",
+      "args": ["resolver", "serve", "--target", "$STADO_HOST"]
     }
   ]
 }

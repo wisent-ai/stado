@@ -44,11 +44,12 @@ pub fn lookup(name: &str) -> Result<Option<CatalogService>, String> {
     Ok(all()?.into_iter().find(|entry| entry.name == name))
 }
 
-/// The program path with the placeholders a host expands: `$HOME` for the
-/// approved account's home and `$STADO_PLATFORM` for the registry
-/// `release_platform` of the host the unit will run on. Expanding anywhere
-/// else would bake this machine's shape into another host's unit.
-pub fn resolve_program(program: &str, home: &str, release_platform: Option<&str>) -> String {
+/// One placeholder expansion, applied to the program and every argument:
+/// `$HOME` for the approved account's home, `$STADO_PLATFORM` for the
+/// registry `release_platform`, `$STADO_HOST` for the target's registry
+/// name. Expanding anywhere but against the resolved target would bake this
+/// machine's shape into another host's unit.
+pub fn resolve_word(word: &str, home: &str, release_platform: Option<&str>, host: &str) -> String {
     let platform = release_platform.unwrap_or("darwin-arm64");
     // The brama artifact layout shortens the platform triple to `darwin-arm`;
     // that is the directory the release actually publishes, not a mistake.
@@ -57,9 +58,26 @@ pub fn resolve_program(program: &str, home: &str, release_platform: Option<&str>
         "linux-amd64" => "linux-amd",
         other => other,
     };
-    program
-        .replace("$HOME", home)
+    word.replace("$HOME", home)
         .replace("$STADO_PLATFORM", short)
+        .replace("$STADO_HOST", host)
+}
+
+/// [`resolve_word`] over a whole catalog entry.
+pub fn resolve_entry(
+    entry: &CatalogService,
+    home: &str,
+    release_platform: Option<&str>,
+    host: &str,
+) -> (String, Vec<String>) {
+    (
+        resolve_word(&entry.program, home, release_platform, host),
+        entry
+            .args
+            .iter()
+            .map(|arg| resolve_word(arg, home, release_platform, host))
+            .collect(),
+    )
 }
 
 /// The approved account's home on a target, derived from the registry's own
