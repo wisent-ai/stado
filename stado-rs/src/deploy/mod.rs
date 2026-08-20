@@ -103,6 +103,7 @@ pub mod local_install;
 pub mod products;
 pub mod reconcile;
 pub mod service;
+pub mod service_catalog;
 pub mod ssh_key;
 pub mod stream;
 pub mod weles_capture;
