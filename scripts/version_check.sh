@@ -22,6 +22,7 @@
 #   MANIFEST     the crate that declares version (default: stado-rs/Cargo.toml)
 
 set -euo pipefail
+script_dir="$(cd "$(dirname "$0")" && pwd)"
 
 candidate="${1:?usage: scripts/version_check.sh <candidate-surface.json>}"
 baseline="${BASELINE:-released-surface.json}"
@@ -65,12 +66,12 @@ if [ "$declared" = "$released" ]; then
     false
   fi
   echo "The surface is unchanged, so the declared version may stay $released."
-elif [ "$declared" != "$required" ]; then
+elif ! "$script_dir/semver_at_least.py" "$declared" "$required"; then
   echo "::error::$manifest declares $declared, but a $change change to" \
-    "$released requires $required."
+    "$released requires at least $required."
   false
 else
-  echo "Declared version $declared matches the $change change."
+  echo "Declared version $declared satisfies the $change change (minimum $required)."
 fi
 
 # The baseline must not lie about the channel, in either direction. Checked against
