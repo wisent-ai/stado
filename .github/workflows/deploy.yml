@@ -123,7 +123,12 @@ jobs:
           test -n "$config_schema"
           test -n "$storage_schema"
           test -n "$machine_schema"
+          release_dir="$RUNNER_TEMP/stado-release"
+          archive="$RUNNER_TEMP/stado-linux-amd64.tar.gz"
+          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/debug/stado"
+          "$stado_bin" storage archive "$release_dir" "$archive"
           STADO_RELEASE_DIR="$RUNNER_TEMP/stado-release" \
+          STADO_RELEASE_ARCHIVE="$archive" \
           STADO_RELEASE_VERSION="$STADO_VERSION" \
           STADO_RELEASE_CHANNEL="$STADO_RELEASE_CHANNEL" \
           STADO_RELEASE_PLATFORM="linux-amd64" \
@@ -137,6 +142,7 @@ jobs:
           STADO_RELEASE_STABLE_INTEGRATIONS="local-compute,local-filesystem-storage,skarbiec,stado-object-storage" \
           STADO_RELEASE_PREVIEW_INTEGRATIONS="gcs-storage,s3-storage,azure-blob-storage,gcp-compute,aws-ec2,azure-vm,cloudflare,box,vast" \
             scripts/release_manifest.sh
+          mv "$archive" "$release_dir/release.tar.gz"
 
       - name: Refuse a release whose version disagrees with its contract
         # The public contract of this product is the command list `stado help`
@@ -311,6 +317,9 @@ jobs:
           version="${version_line#*\"}"
           version="${version%%\"*}"
           platform="${STADO_CONTROL_PLATFORM:?set the native release platform}"
+          stado_bin="$STADO_SOURCE_DIR/stado-rs/target/release/stado"
+          archive="$RUNNER_TEMP/stado-$platform.tar.gz"
+          "$stado_bin" storage archive "$release_dir" "$archive"
           machine_schema="$(
             sed -n '/pub const SCHEMA_VERSION:/{s/.*= //;s/;//;p;q;}' \
               "$STADO_SOURCE_DIR/stado-rs/src/machine.rs"
@@ -330,6 +339,7 @@ jobs:
           test -n "$config_schema"
           test -n "$storage_schema"
           STADO_RELEASE_DIR="$release_dir" \
+          STADO_RELEASE_ARCHIVE="$archive" \
           STADO_RELEASE_VERSION="$version" \
           STADO_RELEASE_CHANNEL="${{ needs.release.outputs.channel }}" \
           STADO_RELEASE_PLATFORM="$platform" \
@@ -343,7 +353,7 @@ jobs:
           STADO_RELEASE_STABLE_INTEGRATIONS="local-compute,local-filesystem-storage,skarbiec,stado-object-storage" \
           STADO_RELEASE_PREVIEW_INTEGRATIONS="gcs-storage,s3-storage,azure-blob-storage,gcp-compute,aws-ec2,azure-vm,box,vast" \
             "$STADO_SOURCE_DIR/scripts/release_manifest.sh"
-          stado_bin="$STADO_SOURCE_DIR/stado-rs/target/release/stado"
+          mv "$archive" "$release_dir/release.tar.gz"
           # Publish through the host's configured Stado store before replacing
           # the host runtime or reloading its public ingress.
           unset STADO_API_URL STADO_API_TOKEN
