@@ -15,17 +15,31 @@
 
 use serde::Deserialize;
 
-/// One preconfigured Wisent service. Internal processes stay internal: the
-/// Stado entry runs `local-control-plane`, which owns the API, scheduler and
-/// worker together instead of exposing three deployment choices.
+/// One Wisent product service. `available` means the product has a durable
+/// host-service install contract today; unavailable products still belong in
+/// the catalog, disabled with the exact missing contract named, rather than
+/// vanishing and making the list look complete.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CatalogService {
     pub name: String,
     pub summary: String,
+    /// Stable launchd/systemd identity when the product's public catalog name
+    /// differs from an already-deployed unit. Without this, `ensure brama`
+    /// minted a second `com.wisent.compute.service.brama` beside the canonical
+    /// `com.wisent.always-on.brama` daemon.
+    #[serde(default)]
+    pub unit: Option<String>,
+    #[serde(default)]
     pub program: String,
     #[serde(default)]
     pub args: Vec<String>,
+    #[serde(default = "available_by_default")]
+    pub available: bool,
+    #[serde(default)]
+    pub unavailable_reason: Option<String>,
 }
+
+fn available_by_default() -> bool { true }
 
 #[derive(Deserialize)]
 struct CatalogDocument {
