@@ -206,13 +206,23 @@ fn targets(document: &Value) -> Result<BTreeMap<String, &Value>, String> {
 }
 
 fn target_declares_service(target: &Value, service: &str) -> bool {
+    let catalog_unit = crate::deploy::service_catalog::lookup(service)
+        .ok()
+        .flatten()
+        .and_then(|entry| entry.unit);
     target
         .get("services")
         .and_then(Value::as_array)
         .is_some_and(|services| {
-            services
-                .iter()
-                .any(|entry| entry.get("name").and_then(Value::as_str) == Some(service))
+            services.iter().any(|entry| {
+                ["name", "label", "unit"].iter().any(|field| {
+                    let value = entry.get(field).and_then(Value::as_str);
+                    value == Some(service)
+                        || catalog_unit
+                            .as_deref()
+                            .is_some_and(|unit| value == Some(unit))
+                })
+            })
         })
 }
 

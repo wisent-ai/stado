@@ -1,0 +1,50 @@
+{
+  "services": [
+    {
+      "name": "brama",
+      "summary": "The authenticated provider-neutral gateway every Wisent model call goes through.",
+      "program": "$HOME/.stado/services/brama/current/$STADO_PLATFORM/bin/start-with-skarbiec",
+      "args": [],
+      "unit": "com.wisent.always-on.brama"
+    },
+    {
+      "name": "weles",
+      "summary": "The browser-automation worker for authorized web workflows.",
+      "program": "$HOME/.stado/bin/weles-worker",
+      "args": []
+    },
+    {
+      "name": "skarbiec",
+      "summary": "The credential and authentication vault.",
+      "program": "$HOME/.stado/bin/skarbiec",
+      "args": [
+        "serve",
+        "--port",
+        "8895"
+      ]
+    },
+    {
+      "name": "stado",
+      "summary": "The complete local Stado control plane as one managed service.",
+      "program": "$HOME/.stado/bin/stado",
+      "args": [
+        "local-control-plane"
+      ]
+    },
+    {
+      "name": "oko",
+      "summary": "The local Oko autonomy service.",
+      "program": "$HOME/.oko/bin/run-autonomy-service",
+      "args": []
+    },
+    {
+      "name": "transcript-lake",
+      "summary": "Continuously stream local agent transcripts into Transcript Lake.",
+      "program": "$HOME/.local/bin/transcript-lake",
+      "args": [
+        "stream",
+        "--json"
+      ]
+    }
+  ]
+}
