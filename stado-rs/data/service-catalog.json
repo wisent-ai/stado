@@ -9,6 +9,7 @@
     {
       "name": "brama",
       "summary": "The one authenticated, provider-neutral gateway every Wisent model call goes through.",
+      "unit": "com.wisent.always-on.brama",
       "program": "$HOME/.stado/services/brama/current/$STADO_PLATFORM/bin/start-with-skarbiec",
       "args": []
     },
