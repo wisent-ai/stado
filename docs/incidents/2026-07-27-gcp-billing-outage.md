@@ -215,10 +215,6 @@ Two image-service revisions were simultaneously represented, consistent with a r
 
 ## GCS buckets and object usage
 
-> Historical incident snapshot. The complete live project inventory and current
-> consumer mapping are in
-> [`../gcp-service-inventory-2026-08-15.md`](../gcp-service-inventory-2026-08-15.md);
-> that inventory supersedes current-state and resource-count claims below.
 
 Six concrete bucket names appear in operational or migration code. Their current existence and object counts cannot be checked.
 

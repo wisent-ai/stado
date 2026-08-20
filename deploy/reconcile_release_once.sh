@@ -11,9 +11,7 @@
 set -euo pipefail
 
 stado="${STADO_BIN:-$HOME/.stado/bin/stado}"
-# `hostname -s` answers `Control-host` while the registry target is
-# `control-host`, and the agent compares them exactly: one more pair of names
-# for one machine, this one mine.
+# Normalize the system hostname the same way registry target matching does.
 target="${RELEASE_TARGET:-$(hostname -s 2>/dev/null | /usr/bin/tr '[:upper:]' '[:lower:]')}"
 product="${RELEASE_PRODUCT:-brama}"
 state_dir="${RELEASE_STATE_DIR:-$HOME/.stado/release-state}"

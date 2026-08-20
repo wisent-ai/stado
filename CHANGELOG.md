@@ -4,6 +4,13 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
 
 ## Unreleased
 
+### Configuration
+
+- Removed Wisent's deployment profiles and bundled fleet registry from the
+  public repository. Stado now ships an empty registry, `stado config init`
+  creates the neutral local starting point, and coordinator installation
+  requires an explicit operator-owned `STADO_CONFIG`.
+
 ### Desktop
 
 - Restored the local control plane as Stado Desktop's default source, removed
