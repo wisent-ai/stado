@@ -101,7 +101,7 @@ jobs:
           )
 
       - name: Build native release publisher CLI
-        run: cargo build --manifest-path stado-rs/Cargo.toml --locked --bin stado
+        run: cargo build --manifest-path stado-rs/Cargo.toml --locked --release --bin stado
 
       - name: Create Linux release manifest
         run: |
@@ -210,18 +210,15 @@ jobs:
             fi
           done
 
-          # Ask the exact bytes about to be published what they offer. Reading
-          # src/cli/mod.rs instead would count the variants marked `hide = true`,
-          # which dispatch but are not offered, and inflate the contract. The image
-          # is used rather than the copied-out binary so this works whatever the
-          # runner's own platform is.
-          docker run --rm --platform linux/amd64 \
-            --entrypoint /out/stado stado-rust-release help \
-            > "$RUNNER_TEMP/stado-help.txt"
+          # The public CLI is architecture-independent. Read it from the native
+          # binary compiled from this exact SHA; the separately cross-compiled
+          # Linux bytes carry the same command surface and need no emulator or
+          # manually-running container daemon.
+          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
+          "$stado_bin" help > "$RUNNER_TEMP/stado-help.txt"
           python3 scripts/surface.py --help-text "$RUNNER_TEMP/stado-help.txt" \
             > "$RUNNER_TEMP/candidate-surface.json"
 
-          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/debug/stado"
           # The publisher is on the owner control-plane host. Its configured
           # Stado store is the source of truth; public ingress is deployment
           # output and therefore cannot be a release prerequisite.
@@ -232,7 +229,7 @@ jobs:
 
       - name: Create immutable Linux release through Stado
         run: |
-          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/debug/stado"
+          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
           test -x "$stado_bin"
           unset STADO_API_URL STADO_API_TOKEN
           for source in "$RUNNER_TEMP"/stado-release/*; do
