@@ -2193,6 +2193,9 @@ struct UnitProgram {
     args: Vec<String>,
     /// `"flag"`, `"registry"` or `"shipped"`.
     source: &'static str,
+    /// Stable unit identity supplied by the catalog. The operator-facing
+    /// product name and launchd label are not required to be the same.
+    unit: Option<String>,
 }
 
 /// The launchd label a declaration carries, or a systemd unit name without
@@ -2227,6 +2230,7 @@ fn unit_program(
             program: from.to_string(),
             args: args.to_vec(),
             source: "flag",
+            unit: None,
         });
     }
     if !args.is_empty() {
@@ -2240,6 +2244,7 @@ fn unit_program(
             program: declared.program.clone(),
             args: declared.args.clone(),
             source: "registry",
+            unit: Some(declared.unit_id().to_string()),
         });
     }
     // The shipped Wisent catalog answers by name, on any host, with no
@@ -2248,6 +2253,15 @@ fn unit_program(
     if let Some(entry) = crate::deploy::service_catalog::lookup(name)
         .map_err(|error| CmdError::click(error.to_string()))?
     {
+        if !entry.available {
+            return Err(CmdError::click(format!(
+                "{name} is a Wisent product service, but it is not installable from Stado yet: {}",
+                entry
+                    .unavailable_reason
+                    .as_deref()
+                    .unwrap_or("the catalog names no host-service install contract")
+            )));
+        }
         return Ok(UnitProgram {
             // Placeholders survive here on purpose: `$HOME` and
             // `$STADO_PLATFORM` belong to the target, and only the caller
@@ -2255,6 +2269,7 @@ fn unit_program(
             program: entry.program,
             args: entry.args,
             source: "catalog",
+            unit: entry.unit,
         });
     }
     let bundled =
@@ -2266,10 +2281,12 @@ fn unit_program(
         .into_iter()
         .find(|candidate| candidate.matches(name) && !candidate.program.is_empty());
     if let Some(shipped) = shipped {
+        let unit = shipped.unit_id().to_string();
         return Ok(UnitProgram {
             program: shipped.program,
             args: shipped.args,
             source: "shipped",
+            unit: Some(unit),
         });
     }
     Err(CmdError::usage(format!(
@@ -2294,18 +2311,28 @@ async fn catalog(json: bool) -> Result<(), CmdError> {
                     "summary": entry.summary,
                     "program": entry.program,
                     "args": entry.args,
+                    "unit": entry.unit,
+                    "available": entry.available,
+                    "unavailable_reason": entry.unavailable_reason,
                 })).collect::<Vec<_>>(),
             }))?
         );
     } else {
         for entry in &entries {
-            println!(
-                "{:<14} {} {}",
-                entry.name,
-                entry.program,
-                entry.args.join(" ")
-            );
-            println!("{:<14} {}", "", entry.summary);
+            if entry.available {
+                println!(
+                    "{:<24} {} {}",
+                    entry.name,
+                    entry.program,
+                    entry.args.join(" ")
+                );
+            } else {
+                println!("{:<24} unavailable", entry.name);
+            }
+            println!("{:<24} {}", "", entry.summary);
+            if let Some(reason) = &entry.unavailable_reason {
+                println!("{:<24} {}", "", reason);
+            }
         }
     }
     Ok(())
@@ -2345,7 +2372,10 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
             name: options.name.to_string(),
             summary: String::new(),
             program: unit.program.clone(),
+            unit: unit.unit.clone(),
             args: unit.args.clone(),
+            available: true,
+            unavailable_reason: None,
         };
         let (program, args) = crate::deploy::service_catalog::resolve_entry(
             &entry,
@@ -2375,7 +2405,11 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
     // At the label the declaration already carries, when it carries one. A
     // minted label for a unit that exists under another one is a second unit,
     // not this one.
-    let plan = match existing.and_then(declared_label) {
+    let plan = match unit
+        .unit
+        .as_deref()
+        .or_else(|| existing.and_then(declared_label))
+    {
         Some(label) => {
             service::plan_deploy_labelled(options.name, label, &unit.program, &unit.args)
         }

@@ -341,8 +341,16 @@ struct WisentCatalogEntry: Decodable, Identifiable, Sendable {
     let summary: String
     let program: String
     let args: [String]
+    let available: Bool?
+    let unavailableReason: String?
 
     var id: String { name }
+    var isAvailable: Bool { available ?? true }
+
+    enum CodingKeys: String, CodingKey {
+        case name, summary, program, args, available
+        case unavailableReason = "unavailable_reason"
+    }
 }
 
 /// `stado service remove <name> --host <host> --json`, one document: the
