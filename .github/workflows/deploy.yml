@@ -125,7 +125,7 @@ jobs:
           test -n "$machine_schema"
           release_dir="$RUNNER_TEMP/stado-release"
           archive="$RUNNER_TEMP/stado-linux-amd64.tar.gz"
-          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/debug/stado"
+          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
           "$stado_bin" storage archive "$release_dir" "$archive"
           STADO_RELEASE_DIR="$RUNNER_TEMP/stado-release" \
           STADO_RELEASE_ARCHIVE="$archive" \
