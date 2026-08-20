@@ -1,0 +1,28 @@
+{
+  "services": [
+    {
+      "name": "skarbiec",
+      "summary": "The credential and authentication vault: holds the fleet's secrets and answers scoped reads.",
+      "program": "$HOME/.stado/bin/skarbiec",
+      "args": ["serve", "--port", "8895"]
+    },
+    {
+      "name": "brama",
+      "summary": "The one authenticated, provider-neutral gateway every Wisent model call goes through.",
+      "program": "$HOME/.stado/services/brama/current/$STADO_PLATFORM/bin/start-with-skarbiec",
+      "args": []
+    },
+    {
+      "name": "weles",
+      "summary": "The browser-automation worker: runs authorized web workflows on the host it is deployed to.",
+      "program": "$HOME/.stado/bin/weles-worker",
+      "args": []
+    },
+    {
+      "name": "stado-agent",
+      "summary": "The local Stado agent: claims queued jobs and publishes this host's capacity.",
+      "program": "$HOME/.stado/bin/stado",
+      "args": ["agent", "--auto"]
+    }
+  ]
+}
