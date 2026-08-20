@@ -523,18 +523,6 @@
           "stat"
         ]
       },
-      "weles-captures": {
-        "item": "weles-object-api",
-        "prefixes": [
-          ""
-        ],
-        "actions": [
-          "get",
-          "list",
-          "put",
-          "stat"
-        ]
-      },
       "wisent-app": {
         "item": "wisent-app-object-api",
         "prefixes": [
