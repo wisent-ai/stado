@@ -41,6 +41,15 @@ pub enum ServiceCommands {
     #[command(subcommand)]
     Directory(crate::cli::directory::DirectoryCommands),
 
+    /// The preconfigured Wisent services, ready to deploy by name: no
+    /// declaration to write, no flags to know. `service deploy <name>` and
+    /// `service ensure <name>` resolve these when nothing else declares the
+    /// unit.
+    Catalog {
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Every registry-managed service across all hosts, with its state.
     ///
     /// Answered from the latest health beacons, so it costs no ssh and
@@ -507,6 +516,7 @@ fn default_log_lines() -> usize {
 pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
     match command {
         ServiceCommands::Directory(sub) => crate::cli::directory::dispatch(sub).await,
+        ServiceCommands::Catalog { json } => catalog(json).await,
         ServiceCommands::List { unowned, json } => {
             if unowned {
                 list_unowned(json).await
@@ -2232,6 +2242,21 @@ fn unit_program(
             source: "registry",
         });
     }
+    // The shipped Wisent catalog answers by name, on any host, with no
+    // declaration of the operator's own — that is the whole of "run Weles
+    // here" as one word.
+    if let Some(entry) = crate::deploy::service_catalog::lookup(name)
+        .map_err(|error| CmdError::click(error.to_string()))?
+    {
+        return Ok(UnitProgram {
+            // Placeholders survive here on purpose: `$HOME` and
+            // `$STADO_PLATFORM` belong to the target, and only the caller
+            // holding the resolved target may expand them.
+            program: entry.program,
+            args: entry.args,
+            source: "catalog",
+        });
+    }
     let bundled =
         targets::load_bundled_registry().map_err(|error| CmdError::click(error.to_string()))?;
     let shipped = bundled
@@ -2249,9 +2274,41 @@ fn unit_program(
     }
     Err(CmdError::usage(format!(
         "nothing declares what {name} runs on {host}: pass --from PATH (repeating --arg for each \
-         argument), or give its registry services[] entry a \"program\" and \"args\" so the \
-         declaration is the source of the unit"
+         argument), give its registry services[] entry a \"program\" and \"args\", or pick one of \
+         the preconfigured Wisent services `stado service catalog` lists"
     )))
+}
+
+/// `service catalog`: the preconfigured Wisent services this build ships,
+/// printed as they would deploy. Read-only and local: the answer comes from
+/// the compiled-in document, never from a host.
+async fn catalog(json: bool) -> Result<(), CmdError> {
+    let entries =
+        crate::deploy::service_catalog::all().map_err(|error| CmdError::click(error.to_string()))?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "services": entries.iter().map(|entry| json!({
+                    "name": entry.name,
+                    "summary": entry.summary,
+                    "program": entry.program,
+                    "args": entry.args,
+                })).collect::<Vec<_>>(),
+            }))?
+        );
+    } else {
+        for entry in &entries {
+            println!(
+                "{:<14} {} {}",
+                entry.name,
+                entry.program,
+                entry.args.join(" ")
+            );
+            println!("{:<14} {}", "", entry.summary);
+        }
+    }
+    Ok(())
 }
 
 /// `service ensure NAME --host HOST [--from PATH] --reason WHY`.
@@ -2282,7 +2339,21 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
     let existing = declared
         .iter()
         .find(|candidate| candidate.matches(options.name));
-    let unit = unit_program(&host, options.name, options.from, options.args, existing)?;
+    let mut unit = unit_program(&host, options.name, options.from, options.args, existing)?;
+    if unit.source == "catalog" {
+        unit.program = crate::deploy::service_catalog::resolve_program(
+            &unit.program,
+            &crate::deploy::service_catalog::home_for(&target),
+            Some(&target.release_platform),
+        );
+        eprintln!(
+            "{host} declares no program for {}; rendering the unit from the Wisent service \
+             catalog this build ships: {} {}",
+            options.name,
+            unit.program,
+            unit.args.join(" ")
+        );
+    }
     if unit.source == "shipped" {
         eprintln!(
             "{host} declares no program for {}; rendering the unit from the declaration shipped \
