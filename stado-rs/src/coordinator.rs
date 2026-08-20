@@ -11,9 +11,13 @@
 //!
 //! Cloud Function parity: `stado/cloud_function/main.py::monitor_jobs`
 //! composes the SAME tick (fire due schedules -> normalize sizing ->
-//! makespan assign -> per provider check/reap/schedule -> run reaper ->
-//! billing collect) and needs no separate port — [`run_tick`] is the single
-//! implementation. Credentials for both deployment shapes are resolved from
+//! reap expired worker leases -> makespan assign -> per provider
+//! check/reap/schedule -> run reaper -> billing collect) and needs no
+//! separate port — [`run_tick`] is the single implementation. The lease
+//! reaper is the tick's provider-neutral addition: it recovers `running/`
+//! records whose worker died and queued pins naming silent workers, which
+//! the per-cloud-provider monitor arms structurally cannot cover on a
+//! local/box-only fleet. Credentials for both deployment shapes are resolved from
 //! Skarbiec; the remaining deployment-specific difference is the box-owner
 //! default (Cloud Function: "gcp-cloud-function"; daemon: hostname).
 //!
@@ -569,6 +573,23 @@ pub async fn run_tick(
             "sizing: corrected {n_sized} stale queue gpu_mem_gb values"
         ));
     }
+    // Phantom-job reaper: a worker that dies mid-job leaves its running/
+    // record behind, and the per-cloud-provider monitor arms above never
+    // run on a fleet with no cloud provider (or one whose API is down) —
+    // the queue then reports capacity that does not exist and the job
+    // waits forever. This provider-neutral pass requeues the job once its
+    // worker lease (status/<job_id>/heartbeat, HEARTBEAT_STALE_MINUTES)
+    // expires, fails it with a stored reason on the second expiry, and
+    // clears queued assignments naming silent workers. It runs BEFORE
+    // assignment and dispatch so recovered jobs are claimable this tick.
+    let reaped = crate::queue::reaper::reap_expired_leases(store, log).await?;
+    if reaped.requeued > 0 || reaped.failed > 0 || reaped.assignments_cleared > 0 {
+        log(&format!(
+            "lease-reaper: requeued {} phantom job(s), failed {} on second expiry, \
+             cleared {} silent-worker assignment(s)",
+            reaped.requeued, reaped.failed, reaped.assignments_cleared
+        ));
+    }
     let autonomy_requires_routing = match crate::autonomy::storage::load_policy(store).await {
         Ok(policy) => {
             let routed = policy.mode != crate::autonomy::AutonomyMode::Report;
@@ -742,6 +763,18 @@ pub async fn run(target: Option<&str>, once: bool) -> Result<i32, String> {
             .await
             .map_err(|exc| exc.to_string())?;
         log(&format!("tick scheduled={n}"));
+        // Record the queue namespace this coordinator serves into the
+        // canonical registry so submitters can refuse an ambient namespace
+        // the fleet never claims from (the 2026-08-19 silent-stall: a job
+        // submitted under the operator's ambient namespace sat unclaimed
+        // for hours). Ok(false) — already current, empty namespace, or a
+        // lost CAS race — needs no line.
+        if let Err(exc) =
+            crate::targets::record_fleet_queue_namespace(config::wc_stado_storage_namespace())
+                .await
+        {
+            log(&format!("fleet queue namespace record failed: {exc}"));
+        }
         // Native-build poller: watch registry build recipes for new commits
         // and enqueue build jobs. Self-rate-limited to one pass per minute;
         // per-recipe failures are logged inside, never raised.
