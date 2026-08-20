@@ -1,11 +1,13 @@
 [automation]
 managed = true
-source_fingerprint = "eda75f0a7d2564dd"
+source_fingerprint = "3c5112175ffa41ec"
 category = "data"
+copy_status = "approved"
+approved_in = "019fe3db-84a1-7000-bf79-c5455aefd43f@2026-08-09T23:59:29Z"
 
 [banner]
-title = "Run governed workloads on any compute."
-description = "Durable orchestration for policy-controlled AI jobs across local, cloud, and owned machines."
+title = "Stado: The Easiest Harness for Managing Compute and Storage Across Local, GCP, AWS, and Azure Infrastructure"
+description = ""
 product = "Wisent"
 url = "wisent.com"
 theme = "dark"
