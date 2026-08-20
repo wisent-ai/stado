@@ -4,9 +4,11 @@
 //! Until now "run Weles here" meant knowing what the unit runs — a path, an
 //! argument vector, a platform directory — which is how the always-on set on
 //! `control-host` came to be a sequence of one-off hand installs instead
-//! of a list the product offers. This catalog is that list, compiled into the
-//! binary ([`data/service-catalog.json`]) so it can never drift from the
-//! build that carries it.
+//! of a list the product offers. This catalog is generated from the canonical
+//! `wisent-ground-truth-docs/catalog/products.yml` by
+//! `wisent-ground-truth-docs/scripts/product_catalog.py`, then compiled into
+//! this binary as [`data/service-catalog.json`]. Product identity never starts
+//! in Stado.
 //!
 //! Resolution order for what a unit runs stays: operator flags, then the
 //! host's own registry `services[]` entry, then this catalog, then the older
