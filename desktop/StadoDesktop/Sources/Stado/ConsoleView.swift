@@ -26,6 +26,7 @@ struct ConsoleView: View {
     @StateObject private var releaseStore = ReleaseEvidenceStore()
     @StateObject private var buildsStore = BuildsStore()
     @StateObject private var groupStore = FleetGroupStore()
+    @StateObject private var productsStore = ProductsStore()
 
     @State private var showsDeploymentSetup = false
     @State private var showsDeploymentAccess = false
@@ -322,7 +323,7 @@ struct ConsoleView: View {
             // platform rows answer which half broke.
             let failed = buildsStore.recipes.count(where: \.hasFailedRun)
             return failed > 0 ? (failed, .danger) : nil
-        case .registry, .deployments, .fleets:
+        case .registry, .deployments, .fleets, .products:
             return nil
         }
     }
@@ -347,6 +348,8 @@ struct ConsoleView: View {
                 )
             case .queue:
                 QueueView(store: store, fleetStore: fleetStore, scope: scopeName)
+            case .products:
+                ProductsView(store: productsStore, fleetStore: fleetStore, scope: scopeName)
             case .hosts:
                 HostsView(
                     store: store,

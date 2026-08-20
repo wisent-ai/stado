@@ -45,6 +45,7 @@ pub mod placement;
 pub mod precheck_runner;
 pub mod profiles_cmd;
 pub mod queue;
+pub mod product;
 pub mod quota;
 pub mod recovery;
 pub mod registry;
@@ -533,6 +534,9 @@ enum Commands {
     /// adopt, retire, deploy, logs, env.
     #[command(subcommand)]
     Service(service::ServiceCommands),
+    /// Install, inspect, update, roll back and remove canonical Wisent products.
+    #[command(subcommand)]
+    Product(product::ProductCommands),
     /// Atomically relocate a declared service group between registered hosts.
     #[command(subcommand)]
     Placement(placement::PlacementCommands),
@@ -2170,6 +2174,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Queue(sub) => queue::dispatch(sub).await,
         Commands::Alerts(sub) => alerts::dispatch(sub).await,
         Commands::Service(sub) => service::dispatch(sub).await,
+        Commands::Product(sub) => product::dispatch(sub).await,
         Commands::Placement(sub) => placement::dispatch(sub).await,
         Commands::Resolver(sub) => resolver::dispatch(sub).await,
         Commands::Inference(sub) => inference::dispatch(sub).await,

@@ -46,5 +46,10 @@ let package = Package(
             ],
             path: "tests/service"
         ),
+        .testTarget(
+            name: "ProductTests",
+            dependencies: ["Stado"],
+            path: "tests/product"
+        ),
     ]
 )
