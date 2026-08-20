@@ -46,7 +46,6 @@ pub fn lookup(name: &str) -> Result<Option<CatalogService>, String> {
     Ok(all()?.into_iter().find(|entry| entry.name == name))
 }
 
-
 /// One placeholder expansion, applied to the program and every argument:
 /// `$HOME` for the approved account's home, `$STADO_PLATFORM` for the
 /// registry `release_platform`, `$STADO_HOST` for the target's registry

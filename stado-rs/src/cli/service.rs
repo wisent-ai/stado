@@ -950,7 +950,10 @@ async fn failure_evidence(row: &ServiceStatus, runner: &crate::deploy::Runner) -
         Ok(report)
             if report.get("status").and_then(Value::as_str) == Some(host_exec::OK_STATUS) =>
         {
-            let stdout = report.get("stdout").and_then(Value::as_str).unwrap_or_default();
+            let stdout = report
+                .get("stdout")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             evidence.last_exit = launchctl_last_exit(stdout, &unit);
         }
         Ok(report) => {
@@ -1830,7 +1833,13 @@ async fn remove(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
             }))?
         );
     } else {
-        render_mutation("removed", &removed, &generation, Some(&report.to_json()), json)?;
+        render_mutation(
+            "removed",
+            &removed,
+            &generation,
+            Some(&report.to_json()),
+            json,
+        )?;
         match &file {
             Ok(outcome) if outcome.succeeded() => {
                 println!("{}: {} {}", outcome.target, outcome.path, outcome.status)
@@ -1905,10 +1914,8 @@ async fn declare(file: &str, as_json: bool) -> Result<(), CmdError> {
     }
     let verify = match value.get("verify") {
         Some(descriptor) => {
-            let descriptor: targets::VerifyDescriptor =
-                serde_json::from_value(descriptor.clone()).map_err(|error| {
-                    CmdError::usage(format!("{file}: 'verify': {error}"))
-                })?;
+            let descriptor: targets::VerifyDescriptor = serde_json::from_value(descriptor.clone())
+                .map_err(|error| CmdError::usage(format!("{file}: 'verify': {error}")))?;
             let problems = targets::validate_verification(&location, &descriptor);
             if !problems.is_empty() {
                 return Err(CmdError::usage(problems.join("; ")));
@@ -1988,7 +1995,11 @@ async fn declare(file: &str, as_json: bool) -> Result<(), CmdError> {
         .entry(name.to_string())
         .or_insert_with(|| json!({}))
         .as_object_mut()
-        .ok_or_else(|| CmdError::click(format!("service_directory.services.{name}: must be an object")))?;
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "service_directory.services.{name}: must be an object"
+            ))
+        })?;
     entry.insert("active_host".to_string(), json!(host));
     entry.insert("endpoints".to_string(), Value::Object(endpoints));
     // The directory contract binds every fixed route to the managed unit on
@@ -2013,9 +2024,9 @@ async fn declare(file: &str, as_json: bool) -> Result<(), CmdError> {
         .get_mut("targets")
         .and_then(Value::as_array_mut)
         .and_then(|targets| {
-            targets.iter_mut().find(|target| {
-                target.get("name").and_then(Value::as_str) == Some(host)
-            })
+            targets
+                .iter_mut()
+                .find(|target| target.get("name").and_then(Value::as_str) == Some(host))
         })
         .ok_or_else(|| CmdError::click(format!("registry targets lost {host}")))?;
     let host_services = target_entry
@@ -2024,7 +2035,9 @@ async fn declare(file: &str, as_json: bool) -> Result<(), CmdError> {
         .entry("services")
         .or_insert_with(|| json!([]))
         .as_array_mut()
-        .ok_or_else(|| CmdError::click(format!("registry target {host}: services must be an array")))?;
+        .ok_or_else(|| {
+            CmdError::click(format!("registry target {host}: services must be an array"))
+        })?;
     let already = host_services
         .iter()
         .any(|record| record.get("name").and_then(Value::as_str) == Some(name));
@@ -2283,8 +2296,8 @@ fn unit_program(
 /// printed as they would deploy. Read-only and local: the answer comes from
 /// the compiled-in document, never from a host.
 async fn catalog(json: bool) -> Result<(), CmdError> {
-    let entries =
-        crate::deploy::service_catalog::all().map_err(|error| CmdError::click(error.to_string()))?;
+    let entries = crate::deploy::service_catalog::all()
+        .map_err(|error| CmdError::click(error.to_string()))?;
     if json {
         println!(
             "{}",
@@ -2331,19 +2344,25 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
         .map_err(click)?;
     let host = target.name.clone();
 
-    // The declaration is looked up twice on purpose. This one answers what the
-    // unit runs and so has to precede the plan; the one below decides whether
-    // the document needs writing and matches the rendered label and unit name
-    // as well as the operator's NAME.
+    // Resolve both the operator-facing product name and the stable catalog
+    // unit. An older registry may carry only the latter; treating that as no
+    // declaration minted a duplicate unit beside the canonical daemon.
     let declared = service::declared_services(&target);
-    let existing = declared
-        .iter()
-        .find(|candidate| candidate.matches(options.name));
+    let catalog_unit = crate::deploy::service_catalog::lookup(options.name)
+        .map_err(|error| CmdError::click(error.to_string()))?
+        .and_then(|entry| entry.unit);
+    let existing = declared.iter().find(|candidate| {
+        candidate.matches(options.name)
+            || catalog_unit
+                .as_deref()
+                .is_some_and(|unit| candidate.matches(unit))
+    });
     let mut unit = unit_program(&host, options.name, options.from, options.args, existing)?;
     if unit.source == "catalog" {
         let entry = crate::deploy::service_catalog::CatalogService {
             name: options.name.to_string(),
             summary: String::new(),
+            unit: unit.unit.clone(),
             program: unit.program.clone(),
             args: unit.args.clone(),
         };
@@ -2629,7 +2648,10 @@ async fn logs(name: &str, host: Option<&str>, lines: usize, json: bool) -> Resul
         // the origin names the file, or the reason there was nothing to
         // show ("absent in plist", "<path> (empty)").
         if let Some(error_origin) = &tail.error_origin {
-            println!("== {} {} stderr ({}) ==", tail.host, tail.unit, error_origin);
+            println!(
+                "== {} {} stderr ({}) ==",
+                tail.host, tail.unit, error_origin
+            );
             if !tail.error_body.is_empty() {
                 print!("{}", tail.error_body);
                 if !tail.error_body.ends_with('\n') {
