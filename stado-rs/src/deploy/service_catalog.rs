@@ -15,7 +15,9 @@
 
 use serde::Deserialize;
 
-/// One preconfigured Wisent service.
+/// One preconfigured Wisent service. Internal processes stay internal: the
+/// Stado entry runs `local-control-plane`, which owns the API, scheduler and
+/// worker together instead of exposing three deployment choices.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CatalogService {
     pub name: String,
@@ -43,6 +45,7 @@ pub fn all() -> Result<Vec<CatalogService>, String> {
 pub fn lookup(name: &str) -> Result<Option<CatalogService>, String> {
     Ok(all()?.into_iter().find(|entry| entry.name == name))
 }
+
 
 /// One placeholder expansion, applied to the program and every argument:
 /// `$HOME` for the approved account's home, `$STADO_PLATFORM` for the
