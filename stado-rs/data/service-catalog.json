@@ -9,6 +9,7 @@
     {
       "name": "brama",
       "summary": "The one authenticated, provider-neutral gateway every Wisent model call goes through.",
+      "unit": "com.wisent.always-on.brama",
       "program": "$HOME/.stado/services/brama/current/$STADO_PLATFORM/bin/start-with-skarbiec",
       "args": []
     },
@@ -19,10 +20,22 @@
       "args": []
     },
     {
-      "name": "stado-agent",
-      "summary": "The local Stado agent: claims queued jobs and publishes this host's capacity.",
+      "name": "stado",
+      "summary": "The complete local Stado control plane: API listener, scheduler and worker as one managed service.",
       "program": "$HOME/.stado/bin/stado",
-      "args": ["agent", "--auto"]
+      "args": ["local-control-plane"]
+    },
+    {
+      "name": "oko",
+      "summary": "The local Oko autonomy service.",
+      "program": "$HOME/.oko/bin/run-autonomy-service",
+      "args": []
+    },
+    {
+      "name": "transcript-lake",
+      "summary": "Continuously streams local agent transcripts into Transcript Lake.",
+      "program": "$HOME/.local/bin/transcript-lake",
+      "args": ["stream", "--json"]
     }
   ]
 }
