@@ -23,6 +23,18 @@
       "summary": "The complete local Stado control plane: API listener, scheduler and worker as one managed service.",
       "program": "$HOME/.stado/bin/stado",
       "args": ["local-control-plane"]
+    },
+    {
+      "name": "oko",
+      "summary": "The local Oko autonomy service.",
+      "program": "$HOME/.oko/bin/run-autonomy-service",
+      "args": []
+    },
+    {
+      "name": "transcript-lake",
+      "summary": "Continuously streams local agent transcripts into Transcript Lake.",
+      "program": "$HOME/.local/bin/transcript-lake",
+      "args": ["stream", "--json"]
     }
   ]
 }
