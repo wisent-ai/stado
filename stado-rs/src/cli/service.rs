@@ -1820,7 +1820,7 @@ async fn remove(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
             }))?
         );
     } else {
-        render_mutation("removed", &removed, &generation, Some(&report.to_json()), json);
+        render_mutation("removed", &removed, &generation, Some(&report.to_json()), json)?;
         match &file {
             Ok(outcome) if outcome.succeeded() => {
                 println!("{}: {} {}", outcome.target, outcome.path, outcome.status)
