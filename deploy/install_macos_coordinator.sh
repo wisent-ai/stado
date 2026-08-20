@@ -15,10 +15,13 @@ if [ -z "$STADO_BIN" ] || [ ! -x "$STADO_BIN" ]; then
     false
 fi
 
-STADO_CONFIG="${STADO_CONFIG:-$SCRIPT_DIR/local/stado.config.json}"
+if [ -z "${STADO_CONFIG:-}" ]; then
+    echo "FATAL: STADO_CONFIG must name an operator-owned deployment profile"
+    echo "Create a neutral local profile with 'stado config init', then set STADO_CONFIG to that file."
+    false
+fi
 if [ ! -r "$STADO_CONFIG" ]; then
     echo "FATAL: missing Stado config at $STADO_CONFIG"
-    echo "Use deploy/local/stado.config.json for outage mode, or explicitly set STADO_CONFIG."
     false
 fi
 if grep -q '<[^>]*>' "$STADO_CONFIG"; then

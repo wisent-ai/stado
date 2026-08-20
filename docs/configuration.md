@@ -9,12 +9,11 @@ cloud locators, or credentials. Existing legacy files migrate explicitly with
 `stado config migrate`; the exact prior file is preserved beside the migrated
 document.
 
-`STADO_CONFIG` selects an authoritative deployment profile. The shipped
-`deploy/local/stado.config.json` is an explicit Wisent outage profile, not a
-first-run template; `deploy/azure/stado.config.json` is a fenced production
-template. Provider order, explicit provider fences, storage,
-object/release/service verifiers, and the workload-agent allowlist live in
-deployment profiles rather than in cloud CLI state.
+`STADO_CONFIG` selects the operator-owned deployment profile. Stado ships no
+company deployment profile: `stado config init` creates a neutral local profile,
+and an operator extends that file with provider order, explicit provider fences,
+storage, object/release/service verifiers, workload grants and service routes.
+Those decisions remain outside the public source tree and cloud CLI state.
 
 Only route-local or process-local values should be overridden:
 
@@ -108,13 +107,12 @@ token file named above.
 
 ## Registry
 
-`stado-rs/data/registry.json` is the canonical create-if-absent seed. It
-declares the sole `local-control-plane` coordinator and only current,
-host-backed local targets. Fenced Azure/GCP coordinators and cloud spot targets
-must not remain marked active. Operators use `stado registry push` and
-`stado registry pull`; both resolve the backend from `STADO_CONFIG`, preserve
-generation fencing, and surface an unreachable store as failure rather than
-silently switching providers.
+`stado-rs/data/registry.json` is an intentionally empty bundled seed. A release
+binary therefore knows no operator host, service, route, release key or workload
+until the operator creates a registry with `stado config init` or publishes one
+through the selected store. `stado registry push` and `stado registry pull`
+resolve that store from `STADO_CONFIG`, preserve generation fencing, and surface
+an unreachable store as failure rather than silently switching providers.
 
 Each target entry:
 
@@ -194,34 +192,34 @@ stable compatibility adapters for workloads on that host:
   "service_directory": {
     "authority": {
       "target": "control-host",
-      "command": "/Users/charles/.stado/bin/stado"
+      "command": "/opt/stado/bin/stado"
     },
     "generation": 7,
     "services": {
-      "brama": {
-        "placement_profile": "brama-skarbiec",
+      "model-router": {
+        "placement_profile": "router-with-credentials",
         "active_host": "control-host",
         "endpoints": {
           "control-host": {"url": "http://127.0.0.1:8080"},
-          "operator-host": {"url": "http://127.0.0.1:8080"}
+          "worker-host": {"url": "http://127.0.0.1:8080"}
         },
         "consumers": {
-          "wisent-backend": {"capabilities": ["model-routing"]}
+          "application": {"capabilities": ["model-routing"]}
         }
       }
     }
   },
   "targets": [{
-    "name": "gpu-host",
+    "name": "worker-host",
     "kind": "local",
     "service_resolver": {
       "api_bind": "127.0.0.1:17600",
       "refresh_seconds": 5,
       "max_stale_seconds": 15,
       "adapters": [{
-        "service": "brama",
+        "service": "model-router",
         "bind": "127.0.0.1:17601",
-        "consumer": "wisent-backend"
+        "consumer": "application"
       }]
     }
   }]
@@ -283,31 +281,30 @@ Bootstrap the gateway snapshot before Brama's first managed start:
 
 ```sh
 stado inference route set example-client/chat/primary \
-  --to example-provider/example-model \
-  --expected absent --gateway control-host
+  --to openai/gpt-4.1-mini \
+  --expected absent --gateway gateway-host
 ```
 
 ```sh
 stado inference plan chat-primary \
   --host gpu-host \
-  --image 'vllm/vllm-openai@sha256:770fe65b2c73ee74a5c42165cf3433de4048cc2cd9c57a937ca4e35aba5aa87b' \
-  --cache-dir /mnt/wd16tb/stado/inference/chat-primary \
-  --model 'TheDrummer/Cydonia-24B-v4.3' \
+  --image 'vllm/vllm-openai@sha256:<image-digest>' \
+  --cache-dir /srv/stado/inference/chat-primary \
+  --model 'example/model' \
   --gpu-mode yieldable \
   --max-model-len 16384 \
-  --revision 'db0426d39d4bd4a6d34fdc71db97569da68f55e1'
+  --revision '<model-revision>'
 stado inference apply <plan-id>
 stado inference doctor chat-primary
 stado inference verify chat-primary
 stado inference route set example-client/chat/primary \
   --to chat-primary \
-  --fallback example-provider/example-model \
-  --expected example-provider/example-model \
-  --gateway control-host
+  --fallback openai/gpt-4.1-mini \
+  --expected openai/gpt-4.1-mini \
+  --gateway gateway-host
 ```
-The pinned Cydonia model is the quality-first single-GPU profile for the
-registered RTX Pro 6000 Blackwell with 96 GB VRAM. The immutable Hugging Face
-revision and amd64 vLLM image digest prevent silent model or runtime replacement.
+The immutable model revision and container image digest prevent silent model
+or runtime replacement.
 
 `kv_cache_memory_gb` sets a fixed vLLM KV-cache allocation in GiB. Omitting it
 preserves the pinned image's own memory policy. A smaller cache releases VRAM
@@ -320,8 +317,8 @@ inference container when an eligible GPU job is queued, advertises the released
 capacity, and resumes inference only after queued and active GPU work has
 cleared. Eligibility includes provider, accelerator, host pin, centralized
 assignment, and capacity constraints; there is no timeout-based eviction.
-Brama's ordered Featherless fallback remains available while the local
-container is yielded.
+The ordered provider fallback remains available while the local container is
+yielded.
 `route set` therefore accepts a non-ready `yieldable` deployment only as the
 primary of a route with at least one ordered fallback. It still requires an
 `exclusive` primary and every local fallback to be ready, so an unavailable
@@ -377,8 +374,8 @@ stage an owner-only route snapshot on the gateway, compare-and-swap the
 registry, and then atomically commit the snapshot. Brama reloads that file per
 request, so cutover needs no backend restart. Ordered `--fallback` destinations
 are attempted when the primary provider fails;
-`example-provider/example-model` therefore preserves the same model
-contract while local vLLM is unavailable.
+An external provider fallback therefore preserves the same model contract while
+local inference is unavailable.
 `rollback` reinstalls the
 recorded prior deployment; `retire` refuses while any primary or fallback route
 still selects the deployment and retains model cache unless `--purge-cache` is
