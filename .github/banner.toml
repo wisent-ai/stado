@@ -1,13 +1,13 @@
 [automation]
 managed = true
-source_fingerprint = "049a6a46935e53c4"
+source_fingerprint = "eda75f0a7d2564dd"
 category = "data"
 
 [banner]
 title = "Run governed workloads on any compute."
 description = "Durable orchestration for policy-controlled AI jobs across local, cloud, and owned machines."
 product = "Wisent"
-url = "wisent.ai"
+url = "wisent.com"
 theme = "dark"
 layout = "layers-left"
 art_seed = "stado"
