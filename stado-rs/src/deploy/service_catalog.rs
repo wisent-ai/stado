@@ -22,6 +22,10 @@ use serde::Deserialize;
 pub struct CatalogService {
     pub name: String,
     pub summary: String,
+    /// Stable launchd/systemd identity when the public product name differs
+    /// from the unit already deployed across the fleet.
+    #[serde(default)]
+    pub unit: Option<String>,
     pub program: String,
     #[serde(default)]
     pub args: Vec<String>,

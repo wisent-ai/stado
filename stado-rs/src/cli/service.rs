@@ -2204,8 +2204,10 @@ struct EnsureOptions<'a> {
 struct UnitProgram {
     program: String,
     args: Vec<String>,
-    /// `"flag"`, `"registry"` or `"shipped"`.
+    /// `"flag"`, `"registry"`, `"catalog"` or `"shipped"`.
     source: &'static str,
+    /// Stable unit identity supplied by a registry or catalog declaration.
+    unit: Option<String>,
 }
 
 /// The launchd label a declaration carries, or a systemd unit name without
@@ -2240,6 +2242,7 @@ fn unit_program(
             program: from.to_string(),
             args: args.to_vec(),
             source: "flag",
+            unit: None,
         });
     }
     if !args.is_empty() {
@@ -2253,6 +2256,7 @@ fn unit_program(
             program: declared.program.clone(),
             args: declared.args.clone(),
             source: "registry",
+            unit: Some(declared.unit_id().to_string()),
         });
     }
     // The shipped Wisent catalog answers by name, on any host, with no
@@ -2268,6 +2272,7 @@ fn unit_program(
             program: entry.program,
             args: entry.args,
             source: "catalog",
+            unit: entry.unit,
         });
     }
     let bundled =
@@ -2279,10 +2284,12 @@ fn unit_program(
         .into_iter()
         .find(|candidate| candidate.matches(name) && !candidate.program.is_empty());
     if let Some(shipped) = shipped {
+        let unit = shipped.unit_id().to_string();
         return Ok(UnitProgram {
             program: shipped.program,
             args: shipped.args,
             source: "shipped",
+            unit: Some(unit),
         });
     }
     Err(CmdError::usage(format!(
@@ -2391,10 +2398,14 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
             unit.args.join(" ")
         );
     }
-    // At the label the declaration already carries, when it carries one. A
-    // minted label for a unit that exists under another one is a second unit,
-    // not this one.
-    let plan = match existing.and_then(declared_label) {
+    // A canonical catalog identity wins, then the unit already declared on
+    // this host. Minting a label from the product name beside either one
+    // creates a duplicate service, not an installation.
+    let plan = match unit
+        .unit
+        .as_deref()
+        .or_else(|| existing.and_then(declared_label))
+    {
         Some(label) => {
             service::plan_deploy_labelled(options.name, label, &unit.program, &unit.args)
         }
