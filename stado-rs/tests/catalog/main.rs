@@ -31,7 +31,7 @@ fn the_catalog_lists_the_wisent_services() {
     let out = stado(dir.path(), &["service", "catalog"]);
     assert!(out.status.success(), "catalog failed: {}", stderr(&out));
     let text = stdout(&out);
-    for name in ["skarbiec", "brama", "weles", "stado"] {
+    for name in ["skarbiec", "brama", "weles", "stado", "oko", "transcript-lake"] {
         assert!(text.contains(name), "missing {name} in: {text}");
     }
 }
@@ -44,7 +44,7 @@ fn the_json_catalog_carries_program_and_args() {
     let document: serde_json::Value =
         serde_json::from_str(&stdout(&out)).expect("catalog --json emits JSON");
     let services = document["services"].as_array().expect("services array");
-    assert_eq!(services.len(), 4);
+    assert_eq!(services.len(), 6);
     let skarbiec = services
         .iter()
         .find(|entry| entry["name"] == "skarbiec")
