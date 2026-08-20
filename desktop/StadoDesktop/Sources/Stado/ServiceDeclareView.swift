@@ -91,30 +91,18 @@ struct ServiceDeclareView: View {
                                     action: WisentAction(
                                         deployingCatalogName == entry.name
                                             ? "Deploying \(entry.name)…"
-                                            : (entry.isAvailable
-                                                ? "Run \(entry.name) on \(host.isEmpty ? "…" : host)"
-                                                : "\(entry.name) — not packaged"),
-                                        symbol: entry.isAvailable ? "play.circle" : "shippingbox.slash",
+                                            : "Run \(entry.name) on \(host.isEmpty ? "…" : host)",
+                                        symbol: "play.circle",
                                         kind: .secondary,
-                                        isEnabled: entry.isAvailable
-                                            && !host.isEmpty
-                                            && deployingCatalogName == nil
+                                        isEnabled: !host.isEmpty && deployingCatalogName == nil
                                     ) {
                                         Task { await deployFromCatalog(entry) }
                                     }
                                 )
-                                VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
-                                    Text(entry.summary)
-                                        .font(WisentTypeScale.caption())
-                                        .foregroundStyle(WisentDesign.secondary)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                    if let reason = entry.unavailableReason {
-                                        Text(reason)
-                                            .font(WisentTypeScale.identifierSmall())
-                                            .foregroundStyle(WisentDesign.muted)
-                                            .fixedSize(horizontal: false, vertical: true)
-                                    }
-                                }
+                                Text(entry.summary)
+                                    .font(WisentTypeScale.caption())
+                                    .foregroundStyle(WisentDesign.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
                         }
                     }
@@ -230,10 +218,6 @@ struct ServiceDeclareView: View {
     /// `deploy`, because it is idempotent and renders the right unit class
     /// for a headless host.
     private func deployFromCatalog(_ entry: WisentCatalogEntry) async {
-        guard entry.isAvailable else {
-            errorMessage = entry.unavailableReason ?? "\(entry.name) has no Stado install contract."
-            return
-        }
         deployingCatalogName = entry.name
         errorMessage = nil
         defer { deployingCatalogName = nil }
