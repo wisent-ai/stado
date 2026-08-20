@@ -22,6 +22,10 @@ use serde::Deserialize;
 pub struct CatalogService {
     pub name: String,
     pub summary: String,
+    /// Stable launchd/systemd identity when the public product name differs
+    /// from the unit already deployed across the fleet.
+    #[serde(default)]
+    pub unit: Option<String>,
     pub program: String,
     #[serde(default)]
     pub args: Vec<String>,
@@ -45,7 +49,6 @@ pub fn all() -> Result<Vec<CatalogService>, String> {
 pub fn lookup(name: &str) -> Result<Option<CatalogService>, String> {
     Ok(all()?.into_iter().find(|entry| entry.name == name))
 }
-
 
 /// One placeholder expansion, applied to the program and every argument:
 /// `$HOME` for the approved account's home, `$STADO_PLATFORM` for the
