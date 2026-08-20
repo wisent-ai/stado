@@ -17,8 +17,11 @@ for command_name in jq openssl; do
     command -v "$command_name" >/dev/null || die "required command is unavailable: $command_name"
 done
 [ -s "$ARCHIVE" ] || die "release archive is missing or empty: $ARCHIVE"
-case "$VERSION:$PLATFORM" in
-    *[![:alnum:]._-]* | *::* | :* | *:) die "invalid immutable release coordinate" ;;
+case "$VERSION" in
+    *[![:alnum:]._-]* | "") die "invalid immutable release version" ;;
+esac
+case "$PLATFORM" in
+    *[![:alnum:]._-]* | "") die "invalid immutable release platform" ;;
 esac
 case "$SOURCE_COMMIT" in
     *[!0-9a-fA-F]* | "") die "source commit must be hexadecimal" ;;

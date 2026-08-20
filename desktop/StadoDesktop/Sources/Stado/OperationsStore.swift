@@ -476,6 +476,10 @@ final class FleetServicesStore: ObservableObject {
         ["service", "restart", name, "--host", host, "--json"]
     }
 
+    nonisolated static func removeServiceArguments(name: String, host: String) -> [String] {
+        ["service", "remove", name, "--host", host, "--json"]
+    }
+
     func refresh(hosts: [String]) async {
         guard !isRefreshing else { return }
         refreshGeneration += 1
@@ -533,6 +537,34 @@ final class FleetServicesStore: ObservableObject {
         // Whatever happened, the beacon's next word is the one worth reading:
         // a succeeded restart shows as active, a refused one as the state it
         // was refused in.
+        await refresh(hosts: lastHosts)
+    }
+
+    /// `stado service remove <name> --host <host>`: the whole of "remove
+    /// this service" — stop, forget, and delete the declared unit file, in
+    /// the CLI's order, with its refusals. The view does not decompose it
+    /// into retire + delete, because two commands an operator must order
+    /// correctly are one command that cannot go wrong.
+    func removeService(_ entry: FleetServiceEntry) async {
+        let unit = entry.unitID.isEmpty ? entry.name : entry.unitID
+        mutation = .working("Removing \(unit) on \(entry.host)")
+        do {
+            let report = try await cli.json(
+                ServiceRemoveReport.self,
+                arguments: Self.removeServiceArguments(name: entry.name, host: entry.host)
+            )
+            if report.succeeded {
+                mutation = .succeeded(
+                    report.file.status == "removed"
+                        ? "Removed \(unit) on \(entry.host): stopped, forgotten, file deleted."
+                        : "Removed \(unit) on \(entry.host); its file was already absent."
+                )
+            } else {
+                mutation = .failed("\(report.target): \(report.fileSentence)")
+            }
+        } catch {
+            mutation = .failed(Self.message(for: error))
+        }
         await refresh(hosts: lastHosts)
     }
 

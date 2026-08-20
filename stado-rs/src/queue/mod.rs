@@ -18,12 +18,15 @@
 //! handle on Python `JobStorage` is `_blob_backend`. The intended behavior
 //! is a single backend handle, which is exactly what [`JobStorage`] holds.
 //!
-//! [`control`] and [`copy`] are the exceptions: they have NO Python
-//! original. [`control`] is the fleet pause switch behind `stado queue
+//! [`control`], [`copy`] and [`reaper`] are the exceptions: they have NO
+//! Python original. [`control`] is the fleet pause switch behind `stado queue
 //! pause`, the drain gate every storage migration already assumed existed.
 //! [`copy`] is the backend-to-backend copier the outage forced (GCS billing
 //! closed, queue state has to reach Azure Blob), a direction no Python tool
-//! covers. Application credentials belong in the separate Skarbiec service and
+//! covers. [`reaper`] is the provider-neutral phantom-job reaper the
+//! coordinator tick runs so a dead worker's `running/` record and a silent
+//! worker's `assigned_to` pin recover even when no cloud monitor arm is
+//! configured or reachable. Application credentials belong in the separate Skarbiec service and
 //! are not part of queue storage or backend migration.
 
 pub mod azure_blob;
@@ -36,6 +39,7 @@ pub mod leases;
 pub mod listing;
 pub mod local_file;
 pub mod migrations;
+pub mod reaper;
 pub mod runs;
 pub mod s3;
 pub mod stado_object;

@@ -41,6 +41,15 @@ pub enum ServiceCommands {
     #[command(subcommand)]
     Directory(crate::cli::directory::DirectoryCommands),
 
+    /// The preconfigured Wisent services, ready to deploy by name: no
+    /// declaration to write, no flags to know. `service deploy <name>` and
+    /// `service ensure <name>` resolve these when nothing else declares the
+    /// unit.
+    Catalog {
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Every registry-managed service across all hosts, with its state.
     ///
     /// Answered from the latest health beacons, so it costs no ssh and
@@ -340,6 +349,23 @@ pub enum ServiceCommands {
         json: bool,
     },
 
+    /// Remove a service entirely: stop it, forget it, and delete its unit
+    /// file from the host — the operation an operator means by "remove this
+    /// service", which `retire` deliberately is not. The file path comes from
+    /// the registry declaration, never from operator words. Refuses before
+    /// anything moves when the unit cannot be stopped; a file the channel
+    /// may not delete leaves the service retired and says so, with the
+    /// privileged command that could remove it.
+    Remove {
+        /// launchd label or systemd unit name, as the host knows it.
+        unit: String,
+        /// Registry host that runs it.
+        #[arg(long)]
+        host: String,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Install a new unit under management: render, push, bootstrap,
     /// record.
     Deploy {
@@ -490,6 +516,7 @@ fn default_log_lines() -> usize {
 pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
     match command {
         ServiceCommands::Directory(sub) => crate::cli::directory::dispatch(sub).await,
+        ServiceCommands::Catalog { json } => catalog(json).await,
         ServiceCommands::List { unowned, json } => {
             if unowned {
                 list_unowned(json).await
@@ -620,6 +647,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             .await
         }
         ServiceCommands::Retire { unit, host, json } => retire(&unit, &host, json).await,
+        ServiceCommands::Remove { unit, host, json } => remove(&unit, &host, json).await,
         ServiceCommands::Deploy {
             name,
             host,
@@ -922,7 +950,10 @@ async fn failure_evidence(row: &ServiceStatus, runner: &crate::deploy::Runner) -
         Ok(report)
             if report.get("status").and_then(Value::as_str) == Some(host_exec::OK_STATUS) =>
         {
-            let stdout = report.get("stdout").and_then(Value::as_str).unwrap_or_default();
+            let stdout = report
+                .get("stdout")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             evidence.last_exit = launchctl_last_exit(stdout, &unit);
         }
         Ok(report) => {
@@ -1735,6 +1766,91 @@ async fn retire(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
     )
 }
 
+/// `service remove`: the whole of "remove this service", composed from the
+/// three halves the product already owns — stop and forget on the host
+/// (`retire`), drop the registry entry, and delete the declared unit file
+/// (`host remove-file`). The file path is the declaration's, which is the
+/// only path worth trusting here: an operator-typed path would make this a
+/// delete-anything verb, and a wrong delete on someone else's machine is the
+/// failure every guard in `remove-file` exists against.
+///
+/// Partial states are said, not hidden: a stopped-and-forgotten service
+/// whose file the channel may not delete is `retired` with the file named
+/// and the privileged command beside it, and the command exits non-zero
+/// because the asked-for end state did not happen.
+async fn remove(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
+    let target = host_channel::canonical_target(host).await.map_err(click)?;
+    let declared = service::declared_services(&target);
+    let Some(found) = declared.iter().find(|candidate| candidate.matches(unit)) else {
+        return Err(unmanaged(unit, Some(host)));
+    };
+    if found.source == SOURCE_RECOVERY {
+        return Err(CmdError::click(format!(
+            "{unit} is carried by the fixed host-recovery program, not by the registry entry \
+             for {host}; it cannot be removed. Adopt it first if you need it under registry \
+             management."
+        )));
+    }
+    let path = found.path.clone();
+
+    let runner = production_runner();
+    let report = service::retire_service(&target, found, &runner)
+        .await
+        .map_err(click)?;
+    if !report.succeeded("retired") {
+        return Err(CmdError::click(format!(
+            "{host}: could not stop {unit}: {}; it is still declared in the registry, and its file was not touched",
+            report.failure()
+        )));
+    }
+
+    let mut document = registry::fetch_document().await?;
+    let removed = service::remove_service(&mut document, host, unit).map_err(click)?;
+    let generation = registry::push_document(&document).await?;
+
+    // The registry is already clean: the file half runs last, because a
+    // failed delete must leave a service the fleet can still see, not a file
+    // nobody declared. Its report is the second document of the answer.
+    let file = crate::cli::host::remove_file_document(&target.name, &path).await;
+    if json {
+        let (file_status, file_detail) = match &file {
+            Ok(outcome) => (outcome.status.clone(), outcome.detail.clone()),
+            Err(error) => ("failed".to_string(), Some(error.to_string())),
+        };
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": target.name,
+                "unit": unit,
+                "action": "removed",
+                "generation": generation,
+                "file": {
+                    "path": path,
+                    "status": file_status,
+                    "detail": file_detail,
+                },
+                "report": report.to_json(),
+            }))?
+        );
+    } else {
+        render_mutation(
+            "removed",
+            &removed,
+            &generation,
+            Some(&report.to_json()),
+            json,
+        )?;
+        match &file {
+            Ok(outcome) if outcome.succeeded() => {
+                println!("{}: {} {}", outcome.target, outcome.path, outcome.status)
+            }
+            Ok(outcome) => println!("{}: {} {}", outcome.target, outcome.path, outcome.status),
+            Err(error) => println!("{error}"),
+        }
+    }
+    file.map(|_| ())
+}
+
 /// One declared service name: lowercase letters and digits at the edges,
 /// with '.', '-' and '_' inside — the same rule the directory validator
 /// applies, enforced here so a bad name fails before the document moves.
@@ -1798,10 +1914,8 @@ async fn declare(file: &str, as_json: bool) -> Result<(), CmdError> {
     }
     let verify = match value.get("verify") {
         Some(descriptor) => {
-            let descriptor: targets::VerifyDescriptor =
-                serde_json::from_value(descriptor.clone()).map_err(|error| {
-                    CmdError::usage(format!("{file}: 'verify': {error}"))
-                })?;
+            let descriptor: targets::VerifyDescriptor = serde_json::from_value(descriptor.clone())
+                .map_err(|error| CmdError::usage(format!("{file}: 'verify': {error}")))?;
             let problems = targets::validate_verification(&location, &descriptor);
             if !problems.is_empty() {
                 return Err(CmdError::usage(problems.join("; ")));
@@ -1881,7 +1995,11 @@ async fn declare(file: &str, as_json: bool) -> Result<(), CmdError> {
         .entry(name.to_string())
         .or_insert_with(|| json!({}))
         .as_object_mut()
-        .ok_or_else(|| CmdError::click(format!("service_directory.services.{name}: must be an object")))?;
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "service_directory.services.{name}: must be an object"
+            ))
+        })?;
     entry.insert("active_host".to_string(), json!(host));
     entry.insert("endpoints".to_string(), Value::Object(endpoints));
     // The directory contract binds every fixed route to the managed unit on
@@ -1906,9 +2024,9 @@ async fn declare(file: &str, as_json: bool) -> Result<(), CmdError> {
         .get_mut("targets")
         .and_then(Value::as_array_mut)
         .and_then(|targets| {
-            targets.iter_mut().find(|target| {
-                target.get("name").and_then(Value::as_str) == Some(host)
-            })
+            targets
+                .iter_mut()
+                .find(|target| target.get("name").and_then(Value::as_str) == Some(host))
         })
         .ok_or_else(|| CmdError::click(format!("registry targets lost {host}")))?;
     let host_services = target_entry
@@ -1917,7 +2035,9 @@ async fn declare(file: &str, as_json: bool) -> Result<(), CmdError> {
         .entry("services")
         .or_insert_with(|| json!([]))
         .as_array_mut()
-        .ok_or_else(|| CmdError::click(format!("registry target {host}: services must be an array")))?;
+        .ok_or_else(|| {
+            CmdError::click(format!("registry target {host}: services must be an array"))
+        })?;
     let already = host_services
         .iter()
         .any(|record| record.get("name").and_then(Value::as_str) == Some(name));
@@ -2084,8 +2204,10 @@ struct EnsureOptions<'a> {
 struct UnitProgram {
     program: String,
     args: Vec<String>,
-    /// `"flag"`, `"registry"` or `"shipped"`.
+    /// `"flag"`, `"registry"`, `"catalog"` or `"shipped"`.
     source: &'static str,
+    /// Stable unit identity supplied by a registry or catalog declaration.
+    unit: Option<String>,
 }
 
 /// The launchd label a declaration carries, or a systemd unit name without
@@ -2120,6 +2242,7 @@ fn unit_program(
             program: from.to_string(),
             args: args.to_vec(),
             source: "flag",
+            unit: None,
         });
     }
     if !args.is_empty() {
@@ -2133,6 +2256,23 @@ fn unit_program(
             program: declared.program.clone(),
             args: declared.args.clone(),
             source: "registry",
+            unit: Some(declared.unit_id().to_string()),
+        });
+    }
+    // The shipped Wisent catalog answers by name, on any host, with no
+    // declaration of the operator's own — that is the whole of "run Weles
+    // here" as one word.
+    if let Some(entry) = crate::deploy::service_catalog::lookup(name)
+        .map_err(|error| CmdError::click(error.to_string()))?
+    {
+        return Ok(UnitProgram {
+            // Placeholders survive here on purpose: `$HOME` and
+            // `$STADO_PLATFORM` belong to the target, and only the caller
+            // holding the resolved target may expand them.
+            program: entry.program,
+            args: entry.args,
+            source: "catalog",
+            unit: entry.unit,
         });
     }
     let bundled =
@@ -2144,17 +2284,51 @@ fn unit_program(
         .into_iter()
         .find(|candidate| candidate.matches(name) && !candidate.program.is_empty());
     if let Some(shipped) = shipped {
+        let unit = shipped.unit_id().to_string();
         return Ok(UnitProgram {
             program: shipped.program,
             args: shipped.args,
             source: "shipped",
+            unit: Some(unit),
         });
     }
     Err(CmdError::usage(format!(
         "nothing declares what {name} runs on {host}: pass --from PATH (repeating --arg for each \
-         argument), or give its registry services[] entry a \"program\" and \"args\" so the \
-         declaration is the source of the unit"
+         argument), give its registry services[] entry a \"program\" and \"args\", or pick one of \
+         the preconfigured Wisent services `stado service catalog` lists"
     )))
+}
+
+/// `service catalog`: the preconfigured Wisent services this build ships,
+/// printed as they would deploy. Read-only and local: the answer comes from
+/// the compiled-in document, never from a host.
+async fn catalog(json: bool) -> Result<(), CmdError> {
+    let entries = crate::deploy::service_catalog::all()
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "services": entries.iter().map(|entry| json!({
+                    "name": entry.name,
+                    "summary": entry.summary,
+                    "program": entry.program,
+                    "args": entry.args,
+                })).collect::<Vec<_>>(),
+            }))?
+        );
+    } else {
+        for entry in &entries {
+            println!(
+                "{:<14} {} {}",
+                entry.name,
+                entry.program,
+                entry.args.join(" ")
+            );
+            println!("{:<14} {}", "", entry.summary);
+        }
+    }
+    Ok(())
 }
 
 /// `service ensure NAME --host HOST [--from PATH] --reason WHY`.
@@ -2177,15 +2351,44 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
         .map_err(click)?;
     let host = target.name.clone();
 
-    // The declaration is looked up twice on purpose. This one answers what the
-    // unit runs and so has to precede the plan; the one below decides whether
-    // the document needs writing and matches the rendered label and unit name
-    // as well as the operator's NAME.
+    // Resolve both the operator-facing product name and the stable catalog
+    // unit. An older registry may carry only the latter; treating that as no
+    // declaration minted a duplicate unit beside the canonical daemon.
     let declared = service::declared_services(&target);
-    let existing = declared
-        .iter()
-        .find(|candidate| candidate.matches(options.name));
-    let unit = unit_program(&host, options.name, options.from, options.args, existing)?;
+    let catalog_unit = crate::deploy::service_catalog::lookup(options.name)
+        .map_err(|error| CmdError::click(error.to_string()))?
+        .and_then(|entry| entry.unit);
+    let existing = declared.iter().find(|candidate| {
+        candidate.matches(options.name)
+            || catalog_unit
+                .as_deref()
+                .is_some_and(|unit| candidate.matches(unit))
+    });
+    let mut unit = unit_program(&host, options.name, options.from, options.args, existing)?;
+    if unit.source == "catalog" {
+        let entry = crate::deploy::service_catalog::CatalogService {
+            name: options.name.to_string(),
+            summary: String::new(),
+            unit: unit.unit.clone(),
+            program: unit.program.clone(),
+            args: unit.args.clone(),
+        };
+        let (program, args) = crate::deploy::service_catalog::resolve_entry(
+            &entry,
+            &crate::deploy::service_catalog::home_for(&target),
+            Some(&target.release_platform),
+            &target.name,
+        );
+        unit.program = program;
+        unit.args = args;
+        eprintln!(
+            "{host} declares no program for {}; rendering the unit from the Wisent service \
+             catalog this build ships: {} {}",
+            options.name,
+            unit.program,
+            unit.args.join(" ")
+        );
+    }
     if unit.source == "shipped" {
         eprintln!(
             "{host} declares no program for {}; rendering the unit from the declaration shipped \
@@ -2195,10 +2398,14 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
             unit.args.join(" ")
         );
     }
-    // At the label the declaration already carries, when it carries one. A
-    // minted label for a unit that exists under another one is a second unit,
-    // not this one.
-    let plan = match existing.and_then(declared_label) {
+    // A canonical catalog identity wins, then the unit already declared on
+    // this host. Minting a label from the product name beside either one
+    // creates a duplicate service, not an installation.
+    let plan = match unit
+        .unit
+        .as_deref()
+        .or_else(|| existing.and_then(declared_label))
+    {
         Some(label) => {
             service::plan_deploy_labelled(options.name, label, &unit.program, &unit.args)
         }
@@ -2452,7 +2659,10 @@ async fn logs(name: &str, host: Option<&str>, lines: usize, json: bool) -> Resul
         // the origin names the file, or the reason there was nothing to
         // show ("absent in plist", "<path> (empty)").
         if let Some(error_origin) = &tail.error_origin {
-            println!("== {} {} stderr ({}) ==", tail.host, tail.unit, error_origin);
+            println!(
+                "== {} {} stderr ({}) ==",
+                tail.host, tail.unit, error_origin
+            );
             if !tail.error_body.is_empty() {
                 print!("{}", tail.error_body);
                 if !tail.error_body.ends_with('\n') {
