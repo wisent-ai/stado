@@ -333,6 +333,18 @@ struct HostGates: Decodable, Identifiable, Sendable {
     }
 }
 
+/// One preconfigured Wisent service, exactly as `stado service catalog
+/// --json` reports it. The app keeps no copy of the list: a build that gains
+/// a service has to reach this screen without shipping a new app.
+struct WisentCatalogEntry: Decodable, Identifiable, Sendable {
+    let name: String
+    let summary: String
+    let program: String
+    let args: [String]
+
+    var id: String { name }
+}
+
 /// `stado service remove <name> --host <host> --json`, one document: the
 /// whole "remove this service" outcome — registry entry dropped at
 /// `generation`, and the unit file's fate under `file`. The file half has

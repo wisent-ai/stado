@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 import WisentDesignSystem
 
@@ -26,6 +27,8 @@ struct ServiceDeclareView: View {
     @State private var consumer = ""
     @State private var capability = ""
     @State private var isDeclaring = false
+    @State private var catalogEntries: [WisentCatalogEntry] = []
+    @State private var deployingCatalogName: String?
     @State private var errorMessage: String?
 
     private let cli = StadoCLI()
@@ -70,6 +73,40 @@ struct ServiceDeclareView: View {
                 Text("The one contract: immutable source, opaque run spec, how it is observed, who may call it. Stado learns nothing about the service's kind.")
                     .font(WisentTypeScale.caption())
                     .foregroundStyle(WisentDesign.secondary)
+            }
+
+            WisentSectionBox(
+                title: "Preconfigured Wisent services",
+                detail: "Ready to run with nothing to fill in: pick the host above the form, press the service, and the unit is rendered from the declaration this build ships. The same list is `stado service catalog`."
+            ) {
+                if catalogEntries.isEmpty {
+                    Text("Reading the catalog…")
+                        .font(WisentTypeScale.caption())
+                        .foregroundStyle(WisentDesign.secondary)
+                } else {
+                    VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
+                        ForEach(catalogEntries) { entry in
+                            HStack(alignment: .firstTextBaseline, spacing: WisentDesign.Space.x3) {
+                                WisentActionButton(
+                                    action: WisentAction(
+                                        deployingCatalogName == entry.name
+                                            ? "Deploying \(entry.name)…"
+                                            : "Run \(entry.name) on \(host.isEmpty ? "…" : host)",
+                                        symbol: "play.circle",
+                                        kind: .secondary,
+                                        isEnabled: !host.isEmpty && deployingCatalogName == nil
+                                    ) {
+                                        Task { await deployFromCatalog(entry) }
+                                    }
+                                )
+                                Text(entry.summary)
+                                    .font(WisentTypeScale.caption())
+                                    .foregroundStyle(WisentDesign.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                }
             }
 
             WisentSectionBox(title: "Name and placement", detail: "Lowercase identifier, and the registry host it runs on.") {
@@ -152,10 +189,53 @@ struct ServiceDeclareView: View {
         .onAppear {
             if host.isEmpty { host = hosts.first ?? "" }
         }
+        .task { await loadCatalog() }
     }
 
     private struct DeclareOutcome: Decodable, Sendable {
         let declared: String
+    }
+
+    private struct CatalogEnvelope: Decodable, Sendable {
+        let services: [WisentCatalogEntry]
+    }
+
+    /// `ensure --json` prints one record document; the fields this sheet
+    /// needs are none — success is the exit status plus a decodable payload,
+    /// and the screen behind re-reads the fleet either way.
+    private struct EnsureOutcome: Decodable, Sendable {}
+
+    private func loadCatalog() async {
+        guard catalogEntries.isEmpty else { return }
+        catalogEntries = (try? await cli.json(
+            CatalogEnvelope.self,
+            arguments: ["service", "catalog", "--json"]
+        ))?.services ?? []
+    }
+
+    /// One preconfigured deployment: `stado service ensure <name> --host
+    /// <host>` with the reason written for the audit trail. `ensure`, not
+    /// `deploy`, because it is idempotent and renders the right unit class
+    /// for a headless host.
+    private func deployFromCatalog(_ entry: WisentCatalogEntry) async {
+        deployingCatalogName = entry.name
+        errorMessage = nil
+        defer { deployingCatalogName = nil }
+        do {
+            _ = try await cli.json(
+                EnsureOutcome.self,
+                arguments: [
+                    "service", "ensure", entry.name,
+                    "--host", host,
+                    "--reason", "deployed from the Wisent catalog by the operator",
+                    "--json",
+                ]
+            )
+            onDeclared()
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func declare() async {
