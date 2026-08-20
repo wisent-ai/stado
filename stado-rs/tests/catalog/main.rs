@@ -31,7 +31,7 @@ fn the_catalog_lists_the_wisent_services() {
     let out = stado(dir.path(), &["service", "catalog"]);
     assert!(out.status.success(), "catalog failed: {}", stderr(&out));
     let text = stdout(&out);
-    for name in ["skarbiec", "brama", "weles", "stado-agent"] {
+    for name in ["skarbiec", "brama", "weles", "stado", "oko", "transcript-lake"] {
         assert!(text.contains(name), "missing {name} in: {text}");
     }
 }
@@ -44,18 +44,18 @@ fn the_json_catalog_carries_program_and_args() {
     let document: serde_json::Value =
         serde_json::from_str(&stdout(&out)).expect("catalog --json emits JSON");
     let services = document["services"].as_array().expect("services array");
-    assert_eq!(services.len(), 4);
+    assert_eq!(services.len(), 6);
     let skarbiec = services
         .iter()
         .find(|entry| entry["name"] == "skarbiec")
         .expect("skarbiec entry");
     assert_eq!(skarbiec["program"], "$HOME/.stado/bin/skarbiec");
     assert_eq!(skarbiec["args"], serde_json::json!(["serve", "--port", "8895"]));
-    let agent = services
+    let stado = services
         .iter()
-        .find(|entry| entry["name"] == "stado-agent")
-        .expect("agent entry");
-    assert_eq!(agent["args"], serde_json::json!(["agent", "--auto"]));
+        .find(|entry| entry["name"] == "stado")
+        .expect("stado entry");
+    assert_eq!(stado["args"], serde_json::json!(["local-control-plane"]));
 }
 
 #[test]
