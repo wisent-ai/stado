@@ -31,9 +31,14 @@ fn the_catalog_lists_the_wisent_services() {
     let out = stado(dir.path(), &["service", "catalog"]);
     assert!(out.status.success(), "catalog failed: {}", stderr(&out));
     let text = stdout(&out);
-    for name in ["skarbiec", "brama", "weles", "stado", "oko", "transcript-lake"] {
+    for name in [
+        "skarbiec", "brama", "weles", "stado", "oko", "transcript-lake",
+        "wisent-backend", "skarbiec-hub", "wisent-customer-support",
+        "wisent-trade", "trading-tools", "trading-autonomy", "growth-tactics",
+    ] {
         assert!(text.contains(name), "missing {name} in: {text}");
     }
+    assert!(!text.contains("image-video-router"), "internal router leaked into product catalog: {text}");
 }
 
 #[test]
@@ -44,7 +49,7 @@ fn the_json_catalog_carries_program_and_args() {
     let document: serde_json::Value =
         serde_json::from_str(&stdout(&out)).expect("catalog --json emits JSON");
     let services = document["services"].as_array().expect("services array");
-    assert_eq!(services.len(), 6);
+    assert_eq!(services.len(), 13);
     let skarbiec = services
         .iter()
         .find(|entry| entry["name"] == "skarbiec")
@@ -56,6 +61,15 @@ fn the_json_catalog_carries_program_and_args() {
         .find(|entry| entry["name"] == "stado")
         .expect("stado entry");
     assert_eq!(stado["args"], serde_json::json!(["local-control-plane"]));
+    let hub = services
+        .iter()
+        .find(|entry| entry["name"] == "skarbiec-hub")
+        .expect("hub entry");
+    assert_eq!(hub["available"], false);
+    assert!(hub["unavailable_reason"]
+        .as_str()
+        .unwrap()
+        .contains("No published host-service artifact"));
 }
 
 #[test]

@@ -36,6 +36,48 @@
       "summary": "Continuously streams local agent transcripts into Transcript Lake.",
       "program": "$HOME/.local/bin/transcript-lake",
       "args": ["stream", "--json"]
+    },
+    {
+      "name": "wisent-backend",
+      "summary": "The product API behind the Wisent applications.",
+      "program": "$HOME/.stado/bin/stado-api-service",
+      "args": []
+    },
+    {
+      "name": "skarbiec-hub",
+      "summary": "The paid control plane for fleets running Skarbiec.",
+      "available": false,
+      "unavailable_reason": "No published host-service artifact or Stado install contract; the repository currently starts node dist/server.js from a source checkout."
+    },
+    {
+      "name": "wisent-customer-support",
+      "summary": "The customer operations, interviews and customer-intelligence backend.",
+      "available": false,
+      "unavailable_reason": "No published host-service artifact or Stado install contract; the repository currently starts node src/server.js from a source checkout."
+    },
+    {
+      "name": "wisent-trade",
+      "summary": "The Wisent trading web service.",
+      "available": false,
+      "unavailable_reason": "No published host-service artifact or Stado install contract; the repository currently requires a built Next.js application."
+    },
+    {
+      "name": "trading-tools",
+      "summary": "The trading bot service.",
+      "available": false,
+      "unavailable_reason": "No published host-service artifact or Stado install contract for the workspace bot binary."
+    },
+    {
+      "name": "trading-autonomy",
+      "summary": "The autonomous trading agent runtime.",
+      "available": false,
+      "unavailable_reason": "No published host-service artifact or Stado install contract for the agent runtime."
+    },
+    {
+      "name": "growth-tactics",
+      "summary": "The Growth Tactics account API.",
+      "available": false,
+      "unavailable_reason": "No published host-service artifact or Stado install contract for the account API."
     }
   ]
 }
