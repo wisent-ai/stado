@@ -1,29 +1,35 @@
 {
   "services": [
     {
-      "name": "skarbiec",
-      "summary": "The credential and authentication vault: holds the fleet's secrets and answers scoped reads.",
-      "program": "$HOME/.stado/bin/skarbiec",
-      "args": ["serve", "--port", "8895"]
-    },
-    {
       "name": "brama",
-      "summary": "The one authenticated, provider-neutral gateway every Wisent model call goes through.",
-      "unit": "com.wisent.always-on.brama",
+      "summary": "The authenticated provider-neutral gateway every Wisent model call goes through.",
       "program": "$HOME/.stado/services/brama/current/$STADO_PLATFORM/bin/start-with-skarbiec",
-      "args": []
+      "args": [],
+      "unit": "com.wisent.always-on.brama"
     },
     {
       "name": "weles",
-      "summary": "The browser-automation worker: runs authorized web workflows on the host it is deployed to.",
+      "summary": "The browser-automation worker for authorized web workflows.",
       "program": "$HOME/.stado/bin/weles-worker",
       "args": []
     },
     {
+      "name": "skarbiec",
+      "summary": "The credential and authentication vault.",
+      "program": "$HOME/.stado/bin/skarbiec",
+      "args": [
+        "serve",
+        "--port",
+        "8895"
+      ]
+    },
+    {
       "name": "stado",
-      "summary": "The complete local Stado control plane: API listener, scheduler and worker as one managed service.",
+      "summary": "The complete local Stado control plane as one managed service.",
       "program": "$HOME/.stado/bin/stado",
-      "args": ["local-control-plane"]
+      "args": [
+        "local-control-plane"
+      ]
     },
     {
       "name": "oko",
@@ -33,9 +39,12 @@
     },
     {
       "name": "transcript-lake",
-      "summary": "Continuously streams local agent transcripts into Transcript Lake.",
+      "summary": "Continuously stream local agent transcripts into Transcript Lake.",
       "program": "$HOME/.local/bin/transcript-lake",
-      "args": ["stream", "--json"]
+      "args": [
+        "stream",
+        "--json"
+      ]
     }
   ]
 }
