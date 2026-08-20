@@ -27,6 +27,19 @@
 //! retries the recipe, because a sha marked seen with one platform missing is
 //! a commit the fleet believes it built for a machine it never did.
 //!
+//! Two gates keep a submission from going silently nowhere. The fleet
+//! namespace pin ([`crate::targets::fleet_namespace_mismatch`]) refuses the
+//! pass when this machine's ambient queue namespace is not the one the
+//! registry records for the fleet — jobs land where the SUBMITTER's config
+//! points, so a misconfigured writer and the fleet's readers would otherwise
+//! address two queues through one API. The claimability check
+//! ([`Claimability`]) refuses a platform no live worker can claim, records
+//! the run `unclaimable` with the reason and leaves the sha unseen, so the
+//! build happens the moment a worker comes back. Runs that do submit are
+//! supervised at completion ([`reconcile_build_runs`]): unclaimed past ten
+//! minutes, running past the sixty-minute ceiling, or vanished from the
+//! queue becomes `failed` with the diagnosis in the run's `reason`.
+//!
 //! Fleet-wide kill switch: a top-level `builds_disabled: true` in the
 //! registry document halts polling entirely.
 //!
@@ -38,20 +51,24 @@
 //! manifest and its signature (`stado release promote`) and stays a
 //! deliberate, separate step.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use crate::deploy::host_release::is_exact_semver;
 use crate::deploy::products;
 use crate::models::isoformat_utc;
+use crate::monitor::host_health;
+use crate::queue::capacity;
 use crate::queue::runs::TERMINAL_PREFIXES;
 use crate::queue::storage::JobStorage;
 use crate::queue::submit::{default_store, submit_job, SubmitOptions};
 use crate::targets::{
-    fetch_registry_remote, platform_job_os_arch, read_build_recipes, BuildRecipe, BuildRun,
+    fetch_registry_remote, fleet_namespace_mismatch, platform_accepts_job,
+    platform_job_os_arch, queue_name, read_build_recipes, BuildRecipe, BuildRun, ComputeTarget,
     Registry, RegistryStore, BUILDS_DISABLED_KEY, BUILDS_KEY,
 };
 
@@ -62,6 +79,19 @@ const PASS_INTERVAL_SECONDS: u64 = 60;
 /// `git ls-remote` wall-clock budget. A wedged remote (credential prompt,
 /// dead host) must cost one recipe one line, not stall the tick daemon.
 const LS_REMOTE_TIMEOUT_SECONDS: u64 = 30;
+
+/// A build job still queued this long after submission counts as unclaimed:
+/// either no live worker of its platform exists, or every one of them is
+/// refusing work — both states the run record must say, not a `running`
+/// that means nothing. Capacity publications go stale in 180s, so 600s is
+/// three missed publications, never one slow tick.
+const QUEUE_CLAIM_THRESHOLD_SECONDS: i64 = 600;
+
+/// Wall-clock ceiling on one claimed build job, measured from its
+/// `started_at` (its submission time when the job record carries none).
+/// v1 is a fixed ceiling for every recipe: a build that legitimately takes
+/// longer needs a recipe field, not a longer silence.
+const BUILD_CEILING_SECONDS: i64 = 3600;
 
 
 /// Poll bookkeeping. Process-local by design: `last_seen_ref` in the
@@ -186,6 +216,133 @@ fn recipe_due(name: &str, interval_seconds: u64) -> bool {
     due
 }
 
+/// One read of the fleet's claim state: which registry targets are
+/// broadcasting fresh capacity right now, and the age of every local
+/// target's newest health beacon. Those are the two questions a submit-time
+/// claimability check asks — "can anything claim this job" and "which
+/// machines went quiet, and how long ago" — and they are the same data
+/// `stado host gates` reads per host (capacity publications under
+/// `capacity/`, beacons under `host_health/`), read fleet-wide once per
+/// submit attempt rather than once per platform.
+///
+/// The check exists because a build job no live worker can claim used to be
+/// indistinguishable from a build in progress: the job sat in the queue and
+/// the run said `running` for as long as nobody went looking.
+pub struct Claimability {
+    /// Registry target names with a fresh capacity publication.
+    live: BTreeSet<String>,
+    /// Local target name -> age of its newest beacon in seconds (`None` =
+    /// it has never beaconed).
+    beacon_ages: BTreeMap<String, Option<i64>>,
+}
+
+impl Claimability {
+    /// Snapshot the claim state of the queue store the jobs would be
+    /// submitted to.
+    pub async fn read(registry: &Registry, store: &JobStorage) -> Result<Self, String> {
+        let now = Utc::now();
+        let publications = capacity::read_publications(store)
+            .await
+            .map_err(|exc| format!("reading capacity publications: {exc}"))?;
+        let mut live = BTreeSet::new();
+        for (consumer, publication) in &publications {
+            if publication.stale(now) {
+                continue;
+            }
+            // A local agent publishes as `local-<hostname>`, and the
+            // hostname is the machine's own word for itself, not its
+            // registry name — resolved to a target through `lookup_self`,
+            // the same join release_submit's builder selection makes.
+            let identity = consumer.strip_prefix("local-").unwrap_or(consumer);
+            if let Some(target) = registry
+                .lookup_self(identity)
+                .map_err(|exc| exc.to_string())?
+            {
+                live.insert(target.name.clone());
+            }
+        }
+        let prefix = format!("{}/", host_health::HEALTH_PREFIX);
+        let mut newest_beacons: BTreeMap<String, DateTime<Utc>> = BTreeMap::new();
+        for blob in store
+            .list_blobs_with_meta(&prefix)
+            .await
+            .map_err(|exc| format!("listing {prefix}: {exc}"))?
+        {
+            let Some(slug) = blob
+                .name
+                .strip_prefix(&prefix)
+                .and_then(|name| name.strip_suffix(".json"))
+            else {
+                continue;
+            };
+            // The object mtime is the age authority, exactly as
+            // `registry beacon-age` reads it: the body's `reported_at` is
+            // stamped by the reporting host's own clock.
+            let Some(updated) = blob.updated else {
+                continue;
+            };
+            newest_beacons.insert(slug.to_string(), updated);
+        }
+        let mut beacon_ages = BTreeMap::new();
+        for target in registry.local_targets() {
+            let observed = host_health::beacon_slugs(target, &target.name)
+                .into_iter()
+                .find_map(|slug| newest_beacons.get(&slug));
+            beacon_ages.insert(
+                target.name.clone(),
+                observed.map(|stamp| (now - *stamp).num_seconds().max(0)),
+            );
+        }
+        Ok(Self { live, beacon_ages })
+    }
+
+    /// Why no live worker can claim a build job for `platform`, or `None`
+    /// when at least one can. The match applies the same routing the
+    /// claiming agent does (`platform_job_os_arch` at submit,
+    /// `platform_accepts_job` at claim), so a platform this check calls
+    /// claimable is one a worker accepts. A platform no registry host
+    /// declares and a platform whose hosts all went quiet are different
+    /// sentences, because they send the operator to different fixes.
+    pub fn refusal(&self, registry: &Registry, platform: &str) -> Option<String> {
+        let (platform_os, architecture) = platform_job_os_arch(platform)?;
+        let candidates: Vec<&ComputeTarget> = registry
+            .targets
+            .iter()
+            .filter(|target| {
+                platform_accepts_job(&target.release_platform, platform_os, architecture)
+            })
+            .collect();
+        let queue = queue_name();
+        if candidates.is_empty() {
+            return Some(format!(
+                "no registry host declares {platform}, so no worker can claim \
+                 the {queue} queue for it"
+            ));
+        }
+        if candidates
+            .iter()
+            .any(|target| self.live.contains(&target.name))
+        {
+            return None;
+        }
+        let beacons = candidates
+            .iter()
+            .map(|target| match self.beacon_ages.get(&target.name) {
+                Some(Some(age)) => format!(
+                    "{} {} ago",
+                    target.name,
+                    crate::cli::registry::human_age(chrono::TimeDelta::seconds(*age))
+                ),
+                _ => format!("{} no beacon", target.name),
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        Some(format!(
+            "no live {platform} worker claims the {queue} queue (last beacons: {beacons})"
+        ))
+    }
+}
+
 /// One recipe: resolve the remote sha, and when it is new, submit one build
 /// job per platform the recipe names and record them through the registry
 /// compare-and-swap fence. The fenced re-read (not the coordinator's cached
@@ -200,7 +357,18 @@ fn recipe_due(name: &str, interval_seconds: u64) -> bool {
 /// `runs` is merged, not replaced: a platform this pass did not submit for
 /// keeps the run the registry already recorded for it, including whatever the
 /// completion pass wrote there.
-async fn poll_one(recipe: &BuildRecipe, log: &dyn Fn(&str)) -> Result<(), String> {
+///
+/// Two gates run before any submission, both against the freshly fenced
+/// document, because both failure modes used to be silent:
+///
+/// * [`fleet_namespace_mismatch`] — jobs land in the queue namespace THIS
+///   machine's config resolves, so a coordinator whose ambient namespace is
+///   not the fleet's would enqueue builds no fleet worker can ever see.
+/// * [`Claimability`] — a platform with no live worker gets no job and an
+///   `unclaimable` run carrying the reason, instead of a job that sits in
+///   the queue forever. The sha stays unseen for that recipe, so the pass
+///   resubmits the moment a worker comes back.
+async fn poll_one(registry: &Registry, recipe: &BuildRecipe, log: &dyn Fn(&str)) -> Result<(), String> {
     let sha = ls_remote(&recipe.repo, &recipe.branch).await?;
     if recipe.last_seen_ref.as_deref() == Some(sha.as_str()) {
         return Ok(());
@@ -215,6 +383,9 @@ async fn poll_one(recipe: &BuildRecipe, log: &dyn Fn(&str)) -> Result<(), String
         .ok_or_else(|| format!("no registry document at {}", store.location()))?;
     let mut document: Value = serde_json::from_str(&versioned.content)
         .map_err(|exc| format!("registry parse failed: {exc}"))?;
+    if let Some(mismatch) = fleet_namespace_mismatch(&document) {
+        return Err(mismatch);
+    }
     let Some(entry) = document
         .get_mut("builds")
         .and_then(Value::as_array_mut)
@@ -242,9 +413,14 @@ async fn poll_one(recipe: &BuildRecipe, log: &dyn Fn(&str)) -> Result<(), String
     }
     let command = build_job_command(&fresh);
     let at = crate::models::isoformat_utc(chrono::Utc::now());
+    let queue = default_store(crate::config::bucket())
+        .await
+        .map_err(|exc| format!("queue store open failed: {exc}"))?;
+    let claimability = Claimability::read(registry, &queue).await?;
     let mut runs: BTreeMap<String, BuildRun> = fresh.runs.clone();
     let mut submitted: Vec<String> = Vec::new();
     let mut failures: Vec<String> = Vec::new();
+    let mut unclaimable: Vec<String> = Vec::new();
     for platform in &fresh.platforms {
         let Some((platform_os, architecture)) = platform_job_os_arch(platform) else {
             // A word that names no machine is reported and skipped, never
@@ -258,6 +434,22 @@ async fn poll_one(recipe: &BuildRecipe, log: &dyn Fn(&str)) -> Result<(), String
             ));
             continue;
         };
+        if let Some(reason) = claimability.refusal(registry, platform) {
+            runs.insert(
+                platform.clone(),
+                BuildRun {
+                    status: "unclaimable".to_string(),
+                    at: at.clone(),
+                    job_id: String::new(),
+                    artifact_uris: Vec::new(),
+                    version: None,
+                    declared: false,
+                    reason: Some(reason.clone()),
+                },
+            );
+            unclaimable.push(format!("{platform}: {reason}"));
+            continue;
+        }
         let options = SubmitOptions {
             platform_os: platform_os.to_string(),
             architecture: architecture.to_string(),
@@ -275,20 +467,34 @@ async fn poll_one(recipe: &BuildRecipe, log: &dyn Fn(&str)) -> Result<(), String
                         artifact_uris: Vec::new(),
                         version: None,
                         declared: false,
+                        reason: None,
                     },
                 );
             }
             Err(exc) => failures.push(format!("{platform}: {exc}")),
         }
     }
-    if submitted.is_empty() {
+    // An unclaimable marker is written once per TRANSITION, not every pass:
+    // while the fleet stays dead the reason does not change, and a fenced
+    // registry rewrite every cadence buys nothing over the log line this
+    // pass already emits. New submissions always write.
+    let markers_changed = unclaimable.iter().any(|entry| {
+        let platform = entry.split(':').next().unwrap_or_default();
+        fresh.runs.get(platform).map(|run| run.status.as_str()) != Some("unclaimable")
+    });
+    let reasons: Vec<String> = failures
+        .iter()
+        .chain(unclaimable.iter())
+        .cloned()
+        .collect();
+    if submitted.is_empty() && !markers_changed {
         return Err(format!(
             "{} moved to {sha} but no build job was submitted: {}",
             fresh.branch,
-            if failures.is_empty() {
+            if reasons.is_empty() {
                 "no platform the recipe names is a release platform".to_string()
             } else {
-                failures.join("; ")
+                reasons.join("; ")
             }
         ));
     }
@@ -303,7 +509,11 @@ async fn poll_one(recipe: &BuildRecipe, log: &dyn Fn(&str)) -> Result<(), String
     // keeps a "last run" in the document that nothing updates again, next to
     // the per-platform runs that are now the record.
     object.remove("last_run");
-    if failures.is_empty() {
+    // The sha is seen only once every named platform has a job. An
+    // unclaimable or failed platform leaves it unseen so the next pass
+    // resubmits: a sha marked seen with one platform missing is a commit
+    // the fleet believes it built for a machine it never did.
+    if reasons.is_empty() {
         object.insert("last_seen_ref".to_string(), Value::String(sha.clone()));
     }
     let payload = format!(
@@ -323,12 +533,19 @@ async fn poll_one(recipe: &BuildRecipe, log: &dyn Fn(&str)) -> Result<(), String
             recipe.name
         )),
     }
-    if !failures.is_empty() {
+    if submitted.is_empty() {
+        return Err(format!(
+            "{} moved to {sha} but no build job was submitted: {}",
+            fresh.branch,
+            reasons.join("; ")
+        ));
+    }
+    if !reasons.is_empty() {
         log(&format!(
             "build {}: no job for {} — {sha} stays unseen, so the next pass retries \
              the recipe and rebuilds the platforms that did submit",
             recipe.name,
-            failures.join("; ")
+            reasons.join("; ")
         ));
     }
     Ok(())
@@ -349,9 +566,9 @@ struct RunOutcome {
 }
 
 /// The terminal prefix `job_id` has landed in, or `None` while it is still
-/// queued or running — or has been swept out of the queue entirely, which
-/// reads the same way here: a run whose job cannot be found is left
-/// `running` rather than declared failed on absence.
+/// queued or running — or has been swept out of the queue entirely. The
+/// caller distinguishes "still in flight" from "vanished" with
+/// [`stuck_reason`]: absence alone is not a verdict.
 async fn terminal_prefix(store: &JobStorage, job_id: &str) -> Result<Option<&'static str>, String> {
     for prefix in TERMINAL_PREFIXES {
         let found = store
@@ -363,6 +580,63 @@ async fn terminal_prefix(store: &JobStorage, job_id: &str) -> Result<Option<&'st
         }
     }
     Ok(None)
+}
+
+/// The supervision verdict for a run whose job sits in no terminal prefix:
+/// the one-sentence reason the run must be failed now, or `None` while it
+/// is still inside its budgets.
+///
+/// Three budgets, three sentences, because they send the operator to three
+/// different places: a job still queued past [`QUEUE_CLAIM_THRESHOLD_SECONDS`]
+/// says no worker took the work; a claimed job past [`BUILD_CEILING_SECONDS`]
+/// says the build — or the worker running it — is wedged; a job record gone
+/// from every prefix says the record was lost with no outcome ever reported.
+/// Build jobs carry no `runs/` manifest, so the by-run reaper never sweeps
+/// their records: absence here is disappearance, not housekeeping.
+async fn stuck_reason(store: &JobStorage, run: &BuildRun, log: &dyn Fn(&str)) -> Option<String> {
+    let recorded_at = DateTime::parse_from_rfc3339(&run.at)
+        .ok()?
+        .with_timezone(&Utc);
+    let age = (Utc::now() - recorded_at).num_seconds().max(0);
+    match store.read_job("queue", &run.job_id).await {
+        Ok(Some(_)) => {
+            return (age > QUEUE_CLAIM_THRESHOLD_SECONDS)
+                .then(|| "no worker claimed the job within 10m".to_string());
+        }
+        Ok(None) => {}
+        Err(exc) => {
+            log(&format!(
+                "build job {}: reading queue record: {exc}",
+                run.job_id
+            ));
+            return None;
+        }
+    }
+    match store.read_job("running", &run.job_id).await {
+        Ok(Some(job)) => {
+            let running_age = job
+                .started_at
+                .as_deref()
+                .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
+                .map(|started| {
+                    (Utc::now() - started.with_timezone(&Utc))
+                        .num_seconds()
+                        .max(0)
+                })
+                .unwrap_or(age);
+            return (running_age > BUILD_CEILING_SECONDS)
+                .then(|| "job exceeded the 60m build ceiling".to_string());
+        }
+        Ok(None) => {}
+        Err(exc) => {
+            log(&format!(
+                "build job {}: reading running record: {exc}",
+                run.job_id
+            ));
+            return None;
+        }
+    }
+    Some("job record disappeared; the worker never reported".to_string())
 }
 
 /// The version a finished build recorded for the commit it built: the first
@@ -489,7 +763,12 @@ async fn declare_on_platform(
 /// has reached a terminal prefix becomes a recorded outcome — succeeded or
 /// failed, the version the build wrote down, the artifacts it uploaded — and,
 /// for an `auto_declare` recipe with a version, a managed-version
-/// declaration on that platform's hosts.
+/// declaration on that platform's hosts. A run whose job has NOT reached a
+/// terminal prefix is supervised instead of waited on forever
+/// ([`stuck_reason`]): queued past the claim threshold, running past the
+/// build ceiling, or vanished from the queue altogether all become `failed`
+/// with the diagnosis in the run's `reason`, because a `running` that means
+/// "nobody knows" is how a dead fleet reads as a busy one.
 ///
 /// Declaration happens BEFORE the registry write on purpose. `declared` must
 /// mean "`managed_versions` says so", and a declaration is idempotent (one
@@ -530,55 +809,79 @@ async fn reconcile_build_runs(registry: &Registry, declare_allowed: bool, log: &
     let mut outcomes: Vec<RunOutcome> = Vec::new();
     for (recipe, platform, run) in pending {
         let prefix = match terminal_prefix(&store, &run.job_id).await {
-            Ok(Some(prefix)) => prefix,
-            Ok(None) => continue,
+            Ok(prefix) => prefix,
             Err(exc) => {
                 log(&format!("build {}: {exc}", recipe.name));
                 continue;
             }
         };
-        let succeeded = prefix == "completed" || prefix == "uploaded";
-        let mut updated = BuildRun {
-            status: if succeeded { "succeeded" } else { "failed" }.to_string(),
-            at: isoformat_utc(chrono::Utc::now()),
-            job_id: run.job_id.clone(),
-            artifact_uris: if succeeded {
-                uploaded_artifacts(&store, &run.job_id, log).await
-            } else {
-                Vec::new()
-            },
-            version: if succeeded {
-                recorded_version(&store, &run.job_id, log).await
-            } else {
-                None
-            },
-            declared: false,
-        };
-        log(&format!(
-            "build {}: {platform} job {} {} ({prefix}), version {}",
-            recipe.name,
-            run.job_id,
-            updated.status,
-            updated.version.as_deref().unwrap_or("none")
-        ));
-        if succeeded && recipe.auto_declare {
-            match (updated.version.clone(), declare_allowed) {
-                (None, _) => log(&format!(
-                    "build {}: auto-declare skipped for {platform}: job {} built a commit with no \
-                     exact version tag, so there is no version to declare",
+        let updated = match prefix {
+            Some(prefix) => {
+                let succeeded = prefix == "completed" || prefix == "uploaded";
+                let mut updated = BuildRun {
+                    status: if succeeded { "succeeded" } else { "failed" }.to_string(),
+                    at: isoformat_utc(chrono::Utc::now()),
+                    job_id: run.job_id.clone(),
+                    artifact_uris: if succeeded {
+                        uploaded_artifacts(&store, &run.job_id, log).await
+                    } else {
+                        Vec::new()
+                    },
+                    version: if succeeded {
+                        recorded_version(&store, &run.job_id, log).await
+                    } else {
+                        None
+                    },
+                    declared: false,
+                    reason: None,
+                };
+                log(&format!(
+                    "build {}: {platform} job {} {} ({prefix}), version {}",
+                    recipe.name,
+                    run.job_id,
+                    updated.status,
+                    updated.version.as_deref().unwrap_or("none")
+                ));
+                if succeeded && recipe.auto_declare {
+                    match (updated.version.clone(), declare_allowed) {
+                        (None, _) => log(&format!(
+                            "build {}: auto-declare skipped for {platform}: job {} built a \
+                             commit with no exact version tag, so there is no version to declare",
+                            recipe.name, run.job_id
+                        )),
+                        (Some(_), false) => log(&format!(
+                            "build {}: auto-declare withheld for {platform}: registry sets \
+                             builds_disabled=true",
+                            recipe.name
+                        )),
+                        (Some(version), true) => {
+                            updated.declared =
+                                declare_on_platform(registry, &recipe.name, platform, &version, log)
+                                    .await;
+                        }
+                    }
+                }
+                updated
+            }
+            None => {
+                let Some(reason) = stuck_reason(&store, run, log).await else {
+                    continue;
+                };
+                log(&format!(
+                    "build {}: {platform} job {} failed — {reason}",
                     recipe.name, run.job_id
-                )),
-                (Some(_), false) => log(&format!(
-                    "build {}: auto-declare withheld for {platform}: registry sets \
-                     builds_disabled=true",
-                    recipe.name
-                )),
-                (Some(version), true) => {
-                    updated.declared =
-                        declare_on_platform(registry, &recipe.name, platform, &version, log).await;
+                ));
+                BuildRun {
+                    status: "failed".to_string(),
+                    at: isoformat_utc(chrono::Utc::now()),
+                    job_id: run.job_id.clone(),
+                    artifact_uris: Vec::new(),
+                    version: None,
+                    declared: false,
+                    reason: Some(reason),
                 }
             }
-        }
+        };
         outcomes.push(RunOutcome {
             recipe: recipe.name.clone(),
             platform: platform.clone(),
@@ -713,7 +1016,7 @@ pub async fn poll_build_recipes(log: &dyn Fn(&str)) {
         if !recipe.enabled || !recipe_due(&recipe.name, recipe.interval_seconds) {
             continue;
         }
-        if let Err(error) = poll_one(recipe, log).await {
+        if let Err(error) = poll_one(&registry, recipe, log).await {
             log(&format!("build {}: {error}", recipe.name));
         }
     }

@@ -39,8 +39,8 @@ use crate::models::isoformat_utc;
 use crate::queue::runs::ALL_PREFIXES;
 use crate::queue::submit::{default_store, submit_job, SubmitOptions};
 use crate::targets::{
-    load_registry_from_str, platform_job_os_arch, read_build_recipes, BuildRecipe, BuildRun,
-    Registry, RegistryStore, BUILDS_KEY,
+    fleet_namespace_mismatch, platform_job_os_arch, read_build_recipes, BuildRecipe, BuildRun,
+    Registry, RegistryFetchError, BUILDS_KEY,
 };
 
 use super::CmdError;
@@ -409,16 +409,41 @@ fn normalized_recipe_json(entry: &Value) -> Value {
         .unwrap_or_else(|| entry.clone())
 }
 
-/// The canonical registry for read-only commands: an absent document reads
-/// as an empty registry rather than an error, so `builds list` answers on a
-/// fresh deployment.
+/// The canonical registry for read-only commands, through the same
+/// last-known-good fallback every other CLI read uses
+/// ([`crate::targets::fetch_registry_or_last_good_detail`]): when the fleet
+/// object API refuses or is unreachable, the answer comes from the cached
+/// copy with one stderr line saying so, and the exit code stays 0. An
+/// absent document still reads as an empty registry rather than an error,
+/// so `builds list` answers on a fresh deployment.
 async fn read_registry() -> Result<Registry, CmdError> {
-    let store = RegistryStore::open().await?;
-    match store.read_versioned().await? {
-        Some(blob) => load_registry_from_str(&blob.content)
-            .map_err(|error| CmdError::click(format!("registry did not parse: {error}"))),
-        None => Ok(Registry::default()),
+    match crate::targets::fetch_registry_or_last_good_detail().await {
+        Ok((registry, copy)) => {
+            if let Some(copy) = copy {
+                crate::targets::report_registry_notice(&format!(
+                    "fleet store unreachable: {}; showing the registry as of {}",
+                    copy.cause, copy.read_at
+                ));
+            }
+            Ok(registry)
+        }
+        Err(RegistryFetchError::Absent { .. }) => Ok(Registry::default()),
+        Err(error) => Err(CmdError::click(error.to_string())),
     }
+}
+
+/// The fenced registry document for a builds MUTATION, refused when this
+/// machine's ambient queue namespace is not the fleet's recorded one
+/// ([`fleet_namespace_mismatch`]): a recipe written into another
+/// namespace's registry is a recipe the fleet never polls, and a job
+/// submitted from it is a job no fleet worker claims. Reads are exempt —
+/// they degrade to the last-known-good copy instead ([`read_registry`]).
+async fn fetch_mutation_document() -> Result<(Value, String), CmdError> {
+    let (document, generation) = super::registry::fetch_versioned_document().await?;
+    if let Some(mismatch) = fleet_namespace_mismatch(&document) {
+        return Err(CmdError::click(mismatch));
+    }
+    Ok((document, generation))
 }
 
 fn recipe_index(recipes: &[BuildRecipe], name: &str) -> Result<usize, CmdError> {
@@ -548,7 +573,7 @@ async fn add(
     check_artifacts(&artifacts)?;
     let platforms = canonical_platforms(&platforms)?;
     check_interval_seconds(interval_seconds)?;
-    let (mut document, generation) = super::registry::fetch_versioned_document().await?;
+    let (mut document, generation) = fetch_mutation_document().await?;
     let entries = builds_array(&mut document)?;
     if entries.iter().any(|entry| entry_name(entry) == Some(name)) {
         return Err(CmdError::click(format!(
@@ -617,7 +642,7 @@ async fn edit(name: &str, fields: RecipeEdit, json: bool) -> Result<(), CmdError
         )));
     }
     let fields = fields.checked()?;
-    let (mut document, generation) = super::registry::fetch_versioned_document().await?;
+    let (mut document, generation) = fetch_mutation_document().await?;
     let entry = find_entry(builds_array(&mut document)?, name)?;
     let object = entry
         .as_object_mut()
@@ -823,7 +848,7 @@ fn short_ref(sha: &str) -> String {
 }
 
 async fn remove(name: &str, json: bool) -> Result<(), CmdError> {
-    let (mut document, generation) = super::registry::fetch_versioned_document().await?;
+    let (mut document, generation) = fetch_mutation_document().await?;
     let entries = builds_array(&mut document)?;
     let before = entries.len();
     entries.retain(|entry| entry_name(entry) != Some(name));
@@ -841,7 +866,7 @@ async fn remove(name: &str, json: bool) -> Result<(), CmdError> {
 }
 
 async fn set_enabled(name: &str, enabled: bool, json: bool) -> Result<(), CmdError> {
-    let (mut document, generation) = super::registry::fetch_versioned_document().await?;
+    let (mut document, generation) = fetch_mutation_document().await?;
     let entry = find_entry(builds_array(&mut document)?, name)?;
     entry
         .as_object_mut()
@@ -864,7 +889,7 @@ async fn set_enabled(name: &str, enabled: bool, json: bool) -> Result<(), CmdErr
 /// platform as `platform_os`/`architecture` so only a worker of that
 /// platform can claim it. A submit that fails leaves the recipe untouched.
 async fn run_now(name: &str, json: bool) -> Result<(), CmdError> {
-    let (mut document, generation) = super::registry::fetch_versioned_document().await?;
+    let (mut document, generation) = fetch_mutation_document().await?;
     let recipe: BuildRecipe = {
         let entry = find_entry(builds_array(&mut document)?, name)?;
         serde_json::from_value(entry.clone()).map_err(|error| {
@@ -903,6 +928,7 @@ async fn run_now(name: &str, json: bool) -> Result<(), CmdError> {
                 artifact_uris: Vec::new(),
                 version: None,
                 declared: false,
+                reason: None,
             },
         ));
     }
