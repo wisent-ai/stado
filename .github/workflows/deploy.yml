@@ -294,6 +294,20 @@ jobs:
             ! jq -e '.providers_disabled // [] | index("azure") != null' "$STADO_CONFIG" >/dev/null
             jq -e '.providers // [] | index("azure") != null' "$STADO_CONFIG" >/dev/null
           fi
+      - name: Reconcile services not placed on the control plane
+        run: |
+          stado_bin="$STADO_SOURCE_DIR/stado-rs/target/release/stado"
+          registry="$RUNNER_TEMP/registry.json"
+          "$stado_bin" registry pull > "$registry"
+          jq -r --arg host "$COORD_TARGET" \
+            '.service_directory.services | to_entries[] |
+             select(.value.active_host != $host) | .key' \
+            "$registry" |
+          while IFS= read -r service; do
+            [ -n "$service" ] || continue
+            "$stado_bin" placement evict "$service" --host "$COORD_TARGET"
+          done
+
 
       - name: Create immutable native release through Stado
         run: |
@@ -313,7 +327,10 @@ jobs:
           version_line="$(sed -n '/^version = /p' "$STADO_SOURCE_DIR/stado-rs/Cargo.toml")"
           version="${version_line#*\"}"
           version="${version%%\"*}"
-          platform="${STADO_CONTROL_PLATFORM:?set the native release platform}"
+          case "${STADO_CONTROL_PLATFORM:?set the native release platform}" in
+            macos-arm64|darwin-arm64) platform=darwin-arm64 ;;
+            *) platform="$STADO_CONTROL_PLATFORM" ;;
+          esac
           stado_bin="$STADO_SOURCE_DIR/stado-rs/target/release/stado"
           archive="$RUNNER_TEMP/stado-$platform.tar.gz"
           "$stado_bin" storage archive "$release_dir" "$archive"
@@ -367,7 +384,11 @@ jobs:
               false
             fi
           done
-          STADO_RELEASE_DIR="$release_dir" bash "$STADO_SOURCE_DIR/deploy/deploy_stado_rust.sh"
+          STADO_API_URL="https://stado.wisent.com" \
+          STADO_RELEASE_VERSION="$version" \
+          STADO_RELEASE_PLATFORM="$platform" \
+          STADO_RELEASE_DIR="$release_dir" \
+            bash "$STADO_SOURCE_DIR/deploy/deploy_stado_rust.sh"
 
       - name: Reload TLS reverse proxy
         if: ${{ vars.STADO_ENABLE_AZURE_DEPLOY == 'true' }}
