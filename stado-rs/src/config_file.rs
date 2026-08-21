@@ -1135,6 +1135,15 @@ pub fn validate(data: &Value) -> Vec<String> {
         );
         }
     }
+    let database_api = root.get("database_api").and_then(Value::as_object);
+    if database_api.is_some() {
+        if let Err(database_problems) = crate::config::parse_database_api_databases(field_in(
+            root,
+            &crate::capabilities::DATABASE_API_DATABASES_CONFIG,
+        )) {
+            problems.extend(database_problems);
+        }
+    }
     let release_api = root.get("release_api").and_then(Value::as_object);
     if release_api.is_some() {
         if let Err(release_problems) = crate::config::parse_release_publishers(field_in(

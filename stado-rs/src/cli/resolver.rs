@@ -114,7 +114,7 @@ fn validate_snapshot(payload: SnapshotPayload) -> Result<(Value, String, u64), S
     ))
 }
 
-async fn read_local_snapshot(store: &RegistryStore) -> Result<(Value, String, u64), String> {
+pub(crate) async fn read_local_snapshot(store: &RegistryStore) -> Result<(Value, String, u64), String> {
     let blob = store
         .read_versioned()
         .await
@@ -198,7 +198,7 @@ async fn refuse_authority(target: &str, reader: &str, sentence: &str) {
 }
 
 #[derive(Clone)]
-enum SnapshotSource {
+pub(crate) enum SnapshotSource {
     Local(Arc<RegistryStore>),
     Authority {
         /// Registry name of the authority target, carried so a failed read
@@ -222,7 +222,7 @@ impl SnapshotSource {
     /// [`host_silence::READER_RESOLVER`] for the serving loop and its
     /// background refresh, [`host_silence::READER_CLI`] for a one-shot
     /// command.
-    async fn fetch(&self, reader: &str) -> Result<(Value, String, u64), String> {
+    pub(crate) async fn fetch(&self, reader: &str) -> Result<(Value, String, u64), String> {
         match self {
             Self::Local(store) => read_local_snapshot(store).await,
             // Unconditional on every failed authority read, not only on
@@ -303,7 +303,7 @@ fn parsed_registry(document: &Value) -> Result<targets::Registry, String> {
     .map_err(|error| error.to_string())
 }
 
-fn current_target(document: &Value) -> Result<String, String> {
+pub(crate) fn current_target(document: &Value) -> Result<String, String> {
     let hostname = crate::providers::vast::system_hostname();
     parsed_registry(document)?
         .lookup_self(&hostname)
@@ -312,7 +312,7 @@ fn current_target(document: &Value) -> Result<String, String> {
         .ok_or_else(|| format!("resolver host {hostname:?} has no registry target identity"))
 }
 
-fn snapshot_source(
+pub(crate) fn snapshot_source(
     local_store: Arc<RegistryStore>,
     document: &Value,
     local_target: &str,
