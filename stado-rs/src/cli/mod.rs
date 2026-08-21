@@ -1568,6 +1568,10 @@ enum HostCommands {
         /// Report the plan without mutation.
         #[arg(long)]
         dry_run: bool,
+        /// Reinstall the exact immutable bytes even when the host reports the
+        /// same semantic version; used to replace an unmanaged same-version file.
+        #[arg(long)]
+        reinstall: bool,
         #[arg(long)]
         json: bool,
     },
@@ -2159,8 +2163,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 binary,
                 version,
                 dry_run,
+                reinstall,
                 json,
-            } => host::release(&target, &binary, &version, dry_run, json).await,
+            } => host::release(&target, &binary, &version, dry_run, reinstall, json).await,
         },
         Commands::Bootstrap {
             target,

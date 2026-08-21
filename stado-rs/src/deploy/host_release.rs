@@ -239,6 +239,7 @@ pub struct ReleaseRequest {
     /// The public Stado origin serving immutable releases.
     pub release_api: String,
     pub dry_run: bool,
+    pub reinstall: bool,
 }
 
 /// A checked request: every refusal below has already been made, so the
@@ -254,6 +255,7 @@ pub struct ReleasePlan {
     pub release_api: String,
     pub declared_version: String,
     pub dry_run: bool,
+    pub reinstall: bool,
 }
 
 impl ReleasePlan {
@@ -390,6 +392,7 @@ pub fn plan(
         release_api: request.release_api.trim_end_matches('/').to_string(),
         declared_version: declared.to_string(),
         dry_run: request.dry_run,
+        reinstall: request.reinstall,
     })
 }
 
@@ -1340,7 +1343,7 @@ pub async fn release_target(
     }
 
     // Already there. Not a deployment, and not reported as one.
-    if active_version == plan.version {
+    if active_version == plan.version && !plan.reinstall {
         report.insert("steps".to_string(), json!(steps));
         report.insert("exit_code".to_string(), json!(probe.code));
         report.insert("status".to_string(), json!(ALREADY_ACTIVE_STATUS));
@@ -1591,6 +1594,7 @@ pub async fn release_host(
     binary: &str,
     version: &str,
     dry_run: bool,
+    reinstall: bool,
     runner: &Runner,
 ) -> Result<Value, DeployError> {
     let product = products::product(binary)?;
@@ -1623,6 +1627,7 @@ pub async fn release_host(
         sha256,
         release_api,
         dry_run,
+        reinstall,
     };
     release_target(&target, &request, self_store, runner).await
 }

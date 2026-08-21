@@ -748,7 +748,9 @@ async fn apply_releases(target: &str, rows: &[Row], runner: &Runner) -> AppliedP
             continue;
         }
         eprintln!("{target}: releasing {} {}", row.binary, row.declared);
-        match host_release::release_host(target, &row.binary, &row.declared, false, runner).await {
+        match host_release::release_host(target, &row.binary, &row.declared, false, false, runner)
+            .await
+        {
             Ok(report) => {
                 let status = report
                     .get("status")
