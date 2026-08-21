@@ -183,6 +183,28 @@ pub enum ServiceCommands {
         json: bool,
     },
 
+    /// Install and activate one service release, rolling back on failed readiness.
+    Release {
+        /// Service name as the registry manages it.
+        name: String,
+        #[arg(long)]
+        host: String,
+        /// Published artifact to install.
+        #[arg(long, conflicts_with = "from_archive", required_unless_present = "from_archive")]
+        from_artifact: Option<String>,
+        /// Local release archive to install.
+        #[arg(long, conflicts_with = "from_artifact", required_unless_present = "from_artifact")]
+        from_archive: Option<String>,
+        /// Optional loopback HTTP endpoint that must answer after restart.
+        #[arg(long)]
+        readiness_url: Option<String>,
+        /// Maximum seconds to wait for readiness.
+        #[arg(long, default_value_t = 30)]
+        readiness_timeout_seconds: u64,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// What a managed unit actually runs: its program, arguments and unit file.
     ///
     /// `env` answers what the unit runs *with*; nothing answered what it runs.
@@ -555,6 +577,26 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
                 rollback_to.as_deref(),
                 json,
             )
+            .await
+        }
+        ServiceCommands::Release {
+            name,
+            host,
+            from_artifact,
+            from_archive,
+            readiness_url,
+            readiness_timeout_seconds,
+            json,
+        } => {
+            release(ServiceReleaseOptions {
+                name: &name,
+                host: &host,
+                reference: from_artifact.as_deref(),
+                archive: from_archive.as_deref(),
+                readiness_url: readiness_url.as_deref(),
+                readiness_timeout_seconds,
+                json,
+            })
             .await
         }
         ServiceCommands::Show { name, host, json } => show(&name, host.as_deref(), json).await,
@@ -1301,6 +1343,219 @@ async fn update(
         println!(
             "{host}: {name} -> {} (takes effect on the next restart)",
             installed.version
+        );
+    }
+    Ok(())
+}
+
+struct ServiceReleaseOptions<'a> {
+    name: &'a str,
+    host: &'a str,
+    reference: Option<&'a str>,
+    archive: Option<&'a str>,
+    readiness_url: Option<&'a str>,
+    readiness_timeout_seconds: u64,
+    json: bool,
+}
+
+async fn current_service_version(
+    target: &targets::ComputeTarget,
+    directory: &str,
+    runner: &crate::deploy::Runner,
+) -> Result<String, CmdError> {
+    let script = format!(
+        "set -euo pipefail\nname={}\nroot=\"$HOME/.stado/services/$name\"\n\
+         target=$(/usr/bin/readlink \"$root/current\")\n\
+         /usr/bin/basename \"$target\"",
+        crate::deploy::shlex_quote(directory),
+    );
+    let output = host_channel::run_script(target, &script, runner)
+        .await
+        .map_err(click)?;
+    if !output.ok() {
+        return Err(CmdError::click(host_channel::last_error_line(
+            &output,
+            "current service version is unreadable",
+        )));
+    }
+    let version = output.stdout.trim();
+    if version.is_empty() {
+        return Err(CmdError::click("current service version is empty"));
+    }
+    Ok(version.to_string())
+}
+
+fn validate_readiness_url(url: &str) -> Result<(), CmdError> {
+    if [
+        "http://127.0.0.1:",
+        "http://localhost:",
+        "http://[::1]:",
+    ]
+    .iter()
+    .any(|prefix| url.starts_with(prefix))
+        && !url.chars().any(char::is_whitespace)
+    {
+        return Ok(());
+    }
+    Err(CmdError::usage(
+        "--readiness-url must be a whitespace-free loopback HTTP URL",
+    ))
+}
+
+async fn wait_for_service_readiness(
+    target: &targets::ComputeTarget,
+    url: &str,
+    timeout_seconds: u64,
+    runner: &crate::deploy::Runner,
+) -> Result<(), CmdError> {
+    validate_readiness_url(url)?;
+    if timeout_seconds == 0 || timeout_seconds > 600 {
+        return Err(CmdError::usage(
+            "--readiness-timeout-seconds must be between 1 and 600",
+        ));
+    }
+    let script = format!(
+        "set -euo pipefail\nurl={}\ndeadline=$((SECONDS + {}))\n\
+         while [ \"$SECONDS\" -lt \"$deadline\" ]; do\n\
+           if /usr/bin/curl -fsS --max-time 2 \"$url\" >/dev/null; then\n\
+             printf '%s\\n' ready\n\
+             exit 0\n\
+           fi\n\
+           /bin/sleep 1\n\
+         done\n\
+         printf '%s\\n' \"readiness timed out after {}s: $url\" >&2\n\
+         exit 1",
+        crate::deploy::shlex_quote(url),
+        timeout_seconds,
+        timeout_seconds,
+    );
+    let output = host_channel::run_script(target, &script, runner)
+        .await
+        .map_err(click)?;
+    if output.ok() {
+        Ok(())
+    } else {
+        Err(CmdError::click(host_channel::last_error_line(
+            &output,
+            "readiness failed",
+        )))
+    }
+}
+
+async fn rollback_service_release(
+    name: &str,
+    host: &str,
+    previous: &str,
+    target: &targets::ComputeTarget,
+    declared: &ManagedService,
+    runner: &crate::deploy::Runner,
+) -> Result<(), CmdError> {
+    update(name, host, None, None, Some(previous), false).await?;
+    let report = service::restart_service(target, declared, runner)
+        .await
+        .map_err(click)?;
+    if report.succeeded("restarted") {
+        Ok(())
+    } else {
+        Err(CmdError::click(format!(
+            "rollback relinked {previous}, but restart failed: {}",
+            report.failure()
+        )))
+    }
+}
+
+async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
+    if options.reference.is_some() == options.archive.is_some() {
+        return Err(CmdError::usage(
+            "release needs exactly one of --from-artifact or --from-archive",
+        ));
+    }
+    let target = host_channel::canonical_target(options.host)
+        .await
+        .map_err(click)?;
+    let services = declared_matching(options.name, Some(options.host)).await?;
+    let Some(declared) = services.first() else {
+        return Err(CmdError::click(format!(
+            "{} does not manage {}; deploy it first",
+            options.host, options.name
+        )));
+    };
+    let runner = production_runner();
+    let shown = service::show_service(&target, declared, &runner)
+        .await
+        .map_err(click)?;
+    let program = shown.detail.trim();
+    let directory = program
+        .split("/services/")
+        .nth(usize::from(true))
+        .and_then(|rest| rest.split('/').next())
+        .filter(|segment| !segment.is_empty())
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{}: {} runs {program:?}, which is not under a managed services directory",
+                options.host, options.name
+            ))
+        })?;
+    let previous = current_service_version(&target, directory, &runner).await?;
+
+    update(
+        options.name,
+        options.host,
+        options.reference,
+        options.archive,
+        None,
+        false,
+    )
+    .await?;
+    let installed = current_service_version(&target, directory, &runner).await?;
+    let restart = service::restart_service(&target, declared, &runner)
+        .await
+        .map_err(click)?;
+    let activation = if restart.succeeded("restarted") {
+        if let Some(url) = options.readiness_url {
+            wait_for_service_readiness(
+                &target,
+                url,
+                options.readiness_timeout_seconds,
+                &runner,
+            )
+            .await
+        } else {
+            Ok(())
+        }
+    } else {
+        Err(CmdError::click(format!(
+            "restart failed: {}",
+            restart.failure()
+        )))
+    };
+    if let Err(error) = activation {
+        let rollback =
+            rollback_service_release(options.name, options.host, &previous, &target, declared, &runner)
+                .await;
+        return match rollback {
+            Ok(()) => Err(CmdError::click(format!(
+                "{error}; rolled back to {previous} and restarted it"
+            ))),
+            Err(rollback_error) => Err(CmdError::click(format!(
+                "{error}; rollback to {previous} also failed: {rollback_error}"
+            ))),
+        };
+    }
+
+    if options.json {
+        print_json(&json!({
+            "host": options.host,
+            "service": options.name,
+            "previous_version": previous,
+            "version": installed,
+            "status": "released",
+            "readiness": if options.readiness_url.is_some() { "passed" } else { "unit-running" },
+        }))?;
+    } else {
+        println!(
+            "{}: {} released {} -> {} (restart and readiness passed)",
+            options.host, options.name, previous, installed
         );
     }
     Ok(())
