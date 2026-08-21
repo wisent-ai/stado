@@ -29,7 +29,7 @@ jobs:
           tailscale_bin=/Applications/Tailscale.app/Contents/MacOS/tailscale
           "$tailscale_bin" funnel --bg --yes 8765
           "$tailscale_bin" funnel status --json |
-            jq -e '.Web | to_entries[] | .value.Handlers[\"/\"].Proxy == \"http://127.0.0.1:8765\"'
+            jq -e '.Web | to_entries[] | .value.Handlers["/"].Proxy == "http://127.0.0.1:8765"'
       - name: Deploy the existing immutable release
         env:
           STADO_BIN: /Users/lukaszbartoszcze/.stado/bin/stado
