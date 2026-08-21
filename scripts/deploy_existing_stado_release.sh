@@ -23,17 +23,23 @@ mkdir -p "$work_root"
 
 ensure_host_archive() {
   local platform="$1"
+  local need_local="${2:-no}"
   local source_uri="stado://releases/stado/$version/$platform/release.tar.gz"
   local archive_uri="stado://releases/stado/$version/$platform/stado-v$version-$platform.tar.gz"
   local archive="$work_root/$platform.tar.gz"
   local state
   state="$($stado_bin storage stat "$archive_uri" --json | jq -r '.state // ""')"
+  if [ "$state" = present ] && [ "$need_local" != yes ]; then
+    return
+  fi
   if [ ! -s "$archive" ]; then
     rm -f "$archive"
     if [ "$state" = present ]; then
-      "$stado_bin" storage get "$archive_uri" "$archive"
+      /usr/bin/curl -fsSLG --data-urlencode "uri=$archive_uri" \
+        "$STADO_API_URL/api/release/object" -o "$archive"
     elif [ "$state" = absent ]; then
-      "$stado_bin" storage get "$source_uri" "$archive"
+      /usr/bin/curl -fsSLG --data-urlencode "uri=$source_uri" \
+        "$STADO_API_URL/api/release/object" -o "$archive"
     else
       echo "FATAL: canonical archive state is ${state:-unknown}: $archive_uri" >&2
       exit 1
@@ -53,7 +59,11 @@ while IFS=$'\t' read -r target platform; do
     echo "FATAL: $target needs $manifest, release channel state is ${state:-unknown}" >&2
     exit 1
   fi
-  ensure_host_archive "$platform"
+  if [ "$target" = "$self_target" ]; then
+    ensure_host_archive "$platform" yes
+  else
+    ensure_host_archive "$platform" no
+  fi
   "$stado_bin" host declare-version "$target" --binary stado --version "$version" --json
   if [ "$target" = "$self_target" ]; then
     "$stado_bin" host install-release \
