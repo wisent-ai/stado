@@ -22,6 +22,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
     case fleets
     case services
     case disk
+    case databases
     case registry
     case builds
     case releases
@@ -38,6 +39,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         case .fleets: "Fleets"
         case .services: "Services"
         case .disk: "Disk"
+        case .databases: "Databases"
         case .registry: "Registry"
         case .builds: "Builds"
         case .releases: "Releases"
@@ -54,6 +56,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         case .fleets: "rectangle.3.group"
         case .services: "gearshape.2"
         case .disk: "externaldrive"
+        case .databases: "cylinder"
         case .registry: "book.closed"
         case .builds: "hammer"
         case .releases: "shippingbox"
@@ -70,6 +73,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         case .fleets: "Named groups of machines: declare one, assign machines, retire one"
         case .services: "What each declared unit runs, and which processes nothing owns"
         case .disk: "Disk pressure, what the last pass reclaimed, and the next pass"
+        case .databases: "Declared fleet databases, their placement and who may resolve them"
         case .registry: "Canonical fleet policy and the generation it was read at"
         case .builds: "Which repositories the control plane builds on new commits, and what the last build produced"
         case .releases: "What each product should run, what its host runs, and what is holding the rollout"
@@ -81,7 +85,7 @@ enum ConsoleDestination: String, CaseIterable, Identifiable {
         switch self {
         case .posture, .queue, .products: .work
         case .hosts, .fleets, .disk, .services: .fleet
-        case .registry, .builds, .releases, .deployments: .system
+        case .databases, .registry, .builds, .releases, .deployments: .system
         }
     }
 
