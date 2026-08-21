@@ -61,12 +61,12 @@ while IFS=$'\t' read -r target platform; do
   fi
   ensure_host_archive "$platform" no
   "$stado_bin" host declare-version "$target" --binary stado --version "$version" --json
-  release_args=()
   if [ "$target" = "$self_target" ]; then
-    release_args+=(--reinstall)
+    "$stado_bin" host release "$target" --binary stado --version "$version" \
+      --reinstall --json
+  else
+    "$stado_bin" host release "$target" --binary stado --version "$version" --json
   fi
-  "$stado_bin" host release "$target" --binary stado --version "$version" \
-    "${release_args[@]}" --json
   "$stado_bin" service converge "$target" stado --json
   echo "$target: stado $version installed and in-sync"
 done <<< "$targets"
