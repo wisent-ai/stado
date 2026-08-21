@@ -1104,19 +1104,54 @@ fn render_status(
 // ---------------------------------------------------------------------------
 // Restart
 // ---------------------------------------------------------------------------
-async fn host_sudo_password(target: &crate::targets::ComputeTarget) -> Result<Option<String>, CmdError> {
+async fn host_sudo_password(
+    target: &crate::targets::ComputeTarget,
+) -> Result<Option<String>, CmdError> {
     let Some(item) = target.account_ref.as_deref() else {
         return Ok(None);
     };
-    crate::credential_store::read_string(item, "password")
-        .await
-        .map_err(|error| {
+    match crate::credential_store::read_string(item, "password").await {
+        Ok(password) => Ok(password.filter(|value| !value.is_empty())),
+        Err(broker_error) => owner_host_password(item).await.map_err(|owner_error| {
             CmdError::click(format!(
-                "cannot read {item}#password for privileged lifecycle on {}: {error}",
+                "cannot read {item}#password for privileged lifecycle on {}: broker: \
+                 {broker_error}; owner vault: {owner_error}",
                 target.name
             ))
-        })
-        .map(|password| password.filter(|value| !value.is_empty()))
+        }),
+    }
+}
+
+/// Read a host account through the owner-controlled local vault when the
+/// broker grant is stale. The secret stays in captured process memory and is
+/// handed directly to SSH stdin; stdout is never forwarded.
+async fn owner_host_password(item: &str) -> Result<Option<String>, String> {
+    let home = std::env::var("HOME").map_err(|error| error.to_string())?;
+    let skarbiec = std::path::Path::new(&home).join(".stado/bin/skarbiec");
+    let vault = std::path::Path::new(&home).join(".stado/skarbiec.vault.json");
+    let path = format!(
+        "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:{}",
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let output = tokio::process::Command::new(&skarbiec)
+        .args(["get", item, "--field", "password"])
+        .env("SKARBIEC_VAULT_FILE", &vault)
+        .env("PATH", path)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .await
+        .map_err(|error| format!("cannot run {}: {error}", skarbiec.display()))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    let document: Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("Skarbiec returned invalid JSON: {error}"))?;
+    Ok(document
+        .get("fields")
+        .and_then(|fields| fields.get("password"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .filter(|password| !password.is_empty()))
 }
 
 
