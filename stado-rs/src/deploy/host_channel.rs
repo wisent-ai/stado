@@ -199,6 +199,35 @@ pub async fn run_program(
     .map_err(DeployError)
 }
 
+/// Run one fixed program while feeding an opaque value on stdin.
+///
+/// Used for host-account authentication: the password is never placed in SSH
+/// argv, the remote command, registry data, stdout, or stderr.
+pub async fn run_program_with_stdin(
+    target: &ComputeTarget,
+    program: &[&str],
+    stdin: &str,
+    runner: &Runner,
+) -> Result<CommandOutput, DeployError> {
+    let (argv, _key) = if target_is_this_host(target) {
+        (program.iter().map(|word| word.to_string()).collect(), None)
+    } else {
+        let key = ssh_key::materialize(&target.name).await?;
+        let argv = ssh_key::add_identity(
+            ssh_program_argv(target.ssh.as_deref().unwrap_or(""), program),
+            &key,
+        )?;
+        (argv, Some(key))
+    };
+    runner(CommandSpec {
+        argv,
+        stdin: Some(stdin.to_string()),
+        timeout: Some(remote_timeout()),
+    })
+    .await
+    .map_err(DeployError)
+}
+
 /// Run one fixed script (fed on stdin) on a resolved target.
 ///
 /// The local branch runs the same `/bin/bash -s` the ssh branch asks the
