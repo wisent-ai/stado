@@ -25,7 +25,7 @@ jobs:
     outputs:
       channel: ${{ steps.release_identity.outputs.channel }}
       version: ${{ steps.release_identity.outputs.version }}
-    runs-on: [self-hosted, stado-release]
+    runs-on: [self-hosted, stado-control-plane]
     permissions:
       contents: read
     steps:
