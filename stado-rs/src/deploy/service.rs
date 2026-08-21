@@ -3020,6 +3020,10 @@ async fn restart_system_daemon(
              privilege it needs: the process is replaced and the job is never unloaded",
             report.detail
         );
+        return Ok(report);
+    }
+    if let Some(password) = sudo_password {
+        return privileged_restart_system_daemon(target, service, password, runner).await;
     }
     Ok(report)
 }
