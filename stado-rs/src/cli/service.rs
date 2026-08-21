@@ -1104,6 +1104,21 @@ fn render_status(
 // ---------------------------------------------------------------------------
 // Restart
 // ---------------------------------------------------------------------------
+async fn host_sudo_password(target: &crate::targets::ComputeTarget) -> Result<Option<String>, CmdError> {
+    let Some(item) = target.account_ref.as_deref() else {
+        return Ok(None);
+    };
+    crate::credential_store::read_string(item, "password")
+        .await
+        .map_err(|error| {
+            CmdError::click(format!(
+                "cannot read {item}#password for privileged lifecycle on {}: {error}",
+                target.name
+            ))
+        })
+        .map(|password| password.filter(|value| !value.is_empty()))
+}
+
 
 async fn restart(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdError> {
     let services = declared_matching(name, host).await?;
@@ -1116,9 +1131,20 @@ async fn restart(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdEr
         let target = host_channel::canonical_target(&declared.host)
             .await
             .map_err(click)?;
-        let report = service::restart_service(&target, declared, &runner)
-            .await
-            .map_err(click)?;
+        let sudo_password = if UnitDomain::from_path(&declared.path).requires_privileged_bootstrap()
+        {
+            host_sudo_password(&target).await?
+        } else {
+            None
+        };
+        let report = service::restart_service_with_password(
+            &target,
+            declared,
+            sudo_password.as_deref(),
+            &runner,
+        )
+        .await
+        .map_err(click)?;
         if !report.succeeded("restarted") {
             failures.push(format!("{}: {}", declared.host, report.failure()));
         }

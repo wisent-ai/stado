@@ -2948,8 +2948,17 @@ pub async fn restart_service(
     service: &ManagedService,
     runner: &Runner,
 ) -> Result<RemoteReport, DeployError> {
+    restart_service_with_password(target, service, None, runner).await
+}
+
+pub async fn restart_service_with_password(
+    target: &ComputeTarget,
+    service: &ManagedService,
+    sudo_password: Option<&str>,
+    runner: &Runner,
+) -> Result<RemoteReport, DeployError> {
     if UnitDomain::from_path(&service.path).requires_privileged_bootstrap() {
-        return restart_system_daemon(target, service, runner).await;
+        return restart_system_daemon(target, service, sudo_password, runner).await;
     }
     let body = RESTART_BODY.replace("@DISOWNED_SWEEP@", DISOWNED_SWEEP);
     let prelude = remote_prelude(service.unit_id(), "", &service.path)?;
@@ -2971,6 +2980,7 @@ pub async fn restart_service(
 async fn restart_system_daemon(
     target: &ComputeTarget,
     service: &ManagedService,
+    sudo_password: Option<&str>,
     runner: &Runner,
 ) -> Result<RemoteReport, DeployError> {
     let (probe, daemon) = inspect_system_daemon(target, service, runner).await?;
@@ -2981,6 +2991,9 @@ async fn restart_system_daemon(
         return Ok(probe);
     };
     if !daemon.restartable_unprivileged() {
+        if let Some(password) = sudo_password {
+            return privileged_restart_system_daemon(target, service, password, runner).await;
+        }
         return Err(DeployError(daemon.refusal(service)));
     }
     let body = DAEMON_TERM_BODY
@@ -3009,6 +3022,73 @@ async fn restart_system_daemon(
         );
     }
     Ok(report)
+}
+
+/// Restart one system LaunchDaemon through the host account credential.
+///
+/// The password travels only on SSH stdin to `sudo -S`; neither the password
+/// nor a shell program containing it is present in argv or command output.
+async fn privileged_restart_system_daemon(
+    target: &ComputeTarget,
+    service: &ManagedService,
+    password: &str,
+    runner: &Runner,
+) -> Result<RemoteReport, DeployError> {
+    validate_unit_id(service.unit_id())?;
+    let qualified = format!("system/{}", service.unit_id());
+    let output = host_channel::run_program_with_stdin(
+        target,
+        &[
+            "/usr/bin/sudo",
+            "-S",
+            "-p",
+            "",
+            "/bin/launchctl",
+            "kickstart",
+            "-k",
+            &qualified,
+        ],
+        &format!("{password}\n"),
+        runner,
+    )
+    .await?;
+    if !output.ok() {
+        return Err(DeployError(format!(
+            "privileged launchd restart failed on {} with exit {}: {}",
+            target.name,
+            output.code,
+            host_channel::last_error_line(&output, "sudo or launchctl returned no detail")
+        )));
+    }
+
+    for _ in 0..15 {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        let (_, daemon) = inspect_system_daemon(target, service, runner).await?;
+        if let Some(daemon) = daemon.filter(|daemon| !daemon.owned_pids.is_empty()) {
+            return Ok(RemoteReport {
+                os: "Darwin".to_string(),
+                domain: "system".to_string(),
+                domain_status: DOMAIN_STATUS_SYSTEM.to_string(),
+                domain_reason: "the unit file is a system LaunchDaemon".to_string(),
+                unit: service.unit_id().to_string(),
+                path: service.path.clone(),
+                status: "restarted".to_string(),
+                detail: format!(
+                    "launchctl kickstart replaced the system daemon with pid(s) {}",
+                    daemon.owned_pids.join(" ")
+                ),
+                postcondition: RUNNING_DESCRIBE.to_string(),
+                postcondition_state: host_channel::POSTCONDITION_MET.to_string(),
+                postcondition_detail: "launchd reports a process for the unit".to_string(),
+                ..RemoteReport::default()
+            });
+        }
+    }
+    Err(DeployError(format!(
+        "{} accepted the privileged kickstart but no process appeared for {} in 15 seconds",
+        target.name,
+        service.unit_id()
+    )))
 }
 
 /// Atomically replace one runtime secret assignment for a managed service.
