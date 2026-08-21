@@ -1639,24 +1639,26 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
     let installed_directory = current_service_version(&target, directory, &runner).await?;
     let restart = service::restart_service(&target, declared, &runner)
         .await
-        .map_err(click)?;
-    let activation = if restart.succeeded("restarted") {
-        if let Some(url) = options.readiness_url {
-            wait_for_service_readiness(
-                &target,
-                url,
-                options.readiness_timeout_seconds,
-                &runner,
-            )
-            .await
-        } else {
-            Ok(())
+        .map_err(click);
+    let activation = match restart {
+        Ok(report) if report.succeeded("restarted") => {
+            if let Some(url) = options.readiness_url {
+                wait_for_service_readiness(
+                    &target,
+                    url,
+                    options.readiness_timeout_seconds,
+                    &runner,
+                )
+                .await
+            } else {
+                Ok(())
+            }
         }
-    } else {
-        Err(CmdError::click(format!(
+        Ok(report) => Err(CmdError::click(format!(
             "restart failed: {}",
-            restart.failure()
-        )))
+            report.failure()
+        ))),
+        Err(error) => Err(error),
     };
     if let Err(error) = activation {
         let rollback = rollback_service_release(

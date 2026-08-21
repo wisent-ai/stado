@@ -2994,7 +2994,14 @@ async fn restart_system_daemon(
         if let Some(password) = sudo_password {
             return privileged_restart_system_daemon(target, service, password, runner).await;
         }
-        return Err(DeployError(daemon.refusal(service)));
+        return privileged_restart_system_daemon(target, service, "", runner)
+            .await
+            .map_err(|error| {
+                DeployError(format!(
+                    "{}; passwordless privileged restart also failed: {error}",
+                    daemon.refusal(service)
+                ))
+            });
     }
     let body = DAEMON_TERM_BODY
         .replace("@ARGV@", &shlex_quote(&daemon.argv))
