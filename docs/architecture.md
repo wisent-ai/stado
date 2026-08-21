@@ -68,6 +68,28 @@ tagged source -> build each platform once -> qualification evidence
       -> stable loopback proxy cutover -> drain -> rollback window -> commit
 ```
 
+### Public Stado release channel
+
+`https://stado.wisent.com` is the one durable Stado release origin. It is a
+product address, not a control-plane host, service-directory entry, tailnet
+name, or operator tunnel. Clients read immutable objects with:
+
+```text
+GET https://stado.wisent.com/api/release/object?uri=stado://releases/...
+```
+
+Reads under `stado://releases/` are public and bearer-free. Publication is
+authenticated and create-only. The public route and the publisher must address
+the same immutable object bytes; copying objects into a second “public” store,
+serving a host-local fallback, or accepting a 404 from one side after a
+successful write on the other is a broken release channel.
+
+The Vercel project behind `stado.wisent.com` owns the stable public name and
+proxies only `/api/release/object` to the configured release origin. Deployment
+automation owns that origin and verifies it before installing anything.
+Changing which process or host currently serves the bytes changes no client
+contract and requires no client configuration update.
+
 Promotion changes references, never bytes. The signed manifest binds product,
 SemVer, platform, source revision, archive digest and size, binary/launcher
 paths, config/state schemas, minimum Stado version, rollback compatibility,
