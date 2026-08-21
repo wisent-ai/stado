@@ -921,6 +921,7 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
     run.failure = None;
     save(&mut run).await?;
     let platforms: Vec<_> = m.platforms.keys().cloned().collect();
+    let mut enqueue_failure = None;
     for p in &platforms {
         if !run.platforms.contains_key(p) || run.platforms[p].state == PlatformRunState::Failed {
             let r = match enqueue(
@@ -937,12 +938,20 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
             .await
             {
                 Ok(run) => run,
-                Err(error) => return Err(persist_failure(&mut run, error).await),
+                Err(error) => {
+                    enqueue_failure = Some(error);
+                    break;
+                }
             };
             run.platforms.insert(p.clone(), r);
             save(&mut run).await?
         }
     }
+    let submitted_platforms: Vec<_> = platforms
+        .iter()
+        .filter(|platform| run.platforms.contains_key(*platform))
+        .cloned()
+        .collect();
     run.state = ReleaseRunState::Waiting;
     save(&mut run).await?;
     let store = match JobStorage::new().await {
@@ -958,7 +967,7 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
     run.state = ReleaseRunState::Publishing;
     save(&mut run).await?;
     let mut artifacts = BTreeMap::new();
-    for p in &platforms {
+    for p in &submitted_platforms {
         let result = if run.platforms[p].state == PlatformRunState::Published {
             super::release_cmd::verified_artifact_for_submit(&run.product, &run.version, p).await
         } else {
@@ -975,6 +984,9 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
         };
         save(&mut run).await?;
         artifacts.insert(p.clone(), a);
+    }
+    if let Some(error) = enqueue_failure {
+        return Err(persist_failure(&mut run, error).await);
     }
     run.state = ReleaseRunState::Delivering;
     save(&mut run).await?;
