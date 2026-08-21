@@ -1,0 +1,31 @@
+name: deploy existing Stado release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing immutable Stado version
+        required: true
+        type: string
+
+concurrency:
+  group: stado-existing-release-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, stado-control-plane]
+    env:
+      STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
+      STADO_API_URL: ${{ vars.STADO_API_URL }}
+      WC_SKARBIEC_CONSUMER: stado-release-publisher
+      WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
+    steps:
+      - uses: actions/checkout@v5
+      - name: Deploy the existing immutable release
+        env:
+          STADO_BIN: /Users/lukaszbartoszcze/.stado/bin/stado
+        run: scripts/deploy_existing_stado_release.sh '${{ inputs.version }}'
