@@ -13,5 +13,5 @@ for candidate in \
 done
 : "${tailscale_bin:?Tailscale CLI is not installed}"
 
-"$tailscale_bin" funnel --bg --yes 8765 >/dev/null
+"$tailscale_bin" funnel --bg --yes 18765 >/dev/null
 "$tailscale_bin" funnel status --json
