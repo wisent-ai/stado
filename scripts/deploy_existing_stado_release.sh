@@ -25,20 +25,27 @@ ensure_host_archive() {
   local platform="$1"
   local source_uri="stado://releases/stado/$version/$platform/release.tar.gz"
   local archive_uri="stado://releases/stado/$version/$platform/stado-v$version-$platform.tar.gz"
+  local archive="$work_root/$platform.tar.gz"
   local state
   state="$($stado_bin storage stat "$archive_uri" --json | jq -r '.state // ""')"
-  [ "$state" = present ] && return
-  [ "$state" = absent ] || {
-    echo "FATAL: canonical archive state is ${state:-unknown}: $archive_uri" >&2
-    exit 1
-  }
-  local archive="$work_root/$platform.tar.gz"
-  rm -f "$archive"
-  "$stado_bin" storage get "$source_uri" "$archive"
-  env -u STADO_API_URL "$stado_bin" storage put "$archive_uri" "$archive" --if-absent
+  if [ ! -s "$archive" ]; then
+    rm -f "$archive"
+    if [ "$state" = present ]; then
+      "$stado_bin" storage get "$archive_uri" "$archive"
+    elif [ "$state" = absent ]; then
+      "$stado_bin" storage get "$source_uri" "$archive"
+    else
+      echo "FATAL: canonical archive state is ${state:-unknown}: $archive_uri" >&2
+      exit 1
+    fi
+  fi
+  if [ "$state" = absent ]; then
+    env -u STADO_API_URL "$stado_bin" storage put "$archive_uri" "$archive" --if-absent
+  fi
 }
 
 
+self_target="$($stado_bin registry self --name-only)"
 while IFS=$'\t' read -r target platform; do
   manifest="stado://releases/stado/$version/$platform/release-manifest-$platform.json"
   state="$($stado_bin storage stat "$manifest" --json | jq -r '.state // ""')"
@@ -48,7 +55,17 @@ while IFS=$'\t' read -r target platform; do
   fi
   ensure_host_archive "$platform"
   "$stado_bin" host declare-version "$target" --binary stado --version "$version" --json
-  "$stado_bin" host release "$target" --binary stado --version "$version" --json
+  if [ "$target" = "$self_target" ]; then
+    manifest_file="$work_root/$platform-manifest.json"
+    rm -f "$manifest_file"
+    "$stado_bin" storage get "$manifest" "$manifest_file"
+    sha256="$(jq -er .sha256 "$manifest_file")"
+    WISENT_RELEASE_ARCHIVE="$work_root/$platform.tar.gz" \
+    WISENT_RELEASE_SHA256="$sha256" \
+      "$stado_bin" release install-local --member stado --name stado
+  else
+    "$stado_bin" host release "$target" --binary stado --version "$version" --json
+  fi
   "$stado_bin" service converge "$target" stado --json
   echo "$target: stado $version installed and in-sync"
 done <<< "$targets"
