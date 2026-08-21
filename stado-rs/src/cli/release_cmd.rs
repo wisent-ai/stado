@@ -446,12 +446,12 @@ async fn prepare(args: &ReleasePrepareArgs) -> Result<(), CmdError> {
     Ok(())
 }
 
-pub(crate) async fn verified_artifact(
+pub(crate) async fn verified_artifact_with_archive(
     product: &str,
     version: &str,
     platform: &str,
     control: &ReleaseControl,
-) -> Result<ReleaseArtifactRef, CmdError> {
+) -> Result<(ReleaseArtifactRef, Vec<u8>), CmdError> {
     let base =
         release_control::release_base(product, version, platform).map_err(CmdError::click)?;
     let manifest_uri = format!("{base}/{}", release_control::RELEASE_MANIFEST_NAME);
@@ -492,15 +492,29 @@ pub(crate) async fn verified_artifact(
             "release archive differs from its signed manifest",
         ));
     }
-    Ok(ReleaseArtifactRef {
-        manifest_uri,
-        signature_uri,
-        archive_uri,
-        manifest_sha256: release_control::sha256_bytes(&manifest_bytes),
-        artifact_sha256: manifest.artifact_sha256,
-        source_revision: manifest.source_revision,
-        key_id: manifest.key_id,
-    })
+    Ok((
+        ReleaseArtifactRef {
+            manifest_uri,
+            signature_uri,
+            archive_uri,
+            manifest_sha256: release_control::sha256_bytes(&manifest_bytes),
+            artifact_sha256: manifest.artifact_sha256,
+            source_revision: manifest.source_revision,
+            key_id: manifest.key_id,
+        },
+        archive,
+    ))
+}
+
+pub(crate) async fn verified_artifact(
+    product: &str,
+    version: &str,
+    platform: &str,
+    control: &ReleaseControl,
+) -> Result<ReleaseArtifactRef, CmdError> {
+    verified_artifact_with_archive(product, version, platform, control)
+        .await
+        .map(|(artifact, _)| artifact)
 }
 
 pub(crate) async fn verified_artifact_for_submit(
