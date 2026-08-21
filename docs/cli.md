@@ -1778,6 +1778,8 @@ an arbitrary, per-host, declared set.
 | `update NAME --host TARGET --from-artifact REF [--json]` | Move a unit already managed onto a new version. |
 | `update NAME --host TARGET --from-archive PATH [--json]` | The same, from a local bundle no store carries yet. |
 | `update NAME --host TARGET --rollback-to VERSION [--json]` | Point `current` back at a version already on the host. |
+| `release NAME --host TARGET --from-artifact REF [--readiness-url URL] [--readiness-timeout-seconds N] [--json]` | Install, restart in place, require readiness, and commit the new `current`; a failure relinks and restarts the previous version. |
+| `release NAME --host TARGET --from-archive PATH [--readiness-url URL] [--readiness-timeout-seconds N] [--json]` | The same atomic activation from a local release archive. |
 | `ensure NAME --host TARGET --from PATH [--arg A]... --reason WHY [--json]` | Assert the unit that host must be running. Idempotent, works where the per-user launchd domain does not exist, and never unloads a unit. |
 | `directory show [--json]` | The service directory: active host, per-caller endpoint, consumers. |
 | `directory profiles [--json]` | Placement profiles: services, start/stop order, hosts, required state. |
@@ -1804,6 +1806,29 @@ immutable version, places that version under
 **before** anything is linked, and moves `current` onto it atomically. A failed
 install leaves the previous `current` running, and the unit points at `current`,
 so a rollback is a relink rather than a redeploy.
+
+### Releasing and activating a service
+
+`service update` deliberately stops after installing a version and moving
+`current`; it is the low-level staging operation. `service release` owns the
+complete activation:
+
+1. read the version currently selected by `current`;
+2. install and verify the immutable artifact beside it;
+3. repoint units pinned to a version directory so they follow `current`;
+4. restart the existing launchd/systemd unit in place, never unload then
+   bootstrap it;
+5. require the restarted unit to remain running and, when
+   `--readiness-url` is supplied, require that loopback HTTP endpoint to return
+   a successful response before the timeout;
+6. on either failure, relink `current` to the previous version and restart it;
+7. report `released` only after restart and readiness pass.
+
+The readiness URL is restricted to loopback HTTP
+(`127.0.0.1`, `localhost`, or `[::1]`), so a service release cannot turn a
+target host into a network probe. The timeout is bounded to 1–600 seconds.
+Builds do not happen here: the command consumes an already-published artifact
+or an explicit archive, so every host activates the same verified bytes.
 
 Exactly one source is accepted. Neither is a safe default: a path deploys
 whatever happens to be on the host, with no version anybody can name.
