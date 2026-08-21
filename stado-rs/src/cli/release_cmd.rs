@@ -105,8 +105,10 @@ pub struct ReleasePrepareArgs {
     binary: String,
     #[arg(long)]
     launcher: String,
-    #[arg(long)]
-    signing_key_item: String,
+    #[arg(long, conflicts_with = "signing_key_file", required_unless_present = "signing_key_file")]
+    signing_key_item: Option<String>,
+    #[arg(long, conflicts_with = "signing_key_item", required_unless_present = "signing_key_item")]
+    signing_key_file: Option<PathBuf>,
     #[arg(long)]
     key_id: String,
     #[arg(long)]
@@ -391,7 +393,24 @@ async fn prepare(args: &ReleasePrepareArgs) -> Result<(), CmdError> {
         evidence_sha256: Some(release_control::sha256_bytes(&qualification_receipt)),
         completed_at: Some(receipt.completed_at),
     };
-    let private = signing_key(&args.signing_key_item).await?;
+    let private = match (&args.signing_key_item, &args.signing_key_file) {
+        (Some(item), None) => signing_key(item).await?,
+        (None, Some(path)) => {
+            use std::os::unix::fs::PermissionsExt as _;
+            let metadata = std::fs::metadata(path)?;
+            if metadata.permissions().mode() & 0o077 != 0 {
+                return Err(CmdError::click(
+                    "release signing key file must be owner-only",
+                ));
+            }
+            std::fs::read(path)?
+        }
+        _ => {
+            return Err(CmdError::usage(
+                "prepare needs exactly one of --signing-key-item or --signing-key-file",
+            ))
+        }
+    };
     let public = release_control::signing_public_key(&private).map_err(CmdError::click)?;
     let (artifact, manifest) = publish_pipeline_release(PipelinePublishRequest {
         product: &args.product,
