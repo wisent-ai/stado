@@ -18,6 +18,27 @@ targets="$({ printf '%s' "$registry" | jq -r '
 '; })"
 [ -n "$targets" ] || { echo "FATAL: registry declares no supported release targets" >&2; exit 1; }
 
+work_root="${STADO_RELEASE_WORK_DIR:-$HOME/.stado/work/releases/$version}"
+mkdir -p "$work_root"
+
+ensure_host_archive() {
+  local platform="$1"
+  local source_uri="stado://releases/stado/$version/$platform/release.tar.gz"
+  local archive_uri="stado://releases/stado/$version/$platform/stado-v$version-$platform.tar.gz"
+  local state
+  state="$($stado_bin storage stat "$archive_uri" --json | jq -r '.state // ""')"
+  [ "$state" = present ] && return
+  [ "$state" = absent ] || {
+    echo "FATAL: canonical archive state is ${state:-unknown}: $archive_uri" >&2
+    exit 1
+  }
+  local archive="$work_root/$platform.tar.gz"
+  rm -f "$archive"
+  "$stado_bin" storage get "$source_uri" "$archive"
+  env -u STADO_API_URL "$stado_bin" storage put "$archive_uri" "$archive" --if-absent
+}
+
+
 while IFS=$'\t' read -r target platform; do
   manifest="stado://releases/stado/$version/$platform/release-manifest-$platform.json"
   state="$($stado_bin storage stat "$manifest" --json | jq -r '.state // ""')"
@@ -25,6 +46,7 @@ while IFS=$'\t' read -r target platform; do
     echo "FATAL: $target needs $manifest, release channel state is ${state:-unknown}" >&2
     exit 1
   fi
+  ensure_host_archive "$platform"
   "$stado_bin" host declare-version "$target" --binary stado --version "$version" --json
   "$stado_bin" host release "$target" --binary stado --version "$version" --json
   "$stado_bin" service converge "$target" stado --json
