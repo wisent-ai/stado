@@ -62,8 +62,9 @@ while IFS=$'\t' read -r target platform; do
   ensure_host_archive "$platform" no
   "$stado_bin" host declare-version "$target" --binary stado --version "$version" --json
   if [ "$target" = "$self_target" ]; then
-    "$stado_bin" host release "$target" --binary stado --version "$version" \
-      --reinstall --json
+    STADO_API_URL=http://127.0.0.1:8765 \
+      "$stado_bin" host release "$target" --binary stado --version "$version" \
+        --reinstall --json
   else
     "$stado_bin" host release "$target" --binary stado --version "$version" --json
   fi

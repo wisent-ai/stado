@@ -1,6 +1,6 @@
 {
-  "version": "0.7.12",
-  "source": "stado:stado/0.7.12/linux-amd64/release-manifest-linux-amd64.json published from 78a7d0ecd358b6b36578e3e8085ffe2a73bf1818",
+  "version": "0.7.13",
+  "source": "stado:stado/0.7.13/linux-amd64/release-manifest-linux-amd64.json published from dc463478ad380aec80eb2a2a854c3ca98d47144f",
   "surface": [
     "agent",
     "alerts",
