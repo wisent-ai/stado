@@ -3047,7 +3047,7 @@ async fn privileged_restart_system_daemon(
 ) -> Result<RemoteReport, DeployError> {
     validate_unit_id(service.unit_id())?;
     let qualified = format!("system/{}", service.unit_id());
-    let output = host_channel::run_program_with_stdin(
+    let mut output = host_channel::run_program_with_stdin(
         target,
         &[
             "/usr/bin/sudo",
@@ -3063,6 +3063,42 @@ async fn privileged_restart_system_daemon(
         runner,
     )
     .await?;
+    if !output.ok() {
+        let bootstrap = host_channel::run_program_with_stdin(
+            target,
+            &[
+                "/usr/bin/sudo",
+                "-S",
+                "-p",
+                "",
+                "/bin/launchctl",
+                "bootstrap",
+                "system",
+                &service.path,
+            ],
+            &format!("{password}\n"),
+            runner,
+        )
+        .await?;
+        if bootstrap.ok() {
+            output = host_channel::run_program_with_stdin(
+                target,
+                &[
+                    "/usr/bin/sudo",
+                    "-S",
+                    "-p",
+                    "",
+                    "/bin/launchctl",
+                    "kickstart",
+                    "-k",
+                    &qualified,
+                ],
+                &format!("{password}\n"),
+                runner,
+            )
+            .await?;
+        }
+    }
     if !output.ok() {
         return Err(DeployError(format!(
             "privileged launchd restart failed on {} with exit {}: {}",
