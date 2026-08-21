@@ -1613,12 +1613,14 @@ pub async fn release_host(
     let release_api = crate::cli::storage::release_api_origin()
         .map_err(|error| DeployError(error.to_string()))?;
     let (source_commit, sha256) = catalog_identity(product, version, platform).await?;
-    // Self-delivery: the directory says this target serves the fleet object
-    // API, so a loopback release origin is the host reading its own store
-    // rather than a network read. Every other target keeps the HTTPS rule.
-    let self_store = registry
-        .service(OBJECT_API_SERVICE)
-        .is_some_and(|object_api| object_api.active_host == target.name);
+    let local_target = registry
+        .lookup_self(&crate::providers::vast::system_hostname())
+        .map_err(|error| DeployError(error.to_string()))?
+        .is_some_and(|local| local.name == target.name);
+    let self_store = local_target
+        || registry
+            .service(OBJECT_API_SERVICE)
+            .is_some_and(|object_api| object_api.active_host == target.name);
     let request = ReleaseRequest {
         binary: product.name.clone(),
         version: version.to_string(),
