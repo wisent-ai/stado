@@ -32,10 +32,18 @@ pub struct DoctorArgs {
     /// not only for the ones that need fixing.
     #[arg(long)]
     fix_hints: bool,
+    /// Gate deployment prerequisites only. Fleet-wide service placement is
+    /// still reported by ordinary `stado doctor`, but does not block installing
+    /// an unrelated Stado control-plane release.
+    #[arg(long)]
+    deployment_preflight: bool,
 }
 
 pub async fn dispatch(args: DoctorArgs) -> Result<(), CmdError> {
-    let report = doctor::run().await;
+    let mut report = doctor::run().await;
+    if args.deployment_preflight {
+        report.checks.retain(|check| check.id != "placement");
+    }
     if args.json {
         println!("{}", serde_json::to_string_pretty(&report.to_json())?);
     } else {
