@@ -1378,7 +1378,7 @@ async fn service_release_bundle(
     target: &targets::ComputeTarget,
     declared: &ManagedService,
 ) -> Result<ServiceReleaseBundle, CmdError> {
-    let (document, _) = registry::fetch_versioned_document().await?;
+    let document = registry::fetch_document().await?;
     let control = crate::release_control::control(&document)?
         .ok_or_else(|| CmdError::click("registry.release_control is not configured"))?;
     let policy = control.products.get(options.product).ok_or_else(|| {
