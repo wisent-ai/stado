@@ -37,12 +37,20 @@ pub struct DoctorArgs {
     /// an unrelated Stado control-plane release.
     #[arg(long)]
     deployment_preflight: bool,
+    /// Verify only that the exact public release coordinate is served after
+    /// deployment.
+    #[arg(long, conflicts_with = "deployment_preflight")]
+    release_verification: bool,
 }
 
 pub async fn dispatch(args: DoctorArgs) -> Result<(), CmdError> {
     let mut report = doctor::run().await;
     if args.deployment_preflight {
-        report.checks.retain(|check| check.id != "placement");
+        report
+            .checks
+            .retain(|check| check.id != "placement" && check.id != "release");
+    } else if args.release_verification {
+        report.checks.retain(|check| check.id == "release");
     }
     if args.json {
         println!("{}", serde_json::to_string_pretty(&report.to_json())?);

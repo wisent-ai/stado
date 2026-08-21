@@ -39,9 +39,12 @@ if ! "$STADO_BIN" config validate; then
     false
 fi
 if ! "$STADO_BIN" doctor --fix-hints --deployment-preflight; then
-    echo "FATAL: Stado preflight failed; resolve the active profile findings above."
+    echo "FATAL: Stado dependency preflight failed; resolve the active profile findings above."
     false
 fi
 COORD_TARGET="${COORD_TARGET:-local-control-plane}"
-
-exec "$STADO_BIN" bootstrap --local --target "$COORD_TARGET"
+"$STADO_BIN" bootstrap --local --target "$COORD_TARGET"
+if ! "$STADO_BIN" doctor --fix-hints --release-verification; then
+    echo "FATAL: deployed Stado does not serve the exact published release."
+    false
+fi
