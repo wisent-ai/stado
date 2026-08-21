@@ -1387,18 +1387,27 @@ async fn service_release_bundle(
             options.product
         ))
     })?;
-    if policy.service != options.name && policy.service != declared.name {
-        return Err(CmdError::click(format!(
-            "product {:?} releases service {:?}, not {:?}",
-            options.product, policy.service, options.name
-        )));
-    }
     let target_policy = policy.targets.get(options.host).ok_or_else(|| {
         CmdError::click(format!(
             "product {:?} has no release target {:?}",
             options.product, options.host
         ))
     })?;
+    let exact_legacy_unit = target_policy
+        .legacy_launchd_label
+        .as_deref()
+        .is_some_and(|label| label == declared.unit_id());
+    if policy.service != options.name
+        && policy.service != declared.name
+        && !exact_legacy_unit
+    {
+        return Err(CmdError::click(format!(
+            "product {:?} releases service {:?}, not unit {:?}",
+            options.product,
+            policy.service,
+            declared.unit_id()
+        )));
+    }
     if target_policy.platform != target.release_platform {
         return Err(CmdError::click(format!(
             "release target platform {:?} disagrees with host platform {:?}",
