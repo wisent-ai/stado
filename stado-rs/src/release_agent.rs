@@ -587,7 +587,7 @@ async fn fetch_release_bytes(uri: &str) -> Result<Vec<u8>, String> {
         .map_err(|e| e.to_string())
 }
 
-async fn fetch_candidate(
+pub(crate) async fn fetch_candidate(
     control: &ReleaseControl,
     product: &str,
     desired: &DesiredRelease,

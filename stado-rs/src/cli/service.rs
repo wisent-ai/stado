@@ -1414,18 +1414,26 @@ async fn service_release_bundle(
             options.product, desired.version, options.version
         )));
     }
-    let (artifact, archive) = crate::cli::release_cmd::verified_artifact_with_archive(
-        options.product,
-        options.version,
-        &target_policy.platform,
+    let artifact = desired
+        .artifacts
+        .get(&target_policy.platform)
+        .cloned()
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "desired release has no artifact for {:?}",
+                target_policy.platform
+            ))
+        })?;
+    let (_, archive, _) = crate::release_agent::fetch_candidate(
         &control,
+        options.product,
+        desired,
+        &artifact,
+        policy,
+        target_policy,
     )
-    .await?;
-    if desired.artifacts.get(&target_policy.platform) != Some(&artifact) {
-        return Err(CmdError::click(
-            "verified release artifact disagrees with the desired registry coordinate",
-        ));
-    }
+    .await
+    .map_err(CmdError::click)?;
 
     let observed_uri = crate::release_agent::release_status_uri(options.product, options.host);
     let observed = match crate::cli::storage::fetch_object(&observed_uri).await {
