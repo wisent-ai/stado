@@ -24,6 +24,11 @@ jobs:
       WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
     steps:
       - uses: actions/checkout@v5
+      - name: Reconcile public release origin
+        run: |
+          tailscale funnel --bg --yes 8765
+          tailscale funnel status --json |
+            jq -e '.Web | to_entries[] | .value.Handlers[\"/\"].Proxy == \"http://127.0.0.1:8765\"'
       - name: Deploy the existing immutable release
         env:
           STADO_BIN: /Users/lukaszbartoszcze/.stado/bin/stado
