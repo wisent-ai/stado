@@ -480,6 +480,10 @@ final class FleetServicesStore: ObservableObject {
         ["service", "remove", name, "--host", host, "--json"]
     }
 
+    nonisolated static func deployArguments(name: String, host: String) -> [String] {
+        ["service", "deploy", name, "--host", host, "--json"]
+    }
+
     func refresh(hosts: [String]) async {
         guard !isRefreshing else { return }
         refreshGeneration += 1
@@ -509,6 +513,27 @@ final class FleetServicesStore: ObservableObject {
             failures = Dictionary(uniqueKeysWithValues: hosts.map { ($0, problem) })
         }
         lastUpdated = Date()
+    }
+
+    /// Deploy the declaration already stored in the canonical service
+    /// directory. The operator supplies no program, args, artifact or digest
+    /// here — those are the declaration's job, and a missing one is the CLI's
+    /// refusal to carry verbatim.
+    func deploy(_ entry: FleetServiceEntry) async {
+        mutation = .working("Deploying \(entry.name) on \(entry.host)")
+        do {
+            let report = try await cli.json(
+                ServiceDeployReport.self,
+                arguments: Self.deployArguments(name: entry.name, host: entry.host),
+                timeoutSeconds: 900
+            )
+            mutation = report.succeeded
+                ? .succeeded("Deployed \(entry.name) on \(entry.host).")
+                : .failed("\(entry.host): deploy returned \(report.action)")
+        } catch {
+            mutation = .failed(Self.message(for: error))
+        }
+        await refresh(hosts: lastHosts)
     }
 
     /// `stado service restart <name> --host <host>` through the CLI runner.

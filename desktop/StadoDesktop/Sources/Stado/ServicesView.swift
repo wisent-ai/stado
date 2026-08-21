@@ -33,6 +33,7 @@ struct ServicesView: View {
     @State private var showsDeclare = false
     @State private var restartCandidate: FleetServiceEntry?
     @State private var removeFileCandidate: FleetServiceEntry?
+    @State private var deployCandidate: FleetServiceEntry?
 
     private var isRefreshing: Bool {
         store.isRefreshing || fleetStore.isRefreshing
@@ -79,6 +80,9 @@ struct ServicesView: View {
         }
         .sheet(item: $removeFileCandidate) { entry in
             removeFileDialog(entry)
+        }
+        .sheet(item: $deployCandidate) { entry in
+            deployDialog(entry)
         }
     }
 
@@ -774,9 +778,50 @@ struct ServicesView: View {
             if !entry.detail.isEmpty {
                 WisentField(label: "Detail", value: entry.detail, tone: entry.isFailed ? .danger : .neutral)
             }
+            deployAffordance(entry)
             restartAffordance(entry)
             removeFileAffordance(entry)
         }
+    }
+
+    /// A declaration writes a placeholder row whose state is `missing`.
+    /// That is the one row that earns Deploy: an active/failed unit already
+    /// exists and belongs to restart/update, while a declaration with no unit
+    /// needs `service deploy` and nothing else.
+    @ViewBuilder
+    private func deployAffordance(_ entry: FleetServiceEntry) -> some View {
+        if entry.state.lowercased() == "missing" {
+            WisentActionButton(
+                action: WisentAction(
+                    "Deploy service…",
+                    symbol: "shippingbox.and.arrow.backward",
+                    kind: .primary,
+                    isEnabled: !fleetStore.mutation.isWorking
+                ) {
+                    deployCandidate = entry
+                }
+            )
+        }
+    }
+
+    private func deployDialog(_ entry: FleetServiceEntry) -> some View {
+        WisentDecisionDialog(
+            tone: .warning,
+            title: "Deploy \(entry.name) on \(entry.host)?",
+            lines: [
+                "The service declaration already owns the immutable artifact, digest, arguments, endpoint, readiness check and consumers. This action supplies none of them and cannot override them.",
+                "Stado installs that exact declaration, verifies the artifact before activation, creates the unit and records the new registry generation.",
+            ],
+            listing: [StadoCLI.commandLine(FleetServicesStore.deployArguments(name: entry.name, host: entry.host))],
+            actions: [
+                WisentAction("Keep it declared only", kind: .primary) { deployCandidate = nil },
+                WisentAction("Deploy service", symbol: "shippingbox", kind: .secondary) {
+                    let candidate = entry
+                    deployCandidate = nil
+                    Task { await fleetStore.deploy(candidate) }
+                },
+            ]
+        )
     }
 
     /// The file-delete verb is offered only where the CLI's guards could
