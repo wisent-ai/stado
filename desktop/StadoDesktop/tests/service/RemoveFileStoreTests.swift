@@ -60,6 +60,13 @@ final class RemoveFileStoreTests: XCTestCase {
         )
     }
 
+    func testDeployUsesOnlyTheStoredDeclarationNameAndHost() {
+        XCTAssertEqual(
+            FleetServicesStore.deployArguments(name: "vllm-llama", host: "gpu-host-1"),
+            ["service", "deploy", "vllm-llama", "--host", "gpu-host-1", "--json"]
+        )
+    }
+
     func testOnlyUserHomePathsEarnTheButton() {
         func entry(_ path: String) -> FleetServiceEntry {
             let payload = """

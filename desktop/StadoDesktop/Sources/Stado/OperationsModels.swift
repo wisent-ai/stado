@@ -333,6 +333,23 @@ struct HostGates: Decodable, Identifiable, Sendable {
     }
 }
 
+/// `stado service deploy NAME --host HOST --json` — the declaration-driven
+/// write. The action word is the verdict; the registry generation proves the
+/// declaration that was installed, and the service object is the row the
+/// screen re-reads afterwards.
+struct ServiceDeployReport: Decodable, Sendable {
+    let action: String
+    let service: FleetServiceEntry
+    let registryGeneration: String
+
+    enum CodingKeys: String, CodingKey {
+        case action, service
+        case registryGeneration = "registry_generation"
+    }
+
+    var succeeded: Bool { action == "deployed" }
+}
+
 /// One preconfigured Wisent service, exactly as `stado service catalog
 /// --json` reports it. The app keeps no copy of the list: a build that gains
 /// a service has to reach this screen without shipping a new app.
