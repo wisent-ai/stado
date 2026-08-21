@@ -267,6 +267,8 @@ jobs:
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
       COORD_TARGET: ${{ vars.STADO_COORDINATOR_TARGET }}
       STADO_API_URL: ${{ vars.STADO_API_URL }}
+      WC_STADO_STORAGE_URL: http://127.0.0.1:18776
+      WC_STADO_STORAGE_NAMESPACE: probierz
       WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
       WC_SKARBIEC_CONSUMER: stado-release-publisher
       WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
