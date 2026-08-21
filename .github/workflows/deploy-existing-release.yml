@@ -20,6 +20,7 @@ jobs:
     runs-on: [self-hosted, stado-control-plane]
     env:
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
+      STADO_API_URL: ${{ vars.STADO_API_URL }}
       WC_SKARBIEC_CONSUMER: stado-release-publisher
       WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
     steps:
