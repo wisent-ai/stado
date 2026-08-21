@@ -59,26 +59,14 @@ while IFS=$'\t' read -r target platform; do
     echo "FATAL: $target needs $manifest, release channel state is ${state:-unknown}" >&2
     exit 1
   fi
-  if [ "$target" = "$self_target" ]; then
-    ensure_host_archive "$platform" yes
-  else
-    ensure_host_archive "$platform" no
-  fi
+  ensure_host_archive "$platform" no
   "$stado_bin" host declare-version "$target" --binary stado --version "$version" --json
+  release_args=()
   if [ "$target" = "$self_target" ]; then
-    "$stado_bin" host install-release \
-      "$target" "$work_root/$platform.tar.gz" stado "$version" \
-      --platform "$platform" --json
-    manifest_file="$work_root/$platform-manifest.json"
-    rm -f "$manifest_file"
-    "$stado_bin" storage get "$manifest" "$manifest_file"
-    sha256="$(jq -er .sha256 "$manifest_file")"
-    WISENT_RELEASE_ARCHIVE="$work_root/$platform.tar.gz" \
-    WISENT_RELEASE_SHA256="$sha256" \
-      "$stado_bin" release install-local --member stado --name stado
-  else
-    "$stado_bin" host release "$target" --binary stado --version "$version" --json
+    release_args+=(--reinstall)
   fi
+  "$stado_bin" host release "$target" --binary stado --version "$version" \
+    "${release_args[@]}" --json
   "$stado_bin" service converge "$target" stado --json
   echo "$target: stado $version installed and in-sync"
 done <<< "$targets"
