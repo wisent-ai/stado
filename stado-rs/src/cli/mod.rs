@@ -29,6 +29,7 @@ pub mod control_plane;
 pub mod coordinator;
 pub mod cost;
 pub mod dashboard;
+pub mod database;
 pub mod directory;
 pub mod disk_cleanup;
 pub mod doctor;
@@ -543,6 +544,9 @@ enum Commands {
     /// Resolve logical services and run the local Stado data plane.
     #[command(subcommand)]
     Resolver(resolver::ResolverCommands),
+    /// Resolve fleet databases: placement endpoint and credential coordinate.
+    #[command(subcommand)]
+    Database(database::DatabaseCommands),
     /// Plan, deploy, route and operate local OpenAI-compatible inference.
     ///
     /// Being replaced by the service declaration contract: a model server is
@@ -1354,6 +1358,22 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// The tail of one managed unit's own log on TARGET.
+    ///
+    /// A crash-looping unit says why in its log and nowhere else: the health
+    /// beacon reports it failed and carries no log, and `host exec` is a
+    /// read-only allowlist that cannot read a file.
+    #[command(name = "unit-log")]
+    UnitLog {
+        target: String,
+        /// Unit label as launchd knows it, e.g. com.wisent.always-on.brama.
+        unit: String,
+        /// Tail this many lines from each declared log path (default 40).
+        #[arg(long)]
+        lines: Option<u32>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Open an encrypted reverse SSH forwarding channel to TARGET.
     #[command(name = "forward-local")]
     ForwardLocal {
@@ -1799,7 +1819,7 @@ fn failure_service(matches: &clap::ArgMatches) -> &'static str {
         "coordinator"
         | "resolver"
         | "release"
-        | "dashboard"
+        | "database"
         | "schedule"
         | "agent"
         | "local-control-plane"
@@ -2100,6 +2120,12 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 tags,
                 json,
             } => host::retag_vault_item(&target, &item, &tags, json).await,
+            HostCommands::UnitLog {
+                target,
+                unit,
+                lines,
+                json,
+            } => host::unit_log(&target, &unit, lines, json).await,
             HostCommands::ForwardLocal {
                 target,
                 name,
@@ -2182,6 +2208,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Product(sub) => product::dispatch(sub).await,
         Commands::Placement(sub) => placement::dispatch(sub).await,
         Commands::Resolver(sub) => resolver::dispatch(sub).await,
+        Commands::Database(sub) => database::dispatch(sub).await,
         Commands::Inference(sub) => inference::dispatch(sub).await,
         Commands::Stream(sub) => stream::dispatch(sub).await,
         Commands::Doctor(args) => doctor::dispatch(args).await,

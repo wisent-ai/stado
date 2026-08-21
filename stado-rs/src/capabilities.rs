@@ -1148,6 +1148,11 @@ pub const OBJECT_API_NAMESPACES_CONFIG: ConfigField = ConfigField::document(
     "WC_OBJECT_API_NAMESPACES",
     "object_api.namespaces",
 );
+pub const DATABASE_API_DATABASES_CONFIG: ConfigField = ConfigField::document(
+    "database-api-databases",
+    "WC_DATABASE_API_DATABASES",
+    "database_api.databases",
+);
 pub const RELEASE_API_PUBLISHERS_CONFIG: ConfigField = ConfigField::document(
     "release-api-publishers",
     "WC_RELEASE_API_PUBLISHERS",
