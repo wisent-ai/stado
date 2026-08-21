@@ -37,14 +37,12 @@ def version_key(tag: str) -> tuple[int, int, int, int, str]:
 
 
 def visible_tags() -> list[str]:
-    shallow = command("git", "rev-parse", "--is-shallow-repository").strip()
-    if shallow == "true":
+    if command("git", "rev-parse", "--is-shallow-repository").strip() == "true":
         raise SystemExit("repository is shallow; release tags are not fully visible")
     local = {tag for tag in command("git", "tag", "--list", "v*").splitlines() if TAG.fullmatch(tag)}
-    remote_lines = command("git", "ls-remote", "--tags", "origin").splitlines()
     remote = {
         ref.removeprefix("refs/tags/").removesuffix("^{}")
-        for line in remote_lines
+        for line in command("git", "ls-remote", "--tags", "origin").splitlines()
         for ref in [line.split("\t", 1)[1]]
         if TAG.fullmatch(ref.removeprefix("refs/tags/").removesuffix("^{}"))
     }
@@ -52,6 +50,25 @@ def visible_tags() -> list[str]:
     if missing:
         raise SystemExit(f"release tags are not fully visible: missing {sorted(missing)}")
     return sorted(local, key=version_key, reverse=True)
+
+
+def declared_versions() -> set[str]:
+    versions: set[str] = set()
+    cargo = Path("stado-rs/Cargo.toml")
+    if cargo.is_file():
+        match = re.search(
+            r'^version\s*=\s*"([^"]+)"\s*$',
+            cargo.read_text(encoding="utf-8"),
+            re.MULTILINE,
+        )
+        if match and TAG.fullmatch(f"v{match.group(1)}"):
+            versions.add(match.group(1))
+    baseline = Path("released-surface.json")
+    if baseline.is_file():
+        value = json.loads(baseline.read_text(encoding="utf-8")).get("version")
+        if isinstance(value, str) and TAG.fullmatch(f"v{value}"):
+            versions.add(value)
+    return versions
 
 
 def state(stado: Path, uri: str) -> str:
@@ -71,8 +88,8 @@ def state(stado: Path, uri: str) -> str:
 
 def best(stado: Path) -> str:
     tags = visible_tags()
-    for tag in tags:
-        version = tag[1:]
+    versions = {tag[1:] for tag in tags} | declared_versions()
+    for version in sorted(versions, key=lambda value: version_key(f"v{value}"), reverse=True):
         uri = f"stado://releases/stado/{version}/linux-amd64/release-manifest-linux-amd64.json"
         verdict = state(stado, uri)
         if verdict == "present":
