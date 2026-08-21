@@ -38,7 +38,7 @@ if ! "$STADO_BIN" config validate; then
     echo "FATAL: Stado deployment config is not ready; resolve every ERROR above."
     false
 fi
-if ! "$STADO_BIN" doctor --fix-hints; then
+if ! "$STADO_BIN" doctor --fix-hints --deployment-preflight; then
     echo "FATAL: Stado preflight failed; resolve the active profile findings above."
     false
 fi
