@@ -22,6 +22,7 @@
 //!   invalid registry is refused with nothing uploaded.
 
 use clap::Subcommand;
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::deploy::service::{
@@ -189,12 +190,12 @@ pub enum ServiceCommands {
         name: String,
         #[arg(long)]
         host: String,
-        /// Published artifact to install.
-        #[arg(long, conflicts_with = "from_archive", required_unless_present = "from_archive")]
-        from_artifact: Option<String>,
-        /// Local release archive to install.
-        #[arg(long, conflicts_with = "from_artifact", required_unless_present = "from_artifact")]
-        from_archive: Option<String>,
+        /// Product in registry.release_control.
+        #[arg(long)]
+        product: String,
+        /// Exact desired semantic version to activate.
+        #[arg(long)]
+        version: String,
         /// Optional loopback HTTP endpoint that must answer after restart.
         #[arg(long)]
         readiness_url: Option<String>,
@@ -582,8 +583,8 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
         ServiceCommands::Release {
             name,
             host,
-            from_artifact,
-            from_archive,
+            product,
+            version,
             readiness_url,
             readiness_timeout_seconds,
             json,
@@ -591,8 +592,8 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             release(ServiceReleaseOptions {
                 name: &name,
                 host: &host,
-                reference: from_artifact.as_deref(),
-                archive: from_archive.as_deref(),
+                product: &product,
+                version: &version,
                 readiness_url: readiness_url.as_deref(),
                 readiness_timeout_seconds,
                 json,
@@ -1351,11 +1352,120 @@ async fn update(
 struct ServiceReleaseOptions<'a> {
     name: &'a str,
     host: &'a str,
-    reference: Option<&'a str>,
-    archive: Option<&'a str>,
+    product: &'a str,
+    version: &'a str,
     readiness_url: Option<&'a str>,
     readiness_timeout_seconds: u64,
     json: bool,
+}
+
+#[derive(Default, Deserialize)]
+struct ObservedServiceRelease {
+    active_version: Option<String>,
+    active_sha256: Option<String>,
+}
+
+struct ServiceReleaseBundle {
+    artifact: crate::release_control::ReleaseArtifactRef,
+    archive: Vec<u8>,
+    rollout_generation: u64,
+    previous_version: Option<String>,
+    previous_sha256: Option<String>,
+}
+
+async fn service_release_bundle(
+    options: &ServiceReleaseOptions<'_>,
+    target: &targets::ComputeTarget,
+    declared: &ManagedService,
+) -> Result<ServiceReleaseBundle, CmdError> {
+    let (document, _) = registry::fetch_versioned_document().await?;
+    let control = crate::release_control::control(&document)?
+        .ok_or_else(|| CmdError::click("registry.release_control is not configured"))?;
+    let policy = control.products.get(options.product).ok_or_else(|| {
+        CmdError::click(format!(
+            "registry.release_control declares no product {:?}",
+            options.product
+        ))
+    })?;
+    if policy.service != options.name && policy.service != declared.name {
+        return Err(CmdError::click(format!(
+            "product {:?} releases service {:?}, not {:?}",
+            options.product, policy.service, options.name
+        )));
+    }
+    let target_policy = policy.targets.get(options.host).ok_or_else(|| {
+        CmdError::click(format!(
+            "product {:?} has no release target {:?}",
+            options.product, options.host
+        ))
+    })?;
+    if target_policy.platform != target.release_platform {
+        return Err(CmdError::click(format!(
+            "release target platform {:?} disagrees with host platform {:?}",
+            target_policy.platform, target.release_platform
+        )));
+    }
+    let desired = policy.desired.as_ref().ok_or_else(|| {
+        CmdError::click(format!("product {:?} has no desired release", options.product))
+    })?;
+    if desired.version != options.version {
+        return Err(CmdError::click(format!(
+            "product {:?} desires {}, not {}",
+            options.product, desired.version, options.version
+        )));
+    }
+    let (artifact, archive) = crate::cli::release_cmd::verified_artifact_with_archive(
+        options.product,
+        options.version,
+        &target_policy.platform,
+        &control,
+    )
+    .await?;
+    if desired.artifacts.get(&target_policy.platform) != Some(&artifact) {
+        return Err(CmdError::click(
+            "verified release artifact disagrees with the desired registry coordinate",
+        ));
+    }
+
+    let observed_uri = crate::release_agent::release_status_uri(options.product, options.host);
+    let observed = match crate::cli::storage::fetch_object(&observed_uri).await {
+        Ok(bytes) => serde_json::from_slice::<ObservedServiceRelease>(&bytes).unwrap_or_default(),
+        Err(_) => ObservedServiceRelease::default(),
+    };
+    let previous_version = observed
+        .active_version
+        .or_else(|| policy.previous.as_ref().map(|release| release.version.clone()));
+    let previous_sha256 = observed.active_sha256.or_else(|| {
+        policy.previous.as_ref().and_then(|release| {
+            release
+                .artifacts
+                .get(&target_policy.platform)
+                .map(|artifact| artifact.artifact_sha256.clone())
+        })
+    });
+    Ok(ServiceReleaseBundle {
+        artifact,
+        archive,
+        rollout_generation: desired.rollout_generation,
+        previous_version,
+        previous_sha256,
+    })
+}
+
+fn stage_service_release_archive(
+    product: &str,
+    version: &str,
+    platform: &str,
+    archive: &[u8],
+) -> Result<std::path::PathBuf, CmdError> {
+    let root = crate::config_file::expand_tilde("~")
+        .join(".stado/work/service-release")
+        .join(product)
+        .join(version);
+    std::fs::create_dir_all(&root)?;
+    let path = root.join(format!("{platform}.tar.gz"));
+    std::fs::write(&path, archive)?;
+    Ok(path)
 }
 
 async fn current_service_version(
@@ -1465,11 +1575,6 @@ async fn rollback_service_release(
 }
 
 async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
-    if options.reference.is_some() == options.archive.is_some() {
-        return Err(CmdError::usage(
-            "release needs exactly one of --from-artifact or --from-archive",
-        ));
-    }
     let target = host_channel::canonical_target(options.host)
         .await
         .map_err(click)?;
@@ -1496,18 +1601,25 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
                 options.host, options.name
             ))
         })?;
-    let previous = current_service_version(&target, directory, &runner).await?;
+    let bundle = service_release_bundle(&options, &target, declared).await?;
+    let archive_path = stage_service_release_archive(
+        options.product,
+        options.version,
+        &target.release_platform,
+        &bundle.archive,
+    )?;
+    let previous_directory = current_service_version(&target, directory, &runner).await?;
 
     update(
         options.name,
         options.host,
-        options.reference,
-        options.archive,
+        None,
+        archive_path.to_str(),
         None,
         false,
     )
     .await?;
-    let installed = current_service_version(&target, directory, &runner).await?;
+    let installed_directory = current_service_version(&target, directory, &runner).await?;
     let restart = service::restart_service(&target, declared, &runner)
         .await
         .map_err(click)?;
@@ -1530,32 +1642,67 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
         )))
     };
     if let Err(error) = activation {
-        let rollback =
-            rollback_service_release(options.name, options.host, &previous, &target, declared, &runner)
-                .await;
+        let rollback = rollback_service_release(
+            options.name,
+            options.host,
+            &previous_directory,
+            &target,
+            declared,
+            &runner,
+        )
+        .await;
         return match rollback {
-            Ok(()) => Err(CmdError::click(format!(
-                "{error}; rolled back to {previous} and restarted it"
-            ))),
+            Ok(()) => {
+                crate::release_agent::publish_service_release_status(
+                    options.product,
+                    options.host,
+                    bundle.rollout_generation,
+                    crate::release_agent::RolloutPhase::RolledBack,
+                    bundle.previous_version.as_deref(),
+                    bundle.previous_sha256.as_deref(),
+                    Some(options.version),
+                    "service readiness failed; previous release restored",
+                )
+                .await
+                .map_err(CmdError::click)?;
+                Err(CmdError::click(format!(
+                    "{error}; rolled back to {previous_directory} and restarted it"
+                )))
+            }
             Err(rollback_error) => Err(CmdError::click(format!(
-                "{error}; rollback to {previous} also failed: {rollback_error}"
+                "{error}; rollback to {previous_directory} also failed: {rollback_error}"
             ))),
         };
     }
 
+    crate::release_agent::publish_service_release_status(
+        options.product,
+        options.host,
+        bundle.rollout_generation,
+        crate::release_agent::RolloutPhase::Committed,
+        Some(options.version),
+        Some(&bundle.artifact.artifact_sha256),
+        bundle.previous_version.as_deref(),
+        "service restart and readiness passed",
+    )
+    .await
+    .map_err(CmdError::click)?;
     if options.json {
         print_json(&json!({
             "host": options.host,
             "service": options.name,
-            "previous_version": previous,
-            "version": installed,
+            "product": options.product,
+            "previous_version": bundle.previous_version,
+            "version": options.version,
+            "artifact_sha256": bundle.artifact.artifact_sha256,
+            "artifact_directory": installed_directory,
             "status": "released",
             "readiness": if options.readiness_url.is_some() { "passed" } else { "unit-running" },
         }))?;
     } else {
         println!(
-            "{}: {} released {} -> {} (restart and readiness passed)",
-            options.host, options.name, previous, installed
+            "{}: {} released {} {} (restart and readiness passed)",
+            options.host, options.name, options.product, options.version
         );
     }
     Ok(())

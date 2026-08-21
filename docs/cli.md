@@ -1778,8 +1778,7 @@ an arbitrary, per-host, declared set.
 | `update NAME --host TARGET --from-artifact REF [--json]` | Move a unit already managed onto a new version. |
 | `update NAME --host TARGET --from-archive PATH [--json]` | The same, from a local bundle no store carries yet. |
 | `update NAME --host TARGET --rollback-to VERSION [--json]` | Point `current` back at a version already on the host. |
-| `release NAME --host TARGET --from-artifact REF [--readiness-url URL] [--readiness-timeout-seconds N] [--json]` | Install, restart in place, require readiness, and commit the new `current`; a failure relinks and restarts the previous version. |
-| `release NAME --host TARGET --from-archive PATH [--readiness-url URL] [--readiness-timeout-seconds N] [--json]` | The same atomic activation from a local release archive. |
+| `release NAME --host TARGET --product PRODUCT --version VERSION [--readiness-url URL] [--readiness-timeout-seconds N] [--json]` | Verify the signed desired product release, install it, restart in place, require readiness, then publish observed version+digest; a failure relinks and restarts the previous version and publishes `rolled_back`. |
 | `ensure NAME --host TARGET --from PATH [--arg A]... --reason WHY [--json]` | Assert the unit that host must be running. Idempotent, works where the per-user launchd domain does not exist, and never unloads a unit. |
 | `directory show [--json]` | The service directory: active host, per-caller endpoint, consumers. |
 | `directory profiles [--json]` | Placement profiles: services, start/stop order, hosts, required state. |
@@ -1807,31 +1806,44 @@ immutable version, places that version under
 install leaves the previous `current` running, and the unit points at `current`,
 so a rollback is a relink rather than a redeploy.
 
+
+Exactly one source is accepted by `deploy` and `update`. Neither is a safe
+default: a path deploys whatever happens to be on the host, with no version
+anybody can name.
+
 ### Releasing and activating a service
 
 `service update` deliberately stops after installing a version and moving
 `current`; it is the low-level staging operation. `service release` owns the
 complete activation:
 
-1. read the version currently selected by `current`;
-2. install and verify the immutable artifact beside it;
-3. repoint units pinned to a version directory so they follow `current`;
-4. restart the existing launchd/systemd unit in place, never unload then
+1. require `registry.release_control.products[PRODUCT].desired.version` to equal
+   `VERSION` and require `TARGET` to be a declared target of that product;
+2. fetch the platform manifest, signature, and archive, verify the trusted key,
+   qualification, coordinate, size, and SHA-256;
+3. read the version currently selected by `current` and the previously
+   published observed product state;
+4. install the verified immutable archive beside the running version;
+5. repoint units pinned to a version directory so they follow `current`;
+6. restart the existing launchd/systemd unit in place, never unload then
    bootstrap it;
-5. require the restarted unit to remain running and, when
+7. require the restarted unit to remain running and, when
    `--readiness-url` is supplied, require that loopback HTTP endpoint to return
    a successful response before the timeout;
-6. on either failure, relink `current` to the previous version and restart it;
-7. report `released` only after restart and readiness pass.
+8. on either failure, relink `current` to the previous version, restart it, and
+   publish the product status as `rolled_back`;
+9. only after readiness passes, publish `committed` with the exact desired
+   SemVer and artifact digest to the same `system/release-status` document
+   `stado release status` reads.
 
 The readiness URL is restricted to loopback HTTP
 (`127.0.0.1`, `localhost`, or `[::1]`), so a service release cannot turn a
 target host into a network probe. The timeout is bounded to 1–600 seconds.
-Builds do not happen here: the command consumes an already-published artifact
-or an explicit archive, so every host activates the same verified bytes.
+Builds do not happen here: the command accepts no arbitrary artifact or local
+archive. It consumes only the signed desired release already promoted for that
+product and target, so `service status`, `release status`, and host software
+provenance describe the same bytes.
 
-Exactly one source is accepted. Neither is a safe default: a path deploys
-whatever happens to be on the host, with no version anybody can name.
 
 ### Declaring a service once, by contract
 

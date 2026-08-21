@@ -844,6 +844,48 @@ async fn publish_status(state: &HostReleaseState) -> Result<(), String> {
     .map_err(|error| error.to_string())
 }
 
+/// Publish the committed outcome of a generic managed-service activation into
+/// the same status document `stado release status` reads.
+pub async fn publish_service_release_status(
+    product: &str,
+    target: &str,
+    rollout_generation: u64,
+    phase: RolloutPhase,
+    active_version: Option<&str>,
+    active_sha256: Option<&str>,
+    previous_version: Option<&str>,
+    detail: &str,
+) -> Result<(), String> {
+    let status = PublishedStatus {
+        schema_version: STATUS_SCHEMA,
+        product,
+        target,
+        rollout_generation,
+        phase,
+        active_version,
+        active_sha256,
+        previous_version,
+        detail,
+        updated_at: Utc::now(),
+    };
+    let temporary = tempfile::NamedTempFile::new()
+        .map_err(|error| format!("cannot create service release status staging: {error}"))?;
+    std::fs::write(
+        temporary.path(),
+        serde_json::to_vec(&status).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| format!("cannot write service release status staging: {error}"))?;
+    crate::cli::storage::store_object(
+        &release_status_uri(product, target),
+        &temporary.path().display().to_string(),
+        "application/json",
+        false,
+    )
+    .await
+    .map(|_| ())
+    .map_err(|error| error.to_string())
+}
+
 async fn rollback(
     target: &ReleaseTargetPolicy,
     state: &mut HostReleaseState,
