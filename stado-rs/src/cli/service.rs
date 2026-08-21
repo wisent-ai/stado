@@ -1726,6 +1726,20 @@ async fn adopt(
     )
 }
 
+/// Remove the directory half of one declaration. `service declare` writes the
+/// target placeholder and `service_directory.services.<name>` in one registry
+/// update; retire/remove must drop both in the same update or the validator
+/// correctly refuses a directory entry pointing at no managed service.
+fn remove_directory_declaration(document: &mut Value, name: &str) {
+    let Some(services) = document
+        .get_mut("service_directory")
+        .and_then(Value::as_object_mut)
+        .and_then(|directory| directory.get_mut("services"))
+        .and_then(Value::as_object_mut)
+    else { return };
+    services.remove(name);
+}
+
 async fn retire(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
     let target = host_channel::canonical_target(host).await.map_err(click)?;
     let declared = service::declared_services(&target);
@@ -1738,6 +1752,17 @@ async fn retire(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
              for {host}; it cannot be retired. Adopt it first if you need it under registry \
              management."
         )));
+    }
+    // `service declare` intentionally writes a registry placeholder before
+    // any unit exists. Retiring that state is a registry-only operation:
+    // asking launchd to boot out an empty label produced the unusable-unit
+    // error and made a declaration impossible to undo from either CLI or GUI.
+    if found.unit_id().is_empty() && found.path.is_empty() {
+        let mut document = registry::fetch_document().await?;
+        let removed = service::remove_service(&mut document, host, unit).map_err(click)?;
+        remove_directory_declaration(&mut document, unit);
+        let generation = registry::push_document(&document).await?;
+        return render_mutation("retired", &removed, &generation, None, json);
     }
 
     let runner = production_runner();
@@ -1756,6 +1781,7 @@ async fn retire(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
 
     let mut document = registry::fetch_document().await?;
     let removed = service::remove_service(&mut document, host, unit).map_err(click)?;
+    remove_directory_declaration(&mut document, unit);
     let generation = registry::push_document(&document).await?;
     render_mutation(
         "retired",
@@ -1792,6 +1818,23 @@ async fn remove(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
         )));
     }
     let path = found.path.clone();
+    if found.unit_id().is_empty() && path.is_empty() {
+        let mut document = registry::fetch_document().await?;
+        let removed = service::remove_service(&mut document, host, unit).map_err(click)?;
+        remove_directory_declaration(&mut document, unit);
+        let generation = registry::push_document(&document).await?;
+        if json {
+            return print_json(&json!({
+                "target": target.name,
+                "unit": unit,
+                "action": "removed",
+                "generation": generation,
+                "file": {"path": "", "status": "absent", "detail": Value::Null},
+                "report": Value::Null,
+            }));
+        }
+        return render_mutation("removed", &removed, &generation, None, false);
+    }
 
     let runner = production_runner();
     let report = service::retire_service(&target, found, &runner)
@@ -1806,6 +1849,7 @@ async fn remove(unit: &str, host: &str, json: bool) -> Result<(), CmdError> {
 
     let mut document = registry::fetch_document().await?;
     let removed = service::remove_service(&mut document, host, unit).map_err(click)?;
+    remove_directory_declaration(&mut document, unit);
     let generation = registry::push_document(&document).await?;
 
     // The registry is already clean: the file half runs last, because a
