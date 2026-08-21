@@ -28,6 +28,9 @@ jobs:
     runs-on: [self-hosted, stado-control-plane]
     permissions:
       contents: read
+    env:
+      WC_STADO_STORAGE_URL: http://127.0.0.1:18776
+      WC_STADO_STORAGE_NAMESPACE: probierz
     steps:
       # v4 runs on Node 20, which GitHub has deprecated and already forces onto Node
       # 24; v5 is the first major that targets Node 24 itself. It needs a runner of at
