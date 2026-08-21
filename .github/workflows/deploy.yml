@@ -25,7 +25,7 @@ jobs:
     outputs:
       channel: ${{ steps.release_identity.outputs.channel }}
       version: ${{ steps.release_identity.outputs.version }}
-    runs-on: [self-hosted, stado-control-plane]
+    runs-on: [self-hosted, stado-release]
     permissions:
       contents: read
     steps:
@@ -36,6 +36,13 @@ jobs:
       # this job publishes create-only release objects and a checkout that changes
       # behaviour under it cannot be corrected after the fact.
       - uses: actions/checkout@v5
+      - name: Ensure daemonless cross-build toolchain
+        run: |
+          PATH="/opt/homebrew/bin:$HOME/.cargo/bin:$PATH"
+          export PATH
+          printf '%s\n' /opt/homebrew/bin "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          command -v zig >/dev/null || /opt/homebrew/bin/brew install zig
+          command -v cargo-zigbuild >/dev/null || cargo install cargo-zigbuild --locked
       - name: Resolve exact release identity
         id: release_identity
         env:
