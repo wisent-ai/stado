@@ -142,7 +142,7 @@ jobs:
           STADO_RELEASE_STABLE_INTEGRATIONS="local-compute,local-filesystem-storage,skarbiec,stado-object-storage" \
           STADO_RELEASE_PREVIEW_INTEGRATIONS="gcs-storage,s3-storage,azure-blob-storage,gcp-compute,aws-ec2,azure-vm,cloudflare,box,vast" \
             scripts/release_manifest.sh
-          mv "$archive" "$release_dir/release.tar.gz"
+          mv "$archive" "$release_dir/stado-v$STADO_VERSION-linux-amd64.tar.gz"
 
       - name: Refuse a release whose version disagrees with its contract
         # The public contract of this product is the command list `stado help`
@@ -354,7 +354,7 @@ jobs:
           STADO_RELEASE_STABLE_INTEGRATIONS="local-compute,local-filesystem-storage,skarbiec,stado-object-storage" \
           STADO_RELEASE_PREVIEW_INTEGRATIONS="gcs-storage,s3-storage,azure-blob-storage,gcp-compute,aws-ec2,azure-vm,box,vast" \
             "$STADO_SOURCE_DIR/scripts/release_manifest.sh"
-          mv "$archive" "$release_dir/release.tar.gz"
+          mv "$archive" "$release_dir/stado-v$version-$platform.tar.gz"
           # Publish through the host's configured Stado store before replacing
           # the host runtime or reloading its public ingress.
           unset STADO_API_URL STADO_API_TOKEN

@@ -2273,6 +2273,7 @@ pub async fn reconcile(
                     binary,
                     version,
                     false,
+                    false,
                     &runner,
                 )
                 .await;
@@ -2732,14 +2733,16 @@ pub async fn release(
     binary: &str,
     version: &str,
     dry_run: bool,
+    reinstall: bool,
     json: bool,
 ) -> Result<(), CmdError> {
     use crate::deploy::host_release;
 
     let runner = crate::deploy::production_runner();
-    let report = host_release::release_host(target, binary, version, dry_run, &runner)
-        .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
+    let report =
+        host_release::release_host(target, binary, version, dry_run, reinstall, &runner)
+            .await
+            .map_err(|exc| CmdError::click(exc.to_string()))?;
     // Three outcomes are success, and conflating them would be the lie this
     // command exists to avoid: a delivery, a host that already ran the
     // requested version, and a dry run that mutated nothing.
