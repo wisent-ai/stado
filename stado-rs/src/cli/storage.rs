@@ -1480,10 +1480,32 @@ impl RemoteObjectApi {
     }
 
     async fn get_release(&self, uri: &str) -> Result<Vec<u8>, CmdError> {
-        let endpoint = self.endpoint("/api/release/object", &[("uri", uri)])?;
-        let response = self.request(reqwest::Method::GET, endpoint).send().await?;
-        self.success_body(response, max_object_api_download_body(), "release GET")
-            .await
+        let mut endpoint = self.endpoint("/api/release/object", &[("uri", uri)])?;
+        for hop in 0..=3 {
+            let response = if hop == 0 {
+                self.request(reqwest::Method::GET, endpoint.clone())
+                    .send()
+                    .await?
+            } else {
+                self.http.get(endpoint.clone()).send().await?
+            };
+            if response.status().is_redirection() {
+                let location = response
+                    .headers()
+                    .get(reqwest::header::LOCATION)
+                    .and_then(|value| value.to_str().ok())
+                    .ok_or_else(|| CmdError::click("release redirect carries no Location"))?;
+                endpoint = response
+                    .url()
+                    .join(location)
+                    .map_err(|error| CmdError::click(format!("invalid release redirect: {error}")))?;
+                continue;
+            }
+            return self
+                .success_body(response, max_object_api_download_body(), "release GET")
+                .await;
+        }
+        Err(CmdError::click("release GET exceeded three redirects"))
     }
 
     /// Ask the release channel itself whether it serves one object.
