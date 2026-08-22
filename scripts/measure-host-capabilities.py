@@ -356,10 +356,12 @@ def headed_render(binary, scratch, environment):
         f"--user-data-dir={profile}",
         f"--remote-debugging-port={port}",
         "--window-size=400,300",
-        # This runs once a minute on a laptop somebody is using. A real window is
-        # the measurement and cannot be given up, but it can be small, parked in
-        # the corner the window server will accept, and gone within seconds.
-        "--window-position=0,0",
+        # This runs once a minute on a machine somebody is using. A real window
+        # is the measurement and cannot be given up, but it does not have to be
+        # where anybody can see it: parked fully outside every display it still
+        # paints frames for Page.captureScreenshot, and a launch watched while a
+        # fullscreen game held the front never took focus (2026-08-21).
+        "--window-position=-32000,-32000",
         PROBE_PAGE,
     ]
     # The worker's display is not this channel's display: on Linux the unit that
