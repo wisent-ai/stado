@@ -319,6 +319,20 @@ def install_linux(python):
 
 
 def main():
+    # A host whose operator retired this unit said no on purpose. Reinstating
+    # it from a fleet-wide pass would silently undo that decision, so the
+    # retirement marker is a refusal, not a hint -- and --force is the one
+    # explicit way past it.
+    retired = sorted(
+        path.name
+        for folder in (AGENTS, DAEMONS)
+        for path in folder.glob(f"{LABEL}.plist.retired-*")
+    )
+    if retired and "--force" not in sys.argv:
+        raise SystemExit(
+            f"{LABEL} was retired on this host ({', '.join(retired)}); "
+            "the operator retired it on purpose. Pass --force to override."
+        )
     if not PUBLISHER.is_file():
         raise SystemExit(
             f"{PUBLISHER} is absent; install it with `stado host install-helper <host> "
