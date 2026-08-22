@@ -1162,6 +1162,9 @@ enum HostCommands {
     /// Report or revert the GUI-automation enablement of TARGET.
     #[command(name = "gui-automation", subcommand)]
     GuiAutomation(HostGuiAutomationCommands),
+    /// Render the managed macOS privacy profile without attempting local TCC writes.
+    #[command(name = "desktop-permissions", subcommand)]
+    DesktopPermissions(HostDesktopPermissionCommands),
     /// Report or reclaim tagged build caches on TARGET.
     #[command(name = "build-caches", subcommand)]
     BuildCaches(HostBuildCacheCommands),
@@ -1623,6 +1626,17 @@ enum HostBuildCacheCommands {
 }
 
 #[derive(Subcommand)]
+enum HostDesktopPermissionCommands {
+    /// Render the canonical PPPC mobileconfig; unchanged bytes are left untouched.
+    Profile {
+        output: String,
+        /// Emit the output path, managed bundles and write state as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum HostGuiAutomationCommands {
     /// Report autologin, remote management, TCC and automation artifacts.
     Status { target: String },
@@ -2019,6 +2033,10 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::GuiAutomation(HostGuiAutomationCommands::Disable { target, bundle }) => {
                 host::gui_automation_disable(&target, bundle.as_deref().unwrap_or("")).await
             }
+            HostCommands::DesktopPermissions(HostDesktopPermissionCommands::Profile {
+                output,
+                json,
+            }) => host::desktop_permissions_profile(&output, json),
             HostCommands::BuildCaches(HostBuildCacheCommands::Report {
                 target,
                 root,
