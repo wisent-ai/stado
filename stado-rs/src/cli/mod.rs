@@ -1261,18 +1261,6 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Install one owner-only opaque credential file on TARGET.
-    #[command(name = "install-secret")]
-    InstallSecret {
-        target: String,
-        /// Owner-only regular local file to transfer.
-        source: String,
-        /// Safe basename under $HOME/.stado on the target.
-        name: String,
-        /// Emit the transfer report as JSON; credential content is never emitted.
-        #[arg(long)]
-        json: bool,
-    },
     /// Install one credential field directly from Stado's selected store.
     #[command(name = "install-credential")]
     InstallCredential {
@@ -2081,12 +2069,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::SyncAcquisitionScopes { target, source } => {
                 host::sync_acquisition_scopes(&target, &source).await
             }
-            HostCommands::InstallSecret {
-                target,
-                source,
-                name,
-                json,
-            } => host::install_secret(&target, &source, &name, json).await,
             HostCommands::InstallCredential {
                 target,
                 item,

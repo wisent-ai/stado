@@ -6,7 +6,6 @@
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use std::io::Read;
-use std::os::unix::fs::MetadataExt;
 
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -2890,11 +2889,9 @@ const DELIVERED_FILES_DIR: &str = ".stado/files";
 /// `stado host install-file TARGET SOURCE NAME [--executable]` — deliver one
 /// file of any size to a registry host through the approved channel.
 ///
-/// The gap this closes: `install-secret` is for credentials and lands them
-/// unreadable and unexecutable by design. Anything else — a built binary, a
-/// bundle, a configuration file an operator produced elsewhere — had no
-/// channel at all, which is how a private `scp` ends up standing in for the
-/// audited one.
+/// Credentials have no channel here on purpose: a bearer belongs to the
+/// vault and reaches a host only through minting plus an explicit grant,
+/// never as a file an agent drops onto disk.
 pub async fn install_file(
     target: &str,
     source: &str,
@@ -2926,52 +2923,6 @@ pub async fn install_file(
     }
     Ok(())
 }
-/// Transfer one opaque owner credential without exposing it in argv, stdout,
-/// logs, a remote environment variable, or a general-purpose remote shell.
-pub async fn install_secret(
-    target: &str,
-    source: &str,
-    name: &str,
-    json: bool,
-) -> Result<(), CmdError> {
-    let metadata = std::fs::symlink_metadata(source)?;
-    let unsafe_bits = u32::from_str_radix("077", u8::BITS).unwrap_or_default();
-    if !metadata.is_file()
-        || metadata.file_type().is_symlink()
-        || metadata.mode() & unsafe_bits != u32::default()
-    {
-        return Err(CmdError::usage(
-            "secret source must be a regular owner-only file without group or other permission bits",
-        ));
-    }
-    // Embedding the payload in the script is what caps an inline transfer, not
-    // anything about the secret itself, so a file too large to embed is streamed
-    // instead of refused. Both paths land owner-only and are checksummed on the
-    // far side before they take the name.
-    let (path, byte_count) = if metadata.len() > u64::from(u16::MAX) {
-        stream_file(target, source, name, ".stado", "u=rw,go=").await?
-    } else {
-        let bytes = std::fs::read(source)?;
-        transfer_secret(target, name, &bytes, None).await?
-    };
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": target,
-                "source": source,
-                "path": path,
-                "bytes": byte_count,
-                "integrity": "sha256",
-                "status": "installed",
-            }))?
-        );
-    } else {
-        println!("{target}: installed owner-only {path} ({byte_count} bytes)");
-    }
-    Ok(())
-}
-
 /// Resolve one exact credential field through Stado's selected store and
 /// transfer it directly to a host. The value never reaches argv, stdout, a
 /// local temporary file, or the JSON report.
@@ -3593,6 +3544,87 @@ pub async fn retag_vault_item(
             "{}: {item} now rev={} state={} tags={}",
             resolved.name, after.revision, after.state, after.tags
         );
+    }
+    Ok(())
+}
+
+/// The unit-log reader this binary carries, run as one fixed remote script.
+const UNIT_LOG_SCRIPT: &str = include_str!("../../scripts/report-unit-log.sh");
+
+/// The tail of one managed unit's own log, from the paths its unit file
+/// declares.
+///
+/// A unit that crash-loops states why in its log and nowhere else: the health
+/// beacon reports `failed` with an empty `last_log`, `service status` reports
+/// the state, and `host exec` is a read-only allowlist that cannot read a file.
+/// Without this the only route to the sentence naming the fault was an ssh
+/// session, which is the one thing the fleet does not allow, so the fault got
+/// guessed at instead.
+pub async fn unit_log(
+    target: &str,
+    unit: &str,
+    lines: Option<u32>,
+    json: bool,
+) -> Result<(), CmdError> {
+    // A unit label is a reverse-DNS name; it is interpolated into a script that
+    // reads files, so it is checked before it gets there.
+    vault_word("unit label", unit)?;
+    let lines = lines.unwrap_or(40).clamp(u32::from(true), 500);
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let script = format!(
+        "unit={}\nlines={lines}\n{UNIT_LOG_SCRIPT}",
+        crate::deploy::shlex_quote(unit),
+    );
+    let output = crate::deploy::host_channel::run_script_with_timeout(
+        &resolved,
+        &script,
+        std::time::Duration::from_secs(60),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    let body: String = output
+        .stdout
+        .lines()
+        .filter(|line| !line.starts_with("STADO_UNITLOG\t"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !output.ok() && body.trim().is_empty() {
+        return Err(CmdError::click(format!(
+            "{}: {unit} log could not be read: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(&output, "remote read failed")
+        )));
+    }
+    if json {
+        let files: Vec<serde_json::Value> = output
+            .stdout
+            .lines()
+            .filter_map(
+                |line| match crate::deploy::host_channel::marker_fields(line).as_slice() {
+                    ["STADO_UNITLOG", kind, value] => Some(json!({
+                        "kind": kind,
+                        "path": value,
+                    })),
+                    _ => None,
+                },
+            )
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": resolved.name,
+                "unit": unit,
+                "lines": lines,
+                "declared": files,
+                "log": body,
+            }))?
+        );
+    } else {
+        println!("{body}");
     }
     Ok(())
 }
