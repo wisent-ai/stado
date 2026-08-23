@@ -3439,6 +3439,15 @@ pub struct DeployPlan {
     /// [`REMOTE_USER_PLACEHOLDER`] as well as [`REMOTE_HOME_PLACEHOLDER`].
     pub darwin_daemon_unit: String,
     pub linux_unit: String,
+    /// Install this plan as a system LaunchDaemon on Darwin, regardless of
+    /// where the host's declaration or the per-login fallback would place it.
+    /// An always-on host with no graphical session has only `system` to run a
+    /// service in: its user-domain units die with the login that never comes,
+    /// and a plist left in `~/Library/LaunchAgents` there is a service that
+    /// runs whenever nobody needs it. `ensure_service` addresses the daemon
+    /// file when this is set; the privileged steps it needs are the ones
+    /// [`crate::deploy::service::ManagedService::privileged_command`] spells.
+    pub force_daemon: bool,
 }
 
 /// Render every unit spelling for a new managed service.
@@ -3529,6 +3538,7 @@ pub fn plan_deploy_labelled(
             REMOTE_USER_PLACEHOLDER,
         ),
         linux_unit: linux.content(remote_home),
+        force_daemon: false,
     };
     guard_heredoc(&plan.darwin_unit)?;
     guard_heredoc(&plan.darwin_daemon_unit)?;
@@ -3637,6 +3647,26 @@ impl EnsureOutcome {
     }
 }
 
+/// The unit file [`ensure_service`] addresses for this plan: the system
+/// daemon path when the plan forces daemon placement, and otherwise the empty
+/// path, which lets the remote prelude find an existing agent file before it
+/// falls back to this login's `LaunchAgents`.
+///
+/// The distinction is a repair, not a preference. An always-on host that
+/// nobody logs into graphically runs its declared services only while their
+/// plists sit in `/Library/LaunchDaemons`; the same plist under
+/// `~/Library/LaunchAgents` there names a job launchd cannot keep alive,
+/// because the per-login domain it loads into exists solely inside sessions
+/// nobody opens. `force_daemon` is how `service ensure --as-daemon` moves such
+/// a unit to the one domain that survives on that host.
+pub fn ensure_unit_path(plan: &DeployPlan) -> String {
+    if plan.force_daemon {
+        format!("/Library/LaunchDaemons/{}.plist", plan.label)
+    } else {
+        String::new()
+    }
+}
+
 /// `service ensure` on one host: install the unit only where the host is not
 /// already running it, and never unload anything.
 pub async fn ensure_service(
@@ -3657,7 +3687,7 @@ pub async fn ensure_service(
         )
         .replace("@DARWIN_UNIT@", plan.darwin_unit.trim_end_matches('\n'))
         .replace("@LINUX_UNIT@", plan.linux_unit.trim_end_matches('\n'));
-    let prelude = prelude_with(&plan.label, &plan.unit, "", NO_DOMAIN_SYSTEM)?;
+    let prelude = prelude_with(&plan.label, &plan.unit, &ensure_unit_path(plan), NO_DOMAIN_SYSTEM)?;
     let mut report = run_remote_checked(
         target,
         &prelude,
@@ -4035,6 +4065,20 @@ pub async fn tail_logs(
     lines: usize,
     runner: &Runner,
 ) -> Result<ServiceLog, DeployError> {
+    tail_unit_logs(target, service.unit_id(), &service.path, lines, runner).await
+}
+
+/// [`tail_logs`] addressed by the launchd label alone: for `host unit-log`,
+/// whose caller names a unit the registry may never have declared, so the
+/// plist search falls to the remote prelude's LaunchAgents/LaunchDaemons
+/// order instead of a declared path.
+pub async fn tail_unit_logs(
+    target: &ComputeTarget,
+    unit_id: &str,
+    path: &str,
+    lines: usize,
+    runner: &Runner,
+) -> Result<ServiceLog, DeployError> {
     // The stdout and stderr tails share the --lines budget, half each with
     // the odd line going to stdout; each side always gets at least one, so
     // `--lines 1` cannot blank stderr entirely.
@@ -4044,13 +4088,13 @@ pub async fn tail_logs(
         .replace("@LINES@", &shlex_quote(&lines.to_string()))
         .replace("@OUT_LINES@", &shlex_quote(&out_lines.to_string()))
         .replace("@ERR_LINES@", &shlex_quote(&err_lines.to_string()));
-    let script = remote_script(service.unit_id(), "", &service.path, &body)?;
+    let script = remote_script(unit_id, "", path, &body)?;
     let report = run_remote(target, script, runner).await?;
     let Some((origin, tail)) = split_marker_body(&report.stdout, "STADO_LOG") else {
         return Err(DeployError(format!(
             "{}: {} log unavailable: {}",
             target.name,
-            service.unit_id(),
+            unit_id,
             report.failure()
         )));
     };
@@ -4063,7 +4107,7 @@ pub async fn tail_logs(
     };
     Ok(ServiceLog {
         host: target.name.clone(),
-        unit: service.unit_id().to_string(),
+        unit: unit_id.to_string(),
         origin: origin.to_string(),
         body: body.to_string(),
         error_origin,
