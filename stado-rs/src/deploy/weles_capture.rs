@@ -66,8 +66,7 @@ pub const ARTIFACT_NAMESPACE: &str = "weles-captures";
 ///
 /// Read through Stado's selected credential store on THIS machine and sent as
 /// an `Authorization` header. It is never written to a remote command line: a
-/// token in `argv` on the far side is readable by every process on that host,
-/// which is the failure `host install-secret` exists to prevent.
+/// token in `argv` on the far side is readable by every process on that host.
 const ADMISSION_TOKEN_ITEM: &str = "weles-admission-api";
 const ADMISSION_TOKEN_FIELD: &str = "token";
 
