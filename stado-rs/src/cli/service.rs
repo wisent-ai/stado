@@ -497,6 +497,15 @@ pub enum ServiceCommands {
         /// the registry document it declared the unit in.
         #[arg(long)]
         reason: String,
+        /// Install the unit as a system LaunchDaemon
+        /// (`/Library/LaunchDaemons/<label>.plist`) instead of following the
+        /// declaration or the per-login fallback. For an always-on host with
+        /// no graphical session this is the only domain that keeps a service
+        /// alive; the privileged install and bootstrap steps run under
+        /// passwordless sudo, and a host without that grant is told exactly
+        /// which step was refused.
+        #[arg(long)]
+        as_daemon: bool,
         #[arg(long)]
         json: bool,
     },
@@ -723,6 +732,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             from,
             args,
             reason,
+            as_daemon,
             json,
         } => {
             ensure(EnsureOptions {
@@ -731,6 +741,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
                 from: from.as_deref(),
                 args: &args,
                 reason: &reason,
+                as_daemon,
                 as_json: json,
             })
             .await
@@ -2774,6 +2785,7 @@ struct EnsureOptions<'a> {
     from: Option<&'a str>,
     args: &'a [String],
     reason: &'a str,
+    as_daemon: bool,
     as_json: bool,
 }
 
@@ -2786,10 +2798,6 @@ struct UnitProgram {
     /// Stable unit identity supplied by a registry or catalog declaration.
     unit: Option<String>,
 }
-
-/// The launchd label a declaration carries, or a systemd unit name without
-/// its suffix — the spelling `deploy::service::plan_deploy_labelled` renders
-/// at.
 fn declared_label(service: &ManagedService) -> Option<&str> {
     let unit_id = service.unit_id();
     Some(unit_id.strip_suffix(".service").unwrap_or(unit_id)).filter(|label| !label.is_empty())
@@ -2989,6 +2997,8 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
         None => service::plan_deploy(options.name, &unit.program, &unit.args),
     }
     .map_err(click)?;
+    let mut plan = plan;
+    plan.force_daemon = options.as_daemon;
 
     // An existing declaration is not a refusal here, and that is the whole
     // difference from `deploy`: asserting a unit that is already declared and

@@ -232,3 +232,30 @@ fn declare_refuses_a_declaration_without_an_endpoint() {
 fn read_document_raw(fleet: &Fleet) -> String {
     std::fs::read_to_string(fleet.registry_blob()).expect("registry blob exists")
 }
+
+#[test]
+fn as_daemon_ensure_addresses_the_system_daemon_file() {
+    let plan = stado::deploy::service::plan_deploy_labelled(
+        "stado-agent-mini",
+        "com.wisent.compute.service.stado-agent-mini",
+        "/home/operator/.stado/bin/stado",
+        &["agent".to_string(), "--auto".to_string()],
+    )
+    .expect("plan renders");
+
+    // Default placement follows the declaration and the per-login fallback:
+    // no path is forced, so the remote prelude keeps its search order.
+    assert!(
+        stado::deploy::service::ensure_unit_path(&plan).is_empty(),
+        "default ensure must not force a unit file"
+    );
+
+    // --as-daemon pins the one domain that survives on an always-on host
+    // with no graphical session, whatever the declaration says.
+    let mut daemon = plan.clone();
+    daemon.force_daemon = true;
+    assert_eq!(
+        stado::deploy::service::ensure_unit_path(&daemon),
+        "/Library/LaunchDaemons/com.wisent.compute.service.stado-agent-mini.plist"
+    );
+}
