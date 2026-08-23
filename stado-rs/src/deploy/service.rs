@@ -2593,7 +2593,16 @@ case \"$env_path\" in
   *) fail_sync 'environment path is not rooted' ;;
 esac
 variable=@VARIABLE@
-assignment=$(printf '%s' '@ASSIGNMENT_B64@' | /usr/bin/base64 \"$decode_flag\") || fail_sync 'invalid assignment payload'
+stado_sync_item=@ITEM@
+stado_sync_field=@FIELD@
+if [ -n \"$stado_sync_item\" ]; then
+  value=$(\"$HOME/.stado/bin/stado\" credentials get \"$stado_sync_item\" --field \"$stado_sync_field\" 2>/dev/null) || fail_sync 'bearer unavailable on this host'
+  [ -n \"$value\" ] || fail_sync 'bearer field is empty'
+  export variable
+  assignment=$(/usr/bin/env STADO_SYNC_VALUE=\"$value\" /usr/bin/python3 -c 'import os, shlex; print(os.environ[\"variable\"] + \"=\" + shlex.quote(os.environ[\"STADO_SYNC_VALUE\"]))' 2>/dev/null) || fail_sync 'cannot render the assignment'
+else
+  assignment=$(printf '%s' '@ASSIGNMENT_B64@' | /usr/bin/base64 \"$decode_flag\") || fail_sync 'invalid assignment payload'
+fi
 parent=$(/usr/bin/dirname \"$env_path\") || fail_sync 'environment parent unavailable'
 /bin/mkdir -p \"$parent\" || fail_sync 'cannot create environment parent'
 tmp=\"$env_path.stado-secret-sync.$$\"
@@ -2617,13 +2626,34 @@ say 'secret_synced' \"$variable $env_path\"
 ///
 /// The bearer is staged in an owner-only curl header file, never argv. Both
 /// the header and response body are removed before the marker is emitted.
-const AUTH_CHECK_BODY: &str = "fail_check() {
+const AUTH_CHECK_BODY: &str = "stado_check_item=@ITEM@
+stado_check_field=@FIELD@
+stado_check_var=@VARIABLE@
+stado_check_env_b64=@ENV_PATH_B64@
+fail_check() {
   say 'auth_check_failed' \"$1\"
   exit 0
 }
 if [ \"$os\" = \"Darwin\" ]; then decode_flag=-D; else decode_flag=--decode; fi
 probe_url=$(printf '%s' '@PROBE_URL_B64@' | /usr/bin/base64 \"$decode_flag\") || fail_check 'invalid probe URL payload'
-token=$(printf '%s' '@TOKEN_B64@' | /usr/bin/base64 \"$decode_flag\") || fail_check 'invalid token payload'
+resolved=\"\"
+if [ -n \"$stado_check_item\" ]; then
+  resolved=$(\"$HOME/.stado/bin/stado\" credentials get \"$stado_check_item\" --field \"$stado_check_field\" 2>/dev/null) || fail_check 'bearer unavailable on this host'
+elif [ -n \"$stado_check_var\" ]; then
+  check_env_path=$(printf '%s' '@ENV_PATH_B64@' | /usr/bin/base64 \"$decode_flag\") || fail_check 'invalid environment path payload'
+  case \"$check_env_path\" in
+    \\$HOME/*) check_env_path=\"$HOME/${check_env_path#\\$HOME/}\" ;;
+    /*) ;;
+    *) fail_check 'environment path is not rooted' ;;
+  esac
+  [ -f \"$check_env_path\" ] || fail_check 'runtime environment file is absent'
+  resolved=$(/usr/bin/awk -F= -v key=\"$stado_check_var\" '$1 == key { v=substr($0, length($1)+2); gsub(/^[\"]+|[\"]+$/, \"\", v); print v }' \"$check_env_path\")
+  [ -n \"$resolved\" ] || fail_check 'environment variable is empty or absent'
+else
+  resolved=$(printf '%s' '@TOKEN_B64@' | /usr/bin/base64 \"$decode_flag\") || fail_check 'invalid token payload'
+fi
+token=\"$resolved\"
+[ -n \"$token\" ] || fail_check 'bearer field is empty'
 post_empty=@POST_EMPTY@
 expected_status=@EXPECTED_STATUS@
 probe_dir=\"$HOME/.stado/auth-check\"
@@ -3186,6 +3216,121 @@ pub async fn check_service_bearer(
         );
     let script = remote_script(service.unit_id(), "", &service.path, &body)?;
     run_remote(target, script, runner).await
+}
+
+/// [`sync_service_secret`] with the bearer resolved on the host: the item is
+/// read there by the host's own Stado identity, so the value never travels
+/// on this channel and the operator's consumer needs no grant for it.
+pub async fn sync_service_item_secret(
+    target: &ComputeTarget,
+    service: &ManagedService,
+    env_path: &str,
+    variable: &str,
+    item: &str,
+    field: &str,
+    runner: &Runner,
+) -> Result<RemoteReport, DeployError> {
+    validate_env_path(env_path)?;
+    validate_env_variable(variable)?;
+    validate_vault_reference(item, field)?;
+
+    let body = SECRET_SYNC_BODY
+        .replace("@ENV_PATH_B64@", &STANDARD.encode(env_path.as_bytes()))
+        .replace("@VARIABLE@", &shlex_quote(variable))
+        .replace("@ITEM@", &shlex_quote(item))
+        .replace("@FIELD@", &shlex_quote(field));
+    let script = remote_script(service.unit_id(), "", &service.path, &body)?;
+    run_remote(target, script, runner).await
+}
+
+/// [`check_service_bearer`] with the bearer resolved on the host from one
+/// Skarbiec item field. The probe reports only its HTTP outcome; the bearer
+/// itself never leaves the host.
+pub async fn check_service_item_bearer(
+    target: &ComputeTarget,
+    service: &ManagedService,
+    probe_url: &str,
+    item: &str,
+    field: &str,
+    post_empty_json: bool,
+    expected_status: Option<u16>,
+    runner: &Runner,
+) -> Result<RemoteReport, DeployError> {
+    validate_loopback_probe_url(probe_url)?;
+    validate_vault_reference(item, field)?;
+    let body = AUTH_CHECK_BODY
+        .replace("@PROBE_URL_B64@", &STANDARD.encode(probe_url.as_bytes()))
+        .replace("@ITEM@", &shlex_quote(item))
+        .replace("@FIELD@", &shlex_quote(field))
+        .replace("@TOKEN_B64@", "")
+        .replace("@POST_EMPTY@", if post_empty_json { "yes" } else { "no" })
+        .replace(
+            "@EXPECTED_STATUS@",
+            &shlex_quote(
+                &expected_status
+                    .map(|status| status.to_string())
+                    .unwrap_or_default(),
+            ),
+        );
+    let script = remote_script(service.unit_id(), "", &service.path, &body)?;
+    run_remote(target, script, runner).await
+}
+
+/// [`check_service_item_bearer`] reading the bearer from the unit's own
+/// runtime environment file -- the exact assignment the running process was
+/// started with. This is the zero-grant diagnostic path: no Skarbiec read is
+/// involved on either side.
+pub async fn check_service_env_bearer(
+    target: &ComputeTarget,
+    service: &ManagedService,
+    probe_url: &str,
+    env_path: &str,
+    variable: &str,
+    post_empty_json: bool,
+    expected_status: Option<u16>,
+    runner: &Runner,
+) -> Result<RemoteReport, DeployError> {
+    validate_loopback_probe_url(probe_url)?;
+    validate_env_path(env_path)?;
+    validate_env_variable(variable)?;
+    let body = AUTH_CHECK_BODY
+        .replace("@PROBE_URL_B64@", &STANDARD.encode(probe_url.as_bytes()))
+        .replace("@ENV_PATH_B64@", &STANDARD.encode(env_path.as_bytes()))
+        .replace("@VARIABLE@", &shlex_quote(variable))
+        .replace("@ITEM@", "")
+        .replace("@FIELD@", "")
+        .replace("@TOKEN_B64@", "")
+        .replace("@POST_EMPTY@", if post_empty_json { "yes" } else { "no" })
+        .replace(
+            "@EXPECTED_STATUS@",
+            &shlex_quote(
+                &expected_status
+                    .map(|status| status.to_string())
+                    .unwrap_or_default(),
+            ),
+        );
+    let script = remote_script(service.unit_id(), "", &service.path, &body)?;
+    run_remote(target, script, runner).await
+}
+
+/// Item and field names travel verbatim into the fixed remote program, so
+/// they carry the same charset contract a launchd label does: nothing that
+/// could close the surrounding quotes or open a substitution.
+fn validate_vault_reference(item: &str, field: &str) -> Result<(), DeployError> {
+    let acceptable = |value: &str| {
+        !value.is_empty()
+            && value
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.'))
+    };
+    if acceptable(item) && acceptable(field) {
+        Ok(())
+    } else {
+        Err(DeployError(
+            "Skarbiec item and field must be non-empty and use only letters, digits, '-', '_' and '.'"
+                .to_string(),
+        ))
+    }
 }
 
 /// Stop an unmanaged process that prevents launchd from reclaiming the probe port.
