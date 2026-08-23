@@ -277,9 +277,11 @@ pub enum ServiceCommands {
         /// The single registry host to check.
         #[arg(long)]
         host: String,
-        /// Skarbiec item containing the bearer.
+        /// Skarbiec item containing the bearer. Required unless the bearer
+        /// is read from the unit's own runtime environment with --variable
+        /// and --env-file instead.
         #[arg(long)]
-        item: String,
+        item: Option<String>,
         /// Exact string field in the Skarbiec item.
         #[arg(long, default_value = "token")]
         field: String,
@@ -298,11 +300,14 @@ pub enum ServiceCommands {
         /// If repair still fails, stop the unmanaged process owning the URL port.
         #[arg(long, requires = "repair")]
         take_over_listener: bool,
-        /// Environment variable to replace when repairing.
-        #[arg(long, requires = "repair")]
+        /// Environment variable holding the bearer. With --item omitted this
+        /// names the assignment auth-check reads from --env-file; with
+        /// --repair it is the assignment synchronized from the item.
+        #[arg(long)]
         variable: Option<String>,
-        /// Runtime env file to update when repairing.
-        #[arg(long, requires = "repair")]
+        /// Runtime env file holding (or, with --repair, receiving) the
+        /// bearer assignment named by --variable.
+        #[arg(long)]
         env_file: Option<String>,
         #[arg(long)]
         json: bool,
@@ -644,7 +649,7 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             auth_check(AuthCheckOptions {
                 name: &name,
                 host: &host,
-                item: &item,
+                item: item.as_deref(),
                 field: &field,
                 url: &url,
                 post_empty_json,
@@ -1915,7 +1920,7 @@ async fn secret_sync(options: SecretSyncOptions<'_>) -> Result<(), CmdError> {
 struct AuthCheckOptions<'a> {
     name: &'a str,
     host: &'a str,
-    item: &'a str,
+    item: Option<&'a str>,
     field: &'a str,
     url: &'a str,
     post_empty_json: bool,
@@ -1950,7 +1955,46 @@ async fn auth_check(options: AuthCheckOptions<'_>) -> Result<(), CmdError> {
     } else {
         None
     };
-    let secret = service_secret(item, field).await?;
+    if item.is_none() && (variable.is_none() || env_file.is_none()) {
+        return Err(CmdError::usage(
+            "give --item, or both --variable and --env-file to read the bearer from the unit's own runtime environment",
+        ));
+    }
+    // The bearer source is a property of the invocation, not of the host:
+    // either a Skarbiec item read on the host by its own identity, or the
+    // exact runtime assignment the unit already runs with. Neither mode
+    // brings the secret back over the channel; only the HTTP outcome does.
+    async fn check(
+        target: &crate::targets::ComputeTarget,
+        declared: &ManagedService,
+        url: &str,
+        item: Option<&str>,
+        field: &str,
+        variable: Option<&str>,
+        env_file: Option<&str>,
+        post_empty_json: bool,
+        expect_status: Option<u16>,
+        runner: &crate::deploy::Runner,
+    ) -> Result<crate::deploy::service::RemoteReport, CmdError> {
+        match (item, variable, env_file) {
+            (Some(item), _, _) => {
+                service::check_service_item_bearer(
+                    target, declared, url, item, field, post_empty_json, expect_status, runner,
+                )
+                .await
+                .map_err(click)
+            }
+            (None, Some(variable), Some(env_file)) => {
+                service::check_service_env_bearer(
+                    target, declared, url, env_file, variable, post_empty_json, expect_status,
+                    runner,
+                )
+                .await
+                .map_err(click)
+            }
+            _ => unreachable!("usage guard above"),
+        }
+    }
     let services = declared_matching(name, Some(host)).await?;
     let runner = production_runner();
     let mut payload: Vec<Value> = Vec::new();
@@ -1961,17 +2005,18 @@ async fn auth_check(options: AuthCheckOptions<'_>) -> Result<(), CmdError> {
         let target = host_channel::canonical_target(&declared.host)
             .await
             .map_err(click)?;
-        let initial = service::check_service_bearer(
+        let initial = check(
             &target,
             declared,
             url,
-            &secret,
+            item,
+            field,
+            variable,
+            env_file,
             post_empty_json,
             expect_status,
             &runner,
-        )
-        .await
-        .map_err(click)?;
+        ).await?;
         let mut final_report = initial.clone();
         let mut synced = None;
         let mut restarted = None;
@@ -1979,8 +2024,13 @@ async fn auth_check(options: AuthCheckOptions<'_>) -> Result<(), CmdError> {
 
         if !initial.succeeded("auth_ok") {
             if let Some((variable, env_file)) = repair_target {
-                let sync_report = service::sync_service_secret(
-                    &target, declared, env_file, variable, &secret, &runner,
+                let Some(item) = item else {
+                    return Err(CmdError::click(
+                        "--repair synchronizes from a Skarbiec item; in --env-file mode the runtime file is already the source",
+                    ));
+                };
+                let sync_report = service::sync_service_item_secret(
+                    &target, declared, env_file, variable, item, field, &runner,
                 )
                 .await
                 .map_err(click)?;
@@ -1993,17 +2043,18 @@ async fn auth_check(options: AuthCheckOptions<'_>) -> Result<(), CmdError> {
                     let restart_ok = restart_report.succeeded("restarted");
                     restarted = Some(restart_report);
                     if restart_ok {
-                        final_report = service::check_service_bearer(
+                        final_report = check(
                             &target,
                             declared,
                             url,
-                            &secret,
+                            Some(item),
+                            field,
+                            Some(variable),
+                            Some(env_file),
                             post_empty_json,
                             expect_status,
                             &runner,
-                        )
-                        .await
-                        .map_err(click)?;
+                        ).await?;
                     }
                 }
             }
@@ -2029,17 +2080,18 @@ async fn auth_check(options: AuthCheckOptions<'_>) -> Result<(), CmdError> {
                 let restart_ok = restart_report.succeeded("restarted");
                 restarted = Some(restart_report);
                 if restart_ok {
-                    final_report = service::check_service_bearer(
+                    final_report = check(
                         &target,
                         declared,
                         url,
-                        &secret,
+                        item,
+                        field,
+                        variable,
+                        env_file,
                         post_empty_json,
                         expect_status,
                         &runner,
-                    )
-                    .await
-                    .map_err(click)?;
+                    ).await?;
                 }
             }
         }
@@ -2076,7 +2128,6 @@ async fn auth_check(options: AuthCheckOptions<'_>) -> Result<(), CmdError> {
             "ok": ok,
         }));
     }
-    drop(secret);
 
     if as_json {
         print_json(&Value::Array(payload))?;
