@@ -282,6 +282,13 @@ pub enum ServiceCommands {
         /// and --env-file instead.
         #[arg(long)]
         item: Option<String>,
+        /// Host-side Skarbiec consumer used to read --item (defaults to the
+        /// host's own selection).
+        #[arg(long)]
+        consumer: Option<String>,
+        /// Token file for --consumer.
+        #[arg(long)]
+        token_file: Option<String>,
         /// Exact string field in the Skarbiec item.
         #[arg(long, default_value = "token")]
         field: String,
@@ -646,6 +653,8 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             host,
             item,
             field,
+            consumer,
+            token_file,
             url,
             repair,
             take_over_listener,
@@ -660,6 +669,8 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
                 host: &host,
                 item: item.as_deref(),
                 field: &field,
+                consumer: consumer.as_deref(),
+                token_file: token_file.as_deref(),
                 url: &url,
                 post_empty_json,
                 expect_status,
@@ -1933,6 +1944,8 @@ struct AuthCheckOptions<'a> {
     host: &'a str,
     item: Option<&'a str>,
     field: &'a str,
+    consumer: Option<&'a str>,
+    token_file: Option<&'a str>,
     url: &'a str,
     post_empty_json: bool,
     expect_status: Option<u16>,
@@ -1949,6 +1962,8 @@ async fn auth_check(options: AuthCheckOptions<'_>) -> Result<(), CmdError> {
         host,
         item,
         field,
+        consumer,
+        token_file,
         url,
         post_empty_json,
         expect_status,
@@ -1981,6 +1996,8 @@ async fn auth_check(options: AuthCheckOptions<'_>) -> Result<(), CmdError> {
         url: &str,
         item: Option<&str>,
         field: &str,
+        consumer: Option<&str>,
+        token_file: Option<&str>,
         variable: Option<&str>,
         env_file: Option<&str>,
         post_empty_json: bool,
@@ -1990,7 +2007,7 @@ async fn auth_check(options: AuthCheckOptions<'_>) -> Result<(), CmdError> {
         match (item, variable, env_file) {
             (Some(item), _, _) => {
                 service::check_service_item_bearer(
-                    target, declared, url, item, field, post_empty_json, expect_status, runner,
+                    target, declared, url, item, field, consumer, token_file, post_empty_json, expect_status, runner,
                 )
                 .await
                 .map_err(click)
@@ -2022,6 +2039,8 @@ async fn auth_check(options: AuthCheckOptions<'_>) -> Result<(), CmdError> {
             url,
             item,
             field,
+            consumer,
+            token_file,
             variable,
             env_file,
             post_empty_json,
@@ -2060,6 +2079,8 @@ async fn auth_check(options: AuthCheckOptions<'_>) -> Result<(), CmdError> {
                             url,
                             Some(item),
                             field,
+                            consumer,
+                            token_file,
                             Some(variable),
                             Some(env_file),
                             post_empty_json,
@@ -2097,6 +2118,8 @@ async fn auth_check(options: AuthCheckOptions<'_>) -> Result<(), CmdError> {
                         url,
                         item,
                         field,
+                        consumer,
+                        token_file,
                         variable,
                         env_file,
                         post_empty_json,
