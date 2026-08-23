@@ -1273,7 +1273,7 @@ domain_status=\"\"
 domain_reason=\"\"
 launch=/bin/launchctl
 say() {
-  detail=$(printf '%s' \"$2\" | /usr/bin/tr '\t\r\n' ' ' | /usr/bin/cut -c1-160)
+  detail=$(printf '%s' \"$2\" | /usr/bin/tr '\t\r\n' ' ' | /usr/bin/cut -c1-400)
   printf 'STADO_SERVICE\\t%s\\t%s\\t%s\\n' \"$unit\" \"$1\" \"$detail\"
 }
 @DOMAIN_RESOLVER@@UNIT_STATE@if [ \"$os\" = \"Darwin\" ]; then
@@ -1330,7 +1330,7 @@ else
 fi
 printf 'STADO_HOST\\t%s\\t%s\\t%s\\t%s\\n' \"$os\" \"$domain\" \"$unit\" \"$unit_path\"
 if [ \"$os\" = \"Darwin\" ]; then
-  printf 'STADO_DOMAIN\\t%s\\t%s\\t%s\\n' \"$domain\" \"$domain_status\" \"$(printf '%s' \"$domain_reason\" | /usr/bin/tr '\t\r\n' ' ' | /usr/bin/cut -c1-160)\"
+  printf 'STADO_DOMAIN\\t%s\\t%s\\t%s\\n' \"$domain\" \"$domain_status\" \"$(printf '%s' \"$domain_reason\" | /usr/bin/tr '\t\r\n' ' ' | /usr/bin/cut -c1-400)\"
 fi
 ";
 
@@ -2630,15 +2630,42 @@ const AUTH_CHECK_BODY: &str = "stado_check_item=@ITEM@
 stado_check_field=@FIELD@
 stado_check_var=@VARIABLE@
 stado_check_env_b64=@ENV_PATH_B64@
+stado_check_consumer=@CONSUMER@
+stado_check_token_file=@TOKEN_FILE@
 fail_check() {
   say 'auth_check_failed' \"$1\"
   exit 0
 }
 if [ \"$os\" = \"Darwin\" ]; then decode_flag=-D; else decode_flag=--decode; fi
 probe_url=$(printf '%s' '@PROBE_URL_B64@' | /usr/bin/base64 \"$decode_flag\") || fail_check 'invalid probe URL payload'
+if [ -n \"$stado_check_consumer\" ]; then
+  export WC_SKARBIEC_CONSUMER=\"$stado_check_consumer\"
+fi
+if [ -n \"$stado_check_token_file\" ]; then
+  export WC_SKARBIEC_TOKEN_FILE=\"$stado_check_token_file\"
+fi
+probe_dir=\"$HOME/.stado/auth-check\"
+/bin/mkdir -p \"$probe_dir\" || fail_check 'cannot create probe directory'
+/bin/chmod 700 \"$probe_dir\" || fail_check 'cannot protect probe directory'
+resolve_err=\"\"
 resolved=\"\"
 if [ -n \"$stado_check_item\" ]; then
-  resolved=$(\"$HOME/.stado/bin/stado\" credentials get \"$stado_check_item\" --field \"$stado_check_field\" 2>/dev/null) || fail_check 'bearer unavailable on this host'
+  probe_log=\"$probe_dir/resolve.log\"
+  : > \"$probe_log\"
+  resolved=$(\"$HOME/.stado/bin/stado\" secrets get \"$stado_check_item\" --field \"$stado_check_field\" 2>\"$probe_log\")
+  src=secrets-get
+  # Source 2/3: legacy credential-store and direct Skarbiec reads.
+  if [ -z \"$resolved\" ]; then
+    resolved=$(\"$HOME/.stado/bin/stado\" credentials get \"$stado_check_item\" --field \"$stado_check_field\" 2>>\"$probe_log\") && src=credentials-get
+  fi
+  if [ -z \"$resolved\" ]; then
+    resolved=$(\"$HOME/.stado/bin/skarbiec\" get \"$stado_check_item\" --field \"$stado_check_field\" 2>>\"$probe_log\") && src=skarbiec-get
+  fi
+  [ -n \"$resolved\" ] || { resolve_err=$(src=$src; /usr/bin/tail -c 300 \"$probe_log\" 2>/dev/null); fail_check \"bearer unavailable via $src${resolve_err:+: $resolve_err}\"; }
+elif [ -n \"$stado_check_var\" ]; then
+      fail_check \"bearer unavailable${resolve_err:+: $resolve_err}\"
+    fi
+  fi
 elif [ -n \"$stado_check_var\" ]; then
   check_env_path=$(printf '%s' '@ENV_PATH_B64@' | /usr/bin/base64 \"$decode_flag\") || fail_check 'invalid environment path payload'
   case \"$check_env_path\" in
@@ -3252,6 +3279,8 @@ pub async fn check_service_item_bearer(
     probe_url: &str,
     item: &str,
     field: &str,
+    consumer: Option<&str>,
+    token_file: Option<&str>,
     post_empty_json: bool,
     expected_status: Option<u16>,
     runner: &Runner,
@@ -3261,6 +3290,8 @@ pub async fn check_service_item_bearer(
     let body = AUTH_CHECK_BODY
         .replace("@PROBE_URL_B64@", &STANDARD.encode(probe_url.as_bytes()))
         .replace("@ITEM@", &shlex_quote(item))
+        .replace("@CONSUMER@", &shlex_quote(consumer.unwrap_or_default()))
+        .replace("@TOKEN_FILE@", &shlex_quote(token_file.unwrap_or_default()))
         .replace("@FIELD@", &shlex_quote(field))
         .replace("@TOKEN_B64@", "")
         .replace("@POST_EMPTY@", if post_empty_json { "yes" } else { "no" })
