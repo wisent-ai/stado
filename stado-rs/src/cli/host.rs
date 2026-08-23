@@ -930,52 +930,6 @@ pub async fn uptime(target: &str, json: bool) -> Result<(), CmdError> {
     report_outcome(&report, crate::deploy::host_uptime::OK_STATUS)
 }
 
-/// `stado host unit-log TARGET UNIT [--lines N]` — the tail of one unit's
-/// own launchd logs, addressed by label alone. A crash-looping unit says why
-/// in its log and nowhere else: the health beacon reports that it failed and
-/// carries no log, and `host exec` is a read-only allowlist that cannot read
-/// a file. The plist search follows the remote prelude's order — the login's
-/// `LaunchAgents`, then `/Library/LaunchDaemons` — so a unit the registry
-/// never declared is still answerable.
-pub async fn unit_log(
-    target: &str,
-    unit: &str,
-    lines: Option<u32>,
-    json: bool,
-) -> Result<(), CmdError> {
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|exc| CmdError::click(exc.to_string()))?;
-    let runner = crate::deploy::production_runner();
-    let tail = crate::deploy::service::tail_unit_logs(
-        &resolved,
-        unit,
-        "",
-        usize::try_from(lines.unwrap_or(40).max(1)).unwrap_or(40),
-        &runner,
-    )
-    .await
-    .map_err(|exc| CmdError::click(exc.to_string()))?;
-    if json {
-        print_json(&tail.to_json());
-        return Ok(());
-    }
-    println!("\n== {} {} ({}) ==", tail.host, tail.unit, tail.origin);
-    print!("{}", tail.body);
-    if !tail.body.ends_with('\n') {
-        println!();
-    }
-    if let Some(error_origin) = &tail.error_origin {
-        println!("== {} {} stderr ({}) ==", tail.host, tail.unit, error_origin);
-        if !tail.error_body.is_empty() {
-            print!("{}", tail.error_body);
-            if !tail.error_body.ends_with('\n') {
-                println!();
-            }
-        }
-    }
-    Ok(())
-}
 
 /// `stado host ping TARGET [--json]` — ssh reachability and beacon age in
 /// one verdict (`docs/missing-commands.md` item three).
