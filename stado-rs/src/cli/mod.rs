@@ -1244,57 +1244,6 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Replace an owner-only Stado program on TARGET with a build proven to run there.
-    #[command(name = "install-binary")]
-    InstallBinary {
-        target: String,
-        /// Local executable to install.
-        #[arg(long)]
-        from: Option<String>,
-        /// Put the previous build back instead of installing a new one.
-        #[arg(long)]
-        rollback: bool,
-        /// Basename under $HOME/.stado/bin on the target.
-        #[arg(long, default_value = "stado")]
-        name: String,
-        /// Emit the installation report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Install one credential field directly from Stado's selected store.
-    #[command(name = "install-credential")]
-    InstallCredential {
-        target: String,
-        /// Credential item id in the selected store.
-        item: String,
-        /// Exact string field to transfer.
-        field: String,
-        /// Absolute target home directory; omit to use the SSH account's home.
-        #[arg(long)]
-        home: Option<String>,
-        /// Safe basename under $HOME/.stado on the target.
-        name: String,
-        /// Emit the transfer report as JSON; credential content is never emitted.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Transfer one immutable product release archive through the registry SSH channel.
-    #[command(name = "install-release")]
-    InstallRelease {
-        target: String,
-        /// Local .tar.gz release archive.
-        source: String,
-        /// Path-safe release family; the remote asset is FAMILY.tar.gz.
-        family: String,
-        /// Immutable release version.
-        version: String,
-        /// Target platform.
-        #[arg(long, default_value = "darwin-arm64")]
-        platform: String,
-        /// Emit the transfer report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
     /// Remove one previously installed owner-only helper from TARGET.
     #[command(name = "remove-helper")]
     RemoveHelper {
@@ -1458,21 +1407,6 @@ enum HostCommands {
         resume: Option<String>,
     },
     /// Deliver one file of any size to TARGET's owner-only Stado files
-    /// directory, checksummed on arrival.
-    #[command(name = "install-file")]
-    InstallFile {
-        target: String,
-        /// Local file to transfer.
-        source: String,
-        /// Safe basename under $HOME/.stado/files on the target.
-        name: String,
-        /// Land it owner-executable instead of owner-readable only.
-        #[arg(long)]
-        executable: bool,
-        /// Emit the transfer report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
     /// Remove one file from TARGET's home, with guards a bare `rm` over ssh
     /// does not have: the path must live under a managed area of the approved
     /// account's home, be a regular file owned by that account, and never be
@@ -2038,13 +1972,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 reason,
                 json,
             } => host::reclaim(&target, apply, reason.as_deref(), json).await,
-            HostCommands::InstallBinary {
-                target,
-                from,
-                name,
-                rollback,
-                json,
-            } => host::install_binary(&target, from.as_deref(), &name, rollback, json).await,
             HostCommands::PrecheckRunner(command) => match command {
                 HostPrecheckRunnerCommands::Install { target, json } => {
                     precheck_runner::install(&target, json).await
@@ -2056,37 +1983,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                     precheck_runner::remove(&target, json).await
                 }
             },
-            HostCommands::InstallFile {
-                target,
-                source,
-                name,
-                executable,
-                json,
-            } => host::install_file(&target, &source, &name, executable, json).await,
-            HostCommands::RemoveFile { target, path, json } => {
-                host::remove_file(&target, &path, json).await
-            }
-            HostCommands::SyncAcquisitionScopes { target, source } => {
-                host::sync_acquisition_scopes(&target, &source).await
-            }
-            HostCommands::InstallCredential {
-                target,
-                item,
-                field,
-                home,
-                name,
-                json,
-            } => {
-                host::install_credential(&target, &item, &field, &name, home.as_deref(), json).await
-            }
-            HostCommands::InstallRelease {
-                target,
-                source,
-                family,
-                version,
-                platform,
-                json,
-            } => host::install_release(&target, &source, &family, &version, &platform, json).await,
             HostCommands::RemoveHelper { target, name, json } => {
                 host::remove_helper(&target, &name, json).await
             }
@@ -2096,6 +1992,12 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 prune,
                 json,
             } => host::helpers(&target, older_than_days, prune, json).await,
+            HostCommands::RemoveFile { target, path, json } => {
+                host::remove_file(&target, &path, json).await
+            }
+            HostCommands::SyncAcquisitionScopes { target, source } => {
+                host::sync_acquisition_scopes(&target, &source).await
+            }
             HostCommands::RetagVaultItem {
                 target,
                 item,
