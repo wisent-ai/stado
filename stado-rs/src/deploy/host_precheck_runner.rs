@@ -63,13 +63,6 @@ const PUBLISHER: RunnerProfile = RunnerProfile {
     labels: "stado,stado-publisher",
 };
 
-const RELEASE_SECRETS: &[&str] = &[
-    "RELEASE_BOOTSTRAP_TOKEN",
-    "AC_API_KEY_ID",
-    "AC_API_ISSUER_ID",
-    "AC_API_KEY_P8",
-    "SPARKLE_PRIVATE_KEY",
-];
 const APP_STORE_CONNECT_ITEM: &str = "api-appstoreconnect-weles";
 const SPARKLE_ITEM_PREFIX: &str = "desktop-release-sparkle-";
 
@@ -399,127 +392,6 @@ async fn configure_publisher_group() -> Result<(), DeployError> {
     Ok(())
 }
 
-async fn grant_release_secrets(repositories: &[String]) -> Result<(), DeployError> {
-    let credential = github_credential().await?;
-    let client = reqwest::Client::new();
-    for repository in repositories {
-        if repository.is_empty()
-            || !repository
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-        {
-            return Err(DeployError(format!(
-                "GitHub repository name is invalid: {repository:?}"
-            )));
-        }
-        let response = client
-            .get(format!(
-                "https://api.github.com/repos/{GITHUB_ORGANIZATION}/{repository}"
-            ))
-            .header(reqwest::header::ACCEPT, "application/vnd.github+json")
-            .header(reqwest::header::USER_AGENT, "wisent-stado-publisher-runner")
-            .header("X-GitHub-Api-Version", "2022-11-28")
-            .bearer_auth(&credential)
-            .send()
-            .await
-            .map_err(|error| DeployError(format!("GitHub repository request failed: {error}")))?;
-        let status = response.status();
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|error| DeployError(format!("GitHub repository response failed: {error}")))?;
-        if !status.is_success() {
-            let detail = String::from_utf8_lossy(&bytes).replace(&credential, "[REDACTED]");
-            return Err(DeployError(format!(
-                "GitHub repository request returned HTTP {}: {}",
-                status.as_u16(),
-                detail.trim()
-            )));
-        }
-        let repository_id = serde_json::from_slice::<Value>(&bytes)
-            .map_err(|error| {
-                DeployError(format!("GitHub repository response is invalid: {error}"))
-            })?
-            .get("id")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| DeployError("GitHub repository response has no id".to_string()))?;
-        for secret in RELEASE_SECRETS {
-            let endpoint = format!(
-                "https://api.github.com/orgs/{GITHUB_ORGANIZATION}/actions/secrets/{secret}"
-            );
-            let response = client
-                .get(&endpoint)
-                .header(reqwest::header::ACCEPT, "application/vnd.github+json")
-                .header(reqwest::header::USER_AGENT, "wisent-stado-publisher-runner")
-                .header("X-GitHub-Api-Version", "2022-11-28")
-                .bearer_auth(&credential)
-                .send()
-                .await
-                .map_err(|error| {
-                    DeployError(format!(
-                        "GitHub organization secret request failed: {error}"
-                    ))
-                })?;
-            let status = response.status();
-            let bytes = response.bytes().await.map_err(|error| {
-                DeployError(format!(
-                    "GitHub organization secret response failed: {error}"
-                ))
-            })?;
-            if !status.is_success() {
-                let detail = String::from_utf8_lossy(&bytes).replace(&credential, "[REDACTED]");
-                return Err(DeployError(format!(
-                    "GitHub organization secret {secret} returned HTTP {}: {}",
-                    status.as_u16(),
-                    detail.trim()
-                )));
-            }
-            let secret_metadata = serde_json::from_slice::<Value>(&bytes).map_err(|error| {
-                DeployError(format!(
-                    "GitHub organization secret response is invalid: {error}"
-                ))
-            })?;
-            let visibility = secret_metadata
-                .get("visibility")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            if visibility == "all" {
-                continue;
-            }
-            if visibility != "selected" {
-                return Err(DeployError(format!(
-                    "GitHub organization secret {secret} has unsupported visibility {visibility:?}"
-                )));
-            }
-            let response = client
-                .put(format!("{endpoint}/repositories/{repository_id}"))
-                .header(reqwest::header::ACCEPT, "application/vnd.github+json")
-                .header(reqwest::header::USER_AGENT, "wisent-stado-publisher-runner")
-                .header("X-GitHub-Api-Version", "2022-11-28")
-                .bearer_auth(&credential)
-                .send()
-                .await
-                .map_err(|error| {
-                    DeployError(format!("GitHub organization secret grant failed: {error}"))
-                })?;
-            if !response.status().is_success() {
-                let status = response.status();
-                let bytes = response.bytes().await.map_err(|error| {
-                    DeployError(format!(
-                        "GitHub organization secret grant response failed: {error}"
-                    ))
-                })?;
-                let detail = String::from_utf8_lossy(&bytes).replace(&credential, "[REDACTED]");
-                return Err(DeployError(format!(
-                    "GitHub organization secret {secret} grant returned HTTP {}: {}",
-                    status.as_u16(),
-                    detail.trim()
-                )));
-            }
-        }
-    }
-    Ok(())
-}
 fn set_repository_secret(
     repository: &str,
     name: &str,
@@ -1140,16 +1012,20 @@ pub async fn install_publisher(
     target_name: &str,
     repositories: &[String],
 ) -> Result<Value, DeployError> {
-    grant_release_secrets(repositories).await?;
+    for repository in repositories {
+        bootstrap_publisher_repository(repository).await?;
+        reconcile_repository(repository).await?;
+    }
     install_profile(target_name, PUBLISHER).await
 }
+
 pub async fn reconcile_publisher_repository(repository: &str) -> Result<Value, DeployError> {
-    let repositories = [repository.to_string()];
-    grant_release_secrets(&repositories).await?;
+    let report = bootstrap_publisher_repository(repository).await?;
+    reconcile_repository(repository).await?;
     Ok(json!({
         "organization": GITHUB_ORGANIZATION,
         "repository": repository,
-        "release_secrets": RELEASE_SECRETS.len(),
+        "release_secrets": report["release_secrets"],
         "status": "reconciled",
     }))
 }
