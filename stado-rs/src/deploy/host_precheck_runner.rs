@@ -669,8 +669,8 @@ fi
 root mkdir -p "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/Library/Caches"
 root chown -R root:wheel "$runner_root"
 root chmod -R go-w "$runner_root"
-root chown -R "$runner_user:$runner_user" "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/Library/Caches"
-root chmod 700 "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/Library/Caches"
+root chown -R "$runner_user:$runner_user" "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/Library"
+root chmod 700 "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/Library" "$runner_root/Library/Caches"
 
 root mkdir -p "$runner_root/routes"
 printf '%s\n' __BRAMA_URL__ | root tee "$runner_root/routes/brama.url" >/dev/null
