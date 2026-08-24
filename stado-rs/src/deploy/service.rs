@@ -4209,6 +4209,168 @@ pub async fn fetch_unit_file(
     })
 }
 
+/// Mint a fresh bearer for CONSUMER against the host's own authoritative
+/// vault and land it at TOKEN_PATH, owner-only. The value never crosses the
+/// channel.
+pub async fn remint_consumer_grant_on_host(
+    target: &ComputeTarget,
+    consumer: &str,
+    capabilities: &str,
+    token_path: &str,
+    vault_file: &str,
+    runner: &Runner,
+) -> Result<RemoteReport, DeployError> {
+    let body = r#"set -eu
+fail() { echo 'remint_failed' "$1"; exit 1; }
+decode=-D
+if [ "$(uname)" = "Linux" ]; then decode=--decode; fi
+vault=$(printf '%s' '@VAULT_B64@' | /usr/bin/base64 "$decode")
+consumer=$(printf '%s' '@CONSUMER_B64@' | /usr/bin/base64 "$decode")
+caps=$(printf '%s' '@CAPS_B64@' | /usr/bin/base64 "$decode")
+token_path=$(printf '%s' '@TOKEN_PATH_B64@' | /usr/bin/base64 "$decode")
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export GNUPGHOME="$HOME/.gnupg"
+export SKARBIEC_VAULT_FILE="$vault"
+out=$("$HOME/.stado/bin/skarbiec" token-mint "$consumer" --capabilities "$caps" --replace-capabilities 2>&1)
+token=$(printf '%s' "$out" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+[ -n "$token" ] || fail "empty bearer from mint"
+umask u=rw,go=
+printf '%s' "$token" > "$token_path"
+# Ensure the admin integration item exists with a fresh token so the
+# launcher's required-secrets loop finds it.
+admin_item="wisent-backend-admin-integration-api"
+existing=$(SKARBIEC_VAULT_FILE="$vault" "$HOME/.stado/bin/skarbiec" get \
+    "$admin_item" --field token 2>/dev/null || true)
+if [ -z "$existing" ]; then
+  admin_token=$(/usr/bin/python3 -c 'import secrets; print(secrets.token_hex(32))')
+  tmp_item="$probe_dir/admin-item.json"
+  printf '{"token": "%s"}' "$admin_token" > "$tmp_item"
+  SKARBIEC_VAULT_FILE="$vault" "$HOME/.stado/bin/skarbiec" set-json \
+    "$admin_item" --from-file "$tmp_item"
+  /bin/rm -f "$tmp_item"
+fi
+echo 'STADO_REMINT	ok'"#;
+    let body = body
+        .replace("@VAULT_B64@", &STANDARD.encode(vault_file.as_bytes()))
+        .replace("@CONSUMER_B64@", &STANDARD.encode(consumer.as_bytes()))
+        .replace("@CAPS_B64@", &STANDARD.encode(capabilities.as_bytes()))
+        .replace("@TOKEN_PATH_B64@", &STANDARD.encode(token_path.as_bytes()));
+    let output = host_channel::run_script(target, &body, runner).await?;
+    if !output.stdout.contains("STADO_REMINT") {
+        return Err(DeployError(format!(
+            "{}: remint failed: {}",
+            target.name,
+            output.stderr.trim_end()
+        )));
+    }
+    Ok(report_from(output))
+}
+
+/// Atomically replace one line (KEY=VALUE) in a remote env file. Creates a
+/// backup before writing. Only the named key changes.
+pub async fn set_env_key_on_host(
+    target: &ComputeTarget,
+    env_path: &str,
+    key: &str,
+    value: &str,
+    runner: &Runner,
+) -> Result<RemoteReport, DeployError> {
+    let body = r#"set -eu
+fail() { echo 'env_set_failed' "$1"; exit 1; }
+decode=-D
+if [ "$(uname)" = "Linux" ]; then decode=--decode; fi
+env_path=$(printf '%s' '@ENV_PATH_B64@' | /usr/bin/base64 "$decode")
+key=@KEY@
+value=$(printf '%s' '@VALUE_B64@' | /usr/bin/base64 "$decode")
+[ -f "$env_path" ] || fail 'environment file not found'
+/bin/cp "$env_path" "$env_path.before-set-key.$$"
+/usr/bin/awk -v key="$key" -v val="$value" '
+  BEGIN { found = 0 }
+  $0 ~ "^" key "=" { print key "=" val; found = 1; next }
+  { print }
+  END { if (!found) print key "=" val }
+' "$env_path" > "$tmp_placeholder"
+/bin/mv -f "$tmp_placeholder" "$env_path"
+echo 'STADO_ENV_SET	ok'"#;
+    let body = body
+        .replace("@ENV_PATH_B64@", &STANDARD.encode(env_path.as_bytes()))
+        .replace("@KEY@", key)
+        .replace("@VALUE_B64@", &STANDARD.encode(value.as_bytes()))
+        .replace("$tmp_placeholder", "$env_path.set-key.$$");
+    let output = host_channel::run_script(target, &body, runner).await?;
+    if !output.stdout.contains("STADO_ENV_SET") {
+        return Err(DeployError(format!(
+            "{}: could not set {} in {}: {}",
+            target.name,
+            key,
+            env_path,
+            output.stderr.trim_end()
+        )));
+    }
+    Ok(report_from(output))
+}
+
+/// Write a base64-encoded payload to an absolute path on the host.
+/// Creates parent directories and sets owner-only permissions.
+pub async fn write_file_on_host(
+    target: &ComputeTarget,
+    path: &str,
+    content_b64: &str,
+    runner: &Runner,
+) -> Result<RemoteReport, DeployError> {
+    let body = r#"set -eu
+b64=@CONTENT_B64@
+path=$(printf '%s' '@PATH_B64@' | /usr/bin/base64 -D)
+/bin/mkdir -p "$(dirname "$path")"
+printf '%s' "$b64" | /usr/bin/base64 -D > "$path"
+/usr/bin/chmod u=rw,go= "$path"
+echo 'STADO_FILE_WRITTEN	ok'"#;
+    let body = body
+        .replace("@CONTENT_B64@", content_b64)
+        .replace("@PATH_B64@", &STANDARD.encode(path.as_bytes()));
+    let output = host_channel::run_script(target, &body, runner).await?;
+    if !output.stdout.contains("STADO_FILE_WRITTEN") {
+        return Err(DeployError(format!(
+            "{}: could not write file: {}",
+            target.name,
+            output.stderr.trim_end()
+        )));
+    }
+    Ok(report_from(output))
+}
+
+/// Write one vault item field on the host using its own Skarbiec binary
+/// and vault file. The value file must already exist on the host.
+pub async fn set_item_field_on_host(
+    target: &ComputeTarget,
+    item: &str,
+    field: &str,
+    value_file: &str,
+    runner: &Runner,
+) -> Result<RemoteReport, DeployError> {
+    let body = r#"set -eu
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export GNUPGHOME="$HOME/.gnupg"
+"$HOME/.stado/bin/skarbiec" set-json "$STADO_ITEM" --field "$STADO_FIELD" --from-file "$STADO_FROM"
+echo 'STADO_ITEM_SET	ok'"#;
+    let body = body
+        .replace("{vault_file}", "")
+        .replace("$STADO_ITEM", &shlex_quote(item))
+        .replace("$STADO_FIELD", &shlex_quote(field))
+        .replace("$STADO_FROM", &shlex_quote(value_file));
+    let output = host_channel::run_script(target, &body, runner).await?;
+    if !output.stdout.contains("STADO_ITEM_SET") {
+        return Err(DeployError(format!(
+            "{}: could not set {}.{}: {}",
+            target.name,
+            item,
+            field,
+            output.stderr.trim_end()
+        )));
+    }
+    Ok(report_from(output))
+}
+
 // ---------------------------------------------------------------------------
 // Registry document mutation (pure; the write goes through cli/registry.rs)
 // ---------------------------------------------------------------------------
