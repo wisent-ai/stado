@@ -97,6 +97,10 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   `declaration_incomplete` until its registry entry carries `program` and
   `args`, and only mutations that failed on a host feed the circuit breaker,
   so refusals cannot starve the healthy repairs behind them.
+  A `failed` unit is repaired the same way a missing one is, a loaded unit
+  with no live process — or with a live process running a stale copy of its
+  own declared binary — is kicked in place instead of refused, and only a
+  process executing a binary the unit never declared stays a refusal.
 
 - `stado host link TARGET [--json]` now says whether anybody is logged in on
   that host's screen. An operator asking where to see this in the GUI was

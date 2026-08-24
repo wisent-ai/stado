@@ -352,22 +352,40 @@ async fn reconcile_undeclared(
         let running = service::inspect_process(target, &corrected, runner)
             .await
             .map_err(|error| error.to_string())?;
-        if running.matches_process() != Some(true) {
-            return Err(format!(
-                "unit {} is loaded on the host but ownership is not proven by its running program",
-                plan.label
-            ));
+        match running.matches_process() {
+            Some(true) => {
+                let changed =
+                    replace_declaration(&status.service, corrected, program, args).await?;
+                let action = if changed { "adopted" } else { "confirmed" };
+                return Ok((
+                    action.to_string(),
+                    changed,
+                    format!(
+                        "beacon omitted unit {}, but the host reports it loaded and running its declared program",
+                        plan.label
+                    ),
+                ));
+            }
+            // `Some(false)` covers two different worlds and only one is a
+            // conflict. A process executing a binary the unit never declared
+            // is unknown ownership and stays refused. A process executing the
+            // declared binary that was REWRITTEN after the process started is
+            // the four-day stale-agent incident, and the in-place kick below
+            // is precisely its repair.
+            Some(false) => {
+                let same_binary = running
+                    .running_binary()
+                    .is_some_and(|binary| binary == running.declared || binary == running.resolved);
+                if !same_binary {
+                    return Err(format!(
+                        "unit {} is loaded on the host but ownership is not proven by its running program",
+                        plan.label
+                    ));
+                }
+            }
+            // the in-place `ensure` kick below is the repair, not a risk.
+            None => {}
         }
-        let changed = replace_declaration(&status.service, corrected, program, args).await?;
-        let action = if changed { "adopted" } else { "confirmed" };
-        return Ok((
-            action.to_string(),
-            changed,
-            format!(
-                "beacon omitted unit {}, but the host reports it loaded and running its declared program",
-                plan.label
-            ),
-        ));
     }
     let outcome = service::ensure_service(target, &plan, runner)
         .await
@@ -522,9 +540,11 @@ pub async fn reconcile(
                 outcomes.push(outcome);
                 continue;
             }
-        } else if status.state != service::STATE_MISSING {
+        } else if status.state != service::STATE_MISSING && status.state != service::STATE_FAILED {
             continue;
         } else {
+            // A `failed` unit is the same repair as a missing one: the unit
+            // exists, nothing runs under it, and `ensure` restarts in place.
             summary.missing += 1;
             let endpoint = endpoints
                 .get(&status.service.name)

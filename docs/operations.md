@@ -47,7 +47,12 @@ host's declared beacon unit is reasserted through the idempotent
 `service ensure` path over the host channel: the channel answering is the
 evidence that repair is possible, `ensure` restarts in place and never
 unloads, and once the beacon publishes again the rest of the host becomes
-repairable from real evidence. For a fresh beacon that omits a declared unit:
+repairable from real evidence. A `failed` unit is the same repair as a
+missing one — the unit exists, nothing runs under it, and the kick is in
+place. For a host-probed unit, a live process running a stale copy of its own
+declared binary is kicked (the four-day stale-agent incident), while a
+process executing a binary the unit never declared stays refused as
+`identity_unresolved`. For a fresh beacon that omits a declared unit:
 
 | Endpoint evidence | Reconciliation |
 |---|---|
