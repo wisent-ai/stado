@@ -1389,7 +1389,7 @@ pub async fn publish_placement_policy(
     });
 
     // Staged as a file because the delivery channel carries files: the same
-    // `install-file` path any other artifact takes, checksummed on arrival,
+    // delivered-file path any other artifact takes, checksummed on arrival,
     // rather than a private scp with the audit trail removed.
     let staged = tempfile::Builder::new()
         .prefix("stado-placement-policy-")

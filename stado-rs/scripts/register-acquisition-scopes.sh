@@ -4,7 +4,7 @@
 # stado prepends exactly one line above this script when it runs it:
 #   catalog_name=<shlex-quoted basename>
 # naming the catalog it delivered into "$HOME/.stado/files" through the
-# install-file channel moments earlier. Everything else about the
+# delivered-file channel moments earlier. Everything else about the
 # registration is fixed here: the vault, the workload key, and the single
 # skarbiec call. Modeled on weles's register-weles-acquisition-scopes-host.sh
 # with the two appstore token re-mints removed -- minting weles worker
