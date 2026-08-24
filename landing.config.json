@@ -4,17 +4,17 @@
   "domain": "https://stado.wisent.com",
   "repository": "https://github.com/wisent-ai/stado",
   "sourceUrl": "https://github.com/wisent-ai/stado",
-  "docsUrl": "https://github.com/wisent-ai/stado/tree/main/docs",
+  "docsUrl": "https://stado.wisent.com/docs",
   "discordUrl": "https://discord.gg/qRjpkthq54",
-  "ogImageAlt": "Stado by Wisent — one provider-neutral queue and job lifecycle across local, GCP, AWS, and Azure infrastructure",
+  "ogImageAlt": "Stado by Wisent \u2014 one provider-neutral queue and job lifecycle across local, GCP, AWS, and Azure infrastructure",
   "navLinks": [
     {
       "label": "Docs",
-      "href": "https://github.com/wisent-ai/stado/tree/main/docs"
+      "href": "https://stado.wisent.com/docs"
     },
     {
       "label": "CLI reference",
-      "href": "https://github.com/wisent-ai/stado/blob/main/docs/cli.md"
+      "href": "https://stado.wisent.com/docs/cli"
     },
     {
       "label": "Source",
@@ -28,23 +28,23 @@
   "footerLinks": [
     {
       "label": "Onboarding",
-      "href": "https://github.com/wisent-ai/stado/blob/main/docs/onboarding.md"
+      "href": "https://stado.wisent.com/docs/onboarding"
     },
     {
       "label": "Add your own machine",
-      "href": "https://github.com/wisent-ai/stado/blob/main/docs/add-your-machine.md"
+      "href": "https://stado.wisent.com/docs/add-your-machine"
     },
     {
       "label": "Architecture",
-      "href": "https://github.com/wisent-ai/stado/blob/main/docs/architecture.md"
+      "href": "https://stado.wisent.com/docs/architecture"
     },
     {
       "label": "Operations",
-      "href": "https://github.com/wisent-ai/stado/blob/main/docs/operations.md"
+      "href": "https://stado.wisent.com/docs/operations"
     },
     {
       "label": "Release and compatibility",
-      "href": "https://github.com/wisent-ai/stado/blob/main/docs/release.md"
+      "href": "https://stado.wisent.com/docs/release"
     },
     {
       "label": "Issues",
