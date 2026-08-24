@@ -204,9 +204,10 @@ async fn configure_publisher_group() -> Result<(), DeployError> {
         .await
         .map_err(|error| DeployError(format!("GitHub runner group request failed: {error}")))?;
     let status = response.status();
-    let bytes = response.bytes().await.map_err(|error| {
-        DeployError(format!("GitHub runner group response failed: {error}"))
-    })?;
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| DeployError(format!("GitHub runner group response failed: {error}")))?;
     if !status.is_success() {
         let detail = String::from_utf8_lossy(&bytes).replace(&credential, "[REDACTED]");
         return Err(DeployError(format!(
@@ -215,8 +216,9 @@ async fn configure_publisher_group() -> Result<(), DeployError> {
             detail.trim()
         )));
     }
-    let groups: Value = serde_json::from_slice(&bytes)
-        .map_err(|error| DeployError(format!("GitHub runner group response is invalid: {error}")))?;
+    let groups: Value = serde_json::from_slice(&bytes).map_err(|error| {
+        DeployError(format!("GitHub runner group response is invalid: {error}"))
+    })?;
     let group_id = groups
         .get("runner_groups")
         .and_then(Value::as_array)
@@ -245,7 +247,9 @@ async fn configure_publisher_group() -> Result<(), DeployError> {
     if !response.status().is_success() {
         let status = response.status();
         let bytes = response.bytes().await.map_err(|error| {
-            DeployError(format!("GitHub runner group update response failed: {error}"))
+            DeployError(format!(
+                "GitHub runner group update response failed: {error}"
+            ))
         })?;
         let detail = String::from_utf8_lossy(&bytes).replace(&credential, "[REDACTED]");
         return Err(DeployError(format!(
@@ -282,9 +286,10 @@ async fn grant_release_secrets(repositories: &[String]) -> Result<(), DeployErro
             .await
             .map_err(|error| DeployError(format!("GitHub repository request failed: {error}")))?;
         let status = response.status();
-        let bytes = response.bytes().await.map_err(|error| {
-            DeployError(format!("GitHub repository response failed: {error}"))
-        })?;
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|error| DeployError(format!("GitHub repository response failed: {error}")))?;
         if !status.is_success() {
             let detail = String::from_utf8_lossy(&bytes).replace(&credential, "[REDACTED]");
             return Err(DeployError(format!(
@@ -313,15 +318,18 @@ async fn grant_release_secrets(repositories: &[String]) -> Result<(), DeployErro
                 .send()
                 .await
                 .map_err(|error| {
-                    DeployError(format!("GitHub organization secret request failed: {error}"))
+                    DeployError(format!(
+                        "GitHub organization secret request failed: {error}"
+                    ))
                 })?;
             let status = response.status();
             let bytes = response.bytes().await.map_err(|error| {
-                DeployError(format!("GitHub organization secret response failed: {error}"))
+                DeployError(format!(
+                    "GitHub organization secret response failed: {error}"
+                ))
             })?;
             if !status.is_success() {
-                let detail =
-                    String::from_utf8_lossy(&bytes).replace(&credential, "[REDACTED]");
+                let detail = String::from_utf8_lossy(&bytes).replace(&credential, "[REDACTED]");
                 return Err(DeployError(format!(
                     "GitHub organization secret {secret} returned HTTP {}: {}",
                     status.as_u16(),
@@ -363,8 +371,7 @@ async fn grant_release_secrets(repositories: &[String]) -> Result<(), DeployErro
                         "GitHub organization secret grant response failed: {error}"
                     ))
                 })?;
-                let detail =
-                    String::from_utf8_lossy(&bytes).replace(&credential, "[REDACTED]");
+                let detail = String::from_utf8_lossy(&bytes).replace(&credential, "[REDACTED]");
                 return Err(DeployError(format!(
                     "GitHub organization secret {secret} grant returned HTTP {}: {}",
                     status.as_u16(),
@@ -445,8 +452,11 @@ async fn github_json(
     if bytes.is_empty() {
         return Ok(Value::Null);
     }
-    serde_json::from_slice(&bytes)
-        .map_err(|error| DeployError(format!("GitHub response from {endpoint} is invalid: {error}")))
+    serde_json::from_slice(&bytes).map_err(|error| {
+        DeployError(format!(
+            "GitHub response from {endpoint} is invalid: {error}"
+        ))
+    })
 }
 
 fn repository_name(repository: &str) -> Result<&str, DeployError> {
@@ -476,13 +486,7 @@ pub async fn reconcile_repository(repository: &str) -> Result<Value, DeployError
     let groups_endpoint = format!(
         "https://api.github.com/orgs/{GITHUB_ORGANIZATION}/actions/runner-groups?per_page=100"
     );
-    let groups = github_json(
-        reqwest::Method::GET,
-        &groups_endpoint,
-        &credential,
-        None,
-    )
-    .await?;
+    let groups = github_json(reqwest::Method::GET, &groups_endpoint, &credential, None).await?;
     let group = groups
         .get("runner_groups")
         .and_then(Value::as_array)
@@ -547,13 +551,7 @@ pub async fn reconcile_repository(repository: &str) -> Result<Value, DeployError
     let access_endpoint = format!(
         "https://api.github.com/orgs/{GITHUB_ORGANIZATION}/actions/runner-groups/{group_id}/repositories/{repository_id}"
     );
-    github_json(
-        reqwest::Method::PUT,
-        &access_endpoint,
-        &credential,
-        None,
-    )
-    .await?;
+    github_json(reqwest::Method::PUT, &access_endpoint, &credential, None).await?;
 
     Ok(json!({
         "organization": GITHUB_ORGANIZATION,
@@ -637,10 +635,7 @@ async fn private_brama_route(target_name: &str) -> Result<(String, u16), DeployE
     Ok((endpoint.url.trim_end_matches('/').to_string(), port))
 }
 
-async fn install_profile(
-    target_name: &str,
-    profile: RunnerProfile,
-) -> Result<Value, DeployError> {
+async fn install_profile(target_name: &str, profile: RunnerProfile) -> Result<Value, DeployError> {
     if profile.kind == PUBLISHER.kind {
         configure_publisher_group().await?;
     }
@@ -649,20 +644,8 @@ async fn install_profile(
     let (brama_url, brama_port) = private_brama_route(target_name).await?;
     let token = github_runner_token("registration").await?;
     let script = match platform {
-        Platform::LinuxAmd64 => linux_installer(
-            &target,
-            &token,
-            &brama_url,
-            brama_port,
-            profile,
-        ),
-        Platform::DarwinArm64 => macos_installer(
-            &target,
-            &token,
-            &brama_url,
-            brama_port,
-            profile,
-        ),
+        Platform::LinuxAmd64 => linux_installer(&target, &token, &brama_url, brama_port, profile),
+        Platform::DarwinArm64 => macos_installer(&target, &token, &brama_url, brama_port, profile),
     };
     let output = host_channel::run_script_with_timeout(
         &target,
@@ -683,10 +666,7 @@ async fn install_profile(
     Ok(value)
 }
 
-async fn status_profile(
-    target_name: &str,
-    profile: RunnerProfile,
-) -> Result<Value, DeployError> {
+async fn status_profile(target_name: &str, profile: RunnerProfile) -> Result<Value, DeployError> {
     let target = host_channel::canonical_target(target_name).await?;
     let script = profile_template(
         match Platform::for_target(&target)? {
@@ -708,10 +688,7 @@ async fn status_profile(
     Ok(value)
 }
 
-async fn remove_profile(
-    target_name: &str,
-    profile: RunnerProfile,
-) -> Result<Value, DeployError> {
+async fn remove_profile(target_name: &str, profile: RunnerProfile) -> Result<Value, DeployError> {
     let target = host_channel::canonical_target(target_name).await?;
     let platform = Platform::for_target(&target)?;
     let token = github_runner_token("remove").await?;
@@ -762,6 +739,16 @@ pub async fn install_publisher(
 ) -> Result<Value, DeployError> {
     grant_release_secrets(repositories).await?;
     install_profile(target_name, PUBLISHER).await
+}
+pub async fn reconcile_publisher_repository(repository: &str) -> Result<Value, DeployError> {
+    let repositories = [repository.to_string()];
+    grant_release_secrets(&repositories).await?;
+    Ok(json!({
+        "organization": GITHUB_ORGANIZATION,
+        "repository": repository,
+        "release_secrets": RELEASE_SECRETS.len(),
+        "status": "reconciled",
+    }))
 }
 
 pub async fn status_publisher(target_name: &str) -> Result<Value, DeployError> {

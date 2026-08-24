@@ -1118,6 +1118,14 @@ enum HostPublisherRunnerCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Grant one desktop repository the shared release secrets.
+    RepositoryAdd {
+        /// Repository name inside the wisent-ai organization.
+        repository: String,
+        /// Emit the reconciliation report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Read the installed runner service, identity and network boundary.
     Status {
         target: String,
@@ -2000,6 +2008,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                     repositories,
                     json,
                 } => precheck_runner::install_publisher(&target, &repositories, json).await,
+                HostPublisherRunnerCommands::RepositoryAdd { repository, json } => {
+                    precheck_runner::publisher_repository_add(&repository, json).await
+                }
                 HostPublisherRunnerCommands::Status { target, json } => {
                     precheck_runner::status_publisher(&target, json).await
                 }
