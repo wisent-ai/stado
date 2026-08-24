@@ -2214,6 +2214,14 @@ else
   /bin/cat > \"$unit_path\" <<'@HEREDOC@'
 @LINUX_UNIT@
 @HEREDOC@
+  # A user unit lives inside the user's systemd instance, and without linger
+  # that instance ends with the login session that created it — on rtx every
+  # user-scoped service (beacon, agent, router) died seconds after the deploy
+  # channel closed, and the host read as down. Lingering is the systemd
+  # mechanism for exactly this, so enabling the unit enables it too.
+  /usr/bin/loginctl enable-linger \"$service_user\" >/dev/null 2>&1 \
+    || \"${sudo_bin:-/usr/bin/sudo}\" /usr/bin/loginctl enable-linger \"$service_user\" >/dev/null 2>&1 \
+    || true
   systemctl_user daemon-reload >/dev/null 2>&1 || true
   detail=$(systemctl_user enable --now \"$unit\" 2>&1)
   rc=$?
@@ -2377,6 +2385,11 @@ if [ \"$os\" = \"Darwin\" ]; then
     rc=$?
   fi
 else
+  # Same linger guarantee as DEPLOY_BODY: an ensured user unit must outlive
+  # the login session that ensured it.
+  /usr/bin/loginctl enable-linger \"$service_user\" >/dev/null 2>&1 \
+    || \"${sudo_bin:-/usr/bin/sudo}\" /usr/bin/loginctl enable-linger \"$service_user\" >/dev/null 2>&1 \
+    || true
   systemctl_user daemon-reload >/dev/null 2>&1 || true
   if [ \"$had_unit\" = yes ]; then
     action=restarted
@@ -3090,7 +3103,10 @@ async fn restart_system_daemon(
     }
     let body = DAEMON_TERM_BODY
         .replace("@ARGV@", &shlex_quote(&daemon.argv))
-        .replace("@PIDS@", &shlex_quote(&validate_pid_list(&daemon.owned_pids)?));
+        .replace(
+            "@PIDS@",
+            &shlex_quote(&validate_pid_list(&daemon.owned_pids)?),
+        );
     let prelude = remote_prelude(service.unit_id(), "", &service.path)?;
     let mut report = run_remote_checked(
         target,
@@ -3378,9 +3394,9 @@ pub async fn check_service_env_bearer(
 fn validate_vault_reference(item: &str, field: &str) -> Result<(), DeployError> {
     let acceptable = |value: &str| {
         !value.is_empty()
-            && value
-                .chars()
-                .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.'))
+            && value.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+            })
     };
     if acceptable(item) && acceptable(field) {
         Ok(())
@@ -3746,7 +3762,12 @@ pub async fn ensure_service(
         )
         .replace("@DARWIN_UNIT@", plan.darwin_unit.trim_end_matches('\n'))
         .replace("@LINUX_UNIT@", plan.linux_unit.trim_end_matches('\n'));
-    let prelude = prelude_with(&plan.label, &plan.unit, &ensure_unit_path(plan), NO_DOMAIN_SYSTEM)?;
+    let prelude = prelude_with(
+        &plan.label,
+        &plan.unit,
+        &ensure_unit_path(plan),
+        NO_DOMAIN_SYSTEM,
+    )?;
     let mut report = run_remote_checked(
         target,
         &prelude,
