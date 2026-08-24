@@ -117,40 +117,48 @@ fn endpoint_states(
     states
 }
 
+/// Render the unit a repair would assert, through the one resolution chain
+/// `service ensure` already uses: the host's own declaration, then the shipped
+/// Wisent catalog, then the declaration bundled with this build. A second
+/// resolution order here would let a repair install a different program than
+/// an operator's `ensure` for the same name.
 fn resolved_plan(
     status: &ServiceStatus,
     target: &crate::targets::ComputeTarget,
 ) -> Result<(service::DeployPlan, String, Vec<String>), String> {
     let declared = &status.service;
-    let (program, args) = if !declared.program.is_empty() {
-        (declared.program.clone(), declared.args.clone())
-    } else {
-        let entry = crate::deploy::service_catalog::lookup(&declared.name)
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| {
-                format!(
-                    "nothing declares what {} runs on {}",
-                    declared.name, declared.host
-                )
-            })?;
-        crate::deploy::service_catalog::resolve_entry(
+    let mut unit =
+        crate::cli::service::unit_program(&target.name, &declared.name, None, &[], Some(declared))
+            .map_err(|error| error.to_string())?;
+    if unit.source == "catalog" {
+        let entry = crate::deploy::service_catalog::CatalogService {
+            name: declared.name.clone(),
+            summary: String::new(),
+            unit: unit.unit.clone(),
+            program: unit.program.clone(),
+            args: unit.args.clone(),
+        };
+        let (program, args) = crate::deploy::service_catalog::resolve_entry(
             &entry,
             &crate::deploy::service_catalog::home_for(target),
             Some(&target.release_platform),
             &target.name,
-        )
-    };
-    let unit = declared.unit_id();
-    if unit.is_empty() {
-        return Err(format!(
-            "{} on {} has no stable unit identity",
-            declared.name, declared.host
-        ));
+        );
+        unit.program = program;
+        unit.args = args;
     }
-    let label = unit.strip_suffix(".service").unwrap_or(unit);
-    let plan = service::plan_deploy_labelled(&declared.name, label, &program, &args)
-        .map_err(|error| error.to_string())?;
-    Ok((plan, program, args))
+    let plan = match unit
+        .unit
+        .as_deref()
+        .or_else(|| crate::cli::service::declared_label(declared))
+    {
+        Some(label) => {
+            service::plan_deploy_labelled(&declared.name, label, &unit.program, &unit.args)
+        }
+        None => service::plan_deploy(&declared.name, &unit.program, &unit.args),
+    }
+    .map_err(|error| error.to_string())?;
+    Ok((plan, unit.program, unit.args))
 }
 
 async fn replace_declaration(
@@ -263,6 +271,131 @@ async fn reconcile_unreachable(
     ))
 }
 
+/// Repair the one unit whose death blinds every other repair.
+///
+/// A silent host beacon turns every service on that host `unknown`, and this
+/// stage rightly refuses to mutate on unknown evidence — which would leave a
+/// dead beacon dead forever, and with it the whole host unrepairable. The
+/// beacon unit is the one exception: the evidence for "the beacon is down" is
+/// the beacon's own absence, and the evidence that repair is possible is the
+/// host channel answering. `ensure` restarts in place and never unloads, so a
+/// beacon that is actually healthy but unheard is kicked, not destroyed.
+///
+/// The registry is only written for a registry-sourced declaration; a
+/// recovery-sourced beacon stays owned by the fixed host-recovery program.
+async fn reconcile_beacon(
+    status: &ServiceStatus,
+    target: &crate::targets::ComputeTarget,
+    runner: &crate::deploy::Runner,
+) -> Result<(String, bool, String), String> {
+    let (plan, program, args) = resolved_plan(status, target)?;
+    let outcome = service::ensure_service(target, &plan, runner)
+        .await
+        .map_err(|error| error.to_string())?;
+    if !outcome.succeeded() {
+        return Err(format!(
+            "beacon ensure did not establish a running unit: {}",
+            outcome.report.failure()
+        ));
+    }
+    let mut declaration_changed = false;
+    if status.service.source == service::SOURCE_REGISTRY {
+        let corrected = service::record_from_ensure(
+            &status.service.host,
+            &status.service.name,
+            &outcome,
+            &status.service.managed_since,
+        );
+        declaration_changed =
+            replace_declaration(&status.service, corrected, program, args).await?;
+    }
+    Ok((
+        outcome.action.clone(),
+        outcome.changed() || declaration_changed,
+        format!(
+            "host beacon was silent; reasserted the beacon unit in the {} domain so evidence can resume",
+            outcome.domain_word()
+        ),
+    ))
+}
+
+/// A declared unit the service directory says nothing about has no endpoint
+/// to disprove, so "endpoint absence was not proven" would block its repair
+/// forever. The host channel is the evidence instead: the unit is probed on
+/// the box, a loaded unit must prove its live program before the declaration
+/// is corrected, and only a unit the host itself reports absent is ensured.
+async fn reconcile_undeclared(
+    status: &ServiceStatus,
+    target: &crate::targets::ComputeTarget,
+    runner: &crate::deploy::Runner,
+) -> Result<(String, bool, String), String> {
+    let (plan, program, args) = resolved_plan(status, target)?;
+    let report = service::probe_service(target, status.service.unit_id(), runner)
+        .await
+        .map_err(|error| error.to_string())?;
+    if !report.succeeded("probed") {
+        return Err(format!(
+            "the unit could not be inspected over the host channel: {}",
+            report.failure()
+        ));
+    }
+    if report.unit_state == "loaded" {
+        let mut corrected = service::record_from_report(
+            &status.service.host,
+            status.service.host_heuristic.as_deref(),
+            &status.service.name,
+            &report,
+            &status.service.managed_since,
+        );
+        corrected.program = program.clone();
+        corrected.args = args.clone();
+        let running = service::inspect_process(target, &corrected, runner)
+            .await
+            .map_err(|error| error.to_string())?;
+        if running.matches_process() != Some(true) {
+            return Err(format!(
+                "unit {} is loaded on the host but ownership is not proven by its running program",
+                plan.label
+            ));
+        }
+        let changed = replace_declaration(&status.service, corrected, program, args).await?;
+        let action = if changed { "adopted" } else { "confirmed" };
+        return Ok((
+            action.to_string(),
+            changed,
+            format!(
+                "beacon omitted unit {}, but the host reports it loaded and running its declared program",
+                plan.label
+            ),
+        ));
+    }
+    let outcome = service::ensure_service(target, &plan, runner)
+        .await
+        .map_err(|error| error.to_string())?;
+    if !outcome.succeeded() {
+        return Err(format!(
+            "ensure did not establish a running unit: {}",
+            outcome.report.failure()
+        ));
+    }
+    let corrected = service::record_from_ensure(
+        &status.service.host,
+        &status.service.name,
+        &outcome,
+        &status.service.managed_since,
+    );
+    let declaration_changed =
+        replace_declaration(&status.service, corrected, program, args).await?;
+    Ok((
+        outcome.action.clone(),
+        outcome.changed() || declaration_changed,
+        format!(
+            "the host itself reported the unit absent; ensure completed in {} domain",
+            outcome.domain_word()
+        ),
+    ))
+}
+
 /// A refused write must name the object and the boundary that refused it.
 ///
 /// The object API authorizes a write by matching its key against the
@@ -359,67 +492,78 @@ pub async fn reconcile(
     let mut mutations = usize::default();
 
     for status in statuses {
-        if status.state == service::STATE_UNKNOWN {
-            summary.unknown += 1;
-            outcomes.push(ServiceReconcileOutcome {
-                host: status.service.host.clone(),
-                service: status.service.name.clone(),
-                unit: status.service.unit_id().to_string(),
-                beacon_state: status.state.clone(),
-                endpoint_state: "not-used".to_string(),
-                classification: "unknown".to_string(),
-                action: "none".to_string(),
-                changed: false,
-                detail: status.detail.clone(),
-            });
-            continue;
-        }
-        if status.state != service::STATE_MISSING {
-            continue;
-        }
-        summary.missing += 1;
-        let endpoint = endpoints
-            .get(&status.service.name)
-            .copied()
-            .unwrap_or(EndpointState::Absent);
+        let is_beacon = status.service.unit_id().contains("host-health-beacon")
+            || status.service.name.contains("host-health-beacon");
         let mut outcome = ServiceReconcileOutcome {
             host: status.service.host.clone(),
             service: status.service.name.clone(),
             unit: status.service.unit_id().to_string(),
             beacon_state: status.state.clone(),
-            endpoint_state: endpoint.word().to_string(),
+            endpoint_state: "not-used".to_string(),
             classification: String::new(),
             action: "none".to_string(),
             changed: false,
             detail: String::new(),
         };
 
-        if status.service.source != service::SOURCE_REGISTRY {
-            outcome.classification = "externally_managed".to_string();
-            outcome.detail = "service belongs to the fixed recovery program".to_string();
-            summary.blocked += 1;
-            outcomes.push(outcome);
+        // Which repair this row needs. `None` means the row is recorded and
+        // left alone; every `Some` goes through one shared mutation gate below
+        // so no repair path can grow its own weaker safety checks.
+        let kind: Option<&'static str> = if status.state == service::STATE_UNKNOWN {
+            if is_beacon {
+                // The one exception to "unknown evidence mutates nothing":
+                // the beacon's own death is what makes everything unknown,
+                // and the host channel is its evidence and its repair path.
+                Some("beacon_repair")
+            } else {
+                summary.unknown += 1;
+                outcome.classification = "unknown".to_string();
+                outcome.detail = status.detail.clone();
+                outcomes.push(outcome);
+                continue;
+            }
+        } else if status.state != service::STATE_MISSING {
             continue;
-        }
-        if let Some(error) = &sweep_error {
-            outcome.classification = "endpoint_unverified".to_string();
-            outcome.endpoint_state = EndpointState::Unverified.word().to_string();
-            outcome.detail = format!("reachability sweep did not complete: {error}");
-            summary.blocked += 1;
-            outcomes.push(outcome);
-            continue;
-        }
-        let planned_action = match endpoint {
-            EndpointState::Observed => "adopt",
-            EndpointState::Unreachable => "ensure",
-            EndpointState::Unverified | EndpointState::Absent => {
-                outcome.classification = "endpoint_unverified".to_string();
-                outcome.detail = "unit is missing, but endpoint absence was not proven".to_string();
+        } else {
+            summary.missing += 1;
+            let endpoint = endpoints
+                .get(&status.service.name)
+                .copied()
+                .unwrap_or(EndpointState::Absent);
+            outcome.endpoint_state = endpoint.word().to_string();
+            if status.service.source != service::SOURCE_REGISTRY {
+                outcome.classification = "externally_managed".to_string();
+                outcome.detail = "service belongs to the fixed recovery program".to_string();
                 summary.blocked += 1;
                 outcomes.push(outcome);
                 continue;
             }
+            if let Some(error) = &sweep_error {
+                outcome.classification = "endpoint_unverified".to_string();
+                outcome.endpoint_state = EndpointState::Unverified.word().to_string();
+                outcome.detail = format!("reachability sweep did not complete: {error}");
+                summary.blocked += 1;
+                outcomes.push(outcome);
+                continue;
+            }
+            match endpoint {
+                EndpointState::Observed => Some("adopt"),
+                EndpointState::Unreachable => Some("ensure"),
+                // Not in the service directory at all: no endpoint exists to
+                // disprove, so the host channel is the evidence instead.
+                EndpointState::Absent => Some("host_probe"),
+                EndpointState::Unverified => {
+                    outcome.classification = "endpoint_unverified".to_string();
+                    outcome.detail =
+                        "unit is missing, but endpoint absence was not proven".to_string();
+                    summary.blocked += 1;
+                    outcomes.push(outcome);
+                    continue;
+                }
+            }
         };
+        let Some(planned_action) = kind else { continue };
+
         summary.planned += 1;
         outcome.action = format!("planned_{planned_action}");
         if policy.mode == AutonomyMode::Report || policy.emergency_paused {
@@ -480,10 +624,12 @@ pub async fn reconcile(
             continue;
         };
         mutations += 1;
-        let mut result = match endpoint {
-            EndpointState::Observed => reconcile_observed(&status, &target, &runner).await,
-            EndpointState::Unreachable => reconcile_unreachable(&status, &target, &runner).await,
-            EndpointState::Unverified | EndpointState::Absent => unreachable!(),
+        let mut result = match planned_action {
+            "beacon_repair" => reconcile_beacon(&status, &target, &runner).await,
+            "adopt" => reconcile_observed(&status, &target, &runner).await,
+            "ensure" => reconcile_unreachable(&status, &target, &runner).await,
+            "host_probe" => reconcile_undeclared(&status, &target, &runner).await,
+            _ => unreachable!(),
         };
         match crate::autonomy::storage::release_placement_lease(store, &lease_subject, &lease.token)
             .await
@@ -524,21 +670,29 @@ pub async fn reconcile(
                     || error.contains("ownership is not proven")
                 {
                     "identity_unresolved".to_string()
-                } else if error.starts_with("nothing declares") {
+                } else if error.contains("nothing declares") {
                     "declaration_incomplete".to_string()
                 } else {
                     "repair_failed".to_string()
                 };
                 outcome.detail = error.clone();
                 summary.failures += 1;
-                crate::autonomy::storage::record_mutation_outcome(
-                    store,
-                    false,
-                    Some(&error),
-                    policy.limits.circuit_breaker_failures,
-                    policy.limits.circuit_breaker_cooldown_seconds,
-                )
-                .await?;
+                // Only a mutation that actually failed on a host feeds the
+                // circuit breaker. `identity_unresolved` and
+                // `declaration_incomplete` are refusals computed before any
+                // host command ran; counting them opened the breaker on four
+                // incomplete declarations and starved every healthy repair
+                // behind them, fifteen minutes per tick, forever.
+                if outcome.classification == "repair_failed" {
+                    crate::autonomy::storage::record_mutation_outcome(
+                        store,
+                        false,
+                        Some(&error),
+                        policy.limits.circuit_breaker_failures,
+                        policy.limits.circuit_breaker_cooldown_seconds,
+                    )
+                    .await?;
+                }
             }
         }
         outcomes.push(outcome);

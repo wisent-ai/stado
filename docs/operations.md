@@ -41,22 +41,46 @@ while the `local` backup backend kept serving stale reads — the same defect
 
 The fleet-wide host-silence threshold is also the service-beacon freshness
 threshold. A missing or stale `reported_at` changes the service state to
-`unknown`; it never authorizes a host mutation. For a fresh beacon that omits
-a declared unit:
+`unknown`; it never authorizes a host mutation — with one exception. The
+beacon unit's own death is what makes every other unit `unknown`, so a silent
+host's declared beacon unit is reasserted through the idempotent
+`service ensure` path over the host channel: the channel answering is the
+evidence that repair is possible, `ensure` restarts in place and never
+unloads, and once the beacon publishes again the rest of the host becomes
+repairable from real evidence. For a fresh beacon that omits a declared unit:
 
 | Endpoint evidence | Reconciliation |
 |---|---|
 | `observed` | Probe the declared unit. Stado adopts a corrected path or unit record only when the unit is loaded and its live process matches the declared program. If ownership cannot be proven, Stado records `identity_unresolved`, alerts once on the transition, and refuses to create a duplicate. |
 | `unreachable` | Run the existing idempotent `service ensure` path. It creates a missing unit or restarts it in place, never unloads it, verifies the running postcondition, and updates the registry when the host selected a different valid unit path. |
-| `unverified` or no observation | Record `endpoint_unverified`, alert once on the transition, and make no change because endpoint absence was not proven. |
+| not declared in the service directory | The unit has no endpoint to disprove, so the host channel is the evidence: the unit is probed on the box, a loaded unit must prove its live program before adoption, and only a unit the host itself reports absent is ensured. |
+| `unverified` | Record `endpoint_unverified`, alert once on the transition, and make no change because endpoint absence was not proven. |
+
+Every repair renders its unit through the same resolution chain
+`service ensure` uses: the host's registry declaration, then the shipped
+Wisent catalog, then the declaration bundled with the build. A declaration
+that names only a unit path cannot be reinstalled from the document; the
+repair records `declaration_incomplete` and alerts until the registry entry
+carries its `program` and `args`, which is the durable fix — read the truth
+with `stado service show <name>`, write it into the entry, and every future
+repair renders from the document.
 
 `AutonomyMode::Report` records the same plan without executing it.
-`EnforceSafe` and `EnforceOwned` execute the reversible `adopt`/`ensure`
-actions, bounded by `max_actions_per_tick`, the emergency pause, the circuit
-breaker, and a per-service mutation lease. Failed repairs feed the existing
-circuit breaker and alert channels. Recovery-managed units stay with the
-fixed host-recovery program and are never silently converted into registry
-services.
+`EnforceSafe` and `EnforceOwned` execute the reversible repair actions,
+bounded by `max_actions_per_tick`, the emergency pause, the circuit breaker,
+and a per-service mutation lease. Only a mutation that failed on a host feeds
+the circuit breaker; `declaration_incomplete` and `identity_unresolved` are
+refusals computed before any host command runs, and a refusal must not starve
+the healthy repairs behind it. Recovery-managed units stay with the fixed
+host-recovery program and are never silently converted into registry
+services; the beacon exception asserts the unit without writing the registry
+for them.
+
+Known gap: a timer-driven oneshot beacon (Linux `host-health-beacon.timer` →
+oneshot service) is a unit shape `service ensure` cannot yet express — it
+asserts a running unit, and a oneshot exits by design. Declaring it as a
+plain service would create a restart loop, so such hosts stay with their
+installed timer and `scripts/publish-linux-host-beacon.sh`.
 
 Useful operator views:
 
