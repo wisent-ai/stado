@@ -2000,6 +2000,11 @@ const RESTART_BODY: &str = "if [ \"$os\" = \"Darwin\" ]; then
   say 'restarted' \"$domain\"
   exit 0
 else
+  # Same linger guarantee as DEPLOY_BODY: a restarted user unit must outlive
+  # the login session that restarted it.
+  /usr/bin/loginctl enable-linger \"$service_user\" >/dev/null 2>&1 \
+    || \"${sudo_bin:-/usr/bin/sudo}\" /usr/bin/loginctl enable-linger \"$service_user\" >/dev/null 2>&1 \
+    || true
   systemctl_user daemon-reload >/dev/null 2>&1 || true
   detail=$(systemctl_user restart \"$unit\" 2>&1)
   rc=$?
