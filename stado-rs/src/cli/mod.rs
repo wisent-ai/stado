@@ -1096,6 +1096,14 @@ enum HostPrecheckRunnerCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Ensure one repository may schedule jobs on the managed runner group.
+    RepositoryAdd {
+        /// Repository name inside the wisent-ai organization.
+        repository: String,
+        /// Emit the reconciliation report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1981,6 +1989,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 }
                 HostPrecheckRunnerCommands::Remove { target, json } => {
                     precheck_runner::remove(&target, json).await
+                }
+                HostPrecheckRunnerCommands::RepositoryAdd { repository, json } => {
+                    precheck_runner::repository_add(&repository, json).await
                 }
             },
             HostCommands::RemoveHelper { target, name, json } => {
