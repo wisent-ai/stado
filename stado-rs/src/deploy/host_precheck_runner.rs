@@ -9,7 +9,10 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use base64::{
+    engine::general_purpose::{STANDARD as BASE64, URL_SAFE, URL_SAFE_NO_PAD},
+    Engine as _,
+};
 use ring::rand::{SecureRandom, SystemRandom};
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde_json::{json, Value};
@@ -426,20 +429,8 @@ fn set_repository_secret(
 
 async fn sparkle_key_pair(repository: &str) -> Result<(String, String), DeployError> {
     let item = format!("{SPARKLE_ITEM_PREFIX}{repository}");
-    let credentials = crate::credential_store::admin_credentials()
+    let exists = crate::credential_store::owner::item_exists(&item)
         .map_err(|error| DeployError(error.to_string()))?;
-    let client = crate::skarbiec::Client::direct(
-        &credentials.url,
-        &credentials.consumer,
-        &credentials.token_file,
-    )
-    .map_err(|error| DeployError(error.to_string()))?;
-    let exists = client
-        .list_items()
-        .await
-        .map_err(|error| DeployError(error.to_string()))?
-        .iter()
-        .any(|candidate| candidate.id == item && candidate.deleted != Some(true));
     if exists {
         let private_key = crate::credential_store::owner::read_string(&item, "private_key")
             .map_err(|error| DeployError(error.to_string()))?;
@@ -482,6 +473,97 @@ async fn sparkle_key_pair(repository: &str) -> Result<(String, String), DeployEr
     .map_err(|error| DeployError(error.to_string()))?;
     Ok((private_key, public_key))
 }
+fn encode_app_store_private_key(value: &str) -> Result<String, DeployError> {
+    let mut value = value.trim().to_string();
+    if value.starts_with('"') && value.ends_with('"') {
+        value = serde_json::from_str::<String>(&value).map_err(|error| {
+            DeployError(format!(
+                "App Store Connect private_key is an invalid JSON string: {error}"
+            ))
+        })?;
+    }
+    if value.starts_with('{') {
+        let document: Value = serde_json::from_str(&value).map_err(|error| {
+            DeployError(format!(
+                "App Store Connect private_key is an invalid JSON object: {error}"
+            ))
+        })?;
+        let object = document.as_object().ok_or_else(|| {
+            DeployError("App Store Connect private_key JSON is not an object".to_string())
+        })?;
+        value = object
+            .get("private_key")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                DeployError(format!(
+                    "App Store Connect private_key JSON has no string private_key; fields: {}",
+                    object.keys().cloned().collect::<Vec<_>>().join(", ")
+                ))
+            })?
+            .to_string();
+    }
+    let normalized = value.trim().replace("\\n", "\n");
+    let is_pem = |candidate: &str| {
+        (candidate.starts_with("-----BEGIN PRIVATE KEY-----")
+            && candidate.ends_with("-----END PRIVATE KEY-----"))
+            || (candidate.starts_with("-----BEGIN EC PRIVATE KEY-----")
+                && candidate.ends_with("-----END EC PRIVATE KEY-----"))
+    };
+    let pem = if is_pem(&normalized) {
+        normalized
+    } else {
+        let compact: String = normalized
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+        let decoded = BASE64
+            .decode(&compact)
+            .or_else(|_| URL_SAFE.decode(&compact))
+            .or_else(|_| URL_SAFE_NO_PAD.decode(&compact))
+            .map_err(|error| {
+                DeployError(format!(
+                    "App Store Connect private_key is neither PEM nor base64 PEM \
+                     ({} bytes; decoder: {error})",
+                    compact.len()
+                ))
+            })?;
+        let decoded = String::from_utf8(decoded).map_err(|_| {
+            DeployError(
+                "App Store Connect private_key base64 does not contain UTF-8 PEM".to_string(),
+            )
+        })?;
+        let decoded = decoded.trim().to_string();
+        if !is_pem(&decoded) {
+            return Err(DeployError(
+                "App Store Connect private_key does not contain PEM".to_string(),
+            ));
+        }
+        decoded
+    };
+    let mut child = Command::new("openssl")
+        .args(["pkey", "-check", "-noout"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| DeployError(format!("could not start openssl pkey: {error}")))?;
+    child
+        .stdin
+        .as_mut()
+        .ok_or_else(|| DeployError("openssl pkey stdin is unavailable".to_string()))?
+        .write_all(pem.as_bytes())
+        .map_err(|error| DeployError(format!("could not write App Store Connect key: {error}")))?;
+    let output = child
+        .wait_with_output()
+        .map_err(|error| DeployError(format!("openssl pkey failed: {error}")))?;
+    if !output.status.success() {
+        return Err(DeployError(format!(
+            "App Store Connect private_key is not a valid PEM key: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(BASE64.encode(pem))
+}
 
 pub async fn bootstrap_publisher_repository(repository: &str) -> Result<Value, DeployError> {
     let repository = repository_name(repository)?;
@@ -494,7 +576,7 @@ pub async fn bootstrap_publisher_repository(repository: &str) -> Result<Value, D
     let app_store_private_key =
         crate::credential_store::owner::read_string(APP_STORE_CONNECT_ITEM, "private_key")
             .map_err(|error| DeployError(error.to_string()))?;
-    let app_store_private_key = BASE64.encode(app_store_private_key);
+    let app_store_private_key = encode_app_store_private_key(&app_store_private_key)?;
     let (sparkle_private_key, sparkle_public_key) = sparkle_key_pair(repository).await?;
     for (name, value) in [
         ("RELEASE_BOOTSTRAP_TOKEN", github_token.as_str()),

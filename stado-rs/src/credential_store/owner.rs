@@ -155,6 +155,34 @@ pub fn store_json(
     Ok(())
 }
 
+/// Check the owner vault itself for one live item.
+///
+/// Reads and writes must use the same vault. Consulting the broker list here
+/// can report an item absent while the owner vault already holds its signing
+/// key, which would rotate that key during an otherwise idempotent bootstrap.
+pub fn item_exists(id: &str) -> Result<bool, SkarbiecError> {
+    let output = std::process::Command::new(binary()?)
+        .arg("list")
+        .env("SKARBIEC_VAULT_FILE", vault()?)
+        .env_remove("SKARBIEC_UNLOCK")
+        .env_remove("SKARBIEC_UNLOCK_FILE")
+        .output()
+        .map_err(|error| SkarbiecError::Deployment(error.to_string()))?;
+    if !output.status.success() {
+        return Err(SkarbiecError::Deployment(format!(
+            "skarbiec could not list owner vault: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    let items: Vec<Value> = serde_json::from_slice(&output.stdout).map_err(|error| {
+        SkarbiecError::Deployment(format!("skarbiec owner list is not valid JSON: {error}"))
+    })?;
+    Ok(items.iter().any(|item| {
+        item.get("id").and_then(Value::as_str) == Some(id)
+            && item.get("deleted").and_then(Value::as_bool) != Some(true)
+    }))
+}
+
 /// Read one exact string field from the resolved owner vault.
 ///
 /// The value is captured from stdin/stdout only and never enters argv. This is
@@ -164,8 +192,6 @@ pub fn read_string(id: &str, field: &str) -> Result<String, SkarbiecError> {
     let output = std::process::Command::new(binary()?)
         .arg("get")
         .arg(id)
-        .arg("--field")
-        .arg(field)
         .env("SKARBIEC_VAULT_FILE", vault()?)
         .env_remove("SKARBIEC_UNLOCK")
         .env_remove("SKARBIEC_UNLOCK_FILE")
@@ -177,9 +203,17 @@ pub fn read_string(id: &str, field: &str) -> Result<String, SkarbiecError> {
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    let value = String::from_utf8(output.stdout)
-        .map_err(|_| SkarbiecError::Deployment(format!("{id}.{field} is not UTF-8")))?;
-    let value = value.trim_end_matches(['\r', '\n']).to_string();
+    let document: Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| SkarbiecError::Deployment(format!("{id} is not valid JSON: {error}")))?;
+    let value = document
+        .get("fields")
+        .and_then(Value::as_object)
+        .and_then(|fields| fields.get(field))
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            SkarbiecError::Deployment(format!("{id} has no string field {field}"))
+        })?
+        .to_string();
     if value.is_empty() {
         return Err(SkarbiecError::Deployment(format!("{id}.{field} is empty")));
     }
