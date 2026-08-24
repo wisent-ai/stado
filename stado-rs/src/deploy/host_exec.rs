@@ -278,6 +278,24 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               a one-sided ping cannot — whether the degraded path is this host's or the peer's",
     },
     ApprovedCommand {
+        argv: &[TAILSCALE_PROGRAM, "serve", "status", "--json"],
+        why: "prints this node's serve and funnel handler table as JSON: which HTTPS port \
+              forwards to which loopback origin, and whether funnel is on. `status` is the \
+              read-only verb; the forms that change anything (`serve --bg`, `funnel`, `reset`) \
+              are absent from this table because the allowlist matches an entry exactly. This \
+              is the read that says a published endpoint 404s because its rule was lost, which \
+              on 2026-08-24 left Jeden reading bare 404s from Brama while every beacon said \
+              active, and could only be diagnosed from outside the host",
+    },
+    ApprovedCommand {
+        argv: &[TAILSCALE_PROGRAM, "funnel", "status"],
+        why: "prints whether funnel is enabled and which origins it publishes. `status` is \
+              the read-only verb and takes no operand, so nothing here can publish, retract, \
+              or alter a rule. It is the postcondition half of the serve-status read: brama's \
+              funnel publisher (brama/scripts/brama-funnel-publisher.sh) verifies itself with \
+              exactly this command, so an operator can re-check its verdict by hand",
+    },
+    ApprovedCommand {
         argv: &["/sbin/ifconfig", "-a"],
         why: "lists every network interface with its addresses and flags. `-a` only widens the \
               selection to interfaces that are not up, which is the whole point: the interface \
