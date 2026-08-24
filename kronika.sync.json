@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "documents": [
+    {
+      "output": "docs/operations.md",
+      "sources": ["stado-rs/src/deploy", "stado-rs/src/monitor"],
+      "instruction": "Operator documentation for Stado fleet operations: beacons, service reconciliation, host commands. Keep the existing section order and the failure quick-grep table."
+    },
+    {
+      "output": "docs/autonomy.md",
+      "sources": ["stado-rs/src/autonomy", "stado-rs/src/coordinator.rs"],
+      "instruction": "The operator page for stado optimize: cycle order, modes, safety rails, reports. Link operations.md for the reconciliation table instead of duplicating it."
+    },
+    {
+      "output": "docs/jobs.md",
+      "sources": ["stado-rs/src/queue", "stado-rs/src/scheduler", "stado-rs/src/monitor/heartbeat_guard.rs"],
+      "instruction": "The queue user's page: job lifecycle from submit to results, profiles, schedules, costs."
+    },
+    {
+      "output": "docs/security.md",
+      "sources": ["stado-rs/src/dashboard/mod.rs", "stado-rs/src/skarbiec", "stado-rs/src/deploy/host_exec.rs"],
+      "instruction": "The trust-boundary page: which token opens what, the host channel contract, what never leaves a host, rotation, enrollment trust, the money boundary."
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "documents": {
+    "docs/operations.md": {
+      "headSha": "d13aeec38fc880e66a7c7b01ca3f5585751af11a",
+      "syncedAt": "2026-08-24T19:48:17.967Z",
+      "lastAction": "baseline"
+    },
+    "docs/autonomy.md": {
+      "headSha": "d13aeec38fc880e66a7c7b01ca3f5585751af11a",
+      "syncedAt": "2026-08-24T19:48:17.967Z",
+      "lastAction": "baseline"
+    },
+    "docs/jobs.md": {
+      "headSha": "d13aeec38fc880e66a7c7b01ca3f5585751af11a",
+      "syncedAt": "2026-08-24T19:48:17.967Z",
+      "lastAction": "baseline"
+    },
+    "docs/security.md": {
+      "headSha": "d13aeec38fc880e66a7c7b01ca3f5585751af11a",
+      "syncedAt": "2026-08-24T19:48:17.967Z",
+      "lastAction": "baseline"
+    }
+  }
+}
