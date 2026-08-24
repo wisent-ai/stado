@@ -13,6 +13,7 @@ pub mod model;
 pub mod optimizer;
 pub mod policy;
 pub mod reconciler;
+pub mod service_reconciler;
 pub mod storage;
 
 pub use model::{DecisionRecord, InventorySnapshot, ResourceRecord, SavingsRecord};

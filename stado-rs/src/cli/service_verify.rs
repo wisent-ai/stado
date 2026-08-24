@@ -120,21 +120,18 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const STANDBY_DETAIL: &str = "standby address for a host that is not serving; not probed";
 
 /// One declaration, checked or explicitly not checked.
-struct Finding {
-    service: String,
-    host: String,
-    endpoint: String,
-    state: &'static str,
-    detail: String,
+pub(crate) struct Finding {
+    pub(crate) service: String,
+    pub(crate) host: String,
+    pub(crate) endpoint: String,
+    pub(crate) state: &'static str,
+    pub(crate) detail: String,
     /// Did anything go and look? False only for a standby address, which is
     /// declared not to be serving and so has nothing to answer for.
     ///
-    /// A flag rather than a comparison against [`STANDBY_DETAIL`]: two places
-    /// decide something about these rows -- the sweep, which must not print a
-    /// probe's copy of a declaration it read itself, and the observation
-    /// record, which must not file one -- and a decision that turns on
-    /// matching a sentence breaks the day the sentence is reworded.
-    probed: bool,
+    /// A flag rather than a comparison against [`STANDBY_DETAIL`]: the sweep
+    /// and observation writer must agree without matching human prose.
+    pub(crate) probed: bool,
 }
 
 impl Finding {
@@ -577,9 +574,10 @@ fn field(row: &Value, key: &str) -> String {
         .to_string()
 }
 
-/// `service verify`: sweep the whole directory from every vantage that holds a
-/// declaration.
-pub async fn verify(host: Option<&str>, json_output: bool) -> Result<(), CmdError> {
+/// Collect and persist one reachability sweep without rendering it. The
+/// coordinator uses this before service reconciliation so every mutation is
+/// based on a fresh external observation, not yesterday's local cache.
+pub(crate) async fn sweep(host: Option<&str>) -> Result<Vec<Finding>, CmdError> {
     let registry = load_registry_auto()
         .await
         .map_err(|exc| CmdError::click(exc.to_string()))?;
@@ -594,9 +592,6 @@ pub async fn verify(host: Option<&str>, json_output: bool) -> Result<(), CmdErro
         .flatten()
         .map(|target| target.name.clone());
 
-    // What each host is declared to hold, so a host that cannot be probed still
-    // reports its declarations as unverified rather than vanishing from the
-    // table. A missing row reads as "fine" to every operator alive.
     let mut per_host: std::collections::BTreeMap<String, Vec<(String, String)>> =
         std::collections::BTreeMap::new();
     for (name, service) in &directory.services {
@@ -613,12 +608,6 @@ pub async fn verify(host: Option<&str>, json_output: bool) -> Result<(), CmdErro
                 .push((name.clone(), endpoint));
         }
     }
-    // Standby addresses come from the directory in hand, once, for every host
-    // in scope -- including a host that holds nothing else and is therefore
-    // never probed from anywhere. They count towards "is there anything to
-    // report", because a host whose only declaration is a standby address has
-    // a declaration, and answering "no service names that host" would be
-    // false.
     let standby = standby_findings(directory, host);
     if per_host.is_empty() && standby.is_empty() {
         return Err(CmdError::click(match host {
@@ -629,17 +618,20 @@ pub async fn verify(host: Option<&str>, json_output: bool) -> Result<(), CmdErro
 
     let mut findings = Vec::new();
     for (target, declared) in &per_host {
-        // Own host in-process: the local path is the same code the probe runs,
-        // and round-tripping to the machine already executing the command
-        // would report `unverified` for the one vantage that is certain.
         if me.as_deref() == Some(target.as_str()) {
             findings.extend(local_findings(&registry, target).await);
-            continue;
+        } else {
+            findings.extend(remote_findings(target, declared).await);
         }
-        findings.extend(remote_findings(target, declared).await);
     }
     findings.extend(standby);
     record_observations(&findings);
+    Ok(findings)
+}
+
+/// `service verify`: sweep the whole directory from every declared vantage.
+pub async fn verify(host: Option<&str>, json_output: bool) -> Result<(), CmdError> {
+    let findings = sweep(host).await?;
     emit(&findings, json_output);
     fail_on_unreachable(&findings)
 }

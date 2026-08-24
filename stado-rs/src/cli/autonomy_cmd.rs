@@ -52,6 +52,7 @@ struct OptimizeStatus {
     forecast: Option<Value>,
     anomalies: Option<Value>,
     savings: Option<Value>,
+    service_reconciliation: Option<Value>,
 }
 
 #[derive(Serialize)]
@@ -120,6 +121,11 @@ async fn status(json_output: bool) -> Result<(), CmdError> {
         forecast: report_value(&store, "forecast").await?,
         anomalies: report_value(&store, "anomalies").await?,
         savings: report_value(&store, "savings").await?,
+        service_reconciliation: crate::autonomy::storage::read_json(
+            &store,
+            "autonomy/services/latest.json",
+        )
+        .await?,
     };
     if json_output {
         println!("{}", serde_json::to_string_pretty(&status)?);
@@ -170,6 +176,9 @@ async fn status(json_output: bool) -> Result<(), CmdError> {
     }
     if let Some(savings) = status.savings {
         println!("Savings: {}", serde_json::to_string_pretty(&savings)?);
+    }
+    if let Some(services) = status.service_reconciliation {
+        println!("Services: {}", serde_json::to_string_pretty(&services)?);
     }
     Ok(())
 }

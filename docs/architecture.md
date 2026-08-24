@@ -213,6 +213,8 @@ places:
   rather than as agreeing.
 - `service_directory.services[].endpoints[<target>]` — the endpoint that
   host answers on for a service, whether or not it is the active host.
+- `targets[].services[]` — the launchd/systemd unit, program, arguments and
+  host-side unit path Stado is required to keep running.
 
 `stado host inventory <target>` is the observation, and it reconciles the
 two along axes that are deliberately independent of each other:
@@ -222,6 +224,8 @@ two along axes that are deliberately independent of each other:
 | Marker vs listener | Is anything listening where `$HOME/.stado/forwards/<name>.url` points? | `matched`, `stale`, `unreadable`, `unknown` |
 | Marker vs registry | Does that marker point where `service_directory` declares this host answers? | `matched`, `disagrees`, `undeclared` |
 | Binary vs registry | Is the installed binary at the version `managed_versions` requires? | `matched`, `behind`, `ahead`, `mismatched`, `undeclared`, `unknown` |
+| Service unit vs beacon | Does a fresh host beacon report the declared unit? | `active`, `inactive`, `failed`, `missing`, `unknown` |
+| Service endpoint vs consumers | Does the declared address answer from its required vantages? | `observed`, `unreachable`, `unverified`, `never` |
 
 Keeping the first two apart is the whole point. A marker can be `matched`
 against the socket table and `disagrees` against the registry at the same
@@ -238,3 +242,13 @@ automation; it is a faster way to break production. The declaration
 (`managed_versions`) came first, the visibility (`host inventory`
 reconciliation) second, and delivery is built on top of both rather than
 beside them.
+
+The autonomy cycle reconciles the last two axes together. A stale beacon is
+`unknown`, never `missing`. A fresh missing unit plus a proven unreachable
+endpoint enters idempotent `service ensure`; a responding endpoint enters
+adoption only after Stado proves a loaded unit owns the declared program.
+Unproven ownership, an unavailable probe, and failed repair produce durable
+service reconciliation records and transition-deduplicated alerts rather than
+a guessed deployment. Report mode records the action; enforcing modes execute
+it under the emergency pause, circuit breaker, action limit and per-service
+mutation lease.
