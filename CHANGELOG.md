@@ -87,6 +87,17 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   why `optimize status` still printed a forecast. `stado optimize run` now
   completes and persists.
 
+- Made the repair loop self-sufficient. A silent host's declared beacon unit
+  is now reasserted over the host channel — the one exception to "unknown
+  evidence mutates nothing", because the beacon's death is what makes
+  everything else unknown. A declared unit the service directory never names
+  is repaired from host-channel evidence instead of being blocked forever on
+  unprovable endpoint absence. Repairs render units through the same
+  resolution chain as `service ensure`, an unrenderable declaration reports
+  `declaration_incomplete` until its registry entry carries `program` and
+  `args`, and only mutations that failed on a host feed the circuit breaker,
+  so refusals cannot starve the healthy repairs behind them.
+
 - `stado host link TARGET [--json]` now says whether anybody is logged in on
   that host's screen. An operator asking where to see this in the GUI was
   answered "nowhere": the fact existed only inside `stado service restart`,

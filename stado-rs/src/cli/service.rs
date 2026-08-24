@@ -2813,15 +2813,19 @@ struct EnsureOptions<'a> {
 }
 
 /// What a unit runs, and which declaration said so.
-struct UnitProgram {
-    program: String,
-    args: Vec<String>,
+///
+/// `pub(crate)` because the autonomy service reconciler renders repair units
+/// through this exact chain; a second resolution order over there is how one
+/// unit gets two different programs depending on who asked.
+pub(crate) struct UnitProgram {
+    pub(crate) program: String,
+    pub(crate) args: Vec<String>,
     /// `"flag"`, `"registry"`, `"catalog"` or `"shipped"`.
-    source: &'static str,
+    pub(crate) source: &'static str,
     /// Stable unit identity supplied by a registry or catalog declaration.
-    unit: Option<String>,
+    pub(crate) unit: Option<String>,
 }
-fn declared_label(service: &ManagedService) -> Option<&str> {
+pub(crate) fn declared_label(service: &ManagedService) -> Option<&str> {
     let unit_id = service.unit_id();
     Some(unit_id.strip_suffix(".service").unwrap_or(unit_id)).filter(|label| !label.is_empty())
 }
@@ -2838,7 +2842,7 @@ fn declared_label(service: &ManagedService) -> Option<&str> {
 /// this build ([`targets::load_bundled_registry`]), which is how a unit
 /// declared in a release reaches a canonical document published before it:
 /// the first `ensure` writes it there.
-fn unit_program(
+pub(crate) fn unit_program(
     host: &str,
     name: &str,
     from: Option<&str>,
