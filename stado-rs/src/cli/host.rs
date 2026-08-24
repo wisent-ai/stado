@@ -2878,7 +2878,90 @@ pub(crate) async fn deliver_file(
 /// shlex-quoted `catalog_name=` line [`sync_acquisition_scopes`] prepends,
 /// the same way [`stream_file`] hands the remote side its file name.
 const REGISTER_ACQUISITION_SCOPES_SCRIPT: &str =
-    include_str!("../../scripts/register-acquisition-scopes.sh");
+    r#"#!/bin/sh
+# Register one delivered Skarbiec acquisition-scope catalog on this host.
+#
+# stado prepends exactly one line above this script when it runs it:
+#   catalog_name=<shlex-quoted basename>
+# naming the catalog it delivered into "$HOME/.stado/files" through the
+# delivered-file channel moments earlier. Everything else about the
+# registration is fixed here: the vault, the workload key, and the single
+# skarbiec call. Modeled on weles's register-weles-acquisition-scopes-host.sh
+# with the two appstore token re-mints removed -- minting weles worker
+# credentials is not part of registering a catalog, and every re-mint
+# silently extended those tokens' expiry.
+set -eu
+umask 077
+
+home=${HOME:?HOME is required}
+bin="$home/.stado/bin/skarbiec"
+vault="$home/.stado/skarbiec.vault.json"
+private_key="$home/.stado/weles-credential-workload-private.pem"
+catalog="$home/.stado/files/$catalog_name"
+PATH="/opt/homebrew/opt/openssl@3/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
+if [ -x /opt/homebrew/opt/openssl@3/bin/openssl ]; then
+  openssl=/opt/homebrew/opt/openssl@3/bin/openssl
+else
+  openssl=$(command -v openssl || true)
+fi
+
+public_key=
+new_private_key=
+cleanup() {
+  [ -z "$public_key" ] || rm -f "$public_key"
+  [ -z "$new_private_key" ] || rm -f "$new_private_key"
+}
+trap cleanup EXIT HUP INT TERM
+
+# The name was checked before delivery; check it again here so the file this
+# script reads is decided by this script, not by whoever wrote the variable.
+case "$catalog_name" in
+  ""|.*|*[!A-Za-z0-9._-]*)
+    printf 'invalid catalog file name\n' >&2
+    exit 1
+    ;;
+esac
+
+for file in "$bin" "$vault" "$private_key" "$catalog"; do
+  [ -f "$file" ] || {
+    printf 'required acquisition-scope file is missing: %s\n' "$file" >&2
+    exit 1
+  }
+done
+[ -n "$openssl" ] || {
+  printf 'openssl is required to derive the workload public key\n' >&2
+  exit 1
+}
+
+public_key=$(mktemp "$home/.stado/weles-acquisition-public.XXXXXX")
+
+# Skarbiec accepts only an Ed25519 workload key. A host still holding an
+# older key gets one Ed25519 replacement, and the new private key takes the
+# canonical path only after registration with its public half succeeded.
+candidate_key="$private_key"
+key_description=$("$openssl" pkey -in "$private_key" -text -noout 2>/dev/null || true)
+case "$key_description" in
+  *ED25519*) ;;
+  *)
+    new_private_key=$(mktemp "$home/.stado/weles-acquisition-private.XXXXXX")
+    "$openssl" genpkey -algorithm ED25519 -out "$new_private_key" >/dev/null 2>&1
+    chmod 600 "$new_private_key"
+    candidate_key="$new_private_key"
+    ;;
+esac
+"$openssl" pkey -in "$candidate_key" -pubout -out "$public_key" >/dev/null 2>&1
+SKARBIEC_VAULT_FILE="$vault" \
+  "$bin" token-register-acquisitions "$catalog" \
+    --workload-public-key-file "$public_key" \
+    --replace-capabilities >/dev/null
+if [ "$candidate_key" != "$private_key" ]; then
+  mv -f "$candidate_key" "$private_key"
+  new_private_key=
+fi
+
+printf '{"status":"reconciled","catalog":"%s"}\n' "$catalog_name"
+"#;
 
 /// The basename a local catalog is delivered and registered under.
 ///
@@ -3218,7 +3301,79 @@ pub async fn remove_file(target: &str, path: &str, json: bool) -> Result<(), Cmd
 /// The retag this binary carries, run as one fixed remote script — the same
 /// channel every other host action takes now that nothing installs scripts on
 /// hosts to be run later.
-const RETAG_SCRIPT: &str = include_str!("../../scripts/retag-vault-item.sh");
+const RETAG_SCRIPT: &str = r#"#!/bin/sh
+# Replace the tags of one Skarbiec item on this host, and prove what changed.
+#
+# Tags are not decoration on a vault item: consumers enumerate by them. Brama
+# treats an item as a spendable subscription only when it carries
+# `brama:subscription` and `brama:agent:<agent>`, so an item that loses those
+# tags disappears from the fleet while its credential stays valid and every
+# health check keeps reporting green. That is not a hypothetical -- it took a
+# working Kimi subscription out of service for a day, and the vault item was at
+# revision 144 with zero tags while `/readyz` still answered `ready: true`.
+#
+# A retag is an owner write, so it can only run where the owner key is: on the
+# host itself, against $HOME/.stado/skarbiec.vault.json. It replaces tags only
+# and never touches or re-encrypts the payload, which is exactly why this
+# exists as its own operation rather than as a `set-json` that would rewrite a
+# live credential to restore a label.
+#
+# The caller prepends `item` and `tags` as shell-quoted bindings. Reports
+# tab-delimited STADO_RETAG markers -- before, after -- so the caller states
+# what the host had and has rather than asserting success.
+set -eu
+PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+export PATH
+GNUPGHOME="${GNUPGHOME:-$HOME/.gnupg}"
+export GNUPGHOME
+SKARBIEC="$HOME/.stado/bin/skarbiec"
+SKARBIEC_VAULT_FILE="${SKARBIEC_VAULT_FILE:-$HOME/.stado/skarbiec.vault.json}"
+export SKARBIEC_VAULT_FILE
+
+if [ ! -x "$SKARBIEC" ]; then
+  printf 'no Skarbiec binary at %s\n' "$SKARBIEC" > /dev/stderr
+  exit 1
+fi
+if [ ! -f "$SKARBIEC_VAULT_FILE" ]; then
+  printf 'no vault at %s\n' "$SKARBIEC_VAULT_FILE" > /dev/stderr
+  exit 1
+fi
+
+# Whether this build can retag at all. The discriminator is the usage literal,
+# never the bare command name: rustc packs string literals into one
+# unterminated blob, so a binary that carries the command shows
+# `...setgetretagdelete...` on a single line and a whole-line match for `retag`
+# reports absent on a build that has it. That false negative cost an hour and
+# sent one diagnosis at the wrong host.
+if ! strings -a "$SKARBIEC" 2>/dev/null | grep -q 'usage: retag <id> --tags'; then
+  printf 'the Skarbiec build at %s predates the retag operation\n' "$SKARBIEC" > /dev/stderr
+  exit 1
+fi
+
+report() {
+  python3 - "$SKARBIEC_VAULT_FILE" "$item" "$1" <<'PY'
+import json, sys
+vault_path, item_id, phase = sys.argv[1], sys.argv[2], sys.argv[3]
+item = json.load(open(vault_path)).get("items", {}).get(item_id)
+if item is None:
+    print(f"STADO_RETAG\t{phase}\tabsent\t-\t-")
+else:
+    tags = item.get("tags") or []
+    print(
+        "STADO_RETAG\t{phase}\t{state}\t{revision}\t{tags}".format(
+            phase=phase,
+            state=item.get("state") or "-",
+            revision=item.get("revision") if item.get("revision") is not None else "-",
+            tags=",".join(tags) if tags else "-",
+        )
+    )
+PY
+}
+
+report before
+"$SKARBIEC" retag "$item" --tags "$tags" > /dev/null
+report after
+"#;
 
 /// A vault item id or tag: the alphabet `release_component` allows, plus the
 /// `:` that every one of these names is built out of
@@ -3349,7 +3504,69 @@ pub async fn retag_vault_item(
 }
 
 /// The unit-log reader this binary carries, run as one fixed remote script.
-const UNIT_LOG_SCRIPT: &str = include_str!("../../scripts/report-unit-log.sh");
+const UNIT_LOG_SCRIPT: &str = r#"#!/bin/sh
+# The tail of one managed unit's own log, read from the paths its unit file
+# declares.
+#
+# Why this exists: when a unit crash-loops, the only thing that says why is the
+# log it writes, and until now nothing in Stado could read it. `host health`
+# reports a unit as `failed` and carries an empty `last_log`; `service status`
+# reports the state; `host exec` is a read-only allowlist that cannot cat a
+# file. So the operator's fastest route to the sentence that names the fault was
+# an ssh session — the one thing the fleet forbids. A brama restart that
+# answered on one poll and was gone on the next cost half an hour of guessing
+# for want of these twenty lines.
+#
+# The caller prepends `unit` and `lines` as shell-quoted bindings. Reports the
+# declared paths, then the tail of each, prefixed so two files never blur into
+# one. Read-only: nothing is written, nothing is installed.
+set -eu
+PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+export PATH
+
+plist=""
+for candidate in \
+  "/Library/LaunchDaemons/$unit.plist" \
+  "$HOME/Library/LaunchAgents/$unit.plist" \
+  "/Library/LaunchAgents/$unit.plist"; do
+  if [ -f "$candidate" ]; then
+    plist="$candidate"
+    break
+  fi
+done
+if [ -z "$plist" ]; then
+  printf 'no unit file for %s in the daemon or agent directories\n' "$unit" > /dev/stderr
+  exit 1
+fi
+printf 'STADO_UNITLOG\tplist\t%s\n' "$plist"
+
+# One reader for both keys: a unit that sends stdout and stderr to the same file
+# must not be tailed twice, and a unit that separates them must not have half of
+# its account silently dropped.
+paths=$(/usr/libexec/PlistBuddy -c 'Print :StandardOutPath' "$plist" 2>/dev/null || true)
+errs=$(/usr/libexec/PlistBuddy -c 'Print :StandardErrorPath' "$plist" 2>/dev/null || true)
+if [ -n "$errs" ] && [ "$errs" != "$paths" ]; then
+  paths="$paths
+$errs"
+fi
+if [ -z "$paths" ]; then
+  printf 'STADO_UNITLOG\tdeclared\tnone\n'
+  printf '%s declares no log path\n' "$unit" > /dev/stderr
+  exit 1
+fi
+
+printf '%s\n' "$paths" | while IFS= read -r log; do
+  [ -n "$log" ] || continue
+  if [ -f "$log" ]; then
+    printf 'STADO_UNITLOG\tfile\t%s\n' "$log"
+    printf '=== %s (last %s lines)\n' "$log" "$lines"
+    tail -n "$lines" -- "$log" 2>/dev/null || printf '    unreadable\n'
+  else
+    printf 'STADO_UNITLOG\tabsent\t%s\n' "$log"
+    printf '=== %s (absent)\n' "$log"
+  fi
+done
+"#;
 
 /// The tail of one managed unit's own log, from the paths its unit file
 /// declares.
@@ -3434,7 +3651,253 @@ pub async fn unit_log(
 /// A run performed on a worker host leaves its evidence on that host, so an
 /// operator anywhere else could see none of it — which is what kept sending
 /// people to a shell on the machine. This is the read that answers instead.
-const WELES_ACTIVITY_SCRIPT: &str = include_str!("../../scripts/report-weles-activity.sh");
+const WELES_ACTIVITY_SCRIPT: &str = r#"#!/bin/bash
+# Report what a Weles worker host is doing, as one JSON document on stdout.
+#
+# Travels inside the stado binary and runs over the fixed-script channel: there
+# is nothing to install on the host and nothing left behind after the read.
+#
+# Recordings hold page DOM, console output, HAR bodies, personas and proxy
+# identities. None of that is emitted. What leaves the host is counts,
+# timestamps, run identifiers, artifact sizes, cost, and the pass/fail flag a
+# trajectory wrote about itself — the fields a remote operator view needs to
+# name a run and say how it ended.
+set -euo pipefail
+
+if [ -x /opt/homebrew/bin/node ]; then
+  node=/opt/homebrew/bin/node
+elif [ -x /usr/local/bin/node ]; then
+  node=/usr/local/bin/node
+else
+  printf '%s\n' 'Node.js is unavailable on this host' >&2
+  exit 69
+fi
+
+limit=${WELES_ACTIVITY_RUN_LIMIT:-40}
+port=${WELES_API_PORT:-8788}
+
+"$node" - "$limit" "$port" <<'NODE'
+const fs = require('node:fs');
+const net = require('node:net');
+const os = require('node:os');
+const path = require('node:path');
+
+const runLimit = Math.max(1, Number.parseInt(process.argv.at(-2), 10) || 40);
+const apiPort = Number.parseInt(process.argv.at(-1), 10) || 8788;
+const home = os.homedir();
+const workerRoot = path.join(home, '.local/share/weles-worker');
+
+const hostname = String(os.hostname()).trim().toLowerCase().replace(/\.+$/, '');
+const shortHostname = hostname.endsWith('.local') ? hostname.slice(0, -'.local'.length) : hostname;
+
+const isoOrNull = (value) => {
+  const time = Number(value);
+  return Number.isFinite(time) && time > 0 ? new Date(time).toISOString() : null;
+};
+
+const readJson = (file) => {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+};
+
+// The version marker names the release the activator staged; the directories say
+// which releases actually ran here. The two disagree while a deploy is mid
+// flight, and a report that carried only one of them would hide that.
+const releaseMarker = (() => {
+  try {
+    return fs.readFileSync(path.join(home, '.stado/files/weles-release-version'), 'utf8').trim() || null;
+  } catch {
+    return null;
+  }
+})();
+
+const compareVersions = (left, right) => {
+  const parts = (value) => String(value).split('.').map((piece) => Number.parseInt(piece, 10) || 0);
+  const [a, b] = [parts(left), parts(right)];
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    const difference = (a[index] ?? 0) - (b[index] ?? 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+};
+
+let releases = [];
+try {
+  releases = fs
+    .readdirSync(workerRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort(compareVersions);
+} catch (error) {
+  if (error?.code !== 'ENOENT') throw error;
+}
+
+const ARTIFACT_CLASSES = [
+  ['screenshots', /\.png$/i],
+  ['pages', /\.html$/i],
+  ['videos', /\.webm$/i],
+  ['logs', /\.(log|ndjson)$/i],
+  ['records', /\.json$|\.jsonl$|\.har$/i],
+];
+
+const classify = (name) => {
+  for (const [label, pattern] of ARTIFACT_CLASSES) {
+    if (pattern.test(name)) return label;
+  }
+  return 'other';
+};
+
+const RUNNING_WINDOW_MS = 180_000;
+
+const describeRun = (release, platform, runDirectory) => {
+  const stat = fs.statSync(runDirectory);
+  const counts = { screenshots: 0, pages: 0, videos: 0, logs: 0, records: 0, other: 0 };
+  let bytes = 0;
+  let action = null;
+  let resultOk = null;
+  let startedAt = null;
+  let completedAt = null;
+
+  const walk = (directory, depth) => {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        // The one directory directly under a run is the action that produced it.
+        if (depth === 0 && !action) action = entry.name;
+        if (depth < 4) walk(full, depth + 1);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      counts[classify(entry.name)] += 1;
+      try {
+        bytes += fs.statSync(full).size;
+      } catch {
+        // A file rotated away mid-walk is not worth failing the report over.
+      }
+      if (/result\.json$/i.test(entry.name)) {
+        const document = readJson(full);
+        if (document && typeof document.ok === 'boolean') resultOk = document.ok;
+        if (typeof document?.completed_at === 'string') completedAt = document.completed_at;
+      } else if (entry.name === 'session_meta.json') {
+        const document = readJson(full);
+        if (typeof document?.started_at === 'string') startedAt = document.started_at;
+      }
+    }
+  };
+  walk(runDirectory, 0);
+
+  const uploaded = fs.existsSync(path.join(runDirectory, '.uploaded.json'));
+  const costs = readJson(path.join(path.dirname(runDirectory), '_costs', `${path.basename(runDirectory)}.json`));
+  const isFresh = Date.now() - stat.mtimeMs < RUNNING_WINDOW_MS;
+
+  let status = 'recorded';
+  if (resultOk === true) status = 'succeeded';
+  else if (resultOk === false) status = 'failed';
+  else if (isFresh) status = 'running';
+
+  return {
+    id: path.basename(runDirectory),
+    release,
+    platform,
+    action,
+    status,
+    started_at: startedAt ?? isoOrNull(stat.birthtimeMs),
+    completed_at: completedAt,
+    updated_at: isoOrNull(stat.mtimeMs),
+    artifact_counts: counts,
+    artifact_bytes: bytes,
+    cost_usd: typeof costs?.cost_usd === 'number' ? costs.cost_usd : null,
+    uploaded,
+  };
+};
+
+const runs = [];
+let runTotal = 0;
+for (const release of releases) {
+  const releaseRoot = path.join(workerRoot, release);
+  let platforms = [];
+  try {
+    platforms = fs
+      .readdirSync(releaseRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch {
+    continue;
+  }
+  for (const platform of platforms) {
+    const recordings = path.join(releaseRoot, platform, 'recordings');
+    let entries = [];
+    try {
+      entries = fs.readdirSync(recordings, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      // `_costs` is the sidecar ledger of the runs beside it, not a run.
+      if (!entry.isDirectory() || entry.name === '_costs') continue;
+      runTotal += 1;
+      runs.push({ release, platform, directory: path.join(recordings, entry.name) });
+    }
+  }
+}
+
+runs.sort((left, right) => {
+  const time = (row) => {
+    try {
+      return fs.statSync(row.directory).mtimeMs;
+    } catch {
+      return 0;
+    }
+  };
+  return time(right) - time(left);
+});
+
+const described = runs.slice(0, runLimit).map((row) => describeRun(row.release, row.platform, row.directory));
+
+const probePort = (port) =>
+  new Promise((resolve) => {
+    const socket = net.createConnection({ host: '127.0.0.1', port });
+    const finish = (listening) => {
+      socket.destroy();
+      resolve(listening);
+    };
+    socket.setTimeout(1500);
+    socket.once('connect', () => finish(true));
+    socket.once('timeout', () => finish(false));
+    socket.once('error', () => finish(false));
+  });
+
+probePort(apiPort).then((listening) => {
+  const document = {
+    schema_version: 1,
+    host: shortHostname || hostname,
+    hostname,
+    generated_at: new Date().toISOString(),
+    worker: {
+      staged_release: releaseMarker,
+      installed_releases: releases,
+      newest_release: releases.at(-1) ?? null,
+    },
+    api: {
+      endpoint: `http://127.0.0.1:${apiPort}`,
+      listening,
+    },
+    run_total: runTotal,
+    runs: described,
+  };
+  process.stdout.write(`STADO-WELES-ACTIVITY ${JSON.stringify(document)}\n`);
+});
+NODE
+"#;
 
 /// The marker the embedded script prefixes to its one JSON line, so a login
 /// shell's own greeting cannot be mistaken for the report.
