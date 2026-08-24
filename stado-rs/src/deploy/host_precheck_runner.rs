@@ -655,7 +655,7 @@ if [ ! -f "$runner_root/.runner" ]; then
   root codesign --remove-signature "$runner_root/bin/Runner.Listener"
   root codesign --remove-signature "$runner_root/bin/Runner.Worker"
   root chown -R "$runner_user:$runner_user" "$runner_root"
-  root mkdir -p "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup"
+  root mkdir -p "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/Library/Caches"
   printf '%s' "$token" > "$token_file"
   chmod 600 "$token_file"
   root chown "$runner_user:$runner_user" "$token_file"
@@ -666,11 +666,11 @@ if [ ! -f "$runner_root/.runner" ]; then
   token=
 fi
 
-root mkdir -p "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup"
+root mkdir -p "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/Library/Caches"
 root chown -R root:wheel "$runner_root"
 root chmod -R go-w "$runner_root"
-root chown -R "$runner_user:$runner_user" "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup"
-root chmod 700 "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup"
+root chown -R "$runner_user:$runner_user" "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/Library/Caches"
+root chmod 700 "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/Library/Caches"
 
 root mkdir -p "$runner_root/routes"
 printf '%s\n' __BRAMA_URL__ | root tee "$runner_root/routes/brama.url" >/dev/null
