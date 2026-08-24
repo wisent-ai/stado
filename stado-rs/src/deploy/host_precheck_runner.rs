@@ -43,9 +43,6 @@ const PUBLISHER: RunnerProfile = RunnerProfile {
 };
 
 const RELEASE_SECRETS: &[&str] = &[
-    "MACOS_CERT_P12",
-    "MACOS_CERT_PASSWORD",
-    "MACOS_SIGN_IDENTITY",
     "RELEASE_BOOTSTRAP_TOKEN",
     "AC_API_KEY_ID",
     "AC_API_ISSUER_ID",
