@@ -155,6 +155,37 @@ pub fn store_json(
     Ok(())
 }
 
+/// Read one exact string field from the resolved owner vault.
+///
+/// The value is captured from stdin/stdout only and never enters argv. This is
+/// the owner-side counterpart to broker reads for bootstrap credentials whose
+/// workload grants deliberately exclude the Stado control process.
+pub fn read_string(id: &str, field: &str) -> Result<String, SkarbiecError> {
+    let output = std::process::Command::new(binary()?)
+        .arg("get")
+        .arg(id)
+        .arg("--field")
+        .arg(field)
+        .env("SKARBIEC_VAULT_FILE", vault()?)
+        .env_remove("SKARBIEC_UNLOCK")
+        .env_remove("SKARBIEC_UNLOCK_FILE")
+        .output()
+        .map_err(|error| SkarbiecError::Deployment(error.to_string()))?;
+    if !output.status.success() {
+        return Err(SkarbiecError::Deployment(format!(
+            "skarbiec could not read {id}.{field}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    let value = String::from_utf8(output.stdout)
+        .map_err(|_| SkarbiecError::Deployment(format!("{id}.{field} is not UTF-8")))?;
+    let value = value.trim_end_matches(['\r', '\n']).to_string();
+    if value.is_empty() {
+        return Err(SkarbiecError::Deployment(format!("{id}.{field} is empty")));
+    }
+    Ok(value)
+}
+
 /// Write one item into the resolved owner vault.
 pub fn write_item(
     id: &str,

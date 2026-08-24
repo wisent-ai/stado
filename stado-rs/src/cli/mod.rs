@@ -1126,6 +1126,14 @@ enum HostPublisherRunnerCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Create repository signing material and publish its required release secrets.
+    Bootstrap {
+        /// Repository name inside the wisent-ai organization.
+        repository: String,
+        /// Emit the bootstrap report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Read the installed runner service, identity and network boundary.
     Status {
         target: String,
@@ -2010,6 +2018,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 } => precheck_runner::install_publisher(&target, &repositories, json).await,
                 HostPublisherRunnerCommands::RepositoryAdd { repository, json } => {
                     precheck_runner::publisher_repository_add(&repository, json).await
+                }
+                HostPublisherRunnerCommands::Bootstrap { repository, json } => {
+                    precheck_runner::bootstrap_publisher_repository(&repository, json).await
                 }
                 HostPublisherRunnerCommands::Status { target, json } => {
                     precheck_runner::status_publisher(&target, json).await

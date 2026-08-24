@@ -122,6 +122,33 @@ pub async fn publisher_repository_add(repository: &str, json_output: bool) -> Re
     }
     Ok(())
 }
+/// Create one repository's durable Sparkle key and required release secrets.
+pub async fn bootstrap_publisher_repository(
+    repository: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let report = crate::deploy::host_precheck_runner::bootstrap_publisher_repository(repository)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if json_output {
+        println!(
+            "{}",
+            crate::deploy::host_recovery::to_sorted_pretty(&report)
+        );
+    } else {
+        println!(
+            "{}/{}: desktop release {}",
+            cell(report.get("organization")),
+            cell(report.get("repository")),
+            cell(report.get("status"))
+        );
+        println!(
+            "Sparkle public key: {}",
+            cell(report.get("sparkle_public_key"))
+        );
+    }
+    Ok(())
+}
 
 /// Read the installed desktop publisher service, identity and network boundary.
 pub async fn status_publisher(target: &str, json: bool) -> Result<(), CmdError> {
