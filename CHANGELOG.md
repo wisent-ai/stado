@@ -79,6 +79,14 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   endpoint is proven unreachable, and persists each run with deduplicated
   failure alerts, mutation leases, action limits and circuit-breaker feedback.
 
+- Rooted every autonomy object under `state/`. The object gateway authorizes a
+  write by prefix, no namespace declares `autonomy/`, and so placement,
+  resource reconciliation, cost reports and service reconciliation had all been
+  refused with `401 unauthorized or non-immutable release write` since
+  2026-08-19 while the `local` backup backend kept serving stale reads, which is
+  why `optimize status` still printed a forecast. `stado optimize run` now
+  completes and persists.
+
 - `stado host link TARGET [--json]` now says whether anybody is logged in on
   that host's screen. An operator asking where to see this in the GUI was
   answered "nowhere": the fact existed only inside `stado service restart`,

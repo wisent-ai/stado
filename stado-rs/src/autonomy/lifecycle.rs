@@ -32,10 +32,10 @@ pub async fn enforce(
     }
     let artifact_ttl = policy.idle.artifact_days * crate::monitor::billing::SECONDS_PER_DAY;
     let targets = [
-        ("autonomy/leases/", policy.limits.decision_ttl_seconds),
-        ("autonomy/decisions/", artifact_ttl),
-        ("autonomy/plans/", artifact_ttl),
-        ("autonomy/feedback/", artifact_ttl),
+        ("state/autonomy/leases/", policy.limits.decision_ttl_seconds),
+        ("state/autonomy/decisions/", artifact_ttl),
+        ("state/autonomy/plans/", artifact_ttl),
+        ("state/autonomy/feedback/", artifact_ttl),
     ];
     for (prefix, ttl_seconds) in targets {
         let blobs = store.list_blobs_with_meta(prefix).await?;
@@ -60,7 +60,7 @@ pub async fn enforce(
         }
     }
     let mut snapshots = store
-        .list_blobs_with_meta("autonomy/inventory/snapshots/")
+        .list_blobs_with_meta("state/autonomy/inventory/snapshots/")
         .await?;
     snapshots.sort_by_key(|blob| std::cmp::Reverse(blob.updated));
     for blob in snapshots.into_iter().skip(true as usize) {

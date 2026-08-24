@@ -253,7 +253,7 @@ pub async fn collect_completed(store: &JobStorage) -> Result<Vec<CostRow>, Stora
 pub async fn collect_completed_dynamic(store: &JobStorage) -> Result<Vec<CostRow>, StorageError> {
     let Some(prices) = crate::autonomy::storage::read_json::<crate::autonomy::cost::PriceBook>(
         store,
-        "autonomy/cost/prices.json",
+        "state/autonomy/cost/prices.json",
     )
     .await?
     else {

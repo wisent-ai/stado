@@ -58,7 +58,7 @@ pub async fn reconcile(
     summary.automatic_actions = plan.actions.len();
     super::storage::write_json(
         store,
-        &format!("autonomy/plans/{}.json", plan.operation_id),
+        &format!("state/autonomy/plans/{}.json", plan.operation_id),
         &plan,
         false,
     )
@@ -245,7 +245,7 @@ async fn reconcile_schedules(
             occurrence.to_rfc3339()
         );
         let marker_hash = hex::encode(Sha256::digest(marker_key.as_bytes()));
-        let marker_path = format!("autonomy/decisions/schedule-{marker_hash}.json");
+        let marker_path = format!("state/autonomy/decisions/schedule-{marker_hash}.json");
         if !acquire_schedule_marker(store, &marker_path, policy, now).await? {
             continue;
         }
@@ -260,7 +260,7 @@ async fn reconcile_schedules(
         )?;
         super::storage::write_json(
             store,
-            &format!("autonomy/plans/{}.json", plan.operation_id),
+            &format!("state/autonomy/plans/{}.json", plan.operation_id),
             &plan,
             false,
         )
