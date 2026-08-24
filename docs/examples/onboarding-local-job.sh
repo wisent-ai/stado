@@ -12,5 +12,7 @@ JOB_ID=$(stado submit --profile local -- echo hello-from-stado | awk -F'"' '/"id
 echo "submitted: $JOB_ID"
 stado job watch "$JOB_ID"
 
-# the result, downloaded
-stado results "$JOB_ID"
+# the result, downloaded; results takes JOB_ID and OUTPUT_DIR
+OUT_DIR=$(mktemp -d)
+stado results "$JOB_ID" "$OUT_DIR"
+ls -la "$OUT_DIR"

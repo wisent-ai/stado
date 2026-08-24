@@ -19,7 +19,6 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-
 struct SigningVault {
     addr: SocketAddr,
 }
@@ -30,9 +29,7 @@ impl SigningVault {
 
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let addr = listener.local_addr().unwrap();
-        let encoded = Arc::new(
-            base64::engine::general_purpose::STANDARD.encode(private_key),
-        );
+        let encoded = Arc::new(base64::engine::general_purpose::STANDARD.encode(private_key));
         thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { continue };
@@ -192,97 +189,95 @@ fn write_grant(path: &Path) {
 }
 
 fn registry(home: &Path, storage: &Path, public_key: &str) {
-    let hostname = String::from_utf8(
-        run(Command::new("hostname").arg("-f")).stdout,
-    )
-    .unwrap()
-    .trim()
-    .to_ascii_lowercase();
+    let hostname = String::from_utf8(run(Command::new("hostname").arg("-f")).stdout)
+        .unwrap()
+        .trim()
+        .to_ascii_lowercase();
     let document = json!({
-            "schema_version": 2,
-            "targets": [{
-                "name": "ci-runner",
-                "kind": "local",
-                "ssh": "nobody@127.0.0.1",
-                "release_platform": "darwin-arm64",
-                "hostnames": [hostname],
-                "disk_cleanup": {
-                    "mode": "off",
-                    "check_interval_seconds": 300,
-                    "low_free_gb": 10,
-                    "target_free_gb": 12,
-                    "max_bytes_per_pass": 53687091200_u64,
-                    "max_items_per_pass": 50,
-                    "max_scan_items": 10000,
-                    "cleaners": {}
-                },
-                "services": [{
-                    "kind": "launchd",
-                    "name": "ci-release-probe",
-                    "label": "ci-release-probe",
-                    "path": home.join("Library/LaunchAgents/ci-release-probe.plist"),
-                    "unit": ""
-                }],
-                "slots": 1
+        "schema_version": 2,
+        "targets": [{
+            "name": "ci-runner",
+            "kind": "local",
+            "ssh": "nobody@127.0.0.1",
+            "release_platform": "darwin-arm64",
+            "hostnames": [hostname],
+            "disk_cleanup": {
+                "mode": "off",
+                "check_interval_seconds": 300,
+                "low_free_gb": 10,
+                "target_free_gb": 12,
+                "max_bytes_per_pass": 53687091200_u64,
+                "max_items_per_pass": 50,
+                "max_scan_items": 10000,
+                "cleaners": {}
+            },
+            "services": [{
+                "kind": "launchd",
+                "name": "ci-release-probe",
+                "label": "ci-release-probe",
+                "path": home.join("Library/LaunchAgents/ci-release-probe.plist"),
+                "unit": ""
             }],
-            "service_directory": {
-                "authority": {
-                    "target": "ci-runner",
-                    "command": env!("CARGO_BIN_EXE_stado")
-                },
-                "generation": 1,
-                "services": {
-                    "ci-release-probe": {
-                        "active_host": "ci-runner",
-                        "managed_service": "ci-release-probe",
-                        "endpoints": {
-                            "ci-runner": {"url": "http://127.0.0.1:1"}
-                        },
-                        "consumers": {
-                            "ci-release": {"capabilities": ["release"]}
-                        }
+            "slots": 1
+        }],
+        "service_directory": {
+            "authority": {
+                "target": "ci-runner",
+                "command": env!("CARGO_BIN_EXE_stado")
+            },
+            "generation": 1,
+            "services": {
+                "ci-release-probe": {
+                    "active_host": "ci-runner",
+                    "managed_service": "ci-release-probe",
+                    "endpoints": {
+                        "ci-runner": {"url": "http://127.0.0.1:1"}
+                    },
+                    "consumers": {
+                        "ci-release": {"capabilities": ["release"]}
                     }
                 }
-            },
-            "release_control": {
-                "schema_version": 1,
-                "generation": 1,
-                "trusted_keys": {"ci-release-key": public_key.trim()},
-                "products": {
-                    "ci-release-probe": {
-                        "service": "ci-release-probe",
-                        "config_schema": 1,
-                        "state_schema": 1,
-                        "install_root": home.join(".stado/services/ci-release-probe"),
-                        "binary": "bin/ci-release-probe",
-                        "launcher": "bin/ci-release-probe",
-                        "binary_env": "CI_RELEASE_PROBE_BIN",
-                        "port_env": "CI_RELEASE_PROBE_PORT",
-                        "runtime_env": "CI_RELEASE_PROBE_RUNTIME",
-                        "environment": {},
-                        "signing_key_item": "ci-release-signing",
-                        "signing_key_id": "ci-release-key",
-                        "strategy": {
-                            "kind": "replace",
-                            "readiness_timeout_seconds": 30,
-                            "drain_timeout_seconds": 30,
-                            "rollback_window_seconds": 300,
-                            "automatic_rollback": false
-                        },
-                        "targets": {
-                            "ci-runner": {
-                                "platform": "darwin-arm64",
-                                "run_as_user": "ci-release",
-                                "home": home,
-                                "state_dir": home.join(".stado/release-state"),
-                                "runtime_root": home.join(".stado/run"),
-                                "logs_root": home.join(".stado/logs")
-                            }
+            }
+        },
+        "release_control": {
+            "schema_version": 1,
+            "generation": 1,
+            "trusted_keys": {"ci-release-key": public_key.trim()},
+            "products": {
+                "ci-release-probe": {
+                    "service": "ci-release-probe",
+                    "config_schema": 1,
+                    "state_schema": 1,
+                    "install_root": home.join(".stado/services/ci-release-probe"),
+                    "binary": "bin/ci-release-probe",
+                    "launcher": "bin/ci-release-probe",
+                    "binary_env": "CI_RELEASE_PROBE_BIN",
+                    "port_env": "CI_RELEASE_PROBE_PORT",
+                    "runtime_env": "CI_RELEASE_PROBE_RUNTIME",
+                    "environment": {},
+                    "signing_key_item": "ci-release-signing",
+                    "signing_key_id": "ci-release-key",
+                    "strategy": {
+                        "kind": "replace",
+                        "readiness_timeout_seconds": 30,
+                        "drain_timeout_seconds": 30,
+                        "rollback_window_seconds": 300,
+                        "automatic_rollback": false
+                    },
+                    "targets": {
+                        "ci-runner": {
+                            "platform": "darwin-arm64",
+                            "run_as_user": "ci-release",
+                            "home": home,
+                            "state_dir": home.join(".stado/release-state"),
+                            "runtime_root": home.join(".stado/run"),
+                            "logs_root": home.join(".stado/logs")
                         }
                     }
                 }
             }
-        });
+        }
+    });
     fs::write(
         storage.join("registry.json"),
         serde_json::to_string_pretty(&document).unwrap(),
@@ -317,7 +312,9 @@ fn store_snapshot(storage: &Path) -> String {
     let mut out = String::new();
     for prefix in ["queue", "running", "failed", "completed", "capacity"] {
         let path = storage.join(prefix);
-        let Ok(entries) = fs::read_dir(&path) else { continue };
+        let Ok(entries) = fs::read_dir(&path) else {
+            continue;
+        };
         for entry in entries.flatten() {
             out.push_str(&format!(
                 "\n== {prefix}/{} ==\n{}",
@@ -364,7 +361,6 @@ fn wait_for_submit(
     }
 }
 
-
 #[test]
 fn a_real_release_builds_publishes_and_installs_its_binary() {
     let run_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/ci-cd-runs");
@@ -375,10 +371,8 @@ fn a_real_release_builds_publishes_and_installs_its_binary() {
         .unwrap();
     let storage = home.path().join("store");
     let operator_home = PathBuf::from(std::env::var_os("HOME").unwrap());
-    std::os::unix::fs::symlink(operator_home.join(".cargo"), home.path().join(".cargo"))
-        .unwrap();
-    std::os::unix::fs::symlink(operator_home.join(".rustup"), home.path().join(".rustup"))
-        .unwrap();
+    std::os::unix::fs::symlink(operator_home.join(".cargo"), home.path().join(".cargo")).unwrap();
+    std::os::unix::fs::symlink(operator_home.join(".rustup"), home.path().join(".rustup")).unwrap();
     fs::create_dir_all(&storage).unwrap();
     let source = fixture_source(home.path());
 
@@ -389,10 +383,14 @@ fn a_real_release_builds_publishes_and_installs_its_binary() {
     fs::copy(env!("CARGO_BIN_EXE_stado"), &worker_bin).unwrap();
     fs::set_permissions(&worker_bin, fs::Permissions::from_mode(0o700)).unwrap();
     run(Command::new(env!("CARGO_BIN_EXE_stado")).args([
-        "release", "keygen",
-        "--private-key", private.to_str().unwrap(),
-        "--public-key", public.to_str().unwrap(),
-        "--key-id", "ci-release-key",
+        "release",
+        "keygen",
+        "--private-key",
+        private.to_str().unwrap(),
+        "--public-key",
+        public.to_str().unwrap(),
+        "--key-id",
+        "ci-release-key",
     ]));
     let public_key = fs::read_to_string(&public).unwrap();
     let vault = SigningVault::spawn(&fs::read(&private).unwrap());
@@ -415,17 +413,22 @@ fn a_real_release_builds_publishes_and_installs_its_binary() {
     let submit_err = File::create(home.path().join("submit.err")).unwrap();
     let mut submit = Command::new(env!("CARGO_BIN_EXE_stado"));
     release_env(&mut submit, home.path(), &storage, &vault);
-    let mut submit = submit.args([
-        "release", "submit",
-        "--source", source.to_str().unwrap(),
-        "--version", "1.0.0",
-        "--channel", "candidate",
-        "--json",
-    ])
-    .stdout(Stdio::from(submit_out))
-    .stderr(Stdio::from(submit_err))
-    .spawn()
-    .unwrap();
+    let mut submit = submit
+        .args([
+            "release",
+            "submit",
+            "--source",
+            source.to_str().unwrap(),
+            "--version",
+            "1.0.0",
+            "--channel",
+            "candidate",
+            "--json",
+        ])
+        .stdout(Stdio::from(submit_out))
+        .stderr(Stdio::from(submit_err))
+        .spawn()
+        .unwrap();
     let status = wait_for_submit(&mut submit, &mut agent, home.path(), &storage);
     let result = Output {
         status,
@@ -448,7 +451,10 @@ fn a_real_release_builds_publishes_and_installs_its_binary() {
     let release: Value = serde_json::from_slice(&result.stdout).unwrap();
     assert_eq!(release["state"], "completed");
     assert_eq!(release["platforms"]["darwin-arm64"]["state"], "published");
-    assert_eq!(release["deliveries"]["install-on-builder"]["state"], "passed");
+    assert_eq!(
+        release["deliveries"]["install-on-builder"]["state"],
+        "passed"
+    );
 
     let installed = home.path().join(".stado/bin/ci-release-probe");
     assert!(installed.exists(), "delivery did not install {installed:?}");

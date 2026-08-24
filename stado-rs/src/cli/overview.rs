@@ -6,8 +6,8 @@ use chrono::{SecondsFormat, Utc};
 use serde_json::{json, Map, Value};
 
 use super::CmdError;
-use crate::monitor::billing;
 use crate::deploy::fleet_claim::{self, FleetClaim};
+use crate::monitor::billing;
 use crate::queue::{JobStorage, StorageError};
 use crate::targets::{self, ComputeTarget, Registry};
 
@@ -321,7 +321,9 @@ fn print_human(document: &Value, claim: &FleetClaim) {
     let fleet = &document["fleet"];
     println!(
         "fleet: {} of {} local hosts publishing capacity | {} registered targets",
-        fleet["publishing_capacity"], fleet["registered_local_workers"], fleet["registered_targets"]
+        fleet["publishing_capacity"],
+        fleet["registered_local_workers"],
+        fleet["registered_targets"]
     );
     // Nothing when the queue is moving, or when it is empty: a report that
     // prints a verdict every time is a report whose verdict stops being read.

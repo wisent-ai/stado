@@ -110,8 +110,7 @@ fn fleet_delete_retires_only_an_unmanned_fleet() {
     let out = stado(storage, &["fleet", "delete", "build"]);
     assert!(!out.status.success());
     assert!(
-        stderr(&out)
-            .contains("fleet 'build' still has 1 member(s): w1; reassign them first"),
+        stderr(&out).contains("fleet 'build' still has 1 member(s): w1; reassign them first"),
         "got: {}",
         stderr(&out)
     );
@@ -133,7 +132,8 @@ fn fleet_assign_moves_a_target_into_the_fleet() {
         stdout(&out)
     );
     assert_eq!(
-        registry(storage)["targets"][0]["fleet"], "build",
+        registry(storage)["targets"][0]["fleet"],
+        "build",
         "the document carries the assignment"
     );
 
@@ -170,7 +170,10 @@ fn fleet_create_writes_the_fleet_into_the_registry() {
     let dir = storage_with_registry(EMPTY_REGISTRY);
     let storage = dir.path();
 
-    let out = stado(storage, &["fleet", "create", "build", "--notes", "ci builders"]);
+    let out = stado(
+        storage,
+        &["fleet", "create", "build", "--notes", "ci builders"],
+    );
     assert!(out.status.success(), "create failed: {}", stderr(&out));
     assert!(
         stdout(&out).contains("fleet 'build' created"),
@@ -198,7 +201,8 @@ fn fleet_create_writes_the_fleet_into_the_registry() {
         stderr(&out)
     );
     assert_eq!(
-        registry(storage)["fleets"][0]["notes"], "ci builders",
+        registry(storage)["fleets"][0]["notes"],
+        "ci builders",
         "the refused create left the existing fleet untouched"
     );
 
@@ -206,8 +210,7 @@ fn fleet_create_writes_the_fleet_into_the_registry() {
     let out = stado(storage, &["fleet", "create", "BAD NAME"]);
     assert!(!out.status.success());
     assert!(
-        stderr(&out)
-            .contains("registry.fleets[1].name: must be a lowercase fleet identifier"),
+        stderr(&out).contains("registry.fleets[1].name: must be a lowercase fleet identifier"),
         "the refusal names the document location, got: {}",
         stderr(&out)
     );

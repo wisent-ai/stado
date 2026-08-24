@@ -105,9 +105,17 @@ pub struct ReleasePrepareArgs {
     binary: String,
     #[arg(long)]
     launcher: String,
-    #[arg(long, conflicts_with = "signing_key_file", required_unless_present = "signing_key_file")]
+    #[arg(
+        long,
+        conflicts_with = "signing_key_file",
+        required_unless_present = "signing_key_file"
+    )]
     signing_key_item: Option<String>,
-    #[arg(long, conflicts_with = "signing_key_item", required_unless_present = "signing_key_item")]
+    #[arg(
+        long,
+        conflicts_with = "signing_key_item",
+        required_unless_present = "signing_key_item"
+    )]
     signing_key_file: Option<PathBuf>,
     #[arg(long)]
     key_id: String,

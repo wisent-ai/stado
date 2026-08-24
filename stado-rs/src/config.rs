@@ -2094,9 +2094,7 @@ pub(crate) fn parse_database_api_databases(
         ]);
     };
     if entries.is_empty() {
-        return Err(vec![
-            "database_api.databases must not be empty".to_string(),
-        ]);
+        return Err(vec!["database_api.databases must not be empty".to_string()]);
     }
     let mut problems = Vec::new();
     let mut databases = BTreeMap::new();
@@ -2104,7 +2102,9 @@ pub(crate) fn parse_database_api_databases(
     for (name, raw) in entries {
         let start = problems.len();
         if !canonical_machine_name(name) {
-            problems.push(format!("database_api.databases key {name:?} is not canonical"));
+            problems.push(format!(
+                "database_api.databases key {name:?} is not canonical"
+            ));
         }
         let Some(entry) = raw.as_object() else {
             problems.push(format!(
@@ -2143,9 +2143,7 @@ pub(crate) fn parse_database_api_databases(
                 String::new()
             }
             None => {
-                problems.push(format!(
-                    "database_api.databases.{name}.engine is required"
-                ));
+                problems.push(format!("database_api.databases.{name}.engine is required"));
                 String::new()
             }
         };
@@ -2173,9 +2171,7 @@ pub(crate) fn parse_database_api_databases(
             Some(_) => problems.push(format!(
                 "database_api.databases.{name}.scopes must be an array"
             )),
-            None => problems.push(format!(
-                "database_api.databases.{name}.scopes is required"
-            )),
+            None => problems.push(format!("database_api.databases.{name}.scopes is required")),
         }
         let mut consumers = Vec::new();
         match entry.get("consumers") {
@@ -2224,19 +2220,26 @@ pub(crate) fn parse_database_api_databases(
     }
 }
 
-static DATABASE_API_DATABASES: LazyLock<Result<BTreeMap<String, DatabaseApiDatabase>, Vec<String>>> =
-    LazyLock::new(|| {
-        let configured = match std::env::var("WC_DATABASE_API_DATABASES")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-        {
-            Some(encoded) => serde_json::from_str::<Value>(&encoded)
-                .map_err(|error| vec![format!("WC_DATABASE_API_DATABASES must be valid JSON: {error}")])
-                .and_then(|parsed| parse_database_api_databases(Some(&parsed))),
-            None => parse_database_api_databases(crate::config_file::get("database_api.databases").as_ref()),
-        };
-        configured
-    });
+static DATABASE_API_DATABASES: LazyLock<
+    Result<BTreeMap<String, DatabaseApiDatabase>, Vec<String>>,
+> = LazyLock::new(|| {
+    let configured = match std::env::var("WC_DATABASE_API_DATABASES")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+    {
+        Some(encoded) => serde_json::from_str::<Value>(&encoded)
+            .map_err(|error| {
+                vec![format!(
+                    "WC_DATABASE_API_DATABASES must be valid JSON: {error}"
+                )]
+            })
+            .and_then(|parsed| parse_database_api_databases(Some(&parsed))),
+        None => {
+            parse_database_api_databases(crate::config_file::get("database_api.databases").as_ref())
+        }
+    };
+    configured
+});
 
 pub fn database_api_databases(
 ) -> Result<&'static BTreeMap<String, DatabaseApiDatabase>, &'static [String]> {

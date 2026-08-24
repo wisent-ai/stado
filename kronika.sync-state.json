@@ -1,0 +1,115 @@
+{
+  "schemaVersion": 1,
+  "documents": {
+    "docs/operations.md": {
+      "headSha": "d13aeec38fc880e66a7c7b01ca3f5585751af11a",
+      "syncedAt": "2026-08-24T19:48:17.967Z",
+      "lastAction": "baseline"
+    },
+    "docs/autonomy.md": {
+      "headSha": "5e0eb6a2aa6a28d81787deb25ecd335889432766",
+      "syncedAt": "2026-08-24T20:09:51.734Z",
+      "lastAction": "advanced"
+    },
+    "docs/jobs.md": {
+      "headSha": "5e0eb6a2aa6a28d81787deb25ecd335889432766",
+      "syncedAt": "2026-08-24T20:09:51.743Z",
+      "lastAction": "advanced"
+    },
+    "docs/security.md": {
+      "headSha": "5e0eb6a2aa6a28d81787deb25ecd335889432766",
+      "syncedAt": "2026-08-24T20:09:51.752Z",
+      "lastAction": "advanced"
+    },
+    "docs/runbook.md": {
+      "headSha": "5e0eb6a2aa6a28d81787deb25ecd335889432766",
+      "syncedAt": "2026-08-24T20:09:51.752Z",
+      "lastAction": "baseline"
+    },
+    "docs/providers.md": {
+      "headSha": "5e0eb6a2aa6a28d81787deb25ecd335889432766",
+      "syncedAt": "2026-08-24T20:09:51.752Z",
+      "lastAction": "baseline"
+    },
+    "docs/inference.md": {
+      "headSha": "5e0eb6a2aa6a28d81787deb25ecd335889432766",
+      "syncedAt": "2026-08-24T20:09:51.752Z",
+      "lastAction": "baseline"
+    },
+    "docs/stream.md": {
+      "headSha": "5e0eb6a2aa6a28d81787deb25ecd335889432766",
+      "syncedAt": "2026-08-24T20:09:51.752Z",
+      "lastAction": "baseline"
+    },
+    "docs/disaster-recovery.md": {
+      "headSha": "5e0eb6a2aa6a28d81787deb25ecd335889432766",
+      "syncedAt": "2026-08-24T20:09:51.752Z",
+      "lastAction": "baseline"
+    },
+    "docs/machine-interface.md": {
+      "headSha": "5e0eb6a2aa6a28d81787deb25ecd335889432766",
+      "syncedAt": "2026-08-24T20:09:51.752Z",
+      "lastAction": "baseline"
+    },
+    "docs/primitives/beacon.md": {
+      "headSha": "5e0eb6a2aa6a28d81787deb25ecd335889432766",
+      "syncedAt": "2026-08-24T20:09:51.752Z",
+      "lastAction": "baseline"
+    },
+    "docs/primitives/service.md": {
+      "headSha": "5e0eb6a2aa6a28d81787deb25ecd335889432766",
+      "syncedAt": "2026-08-24T20:09:51.752Z",
+      "lastAction": "baseline"
+    },
+    "docs/primitives/directory.md": {
+      "headSha": "5e0eb6a2aa6a28d81787deb25ecd335889432766",
+      "syncedAt": "2026-08-24T20:09:51.752Z",
+      "lastAction": "baseline"
+    },
+    "docs/primitives/object-store.md": {
+      "headSha": "5e0eb6a2aa6a28d81787deb25ecd335889432766",
+      "syncedAt": "2026-08-24T20:09:51.752Z",
+      "lastAction": "baseline"
+    },
+    "docs/primitives/observation.md": {
+      "headSha": "5e0eb6a2aa6a28d81787deb25ecd335889432766",
+      "syncedAt": "2026-08-24T20:09:51.752Z",
+      "lastAction": "baseline"
+    },
+    "docs/primitives/policy.md": {
+      "headSha": "5e0eb6a2aa6a28d81787deb25ecd335889432766",
+      "syncedAt": "2026-08-24T20:09:51.752Z",
+      "lastAction": "baseline"
+    },
+    "docs/primitives/lease.md": {
+      "headSha": "5e0eb6a2aa6a28d81787deb25ecd335889432766",
+      "syncedAt": "2026-08-24T20:09:51.752Z",
+      "lastAction": "baseline"
+    },
+    "docs/primitives/registry.md": {
+      "headSha": "5e0eb6a2aa6a28d81787deb25ecd335889432766",
+      "syncedAt": "2026-08-24T20:09:51.752Z",
+      "lastAction": "baseline"
+    },
+    "docs/primitives/target.md": {
+      "headSha": "5e0eb6a2aa6a28d81787deb25ecd335889432766",
+      "syncedAt": "2026-08-24T20:09:51.752Z",
+      "lastAction": "baseline"
+    },
+    "docs/primitives/job.md": {
+      "headSha": "5e0eb6a2aa6a28d81787deb25ecd335889432766",
+      "syncedAt": "2026-08-24T20:09:51.752Z",
+      "lastAction": "baseline"
+    },
+    "docs/primitives/release.md": {
+      "headSha": "5e0eb6a2aa6a28d81787deb25ecd335889432766",
+      "syncedAt": "2026-08-24T20:09:51.752Z",
+      "lastAction": "baseline"
+    },
+    "docs/primitives/grant.md": {
+      "headSha": "5e0eb6a2aa6a28d81787deb25ecd335889432766",
+      "syncedAt": "2026-08-24T20:09:51.752Z",
+      "lastAction": "baseline"
+    }
+  }
+}

@@ -402,7 +402,7 @@ unavailable.
 | `stado host inventory <target>` | The stado-managed binaries under `$HOME/.stado/bin`, the `$HOME/.stado/forwards/*.url` markers, the listening loopback TCP ports, the Skarbiec vault files under `$HOME/.stado` as metadata, whether the installed `stado` knows a fixed set of subcommands — and, the point of the command, whether each forward marker still matches a live listener. |
 | `stado host software [<target>] [--json]` | What a host actually runs: one row per program with its version, its SHA-256 and whether those exact bytes came out of a release Stado published. Naming a target takes the report over the audited channel and persists it as an observation; omitting the target prints what every host has already reported, ages included. The read counterpart of `host release`, and the evidence `stado release status` gates on. |
 | `stado host release <target> --binary NAME --version X.Y.Z` | Put one registry-declared managed binary on the host: fetch the exact coordinate, verify the operator's configured SHA-256, check the layout, stage it under a versioned directory, and only then atomically repoint the active binary and restart its declared unit. The write counterpart of `host inventory`. `--dry-run` probes read-only and reports the plan. |
-| `stado host precheck-runner install <target>` | Install or reconcile the isolated GitHub pre-check runner declared by Stado. The target address and platform come from the canonical registry; Stado obtains a short-lived organization token from the admin-scoped `GITHUB_TOKEN` credential, verifies the pinned runner archive, creates an unprivileged account, installs the service, and applies the private-network boundary. |
+| `stado host precheck-runner install <target>` | Install or reconcile the isolated GitHub pre-check runner declared by Stado. The target address and platform come from the canonical registry; Stado obtains a short-lived organization token from the admin-scoped `GITHUB_TOKEN` credential, resolves the `agent:kronika.value` signing identity from Skarbiec, verifies the pinned runner archive, creates an unprivileged account, installs the service, materializes the signing secret as an owner-only runner file, publishes the non-secret agent ID beside the private Brama route, and applies the private-network boundary. |
 | `stado host precheck-runner repository-add <repository>` | Reconcile GitHub's selected-repository access for the `stado-precheck` runner group. Stado resolves the repository ID and runner-group ID through GitHub using the admin-scoped `GITHUB_TOKEN` held in Skarbiec, keeps the group `selected`, enables public-repository admission only when the named repository is public, and idempotently grants access. Public callers must refuse fork pull requests before runner assignment. Runner installation alone cannot do this: GitHub stores runner registration and repository admission as separate resources. |
 | `stado host precheck-runner status <target>` | Read the service, runner identity, and nftables/PF boundary through the same registry-authorized channel. |
 | `stado host precheck-runner remove <target>` | Deregister the runner with a short-lived removal token, stop and delete its service and files, remove its account, and remove its network boundary. |
@@ -432,13 +432,23 @@ token. That token travels only on the host channel's stdin and is consumed by
 credential. The Actions Runner archive version and SHA-256 are pinned in the
 Rust release.
 
-The runner account is `stado-precheck`, with only `_work` and `_diag` writable.
-A root-owned job hook removes prior workspace contents before and after each
-job. Linux applies an nftables rule to that UID; macOS applies a PF rule to the
-same account. The blocked CIDRs are the fixed RFC1918, loopback, link-local,
-unique-local, and CGNAT network classes—not addresses of fleet hosts—so a job
-can reach public GitHub/package services but not loopback, LAN, Tailscale, or
-other private services.
+The same install resolves `agent:kronika.value` from Skarbiec and sends it on
+host-channel stdin to `/usr/bin/install`. The result is
+`.stado/kronika-agent-auth-secret`, owned by `stado-precheck` with mode `0600`;
+the value never enters argv, stdout, stderr, registry data, or the repository.
+The non-secret agent ID is published as `routes/kronika-agent-id` beside
+`routes/brama.url`. Quality workflows read those Stado-owned files and let
+Kronika sign the exact Brama request body.
+
+The runner account is `stado-precheck`. Workspaces, diagnostics, package and
+toolchain caches, application caches, and `.stado` are the only writable
+runner-owned paths. A root-owned job hook removes prior workspace contents
+before and after each job. Linux applies an nftables rule to that UID; macOS
+applies a PF rule to the same account. The blocked CIDRs are the fixed RFC1918,
+loopback, link-local, unique-local, and CGNAT network classes—not addresses of
+fleet hosts—so a job can reach public GitHub/package services but not loopback,
+LAN, Tailscale, or other private services except for the exact loopback Brama
+port published by Stado.
 
 ### `stado host inventory`
 

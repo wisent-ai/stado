@@ -1224,7 +1224,6 @@ async fn owner_host_password(item: &str) -> Result<Option<String>, String> {
         .filter(|password| !password.is_empty()))
 }
 
-
 async fn restart(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdError> {
     let services = declared_matching(name, host).await?;
     let runner = production_runner();
@@ -1424,10 +1423,7 @@ async fn service_release_bundle(
         .legacy_launchd_label
         .as_deref()
         .is_some_and(|label| label == declared.unit_id());
-    if policy.service != options.name
-        && policy.service != declared.name
-        && !exact_legacy_unit
-    {
+    if policy.service != options.name && policy.service != declared.name && !exact_legacy_unit {
         return Err(CmdError::click(format!(
             "product {:?} releases service {:?}, not unit {:?}",
             options.product,
@@ -1442,7 +1438,10 @@ async fn service_release_bundle(
         )));
     }
     let desired = policy.desired.as_ref().ok_or_else(|| {
-        CmdError::click(format!("product {:?} has no desired release", options.product))
+        CmdError::click(format!(
+            "product {:?} has no desired release",
+            options.product
+        ))
     })?;
     if desired.version != options.version {
         return Err(CmdError::click(format!(
@@ -1476,9 +1475,12 @@ async fn service_release_bundle(
         Ok(bytes) => serde_json::from_slice::<ObservedServiceRelease>(&bytes).unwrap_or_default(),
         Err(_) => ObservedServiceRelease::default(),
     };
-    let previous_version = observed
-        .active_version
-        .or_else(|| policy.previous.as_ref().map(|release| release.version.clone()));
+    let previous_version = observed.active_version.or_else(|| {
+        policy
+            .previous
+            .as_ref()
+            .map(|release| release.version.clone())
+    });
     let previous_sha256 = observed.active_sha256.or_else(|| {
         policy.previous.as_ref().and_then(|release| {
             release
@@ -1540,13 +1542,9 @@ async fn current_service_version(
 }
 
 fn validate_readiness_url(url: &str) -> Result<(), CmdError> {
-    if [
-        "http://127.0.0.1:",
-        "http://localhost:",
-        "http://[::1]:",
-    ]
-    .iter()
-    .any(|prefix| url.starts_with(prefix))
+    if ["http://127.0.0.1:", "http://localhost:", "http://[::1]:"]
+        .iter()
+        .any(|prefix| url.starts_with(prefix))
         && !url.chars().any(char::is_whitespace)
     {
         return Ok(());
@@ -1670,13 +1668,8 @@ async fn release(options: ServiceReleaseOptions<'_>) -> Result<(), CmdError> {
     let activation = match restart {
         Ok(report) if report.succeeded("restarted") => {
             if let Some(url) = options.readiness_url {
-                wait_for_service_readiness(
-                    &target,
-                    url,
-                    options.readiness_timeout_seconds,
-                    &runner,
-                )
-                .await
+                wait_for_service_readiness(&target, url, options.readiness_timeout_seconds, &runner)
+                    .await
             } else {
                 Ok(())
             }
@@ -2005,21 +1998,32 @@ async fn auth_check(options: AuthCheckOptions<'_>) -> Result<(), CmdError> {
         runner: &crate::deploy::Runner,
     ) -> Result<crate::deploy::service::RemoteReport, CmdError> {
         match (item, variable, env_file) {
-            (Some(item), _, _) => {
-                service::check_service_item_bearer(
-                    target, declared, url, item, field, consumer, token_file, post_empty_json, expect_status, runner,
-                )
-                .await
-                .map_err(click)
-            }
-            (None, Some(variable), Some(env_file)) => {
-                service::check_service_env_bearer(
-                    target, declared, url, env_file, variable, post_empty_json, expect_status,
-                    runner,
-                )
-                .await
-                .map_err(click)
-            }
+            (Some(item), _, _) => service::check_service_item_bearer(
+                target,
+                declared,
+                url,
+                item,
+                field,
+                consumer,
+                token_file,
+                post_empty_json,
+                expect_status,
+                runner,
+            )
+            .await
+            .map_err(click),
+            (None, Some(variable), Some(env_file)) => service::check_service_env_bearer(
+                target,
+                declared,
+                url,
+                env_file,
+                variable,
+                post_empty_json,
+                expect_status,
+                runner,
+            )
+            .await
+            .map_err(click),
             _ => unreachable!("usage guard above"),
         }
     }
@@ -2046,7 +2050,8 @@ async fn auth_check(options: AuthCheckOptions<'_>) -> Result<(), CmdError> {
             post_empty_json,
             expect_status,
             &runner,
-        ).await?;
+        )
+        .await?;
         let mut final_report = initial.clone();
         let mut synced = None;
         let mut restarted = None;
@@ -2086,7 +2091,8 @@ async fn auth_check(options: AuthCheckOptions<'_>) -> Result<(), CmdError> {
                             post_empty_json,
                             expect_status,
                             &runner,
-                        ).await?;
+                        )
+                        .await?;
                     }
                 }
             }
@@ -2125,7 +2131,8 @@ async fn auth_check(options: AuthCheckOptions<'_>) -> Result<(), CmdError> {
                         post_empty_json,
                         expect_status,
                         &runner,
-                    ).await?;
+                    )
+                    .await?;
                 }
             }
         }
@@ -2303,7 +2310,9 @@ fn remove_directory_declaration(document: &mut Value, name: &str) {
         .and_then(Value::as_object_mut)
         .and_then(|directory| directory.get_mut("services"))
         .and_then(Value::as_object_mut)
-    else { return };
+    else {
+        return;
+    };
     services.remove(name);
 }
 

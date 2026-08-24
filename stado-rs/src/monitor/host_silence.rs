@@ -440,7 +440,11 @@ pub async fn open_silence(
     store: &JobStorage,
     host: &str,
 ) -> Result<Option<(String, SilenceRecord)>, StorageError> {
-    let Some(path) = newest_first(store, &silence_prefix(host)).await?.into_iter().next() else {
+    let Some(path) = newest_first(store, &silence_prefix(host))
+        .await?
+        .into_iter()
+        .next()
+    else {
         return Ok(None);
     };
     let Some(record) = read_document::<SilenceRecord>(store, &path).await? else {
@@ -642,7 +646,13 @@ fn throttle_admits(host: &str, reader: &str, reason: &str) -> bool {
 /// [`REFUSAL_WRITE_TIMEOUT`] per write.
 ///
 /// `detail` is the component's own sentence and is stored verbatim.
-pub async fn record_refusal(store: &JobStorage, host: &str, reader: &str, reason: &str, detail: &str) {
+pub async fn record_refusal(
+    store: &JobStorage,
+    host: &str,
+    reader: &str,
+    reason: &str,
+    detail: &str,
+) {
     if !throttle_admits(host, reader, reason) {
         return;
     }
@@ -718,7 +728,12 @@ pub async fn report_refusal(host: &str, reader: &str, reason: &str, detail: &str
 /// `await` [`report_refusal`], or the process is gone before the task runs.
 ///
 /// Requires a Tokio runtime, which every caller of this already has.
-pub fn report_refusal_detached(host: String, reader: &'static str, reason: &'static str, detail: String) {
+pub fn report_refusal_detached(
+    host: String,
+    reader: &'static str,
+    reason: &'static str,
+    detail: String,
+) {
     tokio::spawn(async move {
         report_refusal(&host, reader, reason, &detail).await;
     });

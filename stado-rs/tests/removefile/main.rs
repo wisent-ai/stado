@@ -88,7 +88,11 @@ fn an_absent_file_reports_absent_without_failing() {
         home.path(),
         &["host", "remove-file", "this-mac", path.to_str().unwrap()],
     );
-    assert!(out.status.success(), "absence must not fail: {}", stderr(&out));
+    assert!(
+        out.status.success(),
+        "absence must not fail: {}",
+        stderr(&out)
+    );
     assert!(stdout(&out).contains("absent"), "{}", stdout(&out));
 }
 
@@ -166,7 +170,11 @@ fn a_relative_or_dotdot_path_never_reaches_the_host() {
             home.path(),
             &["host", "remove-file", "this-mac", bad],
         );
-        assert_eq!(out.status.code(), Some(2), "path {bad} must be a usage error");
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "path {bad} must be a usage error"
+        );
         assert!(
             stderr(&out).contains("must be absolute, contain no '..', and carry no NUL"),
             "got: {}",

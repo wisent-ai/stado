@@ -67,9 +67,9 @@ use crate::queue::runs::TERMINAL_PREFIXES;
 use crate::queue::storage::JobStorage;
 use crate::queue::submit::{default_store, submit_job, SubmitOptions};
 use crate::targets::{
-    fetch_registry_remote, fleet_namespace_mismatch, platform_accepts_job,
-    platform_job_os_arch, queue_name, read_build_recipes, BuildRecipe, BuildRun, ComputeTarget,
-    Registry, RegistryStore, BUILDS_DISABLED_KEY, BUILDS_KEY,
+    fetch_registry_remote, fleet_namespace_mismatch, platform_accepts_job, platform_job_os_arch,
+    queue_name, read_build_recipes, BuildRecipe, BuildRun, ComputeTarget, Registry, RegistryStore,
+    BUILDS_DISABLED_KEY, BUILDS_KEY,
 };
 
 /// Floor between two poll passes, regardless of the coordinator's tick
@@ -92,7 +92,6 @@ const QUEUE_CLAIM_THRESHOLD_SECONDS: i64 = 600;
 /// v1 is a fixed ceiling for every recipe: a build that legitimately takes
 /// longer needs a recipe field, not a longer silence.
 const BUILD_CEILING_SECONDS: i64 = 3600;
-
 
 /// Poll bookkeeping. Process-local by design: `last_seen_ref` in the
 /// registry is the durable dedup record; these instants only pace work.
@@ -211,7 +210,9 @@ fn recipe_due(name: &str, interval_seconds: u64) -> bool {
         .get(name)
         .is_none_or(|last| last.elapsed() >= Duration::from_secs(interval_seconds.max(1)));
     if due {
-        state.last_recipe_poll.insert(name.to_string(), Instant::now());
+        state
+            .last_recipe_poll
+            .insert(name.to_string(), Instant::now());
     }
     due
 }
@@ -368,7 +369,11 @@ impl Claimability {
 ///   `unclaimable` run carrying the reason, instead of a job that sits in
 ///   the queue forever. The sha stays unseen for that recipe, so the pass
 ///   resubmits the moment a worker comes back.
-async fn poll_one(registry: &Registry, recipe: &BuildRecipe, log: &dyn Fn(&str)) -> Result<(), String> {
+async fn poll_one(
+    registry: &Registry,
+    recipe: &BuildRecipe,
+    log: &dyn Fn(&str),
+) -> Result<(), String> {
     let sha = ls_remote(&recipe.repo, &recipe.branch).await?;
     if recipe.last_seen_ref.as_deref() == Some(sha.as_str()) {
         return Ok(());
@@ -482,11 +487,7 @@ async fn poll_one(registry: &Registry, recipe: &BuildRecipe, log: &dyn Fn(&str))
         let platform = entry.split(':').next().unwrap_or_default();
         fresh.runs.get(platform).map(|run| run.status.as_str()) != Some("unclaimable")
     });
-    let reasons: Vec<String> = failures
-        .iter()
-        .chain(unclaimable.iter())
-        .cloned()
-        .collect();
+    let reasons: Vec<String> = failures.iter().chain(unclaimable.iter()).cloned().collect();
     if submitted.is_empty() && !markers_changed {
         return Err(format!(
             "{} moved to {sha} but no build job was submitted: {}",
@@ -855,9 +856,14 @@ async fn reconcile_build_runs(registry: &Registry, declare_allowed: bool, log: &
                             recipe.name
                         )),
                         (Some(version), true) => {
-                            updated.declared =
-                                declare_on_platform(registry, &recipe.name, platform, &version, log)
-                                    .await;
+                            updated.declared = declare_on_platform(
+                                registry,
+                                &recipe.name,
+                                platform,
+                                &version,
+                                log,
+                            )
+                            .await;
                         }
                     }
                 }

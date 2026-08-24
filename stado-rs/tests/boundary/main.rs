@@ -153,7 +153,9 @@ struct FakeVault {
 impl FakeVault {
     fn spawn() -> Self {
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("stand-in broker binds loopback");
-        let addr = listener.local_addr().expect("stand-in broker has an address");
+        let addr = listener
+            .local_addr()
+            .expect("stand-in broker has an address");
         let listings = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&listings);
         std::thread::Builder::new()
@@ -370,7 +372,10 @@ fn a_shut_object_boundary_recovers_without_a_restart() {
     // already has the `view` permission.
     let closed = object_boundary_state(addr);
     assert_eq!(closed["ready"], Value::Bool(false));
-    assert_eq!(closed["last_error"], Value::String(OBJECT_LAST_ERROR.into()));
+    assert_eq!(
+        closed["last_error"],
+        Value::String(OBJECT_LAST_ERROR.into())
+    );
     assert!(
         closed["checked_at"].is_string(),
         "a closed verdict is timestamped: {closed}"
