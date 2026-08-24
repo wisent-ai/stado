@@ -113,17 +113,24 @@ stado host precheck-runner remove <registry-target>
 Stado resolves the host address and `release_platform` from the canonical
 registry. `install` exchanges `GITHUB_TOKEN.value` through Stado's
 admin-scoped Skarbiec coordinates for a short-lived organization registration
-token, transports the installer and token on host-channel stdin, verifies the pinned Actions
-Runner archive, and installs the OS service. `remove` uses a short-lived
-removal token before deleting the service, account, files, and network rule.
+token, transports the installer and token on host-channel stdin, verifies the
+pinned Actions Runner archive, and installs the OS service. It also resolves
+`agent:kronika.value` from Skarbiec and installs it through stdin as the
+runner-owned, mode-`0600` `.stado/kronika-agent-auth-secret`; the non-secret
+agent ID is published as `routes/kronika-agent-id` beside `routes/brama.url`.
+`remove` uses a short-lived removal token before deleting the service, account,
+files, and network rule.
 
 The runner has one unprivileged `stado-precheck` account and a root-owned
-pre/post-job cleanup hook. Only `_work` and `_diag` are writable by jobs. An
-nftables UID rule on Linux and a PF user rule on macOS reject loopback,
-RFC1918, link-local, unique-local, and CGNAT/Tailscale ranges while leaving
-public GitHub and package endpoints reachable. Those CIDRs are protocol network
-classes compiled into Stado, not fleet host addresses; fleet destinations
-remain registry data.
+pre/post-job cleanup hook. Workspaces, diagnostics, package and toolchain
+caches, application caches, and `.stado` are runner-owned; the rest of the
+installation is root-owned and not writable by jobs. An nftables UID rule on
+Linux and a PF user rule on macOS reject loopback, RFC1918, link-local,
+unique-local, and CGNAT/Tailscale ranges while leaving public GitHub and package
+endpoints reachable. The one exception is the exact loopback Brama port
+published by Stado for the authorized `kronika` consumer. Those CIDRs are
+protocol network classes compiled into Stado, not fleet host addresses; fleet
+destinations remain registry data.
 
 GitHub runner group `stado-precheck` grants access to an explicit repository
 list. Stado keeps public-repository admission disabled until
