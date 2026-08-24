@@ -352,8 +352,7 @@ pub async fn recover(target: &str, bundled_registry: bool) -> Result<(), CmdErro
         "{}",
         crate::deploy::host_recovery::to_sorted_pretty(&report)
     );
-    if report.get("status").and_then(Value::as_str)
-        != Some(crate::deploy::host_recovery::STATUS_OK)
+    if report.get("status").and_then(Value::as_str) != Some(crate::deploy::host_recovery::STATUS_OK)
     {
         // click.exceptions.Exit(1): nothing more to print.
         return Err(CmdError::silent(1));
@@ -930,7 +929,6 @@ pub async fn uptime(target: &str, json: bool) -> Result<(), CmdError> {
     report_outcome(&report, crate::deploy::host_uptime::OK_STATUS)
 }
 
-
 /// `stado host ping TARGET [--json]` — ssh reachability and beacon age in
 /// one verdict (`docs/missing-commands.md` item three).
 ///
@@ -1501,16 +1499,19 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
     // A store that will not answer for the silences is reported as a blocker
     // and never as a failed command. Refusing to print the half that was read
     // is the exact behaviour this command exists to end.
-    let silences =
-        match crate::monitor::host_silence::recent_silences(&store, &resolved.name, NEWEST_SILENCES)
-            .await
-        {
-            Ok(records) => records,
-            Err(exc) => {
-                blockers.push(exc.to_string());
-                Vec::new()
-            }
-        };
+    let silences = match crate::monitor::host_silence::recent_silences(
+        &store,
+        &resolved.name,
+        NEWEST_SILENCES,
+    )
+    .await
+    {
+        Ok(records) => records,
+        Err(exc) => {
+            blockers.push(exc.to_string());
+            Vec::new()
+        }
+    };
     let refusals = match crate::monitor::host_silence::refusal_summary(
         &store,
         &resolved.name,
@@ -1648,8 +1649,16 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
     );
     println!(
         "sleep:    last slept {}, last woke {}",
-        cell(published.as_ref().and_then(|block| block.get("last_sleep_at"))),
-        cell(published.as_ref().and_then(|block| block.get("last_wake_at"))),
+        cell(
+            published
+                .as_ref()
+                .and_then(|block| block.get("last_sleep_at"))
+        ),
+        cell(
+            published
+                .as_ref()
+                .and_then(|block| block.get("last_wake_at"))
+        ),
     );
     if changes.is_empty() {
         println!("changes:  none recorded");
@@ -1671,10 +1680,7 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
             reason_counts(&refusals)
         );
     } else {
-        println!(
-            "refusals: none in the last {}s",
-            refusals.window_seconds
-        );
+        println!("refusals: none in the last {}s", refusals.window_seconds);
     }
     if silences.is_empty() {
         println!("silences: none recorded for this host");
@@ -1684,18 +1690,18 @@ pub async fn link(target: &str, json: bool) -> Result<(), CmdError> {
             println!(
                 "          {} -> {} ({}){}",
                 silence_instant(record.started_at),
-                record.ended_at.map_or_else(
-                    || "still open".to_string(),
-                    silence_instant
-                ),
-                record.duration_seconds.map_or_else(
-                    || "-".to_string(),
-                    |seconds| format!("{seconds}s")
-                ),
-                record.first_reader_error.as_deref().map_or_else(
-                    String::new,
-                    |detail| format!(", first reader error: {detail}")
-                ),
+                record
+                    .ended_at
+                    .map_or_else(|| "still open".to_string(), silence_instant),
+                record
+                    .duration_seconds
+                    .map_or_else(|| "-".to_string(), |seconds| format!("{seconds}s")),
+                record
+                    .first_reader_error
+                    .as_deref()
+                    .map_or_else(String::new, |detail| format!(
+                        ", first reader error: {detail}"
+                    )),
             );
         }
     }
@@ -2739,10 +2745,9 @@ pub async fn release(
     use crate::deploy::host_release;
 
     let runner = crate::deploy::production_runner();
-    let report =
-        host_release::release_host(target, binary, version, dry_run, reinstall, &runner)
-            .await
-            .map_err(|exc| CmdError::click(exc.to_string()))?;
+    let report = host_release::release_host(target, binary, version, dry_run, reinstall, &runner)
+        .await
+        .map_err(|exc| CmdError::click(exc.to_string()))?;
     // Three outcomes are success, and conflating them would be the lie this
     // command exists to avoid: a delivery, a host that already ran the
     // requested version, and a dry run that mutated nothing.
@@ -2840,81 +2845,6 @@ pub async fn release(
 /// credential, a helper, or anything else Stado keeps there.
 const DELIVERED_FILES_DIR: &str = ".stado/files";
 
-/// `stado host install-file TARGET SOURCE NAME [--executable]` — deliver one
-/// file of any size to a registry host through the approved channel.
-///
-/// Credentials have no channel here on purpose: a bearer belongs to the
-/// vault and reaches a host only through minting plus an explicit grant,
-/// never as a file an agent drops onto disk.
-pub async fn install_file(
-    target: &str,
-    source: &str,
-    name: &str,
-    executable: bool,
-    json: bool,
-) -> Result<(), CmdError> {
-    let metadata = std::fs::symlink_metadata(source)?;
-    if !metadata.is_file() || metadata.file_type().is_symlink() {
-        return Err(CmdError::usage("file source must be a regular file"));
-    }
-    let mode = if executable { "u=rwx,go=" } else { "u=rw,go=" };
-    let (path, byte_count) = stream_file(target, source, name, DELIVERED_FILES_DIR, mode).await?;
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": target,
-                "source": source,
-                "path": path,
-                "bytes": byte_count,
-                "mode": mode,
-                "integrity": "sha256",
-                "status": "installed",
-            }))?
-        );
-    } else {
-        println!("{target}: installed {path} ({byte_count} bytes, {mode})");
-    }
-    Ok(())
-}
-/// Resolve one exact credential field through Stado's selected store and
-/// transfer it directly to a host. The value never reaches argv, stdout, a
-/// local temporary file, or the JSON report.
-pub async fn install_credential(
-    target: &str,
-    item: &str,
-    field: &str,
-    name: &str,
-    home: Option<&str>,
-    json: bool,
-) -> Result<(), CmdError> {
-    let value = crate::credential_store::read_string(item, field)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?
-        .ok_or_else(|| {
-            CmdError::click(format!(
-                "credential item {item:?} has no string field {field:?}"
-            ))
-        })?;
-    let (path, byte_count) = transfer_secret(target, name, value.as_bytes(), home).await?;
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": target,
-                "credential": item,
-                "field": field,
-                "path": path,
-                "bytes": byte_count,
-                "integrity": "sha256",
-                "status": "installed",
-            }))?
-        );
-    } else {
-        println!("{target}: installed {item}.{field} as owner-only {path} ({byte_count} bytes)");
-    }
-    Ok(())
-}
 
 pub(crate) async fn install_secret_value_at_home(
     target: &str,
@@ -2925,14 +2855,14 @@ pub(crate) async fn install_secret_value_at_home(
     transfer_secret(target, name, value.as_bytes(), Some(home)).await
 }
 
-/// Deliver one file through the [`install_file`] channel and RETURN where it
+/// Deliver one file through the [`stream_file`] channel and RETURN where it
 /// landed, for a caller that renders its own report.
 ///
-/// A callee that prints is unusable from a machine-readable caller: with
-/// [`install_file`] itself, `stado host publish-placement-policy --json` would
-/// put a delivery report in front of its own document and hand the operator two
-/// JSON objects on one stream. Same channel, same checksum, same owner-only
-/// mode — only the reporting belongs to whoever asked.
+/// A callee that prints is unusable from a machine-readable caller:
+/// `stado host publish-placement-policy --json` would put a delivery report in
+/// front of its own document and hand the operator two JSON objects on one
+/// stream. Same channel, same checksum, same owner-only mode — only the
+/// reporting belongs to whoever asked.
 pub(crate) async fn deliver_file(
     target: &str,
     source: &str,
@@ -2974,7 +2904,7 @@ fn catalog_file_name(source: &str) -> Result<String, CmdError> {
 /// host's fleet vault.
 ///
 /// Two audited halves and no third way in: the catalog travels through the
-/// [`install_file`] delivery channel into `$HOME/.stado/files`, owner-only
+/// [`stream_file`] delivery channel into `$HOME/.stado/files`, owner-only
 /// and checksummed on arrival, and the registration is the embedded fixed
 /// script — there is nothing to install on the host and nothing left behind
 /// but the delivered catalog. This is the reviewed replacement for running
@@ -3116,90 +3046,6 @@ printf '%s\n' "$dir/$name"
     ))
 }
 
-/// The exact removal `host remove-helper` performs, for one named helper on an
-/// already-resolved target.
-///
-/// Shared with `host helpers --prune`, which removes many of these in one run.
-/// One function, because two spellings of "delete a file under `.stado/bin`"
-/// would be two policies about symlinks, about what counts as absent, and
-/// about which channel the deletion is audited on -- and the second one always
-/// turns out to be a shell one-liner somebody wrote in a hurry.
-///
-/// Returns the remote's own word: `removed` or `absent`. Absent is not a
-/// failure; a helper listed by an inventory taken seconds ago and gone by the
-/// time the removal lands is a race with a truthful outcome, and reporting it
-/// as an error would send an operator looking for a fault nobody committed.
-async fn remove_installed_helper(
-    resolved: &ComputeTarget,
-    name: &str,
-    runner: &crate::deploy::Runner,
-) -> Result<String, CmdError> {
-    // The name may have come back from a remote inventory rather than from the
-    // operator's own argv, so it is checked here as well: this is the last
-    // place before it is interpolated into a script that deletes files.
-    release_component("helper name", name)?;
-    let remote_name = crate::deploy::shlex_quote(name);
-    // Regular file only: a symlink under that name is not something this
-    // command put there, and following it would delete an unrelated path.
-    let script = format!(
-        r#"set -euo pipefail
-helper="$HOME/.stado/bin/"{remote_name}
-if [ -L "$helper" ]; then
-  printf '%s\n' "refusing to remove symlink: $helper" > /dev/stderr
-  false
-elif [ -f "$helper" ]; then
-  rm -f -- "$helper"
-  printf '%s\n' removed
-else
-  printf '%s\n' absent
-fi
-"#
-    );
-    let output = crate::deploy::host_channel::run_script_with_timeout(
-        resolved,
-        &script,
-        std::time::Duration::from_secs(crate::monitor::billing::SECONDS_PER_HOUR),
-        runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
-    if !output.ok() {
-        return Err(CmdError::click(format!(
-            "{}: helper {name} could not be removed: {}",
-            resolved.name,
-            crate::deploy::host_channel::last_error_line(&output, "remote removal failed")
-        )));
-    }
-    Ok(output.stdout.trim().to_string())
-}
-
-/// Remove one previously installed helper. The helper channel that installed
-/// these is retired — nothing in stado installs scripts into `$HOME/.stado/bin`
-/// any more — so this command exists to reap what the channel left behind on
-/// someone else's machine; without it nothing but the operator's memory says
-/// what those files were for.
-pub async fn remove_helper(target: &str, name: &str, json: bool) -> Result<(), CmdError> {
-    release_component("helper name", name)?;
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let runner = crate::deploy::production_runner();
-    let state = remove_installed_helper(&resolved, name, &runner).await?;
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": target,
-                "helper": name,
-                "status": state,
-            }))?
-        );
-    } else {
-        println!("{target}: {name} {state}");
-    }
-    Ok(())
-}
-
 /// Remove one file from TARGET's home: the path Stado never had a way to
 /// delete, so a retired or broken unit left its plist on disk forever and the
 /// only answer was a bare `rm` over ssh, which nothing bounds and nobody
@@ -3248,10 +3094,7 @@ impl RemoveFileOutcome {
 
 /// The guarded delete itself, as a value: validation, resolution, the fixed
 /// remote script, the marker read. Printing belongs to the caller.
-pub async fn remove_file_document(
-    target: &str,
-    path: &str,
-) -> Result<RemoveFileOutcome, CmdError> {
+pub async fn remove_file_document(target: &str, path: &str) -> Result<RemoveFileOutcome, CmdError> {
     if !path.starts_with('/') || path.contains("..") || path.contains('\0') {
         return Err(CmdError::usage(
             "path must be absolute, contain no '..', and carry no NUL",
@@ -3361,7 +3204,10 @@ pub async fn remove_file(target: &str, path: &str, json: bool) -> Result<(), Cmd
     } else {
         match &outcome.detail {
             Some(detail) if !detail.is_empty() => {
-                println!("{}: {} {} — {detail}", outcome.target, outcome.path, outcome.status)
+                println!(
+                    "{}: {} {} — {detail}",
+                    outcome.target, outcome.path, outcome.status
+                )
             }
             _ => println!("{}: {} {}", outcome.target, outcome.path, outcome.status),
         }
@@ -3581,246 +3427,6 @@ pub async fn unit_log(
         println!("{body}");
     }
     Ok(())
-}
-
-/// The inventory of leftover helper scripts in `$HOME/.stado/bin`, embedded in
-/// this binary and run as one fixed remote script — the same channel `host
-/// provenance` reads with, and the shape every read on this channel takes now
-/// that nothing installs scripts on hosts to be run later.
-const INVENTORY_SCRIPT: &str = include_str!("../../scripts/report-stale-helpers.sh");
-
-/// One installed helper script, as the remote inventory reported it.
-struct InstalledHelper {
-    name: String,
-    bytes: u64,
-    /// Seconds since the file was last written, from the remote's own clock
-    /// against this one. Skew shows up as a small negative that clamps to
-    /// zero, which is a helper installed moments ago -- exactly what it is.
-    age_seconds: i64,
-}
-
-/// One `name<TAB>mtime<TAB>size` line from `report-stale-helpers`.
-///
-/// `None` for anything that is not exactly those three fields. A short line, a
-/// number that will not parse, a fourth field from a newer helper: none of
-/// them is a helper this can date or size, and inventing a zero for the
-/// missing half would put a fabricated row at the head of an oldest-first list
-/// -- which is the first thing `--prune` would then delete.
-fn parse_inventory_line(line: &str, now: i64) -> Option<InstalledHelper> {
-    let mut fields = line.split('\t');
-    let name = fields.next().filter(|name| !name.is_empty())?;
-    let modified: i64 = fields.next()?.parse().ok()?;
-    let bytes: u64 = fields.next()?.parse().ok()?;
-    if fields.next().is_some() {
-        return None;
-    }
-    Some(InstalledHelper {
-        name: name.to_string(),
-        bytes,
-        // Clamped: a remote clock ahead of this one is skew, not a helper
-        // installed in the future, and a negative age would sort to the end of
-        // the list and read as the newest thing on the host.
-        age_seconds: (now - modified).max(i64::default()),
-    })
-}
-
-/// A prune that could not remove everything it named, reported after the
-/// table rather than instead of it.
-///
-/// The rows already printed are true and the operator needs them more than
-/// they need an early exit; the non-zero status is what stops a caller
-/// treating a partial sweep as a completed one.
-fn removal_outcome(target: &str, failed: usize) -> Result<(), CmdError> {
-    if failed == usize::default() {
-        return Ok(());
-    }
-    Err(CmdError::click(format!(
-        "{target}: {failed} helper(s) could not be removed; each is reported above with the \
-         remote's own words"
-    )))
-}
-
-/// `stado host helpers TARGET [--older-than-days N] [--prune] [--json]` — every
-/// leftover helper script this host carries, oldest first.
-///
-/// The retired helper channel had a writer and no reaper. control-host
-/// carries 553 installed helper scripts beside 16 binaries: each was delivered
-/// to settle one incident, none was ever withdrawn, and `host provenance` can
-/// only print the count as a footnote because nothing enumerated them. This is
-/// the enumeration -- name, age and size, which is the least an operator needs
-/// to decide whether a script from an incident nobody remembers may go.
-///
-/// Removal is under `--prune` and never otherwise, and `--prune` demands an
-/// explicit `--older-than-days`: a sweep with no threshold means "remove
-/// everything", which is never the intent on a directory whose 553 entries
-/// include the ones three products currently run.
-///
-/// The inventory is one fixed read-only script embedded in this binary, run
-/// over the same audited channel as every other read, and every removal goes
-/// back through the same audited channel `host remove-helper` uses, one named
-/// helper at a time.
-pub async fn helpers(
-    target: &str,
-    older_than_days: Option<u32>,
-    prune: bool,
-    json: bool,
-) -> Result<(), CmdError> {
-    if prune && older_than_days.is_none() {
-        return Err(CmdError::usage(
-            "--prune requires --older-than-days: removing every helper is never the intent, \
-             and a sweep with no threshold cannot tell a fossil from a file an operator \
-             placed there yesterday",
-        ));
-    }
-    let runner = crate::deploy::production_runner();
-    let inventory =
-        crate::deploy::host_channel::run_fixed_script(target, INVENTORY_SCRIPT, &runner)
-            .await
-            .map_err(|error| {
-                CmdError::click(format!(
-                    "{target}: cannot read the helper inventory: {error}"
-                ))
-            })?;
-
-    let now = chrono::Utc::now().timestamp();
-    let mut installed: Vec<InstalledHelper> = Vec::new();
-    // A line the inventory format does not explain is carried to the operator
-    // rather than dropped: a row this cannot parse is a row this cannot reason
-    // about, and silently shrinking the population is how a count stops being
-    // evidence.
-    let mut unreadable: Vec<String> = Vec::new();
-    for line in inventory.lines() {
-        let line = line.trim_end();
-        if line.is_empty() {
-            continue;
-        }
-        match parse_inventory_line(line, now) {
-            Some(helper) => installed.push(helper),
-            None => unreadable.push(line.to_string()),
-        }
-    }
-    // Oldest first: the head of this list is where the fossils are, and it is
-    // also exactly what `--prune` acts on, so the two orders cannot disagree.
-    installed.sort_by(|left, right| {
-        right
-            .age_seconds
-            .cmp(&left.age_seconds)
-            .then_with(|| left.name.cmp(&right.name))
-    });
-
-    let threshold = older_than_days.map(|days| {
-        i64::from(days).saturating_mul(
-            i64::try_from(crate::monitor::billing::SECONDS_PER_DAY).unwrap_or(i64::MAX),
-        )
-    });
-    let stale = |helper: &InstalledHelper| {
-        threshold.is_some_and(|threshold| helper.age_seconds >= threshold)
-    };
-
-    let mut pruned: Vec<Value> = Vec::new();
-    let mut failed = usize::default();
-    if prune {
-        let resolved = crate::deploy::host_channel::canonical_target(target)
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
-        // One failure does not end the sweep. A helper that is a symlink is
-        // refused by the removal script by design, and letting that abort the
-        // run would leave the remaining hundreds unreported and the operator
-        // with no idea how far it got.
-        for helper in installed.iter().filter(|helper| stale(helper)) {
-            match remove_installed_helper(&resolved, &helper.name, &runner).await {
-                Ok(status) => pruned.push(json!({"helper": helper.name, "status": status})),
-                Err(error) => {
-                    failed += 1;
-                    pruned.push(json!({
-                        "helper": helper.name,
-                        "status": "failed",
-                        "error": error.to_string(),
-                    }));
-                }
-            }
-        }
-    }
-
-    let older = installed.iter().filter(|helper| stale(helper)).count();
-    if json {
-        let rows: Vec<Value> = installed
-            .iter()
-            .map(|helper| {
-                json!({
-                    "helper": helper.name,
-                    "age_seconds": helper.age_seconds,
-                    "bytes": helper.bytes,
-                    "stale": threshold.map(|_| stale(helper)),
-                })
-            })
-            .collect();
-        let mut report = json!({
-            "target": target,
-            "helpers": rows,
-            "total": installed.len(),
-            "older_than_days": older_than_days,
-            "older_than_threshold": older,
-            "unreadable": unreadable,
-        });
-        if prune {
-            report["pruned"] = Value::Array(pruned);
-        }
-        println!("{}", serde_json::to_string_pretty(&report)?);
-        return removal_outcome(target, failed);
-    }
-
-    for line in &unreadable {
-        eprintln!("{target}: an inventory line could not be read: {line}");
-    }
-    if installed.is_empty() {
-        println!("{target}: carries no installed helper scripts");
-        return Ok(());
-    }
-    let rows: Vec<Vec<String>> = installed
-        .iter()
-        .map(|helper| {
-            let mut row = vec![
-                helper.name.clone(),
-                super::registry::human_age(chrono::TimeDelta::seconds(helper.age_seconds)),
-                helper.bytes.to_string(),
-            ];
-            if threshold.is_some() {
-                row.push(if stale(helper) { "yes" } else { "no" }.to_string());
-            }
-            row
-        })
-        .collect();
-    if threshold.is_some() {
-        super::table::print(&["HELPER", "AGE", "BYTES", "OLDER"], &rows);
-    } else {
-        super::table::print(&["HELPER", "AGE", "BYTES"], &rows);
-    }
-    for entry in &pruned {
-        println!(
-            "pruned {}: {}{}",
-            entry.get("helper").and_then(Value::as_str).unwrap_or(""),
-            entry.get("status").and_then(Value::as_str).unwrap_or(""),
-            entry
-                .get("error")
-                .and_then(Value::as_str)
-                .map_or_else(String::new, |error| format!(": {error}"))
-        );
-    }
-    // The count is the finding. One helper left behind is untidy; 553 of them
-    // is a directory that accumulated while nobody decided to keep any of it,
-    // and only the number says which of those two an operator is looking at.
-    println!(
-        "\n{target}: {} installed helper script(s) in $HOME/.stado/bin",
-        installed.len()
-    );
-    if let Some(days) = older_than_days {
-        println!("{target}: {older} older than {days} day(s)");
-        if !prune && older != usize::default() {
-            println!("nothing was removed; `--prune` removes exactly those {older}");
-        }
-    }
-    removal_outcome(target, failed)
 }
 
 /// What one Weles worker host is doing, read over the fixed-script channel.
@@ -4252,590 +3858,6 @@ fn release_component(kind: &str, value: &str) -> Result<(), CmdError> {
         return Err(CmdError::usage(format!(
             "{kind} must contain only letters, digits, '.', '_' or '-'"
         )));
-    }
-    Ok(())
-}
-
-fn release_archive_hash(path: &std::path::Path) -> Result<(u64, String), CmdError> {
-    let mut file = std::fs::File::open(path)?;
-    let bytes = file.metadata()?.len();
-    if bytes == u64::default() {
-        return Err(CmdError::click("release archive is empty"));
-    }
-    let mut hasher = Sha256::new();
-    let mut buffer = [u8::MIN; u16::MAX as usize];
-    loop {
-        let read = file.read(&mut buffer)?;
-        if read == usize::default() {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
-    Ok((bytes, hex::encode(hasher.finalize())))
-}
-
-/// Transfer one immutable release archive through Stado's registry-authorized
-/// SSH channel. The remote side verifies the local digest before create-only
-/// publication into its owner-only staging tree.
-pub async fn install_release(
-    target: &str,
-    source: &str,
-    family: &str,
-    version: &str,
-    platform: &str,
-    json: bool,
-) -> Result<(), CmdError> {
-    release_component("family", family)?;
-    release_component("version", version)?;
-    release_component("platform", platform)?;
-    let asset = format!("{family}.tar.gz");
-    let source_path = std::path::Path::new(source);
-    if !source_path.is_file() || source_path.is_symlink() {
-        return Err(CmdError::click(format!(
-            "release source must be a regular file: {}",
-            source_path.display()
-        )));
-    }
-    let (bytes, sha256) = release_archive_hash(source_path)?;
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let relative = format!(".stado/releases/{family}/{version}/{platform}");
-    let temporary = format!(".{asset}.stado-{}", uuid::Uuid::new_v4().simple());
-    let prepare = format!(
-        "set -euo pipefail\ndirectory=\"$HOME/{relative}\"\n/bin/mkdir -p \"$directory\"\n/bin/chmod u=rwx,go= \"$directory\"\nprintf '%s\\n' \"$HOME\"\n"
-    );
-    let runner = crate::deploy::production_runner();
-    let prepared = crate::deploy::host_channel::run_script(&resolved, &prepare, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    if !prepared.ok() {
-        return Err(CmdError::click(format!(
-            "{target}: cannot prepare release staging: {}",
-            crate::deploy::host_channel::last_error_line(
-                &prepared,
-                "remote release directory creation failed"
-            )
-        )));
-    }
-    let remote_home = prepared.stdout.trim();
-    if !remote_home.starts_with('/')
-        || remote_home.bytes().any(|byte| {
-            !(byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'_' | b'-'))
-        })
-    {
-        return Err(CmdError::click(
-            "target returned an unsafe or non-absolute home directory",
-        ));
-    }
-    let remote_temporary = format!("{remote_home}/{relative}/{temporary}");
-    let remote_final = format!("{remote_home}/{relative}/{asset}");
-    if crate::deploy::host_channel::target_is_this_host(&resolved) {
-        std::fs::copy(source_path, &remote_temporary)?;
-    } else {
-        let ssh = resolved
-            .ssh
-            .as_deref()
-            .ok_or_else(|| CmdError::click("registry target has no SSH destination"))?;
-        let key = crate::deploy::ssh_key::materialize(&resolved.name)
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
-        let destination = format!("{ssh}:{remote_temporary}");
-        let transferred = tokio::process::Command::new("scp")
-            .arg("-i")
-            .arg(key.path())
-            .arg("-o")
-            .arg("IdentitiesOnly=yes")
-            .arg("-q")
-            .arg("-o")
-            .arg("BatchMode=yes")
-            .arg("-o")
-            .arg("ConnectTimeout=15")
-            .arg("-o")
-            .arg("StrictHostKeyChecking=accept-new")
-            .arg(source_path)
-            .arg(&destination)
-            .kill_on_drop(true)
-            .output()
-            .await?;
-        if !transferred.status.success() {
-            return Err(CmdError::click(format!(
-                "{target}: release transfer failed: {}",
-                String::from_utf8_lossy(&transferred.stderr)
-                    .lines()
-                    .next_back()
-                    .unwrap_or("scp failed")
-            )));
-        }
-    }
-    let verify = format!(
-        r#"set -euo pipefail
-temporary={temporary}
-final={final}
-expected={expected}
-trap '/bin/rm -f "$temporary"' EXIT
-line=$(/usr/bin/openssl dgst -sha256 -r "$temporary")
-actual="${{line%% *}}"
-if [ "$actual" != "$expected" ]; then
-  printf '%s\n' "release checksum mismatch: expected=$expected actual=$actual" > /dev/stderr
-  false
-fi
-if [ -e "$final" ]; then
-  line=$(/usr/bin/openssl dgst -sha256 -r "$final")
-  existing="${{line%% *}}"
-  if [ "$existing" != "$expected" ]; then
-    printf '%s\n' "immutable release path already contains a different archive" > /dev/stderr
-    false
-  fi
-  /bin/rm -f "$temporary"
-else
-  /bin/mv "$temporary" "$final"
-fi
-/bin/chmod u=rw,go=r "$final"
-trap - EXIT
-printf '%s\n' "$final"
-"#,
-        temporary = crate::deploy::shlex_quote(&remote_temporary),
-        final = crate::deploy::shlex_quote(&remote_final),
-        expected = crate::deploy::shlex_quote(&sha256),
-    );
-    let verified = crate::deploy::host_channel::run_script(&resolved, &verify, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    if !verified.ok() {
-        return Err(CmdError::click(format!(
-            "{target}: release verification failed: {}",
-            crate::deploy::host_channel::last_error_line(
-                &verified,
-                "remote release verification failed"
-            )
-        )));
-    }
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": target,
-                "source": source,
-                "family": family,
-                "version": version,
-                "platform": platform,
-                "path": format!("$HOME/{relative}/{asset}"),
-                "bytes": bytes,
-                "sha256": sha256,
-                "status": "installed",
-            }))?
-        );
-    } else {
-        println!(
-            "{target}: installed {family}/{version}/{platform}/{asset} ({bytes} bytes, sha256={sha256})"
-        );
-    }
-    Ok(())
-}
-
-const INSTALL_BODY: &str = r#"dir="$HOME/.stado/bin"
-staged="$dir/.$name.install"
-installed="$dir/$name"
-previous="$dir/$name.previous"
-trap 'rm -f "$staged"' EXIT
-
-[ -s "$staged" ] || { printf '%s\n' 'delivered program is missing or empty' >&2; exit 1; }
-/bin/chmod 755 "$staged"
-
-if [ "$(/usr/bin/uname -s)" = "Darwin" ]; then
-  /usr/bin/xattr -c "$staged" 2>/dev/null || true
-  /usr/bin/codesign -s - --force "$staged" >/dev/null 2>&1 \
-    || { printf '%s\n' 'delivered program could not be signed on this host' >&2; exit 1; }
-fi
-
-new_version="$("$staged" --version 2>&1)" \
-  || { printf '%s\n' "delivered program does not run here: $new_version" >&2; exit 1; }
-
-old_version="absent"
-if [ -x "$installed" ]; then
-  old_version="$("$installed" --version 2>&1 || printf '%s' 'unreadable')"
-  /bin/cp -p "$installed" "$previous"
-fi
-
-/bin/mv "$staged" "$installed"
-trap - EXIT
-
-if ! "$installed" --version >/dev/null 2>&1; then
-  if [ -f "$previous" ]; then /bin/mv "$previous" "$installed"; fi
-  printf '%s\n' 'installed program does not run; rolled back to the previous build' >&2
-  exit 1
-fi
-
-printf 'STADO-BIN-OLD %s\n' "$old_version"
-printf 'STADO-BIN-NEW %s\n' "$new_version"
-# The bytes that ended up on disk, which on Darwin are not the bytes that were
-# delivered: the ad-hoc codesign above rewrites the signature in place. A
-# manifest recording the source digest therefore describes a file that never
-# existed here, and `host provenance` correctly but uselessly reports every Mac
-# install as REPLACED. The installed digest is the only one worth recording.
-installed_digest=-
-if [ -x /usr/bin/shasum ]; then
-  installed_digest=$(/usr/bin/shasum -a 256 "$installed" | /usr/bin/awk '{print $1}')
-elif command -v sha256sum >/dev/null 2>&1; then
-  installed_digest=$(sha256sum "$installed" | /usr/bin/awk '{print $1}')
-fi
-printf 'STADO-BIN-SHA256 %s\n' "$installed_digest"
-"#;
-
-/// Replace an owner-only Stado program on TARGET with a build proven to run there.
-///
-/// These binaries are what every other operation on that host goes through, so
-/// installing one wrongly removes the means of repair. Three rules are encoded
-/// here rather than left to whoever is at the keyboard:
-///
-/// * the new binary is renamed into place, never written through the file that
-///   is already there -- overwriting a Mach-O in place invalidates its
-///   signature and the kernel answers the next exec with SIGKILL, no message;
-/// * it is signed and then executed on the target BEFORE it becomes the CLI,
-///   because a binary that is merely present is not evidence of anything;
-/// * the previous build is kept, and a version that will not run is rolled
-///   back automatically rather than reported as an installation.
-pub async fn install_binary(
-    target: &str,
-    source: Option<&str>,
-    name: &str,
-    rollback: bool,
-    json: bool,
-) -> Result<(), CmdError> {
-    if name.is_empty()
-        || name
-            .bytes()
-            .any(|byte| !(byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')))
-    {
-        return Err(CmdError::usage(
-            "program name must be a non-empty basename containing only letters, digits, '.', '_' or '-'",
-        ));
-    }
-    if rollback {
-        return rollback_binary(target, name, json).await;
-    }
-    let source = source.ok_or_else(|| CmdError::usage("--from is required unless --rollback"))?;
-    let bytes = std::fs::metadata(source)
-        .map_err(|error| CmdError::click(format!("cannot read {source}: {error}")))?
-        .len();
-    if bytes == 0 {
-        return Err(CmdError::click(format!("{source} is empty")));
-    }
-
-    // Computed before anything is delivered, on this machine, because this is
-    // the last moment the answer exists: the checkout the file came out of is
-    // here and nowhere else, and once the process ends nothing on either side
-    // can reconstruct it.
-    let provenance = crate::provenance::describe(std::path::Path::new(source), name);
-    if let Some(unknown) = unprovenanced_reason(source, &provenance) {
-        eprintln!(
-            "{target}: DRIFTED -- installing {name} from a build with no producer: {unknown}. \
-             This is the trade that put stado 0.7.1 on control-host, a control-plane \
-             binary whose version no commit on any branch of this repository has ever \
-             contained, and that left the Weles worker beside it on release main-objapi-fix, \
-             built on a laptop and never published -- installing is one command and releasing \
-             is a pipeline. The install proceeds, because refusing strands whoever is \
-             mid-incident; the manifest at $HOME/{PROVENANCE_DIR}/{name}.json records the gap \
-             so `stado host provenance {target}` finds it later without anyone remembering \
-             this line."
-        );
-    }
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let ssh_target = resolved.ssh.clone().unwrap_or_default();
-    if ssh_target.is_empty() {
-        return Err(CmdError::click(format!(
-            "{target} declares no ssh destination, so the CLI cannot be delivered"
-        )));
-    }
-    let runner = crate::deploy::production_runner();
-
-    let stage = crate::deploy::host_channel::run_script(
-        &resolved,
-        "set -euo pipefail\n/bin/mkdir -p \"$HOME/.stado/bin\"\n/bin/chmod 700 \"$HOME/.stado/bin\"\n",
-        &runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
-    if !stage.ok() {
-        return Err(CmdError::click(format!(
-            "{target}: cannot prepare the CLI directory: {}",
-            crate::deploy::host_channel::last_error_line(&stage, "remote mkdir failed")
-        )));
-    }
-
-    // The same command has to work on the machine running it, where there is no
-    // ssh listener to talk to and a copy is just a copy.
-    if crate::deploy::host_channel::target_is_this_host(&resolved) {
-        let home = std::env::var("HOME")
-            .map_err(|_| CmdError::click("HOME is not set, so the CLI path is unknown"))?;
-        let staged = std::path::Path::new(&home).join(format!(".stado/bin/.{name}.install"));
-        std::fs::copy(source, &staged).map_err(|error| {
-            CmdError::click(format!(
-                "cannot stage the CLI at {}: {error}",
-                staged.display()
-            ))
-        })?;
-        return finish_install(
-            target,
-            source,
-            name,
-            bytes,
-            &provenance,
-            &resolved,
-            &runner,
-            json,
-        )
-        .await;
-    }
-    let mut copy_argv = crate::deploy::host_channel::ssh_options(&ssh_target);
-    copy_argv.pop();
-    let mut scp_argv = vec!["scp".to_string(), "-q".to_string()];
-    scp_argv.extend(copy_argv.into_iter().skip(usize::from(true)));
-    scp_argv.push(source.to_string());
-    scp_argv.push(format!("{ssh_target}:.stado/bin/.{name}.install"));
-    let copy = runner(crate::deploy::CommandSpec::new(scp_argv))
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    if !copy.ok() {
-        return Err(CmdError::click(format!(
-            "{target}: cannot deliver the CLI: {}",
-            copy.detail()
-        )));
-    }
-
-    finish_install(
-        target,
-        source,
-        name,
-        bytes,
-        &provenance,
-        &resolved,
-        &runner,
-        json,
-    )
-    .await
-}
-
-/// Sign, prove, swap and verify -- the half of `install-binary` that is identical
-/// whether the program arrived over ssh or was copied on the spot.
-///
-/// The provenance record travels as an argument rather than being recomputed
-/// here: it is derived on the machine that holds the checkout, and hashing a
-/// release binary twice per install to save a parameter is a poor trade.
-#[allow(clippy::too_many_arguments)]
-async fn finish_install(
-    target: &str,
-    source: &str,
-    name: &str,
-    bytes: u64,
-    provenance: &crate::provenance::Provenance,
-    resolved: &crate::targets::ComputeTarget,
-    runner: &crate::deploy::Runner,
-    json: bool,
-) -> Result<(), CmdError> {
-    let quoted = crate::deploy::shlex_quote(name);
-    let script = format!("set -euo pipefail\nname={quoted}\n{INSTALL_BODY}");
-    let output = crate::deploy::host_channel::run_script(resolved, &script, runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    if !output.ok() {
-        return Err(CmdError::click(format!(
-            "{target}: CLI update failed: {}",
-            crate::deploy::host_channel::last_error_line(&output, "remote install failed")
-        )));
-    }
-    let marker = |tag: &str| -> String {
-        output
-            .stdout
-            .lines()
-            .find_map(|line| line.strip_prefix(tag))
-            .unwrap_or_default()
-            .trim()
-            .to_string()
-    };
-    let old_version = marker("STADO-BIN-OLD ");
-    let new_version = marker("STADO-BIN-NEW ");
-
-    // Prefer the digest the host measured after the swap over the one computed
-    // from the source file. They differ on Darwin, where the install ad-hoc
-    // signs the binary in place, and the manifest has to describe the bytes a
-    // later reader will hash -- otherwise every Mac install reports itself as
-    // REPLACED and the check trains people to ignore it.
-    let installed_digest = marker("STADO-BIN-SHA256 ");
-    let mut provenance = provenance.clone();
-    if !installed_digest.is_empty()
-        && installed_digest != "-"
-        && installed_digest.chars().all(|c| c.is_ascii_hexdigit())
-    {
-        provenance.sha256 = installed_digest;
-    }
-    let provenance = &provenance;
-
-    // After the swap and before the report: a manifest that arrives first
-    // would describe a binary that may never land, and a report printed first
-    // would be the same one-line receipt that said `stado 0.7.1 -> stado
-    // 0.7.0` and left nothing behind to check it against.
-    let manifest = deliver_provenance(target, provenance)
-        .await
-        .map_err(|error| {
-            CmdError::click(format!(
-                "{target}: {name} is installed but its provenance manifest could not be \
-                 delivered, so the host now carries an artifact nothing can trace to a \
-                 commit: {error}"
-            ))
-        })?;
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": target,
-                "source": source,
-                "name": name,
-                "bytes": bytes,
-                "previous_version": old_version,
-                "installed_version": new_version,
-                "commit": provenance.commit,
-                "sha256": provenance.sha256,
-                "builder": provenance.builder,
-                "provenance": manifest,
-                "status": "installed",
-            }))?
-        );
-    } else {
-        println!(
-            "{target}: {name} {old_version} -> {new_version} (commit {}, built on {}, recorded at {manifest})",
-            provenance.commit, provenance.builder
-        );
-    }
-    Ok(())
-}
-
-/// Where a delivered provenance manifest lands, one file per artifact.
-///
-/// Its own directory under `.stado`, not beside the binary in `.stado/bin`:
-/// everything in that directory is executed, and a JSON document that is not
-/// a program has no business sharing a namespace with the ones that are.
-const PROVENANCE_DIR: &str = ".stado/provenance";
-
-/// Why this build cannot be traced to a published commit, or `None` when it
-/// can.
-///
-/// Three distinct answers rather than one boolean, because they send an
-/// operator to three different places: build it inside a checkout, commit
-/// what you built, push what you committed. A single "unverified" would have
-/// described 0.7.1 accurately and told nobody what to do about it.
-fn unprovenanced_reason(
-    source: &str,
-    provenance: &crate::provenance::Provenance,
-) -> Option<String> {
-    let Some(repo) = crate::provenance::source_repo(std::path::Path::new(source)) else {
-        return Some(format!(
-            "{source} does not sit under a git checkout's target/ directory, so no tree \
-             claims to have produced it"
-        ));
-    };
-    if !provenance.names_a_commit() {
-        return Some(format!(
-            "{} has no resolvable HEAD, so the build has no commit to name",
-            repo.display()
-        ));
-    }
-    if !crate::provenance::reachable_in_repo(&provenance.commit, &repo) {
-        return Some(format!(
-            "commit {} is not reachable from origin/main in {}, so it exists only on the \
-             machine that built it",
-            provenance.commit,
-            repo.display()
-        ));
-    }
-    None
-}
-
-/// Deliver one artifact's manifest to the host that now carries the artifact.
-///
-/// Through `stream_file`, the same audited channel the binary itself went
-/// over: owner-only, checksummed on the far side before it takes its name. A
-/// separate private path for the paperwork would be a second way onto these
-/// hosts, which is the shape of the problem this is meant to close.
-async fn deliver_provenance(
-    target: &str,
-    provenance: &crate::provenance::Provenance,
-) -> Result<String, CmdError> {
-    let document = serde_json::to_vec_pretty(provenance)?;
-    let staged = tempfile::Builder::new()
-        .prefix(".stado-provenance-")
-        .suffix(".json")
-        .tempfile()?;
-    std::fs::write(staged.path(), &document)?;
-    let source = staged
-        .path()
-        .to_str()
-        .ok_or_else(|| CmdError::click("provenance staging path is not valid UTF-8"))?;
-    let name = format!("{}.json", provenance.artifact);
-    let (path, _) = stream_file(target, source, &name, PROVENANCE_DIR, "u=rw,go=").await?;
-    Ok(path)
-}
-
-const ROLLBACK_BODY: &str = r#"dir="$HOME/.stado/bin"
-installed="$dir/$name"
-previous="$dir/$name.previous"
-
-[ -s "$previous" ] || { printf '%s\n' 'there is no previous build to restore' >&2; exit 1; }
-/bin/chmod 755 "$previous"
-"$previous" --version >/dev/null 2>&1 \
-  || { printf '%s\n' 'the previous build does not run either; not swapping' >&2; exit 1; }
-/bin/mv "$previous" "$installed"
-"$installed" --version >/dev/null 2>&1 \
-  || { printf '%s\n' 'restored build does not run' >&2; exit 1; }
-
-# The manifest described the build that was just removed. Left in place it
-# would name a commit for bytes no longer on this host, which is worse than
-# naming nothing: `host provenance` reports a missing manifest as
-# unprovenanced, and unprovenanced is the truth here until the next install.
-/bin/rm -f "$HOME/.stado/provenance/$name.json"
-"#;
-
-/// Put the previous build of one owner-only Stado program back on TARGET.
-///
-/// `install-binary` verifies that a new build runs, which is not the same as
-/// verifying that the unit around it still works: a program can answer
-/// `--version` perfectly and still reject the arguments its launchd job passes.
-/// That failure appears after the swap, so the previous build is kept beside
-/// the new one and this is how it comes back.
-async fn rollback_binary(target: &str, name: &str, json: bool) -> Result<(), CmdError> {
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    let runner = crate::deploy::production_runner();
-    let quoted = crate::deploy::shlex_quote(name);
-    let script = format!("set -euo pipefail\nname={quoted}\n{ROLLBACK_BODY}");
-    let output = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    if !output.ok() {
-        return Err(CmdError::click(format!(
-            "{target}: rollback failed: {}",
-            crate::deploy::host_channel::last_error_line(&output, "remote rollback failed")
-        )));
-    }
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json!({
-                "target": target,
-                "name": name,
-                "provenance": crate::provenance::UNPROVENANCED,
-                "status": "rolled-back",
-            }))?
-        );
-    } else {
-        println!(
-            "{target}: {name} restored from the previous build; its provenance manifest was \
-             dropped, because it described the build just removed"
-        );
     }
     Ok(())
 }

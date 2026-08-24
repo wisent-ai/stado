@@ -44,9 +44,9 @@ pub mod mail;
 pub mod overview;
 pub mod placement;
 pub mod precheck_runner;
+pub mod product;
 pub mod profiles_cmd;
 pub mod queue;
-pub mod product;
 pub mod quota;
 pub mod recovery;
 pub mod registry;
@@ -1252,36 +1252,6 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Remove one previously installed owner-only helper from TARGET.
-    #[command(name = "remove-helper")]
-    RemoveHelper {
-        target: String,
-        /// Safe basename under $HOME/.stado/bin on the target.
-        name: String,
-        /// Emit the removal report as JSON.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Every helper script TARGET carries, oldest first, with its age and size.
-    ///
-    /// The retired helper channel wrote into `$HOME/.stado/bin` and nothing
-    /// removed what it wrote: control-host holds 553 installed helper
-    /// scripts beside 16 binaries. Reporting is the default; `--prune` removes
-    /// the ones past `--older-than-days` and refuses to run without it, because
-    /// "remove everything" is never what an operator means here.
-    Helpers {
-        target: String,
-        /// Only count -- and, with --prune, remove -- helpers older than this.
-        #[arg(long)]
-        older_than_days: Option<u32>,
-        /// Remove the helpers past the threshold. Required companion of
-        /// --older-than-days; without it this command only reports.
-        #[arg(long)]
-        prune: bool,
-        /// Emit the inventory as JSON.
-        #[arg(long)]
-        json: bool,
-    },
     /// Replace the tags of one Skarbiec item on TARGET, payload untouched.
     ///
     /// Consumers enumerate vault items by tag: Brama spends a subscription only
@@ -1414,7 +1384,6 @@ enum HostCommands {
         #[arg(long)]
         resume: Option<String>,
     },
-    /// Deliver one file of any size to TARGET's owner-only Stado files
     /// Remove one file from TARGET's home, with guards a bare `rm` over ssh
     /// does not have: the path must live under a managed area of the approved
     /// account's home, be a regular file owned by that account, and never be
@@ -1994,15 +1963,6 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                     precheck_runner::repository_add(&repository, json).await
                 }
             },
-            HostCommands::RemoveHelper { target, name, json } => {
-                host::remove_helper(&target, &name, json).await
-            }
-            HostCommands::Helpers {
-                target,
-                older_than_days,
-                prune,
-                json,
-            } => host::helpers(&target, older_than_days, prune, json).await,
             HostCommands::RemoveFile { target, path, json } => {
                 host::remove_file(&target, &path, json).await
             }
