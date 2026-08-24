@@ -219,6 +219,15 @@ async fn github_credential() -> Result<String, DeployError> {
 }
 
 async fn kronika_agent_secret() -> Result<String, DeployError> {
+    let credentials = crate::credential_store::admin_credentials()
+        .map_err(|error| DeployError(error.to_string()))?;
+    crate::credential_store::grant::grant_field_reads(
+        &credentials.consumer,
+        std::path::Path::new(&credentials.token_file),
+        KRONIKA_AGENT_SECRET_ITEM,
+        &[KRONIKA_AGENT_SECRET_FIELD],
+    )
+    .map_err(|error| DeployError(error.to_string()))?;
     admin_credential(KRONIKA_AGENT_SECRET_ITEM, KRONIKA_AGENT_SECRET_FIELD).await
 }
 
