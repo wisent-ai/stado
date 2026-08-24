@@ -6,6 +6,7 @@
 //! part of the lifecycle.
 
 use std::io::Write;
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -25,8 +26,7 @@ pub const GITHUB_CREDENTIAL_ITEM: &str = "GITHUB_TOKEN";
 pub const RUNNER_GROUP: &str = "stado-precheck";
 pub const RUNNER_USER: &str = "stado-precheck";
 pub const KRONIKA_AGENT_ID: &str = "kronika";
-pub const KRONIKA_AGENT_SECRET_ITEM: &str = "agent:kronika";
-pub const KRONIKA_AGENT_SECRET_FIELD: &str = "value";
+pub const KRONIKA_AGENT_RESOURCE: &str = "agent:kronika";
 pub const LINUX_KRONIKA_AGENT_SECRET_FILE: &str =
     "/opt/wisent/stado-precheck-runner/.stado/kronika-agent-auth-secret";
 pub const MACOS_KRONIKA_AGENT_SECRET_FILE: &str =
@@ -34,6 +34,12 @@ pub const MACOS_KRONIKA_AGENT_SECRET_FILE: &str =
 pub const RUNNER_VERSION: &str = "2.336.0";
 pub const LINUX_SHA256: &str = "04cf0be1aff4c3ec3554466c39124ca250e3effd8873bb7e8d68535aa9505d5d";
 pub const MACOS_SHA256: &str = "8e8839c49b7060b6b2154f4931f815df330c27f167d53ef2239ee3dfce28b079";
+
+struct KronikaAgentCredential {
+    item: String,
+    field: String,
+    secret: String,
+}
 
 #[derive(Debug, Clone, Copy)]
 struct RunnerProfile {
@@ -147,10 +153,7 @@ fn linux_installer(
             ),
             ("__BLOCKED_IPV4__", shell_list(BLOCKED_IPV4_NETWORKS)),
             ("__BRAMA_URL__", super::shlex_quote(brama_url)),
-            (
-                "__KRONIKA_AGENT_ID__",
-                super::shlex_quote(KRONIKA_AGENT_ID),
-            ),
+            ("__KRONIKA_AGENT_ID__", super::shlex_quote(KRONIKA_AGENT_ID)),
             ("__BRAMA_PORT__", brama_port.to_string()),
             ("__BLOCKED_IPV6__", shell_list(BLOCKED_IPV6_NETWORKS)),
         ],
@@ -179,10 +182,7 @@ fn macos_installer(
                 format!("https://github.com/{GITHUB_ORGANIZATION}"),
             ),
             ("__BRAMA_URL__", super::shlex_quote(brama_url)),
-            (
-                "__KRONIKA_AGENT_ID__",
-                super::shlex_quote(KRONIKA_AGENT_ID),
-            ),
+            ("__KRONIKA_AGENT_ID__", super::shlex_quote(KRONIKA_AGENT_ID)),
             ("__BRAMA_PORT__", brama_port.to_string()),
             (
                 "__BLOCKED_NETWORKS__",
@@ -218,17 +218,113 @@ async fn github_credential() -> Result<String, DeployError> {
     admin_credential(GITHUB_CREDENTIAL_ITEM, "value").await
 }
 
-async fn kronika_agent_secret() -> Result<String, DeployError> {
+async fn kronika_agent_credential(
+    target: &ComputeTarget,
+) -> Result<KronikaAgentCredential, DeployError> {
+    let runner = production_runner();
+    let home = host_channel::remote_home(target, &runner).await?;
+    let skarbiec = format!("{home}/.stado/bin/skarbiec");
+    let vault = format!("SKARBIEC_VAULT_FILE={home}/.stado/skarbiec.vault.json");
+    let routes = format!("SKARBIEC_CAPABILITY_ROUTES_FILE={home}/.stado/capability-routes.json");
+    let listed = host_channel::run_program(
+        target,
+        &[
+            "/usr/bin/env",
+            &vault,
+            &routes,
+            &skarbiec,
+            "routes",
+            "list",
+            KRONIKA_AGENT_ID,
+        ],
+        &runner,
+    )
+    .await?;
+    if !listed.ok() {
+        return Err(DeployError(format!(
+            "{}: cannot resolve {KRONIKA_AGENT_RESOURCE} through Skarbiec: {}",
+            target.name,
+            command_failure(&listed, "capability route lookup failed")
+        )));
+    }
+    let document: Value = serde_json::from_str(&listed.stdout)
+        .map_err(|error| DeployError(format!("Skarbiec route report is invalid: {error}")))?;
+    let route = document
+        .get("routes")
+        .and_then(Value::as_array)
+        .and_then(|routes| {
+            routes.iter().find(|route| {
+                route.get("resource").and_then(Value::as_str) == Some(KRONIKA_AGENT_RESOURCE)
+            })
+        })
+        .ok_or_else(|| {
+            DeployError(format!(
+                "Skarbiec maps no credential for {KRONIKA_AGENT_RESOURCE}"
+            ))
+        })?;
+    if route.get("item_present") != Some(&Value::Bool(true))
+        || route.get("field_present") != Some(&Value::Bool(true))
+    {
+        return Err(DeployError(format!(
+            "Skarbiec route {KRONIKA_AGENT_RESOURCE} does not resolve to a readable field"
+        )));
+    }
+    let item = route
+        .get("item")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty() && !value.chars().any(char::is_control))
+        .map(str::to_string)
+        .ok_or_else(|| DeployError("Kronika route has no valid item".to_string()))?;
+    let field = route
+        .get("field")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty() && !value.chars().any(char::is_control))
+        .map(str::to_string)
+        .ok_or_else(|| DeployError("Kronika route has no valid field".to_string()))?;
+
     let credentials = crate::credential_store::admin_credentials()
         .map_err(|error| DeployError(error.to_string()))?;
-    crate::credential_store::grant::grant_field_reads(
-        &credentials.consumer,
-        std::path::Path::new(&credentials.token_file),
-        KRONIKA_AGENT_SECRET_ITEM,
-        &[KRONIKA_AGENT_SECRET_FIELD],
+    let token_name = Path::new(&credentials.token_file)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| {
+            !name.is_empty()
+                && name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        })
+        .ok_or_else(|| DeployError("admin token file has no safe basename".to_string()))?;
+    let remote_token_file = format!("{home}/.stado/{token_name}");
+    let reconciled = host_channel::run_program(
+        target,
+        &[
+            "/usr/bin/env",
+            &vault,
+            &skarbiec,
+            "token-ensure-read",
+            &credentials.consumer,
+            &item,
+            "--field",
+            &field,
+            "--token-file",
+            &remote_token_file,
+        ],
+        &runner,
     )
-    .map_err(|error| DeployError(error.to_string()))?;
-    admin_credential(KRONIKA_AGENT_SECRET_ITEM, KRONIKA_AGENT_SECRET_FIELD).await
+    .await?;
+    if !reconciled.ok() {
+        return Err(DeployError(format!(
+            "{}: cannot authorize the Stado credential reader for {KRONIKA_AGENT_RESOURCE}: {}",
+            target.name,
+            command_failure(&reconciled, "grant reconciliation failed")
+        )));
+    }
+    let secret = admin_credential(&item, &field).await?;
+    Ok(KronikaAgentCredential {
+        item,
+        field,
+        secret,
+    })
 }
 
 async fn configure_publisher_group() -> Result<(), DeployError> {
@@ -925,8 +1021,8 @@ async fn install_profile(target_name: &str, profile: RunnerProfile) -> Result<Va
     let target = host_channel::canonical_target(target_name).await?;
     let platform = Platform::for_target(&target)?;
     let (brama_url, brama_port) = private_brama_route(target_name).await?;
-    let kronika_secret = if profile.kind == PRECHECK.kind {
-        Some(kronika_agent_secret().await?)
+    let kronika_credential = if profile.kind == PRECHECK.kind {
+        Some(kronika_agent_credential(&target).await?)
     } else {
         None
     };
@@ -951,12 +1047,13 @@ async fn install_profile(target_name: &str, profile: RunnerProfile) -> Result<Va
             command_failure(&output, "remote installer failed")
         )));
     }
-    if let Some(kronika_secret) = kronika_secret {
-        install_kronika_agent_secret(&target, platform, &kronika_secret).await?;
+    if let Some(kronika_credential) = kronika_credential {
+        install_kronika_agent_secret(&target, platform, &kronika_credential.secret).await?;
         value["kronika_identity"] = json!({
             "agent_id": KRONIKA_AGENT_ID,
-            "secret_item": KRONIKA_AGENT_SECRET_ITEM,
-            "secret_field": KRONIKA_AGENT_SECRET_FIELD,
+            "resource": KRONIKA_AGENT_RESOURCE,
+            "secret_item": kronika_credential.item,
+            "secret_field": kronika_credential.field,
             "secret_file": platform.kronika_agent_secret_file(),
             "status": "installed",
         });

@@ -114,10 +114,13 @@ Stado resolves the host address and `release_platform` from the canonical
 registry. `install` exchanges `GITHUB_TOKEN.value` through Stado's
 admin-scoped Skarbiec coordinates for a short-lived organization registration
 token, transports the installer and token on host-channel stdin, verifies the
-pinned Actions Runner archive, and installs the OS service. It also resolves
-`agent:kronika.value` from Skarbiec and installs it through stdin as the
-runner-owned, mode-`0600` `.stado/kronika-agent-auth-secret`; the non-secret
-agent ID is published as `routes/kronika-agent-id` beside `routes/brama.url`.
+pinned Actions Runner archive, and installs the OS service. It also asks the
+target's Skarbiec which item and field the `agent:kronika` resource maps to,
+verifies that coordinate is readable, reconciles the existing Stado admin
+reader grant for that exact field without rotating its bearer, and installs the
+resolved value through stdin as the runner-owned, mode-`0600`
+`.stado/kronika-agent-auth-secret`; the non-secret agent ID is published as
+`routes/kronika-agent-id` beside `routes/brama.url`.
 `remove` uses a short-lived removal token before deleting the service, account,
 files, and network rule.
 
