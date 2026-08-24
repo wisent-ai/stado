@@ -63,7 +63,12 @@ fn replace(template: &str, pairs: &[(&str, String)]) -> String {
         })
 }
 
-fn linux_installer(target: &ComputeTarget, registration_token: &str) -> String {
+fn linux_installer(
+    target: &ComputeTarget,
+    registration_token: &str,
+    brama_url: &str,
+    brama_port: u16,
+) -> String {
     let runner_name = format!("stado-precheck-{}", target.name);
     replace(
         LINUX_INSTALLER,
@@ -78,12 +83,19 @@ fn linux_installer(target: &ComputeTarget, registration_token: &str) -> String {
                 format!("https://github.com/{GITHUB_ORGANIZATION}"),
             ),
             ("__BLOCKED_IPV4__", shell_list(BLOCKED_IPV4_NETWORKS)),
+            ("__BRAMA_URL__", super::shlex_quote(brama_url)),
+            ("__BRAMA_PORT__", brama_port.to_string()),
             ("__BLOCKED_IPV6__", shell_list(BLOCKED_IPV6_NETWORKS)),
         ],
     )
 }
 
-fn macos_installer(target: &ComputeTarget, registration_token: &str) -> String {
+fn macos_installer(
+    target: &ComputeTarget,
+    registration_token: &str,
+    brama_url: &str,
+    brama_port: u16,
+) -> String {
     let runner_name = format!("stado-precheck-{}", target.name);
     replace(
         MACOS_INSTALLER,
@@ -97,6 +109,8 @@ fn macos_installer(target: &ComputeTarget, registration_token: &str) -> String {
                 "__ORGANIZATION_URL__",
                 format!("https://github.com/{GITHUB_ORGANIZATION}"),
             ),
+            ("__BRAMA_URL__", super::shlex_quote(brama_url)),
+            ("__BRAMA_PORT__", brama_port.to_string()),
             (
                 "__BLOCKED_NETWORKS__",
                 BLOCKED_IPV4_NETWORKS
@@ -110,7 +124,7 @@ fn macos_installer(target: &ComputeTarget, registration_token: &str) -> String {
     )
 }
 
-async fn github_runner_token(kind: &str) -> Result<String, DeployError> {
+async fn github_credential() -> Result<String, DeployError> {
     let credentials = crate::credential_store::admin_credentials()
         .map_err(|error| DeployError(error.to_string()))?;
     let client = crate::skarbiec::Client::direct(
@@ -119,7 +133,7 @@ async fn github_runner_token(kind: &str) -> Result<String, DeployError> {
         &credentials.token_file,
     )
     .map_err(|error| DeployError(error.to_string()))?;
-    let credential = client
+    client
         .read_string(GITHUB_CREDENTIAL_ITEM, "value")
         .await
         .map_err(|error| DeployError(error.to_string()))?
@@ -128,7 +142,11 @@ async fn github_runner_token(kind: &str) -> Result<String, DeployError> {
             DeployError(format!(
                 "credential {GITHUB_CREDENTIAL_ITEM}.value is required"
             ))
-        })?;
+        })
+}
+
+async fn github_runner_token(kind: &str) -> Result<String, DeployError> {
+    let credential = github_credential().await?;
     let endpoint =
         format!("https://api.github.com/orgs/{GITHUB_ORGANIZATION}/actions/runners/{kind}-token");
     let response = reqwest::Client::new()
@@ -162,6 +180,162 @@ async fn github_runner_token(kind: &str) -> Result<String, DeployError> {
         .ok_or_else(|| DeployError("GitHub runner token response has no token".to_string()))
 }
 
+async fn github_json(
+    method: reqwest::Method,
+    endpoint: &str,
+    credential: &str,
+    body: Option<&Value>,
+) -> Result<Value, DeployError> {
+    let mut request = reqwest::Client::new()
+        .request(method, endpoint)
+        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .header(reqwest::header::USER_AGENT, "wisent-stado-precheck-runner")
+        .bearer_auth(credential);
+    if let Some(body) = body {
+        request = request.json(body);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|error| DeployError(format!("GitHub request failed for {endpoint}: {error}")))?;
+    let status = response.status();
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| DeployError(format!("GitHub response failed for {endpoint}: {error}")))?;
+    if !status.is_success() {
+        let detail = String::from_utf8_lossy(&bytes).replace(credential, "[REDACTED]");
+        return Err(DeployError(format!(
+            "GitHub request to {endpoint} returned HTTP {}: {}",
+            status.as_u16(),
+            detail.trim()
+        )));
+    }
+    if bytes.is_empty() {
+        return Ok(Value::Null);
+    }
+    serde_json::from_slice(&bytes)
+        .map_err(|error| DeployError(format!("GitHub response from {endpoint} is invalid: {error}")))
+}
+
+fn repository_name(repository: &str) -> Result<&str, DeployError> {
+    let repository = repository.trim();
+    if repository.is_empty()
+        || repository.contains('/')
+        || !repository
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+    {
+        return Err(DeployError(
+            "repository must be one name inside wisent-ai".to_string(),
+        ));
+    }
+    Ok(repository)
+}
+
+/// Ensure one repository can schedule jobs on the Stado-managed runner group.
+///
+/// Runner installation and repository admission are deliberately separate
+/// GitHub resources. Registering a healthy runner does not make it visible to a
+/// repository when the group uses selected-repository access, which previously
+/// left jobs queued forever with an empty runner name.
+pub async fn reconcile_repository(repository: &str) -> Result<Value, DeployError> {
+    let repository = repository_name(repository)?;
+    let credential = github_credential().await?;
+    let groups_endpoint = format!(
+        "https://api.github.com/orgs/{GITHUB_ORGANIZATION}/actions/runner-groups?per_page=100"
+    );
+    let groups = github_json(
+        reqwest::Method::GET,
+        &groups_endpoint,
+        &credential,
+        None,
+    )
+    .await?;
+    let group = groups
+        .get("runner_groups")
+        .and_then(Value::as_array)
+        .and_then(|groups| {
+            groups
+                .iter()
+                .find(|group| group.get("name").and_then(Value::as_str) == Some(RUNNER_GROUP))
+        })
+        .ok_or_else(|| DeployError(format!("GitHub runner group {RUNNER_GROUP:?} is missing")))?;
+    let group_id = group
+        .get("id")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| DeployError(format!("GitHub runner group {RUNNER_GROUP:?} has no id")))?;
+    let visibility = group
+        .get("visibility")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if visibility != "selected" {
+        return Err(DeployError(format!(
+            "GitHub runner group {RUNNER_GROUP:?} visibility is {visibility:?}, expected \"selected\""
+        )));
+    }
+
+    let repository_endpoint =
+        format!("https://api.github.com/repos/{GITHUB_ORGANIZATION}/{repository}");
+    let repository_document = github_json(
+        reqwest::Method::GET,
+        &repository_endpoint,
+        &credential,
+        None,
+    )
+    .await?;
+    let repository_id = repository_document
+        .get("id")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| DeployError(format!("GitHub repository {repository:?} has no id")))?;
+    let repository_is_public = !repository_document
+        .get("private")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let public_repositories_enabled = group
+        .get("allows_public_repositories")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if repository_is_public && !public_repositories_enabled {
+        let group_endpoint = format!(
+            "https://api.github.com/orgs/{GITHUB_ORGANIZATION}/actions/runner-groups/{group_id}"
+        );
+        let update = json!({
+            "name": RUNNER_GROUP,
+            "visibility": "selected",
+            "allows_public_repositories": true,
+        });
+        github_json(
+            reqwest::Method::PATCH,
+            &group_endpoint,
+            &credential,
+            Some(&update),
+        )
+        .await?;
+    }
+    let access_endpoint = format!(
+        "https://api.github.com/orgs/{GITHUB_ORGANIZATION}/actions/runner-groups/{group_id}/repositories/{repository_id}"
+    );
+    github_json(
+        reqwest::Method::PUT,
+        &access_endpoint,
+        &credential,
+        None,
+    )
+    .await?;
+
+    Ok(json!({
+        "organization": GITHUB_ORGANIZATION,
+        "runner_group": RUNNER_GROUP,
+        "repository": repository,
+        "repository_id": repository_id,
+        "access": "selected",
+        "repository_visibility": if repository_is_public { "public" } else { "private" },
+        "status": "reconciled",
+    }))
+}
+
 fn report(target: &ComputeTarget, output: &CommandOutput, action: &str) -> Value {
     json!({
         "target": target.name,
@@ -175,13 +349,56 @@ fn report(target: &ComputeTarget, output: &CommandOutput, action: &str) -> Value
     })
 }
 
+async fn private_brama_route(target_name: &str) -> Result<(String, u16), DeployError> {
+    let registry = host_channel::canonical_registry().await?;
+    let service = registry
+        .service("brama")
+        .ok_or_else(|| DeployError("service directory carries no brama service".to_string()))?;
+    let consumer = service
+        .consumers
+        .get("kronika")
+        .ok_or_else(|| DeployError("brama does not authorize consumer \"kronika\"".to_string()))?;
+    if !consumer
+        .capabilities
+        .iter()
+        .any(|capability| capability == "model-routing")
+    {
+        return Err(DeployError(
+            "brama consumer \"kronika\" lacks model-routing".to_string(),
+        ));
+    }
+    let endpoint = service.address_for(target_name).ok_or_else(|| {
+        DeployError(format!(
+            "brama declares no endpoint for runner target {target_name:?}"
+        ))
+    })?;
+    let parsed = url::Url::parse(&endpoint.url)
+        .map_err(|error| DeployError(format!("brama endpoint is invalid: {error}")))?;
+    if parsed.scheme() != "http"
+        || !matches!(parsed.host_str(), Some("127.0.0.1" | "localhost"))
+        || parsed.path() != "/"
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(DeployError(format!(
+            "brama endpoint for {target_name:?} must be a private loopback HTTP origin, got {}",
+            endpoint.url
+        )));
+    }
+    let port = parsed
+        .port_or_known_default()
+        .ok_or_else(|| DeployError("brama endpoint has no port".to_string()))?;
+    Ok((endpoint.url.trim_end_matches('/').to_string(), port))
+}
+
 pub async fn install(target_name: &str) -> Result<Value, DeployError> {
     let target = host_channel::canonical_target(target_name).await?;
     let platform = Platform::for_target(&target)?;
+    let (brama_url, brama_port) = private_brama_route(target_name).await?;
     let token = github_runner_token("registration").await?;
     let script = match platform {
-        Platform::LinuxAmd64 => linux_installer(&target, &token),
-        Platform::DarwinArm64 => macos_installer(&target, &token),
+        Platform::LinuxAmd64 => linux_installer(&target, &token, &brama_url, brama_port),
+        Platform::DarwinArm64 => macos_installer(&target, &token, &brama_url, brama_port),
     };
     let output = host_channel::run_script_with_timeout(
         &target,
@@ -303,6 +520,12 @@ root chmod -R go-w "$runner_root"
 root chown "$runner_user:$runner_user" "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache"
 root chmod 700 "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache"
 
+root mkdir -p "$runner_root/routes"
+printf '%s\n' __BRAMA_URL__ | root tee "$runner_root/routes/brama.url" >/dev/null
+root chown -R root:root "$runner_root/routes"
+root chmod 555 "$runner_root/routes"
+root chmod 444 "$runner_root/routes/brama.url"
+
 hook=$(mktemp)
 cat > "$hook" <<'HOOK'
 #!/bin/sh
@@ -319,6 +542,7 @@ table inet stado_precheck {
     type filter hook output priority filter; policy accept;
     meta skuid $uid ip daddr 127.0.0.53 udp dport 53 accept
     meta skuid $uid ip daddr 127.0.0.53 tcp dport 53 accept
+    meta skuid $uid ip daddr 127.0.0.1 tcp dport __BRAMA_PORT__ accept
     meta skuid $uid ip daddr { __BLOCKED_IPV4__ } reject
     meta skuid $uid ip6 daddr { __BLOCKED_IPV6__ } reject
   }
@@ -373,9 +597,8 @@ root install -o root -g root -m 0644 "$unit" /etc/systemd/system/wisent-stado-pr
 rm -f "$unit"
 root systemctl daemon-reload
 root systemctl enable --now wisent-stado-precheck-runner.service >/dev/null
-root systemctl restart wisent-stado-precheck-runner.service
 root systemctl is-active --quiet wisent-stado-precheck-runner.service
-printf 'runner service: active\nrunner identity: %s uid=%s\nrunner group: %s\nprivate-network egress: blocked\n' "$runner_user" "$uid" "$runner_group"
+printf 'runner service: active\nrunner identity: %s uid=%s\nrunner group: %s\nprivate-network egress: blocked except Stado route %s\n' "$runner_user" "$uid" "$runner_group" __BRAMA_URL__
 "#;
 
 const MACOS_INSTALLER: &str = r#"set -euo pipefail
@@ -449,6 +672,12 @@ root chmod -R go-w "$runner_root"
 root chown "$runner_user:$runner_user" "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache"
 root chmod 700 "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache"
 
+root mkdir -p "$runner_root/routes"
+printf '%s\n' __BRAMA_URL__ | root tee "$runner_root/routes/brama.url" >/dev/null
+root chown -R root:wheel "$runner_root/routes"
+root chmod 555 "$runner_root/routes"
+root chmod 444 "$runner_root/routes/brama.url"
+
 hook=$(mktemp)
 cat > "$hook" <<'HOOK'
 #!/bin/sh
@@ -460,9 +689,12 @@ rm -f "$hook"
 
 anchor=$(mktemp)
 cat > "$anchor" <<RULES
+pass out quick proto tcp from any to 127.0.0.1 port __BRAMA_PORT__ user $runner_user
 block return out quick proto { tcp udp } from any to { __BLOCKED_NETWORKS__ } user $runner_user
 RULES
 root install -o root -g wheel -m 0644 "$anchor" /etc/pf.anchors/com.wisent.stado-precheck
+root pfctl -a com.wisent.stado-precheck -f /etc/pf.anchors/com.wisent.stado-precheck
+root pfctl -E >/dev/null 2>&1 || true
 rm -f "$anchor"
 
 launcher=$(mktemp)
@@ -494,14 +726,12 @@ PLIST
 root plutil -lint "$plist" >/dev/null
 root install -o root -g wheel -m 0644 "$plist" /Library/LaunchDaemons/com.wisent.stado-precheck-runner.plist
 rm -f "$plist"
-if root launchctl print system/com.wisent.stado-precheck-runner >/dev/null 2>&1; then
-  root launchctl kickstart -k system/com.wisent.stado-precheck-runner
-else
+if ! root launchctl print system/com.wisent.stado-precheck-runner >/dev/null 2>&1; then
   root launchctl bootstrap system /Library/LaunchDaemons/com.wisent.stado-precheck-runner.plist
 fi
 root launchctl enable system/com.wisent.stado-precheck-runner
 root launchctl print system/com.wisent.stado-precheck-runner | grep -F 'state = running' >/dev/null
-printf 'runner service: running\nrunner identity: %s uid=%s\nrunner group: %s\nprivate-network egress: blocked\n' "$runner_user" "$uid" "$runner_group"
+printf 'runner service: running\nrunner identity: %s uid=%s\nrunner group: %s\nprivate-network egress: blocked except Stado route %s\n' "$runner_user" "$uid" "$runner_group" __BRAMA_URL__
 "#;
 
 const LINUX_STATUS: &str = r#"set -euo pipefail

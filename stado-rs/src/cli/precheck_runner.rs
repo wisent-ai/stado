@@ -41,6 +41,28 @@ async fn render(target: &str, action: &str, json_output: bool) -> Result<(), Cmd
     Ok(())
 }
 
+/// Ensure one repository can schedule on the selected-repository runner group.
+pub async fn repository_add(repository: &str, json_output: bool) -> Result<(), CmdError> {
+    let report = crate::deploy::host_precheck_runner::reconcile_repository(repository)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if json_output {
+        println!(
+            "{}",
+            crate::deploy::host_recovery::to_sorted_pretty(&report)
+        );
+    } else {
+        println!(
+            "{}/{}: runner group {} access {}",
+            cell(report.get("organization")),
+            cell(report.get("repository")),
+            cell(report.get("runner_group")),
+            cell(report.get("status"))
+        );
+    }
+    Ok(())
+}
+
 /// Install or reconcile the isolated GitHub pre-check runner on TARGET.
 pub async fn install(target: &str, json: bool) -> Result<(), CmdError> {
     render(target, "install", json).await
