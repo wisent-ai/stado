@@ -21,8 +21,8 @@ jobs:
     env:
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
       STADO_API_URL: ${{ vars.STADO_API_URL }}
-      WC_SKARBIEC_CONSUMER: stado-release-publisher
-      WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
+      WC_SKARBIEC_CONSUMER: stado-release-api-verifier
+      WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-api-verifier-skarbiec-token
     steps:
       - uses: actions/checkout@v5
       - name: Reconcile public release origin
@@ -31,6 +31,13 @@ jobs:
           "$tailscale_bin" funnel --bg --yes 8765
           "$tailscale_bin" funnel status --json |
             jq -e '.Web | to_entries[] | .value.Handlers["/"].Proxy == "http://127.0.0.1:8765"'
+      - name: Acquire release channel bearer
+        run: |
+          stado_bin=/Users/lukaszbartoszcze/.stado/bin/stado
+          token="$("$stado_bin" secrets get stado-release-publisher --field token)"
+          test -n "$token"
+          echo "::add-mask::$token"
+          echo "STADO_API_TOKEN=$token" >> "$GITHUB_ENV"
       - name: Deploy the existing immutable release
         env:
           STADO_BIN: /Users/lukaszbartoszcze/.stado/bin/stado
