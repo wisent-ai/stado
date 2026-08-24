@@ -20,6 +20,39 @@ pub const RUNNER_VERSION: &str = "2.336.0";
 pub const LINUX_SHA256: &str = "04cf0be1aff4c3ec3554466c39124ca250e3effd8873bb7e8d68535aa9505d5d";
 pub const MACOS_SHA256: &str = "8e8839c49b7060b6b2154f4931f815df330c27f167d53ef2239ee3dfce28b079";
 
+#[derive(Debug, Clone, Copy)]
+struct RunnerProfile {
+    kind: &'static str,
+    slug: &'static str,
+    group: &'static str,
+    labels: &'static str,
+}
+
+const PRECHECK: RunnerProfile = RunnerProfile {
+    kind: "precheck",
+    slug: "stado-precheck",
+    group: "stado-precheck",
+    labels: "stado-precheck",
+};
+
+const PUBLISHER: RunnerProfile = RunnerProfile {
+    kind: "publisher",
+    slug: "stado-publisher",
+    group: "Default",
+    labels: "stado,stado-publisher",
+};
+
+const RELEASE_SECRETS: &[&str] = &[
+    "MACOS_CERT_P12",
+    "MACOS_CERT_PASSWORD",
+    "MACOS_SIGN_IDENTITY",
+    "RELEASE_BOOTSTRAP_TOKEN",
+    "AC_API_KEY_ID",
+    "AC_API_ISSUER_ID",
+    "AC_API_KEY_P8",
+    "SPARKLE_PRIVATE_KEY",
+];
+
 // These are network classes, not fleet addresses. Keeping the policy here makes
 // the Linux nftables and macOS PF renderers consume one source of truth.
 pub const BLOCKED_IPV4_NETWORKS: &[&str] = &[
@@ -63,21 +96,30 @@ fn replace(template: &str, pairs: &[(&str, String)]) -> String {
         })
 }
 
+fn profile_template(template: &str, profile: RunnerProfile) -> String {
+    template
+        .replace("stado-precheck", profile.slug)
+        .replace("stado_precheck", &profile.slug.replace('-', "_"))
+        .replace("precheck", profile.kind)
+}
+
 fn linux_installer(
     target: &ComputeTarget,
     registration_token: &str,
     brama_url: &str,
     brama_port: u16,
+    profile: RunnerProfile,
 ) -> String {
-    let runner_name = format!("stado-precheck-{}", target.name);
+    let runner_name = format!("{}-{}", profile.slug, target.name);
     replace(
-        LINUX_INSTALLER,
+        &profile_template(LINUX_INSTALLER, profile),
         &[
             ("__VERSION__", RUNNER_VERSION.to_string()),
             ("__SHA256__", LINUX_SHA256.to_string()),
             ("__TOKEN__", super::shlex_quote(registration_token)),
             ("__RUNNER_NAME__", super::shlex_quote(&runner_name)),
-            ("__RUNNER_GROUP__", super::shlex_quote(RUNNER_GROUP)),
+            ("__RUNNER_GROUP__", super::shlex_quote(profile.group)),
+            ("__RUNNER_LABELS__", profile.labels.to_string()),
             (
                 "__ORGANIZATION_URL__",
                 format!("https://github.com/{GITHUB_ORGANIZATION}"),
@@ -95,16 +137,18 @@ fn macos_installer(
     registration_token: &str,
     brama_url: &str,
     brama_port: u16,
+    profile: RunnerProfile,
 ) -> String {
-    let runner_name = format!("stado-precheck-{}", target.name);
+    let runner_name = format!("{}-{}", profile.slug, target.name);
     replace(
-        MACOS_INSTALLER,
+        &profile_template(MACOS_INSTALLER, profile),
         &[
             ("__VERSION__", RUNNER_VERSION.to_string()),
             ("__SHA256__", MACOS_SHA256.to_string()),
             ("__TOKEN__", super::shlex_quote(registration_token)),
             ("__RUNNER_NAME__", super::shlex_quote(&runner_name)),
-            ("__RUNNER_GROUP__", super::shlex_quote(RUNNER_GROUP)),
+            ("__RUNNER_GROUP__", super::shlex_quote(profile.group)),
+            ("__RUNNER_LABELS__", profile.labels.to_string()),
             (
                 "__ORGANIZATION_URL__",
                 format!("https://github.com/{GITHUB_ORGANIZATION}"),
@@ -145,6 +189,192 @@ async fn github_credential() -> Result<String, DeployError> {
         })
 }
 
+async fn configure_publisher_group() -> Result<(), DeployError> {
+    let credential = github_credential().await?;
+    let endpoint =
+        format!("https://api.github.com/orgs/{GITHUB_ORGANIZATION}/actions/runner-groups");
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&endpoint)
+        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+        .header(reqwest::header::USER_AGENT, "wisent-stado-publisher-runner")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .bearer_auth(&credential)
+        .send()
+        .await
+        .map_err(|error| DeployError(format!("GitHub runner group request failed: {error}")))?;
+    let status = response.status();
+    let bytes = response.bytes().await.map_err(|error| {
+        DeployError(format!("GitHub runner group response failed: {error}"))
+    })?;
+    if !status.is_success() {
+        let detail = String::from_utf8_lossy(&bytes).replace(&credential, "[REDACTED]");
+        return Err(DeployError(format!(
+            "GitHub runner group request returned HTTP {}: {}",
+            status.as_u16(),
+            detail.trim()
+        )));
+    }
+    let groups: Value = serde_json::from_slice(&bytes)
+        .map_err(|error| DeployError(format!("GitHub runner group response is invalid: {error}")))?;
+    let group_id = groups
+        .get("runner_groups")
+        .and_then(Value::as_array)
+        .and_then(|groups| {
+            groups.iter().find_map(|group| {
+                (group.get("name").and_then(Value::as_str) == Some(PUBLISHER.group))
+                    .then(|| group.get("id").and_then(Value::as_u64))
+                    .flatten()
+            })
+        })
+        .ok_or_else(|| DeployError("GitHub Default runner group is unavailable".to_string()))?;
+    let response = client
+        .patch(format!("{endpoint}/{group_id}"))
+        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+        .header(reqwest::header::USER_AGENT, "wisent-stado-publisher-runner")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .bearer_auth(&credential)
+        .json(&json!({
+            "name": PUBLISHER.group,
+            "visibility": "all",
+            "allows_public_repositories": true,
+        }))
+        .send()
+        .await
+        .map_err(|error| DeployError(format!("GitHub runner group update failed: {error}")))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let bytes = response.bytes().await.map_err(|error| {
+            DeployError(format!("GitHub runner group update response failed: {error}"))
+        })?;
+        let detail = String::from_utf8_lossy(&bytes).replace(&credential, "[REDACTED]");
+        return Err(DeployError(format!(
+            "GitHub runner group update returned HTTP {}: {}",
+            status.as_u16(),
+            detail.trim()
+        )));
+    }
+    Ok(())
+}
+
+async fn grant_release_secrets(repositories: &[String]) -> Result<(), DeployError> {
+    let credential = github_credential().await?;
+    let client = reqwest::Client::new();
+    for repository in repositories {
+        if repository.is_empty()
+            || !repository
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        {
+            return Err(DeployError(format!(
+                "GitHub repository name is invalid: {repository:?}"
+            )));
+        }
+        let response = client
+            .get(format!(
+                "https://api.github.com/repos/{GITHUB_ORGANIZATION}/{repository}"
+            ))
+            .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+            .header(reqwest::header::USER_AGENT, "wisent-stado-publisher-runner")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .bearer_auth(&credential)
+            .send()
+            .await
+            .map_err(|error| DeployError(format!("GitHub repository request failed: {error}")))?;
+        let status = response.status();
+        let bytes = response.bytes().await.map_err(|error| {
+            DeployError(format!("GitHub repository response failed: {error}"))
+        })?;
+        if !status.is_success() {
+            let detail = String::from_utf8_lossy(&bytes).replace(&credential, "[REDACTED]");
+            return Err(DeployError(format!(
+                "GitHub repository request returned HTTP {}: {}",
+                status.as_u16(),
+                detail.trim()
+            )));
+        }
+        let repository_id = serde_json::from_slice::<Value>(&bytes)
+            .map_err(|error| {
+                DeployError(format!("GitHub repository response is invalid: {error}"))
+            })?
+            .get("id")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| DeployError("GitHub repository response has no id".to_string()))?;
+        for secret in RELEASE_SECRETS {
+            let endpoint = format!(
+                "https://api.github.com/orgs/{GITHUB_ORGANIZATION}/actions/secrets/{secret}"
+            );
+            let response = client
+                .get(&endpoint)
+                .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+                .header(reqwest::header::USER_AGENT, "wisent-stado-publisher-runner")
+                .header("X-GitHub-Api-Version", "2022-11-28")
+                .bearer_auth(&credential)
+                .send()
+                .await
+                .map_err(|error| {
+                    DeployError(format!("GitHub organization secret request failed: {error}"))
+                })?;
+            let status = response.status();
+            let bytes = response.bytes().await.map_err(|error| {
+                DeployError(format!("GitHub organization secret response failed: {error}"))
+            })?;
+            if !status.is_success() {
+                let detail =
+                    String::from_utf8_lossy(&bytes).replace(&credential, "[REDACTED]");
+                return Err(DeployError(format!(
+                    "GitHub organization secret {secret} returned HTTP {}: {}",
+                    status.as_u16(),
+                    detail.trim()
+                )));
+            }
+            let secret_metadata = serde_json::from_slice::<Value>(&bytes).map_err(|error| {
+                DeployError(format!(
+                    "GitHub organization secret response is invalid: {error}"
+                ))
+            })?;
+            let visibility = secret_metadata
+                .get("visibility")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if visibility == "all" {
+                continue;
+            }
+            if visibility != "selected" {
+                return Err(DeployError(format!(
+                    "GitHub organization secret {secret} has unsupported visibility {visibility:?}"
+                )));
+            }
+            let response = client
+                .put(format!("{endpoint}/repositories/{repository_id}"))
+                .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+                .header(reqwest::header::USER_AGENT, "wisent-stado-publisher-runner")
+                .header("X-GitHub-Api-Version", "2022-11-28")
+                .bearer_auth(&credential)
+                .send()
+                .await
+                .map_err(|error| {
+                    DeployError(format!("GitHub organization secret grant failed: {error}"))
+                })?;
+            if !response.status().is_success() {
+                let status = response.status();
+                let bytes = response.bytes().await.map_err(|error| {
+                    DeployError(format!(
+                        "GitHub organization secret grant response failed: {error}"
+                    ))
+                })?;
+                let detail =
+                    String::from_utf8_lossy(&bytes).replace(&credential, "[REDACTED]");
+                return Err(DeployError(format!(
+                    "GitHub organization secret {secret} grant returned HTTP {}: {}",
+                    status.as_u16(),
+                    detail.trim()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
 async fn github_runner_token(kind: &str) -> Result<String, DeployError> {
     let credential = github_credential().await?;
     let endpoint =
@@ -336,11 +566,27 @@ pub async fn reconcile_repository(repository: &str) -> Result<Value, DeployError
     }))
 }
 
-fn report(target: &ComputeTarget, output: &CommandOutput, action: &str) -> Value {
+fn command_failure(output: &CommandOutput, fallback: &str) -> String {
+    let stderr = output.stderr.trim();
+    if stderr.is_empty() {
+        host_channel::last_error_line(output, fallback)
+    } else {
+        stderr.to_string()
+    }
+}
+
+fn report(
+    target: &ComputeTarget,
+    output: &CommandOutput,
+    action: &str,
+    profile: RunnerProfile,
+) -> Value {
     json!({
         "target": target.name,
         "platform": target.release_platform,
-        "runner_group": RUNNER_GROUP,
+        "runner_kind": profile.kind,
+        "runner_group": profile.group,
+        "runner_labels": profile.labels,
         "action": action,
         "status": if output.ok() { "completed" } else { "failed" },
         "exit_code": output.code,
@@ -391,14 +637,32 @@ async fn private_brama_route(target_name: &str) -> Result<(String, u16), DeployE
     Ok((endpoint.url.trim_end_matches('/').to_string(), port))
 }
 
-pub async fn install(target_name: &str) -> Result<Value, DeployError> {
+async fn install_profile(
+    target_name: &str,
+    profile: RunnerProfile,
+) -> Result<Value, DeployError> {
+    if profile.kind == PUBLISHER.kind {
+        configure_publisher_group().await?;
+    }
     let target = host_channel::canonical_target(target_name).await?;
     let platform = Platform::for_target(&target)?;
     let (brama_url, brama_port) = private_brama_route(target_name).await?;
     let token = github_runner_token("registration").await?;
     let script = match platform {
-        Platform::LinuxAmd64 => linux_installer(&target, &token, &brama_url, brama_port),
-        Platform::DarwinArm64 => macos_installer(&target, &token, &brama_url, brama_port),
+        Platform::LinuxAmd64 => linux_installer(
+            &target,
+            &token,
+            &brama_url,
+            brama_port,
+            profile,
+        ),
+        Platform::DarwinArm64 => macos_installer(
+            &target,
+            &token,
+            &brama_url,
+            brama_port,
+            profile,
+        ),
     };
     let output = host_channel::run_script_with_timeout(
         &target,
@@ -407,44 +671,58 @@ pub async fn install(target_name: &str) -> Result<Value, DeployError> {
         &production_runner(),
     )
     .await?;
-    let value = report(&target, &output, "install");
+    let value = report(&target, &output, "install", profile);
     if !output.ok() {
         return Err(DeployError(format!(
-            "{}: precheck runner installation failed: {}",
+            "{}: {} runner installation failed: {}",
             target.name,
-            host_channel::last_error_line(&output, "remote installer failed")
+            profile.kind,
+            command_failure(&output, "remote installer failed")
         )));
     }
     Ok(value)
 }
 
-pub async fn status(target_name: &str) -> Result<Value, DeployError> {
+async fn status_profile(
+    target_name: &str,
+    profile: RunnerProfile,
+) -> Result<Value, DeployError> {
     let target = host_channel::canonical_target(target_name).await?;
-    let script = match Platform::for_target(&target)? {
-        Platform::LinuxAmd64 => LINUX_STATUS,
-        Platform::DarwinArm64 => MACOS_STATUS,
-    };
-    let output = host_channel::run_script(&target, script, &production_runner()).await?;
-    let value = report(&target, &output, "status");
+    let script = profile_template(
+        match Platform::for_target(&target)? {
+            Platform::LinuxAmd64 => LINUX_STATUS,
+            Platform::DarwinArm64 => MACOS_STATUS,
+        },
+        profile,
+    );
+    let output = host_channel::run_script(&target, &script, &production_runner()).await?;
+    let value = report(&target, &output, "status", profile);
     if !output.ok() {
         return Err(DeployError(format!(
-            "{}: precheck runner status failed: {}",
+            "{}: {} runner status failed: {}",
             target.name,
-            host_channel::last_error_line(&output, "remote status failed")
+            profile.kind,
+            command_failure(&output, "remote status failed")
         )));
     }
     Ok(value)
 }
 
-pub async fn remove(target_name: &str) -> Result<Value, DeployError> {
+async fn remove_profile(
+    target_name: &str,
+    profile: RunnerProfile,
+) -> Result<Value, DeployError> {
     let target = host_channel::canonical_target(target_name).await?;
     let platform = Platform::for_target(&target)?;
     let token = github_runner_token("remove").await?;
     let script = replace(
-        match platform {
-            Platform::LinuxAmd64 => LINUX_REMOVE,
-            Platform::DarwinArm64 => MACOS_REMOVE,
-        },
+        &profile_template(
+            match platform {
+                Platform::LinuxAmd64 => LINUX_REMOVE,
+                Platform::DarwinArm64 => MACOS_REMOVE,
+            },
+            profile,
+        ),
         &[("__TOKEN__", super::shlex_quote(&token))],
     );
     let output = host_channel::run_script_with_timeout(
@@ -454,15 +732,44 @@ pub async fn remove(target_name: &str) -> Result<Value, DeployError> {
         &production_runner(),
     )
     .await?;
-    let value = report(&target, &output, "remove");
+    let value = report(&target, &output, "remove", profile);
     if !output.ok() {
         return Err(DeployError(format!(
-            "{}: precheck runner removal failed: {}",
+            "{}: {} runner removal failed: {}",
             target.name,
-            host_channel::last_error_line(&output, "remote removal failed")
+            profile.kind,
+            command_failure(&output, "remote removal failed")
         )));
     }
     Ok(value)
+}
+
+pub async fn install(target_name: &str) -> Result<Value, DeployError> {
+    install_profile(target_name, PRECHECK).await
+}
+
+pub async fn status(target_name: &str) -> Result<Value, DeployError> {
+    status_profile(target_name, PRECHECK).await
+}
+
+pub async fn remove(target_name: &str) -> Result<Value, DeployError> {
+    remove_profile(target_name, PRECHECK).await
+}
+
+pub async fn install_publisher(
+    target_name: &str,
+    repositories: &[String],
+) -> Result<Value, DeployError> {
+    grant_release_secrets(repositories).await?;
+    install_profile(target_name, PUBLISHER).await
+}
+
+pub async fn status_publisher(target_name: &str) -> Result<Value, DeployError> {
+    status_profile(target_name, PUBLISHER).await
+}
+
+pub async fn remove_publisher(target_name: &str) -> Result<Value, DeployError> {
+    remove_profile(target_name, PUBLISHER).await
 }
 
 const LINUX_INSTALLER: &str = r#"set -euo pipefail
@@ -506,11 +813,18 @@ if [ ! -f "$runner_root/.runner" ]; then
   root chown "$runner_user:$runner_user" "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache"
   printf '%s' "$token" > "$token_file"
   chmod 600 "$token_file"
-  root chown "$runner_user:$runner_user" "$token_file"
-  root /usr/sbin/runuser --user "$runner_user" -- /usr/bin/env \
+  root install -o "$runner_user" -g "$runner_user" -m 0600 "$token_file" "$runner_root/.registration-token"
+  token_file="$runner_root/.registration-token"
+  if ! (cd "$runner_root" && root /usr/sbin/runuser --user "$runner_user" -- /usr/bin/env \
     HOME="$runner_root" PATH=/usr/local/bin:/usr/bin:/bin TOKEN_FILE="$token_file" \
-    /bin/bash -c 'read -r ACTIONS_RUNNER_INPUT_TOKEN < "$TOKEN_FILE"; export ACTIONS_RUNNER_INPUT_TOKEN; export ACTIONS_RUNNER_INPUT_URL=__ORGANIZATION_URL__ ACTIONS_RUNNER_INPUT_NAME="$1" ACTIONS_RUNNER_INPUT_RUNNERGROUP="$2" ACTIONS_RUNNER_INPUT_LABELS=stado-precheck ACTIONS_RUNNER_INPUT_WORK=_work; exec ./config.sh --unattended --replace --disableupdate' \
-    bash "$runner_name" "$runner_group"
+    /bin/bash -c 'read -r ACTIONS_RUNNER_INPUT_TOKEN < "$TOKEN_FILE"; export ACTIONS_RUNNER_INPUT_TOKEN; export ACTIONS_RUNNER_INPUT_URL=__ORGANIZATION_URL__ ACTIONS_RUNNER_INPUT_NAME="$1" ACTIONS_RUNNER_INPUT_RUNNERGROUP="$2" ACTIONS_RUNNER_INPUT_LABELS=__RUNNER_LABELS__ ACTIONS_RUNNER_INPUT_WORK=_work; exec ./config.sh --unattended --replace --disableupdate' \
+    bash "$runner_name" "$runner_group"); then
+    for log in "$runner_root"/_diag/Runner_*.log; do
+      [ -f "$log" ] || continue
+      root tail -n 80 "$log" >&2 || true
+    done
+    exit 1
+  fi
   token=
 fi
 
@@ -654,23 +968,37 @@ if [ ! -f "$runner_root/.runner" ]; then
   root tar -xzf "$archive" -C "$runner_root"
   root codesign --remove-signature "$runner_root/bin/Runner.Listener"
   root codesign --remove-signature "$runner_root/bin/Runner.Worker"
-  root chown -R "$runner_user:$runner_user" "$runner_root"
-  root mkdir -p "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache"
+  installer_user=$(id -un)
+  installer_group=$(id -gn)
+  root chown -R "$installer_user:$installer_group" "$runner_root"
+  root mkdir -p "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.tmp" "$runner_root/.dotnet"
+  root chown "$installer_user:$installer_group" "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.tmp" "$runner_root/.dotnet"
   printf '%s' "$token" > "$token_file"
   chmod 600 "$token_file"
-  root chown "$runner_user:$runner_user" "$token_file"
-  root sudo -u "$runner_user" -H -- /usr/bin/env \
-    HOME="$runner_root" PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin TOKEN_FILE="$token_file" \
-    /bin/bash -c 'cd "$HOME"; read -r ACTIONS_RUNNER_INPUT_TOKEN < "$TOKEN_FILE"; export ACTIONS_RUNNER_INPUT_TOKEN; export ACTIONS_RUNNER_INPUT_URL=__ORGANIZATION_URL__ ACTIONS_RUNNER_INPUT_NAME="$1" ACTIONS_RUNNER_INPUT_RUNNERGROUP="$2" ACTIONS_RUNNER_INPUT_LABELS=stado-precheck ACTIONS_RUNNER_INPUT_WORK=_work; exec ./config.sh --unattended --replace --disableupdate' \
-    bash "$runner_name" "$runner_group"
+  if ! (cd "$runner_root" && /usr/bin/env \
+    HOME="$runner_root" TMPDIR="$runner_root/.tmp" DOTNET_BUNDLE_EXTRACT_BASE_DIR="$runner_root/.dotnet" PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin TOKEN_FILE="$token_file" \
+    /bin/bash -c 'cd "$HOME"; read -r ACTIONS_RUNNER_INPUT_TOKEN < "$TOKEN_FILE"; export ACTIONS_RUNNER_INPUT_TOKEN; export ACTIONS_RUNNER_INPUT_URL=__ORGANIZATION_URL__ ACTIONS_RUNNER_INPUT_NAME="$1" ACTIONS_RUNNER_INPUT_RUNNERGROUP="$2" ACTIONS_RUNNER_INPUT_LABELS=__RUNNER_LABELS__ ACTIONS_RUNNER_INPUT_WORK=_work; exec ./config.sh --unattended --replace --disableupdate' \
+    bash "$runner_name" "$runner_group"); then
+    for log in "$runner_root"/_diag/Runner_*.log; do
+      [ -f "$log" ] || continue
+      root tail -n 80 "$log" >&2 || true
+    done
+    exit 1
+  fi
   token=
 fi
+  root chown -R "$runner_user:$runner_user" "$runner_root"
 
-root mkdir -p "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache"
+root mkdir -p "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.tmp" "$runner_root/.dotnet"
 root chown -R root:wheel "$runner_root"
 root chmod -R go-w "$runner_root"
-root chown "$runner_user:$runner_user" "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache"
-root chmod 700 "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache"
+for state_file in "$runner_root"/.credentials* "$runner_root"/.runner "$runner_root"/.service "$runner_root"/.path; do
+  [ -f "$state_file" ] || continue
+  root chown "$runner_user:$runner_user" "$state_file"
+  root chmod 600 "$state_file"
+done
+root chown "$runner_user:$runner_user" "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.tmp" "$runner_root/.dotnet"
+root chmod 700 "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.tmp" "$runner_root/.dotnet"
 
 root mkdir -p "$runner_root/routes"
 printf '%s\n' __BRAMA_URL__ | root tee "$runner_root/routes/brama.url" >/dev/null
@@ -703,7 +1031,7 @@ cat > "$launcher" <<LAUNCHER
 set -eu
 /sbin/pfctl -a com.wisent.stado-precheck -f /etc/pf.anchors/com.wisent.stado-precheck
 /sbin/pfctl -E >/dev/null 2>&1 || true
-exec /usr/bin/sudo -u $runner_user -H -- /usr/bin/env HOME=$runner_root PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin ACTIONS_RUNNER_HOOK_JOB_COMPLETED=$runner_root/clean-work.sh $runner_root/bin/runsvc.sh
+exec /usr/bin/sudo -u $runner_user -H -- /usr/bin/env HOME=$runner_root TMPDIR=$runner_root/.tmp DOTNET_BUNDLE_EXTRACT_BASE_DIR=$runner_root/.dotnet PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin ACTIONS_RUNNER_HOOK_JOB_COMPLETED=$runner_root/clean-work.sh $runner_root/bin/runsvc.sh
 LAUNCHER
 root install -o root -g wheel -m 0755 "$launcher" "$runner_root/start-runner.sh"
 rm -f "$launcher"
@@ -751,6 +1079,9 @@ if ! root launchctl print system/com.wisent.stado-precheck-runner; then
 fi
 dscl . -read /Users/stado-precheck UniqueID PrimaryGroupID NFSHomeDirectory UserShell Password
 root pfctl -a com.wisent.stado-precheck -sr
+root tail -n 40 /Users/Shared/stado-precheck-runner/_diag/launchd.stdout.log 2>/dev/null || true
+root tail -n 40 /Users/Shared/stado-precheck-runner/_diag/launchd.stderr.log >&2 2>/dev/null || true
+root sudo -u stado-precheck -H -- /usr/bin/env HOME=/Users/Shared/stado-precheck-runner TMPDIR=/Users/Shared/stado-precheck-runner/_work /Users/Shared/stado-precheck-runner/bin/Runner.Listener --version
 "#;
 
 const LINUX_REMOVE: &str = r#"set -euo pipefail

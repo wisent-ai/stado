@@ -1107,6 +1107,34 @@ enum HostPrecheckRunnerCommands {
 }
 
 #[derive(Subcommand)]
+enum HostPublisherRunnerCommands {
+    /// Install or reconcile the desktop publisher and grant its release secrets.
+    Install {
+        target: String,
+        /// Repository that may consume the shared release secrets. Repeat as needed.
+        #[arg(long = "repository", required = true)]
+        repositories: Vec<String>,
+        /// Emit the lifecycle report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read the installed runner service, identity and network boundary.
+    Status {
+        target: String,
+        /// Emit the lifecycle report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove the runner, service definition and network boundary from TARGET.
+    Remove {
+        target: String,
+        /// Emit the lifecycle report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum HostCommands {
     /// Show the latest Stado health beacon and log tail for TARGET.
     Health {
@@ -1143,6 +1171,9 @@ enum HostCommands {
     /// Manage the isolated GitHub pre-check runner on a registry host.
     #[command(name = "precheck-runner", subcommand)]
     PrecheckRunner(HostPrecheckRunnerCommands),
+    /// Manage the organization-wide GitHub desktop publisher on a registry host.
+    #[command(name = "publisher-runner", subcommand)]
+    PublisherRunner(HostPublisherRunnerCommands),
     /// Point TARGET's Weles recordings store at PATH.
     #[command(name = "weles-recordings-dir")]
     WelesRecordingsDir { target: String, path: String },
@@ -1961,6 +1992,19 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 }
                 HostPrecheckRunnerCommands::RepositoryAdd { repository, json } => {
                     precheck_runner::repository_add(&repository, json).await
+                }
+            },
+            HostCommands::PublisherRunner(command) => match command {
+                HostPublisherRunnerCommands::Install {
+                    target,
+                    repositories,
+                    json,
+                } => precheck_runner::install_publisher(&target, &repositories, json).await,
+                HostPublisherRunnerCommands::Status { target, json } => {
+                    precheck_runner::status_publisher(&target, json).await
+                }
+                HostPublisherRunnerCommands::Remove { target, json } => {
+                    precheck_runner::remove_publisher(&target, json).await
                 }
             },
             HostCommands::RemoveFile { target, path, json } => {
