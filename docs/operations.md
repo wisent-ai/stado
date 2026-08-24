@@ -21,6 +21,45 @@ The systemd unit reads non-secret API/Skarbiec origins from
 routing metadata. Both keep the opaque Skarbiec grant owner-only at
 `~/.stado/host-health-beacon-skarbiec-token`.
 
+## Missing service reconciliation
+
+The coordinator runs a service reconciliation stage during every
+`stado optimize run` and scheduled autonomy tick. It joins two independent
+facts: the unit state in the newest host beacon and a fresh
+`stado service verify` reachability sweep from the declared consumer hosts.
+The result is written to both
+`autonomy/services/latest.json` and an immutable
+`autonomy/services/runs/<timestamp>.json`; `stado optimize status` prints the
+latest report.
+
+The fleet-wide host-silence threshold is also the service-beacon freshness
+threshold. A missing or stale `reported_at` changes the service state to
+`unknown`; it never authorizes a host mutation. For a fresh beacon that omits
+a declared unit:
+
+| Endpoint evidence | Reconciliation |
+|---|---|
+| `observed` | Probe the declared unit. Stado adopts a corrected path or unit record only when the unit is loaded and its live process matches the declared program. If ownership cannot be proven, Stado records `identity_unresolved`, alerts once on the transition, and refuses to create a duplicate. |
+| `unreachable` | Run the existing idempotent `service ensure` path. It creates a missing unit or restarts it in place, never unloads it, verifies the running postcondition, and updates the registry when the host selected a different valid unit path. |
+| `unverified` or no observation | Record `endpoint_unverified`, alert once on the transition, and make no change because endpoint absence was not proven. |
+
+`AutonomyMode::Report` records the same plan without executing it.
+`EnforceSafe` and `EnforceOwned` execute the reversible `adopt`/`ensure`
+actions, bounded by `max_actions_per_tick`, the emergency pause, the circuit
+breaker, and a per-service mutation lease. Failed repairs feed the existing
+circuit breaker and alert channels. Recovery-managed units stay with the
+fixed host-recovery program and are never silently converted into registry
+services.
+
+Useful operator views:
+
+```bash
+stado service list
+stado service verify
+stado optimize status
+stado optimize run
+```
+
 Every command below enters through Stado. Provider diagnostics belong inside
 the corresponding adapter and are unavailable unless that provider is
 explicitly enabled in the selected profile.

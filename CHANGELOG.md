@@ -72,6 +72,13 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
 
 ### Host operations
 
+- Added service reconciliation to every autonomy cycle. Stado now turns stale
+  service beacons into `unknown`, joins fresh unit state with a current
+  consumer-side endpoint sweep, safely adopts only a loaded unit whose live
+  program matches its declaration, idempotently ensures a unit only after the
+  endpoint is proven unreachable, and persists each run with deduplicated
+  failure alerts, mutation leases, action limits and circuit-breaker feedback.
+
 - `stado host link TARGET [--json]` now says whether anybody is logged in on
   that host's screen. An operator asking where to see this in the GUI was
   answered "nowhere": the fact existed only inside `stado service restart`,

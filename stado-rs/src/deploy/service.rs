@@ -49,6 +49,7 @@ use std::path::{Component, Path};
 use std::sync::LazyLock;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use chrono::{DateTime, Utc};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -704,6 +705,26 @@ fn beacon_state(beacon: Option<&Map<String, Value>>, unit_id: &str) -> (String, 
     (state, String::new())
 }
 
+/// A beacon older than the fleet's one silence threshold cannot describe the
+/// present. Callers still receive its timestamp and the reason it was refused,
+/// but never a confident `active` or `missing` derived from stale evidence.
+fn stale_beacon_detail(reported_at: &str, now: DateTime<Utc>) -> Option<String> {
+    let threshold = crate::monitor::host_silence::silence_threshold_seconds();
+    let Some(stamp) = DateTime::parse_from_rfc3339(reported_at)
+        .ok()
+        .map(|stamp| stamp.with_timezone(&Utc))
+    else {
+        return Some("health beacon has no usable reported_at; unit state is unknown".to_string());
+    };
+    let age = now.signed_duration_since(stamp).num_seconds();
+    if age < i64::default() || age <= threshold {
+        return None;
+    }
+    Some(format!(
+        "health beacon is {age}s old, past the {threshold}s silence threshold; unit state is unknown"
+    ))
+}
+
 /// Every registry-managed service on every kind=local host, with the state
 /// the latest beacons report.
 ///
@@ -730,8 +751,15 @@ pub async fn list_services(store: &JobStorage) -> Result<Vec<ServiceStatus>, Dep
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
+        let stale = report
+            .as_ref()
+            .and_then(|_| stale_beacon_detail(&reported_at, Utc::now()));
         for service in declared {
-            let (state, detail) = beacon_state(beacon, service.unit_id());
+            let (mut state, mut detail) = beacon_state(beacon, service.unit_id());
+            if let Some(stale) = &stale {
+                state = STATE_UNKNOWN.to_string();
+                detail = stale.clone();
+            }
             let misdeclared_domain = MisdeclaredDomain::detect(target, &service);
             rows.push(ServiceStatus {
                 service,
@@ -4246,6 +4274,39 @@ pub fn add_service(document: &mut Value, service: &ManagedService) -> Result<(),
         )));
     }
     declared.push(service.to_record());
+    Ok(())
+}
+
+/// Replace one registry-managed service after a host observation corrected its
+/// unit identity or file path. The match is by logical name or stable unit id;
+/// recovery-sourced services are never written into the registry.
+pub fn replace_service(document: &mut Value, service: &ManagedService) -> Result<(), DeployError> {
+    let entry = target_entry(document, &service.host)?;
+    let declared = entry
+        .get_mut(SERVICES_KEY)
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| {
+            DeployError(format!(
+                "{} declares no managed services",
+                py_str_repr(&service.host)
+            ))
+        })?;
+    let record = declared
+        .iter_mut()
+        .find(|record| {
+            record.as_object().is_some_and(|record| {
+                let existing = ManagedService::from_record(&service.host, record);
+                existing.matches(&service.name) || existing.matches(service.unit_id())
+            })
+        })
+        .ok_or_else(|| {
+            DeployError(format!(
+                "{} is not a registry-managed service on {}",
+                py_str_repr(&service.name),
+                py_str_repr(&service.host)
+            ))
+        })?;
+    *record = service.to_record();
     Ok(())
 }
 
