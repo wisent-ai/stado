@@ -28,9 +28,16 @@ The coordinator runs a service reconciliation stage during every
 facts: the unit state in the newest host beacon and a fresh
 `stado service verify` reachability sweep from the declared consumer hosts.
 The result is written to both
-`autonomy/services/latest.json` and an immutable
-`autonomy/services/runs/<timestamp>.json`; `stado optimize status` prints the
-latest report.
+`state/autonomy/services/latest.json` and an immutable
+`state/autonomy/services/runs/<timestamp>.json`; `stado optimize status` prints
+the latest report.
+
+Every autonomy object is rooted under `state/` because the object gateway
+authorizes a write by matching its key against the configured namespace's
+prefix allowlist. No namespace declares `autonomy/`, so the whole layer's
+writes were refused with `401 unauthorized or non-immutable release write`
+while the `local` backup backend kept serving stale reads — the same defect
+`state/host_silence/` was moved to fix.
 
 The fleet-wide host-silence threshold is also the service-beacon freshness
 threshold. A missing or stale `reported_at` changes the service state to

@@ -206,7 +206,7 @@ impl Context {
         };
         let Some(snapshot) = crate::autonomy::storage::read_json::<
             crate::autonomy::model::InventorySnapshot,
-        >(&self.store, "autonomy/inventory/latest.json")
+        >(&self.store, "state/autonomy/inventory/latest.json")
         .await?
         else {
             return Ok(Some((false, u64::default())));

@@ -17,8 +17,8 @@ use crate::monitor::alerts;
 use crate::observations::{OBSERVED, UNREACHABLE};
 use crate::queue::{JobStorage, StorageError};
 
-const LATEST_REPORT: &str = "autonomy/services/latest.json";
-const REPORT_PREFIX: &str = "autonomy/services/runs";
+const LATEST_REPORT: &str = "state/autonomy/services/latest.json";
+const REPORT_PREFIX: &str = "state/autonomy/services/runs";
 const SCHEMA_VERSION: u16 = 1;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

@@ -347,7 +347,7 @@ pub(crate) async fn run_autonomy_once(
         ));
     }
     policy.emergency_paused |= control.emergency_paused || circuit_open;
-    let prices_path = "autonomy/cost/prices.json";
+    let prices_path = "state/autonomy/cost/prices.json";
     let prices: crate::autonomy::cost::PriceBook = match crate::autonomy::storage::read_json::<
         crate::autonomy::cost::PriceBook,
     >(store, prices_path)
@@ -503,7 +503,7 @@ pub(crate) async fn run_autonomy_once(
         crate::autonomy::cost::summarize_savings_with_measurements(&savings, &measurements);
     crate::autonomy::storage::write_json(
         store,
-        "autonomy/cost/savings.json",
+        "state/autonomy/cost/savings.json",
         &savings_summary,
         false,
     )

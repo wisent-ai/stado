@@ -1382,17 +1382,20 @@ pub async fn persist_reports(
     anomalies: &[CostAnomaly],
 ) -> Result<(), StorageError> {
     for (path, value) in [
-        ("autonomy/cost/prices.json", serde_json::to_value(prices)?),
         (
-            "autonomy/cost/allocation.json",
+            "state/autonomy/cost/prices.json",
+            serde_json::to_value(prices)?,
+        ),
+        (
+            "state/autonomy/cost/allocation.json",
             serde_json::to_value(allocation)?,
         ),
         (
-            "autonomy/cost/forecast.json",
+            "state/autonomy/cost/forecast.json",
             serde_json::to_value(forecast)?,
         ),
         (
-            "autonomy/cost/anomalies.json",
+            "state/autonomy/cost/anomalies.json",
             serde_json::to_value(anomalies)?,
         ),
     ] {

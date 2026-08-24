@@ -123,7 +123,7 @@ async fn status(json_output: bool) -> Result<(), CmdError> {
         savings: report_value(&store, "savings").await?,
         service_reconciliation: crate::autonomy::storage::read_json(
             &store,
-            "autonomy/services/latest.json",
+            "state/autonomy/services/latest.json",
         )
         .await?,
     };
@@ -267,7 +267,10 @@ pub(crate) async fn show_report(name: &str, json_output: bool) -> Result<(), Cmd
 }
 
 async fn report_value(store: &JobStorage, name: &str) -> Result<Option<Value>, CmdError> {
-    Ok(crate::autonomy::storage::read_json(store, &format!("autonomy/cost/{name}.json")).await?)
+    Ok(
+        crate::autonomy::storage::read_json(store, &format!("state/autonomy/cost/{name}.json"))
+            .await?,
+    )
 }
 
 /// Who a recorded mutation is attributed to.
