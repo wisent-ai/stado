@@ -317,216 +317,253 @@ impl Hasher {
         Ok((!path.is_empty()).then(|| Self::Sha256sum(path.to_string())))
     }
 
-    /// A file's SHA-256, or nothing when the read failed.
-    async fn digest(
+    /// The SHA-256 of every listed file, keyed by path. One remote call for
+    /// the whole set: both hash tools take any number of files and print one
+    /// `<digest>  <path>` line each, so a per-file call would multiply a
+    /// status read by the number of programs on the host. A file the tool
+    /// could not read is simply absent from the map — nothing rather than a
+    /// placeholder, exactly as the per-file call answered nothing.
+    async fn digest_all(
         &self,
         target: &ComputeTarget,
-        path: &str,
+        paths: &[&str],
         runner: &Runner,
-    ) -> Result<String, DeployError> {
+    ) -> Result<BTreeMap<String, String>, DeployError> {
+        let mut digests = BTreeMap::new();
+        if paths.is_empty() {
+            return Ok(digests);
+        }
         let output = match self {
             Self::Shasum => {
-                host_channel::run_program(target, &["/usr/bin/shasum", "-a", "256", path], runner)
-                    .await?
+                let mut words = vec!["/usr/bin/shasum", "-a", "256"];
+                words.extend_from_slice(paths);
+                host_channel::run_program(target, &words, runner).await?
             }
             Self::Sha256sum(program) => {
-                host_channel::run_program(target, &[program.as_str(), path], runner).await?
+                let mut words = vec![program.as_str()];
+                words.extend_from_slice(paths);
+                host_channel::run_program(target, &words, runner).await?
             }
         };
-        Ok(if output.ok() {
-            output
-                .stdout
-                .split_whitespace()
-                .next()
-                .unwrap_or_default()
-                .to_string()
-        } else {
-            String::new()
-        })
-    }
-}
-
-/// The reporting pass over one host: the population rules, the per-program
-/// readings and the report text, composed here in the wire format
-/// [`parse`] reads.
-struct Reporter<'a> {
-    target: &'a ComputeTarget,
-    runner: &'a Runner,
-    home: String,
-    releases: String,
-    hasher: Option<Hasher>,
-    seen: BTreeSet<String>,
-    scripts: usize,
-    reported: usize,
-    out: String,
-}
-
-impl Reporter<'_> {
-    /// The program one declared unit runs, read out of the unit file itself
-    /// rather than guessed from its label: a label that merely mentions
-    /// "stado" is a guess, and a wrong program in this report is worse than
-    /// an admitted absence.
-    async fn unit_program(&self, kind: &str, path: &str) -> Result<Option<String>, DeployError> {
-        let path = if path.starts_with('/') {
-            path.to_string()
-        } else {
-            format!("{}/{}", self.home, path)
-        };
-        if !host_channel::remote_test(
-            self.target,
-            &format!("-f {}", shlex_quote(&path)),
-            self.runner,
-        )
-        .await?
-        {
-            return Ok(None);
-        }
-        if kind == "systemd" {
-            // `sed -n 's/^ExecStart=//p' | head -n 1 | awk '{print $1}'`.
-            let read = host_channel::run_command(
-                self.target,
-                &format!("sed -n 's/^ExecStart=//p' {} | head -n 1", shlex_quote(&path)),
-                self.runner,
-            )
-            .await?;
-            return Ok(read
-                .stdout
-                .lines()
-                .next()
-                .and_then(|line| line.split_whitespace().next())
-                .map(str::to_string));
-        }
-        let extracted = host_channel::run_program(
-            self.target,
-            &["/usr/bin/plutil", "-extract", "ProgramArguments.0", "raw", "-o", "-", &path],
-            self.runner,
-        )
-        .await?;
-        let program = extracted.stdout.trim();
-        Ok((extracted.ok() && !program.is_empty()).then(|| program.to_string()))
-    }
-
-    /// `release` when these exact bytes are also a staged release artefact
-    /// under `$HOME/.stado/releases`, else `unmanaged`.
-    ///
-    /// Matched on the basename as well as the digest: the staging trees are
-    /// the only place on the host where a verified published artefact is kept
-    /// under its own coordinate, and hashing every file beneath them to
-    /// answer one question would turn a status read into a full-tree walk of
-    /// every release ever delivered.
-    async fn provenance(&mut self, digest: &str, base: &str) -> Result<&'static str, DeployError> {
-        if digest.is_empty()
-            || !host_channel::remote_test(
-                self.target,
-                &format!("-d {}", shlex_quote(&self.releases)),
-                self.runner,
-            )
-            .await?
-        {
-            return Ok(UNMANAGED);
-        }
-        let found = host_channel::run_command(
-            self.target,
-            &format!(
-                "find {} -maxdepth 6 -type f -name {} 2>/dev/null",
-                shlex_quote(&self.releases),
-                shlex_quote(base),
-            ),
-            self.runner,
-        )
-        .await?;
-        for candidate in found.stdout.lines() {
-            if candidate.is_empty() {
-                continue;
-            }
-            if let Some(hasher) = &self.hasher {
-                if hasher.digest(self.target, candidate, self.runner).await? == digest {
-                    return Ok(RELEASE);
+        for line in output.stdout.lines() {
+            // The format is 64 hex characters, two spaces, then the path,
+            // verbatim — a path is the one field here that may contain a
+            // space, so it takes the rest of the line.
+            if line.len() > 66 && line.is_char_boundary(64) {
+                let (digest, rest) = line.split_at(64);
+                if digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    && let Some(path) = rest.strip_prefix("  ")
+                {
+                    digests.insert(path.to_string(), digest.to_string());
                 }
             }
         }
-        Ok(UNMANAGED)
+        Ok(digests)
     }
+}
 
-    /// One program, reported once. A path already reported is skipped rather
-    /// than repeated: `$HOME/.stado/bin/stado` is both an installed program
-    /// and the program a declared unit runs, and two rows for one file would
-    /// read as two programs disagreeing with each other.
-    async fn report_program(&mut self, path: &str) -> Result<(), DeployError> {
-        if path.is_empty()
-            || !host_channel::remote_test(
-                self.target,
-                &format!("-f {}", shlex_quote(path)),
-                self.runner,
-            )
-            .await?
-            || !self.seen.insert(path.to_string())
-        {
-            return Ok(());
-        }
-        let base = path.rsplit('/').next().unwrap_or(path);
-        // A `.previous` is the rollback copy of a program already reported
-        // under its own name, and a dotfile is this directory's own staging
-        // litter.
-        if base.starts_with('.') || base.ends_with(".previous") {
-            return Ok(());
-        }
-        // A compiled program is what a release pipeline produces; a shell
-        // script in the same directory is what the retired helper channel
-        // left there. Counted so the number is visible, not rowed so the
-        // real answers stay readable.
-        //
-        // Tested before the executable bit and not after, because the count
-        // has to match what `host helpers` reports and that command counts a
-        // leftover by its shebang alone. control-host carries 1393 of these
-        // against 28 programs and not one of them is executable any more;
-        // filtering on the exec bit first made every one of them vanish from
-        // the report instead of being counted, which is the accretion going
-        // quiet again in a command written to expose it.
-        let head = host_channel::run_program(
-            self.target,
-            &["/usr/bin/head", "-c", "2", path],
-            self.runner,
+/// The program one declared unit runs, read out of the unit file itself
+/// rather than guessed from its label: a label that merely mentions "stado"
+/// is a guess, and a wrong program in this report is worse than an admitted
+/// absence. A relative unit path is anchored at the remote `$HOME`, as the
+/// retired reporter anchored it.
+async fn unit_program(
+    target: &ComputeTarget,
+    runner: &Runner,
+    home: &str,
+    kind: &str,
+    path: &str,
+) -> Result<Option<String>, DeployError> {
+    let path = if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("{home}/{path}")
+    };
+    if !host_channel::remote_test(target, &format!("-f {}", shlex_quote(&path)), runner).await? {
+        return Ok(None);
+    }
+    if kind == "systemd" {
+        // `sed -n 's/^ExecStart=//p' | head -n 1 | awk '{print $1}'`.
+        let read = host_channel::run_command(
+            target,
+            &format!("sed -n 's/^ExecStart=//p' {} | head -n 1", shlex_quote(&path)),
+            runner,
         )
         .await?;
-        if head.stdout == "#!" {
-            self.scripts += 1;
-            return Ok(());
-        }
-        // What is left has to be executable to be a program.
-        // `$HOME/.stado/bin` also holds `SHA256SUMS` and a
-        // `release-manifest.json` left by earlier installs, and reporting a
-        // checksum list as software this host runs would put a row in front
-        // of an operator that no version and no release could ever account
-        // for.
-        if !host_channel::remote_test(
-            self.target,
-            &format!("-x {}", shlex_quote(path)),
-            self.runner,
-        )
-        .await?
-        {
-            return Ok(());
-        }
-        let digest = match &self.hasher {
-            Some(hasher) => hasher.digest(self.target, path, self.runner).await?,
-            None => String::new(),
-        };
-        let version = host_channel::remote_program_version(self.target, path, self.runner)
-            .await?
-            .unwrap_or_default();
-        let provenance = self.provenance(&digest, base).await?;
-        self.reported += 1;
-        self.out.push_str(&format!(
-            "software name={} version={} sha256={} provenance={} path={}\n",
-            base,
-            if version.is_empty() { UNKNOWN } else { &version },
-            if digest.is_empty() { UNKNOWN } else { &digest },
-            provenance,
-            path,
-        ));
-        Ok(())
+        return Ok(read
+            .stdout
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().next())
+            .map(str::to_string));
     }
+    let extracted = host_channel::run_program(
+        target,
+        &["/usr/bin/plutil", "-extract", "ProgramArguments.0", "raw", "-o", "-", &path],
+        runner,
+    )
+    .await?;
+    let program = extracted.stdout.trim();
+    Ok((extracted.ok() && !program.is_empty()).then(|| program.to_string()))
+}
+
+/// Type and mode of every candidate path, in one remote `stat` for the whole
+/// set: `<type>\t<mode>\t<path>` per file. The format string is the one fork
+/// between the fleet's two platforms — BSD `stat -f` on the Macs, GNU
+/// `stat -L -c` on the Linux hosts — both at the fixed `/usr/bin/stat`, and
+/// both following symlinks, as `test -f` did.
+///
+/// A path stat cannot read (missing, or a broken symlink) prints nothing for
+/// itself, which the caller reads as "not a regular file" — the `[ -f ] ||
+/// return 0` guard the retired reporter opened with.
+async fn stat_all(
+    target: &ComputeTarget,
+    paths: &[&str],
+    runner: &Runner,
+) -> Result<BTreeMap<String, (bool, bool)>, DeployError> {
+    let mut facts = BTreeMap::new();
+    if paths.is_empty() {
+        return Ok(facts);
+    }
+    let uname = host_channel::run_program(target, &["/usr/bin/uname", "-s"], runner).await?;
+    let mut words: Vec<&str> = if uname.stdout.trim() == "Darwin" {
+        vec!["/usr/bin/stat", "-f", "%HT\t%Sp\t%N"]
+    } else {
+        // -L follows symlinks, as BSD stat does by default and as `test -f`
+        // did: a symlink to a program is the program.
+        vec!["/usr/bin/stat", "-L", "-c", "%F\t%A\t%n"]
+    };
+    words.extend_from_slice(paths);
+    let stated = host_channel::run_program(target, &words, runner).await?;
+    for line in stated.stdout.lines() {
+        let mut fields = line.split('\t');
+        let (Some(kind), Some(mode), Some(path)) = (fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        let regular = kind.eq_ignore_ascii_case("regular file");
+        // `test -x` as the mode bits say it. Every file this report looks at
+        // is owned by the login user the channel lands on — Stado installed
+        // it, or the retired helper channel left it — so the mode and
+        // access(2) agree.
+        let executable = mode.chars().any(|flag| flag == 'x');
+        facts.insert(path.to_string(), (regular, executable));
+    }
+    Ok(facts)
+}
+
+/// The first two bytes of every regular candidate, in one remote `head`:
+/// with multiple files, `head -c 2` prints an `==> path <==` header before
+/// each file's bytes and a newline separator before every header but the
+/// first — the whole answer the shebang question needs without a remote
+/// loop. The stream is parsed byte-exactly: a file's content is 0, 1 or 2
+/// bytes followed by the next `\n==> ` or by the end of the stream, so empty
+/// and one-byte files cannot desynchronize the walk.
+async fn shebangs_all(
+    target: &ComputeTarget,
+    paths: &[&str],
+    runner: &Runner,
+) -> Result<BTreeSet<String>, DeployError> {
+    let mut scripts = BTreeSet::new();
+    let [path] = paths else {
+        if paths.is_empty() {
+            return Ok(scripts);
+        }
+        let mut words = vec!["/usr/bin/head", "-c", "2"];
+        words.extend_from_slice(paths);
+        let read = host_channel::run_program(target, &words, runner).await?;
+        let mut rest = read.stdout.as_bytes();
+        let mut first = true;
+        loop {
+            let after_marker = if first {
+                first = false;
+                rest.strip_prefix(b"==> ")
+            } else {
+                rest.strip_prefix(b"\n==> ")
+            };
+            let Some(after_marker) = after_marker else {
+                break;
+            };
+            let Some(end) = after_marker
+                .windows(4)
+                .position(|window| window == b" <==\n")
+            else {
+                break;
+            };
+            let path = String::from_utf8_lossy(&after_marker[..end]).into_owned();
+            rest = &after_marker[end + 4..];
+            let mut next = None;
+            for len in [2usize, 1, 0] {
+                if rest.len() < len {
+                    continue;
+                }
+                let following = &rest[len..];
+                if following.is_empty() || following.starts_with(b"\n==> ") {
+                    if &rest[..len] == b"#!" {
+                        scripts.insert(path.clone());
+                    }
+                    next = Some(following);
+                    break;
+                }
+            }
+            let Some(following) = next else {
+                break;
+            };
+            rest = following;
+        }
+        return Ok(scripts);
+    };
+    // A single file gets no header from head; ask directly.
+    let head = host_channel::run_program(target, &["/usr/bin/head", "-c", "2", path], runner).await?;
+    if head.stdout == "#!" {
+        scripts.insert((*path).to_string());
+    }
+    Ok(scripts)
+}
+
+/// `release` when these exact bytes are also a staged release artefact under
+/// `$HOME/.stado/releases`, else `unmanaged`.
+///
+/// Matched on the basename as well as the digest: the staging trees are the
+/// only place on the host where a verified published artefact is kept under
+/// its own coordinate, and hashing every file beneath them to answer one
+/// question would turn a status read into a full-tree walk of every release
+/// ever delivered.
+async fn provenance(
+    target: &ComputeTarget,
+    runner: &Runner,
+    hasher: Option<&Hasher>,
+    releases: &str,
+    digest: &str,
+    base: &str,
+) -> Result<&'static str, DeployError> {
+    if digest.is_empty()
+        || !host_channel::remote_test(target, &format!("-d {}", shlex_quote(releases)), runner)
+            .await?
+    {
+        return Ok(UNMANAGED);
+    }
+    let found = host_channel::run_command(
+        target,
+        &format!(
+            "find {} -maxdepth 6 -type f -name {} 2>/dev/null",
+            shlex_quote(releases),
+            shlex_quote(base),
+        ),
+        runner,
+    )
+    .await?;
+    let candidates: Vec<&str> = found.stdout.lines().filter(|line| !line.is_empty()).collect();
+    if let Some(hasher) = hasher {
+        let digests = hasher.digest_all(target, &candidates, runner).await?;
+        if candidates
+            .iter()
+            .any(|candidate| digests.get(*candidate).is_some_and(|found| found == digest))
+        {
+            return Ok(RELEASE);
+        }
+    }
+    Ok(UNMANAGED)
 }
 
 /// Ask TARGET what it runs, natively: the population rules and per-program
