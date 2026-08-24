@@ -28,8 +28,8 @@ grant, and it never routes through the credential-store selector
 
 The narrowness is load-bearing: when `release submit` read the signing key
 through the coordinator grant, the vault refused with `403 consumer not
-authorized` — the policy was right and the caller was reaching for the wrong
-identity (`stado-rs/src/skarbiec/verifiers.rs`).
+authorized to read item field` — the policy was right and the caller was
+reaching for the wrong identity (`stado-rs/src/skarbiec/verifiers.rs`).
 
 Secrets stay where they are minted. When a managed service's bearer is synced
 from a Skarbiec item, the item is read on the host by the host's own Stado
@@ -46,8 +46,8 @@ consumer name, and the path of the owner-only token file
 (`STADO_HOST_HEALTH_SKARBIEC_URL` / `_CONSUMER` / `_TOKEN_FILE` for the beacon
 publisher). A workload-agent grant contains only the provider-neutral
 application items in `agent.skarbiec.items`; it must never contain
-`stado-gcp`, `stado-azure`, or `stado-aws`, and such a grant fails profile
-validation ([configuration](../configuration.md)).
+`stado-gcp`, `stado-azure`, or `stado-aws`, and such a grant fails
+configuration validation ([configuration](../configuration.md)).
 
 One deliberate exception: a backend's own bootstrap credential stays outside
 the store, because putting the grant needed to unlock a manager inside that
@@ -93,6 +93,6 @@ lives in [cli](../cli.md).
 - **A Skarbiec item.** The item is the credential; the grant is the scoped
   permission to read named item fields. Rotating one does not rotate the
   other.
-- **A fleet channel key.** Host channels use registry-owned ed25519 keys
-  managed by `stado fleet key`; a grant opens Skarbiec, not a host
+- **A fleet channel key.** Host channels use fleet-held ed25519 keys managed
+  by `stado fleet key`; a grant opens Skarbiec, not a host
   ([cli](../cli.md)). See [security](../security.md) for the whole boundary.

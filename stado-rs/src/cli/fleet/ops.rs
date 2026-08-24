@@ -78,8 +78,8 @@ pub async fn create(name: &str, notes: &str) -> Result<bool, String> {
 /// the write that would strand them never happens. Pure.
 pub fn delete_fleet(document: &Value, name: &str) -> Result<Value, String> {
     let fleets = parse_fleets(document)?;
-    let fleet = find_fleet(&fleets, name)
-        .ok_or_else(|| format!("fleet '{name}' is not declared"))?;
+    let fleet =
+        find_fleet(&fleets, name).ok_or_else(|| format!("fleet '{name}' is not declared"))?;
     if !fleet.members.is_empty() {
         return Err(format!(
             "fleet '{name}' still has {} member(s): {}; reassign them first",

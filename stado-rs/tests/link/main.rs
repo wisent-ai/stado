@@ -209,8 +209,7 @@ fn host_link_reports_the_published_link_and_closes_the_open_silence() {
         "the reader that closed the gap is named beside the one that opened it"
     );
     assert_eq!(
-        records[0]["first_reader_error"],
-        "service directory cache is stale",
+        records[0]["first_reader_error"], "service directory cache is stale",
         "closing a gap never rewrites what the first reader said about it"
     );
     // The closed record is the one the document carried.
@@ -274,9 +273,10 @@ fn host_link_calls_a_stale_host_silent_and_records_the_gap() {
         .map(|blocker| blocker.as_str().unwrap())
         .collect();
     assert!(
-        blockers.iter().any(|blocker| blocker
-            .ends_with("s old, past the 300s silence threshold")
-            && blocker.starts_with("this host's newest beacon is")),
+        blockers.iter().any(
+            |blocker| blocker.ends_with("s old, past the 300s silence threshold")
+                && blocker.starts_with("this host's newest beacon is")
+        ),
         "the staleness blocker names the age and the threshold, got: {blockers:?}"
     );
     assert!(
@@ -695,7 +695,8 @@ fn a_headless_host_declaring_a_user_service_names_it_as_a_blocker() {
     // fresh and nothing refused, so it is healthy and the command exits 0 with
     // the blocker named in the document.
     assert_eq!(
-        report["verdict"], "healthy",
+        report["verdict"],
+        "healthy",
         "a headless host is not by itself unhealthy: {}",
         stderr(&out)
     );

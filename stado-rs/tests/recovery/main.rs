@@ -145,7 +145,8 @@ esac
 
 /// The fake process table is `state/pids`, one `pid user` per line; every
 /// process in it runs the unit's one program.
-const FAKE_PGREP: &str = "#!/bin/sh\n/usr/bin/awk '{print $1}' \"$STADO_FAKE_STATE/pids\" 2>/dev/null\n";
+const FAKE_PGREP: &str =
+    "#!/bin/sh\n/usr/bin/awk '{print $1}' \"$STADO_FAKE_STATE/pids\" 2>/dev/null\n";
 
 const FAKE_PS: &str = r#"#!/bin/sh
 want=""
@@ -240,7 +241,14 @@ impl Harness {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        for child in ["ssh-bin", "host-bin", "state", "state/env", "storage", "home"] {
+        for child in [
+            "ssh-bin",
+            "host-bin",
+            "state",
+            "state/env",
+            "storage",
+            "home",
+        ] {
             std::fs::create_dir_all(root.join(child)).unwrap();
         }
         tool(&root.join("ssh-bin"), "ssh", FAKE_SSH);
@@ -278,8 +286,14 @@ impl Harness {
         harness.declare_daemon(BEACON);
         for (name, value) in [
             ("STADO_HOST_HEALTH_API_URL", "http://127.0.0.1:8765"),
-            ("STADO_HOST_HEALTH_SKARBIEC_URL", "https://skarbiec.wisent.com"),
-            ("STADO_HOST_HEALTH_SKARBIEC_CONSUMER", "stado-host-health-beacon"),
+            (
+                "STADO_HOST_HEALTH_SKARBIEC_URL",
+                "https://skarbiec.wisent.com",
+            ),
+            (
+                "STADO_HOST_HEALTH_SKARBIEC_CONSUMER",
+                "stado-host-health-beacon",
+            ),
             (
                 "STADO_HOST_HEALTH_SKARBIEC_TOKEN_FILE",
                 "/Users/approved/.stado/host-health-beacon-skarbiec-token",
@@ -431,9 +445,18 @@ fn service_restart_ends_the_owned_process_of_a_keepalive_daemon() {
 
     // And the end state was checked on the host, not assumed.
     let out = host.stado(&[
-        "service", "restart", OBJECT_API, "--host", "fake-mini", "--json",
+        "service",
+        "restart",
+        OBJECT_API,
+        "--host",
+        "fake-mini",
+        "--json",
     ]);
-    assert!(out.status.success(), "second restart failed: {}", stderr(&out));
+    assert!(
+        out.status.success(),
+        "second restart failed: {}",
+        stderr(&out)
+    );
     let report = &document(&out)[0];
     assert_eq!(
         report["postcondition"]["intent"],

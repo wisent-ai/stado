@@ -216,11 +216,7 @@ async fn registry(store: &JobStorage) -> HandlerResult {
     Ok(json!({"beacons": beacons, "artifacts": artifacts}))
 }
 
-pub(super) async fn handle(
-    action: &str,
-    body: &[u8],
-    store: &JobStorage,
-) -> HandlerResult {
+pub(super) async fn handle(action: &str, body: &[u8], store: &JobStorage) -> HandlerResult {
     empty_request(body)?;
     match action {
         "jobs.snapshot" => snapshot(store).await,

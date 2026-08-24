@@ -24,9 +24,9 @@ their credential boundaries.
 
 ## What the screens show
 
-The Hosts, Services, and Releases screens are documented with screenshots in
-the app's own README under `desktop/StadoDesktop/docs/screenshots/`. Their
-shared discipline:
+The Hosts, Services, and Releases screens are captured in screenshots under
+`desktop/StadoDesktop/docs/screenshots/`; the app's own README documents the
+Services and Builds screens in detail. Their shared discipline:
 
 - **Services** separates what is declared from what is running: declared
   units, the fleet as the health beacons report it, and processes no unit

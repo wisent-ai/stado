@@ -619,9 +619,7 @@ impl Dashboard {
             {
                 return send_json(http_status("403"), &json!({"error": "forbidden"}));
             }
-            let available = self
-                .boundaries_available(&[Boundary::Integration])
-                .await;
+            let available = self.boundaries_available(&[Boundary::Integration]).await;
             return integration::handle(request, available, &self.store).await;
         }
         match request.method.as_str() {

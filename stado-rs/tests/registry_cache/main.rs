@@ -111,11 +111,8 @@ impl Fleet {
     /// Make the canonical read fail the way an unreachable store fails,
     /// without a network: the object is there and cannot be read.
     fn break_authority(&self) {
-        std::fs::set_permissions(
-            self.registry_blob(),
-            std::fs::Permissions::from_mode(0o000),
-        )
-        .unwrap();
+        std::fs::set_permissions(self.registry_blob(), std::fs::Permissions::from_mode(0o000))
+            .unwrap();
     }
 
     /// The contract's path for the last-known-good copy.
@@ -146,9 +143,8 @@ impl Fleet {
     fn backdate_copy(&self, seconds: i64) {
         let mut sidecar = self.sidecar();
         let read_at = chrono::Utc::now() - chrono::Duration::seconds(seconds);
-        sidecar["read_at"] = serde_json::Value::String(
-            read_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        );
+        sidecar["read_at"] =
+            serde_json::Value::String(read_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
         std::fs::write(self.sidecar_path(), sidecar.to_string()).unwrap();
     }
 
@@ -163,7 +159,10 @@ impl Fleet {
             .env("WC_STORAGE_BACKEND", "local")
             .env("WC_LOCAL_STORAGE_PATH", self.storage.path())
             // A set-but-missing STADO_CONFIG disables config-file discovery.
-            .env("STADO_CONFIG", self.storage.path().join("no-such-config.json"))
+            .env(
+                "STADO_CONFIG",
+                self.storage.path().join("no-such-config.json"),
+            )
             .env_remove("COMPUTE_API_KEY")
             .env_remove("COMPUTE_API_URL")
             .env_remove("WC_PROFILES_DIR");
@@ -292,8 +291,14 @@ fn a_document_that_fails_the_contract_is_never_recorded() {
         "got: {}",
         stderr(&out)
     );
-    assert!(!fleet.copy_path().exists(), "a rejected document was cached");
-    assert!(!fleet.sidecar_path().exists(), "a rejected document was dated");
+    assert!(
+        !fleet.copy_path().exists(),
+        "a rejected document was cached"
+    );
+    assert!(
+        !fleet.sidecar_path().exists(),
+        "a rejected document was dated"
+    );
 
     // And it cannot overwrite a copy that IS good: the whole value of the
     // cache is that the document in it was known good once.

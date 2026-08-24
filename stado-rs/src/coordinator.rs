@@ -771,8 +771,7 @@ pub async fn run(target: Option<&str>, once: bool) -> Result<i32, String> {
         // for hours). Ok(false) — already current, empty namespace, or a
         // lost CAS race — needs no line.
         if let Err(exc) =
-            crate::targets::record_fleet_queue_namespace(config::wc_stado_storage_namespace())
-                .await
+            crate::targets::record_fleet_queue_namespace(config::wc_stado_storage_namespace()).await
         {
             log(&format!("fleet queue namespace record failed: {exc}"));
         }

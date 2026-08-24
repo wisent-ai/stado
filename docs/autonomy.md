@@ -59,7 +59,7 @@ always allowed; financial commitments are denied in every mode.
 |---|---|
 | `report` (default) | Everything is observed and recorded, nothing is mutated. Placement is skipped, resource plans are not executed, and service repairs are recorded as `planned` with the mutation they would have made. |
 | `enforce-safe` | Reversible actions on owned or adopted resources execute. New cloud placement gets zero spend headroom, so placement cannot add cloud cost. Destructive actions are denied. |
-| `enforce-owned` | Reversible actions execute, destructive actions execute only when an explicit resource rule allows them, and this is the only mode in which new cloud placement receives a nonzero budget. |
+| `enforce-owned` | Reversible resource actions execute only when a resource rule allows them (service repairs need no rule), destructive actions only when an explicit rule allows them, and this is the only mode in which new cloud placement receives a nonzero budget. |
 
 With no persisted policy document, `load_policy` returns the default:
 report-only, version `default-report-only`.

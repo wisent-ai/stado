@@ -12,6 +12,20 @@
 //! `retryable` flag, exactly the contract Python's `_invoke` emits.
 //! Unexpected storage/IO/JSON failures map to code INTERNAL with
 //! retryable=false (Python `_invoke`'s catch-all).
+//!
+//! # Compatibility policy
+//!
+//! Within `schema_version` 1 the envelope only grows: existing fields keep
+//! their name, type, and meaning and are never removed; changes ship as new
+//! optional fields, and a consumer must ignore fields it does not
+//! recognize. Error codes are stable identifiers — a code is never reused
+//! for a different condition. New codes may appear; a consumer must treat
+//! an unknown code as a non-retryable failure unless the envelope's
+//! `retryable` flag says otherwise. Any change that breaks these rules
+//! increments [`SCHEMA_VERSION`]. The CLI emits exactly one schema version
+//! per binary — there is no flag to request an older one — so a consumer
+//! must refuse an envelope whose `schema_version` it does not know rather
+//! than guess.
 
 use std::collections::BTreeMap;
 use std::io::Read;

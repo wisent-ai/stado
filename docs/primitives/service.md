@@ -96,7 +96,7 @@ written into the registry by any of these paths
 ```bash
 stado service list
 stado service show <name>
-stado service ensure <name> --host <host>
+stado service ensure <name> --host <host> --reason <why>
 stado service adopt <unit> --host <host>
 stado service retire <unit> --host <host>
 stado service restart <name>

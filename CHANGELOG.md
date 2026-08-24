@@ -4,6 +4,13 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
 
 ## Unreleased
 
+### Machine interface
+
+- Documented the envelope compatibility policy: within `schema_version` 1
+  fields only grow and error codes are never reused, consumers ignore unknown
+  fields and treat unknown codes as non-retryable, and a breaking change
+  increments `schema_version`, which consumers must refuse when unknown.
+
 ### Configuration
 
 - Removed Wisent's deployment profiles and bundled fleet registry from the

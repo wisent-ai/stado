@@ -173,7 +173,11 @@ fn resolver_status_is_ready_only_while_the_generation_it_holds_is_current() {
     // Serving, holding the generation the authority publishes, inside its
     // max-stale window, with both declared binds held: ready, exit 0.
     publish_state(home, "serving", Some(7), 1);
-    let out = stado(home, storage, &["resolver", "status", "--target", "w1", "--json"]);
+    let out = stado(
+        home,
+        storage,
+        &["resolver", "status", "--target", "w1", "--json"],
+    );
     assert!(
         out.status.success(),
         "a ready resolver exited {:?}: {}{}",
@@ -205,7 +209,11 @@ fn resolver_status_is_ready_only_while_the_generation_it_holds_is_current() {
         registry_document(9, api_port, adapter_port),
     )
     .unwrap();
-    let out = stado(home, storage, &["resolver", "status", "--target", "w1", "--json"]);
+    let out = stado(
+        home,
+        storage,
+        &["resolver", "status", "--target", "w1", "--json"],
+    );
     assert_eq!(
         out.status.code(),
         Some(1),
@@ -233,7 +241,11 @@ fn resolver_status_is_ready_only_while_the_generation_it_holds_is_current() {
     )
     .unwrap();
     publish_state(home, "serving", Some(7), 400);
-    let out = stado(home, storage, &["resolver", "status", "--target", "w1", "--json"]);
+    let out = stado(
+        home,
+        storage,
+        &["resolver", "status", "--target", "w1", "--json"],
+    );
     assert_eq!(out.status.code(), Some(1));
     let document = report(&out);
     assert_eq!(document["stale"], true);
@@ -260,7 +272,11 @@ fn resolver_status_answers_while_the_resolver_is_stopped() {
     // No state file and nothing listening: the whole point of the subcommand
     // is that this answers at all. On 2026-08-19 the equivalent question had
     // no answer anywhere in the product.
-    let out = stado(home, storage, &["resolver", "status", "--target", "w1", "--json"]);
+    let out = stado(
+        home,
+        storage,
+        &["resolver", "status", "--target", "w1", "--json"],
+    );
     assert_eq!(
         out.status.code(),
         Some(1),
@@ -307,7 +323,11 @@ fn resolver_status_answers_while_the_resolver_is_stopped() {
     // it reaches the operator through this command instead of through 83 MiB
     // of stderr.
     publish_state(home, "backing_off", Some(7), 1);
-    let out = stado(home, storage, &["resolver", "status", "--target", "w1", "--json"]);
+    let out = stado(
+        home,
+        storage,
+        &["resolver", "status", "--target", "w1", "--json"],
+    );
     assert_eq!(out.status.code(), Some(1));
     let document = report(&out);
     assert_eq!(document["state"], "backing_off");
@@ -436,7 +456,10 @@ fn the_shipped_registry_declares_what_the_resolver_and_dashboard_run() {
         resolver["path"],
         "/Users/lukaszbartoszcze/Library/LaunchAgents/com.wisent.stado-resolver.plist"
     );
-    assert_eq!(resolver["program"], "/Users/lukaszbartoszcze/.stado/bin/stado");
+    assert_eq!(
+        resolver["program"],
+        "/Users/lukaszbartoszcze/.stado/bin/stado"
+    );
     assert_eq!(
         resolver["args"],
         serde_json::json!(["resolver", "serve", "--target", "operator-host"])

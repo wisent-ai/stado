@@ -3,23 +3,187 @@
   "documents": [
     {
       "output": "docs/operations.md",
-      "sources": ["stado-rs/src/deploy", "stado-rs/src/monitor"],
+      "sources": [
+        "stado-rs/src/deploy",
+        "stado-rs/src/monitor"
+      ],
       "instruction": "Operator documentation for Stado fleet operations: beacons, service reconciliation, host commands. Keep the existing section order and the failure quick-grep table."
     },
     {
       "output": "docs/autonomy.md",
-      "sources": ["stado-rs/src/autonomy", "stado-rs/src/coordinator.rs"],
+      "sources": [
+        "stado-rs/src/autonomy",
+        "stado-rs/src/coordinator.rs"
+      ],
       "instruction": "The operator page for stado optimize: cycle order, modes, safety rails, reports. Link operations.md for the reconciliation table instead of duplicating it."
     },
     {
       "output": "docs/jobs.md",
-      "sources": ["stado-rs/src/queue", "stado-rs/src/scheduler", "stado-rs/src/monitor/heartbeat_guard.rs"],
+      "sources": [
+        "stado-rs/src/queue",
+        "stado-rs/src/scheduler",
+        "stado-rs/src/monitor/heartbeat_guard.rs"
+      ],
       "instruction": "The queue user's page: job lifecycle from submit to results, profiles, schedules, costs."
     },
     {
       "output": "docs/security.md",
-      "sources": ["stado-rs/src/dashboard/mod.rs", "stado-rs/src/skarbiec", "stado-rs/src/deploy/host_exec.rs"],
+      "sources": [
+        "stado-rs/src/dashboard/mod.rs",
+        "stado-rs/src/skarbiec",
+        "stado-rs/src/deploy/host_exec.rs"
+      ],
       "instruction": "The trust-boundary page: which token opens what, the host channel contract, what never leaves a host, rotation, enrollment trust, the money boundary."
+    },
+    {
+      "output": "docs/runbook.md",
+      "sources": [
+        "stado-rs/src/deploy",
+        "stado-rs/src/monitor",
+        "stado-rs/src/dashboard/mod.rs",
+        "stado-rs/src/cli/service_converge.rs",
+        "stado-rs/src/cli/release_quarantine.rs"
+      ],
+      "instruction": "Symptom-first diagnosis page. Keep the symptom -> first command -> reading -> next command shape; link tables in operations.md instead of duplicating them."
+    },
+    {
+      "output": "docs/providers.md",
+      "sources": [
+        "stado-rs/src/providers",
+        "stado-rs/src/capabilities.rs",
+        "stado-rs/src/config.rs"
+      ],
+      "instruction": "Compute providers: WC_PROVIDERS selection, per-provider contributions, quota, instances, vast. Provider-neutral rule stands; no cloud-console instructions."
+    },
+    {
+      "output": "docs/inference.md",
+      "sources": [
+        "stado-rs/src/inference",
+        "stado-rs/src/deploy/inference.rs",
+        "stado-rs/src/cli/inference"
+      ],
+      "instruction": "Local OpenAI-compatible inference lifecycle. Carry the CLI's own deprecation notice while it exists in the source."
+    },
+    {
+      "output": "docs/stream.md",
+      "sources": [
+        "stado-rs/src/stream",
+        "stado-rs/src/deploy/stream.rs"
+      ],
+      "instruction": "Interactive GPU display sessions via Moonlight: provision, connect, end, and what state remains."
+    },
+    {
+      "output": "docs/disaster-recovery.md",
+      "sources": [
+        "stado-rs/src/cli/recovery.rs",
+        "stado-rs/src/cli/placement.rs",
+        "stado-rs/src/cli/blast_radius.rs",
+        "stado-rs/src/monitor/host_silence.rs"
+      ],
+      "instruction": "Outage handling in operator order: inventory, fence/migrate/verify/cutover, storage migration, silence records. Keep the order rule at the end."
+    },
+    {
+      "output": "docs/machine-interface.md",
+      "sources": [
+        "stado-rs/src/machine.rs",
+        "stado-rs/src/cli/machine.rs"
+      ],
+      "instruction": "The stable JSON surface for integrators; the compatibility policy must match the module doc exactly."
+    },
+    {
+      "output": "docs/primitives/beacon.md",
+      "sources": [
+        "stado-rs/src/monitor/host_health.rs",
+        "stado-rs/src/monitor/host_silence.rs",
+        "deploy/host_health_beacon_macos.sh"
+      ],
+      "instruction": "Primitive page, fixed shape: what it is, who declares, who observes, where it lives, commands, not to be confused with."
+    },
+    {
+      "output": "docs/primitives/service.md",
+      "sources": [
+        "stado-rs/src/deploy/service.rs"
+      ],
+      "instruction": "Primitive page, fixed shape as in the other primitives."
+    },
+    {
+      "output": "docs/primitives/directory.md",
+      "sources": [
+        "stado-rs/src/cli/service_verify.rs",
+        "stado-rs/src/cli/directory.rs"
+      ],
+      "instruction": "Primitive page, fixed shape as in the other primitives."
+    },
+    {
+      "output": "docs/primitives/object-store.md",
+      "sources": [
+        "stado-rs/src/dashboard/mod.rs",
+        "stado-rs/src/autonomy/storage.rs"
+      ],
+      "instruction": "Primitive page, fixed shape as in the other primitives."
+    },
+    {
+      "output": "docs/primitives/observation.md",
+      "sources": [
+        "stado-rs/src/observations.rs"
+      ],
+      "instruction": "Primitive page, fixed shape as in the other primitives."
+    },
+    {
+      "output": "docs/primitives/policy.md",
+      "sources": [
+        "stado-rs/src/autonomy/policy.rs",
+        "stado-rs/src/cli/autonomy_cmd.rs"
+      ],
+      "instruction": "Primitive page, fixed shape as in the other primitives."
+    },
+    {
+      "output": "docs/primitives/lease.md",
+      "sources": [
+        "stado-rs/src/autonomy/storage.rs",
+        "stado-rs/src/autonomy/service_reconciler.rs"
+      ],
+      "instruction": "Primitive page, fixed shape as in the other primitives."
+    },
+    {
+      "output": "docs/primitives/registry.md",
+      "sources": [
+        "stado-rs/src/targets.rs",
+        "stado-rs/src/cli/registry.rs"
+      ],
+      "instruction": "Primitive page, fixed shape as in the other primitives."
+    },
+    {
+      "output": "docs/primitives/target.md",
+      "sources": [
+        "stado-rs/src/targets.rs",
+        "stado-rs/src/monitor/host_health.rs"
+      ],
+      "instruction": "Primitive page, fixed shape as in the other primitives."
+    },
+    {
+      "output": "docs/primitives/job.md",
+      "sources": [
+        "stado-rs/src/queue",
+        "stado-rs/src/monitor/heartbeat_guard.rs"
+      ],
+      "instruction": "Primitive page, fixed shape as in the other primitives."
+    },
+    {
+      "output": "docs/primitives/release.md",
+      "sources": [
+        "stado-rs/src/release_agent.rs",
+        "stado-rs/src/cli/release_cmd.rs"
+      ],
+      "instruction": "Primitive page, fixed shape as in the other primitives."
+    },
+    {
+      "output": "docs/primitives/grant.md",
+      "sources": [
+        "stado-rs/src/skarbiec",
+        "stado-rs/src/deploy/service.rs"
+      ],
+      "instruction": "Primitive page, fixed shape as in the other primitives."
     }
   ]
 }

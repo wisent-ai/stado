@@ -109,7 +109,10 @@ async fn fenced_move(
     if !store.create_text_if_absent(&to, &body).await? {
         return Ok(false);
     }
-    match store.compare_and_swap_text(&from, expected_version, &body).await {
+    match store
+        .compare_and_swap_text(&from, expected_version, &body)
+        .await
+    {
         Ok(_) => {
             store.delete_blob(&from).await?;
             if from_prefix == "queue" {

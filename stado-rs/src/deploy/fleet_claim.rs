@@ -209,7 +209,11 @@ impl FleetClaim {
                 .iter()
                 .map(|blocker| blocker.rendered())
                 .collect();
-            lines.push(format!("  cannot claim: {} {}", host.host, words.join(", ")));
+            lines.push(format!(
+                "  cannot claim: {} {}",
+                host.host,
+                words.join(", ")
+            ));
         }
         lines
     }
@@ -376,7 +380,8 @@ async fn host_blockers(
     // would claim, so the reason it is not claiming is one of the words
     // above, and printing `pinned_only` beside them would send an operator to
     // change a policy that is not the problem.
-    let pinned_only = target.pinned_only || diag_flag(payload, host_gates::PINNED_ONLY) == Some(true);
+    let pinned_only =
+        target.pinned_only || diag_flag(payload, host_gates::PINNED_ONLY) == Some(true);
     if pinned_only && !pinned_here(registry, target, queued)? {
         blockers.push(Blocker::new(
             host_gates::PINNED_ONLY,
@@ -450,7 +455,11 @@ async fn agent_not_loaded(
         return Ok(Some(format!(
             "{unit} is declared at {}; the latest beacon reports it {}",
             agent.path,
-            if state.is_empty() { "with no state" } else { state }
+            if state.is_empty() {
+                "with no state"
+            } else {
+                state
+            }
         )));
     }
     Ok(None)

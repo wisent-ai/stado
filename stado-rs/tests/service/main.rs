@@ -78,7 +78,10 @@ impl Fleet {
             .env("HOME", self.home.path())
             .env("WC_STORAGE_BACKEND", "local")
             .env("WC_LOCAL_STORAGE_PATH", self.storage.path())
-            .env("STADO_CONFIG", self.storage.path().join("no-such-config.json"))
+            .env(
+                "STADO_CONFIG",
+                self.storage.path().join("no-such-config.json"),
+            )
             .env_remove("COMPUTE_API_KEY")
             .env_remove("COMPUTE_API_URL")
             .env_remove("WC_PROFILES_DIR");

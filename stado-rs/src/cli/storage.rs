@@ -1495,10 +1495,9 @@ impl RemoteObjectApi {
                     .get(reqwest::header::LOCATION)
                     .and_then(|value| value.to_str().ok())
                     .ok_or_else(|| CmdError::click("release redirect carries no Location"))?;
-                endpoint = response
-                    .url()
-                    .join(location)
-                    .map_err(|error| CmdError::click(format!("invalid release redirect: {error}")))?;
+                endpoint = response.url().join(location).map_err(|error| {
+                    CmdError::click(format!("invalid release redirect: {error}"))
+                })?;
                 continue;
             }
             return self
