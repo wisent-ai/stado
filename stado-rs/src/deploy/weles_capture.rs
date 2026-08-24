@@ -582,11 +582,7 @@ fn free_loopback_port() -> Result<u16, DeployError> {
     })?;
     let port = listener
         .local_addr()
-        .map_err(|error| {
-            DeployError(format!(
-                "cannot read the reserved loopback port: {error}"
-            ))
-        })?
+        .map_err(|error| DeployError(format!("cannot read the reserved loopback port: {error}")))?
         .port();
     Ok(port)
 }
@@ -597,9 +593,10 @@ fn free_loopback_port() -> Result<u16, DeployError> {
 async fn await_forward(child: &mut tokio::process::Child, port: u16) -> Result<(), DeployError> {
     let deadline = Instant::now() + FORWARD_DEADLINE;
     loop {
-        if let Some(status) = child.try_wait().map_err(|error| {
-            DeployError(format!("cannot read the SSH forward's state: {error}"))
-        })? {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| DeployError(format!("cannot read the SSH forward's state: {error}")))?
+        {
             return Err(DeployError(format!(
                 "SSH forwarding to the Weles admission API exited ({status}): {}",
                 forward_error(child).await
@@ -743,7 +740,9 @@ pub async fn enqueue(channel: &Channel, plan: &Plan) -> Result<Vec<Enqueued>, De
                 })
             })
             .collect();
-        let data = channel.call(ENQUEUE_ROUTE, &json!({ "jobs": jobs })).await?;
+        let data = channel
+            .call(ENQUEUE_ROUTE, &json!({ "jobs": jobs }))
+            .await?;
         let ids = data
             .get("job_ids")
             .and_then(Value::as_array)
@@ -859,9 +858,7 @@ pub async fn status(channel: &Channel, batch: &str) -> Result<BatchStatus, Deplo
     };
     let mut states: Vec<CaptureState> = logs
         .iter()
-        .filter(|row| {
-            row.pointer("/params/batch").and_then(Value::as_str) == Some(batch)
-        })
+        .filter(|row| row.pointer("/params/batch").and_then(Value::as_str) == Some(batch))
         .map(|row| {
             let artifact_prefix = row
                 .pointer("/params/artifact_prefix")
@@ -893,7 +890,11 @@ pub async fn status(channel: &Channel, batch: &str) -> Result<BatchStatus, Deplo
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string(),
-                state: capture_state(row.get("status").and_then(Value::as_str).unwrap_or_default()),
+                state: capture_state(
+                    row.get("status")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                ),
                 error: row
                     .get("error")
                     .and_then(Value::as_str)

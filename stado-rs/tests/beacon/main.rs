@@ -334,7 +334,8 @@ fn publish_beacon_refuses_a_document_it_cannot_read() {
     let out = fixture.collect(&malformed);
     assert_eq!(out.status.code(), Some(1));
     assert!(
-        stderr(&out).contains("Error: host beacon is not valid JSON: expected ident at line 1 column 2"),
+        stderr(&out)
+            .contains("Error: host beacon is not valid JSON: expected ident at line 1 column 2"),
         "got: {}",
         stderr(&out)
     );

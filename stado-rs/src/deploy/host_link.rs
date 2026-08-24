@@ -397,11 +397,7 @@ const MACOS_WAKE_KINDS: [&str; 2] = ["Wake", "DarkWake"];
 /// backwards and stops as soon as it has both.
 async fn macos_sleep_wake(runner: &Runner) -> Option<(Option<String>, Option<String>)> {
     let program = resolve_program("pmset")?;
-    let output = probe(
-        runner,
-        vec![program, "-g".to_string(), "log".to_string()],
-    )
-    .await?;
+    let output = probe(runner, vec![program, "-g".to_string(), "log".to_string()]).await?;
 
     let mut sleep = None;
     let mut wake = None;
@@ -533,8 +529,12 @@ fn journal_message(line: &str) -> &str {
 /// The kernel-log markers of a link transition, matched case-insensitively.
 /// Copied from a live fleet host: `i40e ... eth0: NIC Link is Up, 1000 Mbps
 /// Full Duplex` is the spelling a real interface change has there.
-const LINUX_INTERFACE_MARKERS: [&str; 4] =
-    ["link is up", "link is down", "link becomes ready", "carrier"];
+const LINUX_INTERFACE_MARKERS: [&str; 4] = [
+    "link is up",
+    "link is down",
+    "link becomes ready",
+    "carrier",
+];
 
 /// Interface changes inside the window from the kernel journal, or `None`
 /// when journalctl is absent or failed.

@@ -106,5 +106,15 @@ refused with `ARTIFACT_SECURITY` rather than written.
 ## Stability
 
 The envelope is versioned: `schema_version` is `1`, and the error codes above
-are stable identifiers a program may branch on. Not yet documented: a
-compatibility policy for what a future `schema_version` change would preserve.
+are stable identifiers a program may branch on. The compatibility policy:
+
+- Within one `schema_version`, existing fields keep their name, type, and
+  meaning and are never removed. Changes ship as new optional fields, so a
+  consumer must ignore fields it does not recognize.
+- An error code is never reused for a different condition. New codes may
+  appear; a consumer must treat an unknown code as a non-retryable failure
+  unless the envelope's `retryable` flag says otherwise.
+- `schema_version` increments on any breaking change. The CLI emits exactly
+  one schema version per binary — there is no flag to request an older one —
+  so a consumer must refuse an envelope whose `schema_version` it does not
+  know rather than guess.

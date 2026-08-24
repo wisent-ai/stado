@@ -2871,97 +2871,258 @@ pub(crate) async fn deliver_file(
     stream_file(target, source, name, DELIVERED_FILES_DIR, "u=rw,go=").await
 }
 
-/// The registration program `stado host sync-acquisition-scopes` runs on the
-/// host. Embedded, like every program this channel carries, so it is reviewed
-/// and read as the shell program it is; the one operator-chosen word — the
-/// delivered catalog's basename — reaches it through the validated,
-/// shlex-quoted `catalog_name=` line [`sync_acquisition_scopes`] prepends,
-/// the same way [`stream_file`] hands the remote side its file name.
-const REGISTER_ACQUISITION_SCOPES_SCRIPT: &str =
-    r#"#!/bin/sh
-# Register one delivered Skarbiec acquisition-scope catalog on this host.
-#
-# stado prepends exactly one line above this script when it runs it:
-#   catalog_name=<shlex-quoted basename>
-# naming the catalog it delivered into "$HOME/.stado/files" through the
-# delivered-file channel moments earlier. Everything else about the
-# registration is fixed here: the vault, the workload key, and the single
-# skarbiec call. Modeled on weles's register-weles-acquisition-scopes-host.sh
-# with the two appstore token re-mints removed -- minting weles worker
-# credentials is not part of registering a catalog, and every re-mint
-# silently extended those tokens' expiry.
-set -eu
-umask 077
+/// The registration `stado host sync-acquisition-scopes` performs on the host,
+/// natively: the checks and key steps of the retired registration script as
+/// individual remote commands, with every branch taken here. Modeled on
+/// weles's register-weles-acquisition-scopes-host.sh with the two appstore
+/// token re-mints removed — minting weles worker credentials is not part of
+/// registering a catalog, and every re-mint silently extended those tokens'
+/// expiry.
+///
+/// Everything about the registration is fixed: the vault, the workload key,
+/// and the single skarbiec call. The one operator-chosen word — the delivered
+/// catalog's basename — was validated by [`catalog_file_name`] before
+/// delivery and is validated again below, so the file this reads is decided
+/// here, not by whoever wrote the variable.
+///
+/// The return is the one line the retired script printed, composed here.
+/// Failures divide the way the channel always divided them: a transport error
+/// is returned as-is, and a remote refusal is wrapped with the delivered path
+/// so the operator can tell "delivered and not registered" from "never
+/// reached the host".
+async fn register_acquisition_scopes(
+    resolved: &ComputeTarget,
+    delivered: &str,
+    catalog_name: &str,
+    runner: &crate::deploy::Runner,
+) -> Result<String, CmdError> {
+    use crate::deploy::host_channel;
 
-home=${HOME:?HOME is required}
-bin="$home/.stado/bin/skarbiec"
-vault="$home/.stado/skarbiec.vault.json"
-private_key="$home/.stado/weles-credential-workload-private.pem"
-catalog="$home/.stado/files/$catalog_name"
-PATH="/opt/homebrew/opt/openssl@3/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-export PATH
-if [ -x /opt/homebrew/opt/openssl@3/bin/openssl ]; then
-  openssl=/opt/homebrew/opt/openssl@3/bin/openssl
-else
-  openssl=$(command -v openssl || true)
-fi
+    // A remote refusal: the script's own words, wrapped with which half of
+    // the operation happened.
+    let refused = |detail: String| {
+        CmdError::click(format!(
+            "{}: the catalog reached {delivered} and was NOT registered: {detail}. \
+             Settle the refusal and sync again",
+            resolved.name
+        ))
+    };
 
-public_key=
-new_private_key=
-cleanup() {
-  [ -z "$public_key" ] || rm -f "$public_key"
-  [ -z "$new_private_key" ] || rm -f "$new_private_key"
+    if catalog_name.is_empty()
+        || catalog_name.starts_with('.')
+        || !catalog_name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(refused("invalid catalog file name".to_string()));
+    }
+
+    let home = host_channel::remote_home(resolved, runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let bin = format!("{home}/.stado/bin/skarbiec");
+    let vault = format!("{home}/.stado/skarbiec.vault.json");
+    let private_key = format!("{home}/.stado/weles-credential-workload-private.pem");
+    let catalog = format!("{home}/.stado/files/{catalog_name}");
+
+    for file in [&bin, &vault, &private_key, &catalog] {
+        let present = host_channel::remote_test(
+            resolved,
+            &format!("-f {}", crate::deploy::shlex_quote(file)),
+            runner,
+        )
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+        if !present {
+            return Err(refused(format!(
+                "required acquisition-scope file is missing: {file}"
+            )));
+        }
+    }
+
+    let brewed = "/opt/homebrew/opt/openssl@3/bin/openssl";
+    let openssl = if host_channel::remote_test(resolved, &format!("-x {brewed}"), runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?
+    {
+        brewed.to_string()
+    } else {
+        let looked_up = host_channel::run_command(resolved, "command -v openssl", runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        let found = looked_up.stdout.trim();
+        if found.is_empty() {
+            return Err(refused(
+                "openssl is required to derive the workload public key".to_string(),
+            ));
+        }
+        found.to_string()
+    };
+
+    let public_key = match acquisition_scratch(resolved, &home, "weles-acquisition-public.XXXXXX", runner).await {
+        Ok(path) => path,
+        Err(detail) => return Err(refused(detail)),
+    };
+
+    // Skarbiec accepts only an Ed25519 workload key. A host still holding an
+    // older key gets one Ed25519 replacement, and the new private key takes
+    // the canonical path only after registration with its public half
+    // succeeded.
+    let mut candidate_key = private_key.clone();
+    let mut new_private_key: Option<String> = None;
+    let described = host_channel::run_program(
+        resolved,
+        &[openssl.as_str(), "pkey", "-in", private_key.as_str(), "-text", "-noout"],
+        runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !described.stdout.contains("ED25519") {
+        let fresh = match acquisition_scratch(resolved, &home, "weles-acquisition-private.XXXXXX", runner).await {
+            Ok(path) => path,
+            Err(detail) => {
+                remove_remote(resolved, &[public_key.as_str()], runner).await;
+                return Err(refused(detail));
+            }
+        };
+        for words in [
+            vec![
+                openssl.as_str(),
+                "genpkey",
+                "-algorithm",
+                "ED25519",
+                "-out",
+                fresh.as_str(),
+            ],
+            vec!["/bin/chmod", "600", fresh.as_str()],
+        ] {
+            let stepped = host_channel::run_program(resolved, &words, runner)
+                .await
+                .map_err(|error| CmdError::click(error.to_string()))?;
+            if !stepped.ok() {
+                remove_remote(resolved, &[public_key.as_str(), fresh.as_str()], runner).await;
+                return Err(refused(host_channel::last_error_line(
+                    &stepped,
+                    "openssl could not generate an Ed25519 workload key",
+                )));
+            }
+        }
+        candidate_key = fresh.clone();
+        new_private_key = Some(fresh);
+    }
+
+    let derived = host_channel::run_program(
+        resolved,
+        &[
+            openssl.as_str(),
+            "pkey",
+            "-in",
+            candidate_key.as_str(),
+            "-pubout",
+            "-out",
+            public_key.as_str(),
+        ],
+        runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !derived.ok() {
+        let mut litter = vec![public_key.as_str()];
+        if let Some(fresh) = &new_private_key {
+            litter.push(fresh.as_str());
+        }
+        remove_remote(resolved, &litter, runner).await;
+        return Err(refused(host_channel::last_error_line(
+            &derived,
+            "openssl could not derive the workload public key",
+        )));
+    }
+
+    let registered = host_channel::run_command(
+        resolved,
+        &format!(
+            "SKARBIEC_VAULT_FILE={} {} token-register-acquisitions {} \
+             --workload-public-key-file {} --replace-capabilities >/dev/null",
+            crate::deploy::shlex_quote(&vault),
+            crate::deploy::shlex_quote(&bin),
+            crate::deploy::shlex_quote(&catalog),
+            crate::deploy::shlex_quote(&public_key),
+        ),
+        runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !registered.ok() {
+        let mut litter = vec![public_key.as_str()];
+        if let Some(fresh) = &new_private_key {
+            litter.push(fresh.as_str());
+        }
+        remove_remote(resolved, &litter, runner).await;
+        return Err(refused(host_channel::last_error_line(
+            &registered,
+            "remote registration failed",
+        )));
+    }
+
+    if let Some(fresh) = &new_private_key {
+        let moved = host_channel::run_program(
+            resolved,
+            &["/bin/mv", "-f", fresh.as_str(), private_key.as_str()],
+            runner,
+        )
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+        if !moved.ok() {
+            remove_remote(resolved, &[public_key.as_str(), fresh.as_str()], runner).await;
+            return Err(refused(host_channel::last_error_line(
+                &moved,
+                "the new Ed25519 workload key could not be moved into place",
+            )));
+        }
+    }
+    remove_remote(resolved, &[public_key.as_str()], runner).await;
+
+    Ok(format!(
+        "{{\"status\":\"reconciled\",\"catalog\":\"{catalog_name}\"}}\n"
+    ))
 }
-trap cleanup EXIT HUP INT TERM
 
-# The name was checked before delivery; check it again here so the file this
-# script reads is decided by this script, not by whoever wrote the variable.
-case "$catalog_name" in
-  ""|.*|*[!A-Za-z0-9._-]*)
-    printf 'invalid catalog file name\n' >&2
-    exit 1
-    ;;
-esac
-
-for file in "$bin" "$vault" "$private_key" "$catalog"; do
-  [ -f "$file" ] || {
-    printf 'required acquisition-scope file is missing: %s\n' "$file" >&2
-    exit 1
-  }
-done
-[ -n "$openssl" ] || {
-  printf 'openssl is required to derive the workload public key\n' >&2
-  exit 1
+/// One scratch file in the host's own `.stado` directory, owner-only from the
+/// moment `mktemp` creates it.
+async fn acquisition_scratch(
+    resolved: &ComputeTarget,
+    home: &str,
+    suffix: &str,
+    runner: &crate::deploy::Runner,
+) -> Result<String, String> {
+    let made = crate::deploy::host_channel::run_command(
+        resolved,
+        &format!(
+            "mktemp {}",
+            crate::deploy::shlex_quote(&format!("{home}/.stado/{suffix}"))
+        ),
+        runner,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    if !made.ok() {
+        return Err(crate::deploy::host_channel::last_error_line(
+            &made,
+            "could not create a scratch file on the host",
+        ));
+    }
+    Ok(made.stdout.trim().to_string())
 }
 
-public_key=$(mktemp "$home/.stado/weles-acquisition-public.XXXXXX")
-
-# Skarbiec accepts only an Ed25519 workload key. A host still holding an
-# older key gets one Ed25519 replacement, and the new private key takes the
-# canonical path only after registration with its public half succeeded.
-candidate_key="$private_key"
-key_description=$("$openssl" pkey -in "$private_key" -text -noout 2>/dev/null || true)
-case "$key_description" in
-  *ED25519*) ;;
-  *)
-    new_private_key=$(mktemp "$home/.stado/weles-acquisition-private.XXXXXX")
-    "$openssl" genpkey -algorithm ED25519 -out "$new_private_key" >/dev/null 2>&1
-    chmod 600 "$new_private_key"
-    candidate_key="$new_private_key"
-    ;;
-esac
-"$openssl" pkey -in "$candidate_key" -pubout -out "$public_key" >/dev/null 2>&1
-SKARBIEC_VAULT_FILE="$vault" \
-  "$bin" token-register-acquisitions "$catalog" \
-    --workload-public-key-file "$public_key" \
-    --replace-capabilities >/dev/null
-if [ "$candidate_key" != "$private_key" ]; then
-  mv -f "$candidate_key" "$private_key"
-  new_private_key=
-fi
-
-printf '{"status":"reconciled","catalog":"%s"}\n' "$catalog_name"
-"#;
+/// Best-effort removal of this registration's scratch files — the retired
+/// script's EXIT trap. A failure to remove is not a failure of the
+/// registration that already happened, so it is ignored here exactly as the
+/// trap's `rm -f` ignored it there.
+async fn remove_remote(resolved: &ComputeTarget, paths: &[&str], runner: &crate::deploy::Runner) {
+    let mut words = vec!["/bin/rm", "-f"];
+    words.extend_from_slice(paths);
+    let _ = crate::deploy::host_channel::run_program(resolved, &words, runner).await;
+}
 
 /// The basename a local catalog is delivered and registered under.
 ///
@@ -2988,10 +3149,11 @@ fn catalog_file_name(source: &str) -> Result<String, CmdError> {
 ///
 /// Two audited halves and no third way in: the catalog travels through the
 /// [`stream_file`] delivery channel into `$HOME/.stado/files`, owner-only
-/// and checksummed on arrival, and the registration is the embedded fixed
-/// script — there is nothing to install on the host and nothing left behind
-/// but the delivered catalog. This is the reviewed replacement for running
-/// weles's register script through the retired helper channel.
+/// and checksummed on arrival, and the registration is
+/// [`register_acquisition_scopes`] — there is nothing to install on the host
+/// and nothing left behind but the delivered catalog. This is the reviewed
+/// replacement for running weles's register script through the retired helper
+/// channel.
 pub async fn sync_acquisition_scopes(target: &str, source: &str) -> Result<(), CmdError> {
     let metadata = std::fs::symlink_metadata(source)?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
@@ -3004,25 +3166,9 @@ pub async fn sync_acquisition_scopes(target: &str, source: &str) -> Result<(), C
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let runner = crate::deploy::production_runner();
-    let script = format!(
-        "catalog_name={}\n{REGISTER_ACQUISITION_SCOPES_SCRIPT}",
-        crate::deploy::shlex_quote(&name)
-    );
-    let output = crate::deploy::host_channel::run_script(&resolved, &script, &runner)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
-    if !output.ok() {
-        // Delivered and not registered is a real state, and the operator has
-        // to be told which half happened. The refusal is the remote's own
-        // words — the script says exactly which of its checks failed.
-        return Err(CmdError::click(format!(
-            "{target}: the catalog reached {delivered} and was NOT registered: {}. \
-             Settle the refusal and sync again",
-            crate::deploy::host_channel::last_error_line(&output, "remote registration failed")
-        )));
-    }
-    print!("{}", output.stdout);
-    if !output.stdout.ends_with('\n') {
+    let printed = register_acquisition_scopes(&resolved, &delivered, &name, &runner).await?;
+    print!("{printed}");
+    if !printed.ends_with('\n') {
         println!();
     }
     Ok(())
@@ -3298,83 +3444,6 @@ pub async fn remove_file(target: &str, path: &str, json: bool) -> Result<(), Cmd
     Ok(())
 }
 
-/// The retag this binary carries, run as one fixed remote script — the same
-/// channel every other host action takes now that nothing installs scripts on
-/// hosts to be run later.
-const RETAG_SCRIPT: &str = r#"#!/bin/sh
-# Replace the tags of one Skarbiec item on this host, and prove what changed.
-#
-# Tags are not decoration on a vault item: consumers enumerate by them. Brama
-# treats an item as a spendable subscription only when it carries
-# `brama:subscription` and `brama:agent:<agent>`, so an item that loses those
-# tags disappears from the fleet while its credential stays valid and every
-# health check keeps reporting green. That is not a hypothetical -- it took a
-# working Kimi subscription out of service for a day, and the vault item was at
-# revision 144 with zero tags while `/readyz` still answered `ready: true`.
-#
-# A retag is an owner write, so it can only run where the owner key is: on the
-# host itself, against $HOME/.stado/skarbiec.vault.json. It replaces tags only
-# and never touches or re-encrypts the payload, which is exactly why this
-# exists as its own operation rather than as a `set-json` that would rewrite a
-# live credential to restore a label.
-#
-# The caller prepends `item` and `tags` as shell-quoted bindings. Reports
-# tab-delimited STADO_RETAG markers -- before, after -- so the caller states
-# what the host had and has rather than asserting success.
-set -eu
-PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-export PATH
-GNUPGHOME="${GNUPGHOME:-$HOME/.gnupg}"
-export GNUPGHOME
-SKARBIEC="$HOME/.stado/bin/skarbiec"
-SKARBIEC_VAULT_FILE="${SKARBIEC_VAULT_FILE:-$HOME/.stado/skarbiec.vault.json}"
-export SKARBIEC_VAULT_FILE
-
-if [ ! -x "$SKARBIEC" ]; then
-  printf 'no Skarbiec binary at %s\n' "$SKARBIEC" > /dev/stderr
-  exit 1
-fi
-if [ ! -f "$SKARBIEC_VAULT_FILE" ]; then
-  printf 'no vault at %s\n' "$SKARBIEC_VAULT_FILE" > /dev/stderr
-  exit 1
-fi
-
-# Whether this build can retag at all. The discriminator is the usage literal,
-# never the bare command name: rustc packs string literals into one
-# unterminated blob, so a binary that carries the command shows
-# `...setgetretagdelete...` on a single line and a whole-line match for `retag`
-# reports absent on a build that has it. That false negative cost an hour and
-# sent one diagnosis at the wrong host.
-if ! strings -a "$SKARBIEC" 2>/dev/null | grep -q 'usage: retag <id> --tags'; then
-  printf 'the Skarbiec build at %s predates the retag operation\n' "$SKARBIEC" > /dev/stderr
-  exit 1
-fi
-
-report() {
-  python3 - "$SKARBIEC_VAULT_FILE" "$item" "$1" <<'PY'
-import json, sys
-vault_path, item_id, phase = sys.argv[1], sys.argv[2], sys.argv[3]
-item = json.load(open(vault_path)).get("items", {}).get(item_id)
-if item is None:
-    print(f"STADO_RETAG\t{phase}\tabsent\t-\t-")
-else:
-    tags = item.get("tags") or []
-    print(
-        "STADO_RETAG\t{phase}\t{state}\t{revision}\t{tags}".format(
-            phase=phase,
-            state=item.get("state") or "-",
-            revision=item.get("revision") if item.get("revision") is not None else "-",
-            tags=",".join(tags) if tags else "-",
-        )
-    )
-PY
-}
-
-report before
-"$SKARBIEC" retag "$item" --tags "$tags" > /dev/null
-report after
-"#;
-
 /// A vault item id or tag: the alphabet `release_component` allows, plus the
 /// `:` that every one of these names is built out of
 /// (`provider:kimi:brama-sub-…`, `brama:agent:wisent-app`).
@@ -3402,16 +3471,55 @@ struct RetagPhase {
     tags: String,
 }
 
-fn retag_phase(stdout: &str, phase: &str) -> Option<RetagPhase> {
-    stdout.lines().find_map(|line| {
-        match crate::deploy::host_channel::marker_fields(line).as_slice() {
-            ["STADO_RETAG", found, state, revision, tags] if *found == phase => Some(RetagPhase {
-                state: (*state).to_string(),
-                revision: (*revision).to_string(),
-                tags: (*tags).to_string(),
-            }),
-            _ => None,
-        }
+/// One item of the host's vault, read as a retag phase: its state, revision
+/// and tags, or `absent` when the vault holds no such item. The vault is read
+/// over the channel and parsed here — the phase rendering the retired
+/// script's python snippet produced, without a python payload.
+async fn read_vault_phase(
+    resolved: &ComputeTarget,
+    vault: &str,
+    item: &str,
+    runner: &crate::deploy::Runner,
+) -> Result<RetagPhase, String> {
+    let text = crate::deploy::host_channel::remote_read_file(resolved, vault, runner)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("the vault at {vault} could not be read"))?;
+    let document: Value = serde_json::from_str(&text)
+        .map_err(|error| format!("the vault at {vault} did not parse as JSON: {error}"))?;
+    let Some(record) = document.get("items").and_then(|items| items.get(item)) else {
+        return Ok(RetagPhase {
+            state: "absent".to_string(),
+            revision: "-".to_string(),
+            tags: "-".to_string(),
+        });
+    };
+    let state = record
+        .get("state")
+        .and_then(Value::as_str)
+        .filter(|state| !state.is_empty())
+        .unwrap_or("-")
+        .to_string();
+    let revision = match record.get("revision") {
+        Some(Value::String(revision)) => revision.clone(),
+        Some(Value::Number(revision)) => revision.to_string(),
+        _ => "-".to_string(),
+    };
+    let tags = record
+        .get("tags")
+        .and_then(Value::as_array)
+        .map(|tags| {
+            tags.iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<&str>>()
+                .join(",")
+        })
+        .filter(|tags| !tags.is_empty())
+        .unwrap_or_else(|| "-".to_string());
+    Ok(RetagPhase {
+        state,
+        revision,
+        tags,
     })
 }
 
@@ -3442,34 +3550,118 @@ pub async fn retag_vault_item(
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let runner = crate::deploy::production_runner();
-    let script = format!(
-        "item={}\ntags={}\n{RETAG_SCRIPT}",
-        crate::deploy::shlex_quote(item),
-        crate::deploy::shlex_quote(tags),
-    );
-    let output = crate::deploy::host_channel::run_script_with_timeout(
+    let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    // The host's own overrides, resolved on the host the way the retired
+    // script's `${VAR:-default}` did.
+    let environment = crate::deploy::host_channel::run_command(
         &resolved,
-        &script,
-        std::time::Duration::from_secs(60),
+        "printf '%s\\n%s\\n' \"${SKARBIEC_VAULT_FILE:-$HOME/.stado/skarbiec.vault.json}\" \
+         \"${GNUPGHOME:-$HOME/.gnupg}\"",
         &runner,
     )
     .await
     .map_err(|error| CmdError::click(error.to_string()))?;
-    if !output.ok() {
+    if !environment.ok() {
         return Err(CmdError::click(format!(
             "{}: {item} could not be retagged: {}",
             resolved.name,
-            crate::deploy::host_channel::last_error_line(&output, "remote retag failed")
+            crate::deploy::host_channel::last_error_line(
+                &environment,
+                "the host's vault environment could not be read"
+            )
         )));
     }
-    let before = retag_phase(&output.stdout, "before");
-    let Some(after) = retag_phase(&output.stdout, "after") else {
-        return Err(CmdError::click(format!(
-            "{}: {item} reported no tags after the retag; the host said: {}",
-            resolved.name,
-            crate::deploy::host_channel::last_error_line(&output, "nothing")
-        )));
+    let mut variables = environment.stdout.lines();
+    let vault = variables.next().unwrap_or_default().to_string();
+    let gnupg_home = variables.next().unwrap_or_default().to_string();
+    let skarbiec = format!("{home}/.stado/bin/skarbiec");
+
+    // A remote refusal names the check that failed, in the words the retired
+    // script printed to stderr.
+    let refused = |detail: String| {
+        CmdError::click(format!(
+            "{}: {item} could not be retagged: {detail}",
+            resolved.name
+        ))
     };
+    if !crate::deploy::host_channel::remote_test(
+        &resolved,
+        &format!("-x {}", crate::deploy::shlex_quote(&skarbiec)),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?
+    {
+        return Err(refused(format!("no Skarbiec binary at {skarbiec}")));
+    }
+    if !crate::deploy::host_channel::remote_test(
+        &resolved,
+        &format!("-f {}", crate::deploy::shlex_quote(&vault)),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?
+    {
+        return Err(refused(format!("no vault at {vault}")));
+    }
+    // Whether this build can retag at all. The discriminator is the usage
+    // literal, never the bare command name: rustc packs string literals into
+    // one unterminated blob, so a binary that carries the command shows
+    // `...setgetretagdelete...` on a single line and a whole-line match for
+    // `retag` reports absent on a build that has it. That false negative cost
+    // an hour and sent one diagnosis at the wrong host.
+    let capable = crate::deploy::host_channel::run_command(
+        &resolved,
+        &format!(
+            "strings -a {} 2>/dev/null | grep -q 'usage: retag <id> --tags'",
+            crate::deploy::shlex_quote(&skarbiec)
+        ),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !capable.ok() {
+        return Err(refused(format!(
+            "the Skarbiec build at {skarbiec} predates the retag operation"
+        )));
+    }
+
+    // The caller states what the host had and has rather than asserting
+    // success: read the item before, retag, read it again.
+    let before = read_vault_phase(&resolved, &vault, item, &runner)
+        .await
+        .map_err(refused)?;
+    let retagged = crate::deploy::host_channel::run_command(
+        &resolved,
+        &format!(
+            "GNUPGHOME={} SKARBIEC_VAULT_FILE={} {} retag {} --tags {} > /dev/null",
+            crate::deploy::shlex_quote(&gnupg_home),
+            crate::deploy::shlex_quote(&vault),
+            crate::deploy::shlex_quote(&skarbiec),
+            crate::deploy::shlex_quote(item),
+            crate::deploy::shlex_quote(tags),
+        ),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !retagged.ok() {
+        return Err(refused(crate::deploy::host_channel::last_error_line(
+            &retagged,
+            "remote retag failed",
+        )));
+    }
+    let after = read_vault_phase(&resolved, &vault, item, &runner)
+        .await
+        .map_err(|detail| {
+            CmdError::click(format!(
+                "{}: {item} reported no tags after the retag; the host said: {detail}",
+                resolved.name
+            ))
+        })?;
+    let before = Some(before);
     if json {
         println!(
             "{}",
@@ -3503,70 +3695,26 @@ pub async fn retag_vault_item(
     Ok(())
 }
 
-/// The unit-log reader this binary carries, run as one fixed remote script.
-const UNIT_LOG_SCRIPT: &str = r#"#!/bin/sh
-# The tail of one managed unit's own log, read from the paths its unit file
-# declares.
-#
-# Why this exists: when a unit crash-loops, the only thing that says why is the
-# log it writes, and until now nothing in Stado could read it. `host health`
-# reports a unit as `failed` and carries an empty `last_log`; `service status`
-# reports the state; `host exec` is a read-only allowlist that cannot cat a
-# file. So the operator's fastest route to the sentence that names the fault was
-# an ssh session — the one thing the fleet forbids. A brama restart that
-# answered on one poll and was gone on the next cost half an hour of guessing
-# for want of these twenty lines.
-#
-# The caller prepends `unit` and `lines` as shell-quoted bindings. Reports the
-# declared paths, then the tail of each, prefixed so two files never blur into
-# one. Read-only: nothing is written, nothing is installed.
-set -eu
-PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-export PATH
-
-plist=""
-for candidate in \
-  "/Library/LaunchDaemons/$unit.plist" \
-  "$HOME/Library/LaunchAgents/$unit.plist" \
-  "/Library/LaunchAgents/$unit.plist"; do
-  if [ -f "$candidate" ]; then
-    plist="$candidate"
-    break
-  fi
-done
-if [ -z "$plist" ]; then
-  printf 'no unit file for %s in the daemon or agent directories\n' "$unit" > /dev/stderr
-  exit 1
-fi
-printf 'STADO_UNITLOG\tplist\t%s\n' "$plist"
-
-# One reader for both keys: a unit that sends stdout and stderr to the same file
-# must not be tailed twice, and a unit that separates them must not have half of
-# its account silently dropped.
-paths=$(/usr/libexec/PlistBuddy -c 'Print :StandardOutPath' "$plist" 2>/dev/null || true)
-errs=$(/usr/libexec/PlistBuddy -c 'Print :StandardErrorPath' "$plist" 2>/dev/null || true)
-if [ -n "$errs" ] && [ "$errs" != "$paths" ]; then
-  paths="$paths
-$errs"
-fi
-if [ -z "$paths" ]; then
-  printf 'STADO_UNITLOG\tdeclared\tnone\n'
-  printf '%s declares no log path\n' "$unit" > /dev/stderr
-  exit 1
-fi
-
-printf '%s\n' "$paths" | while IFS= read -r log; do
-  [ -n "$log" ] || continue
-  if [ -f "$log" ]; then
-    printf 'STADO_UNITLOG\tfile\t%s\n' "$log"
-    printf '=== %s (last %s lines)\n' "$log" "$lines"
-    tail -n "$lines" -- "$log" 2>/dev/null || printf '    unreadable\n'
-  else
-    printf 'STADO_UNITLOG\tabsent\t%s\n' "$log"
-    printf '=== %s (absent)\n' "$log"
-  fi
-done
-"#;
+/// One declared log path out of a unit plist: `StandardOutPath` or
+/// `StandardErrorPath`, or nothing when the plist does not declare it.
+/// PlistBuddy writes its "does not exist" to stderr and prints nothing, so a
+/// failed read is simply no path.
+async fn unit_log_path(
+    resolved: &ComputeTarget,
+    key: &str,
+    plist: &str,
+    runner: &crate::deploy::Runner,
+) -> Result<Option<String>, CmdError> {
+    let output = crate::deploy::host_channel::run_program(
+        resolved,
+        &["/usr/libexec/PlistBuddy", "-c", key, plist],
+        runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    let declared = output.stdout.trim();
+    Ok((output.ok() && !declared.is_empty()).then(|| declared.to_string()))
+}
 
 /// The tail of one managed unit's own log, from the paths its unit file
 /// declares.
@@ -3583,42 +3731,108 @@ pub async fn unit_log(
     lines: Option<u32>,
     json: bool,
 ) -> Result<(), CmdError> {
-    // A unit label is a reverse-DNS name; it is interpolated into a script that
-    // reads files, so it is checked before it gets there.
+    // A unit label is a reverse-DNS name; it names the plist files this reads,
+    // so it is checked before it gets there.
     vault_word("unit label", unit)?;
     let lines = lines.unwrap_or(40).clamp(u32::from(true), 500);
     let resolved = crate::deploy::host_channel::canonical_target(target)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
     let runner = crate::deploy::production_runner();
-    let script = format!(
-        "unit={}\nlines={lines}\n{UNIT_LOG_SCRIPT}",
-        crate::deploy::shlex_quote(unit),
-    );
-    let output = crate::deploy::host_channel::run_script_with_timeout(
-        &resolved,
-        &script,
-        std::time::Duration::from_secs(60),
-        &runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
-    let body: String = output
-        .stdout
+    let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+
+    // The unit file is found, never guessed: the daemon directory first, then
+    // both agent directories, exactly the retired reader's search order.
+    let mut plist = None;
+    for candidate in [
+        format!("/Library/LaunchDaemons/{unit}.plist"),
+        format!("{home}/Library/LaunchAgents/{unit}.plist"),
+        format!("/Library/LaunchAgents/{unit}.plist"),
+    ] {
+        if crate::deploy::host_channel::remote_test(
+            &resolved,
+            &format!("-f {}", crate::deploy::shlex_quote(&candidate)),
+            &runner,
+        )
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?
+        {
+            plist = Some(candidate);
+            break;
+        }
+    }
+    let Some(plist) = plist else {
+        return Err(CmdError::click(format!(
+            "{}: {unit} log could not be read: no unit file for {unit} in the daemon or agent \
+             directories",
+            resolved.name
+        )));
+    };
+
+    // The report is composed here, in the wire text the retired reader
+    // printed: STADO_UNITLOG marker lines interleaved with the prefixed
+    // tails, so the JSON and text renderings below parse it unchanged.
+    let mut report = format!("STADO_UNITLOG\tplist\t{plist}\n");
+
+    // One reader for both keys: a unit that sends stdout and stderr to the
+    // same file must not be tailed twice, and a unit that separates them must
+    // not have half of its account silently dropped.
+    let out_path = unit_log_path(&resolved, "Print :StandardOutPath", &plist, &runner).await?;
+    let err_path = unit_log_path(&resolved, "Print :StandardErrorPath", &plist, &runner).await?;
+    let mut declared: Vec<String> = Vec::new();
+    if let Some(path) = &out_path {
+        declared.push(path.clone());
+    }
+    if let Some(path) = &err_path {
+        if out_path.as_ref() != Some(path) {
+            declared.push(path.clone());
+        }
+    }
+    if declared.is_empty() {
+        return Err(CmdError::click(format!(
+            "{}: {unit} log could not be read: {unit} declares no log path",
+            resolved.name
+        )));
+    }
+
+    for log in &declared {
+        if crate::deploy::host_channel::remote_test(
+            &resolved,
+            &format!("-f {}", crate::deploy::shlex_quote(log)),
+            &runner,
+        )
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?
+        {
+            report.push_str(&format!("STADO_UNITLOG\tfile\t{log}\n"));
+            report.push_str(&format!("=== {log} (last {lines} lines)\n"));
+            let tail = crate::deploy::host_channel::run_program(
+                &resolved,
+                &["/usr/bin/tail", "-n", &lines.to_string(), "--", log],
+                &runner,
+            )
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+            if tail.ok() {
+                report.push_str(&tail.stdout);
+            } else {
+                report.push_str("    unreadable\n");
+            }
+        } else {
+            report.push_str(&format!("STADO_UNITLOG\tabsent\t{log}\n"));
+            report.push_str(&format!("=== {log} (absent)\n"));
+        }
+    }
+
+    let body: String = report
         .lines()
         .filter(|line| !line.starts_with("STADO_UNITLOG\t"))
         .collect::<Vec<_>>()
         .join("\n");
-    if !output.ok() && body.trim().is_empty() {
-        return Err(CmdError::click(format!(
-            "{}: {unit} log could not be read: {}",
-            resolved.name,
-            crate::deploy::host_channel::last_error_line(&output, "remote read failed")
-        )));
-    }
     if json {
-        let files: Vec<serde_json::Value> = output
-            .stdout
+        let files: Vec<serde_json::Value> = report
             .lines()
             .filter_map(
                 |line| match crate::deploy::host_channel::marker_fields(line).as_slice() {
@@ -3646,38 +3860,20 @@ pub async fn unit_log(
     Ok(())
 }
 
-/// What one Weles worker host is doing, read over the fixed-script channel.
+/// What one Weles worker host is doing: the Node.js program that reads the
+/// worker's run evidence on the host itself and prints one JSON document.
 ///
-/// A run performed on a worker host leaves its evidence on that host, so an
-/// operator anywhere else could see none of it — which is what kept sending
-/// people to a shell on the machine. This is the read that answers instead.
-const WELES_ACTIVITY_SCRIPT: &str = r#"#!/bin/bash
-# Report what a Weles worker host is doing, as one JSON document on stdout.
-#
-# Travels inside the stado binary and runs over the fixed-script channel: there
-# is nothing to install on the host and nothing left behind after the read.
-#
-# Recordings hold page DOM, console output, HAR bodies, personas and proxy
-# identities. None of that is emitted. What leaves the host is counts,
-# timestamps, run identifiers, artifact sizes, cost, and the pass/fail flag a
-# trajectory wrote about itself — the fields a remote operator view needs to
-# name a run and say how it ended.
-set -euo pipefail
-
-if [ -x /opt/homebrew/bin/node ]; then
-  node=/opt/homebrew/bin/node
-elif [ -x /usr/local/bin/node ]; then
-  node=/usr/local/bin/node
-else
-  printf '%s\n' 'Node.js is unavailable on this host' >&2
-  exit 69
-fi
-
-limit=${WELES_ACTIVITY_RUN_LIMIT:-40}
-port=${WELES_API_PORT:-8788}
-
-"$node" - "$limit" "$port" <<'NODE'
-const fs = require('node:fs');
+/// Fed to the host's own `node` over the channel's stdin, with the run limit
+/// and API port as argv — the same two values the retired bash wrapper took
+/// from the host's environment. There is nothing to install on the host and
+/// nothing left behind after the read.
+///
+/// Recordings hold page DOM, console output, HAR bodies, personas and proxy
+/// identities. None of that is emitted. What leaves the host is counts,
+/// timestamps, run identifiers, artifact sizes, cost, and the pass/fail flag a
+/// trajectory wrote about itself — the fields a remote operator view needs to
+/// name a run and say how it ended.
+const WELES_ACTIVITY_SOURCE: &str = r#"const fs = require('node:fs');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
@@ -3896,22 +4092,79 @@ probePort(apiPort).then((listening) => {
   };
   process.stdout.write(`STADO-WELES-ACTIVITY ${JSON.stringify(document)}\n`);
 });
-NODE
 "#;
 
-/// The marker the embedded script prefixes to its one JSON line, so a login
-/// shell's own greeting cannot be mistaken for the report.
+/// The marker [`WELES_ACTIVITY_SOURCE`] prefixes to its one JSON line, so a
+/// login shell's own greeting cannot be mistaken for the report.
 const WELES_ACTIVITY_MARKER: &str = "STADO-WELES-ACTIVITY ";
+
+/// Run [`WELES_ACTIVITY_SOURCE`] on one host with the host's own node, and
+/// hand back what it printed.
+///
+/// The run limit and API port are the host's environment or the defaults the
+/// retired wrapper carried, resolved on the host so an operator's local
+/// environment cannot steer a remote read.
+async fn read_weles_activity(
+    resolved: &ComputeTarget,
+    runner: &crate::deploy::Runner,
+) -> Result<String, crate::deploy::DeployError> {
+    use crate::deploy::host_channel;
+    let mut node = None;
+    for candidate in ["/opt/homebrew/bin/node", "/usr/local/bin/node"] {
+        if host_channel::remote_test(resolved, &format!("-x {candidate}"), runner).await? {
+            node = Some(candidate);
+            break;
+        }
+    }
+    let Some(node) = node else {
+        return Err(crate::deploy::DeployError(
+            "Node.js is unavailable on this host".to_string(),
+        ));
+    };
+    let environment = host_channel::run_command(
+        resolved,
+        "printf '%s %s' \"${WELES_ACTIVITY_RUN_LIMIT:-40}\" \"${WELES_API_PORT:-8788}\"",
+        runner,
+    )
+    .await?;
+    if !environment.ok() {
+        return Err(crate::deploy::DeployError(host_channel::last_error_line(
+            &environment,
+            "the host's Weles environment could not be read",
+        )));
+    }
+    let mut values = environment.stdout.split_whitespace();
+    let limit = values.next().unwrap_or("40");
+    let port = values.next().unwrap_or("8788");
+    let output = host_channel::run_program_with_stdin(
+        resolved,
+        &[node, "-", limit, port],
+        WELES_ACTIVITY_SOURCE,
+        runner,
+    )
+    .await?;
+    if !output.ok() {
+        return Err(crate::deploy::DeployError(host_channel::last_error_line(
+            &output,
+            "the Weles activity read did not complete",
+        )));
+    }
+    Ok(output.stdout)
+}
 
 /// Report TARGET's Weles worker releases, API reachability and recorded runs.
 pub async fn weles_activity(target: &str, json: bool) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
-    let output =
-        crate::deploy::host_channel::run_fixed_script(target, WELES_ACTIVITY_SCRIPT, &runner)
-            .await
-            .map_err(|error| {
-                CmdError::click(format!("{target}: cannot read Weles activity: {error}"))
-            })?;
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| {
+            CmdError::click(format!("{target}: cannot read Weles activity: {error}"))
+        })?;
+    let output = read_weles_activity(&resolved, &runner)
+        .await
+        .map_err(|error| {
+            CmdError::click(format!("{target}: cannot read Weles activity: {error}"))
+        })?;
 
     let document = output
         .lines()

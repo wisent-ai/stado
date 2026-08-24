@@ -9,8 +9,9 @@ Command surfaces live in [cli](cli.md); this page is the boundary map.
 
 There is no global dashboard bearer. Every API bearer is verified against a
 value held in Skarbiec, the separate credential service, and every comparison
-is constant-time. A missing or empty verifier item is an error the route
-reports as a redacted 503 — never access.
+is constant-time. A missing or empty verifier item is an error, never
+access: the object, release, and service routes report it as a redacted 503,
+and the host-health route refuses with a 401.
 
 | Bearer | Verified against | Opens |
 |---|---|---|
@@ -64,8 +65,8 @@ operator's words and the host (`stado-rs/src/deploy/host_exec.rs`):
 Extending the allowlist is a commit: each `ApprovedCommand` entry carries the
 fixed `argv` and a `why` field justifying unattended execution as the
 registry-managed login user. An entry without a defensible answer there does
-not belong in the table. Every entry is read-only — the allowlist cannot read
-a file.
+not belong in the table. Every entry is read-only, and no entry takes an
+operator-supplied path, so the allowlist cannot be pointed at a file.
 
 ## What never leaves a host
 

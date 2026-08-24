@@ -38,6 +38,9 @@ Only route-local or process-local values should be overridden:
 | `STADO_CREDENTIALS_ADMIN_CONSUMER` | Skarbiec bootstrap consumer used only for store administration and migration. |
 | `STADO_CREDENTIALS_ADMIN_TOKEN_FILE` | Owner-only bootstrap grant for the credential-store administrator. |
 
+What each bearer opens, and how every token is verified against its own
+Skarbiec item: [security](security.md).
+
 Cloud-provider locators and credentials are not caller overrides. An enabled
 provider adapter receives its exact profile and provider-plugin identity; a
 workload-agent grant contains only the provider-neutral application items in
@@ -50,6 +53,9 @@ Stado object boundary. Immutable artifact manifests may additionally reference
 provider-native `az://`, `gs://`, and `s3://` locations, plus `hf://` and
 HTTPS; access still resolves through authenticated provider adapters, and
 embedded credentials or sensitive query parameters are rejected.
+
+How the gateway resolves a namespace and authorizes each key and action:
+[object store](primitives/object-store.md).
 
 Optional alerts are disabled when `alerts.channels` is absent or empty. Enabling
 a channel authorizes only its own credential lookup and network route. The

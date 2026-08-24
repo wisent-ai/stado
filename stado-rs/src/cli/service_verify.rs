@@ -102,33 +102,52 @@ use crate::targets::{
     VERIFY_FROM_ACTIVE_HOST, VERIFY_FROM_ENDPOINT_HOLDERS, VERIFY_KIND_HTTP, VERIFY_KIND_TCP,
 };
 
-/// The probe that runs this same command in `--local` mode on a remote host,
-/// embedded in this binary and run as one fixed remote script — nothing is
-/// installed on the host, and nothing is left behind.
-const PROBE_SCRIPT: &str = r#"#!/bin/sh
-# Report which of this host's declared service endpoints actually answer.
-#
-# This script is embedded in the stado binary itself
-# (`service_verify::PROBE_SCRIPT`, via include_str!). `stado service verify`
-# runs it as one fixed remote script on every host that holds a declaration and
-# merges the answers into one table. It takes no arguments on purpose: a probe
-# that accepted a URL would be a remote fetcher with the audit trail removed.
-# Everything it probes comes from the registry this host already resolves.
-#
-# A host whose probe cannot run is reported `unverified`, never `observed` and
-# never `unreachable`. That is the whole point of the third state.
-set -eu
+/// The probe's one remote invocation: this same command in `--local` mode,
+/// run by the host's own installed stado — nothing is installed for the read,
+/// and nothing is left behind.
+const PROBE_ARGV: &[&str] = &["service", "verify", "--local", "--json"];
 
-stado="$HOME/.stado/bin/stado"
-if [ ! -x "$stado" ]; then
-  printf '%s\n' "missing executable Stado binary: $stado" >&2
-  exit 69
-fi
-
-# --local exits non-zero when a declaration is unreachable, which is the answer
-# the sweep wants recorded rather than treated as a broken probe.
-"$stado" service verify --local --json || true
-"#;
+/// Run the probe on one remote host, natively: locate the host's own stado,
+/// then ask it for the local findings with the fixed [`PROBE_ARGV`].
+///
+/// Not `ssh`, and not `host exec`: the exec allowlist carries fixed read-only
+/// argv and cannot express "and then interpret this URL", while an invocation
+/// that took the URL as an argument would be a remote fetcher with the audit
+/// trail removed. The probe takes no arguments at all -- it asks the same
+/// registry this command is reading and probes the host's own share of it.
+///
+/// A host whose probe cannot run is reported `unverified`, never `observed`
+/// and never `unreachable`. That is the whole point of the third state, so
+/// every failure here is the detail string of the `unverified` rows.
+async fn probe_remote(host: &str, runner: &crate::deploy::Runner) -> Result<String, String> {
+    use crate::deploy::host_channel;
+    let target = host_channel::canonical_target(host)
+        .await
+        .map_err(|error| root_cause(&error))?;
+    let home = host_channel::remote_home(&target, runner)
+        .await
+        .map_err(|error| root_cause(&error))?;
+    let stado = format!("{home}/.stado/bin/stado");
+    if !host_channel::remote_test(
+        &target,
+        &format!("-x {}", crate::deploy::shlex_quote(&stado)),
+        runner,
+    )
+    .await
+    .map_err(|error| root_cause(&error))?
+    {
+        return Err(format!("missing executable Stado binary: {stado}"));
+    }
+    let mut words: Vec<&str> = vec![stado.as_str()];
+    words.extend_from_slice(PROBE_ARGV);
+    let output = host_channel::run_program(&target, &words, runner)
+        .await
+        .map_err(|error| root_cause(&error))?;
+    // --local exits non-zero when a declaration is unreachable, which is the
+    // answer the sweep wants recorded rather than treated as a broken probe —
+    // the retired script's trailing `|| true`, taken here.
+    Ok(output.stdout)
+}
 
 /// A probe must not hang a fleet sweep behind one dead forward. Long enough for
 /// a loopback service under load, short enough that a closed laptop answers
@@ -533,13 +552,9 @@ pub async fn verify_local(json_output: bool) -> Result<(), CmdError> {
     fail_on_unreachable(&findings)
 }
 
-/// Run the probe on one remote host as a fixed script embedded in this binary.
-///
-/// Not `ssh`, and not `host exec`: the exec allowlist carries fixed read-only
-/// argv and cannot express "and then interpret this URL", while a script that
-/// took the URL as an argument would be a remote fetcher with the audit trail
-/// removed. The probe takes no arguments at all -- it asks the same registry
-/// this command is reading and probes the host's own share of it.
+/// Run the probe on one remote host, through [`probe_remote`]: one fixed argv
+/// answered by the host's own stado, with every refusal turned into the
+/// `unverified` detail the sweep records.
 async fn remote_findings(host: &str, declared: &[(String, String)]) -> Vec<Finding> {
     let runner = crate::deploy::production_runner();
     let unverified = |detail: String| -> Vec<Finding> {
@@ -555,11 +570,10 @@ async fn remote_findings(host: &str, declared: &[(String, String)]) -> Vec<Findi
             })
             .collect()
     };
-    let output =
-        match crate::deploy::host_channel::run_fixed_script(host, PROBE_SCRIPT, &runner).await {
-            Ok(output) => output,
-            Err(error) => return unverified(root_cause(&error)),
-        };
+    let output = match probe_remote(host, &runner).await {
+        Ok(output) => output,
+        Err(detail) => return unverified(detail),
+    };
     let parsed: Value = match serde_json::from_str(output.trim()) {
         Ok(parsed) => parsed,
         Err(error) => return unverified(format!("probe returned no usable JSON: {error}")),

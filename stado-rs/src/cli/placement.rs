@@ -1151,152 +1151,278 @@ async fn move_services(
 // ---------------------------------------------------------------------------
 
 /// Basename the policy takes in the target's delivered-files directory, and the
-/// only name [`APPLY_SCRIPT`] will read.
+/// only name [`apply_policy`] will read.
 const POLICY_FILE: &str = "placement-policy.json";
 
 /// Where the worker reads it, per `weles/src/worker/placement-policy.ts`: the
 /// loader joins `homedir()` with `.config/weles/placement-policy.json` unless
 /// `WELES_PLACEMENT_POLICY_FILE` overrides it. Reported here, never written
-/// here — the move belongs to the remote script, because only the host can see
-/// what the document replaced.
+/// here — the move belongs to the host, because only the host can see what the
+/// document replaced.
 const POLICY_DESTINATION: &str = "$HOME/.config/weles/placement-policy.json";
 
-/// The fixed remote script that moves a delivered policy into place and reports
-/// both sides of the change, embedded in this binary. It takes no arguments and
-/// both of its paths are fixed, so the only thing an operator can vary is what
-/// the registry says. Kept as a checked-in file rather than a string literal so
-/// it is reviewed and read as the shell program it is.
-const APPLY_SCRIPT: &str = r#"#!/bin/sh
-# Move the registry-published Weles placement policy into the path the worker
-# reads, or refuse and change nothing.
-#
-# This script is embedded in the stado binary itself
-# (`placement::APPLY_SCRIPT`, via include_str!). `stado host
-# publish-placement-policy` delivers the document to
-# $HOME/.stado/files/placement-policy.json through the audited channel and then
-# runs this as one fixed remote script. It takes no arguments on purpose: a
-# script that accepted a source or a destination path would be a remote writer
-# with the audit trail removed. Both paths below are fixed, so the only thing
-# an operator can vary is what the registry says.
-#
-# Three refusals, all of them silent failures somewhere else:
-#
-#   not JSON      a truncated or half-written delivery. Installing it takes the
-#                 worker's placement loader out entirely, on every claim.
-#   no _source    an unstamped document is one nobody can trace to a registry
-#                 read. That is the file this whole change exists to retire: the
-#                 host copy that disagreed with the registry for hours and could
-#                 not be dated, attributed, or compared against it.
-#   not this host a policy whose entries name no identity of this machine does
-#                 not fail loudly in the worker. It resolves to `enabled: false`
-#                 and the worker declines every row in silence -- 29,616 times,
-#                 the last time this fleet learned it.
-#
-# The destination is written through a temporary file in the same directory and
-# renamed, so a worker reading concurrently sees either the whole old document
-# or the whole new one, never a partial write.
-set -eu
-
-src="$HOME/.stado/files/placement-policy.json"
-dest_dir="$HOME/.config/weles"
-dest="$dest_dir/placement-policy.json"
-
-# Every check below is a JSON question, so a host without jq cannot answer any
-# of them -- and a script that cannot verify must not write. The fleet's other
-# scripts hardcode /usr/bin/jq; that path is real on the Linux hosts and absent
-# on the macOS ones, where Homebrew owns it, so this one looks in the three
-# places it is actually installed rather than assuming one of them.
-jq=
-for candidate in /usr/bin/jq /opt/homebrew/bin/jq /usr/local/bin/jq; do
-  if [ -x "$candidate" ]; then
-    jq=$candidate
-    break
-  fi
-done
-if [ -z "$jq" ]; then
-  printf '%s\n' 'no jq on this host: refusing to install a placement policy nothing here can parse' >&2
-  exit 69
-fi
-
-refuse() {
-  printf 'refusing to install %s: %s\n' "$src" "$1" >&2
-  exit 1
-}
-
-# The worker's own identity rule, transcribed from weles
-# src/worker/identity.ts: trim, lowercase, drop trailing dots. `hostname` and
-# node's `os.hostname()` are both gethostname(2), so this compares the same
-# string the loader will compare.
-host=$(hostname 2>/dev/null || printf '%s' '')
-if [ -z "$host" ]; then
-  printf '%s\n' 'this host cannot state its own hostname; the worker resolves placement by it' >&2
-  exit 69
-fi
-
-# `norm` and `entry` are the loader's matching rule, applied to whichever
-# document is being read: the delivery on the way in, and the file already in
-# place on the way out.
-filter='def norm: ascii_downcase | sub("\\.+$"; "");
+/// The jq vocabulary [`apply_policy`] verifies and summarizes the policy with:
+/// the worker's own identity rule, transcribed from weles
+/// `src/worker/identity.ts` (trim, lowercase, drop trailing dots), and the
+/// loader's entry-matching rule. A jq program is data for the remote jq, not
+/// a shell payload; the shell never sees it.
+///
+/// Transcribed rather than approximated because it is a comparison, and a
+/// comparison the two sides perform differently is a host that matches nothing.
+const POLICY_JQ_FILTER: &str = r#"def norm: ascii_downcase | sub("\\.+$"; "");
 def entry($h): [ .hosts[]? | select(((.hostname // "") | tostring | norm) == $h
-    or (((.aliases // []) | map(tostring | norm)) | index($h) != null)) ] | .[0];'
+    or (((.aliases // []) | map(tostring | norm)) | index($h) != null)) ] | .[0];"#;
 
-# generation, enabled, actions -- as three tab-separated fields, for whichever
-# entry belongs to this machine. `stado host publish-placement-policy` parses
-# these to report the delta; an operator reading the remote output sees them
-# directly.
-summarize() {
-  "$jq" -r --arg host "$host" "$filter"'
-    ($host | norm) as $h
-    | entry($h) as $e
-    | [ ((._source.registry_generation // "unstamped") | tostring),
-        (if $e == null then "-" else ($e.enabled | tostring) end),
-        (if $e == null then "-"
-         elif (($e.actions // []) | length) == 0 then "-"
-         else (($e.actions | map(tostring)) | join(",")) end) ]
-    | @tsv' "$1"
+/// generation, enabled, actions — as three tab-separated fields, for whichever
+/// entry belongs to the host named by `--arg host`. `stado host
+/// publish-placement-policy` parses these to report the delta; an operator
+/// reading the remote output sees them directly.
+const POLICY_JQ_SUMMARIZE: &str = r#"($host | norm) as $h
+| entry($h) as $e
+| [ ((._source.registry_generation // "unstamped") | tostring),
+    (if $e == null then "-" else ($e.enabled | tostring) end),
+    (if $e == null then "-"
+     elif (($e.actions // []) | length) == 0 then "-"
+     else (($e.actions | map(tostring)) | join(",")) end) ]
+| @tsv"#;
+
+/// One jq question about one JSON file on the host.
+///
+/// `raw` selects `-r` (the summarizing reads) over `-e` (the verifications,
+/// where the exit status is the answer and the output is nothing). `host`
+/// binds jq's `$host` for the entry-matching queries.
+async fn jq_eval(
+    target: &ComputeTarget,
+    runner: &Runner,
+    jq: &str,
+    host: Option<&str>,
+    raw: bool,
+    query: &str,
+    path: &str,
+) -> Result<CommandOutput, DeployError> {
+    let mut words: Vec<&str> = vec![jq, if raw { "-r" } else { "-e" }];
+    if let Some(host) = host {
+        words.extend(["--arg", "host", host]);
+    }
+    words.extend([query, path]);
+    host_channel::run_program(target, &words, runner).await
 }
 
-[ -f "$src" ] || refuse 'no delivered document at that path'
-"$jq" -e 'type == "object"' "$src" >/dev/null 2>&1 || refuse 'it does not parse as a JSON object'
-"$jq" -e '(._source | type) == "object"
+/// Move the registry-published Weles placement policy into the path the worker
+/// reads, or refuse and change nothing — the checks the retired apply script
+/// ran, as individual remote commands with every branch taken here.
+///
+/// `stado host publish-placement-policy` delivers the document to
+/// `$HOME/.stado/files/placement-policy.json` through the audited channel and
+/// then runs this. It takes no operator input on purpose: a writer that
+/// accepted a source or a destination path would be a remote writer with the
+/// audit trail removed. Both paths are fixed, so the only thing an operator
+/// can vary is what the registry says.
+///
+/// Three refusals, all of them silent failures somewhere else:
+///
+///   not JSON      a truncated or half-written delivery. Installing it takes
+///                 the worker's placement loader out entirely, on every claim.
+///   no _source    an unstamped document is one nobody can trace to a registry
+///                 read. That is the file this whole change exists to retire:
+///                 the host copy that disagreed with the registry for hours
+///                 and could not be dated, attributed, or compared against it.
+///   not this host a policy whose entries name no identity of this machine
+///                 does not fail loudly in the worker. It resolves to
+///                 `enabled: false` and the worker declines every row in
+///                 silence -- 29,616 times, the last time this fleet learned it.
+///
+/// The destination is written through a temporary file in the same directory
+/// and renamed, so a worker reading concurrently sees either the whole old
+/// document or the whole new one, never a partial write.
+///
+/// The return is the report the retired script printed, composed here from
+/// what the host answered: the `PLACEMENT_VANTAGE` and `PLACEMENT_POLICY`
+/// marker lines and the closing human line, so [`snapshot`] and the vantage
+/// read below parse it unchanged.
+async fn apply_policy(resolved: &ComputeTarget, runner: &Runner) -> Result<String, DeployError> {
+    let home = host_channel::remote_home(resolved, runner).await?;
+    let source = format!("{home}/.stado/files/{POLICY_FILE}");
+    let dest_dir = format!("{home}/.config/weles");
+    let dest = format!("{dest_dir}/{POLICY_FILE}");
+
+    // Every check below is a JSON question, so a host without jq cannot answer
+    // any of them -- and a writer that cannot verify must not write. jq is at
+    // /usr/bin on the Linux hosts and under Homebrew on the macOS ones, so the
+    // three places it is actually installed are tried rather than one assumed.
+    let mut jq = None;
+    for candidate in ["/usr/bin/jq", "/opt/homebrew/bin/jq", "/usr/local/bin/jq"] {
+        if host_channel::remote_test(resolved, &format!("-x {candidate}"), runner).await? {
+            jq = Some(candidate);
+            break;
+        }
+    }
+    let Some(jq) = jq else {
+        return Err(DeployError(
+            "no jq on this host: refusing to install a placement policy nothing here can parse"
+                .to_string(),
+        ));
+    };
+
+    // `hostname` and node's `os.hostname()` are both gethostname(2), so this
+    // compares the same string the worker's loader will compare.
+    let looked_up = host_channel::run_program(resolved, &["/bin/hostname"], runner).await?;
+    let host = looked_up.stdout.trim().to_string();
+    if host.is_empty() {
+        return Err(DeployError(
+            "this host cannot state its own hostname; the worker resolves placement by it"
+                .to_string(),
+        ));
+    }
+
+    let refuse = |why: &str| DeployError(format!("refusing to install {source}: {why}"));
+    let quoted_source = crate::deploy::shlex_quote(&source);
+    if !host_channel::remote_test(resolved, &format!("-f {quoted_source}"), runner).await? {
+        return Err(refuse("no delivered document at that path"));
+    }
+    if !jq_eval(resolved, runner, jq, None, false, r#"type == "object""#, &source)
+        .await?
+        .ok()
+    {
+        return Err(refuse("it does not parse as a JSON object"));
+    }
+    if !jq_eval(
+        resolved,
+        runner,
+        jq,
+        None,
+        false,
+        r#"(._source | type) == "object"
   and ((._source.registry_generation // "") | tostring | length) > 0
   and ((._source.published_at // "") | tostring | length) > 0
-  and ((._source.by // "") | tostring | length) > 0' "$src" >/dev/null 2>&1 \
-  || refuse 'it carries no _source stamp naming the registry generation it came from'
-"$jq" -e '.schema_version == 1 and (.hosts | type) == "array"' "$src" >/dev/null 2>&1 \
-  || refuse 'the worker parses schema_version 1 with a hosts array, and this is not that'
-"$jq" -e --arg host "$host" "$filter"'($host | norm) as $h | entry($h) != null' "$src" \
-  >/dev/null 2>&1 \
-  || refuse "no entry names this host ($host), so the worker would silently refuse every action"
+  and ((._source.by // "") | tostring | length) > 0"#,
+        &source,
+    )
+    .await?
+    .ok()
+    {
+        return Err(refuse(
+            "it carries no _source stamp naming the registry generation it came from",
+        ));
+    }
+    if !jq_eval(
+        resolved,
+        runner,
+        jq,
+        None,
+        false,
+        r#".schema_version == 1 and (.hosts | type) == "array""#,
+        &source,
+    )
+    .await?
+    .ok()
+    {
+        return Err(refuse(
+            "the worker parses schema_version 1 with a hosts array, and this is not that",
+        ));
+    }
+    let entry_query = format!("{POLICY_JQ_FILTER}\n($host | norm) as $h | entry($h) != null");
+    if !jq_eval(
+        resolved,
+        runner,
+        jq,
+        Some(host.as_str()),
+        false,
+        &entry_query,
+        &source,
+    )
+    .await?
+    .ok()
+    {
+        return Err(refuse(&format!(
+            "no entry names this host ({host}), so the worker would silently refuse every action"
+        )));
+    }
 
-# Read what is already there BEFORE overwriting it: after the rename nothing on
-# this machine can still say what the host was running on.
-if [ -L "$dest" ]; then
-  printf 'refusing to write through a symlink: %s\n' "$dest" >&2
-  exit 1
-elif [ ! -e "$dest" ]; then
-  previous=$(printf 'absent\t-\t-')
-else
-  previous=$(summarize "$dest" 2>/dev/null || printf '%s' '')
-  [ -n "$previous" ] || previous=$(printf 'unreadable\t-\t-')
-fi
+    let summarize_query = format!("{POLICY_JQ_FILTER}\n{POLICY_JQ_SUMMARIZE}");
 
-/bin/mkdir -p "$dest_dir"
-tmp="$dest_dir/.placement-policy.json.stado-apply.$$"
-trap '/bin/rm -f "$tmp"' EXIT
-/bin/cp "$src" "$tmp"
-/bin/chmod 600 "$tmp"
-/bin/mv "$tmp" "$dest"
-trap - EXIT
+    // Read what is already there BEFORE overwriting it: after the rename
+    // nothing on this machine can still say what the host was running on.
+    let quoted_dest = crate::deploy::shlex_quote(&dest);
+    if host_channel::remote_test(resolved, &format!("-L {quoted_dest}"), runner).await? {
+        return Err(DeployError(format!(
+            "refusing to write through a symlink: {dest}"
+        )));
+    }
+    let previous = if !host_channel::remote_test(resolved, &format!("-e {quoted_dest}"), runner)
+        .await?
+    {
+        "absent\t-\t-".to_string()
+    } else {
+        let summarized = jq_eval(
+            resolved,
+            runner,
+            jq,
+            Some(host.as_str()),
+            true,
+            &summarize_query,
+            &dest,
+        )
+        .await?;
+        match summarized.ok().then(|| summarized.stdout.trim().to_string()) {
+            Some(line) if !line.is_empty() => line,
+            _ => "unreadable\t-\t-".to_string(),
+        }
+    };
 
-installed=$(summarize "$dest")
-generation=$(printf '%s' "$installed" | /usr/bin/cut -f1)
+    let made = host_channel::run_program(resolved, &["/bin/mkdir", "-p", &dest_dir], runner).await?;
+    if !made.ok() {
+        return Err(DeployError(host_channel::last_error_line(
+            &made,
+            "could not create the policy directory",
+        )));
+    }
+    let temporary = format!("{dest_dir}/.placement-policy.json.stado-apply-{}", std::process::id());
+    for words in [
+        vec!["/bin/cp", source.as_str(), temporary.as_str()],
+        vec!["/bin/chmod", "600", temporary.as_str()],
+        vec!["/bin/mv", temporary.as_str(), dest.as_str()],
+    ] {
+        let stepped = host_channel::run_program(resolved, &words, runner).await?;
+        if !stepped.ok() {
+            // A failed install leaves no half-written destination and no
+            // staging litter: the temporary file goes, exactly as the retired
+            // script's EXIT trap removed it.
+            let _ = host_channel::run_program(resolved, &["/bin/rm", "-f", &temporary], runner)
+                .await;
+            return Err(DeployError(host_channel::last_error_line(
+                &stepped,
+                "remote install failed",
+            )));
+        }
+    }
 
-printf 'PLACEMENT_VANTAGE\t%s\n' "$host"
-printf 'PLACEMENT_POLICY\tprevious\t%s\n' "$previous"
-printf 'PLACEMENT_POLICY\tinstalled\t%s\n' "$installed"
-printf 'installed %s at registry generation %s\n' "$dest" "$generation"
-"#;
+    let installed_output = jq_eval(
+        resolved,
+        runner,
+        jq,
+        Some(host.as_str()),
+        true,
+        &summarize_query,
+        &dest,
+    )
+    .await?;
+    let installed = installed_output.stdout.trim().to_string();
+    if !installed_output.ok() || installed.is_empty() {
+        return Err(DeployError(host_channel::last_error_line(
+            &installed_output,
+            "the installed policy could not be read back",
+        )));
+    }
+    let generation = installed.split('\t').next().unwrap_or_default();
+
+    Ok(format!(
+        "{VANTAGE_MARKER}\t{host}\n\
+         {POLICY_MARKER}\tprevious\t{previous}\n\
+         {POLICY_MARKER}\tinstalled\t{installed}\n\
+         installed {dest} at registry generation {generation}\n"
+    ))
+}
 
 /// `PLACEMENT_POLICY <phase> <generation> <enabled> <actions>`, tab separated:
 /// the apply script's report of what the host carried and what it carries now.
@@ -1536,14 +1662,13 @@ pub async fn publish_placement_policy(
     let (delivered, bytes) = super::host::deliver_file(&resolved.name, source, POLICY_FILE).await?;
 
     let runner = production_runner();
-    let reported = host_channel::run_fixed_script(&resolved.name, APPLY_SCRIPT, &runner)
+    let reported = apply_policy(&resolved, &runner)
         .await
         .map_err(|error| {
             // Delivered and not installed is a real state, and the operator has
             // to be told which half happened: the worker is still running the
             // old list, and a file it does not read is sitting next to it. The
-            // refusal is the remote's own words -- the script says exactly
-            // which of its checks the document failed.
+            // refusal names exactly which check the document failed.
             CmdError::click(format!(
                 "{name}: the policy reached {delivered} and was NOT installed: {error}. \
                  Settle the refusal and publish again",
@@ -1553,7 +1678,7 @@ pub async fn publish_placement_policy(
 
     let installed = snapshot(&reported, "installed").ok_or_else(|| {
         CmdError::click(format!(
-            "{}: the apply script reported no installed policy, so {POLICY_DESTINATION} on that \
+            "{}: the apply step reported no installed policy, so {POLICY_DESTINATION} on that \
              host is now of unknown provenance; read it there before publishing again",
             resolved.name
         ))

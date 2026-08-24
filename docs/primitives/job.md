@@ -65,7 +65,7 @@ stado submit "python train.py"
 stado status <id>
 stado job watch <id>
 stado job rerun <id>
-stado results <id>
+stado results <id> <output-dir>
 stado cancel <id>
 stado queue pause
 ```

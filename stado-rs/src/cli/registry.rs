@@ -1228,12 +1228,8 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
         for misdeclared in service::misdeclared_domains(target) {
             let unit = misdeclared.unit.clone();
             findings.push(
-                Finding::new(
-                    "misdeclared-domain",
-                    &target.name,
-                    misdeclared.sentence(),
-                )
-                .about(unit),
+                Finding::new("misdeclared-domain", &target.name, misdeclared.sentence())
+                    .about(unit),
             );
         }
         let Some(beacon) = slugs.iter().find_map(|slug| beacons.get(slug)) else {
@@ -1487,7 +1483,10 @@ pub async fn doctor(as_json: bool) -> Result<(), CmdError> {
     let caused: Vec<(String, String)> = findings
         .iter()
         .filter(|finding| {
-            matches!(finding.kind, "capability-unsatisfied" | "misdeclared-domain")
+            matches!(
+                finding.kind,
+                "capability-unsatisfied" | "misdeclared-domain"
+            )
         })
         .filter_map(|finding| {
             finding

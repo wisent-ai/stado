@@ -55,7 +55,8 @@ sh queue-maintenance.sh
 
 Fleet truth without ssh: who reported lately, who answers, what services run.
 Runs `stado registry beacon-age` (every registry host and its last heartbeat,
-worst first), `stado host ping --json` (reachability verdict per host), and
+worst first), `stado host ping <target> --json` (reachability verdict — ssh
+check plus beacon age — one target per invocation), and
 `stado service list` (managed services across the fleet, from beacons alone).
 Success is all three commands printing fleet state gathered from beacons and
 the registry, with no direct login to any machine.
@@ -116,11 +117,14 @@ scenarios with command sequences rather than single scripts:
   backend as every other Stado credential, and the central enrollment
   catalog every machine can read.
 
-## Not yet written
+## Walkthroughs
 
-Two scenarios are named gaps, explicitly not yet written:
+Two scenarios are written as full prose walkthroughs rather than scripts:
 
-- Service deploy plus self-repair walkthrough — not yet written.
-- Release end-to-end — not yet written.
+- [service deploy plus self-repair](walkthrough-service-repair.md) — one
+  declared service breaking and the autonomy loop repairing it, as commands
+  and their readings.
+- [release end-to-end](walkthrough-release.md) — one release from source to
+  fleet and back, including rollback and per-host quarantine.
 
 For flag-by-flag command details, see the [cli](cli.md) reference.

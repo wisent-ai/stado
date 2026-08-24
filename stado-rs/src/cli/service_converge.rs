@@ -95,338 +95,6 @@ pub const HOST_AHEAD: &str = "host-ahead";
 /// Nothing usable came back, so drift is neither confirmed nor ruled out.
 pub const UNKNOWN: &str = "unknown";
 
-/// The reporter that reads every managed binary on the host and prints the
-/// version it is actually installed at, embedded in this binary and run as one
-/// fixed remote script.
-///
-/// One program answering the same question for every binary on the box: a
-/// per-product reporter would be a per-product opinion about what "the
-/// installed version" means, and the whole point of `managed_versions` is that
-/// there is one. It takes no arguments and finds its own hostname in the
-/// canonical registry the same way this command finds the host's declarations.
-/// Kept as a checked-in file rather than a string literal so it is reviewed and
-/// read as the shell program it is.
-const VERSION_PROBE: &str = r#"#!/bin/sh
-# Report, for every binary this host has a declared `managed_versions` entry
-# for, which version it is actually running.
-#
-# This script is embedded in the stado binary itself
-# (`service_converge::VERSION_PROBE`, via include_str!). `stado service
-# converge` runs it as one fixed remote script and compares each `version=`
-# against the registry's `targets[].managed_versions`. It takes no arguments on
-# purpose, so everything this reads comes from the canonical registry this host
-# already resolves, exactly as `probe-service-endpoints` does.
-#
-# The gap it closes: a declaration names a unit and a plist and says nothing
-# about which build is behind them, so a host serving an old release is
-# indistinguishable from one at the declared version. This is the installed
-# half of that comparison. It is a version and not a commit because that is
-# what these hosts carry: control-host runs Weles as an installed release
-# artefact -- package.json, .weles-release, provenance.json, no .git anywhere --
-# and asking such a tree for a commit can only ever answer "unknown" about a
-# product that is in fact precisely versioned.
-#
-# Read-only, and strictly so: it fetches nothing, writes nothing outside its own
-# scratch directory, never restarts a unit, and prints no credential -- the only
-# values it emits are binary names, versions, paths, unit labels and launchd
-# state. Delivery is Stado's job (`stado host release`, which
-# `service converge --apply` calls), never this script's.
-#
-# Where an installed version comes from, in this order, first hit wins:
-#
-#   1. `$HOME/.stado/bin/<name>` -- an owner-only Stado program. It is asked
-#      directly (`--version`, then the `version` subcommand), because a program
-#      that reports its own version is the shortest true answer and both shapes
-#      this fleet ships (a plain line, a JSON object) are handled.
-#   2. package.json /version -- the version source a released product declares
-#      for itself in `.wisent-release.json`, so this reads the same field the
-#      release that produced the artefact was numbered from.
-#   3. .weles-release -- the stamp the release launcher writes beside the
-#      unpacked runtime, carrying the immutable coordinate the artefact was
-#      fetched from.
-#   4. provenance.json -- the SLSA attestation shipped inside the artefact;
-#      `.version` when it carries one, otherwise the build's own tag.
-#
-# A product whose artefact carries none of those reports `version=unknown`.
-# That is the honest answer and it is never rounded to the declared version:
-# `service converge` reports it as `unknown`, never as `in-sync`.
-#
-# Output contract, which `stado service converge` parses:
-#   * report lines on stdout, diagnostics on stderr;
-#   * blank lines and lines beginning with `#` are ignored by the reader;
-#   * every other line is space-separated key=value tokens, no value contains
-#     a space;
-#   * one line per binary this host declares a version for, emitted even when
-#     nothing can be read for it:
-#       binary=<name> version=<installed|unknown> root=<path> unit=<label|none>
-#       state=<launchd state>
-#   * `version=` is an exact semantic version or the literal `unknown` -- never
-#     a partial, never empty;
-#   * exit 0 whenever the reporter itself ran, including when every version is
-#     unknown. Non-zero means this host cannot report at all.
-set -eu
-
-PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-export PATH
-
-STADO="$HOME/.stado/bin/stado"
-[ -x "$STADO" ] || { printf '%s\n' "missing executable Stado binary: $STADO" >&2; exit 69; }
-
-# jq is not on every managed host and a report that dies for want of it reads
-# as a dead host; python3 ships with macOS and is what the beacon already uses.
-PYTHON=$(command -v python3 || printf /usr/bin/python3)
-
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/report-installed-versions.XXXXXX")
-trap 'rm -rf "$WORK"' EXIT INT TERM
-
-HOST=$("$STADO" registry self --name-only 2>/dev/null | tr -d '[:space:]') || HOST=""
-[ -n "$HOST" ] || { printf '%s\n' "this host is not a registry target: stado registry self failed" >&2; exit 1; }
-
-"$STADO" registry pull >"$WORK/registry.json" 2>"$WORK/pull.err" || {
-  printf 'cannot read the canonical registry: %s\n' "$(tr '\n' ' ' <"$WORK/pull.err")" >&2
-  exit 1
-}
-
-# One name per line: the binaries this host declares a version for. The
-# declaration is the scope -- a binary nobody declared is not this reporter's
-# business, and reporting it would bury the ones that are.
-"$PYTHON" -c 'import json,sys
-host = sys.argv[1]
-doc = json.load(sys.stdin)
-for target in doc.get("targets") or []:
-    if target.get("name") != host:
-        continue
-    for name in sorted((target.get("managed_versions") or {})):
-        print(name)' "$HOST" <"$WORK/registry.json" >"$WORK/binaries.txt"
-
-# One tab-separated record per declared service of this host: label, unit-file
-# path, kind. Used only to attribute a unit to an artefact, never to decide a
-# version.
-"$PYTHON" -c 'import json,sys
-host = sys.argv[1]
-doc = json.load(sys.stdin)
-for target in doc.get("targets") or []:
-    if target.get("name") != host:
-        continue
-    for service in target.get("services") or []:
-        print("\t".join(str(field or "") for field in (
-            service.get("label") or service.get("unit") or service.get("name"),
-            service.get("path"),
-            service.get("kind"),
-        )))' "$HOST" <"$WORK/registry.json" >"$WORK/services.tsv"
-
-# A version, or nothing, out of whatever text a program or a metadata file
-# produced. Anchored on the semantic-version shape converge accepts, so a
-# banner line ("stado 0.6.0"), a bare version and a `v`-prefixed tag all read
-# the same and a sentence with no version in it reads as nothing.
-extract_version() {
-  printf '%s' "$1" |
-    tr ' \t' '\n\n' |
-    sed -n 's/^[vV]\{0,1\}\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\(-[0-9A-Za-z.-]\{1,\}\)\{0,1\}\)$/\1/p' |
-    head -n 1
-}
-
-# A JSON member, by pointer-ish path, or nothing. Missing file, unparseable
-# file and absent member are one answer on purpose: each means this file did
-# not tell us the version, and the caller falls through to the next source.
-json_member() {
-  [ -f "$1" ] || return 0
-  "$PYTHON" -c 'import json,sys
-try:
-    doc = json.load(open(sys.argv[1]))
-except Exception:
-    sys.exit(0)
-for key in sys.argv[2:]:
-    if not isinstance(doc, dict):
-        sys.exit(0)
-    doc = doc.get(key)
-if isinstance(doc, (str, int, float)):
-    print(doc)' "$@" 2>/dev/null || true
-}
-
-# An owner-only Stado program, asked what it is. `--version` first because that
-# is what every Rust binary here answers to; the `version` subcommand second
-# because skarbiec prints a JSON object from one instead.
-program_version() {
-  out=$("$1" --version 2>/dev/null </dev/null || true)
-  found=$(extract_version "$out")
-  if [ -z "$found" ]; then
-    out=$("$1" version 2>/dev/null </dev/null || true)
-    case "$out" in
-      \{*)
-        printf '%s' "$out" >"$WORK/version.json"
-        out=$(json_member "$WORK/version.json" version)
-        ;;
-    esac
-    found=$(extract_version "$out")
-  fi
-  printf '%s' "$found"
-}
-
-# The version an installed release artefact carries about itself.
-artefact_version() {
-  root=$1
-  found=$(extract_version "$(json_member "$root/package.json" version)")
-  if [ -z "$found" ] && [ -f "$root/.weles-release" ]; then
-    # `version=` when the stamp carries one, otherwise the version segment of
-    # the immutable coordinate it was fetched from:
-    #   release_uri=stado://releases/<product>/<version>/<platform>/<archive>
-    stamped=$(sed -n 's/^version=//p' "$root/.weles-release" | head -n 1)
-    [ -n "$stamped" ] || stamped=$(sed -n 's|^release_uri=stado://releases/[^/]*/\([^/]*\)/.*|\1|p' \
-      "$root/.weles-release" | head -n 1)
-    found=$(extract_version "$stamped")
-  fi
-  if [ -z "$found" ]; then
-    found=$(extract_version "$(json_member "$root/provenance.json" version)")
-  fi
-  if [ -z "$found" ]; then
-    found=$(extract_version "$(json_member "$root/provenance.json" \
-      buildDefinition externalParameters tag)")
-  fi
-  printf '%s' "$found"
-}
-
-# Where an installed product lives, or nothing. Candidates and never a search:
-# a script that walks the filesystem looking for something called <name> finds
-# a backup copy and reports its version as the running one.
-artefact_root() {
-  name=$1
-  stem=${name%%-*}
-  for candidate in \
-    "$HOME/$name" \
-    "$HOME/$stem" \
-    "$HOME/.stado/releases/$name/current" \
-    "/opt/$name"
-  do
-    if [ -d "$candidate" ]; then
-      printf '%s' "$candidate"
-      return 0
-    fi
-  done
-  printf ''
-}
-
-# launchd state for one label, from `launchctl print` and, when the domain
-# refuses it, from `launchctl list`. Spaces are folded to dashes so a state
-# like `spawn scheduled` stays one token.
-launchd_state() {
-  state_label=$1
-  state_domain=$2
-  if state_out=$(/bin/launchctl print "$state_domain/$state_label" 2>/dev/null); then
-    state_value=$(printf '%s\n' "$state_out" |
-      awk -F'=' '$1 ~ /^[[:space:]]*state[[:space:]]*$/ {sub(/^[[:space:]]+/, "", $2); print $2; exit}')
-    [ -n "$state_value" ] || state_value=loaded
-  else
-    state_value=$(/bin/launchctl list 2>/dev/null |
-      awk -v want="$state_label" '$3 == want {print ($1 == "-" ? "loaded-not-running" : "running-pid-" $1); exit}')
-    [ -n "$state_value" ] || state_value=not-loaded
-  fi
-  printf '%s\n' "$state_value" | tr ' ' '-'
-}
-
-systemd_state() {
-  command -v systemctl >/dev/null 2>&1 || { printf 'no-systemctl\n'; return 0; }
-  systemctl is-active "$1" 2>/dev/null || true
-}
-
-unit_state() {
-  unit_label=$1
-  unit_path=$2
-  unit_kind=$3
-  case "$unit_kind" in
-    systemd)
-      systemd_state "$unit_label"
-      return 0
-      ;;
-  esac
-  case "$unit_path" in
-    /Library/LaunchDaemons/*) launchd_state "$unit_label" system ;;
-    *) launchd_state "$unit_label" "gui/$(/usr/bin/id -u)" ;;
-  esac
-}
-
-# The program one declared unit runs, read out of the unit file itself.
-unit_program() {
-  case "$3" in
-    systemd)
-      [ -f "$1" ] || return 0
-      sed -n 's/^ExecStart=//p' "$1" | head -n 1 | awk '{print $1}'
-      return 0
-      ;;
-  esac
-  [ -f "$1" ] || return 0
-  /usr/bin/plutil -extract ProgramArguments.0 raw -o - "$1" 2>/dev/null || true
-}
-
-# The declared unit whose program lives under this artefact, or nothing.
-#
-# Matched on the program the unit file actually names rather than on the
-# binary's name: a label that merely mentions "stado" is a guess, and a wrong
-# unit in a report is worse than an admitted absence.
-unit_for_root() {
-  match_root=$1
-  [ -n "$match_root" ] || return 0
-  while IFS='	' read -r u_label u_path u_kind; do
-    [ -n "$u_label" ] || continue
-    case "$u_path" in
-      "\$HOME"/*) u_path="$HOME/${u_path#\$HOME/}" ;;
-    esac
-    program=$(unit_program "$u_path" "$u_label" "$u_kind")
-    [ -n "$program" ] || continue
-    case "$program" in
-      "$match_root" | "$match_root"/*)
-        printf '%s\t%s\t%s' "$u_label" "$u_path" "$u_kind"
-        return 0
-        ;;
-    esac
-  done <"$WORK/services.tsv"
-  printf ''
-}
-
-printf '# host %s  registry %s  at %s\n' "$HOST" "canonical" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-
-count=0
-while read -r binary; do
-  [ -n "$binary" ] || continue
-  count=$((count + 1))
-  version=""
-  root=""
-
-  stado_program="$HOME/.stado/bin/$binary"
-  if [ -x "$stado_program" ] && [ -f "$stado_program" ]; then
-    root="$stado_program"
-    version=$(program_version "$stado_program")
-    [ -n "$version" ] ||
-      printf '%s: %s ran but printed no version\n' "$binary" "$stado_program" >&2
-  else
-    root=$(artefact_root "$binary")
-    if [ -n "$root" ]; then
-      version=$(artefact_version "$root")
-      [ -n "$version" ] ||
-        printf '%s: %s carries no version metadata (package.json, .weles-release, provenance.json)\n' \
-          "$binary" "$root" >&2
-    else
-      printf '%s: nothing installed under $HOME/%s or $HOME/.stado/bin/%s\n' \
-        "$binary" "$binary" "$binary" >&2
-    fi
-  fi
-
-  unit=none
-  state=none
-  if unit_record=$(unit_for_root "$root") && [ -n "$unit_record" ]; then
-    unit=$(printf '%s' "$unit_record" | cut -f1)
-    unit_path=$(printf '%s' "$unit_record" | cut -f2)
-    unit_kind=$(printf '%s' "$unit_record" | cut -f3)
-    state=$(unit_state "$unit" "$unit_path" "$unit_kind")
-  fi
-
-  printf 'binary=%s version=%s root=%s unit=%s state=%s\n' \
-    "$binary" "${version:-unknown}" "${root:-none}" "${unit:-none}" "${state:-none}"
-done <"$WORK/binaries.txt"
-
-printf '# binaries %s\n' "$count"
-"#;
-
 /// The reporter's name, for sentences that need to name it.
 const VERSION_HELPER: &str = "report-installed-versions";
 
@@ -716,38 +384,391 @@ fn declaring(
 /// sentence belongs on every row rather than one row carrying the detail and
 /// the rest carrying a blank.
 ///
-/// The reporter is [`VERSION_PROBE`], embedded in this binary — the script
-/// travels with stado, so there is nothing to install on the host and the
-/// failure text is the remote's own words, never a remedy for a delivery
-/// channel that no longer exists. No arguments are appended at all: the probe
-/// reads the canonical registry to learn which host it is reporting on.
-/// Reading a version is a status read and nothing else, so it runs under the
-/// channel's ordinary read bound.
+/// The reporter is [`probe_installed_versions`]: the checks the retired probe
+/// script ran, as individual remote commands with every branch taken here, so
+/// there is nothing to install on the host and the failure text is the
+/// remote's own words, never a remedy for a delivery channel that no longer
+/// exists. The declarations the probe compares against are the registry this
+/// command already resolved — the same canonical registry the retired script
+/// re-read on the host to learn which host it was reporting on. Reading a
+/// version is a status read and nothing else, so every remote command runs
+/// under the channel's ordinary read bound.
 async fn read_installed(
     target: &ComputeTarget,
     runner: &Runner,
 ) -> Result<BTreeMap<String, Installed>, String> {
-    let output = host_channel::run_script_with_timeout(
-        target,
-        VERSION_PROBE,
-        host_channel::remote_timeout(),
-        runner,
-    )
-    .await
-    .and_then(|output| {
-        if output.ok() {
-            Ok(output)
-        } else {
-            Err(DeployError(host_channel::last_error_line(
-                &output,
-                "the version reporter did not complete",
-            )))
-        }
-    });
-    match output {
-        Ok(output) => Ok(parse_report(&output.stdout)),
+    match probe_installed_versions(target, runner).await {
+        Ok(stdout) => Ok(parse_report(&stdout)),
         Err(error) => Err(error.to_string()),
     }
+}
+
+/// The services one registry target declares, as `(label, path, kind)` —
+/// label falling back to unit and then to name, fields the retired probe
+/// read out of the registry document with python. Used only to attribute a
+/// unit to an artefact, never to decide a version.
+fn declared_service_records(target: &ComputeTarget) -> Vec<(String, String, String)> {
+    let text = |record: &serde_json::Map<String, Value>, key: &str| match record.get(key) {
+        Some(Value::String(value)) => value.clone(),
+        _ => String::new(),
+    };
+    target
+        .extra
+        .get(service::SERVICES_KEY)
+        .and_then(Value::as_array)
+        .map(|records| {
+            records
+                .iter()
+                .filter_map(Value::as_object)
+                .map(|record| {
+                    let label = ["label", "unit", "name"]
+                        .iter()
+                        .map(|key| text(record, key))
+                        .find(|value| !value.is_empty())
+                        .unwrap_or_default();
+                    (label, text(record, "path"), text(record, "kind"))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The program one declared unit runs, read out of the unit file itself.
+async fn unit_program(
+    target: &ComputeTarget,
+    runner: &Runner,
+    path: &str,
+    kind: &str,
+) -> Result<Option<String>, DeployError> {
+    if !host_channel::remote_test(target, &format!("-f {}", crate::deploy::shlex_quote(path)), runner)
+        .await?
+    {
+        return Ok(None);
+    }
+    if kind == "systemd" {
+        let read = host_channel::run_command(
+            target,
+            &format!(
+                "sed -n 's/^ExecStart=//p' {} | head -n 1",
+                crate::deploy::shlex_quote(path)
+            ),
+            runner,
+        )
+        .await?;
+        return Ok(read
+            .stdout
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().next())
+            .map(str::to_string));
+    }
+    let extracted = host_channel::run_program(
+        target,
+        &["/usr/bin/plutil", "-extract", "ProgramArguments.0", "raw", "-o", "-", path],
+        runner,
+    )
+    .await?;
+    let program = extracted.stdout.trim();
+    Ok((extracted.ok() && !program.is_empty()).then(|| program.to_string()))
+}
+
+/// The declared unit whose program lives under this artefact, or nothing.
+///
+/// Matched on the program the unit file actually names rather than on the
+/// binary's name: a label that merely mentions "stado" is a guess, and a
+/// wrong unit in a report is worse than an admitted absence.
+async fn unit_for_root(
+    target: &ComputeTarget,
+    runner: &Runner,
+    home: &str,
+    services: &[(String, String, String)],
+    root: &str,
+) -> Result<Option<(String, String, String)>, DeployError> {
+    if root.is_empty() {
+        return Ok(None);
+    }
+    for (label, path, kind) in services {
+        if label.is_empty() {
+            continue;
+        }
+        let path = path
+            .strip_prefix("$HOME/")
+            .map_or_else(|| path.clone(), |rest| format!("{home}/{rest}"));
+        let Some(program) = unit_program(target, runner, &path, kind).await? else {
+            continue;
+        };
+        if program == root || program.starts_with(&format!("{root}/")) {
+            return Ok(Some((label.clone(), path, kind.clone())));
+        }
+    }
+    Ok(None)
+}
+
+/// launchd state for one label, from `launchctl print` and, when the domain
+/// refuses it, from `launchctl list`. Spaces are folded to dashes so a state
+/// like `spawn scheduled` stays one token.
+async fn launchd_state(
+    target: &ComputeTarget,
+    runner: &Runner,
+    label: &str,
+    domain: &str,
+) -> Result<String, DeployError> {
+    let printed = host_channel::run_program(
+        target,
+        &["/bin/launchctl", "print", &format!("{domain}/{label}")],
+        runner,
+    )
+    .await?;
+    let value = if printed.ok() {
+        printed
+            .stdout
+            .lines()
+            .find_map(|line| {
+                let (key, value) = line.split_once('=')?;
+                (key.trim() == "state").then(|| value.trim_start().to_string())
+            })
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "loaded".to_string())
+    } else {
+        let listed = host_channel::run_program(target, &["/bin/launchctl", "list"], runner).await?;
+        listed
+            .stdout
+            .lines()
+            .find_map(|line| {
+                let mut fields = line.split_whitespace();
+                let pid = fields.next()?;
+                fields.next()?;
+                let name = fields.next()?;
+                (name == label).then(|| {
+                    if pid == "-" {
+                        "loaded-not-running".to_string()
+                    } else {
+                        format!("running-pid-{pid}")
+                    }
+                })
+            })
+            .unwrap_or_else(|| "not-loaded".to_string())
+    };
+    Ok(value.replace(' ', "-"))
+}
+
+/// systemd state for one unit, or `no-systemctl` on a host without systemd.
+async fn systemd_state(
+    target: &ComputeTarget,
+    runner: &Runner,
+    label: &str,
+) -> Result<String, DeployError> {
+    let found = host_channel::run_command(target, "command -v systemctl", runner).await?;
+    if found.stdout.trim().is_empty() {
+        return Ok("no-systemctl".to_string());
+    }
+    let asked = host_channel::run_program(target, &["systemctl", "is-active", label], runner).await?;
+    Ok(asked.stdout.trim().to_string())
+}
+
+/// The state of one unit, by its kind and where its unit file lives:
+/// LaunchDaemons print in the system domain, everything else in the login
+/// user's GUI domain.
+async fn unit_state(
+    target: &ComputeTarget,
+    runner: &Runner,
+    label: &str,
+    path: &str,
+    kind: &str,
+    uid: &mut Option<String>,
+) -> Result<String, DeployError> {
+    if kind == "systemd" {
+        return systemd_state(target, runner, label).await;
+    }
+    if path.starts_with("/Library/LaunchDaemons/") {
+        return launchd_state(target, runner, label, "system").await;
+    }
+    if uid.is_none() {
+        let answered = host_channel::run_program(target, &["/usr/bin/id", "-u"], runner).await?;
+        *uid = Some(answered.stdout.trim().to_string());
+    }
+    launchd_state(
+        target,
+        runner,
+        label,
+        &format!("gui/{}", uid.as_deref().unwrap_or_default()),
+    )
+    .await
+}
+
+/// Where an installed product lives, or nothing. Candidates and never a
+/// search: a probe that walks the filesystem looking for something called
+/// <name> finds a backup copy and reports its version as the running one.
+async fn artefact_root(
+    target: &ComputeTarget,
+    runner: &Runner,
+    home: &str,
+    name: &str,
+) -> Result<String, DeployError> {
+    let stem = name.split('-').next().unwrap_or(name);
+    for candidate in [
+        format!("{home}/{name}"),
+        format!("{home}/{stem}"),
+        format!("{home}/.stado/releases/{name}/current"),
+        format!("/opt/{name}"),
+    ] {
+        if host_channel::remote_test(
+            target,
+            &format!("-d {}", crate::deploy::shlex_quote(&candidate)),
+            runner,
+        )
+        .await?
+        {
+            return Ok(candidate);
+        }
+    }
+    Ok(String::new())
+}
+
+/// The version an installed release artefact carries about itself:
+/// `package.json` first — the version source a released product declares for
+/// itself in `.wisent-release.json` — then the `.weles-release` stamp the
+/// release launcher writes beside the unpacked runtime, then the SLSA
+/// `provenance.json` shipped inside the artefact.
+async fn artefact_version(
+    target: &ComputeTarget,
+    runner: &Runner,
+    root: &str,
+) -> Result<String, DeployError> {
+    if let Some(text) =
+        host_channel::remote_json_member(target, &format!("{root}/package.json"), &["version"], runner)
+            .await?
+    {
+        if let Some(version) = host_channel::extract_semver(&text) {
+            return Ok(version);
+        }
+    }
+    if let Some(stamp) =
+        host_channel::remote_read_file(target, &format!("{root}/.weles-release"), runner).await?
+    {
+        // `version=` when the stamp carries one, otherwise the version
+        // segment of the immutable coordinate the artefact was fetched from:
+        //   release_uri=stado://releases/<product>/<version>/<platform>/<archive>
+        let stamped = stamp
+            .lines()
+            .find_map(|line| line.strip_prefix("version="))
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                stamp.lines().find_map(|line| {
+                    let rest = line.strip_prefix("release_uri=stado://releases/")?;
+                    let mut segments = rest.split('/');
+                    segments.next()?;
+                    let version = segments.next()?;
+                    segments.next().map(|_| version)
+                })
+            });
+        if let Some(version) = stamped.and_then(host_channel::extract_semver) {
+            return Ok(version);
+        }
+    }
+    for keys in [
+        &["version"][..],
+        &["buildDefinition", "externalParameters", "tag"][..],
+    ] {
+        if let Some(text) = host_channel::remote_json_member(
+            target,
+            &format!("{root}/provenance.json"),
+            keys,
+            runner,
+        )
+        .await?
+        {
+            if let Some(version) = host_channel::extract_semver(&text) {
+                return Ok(version);
+            }
+        }
+    }
+    Ok(String::new())
+}
+
+/// Report, for every binary this host has a declared `managed_versions` entry
+/// for, which version it is actually running — natively, one remote command
+/// per question, with the report text composed here in the wire format
+/// [`parse_report`] reads.
+///
+/// The declaration is the scope — a binary nobody declared is not this
+/// reporter's business, and reporting it would bury the ones that are. Where
+/// an installed version comes from, in this order, first hit wins:
+///
+///   1. `$HOME/.stado/bin/<name>` — an owner-only Stado program, asked
+///      directly;
+///   2. package.json `version`;
+///   3. `.weles-release`;
+///   4. `provenance.json` — `.version` when it carries one, otherwise the
+///      build's own tag.
+///
+/// A product whose artefact carries none of those reports `version=unknown`.
+/// That is the honest answer and it is never rounded to the declared version:
+/// `service converge` reports it as `unknown`, never as `in-sync`.
+///
+/// Read-only, and strictly so: nothing is fetched, nothing is written, no
+/// unit is restarted, and no credential is printed — the only values emitted
+/// are binary names, versions, paths, unit labels and launchd state.
+async fn probe_installed_versions(
+    target: &ComputeTarget,
+    runner: &Runner,
+) -> Result<String, DeployError> {
+    let home = host_channel::remote_home(target, runner).await?;
+    let services = declared_service_records(target);
+    let mut uid = None;
+    let mut out = format!(
+        "# host {}  registry canonical  at {}\n",
+        target.name,
+        chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ")
+    );
+    let mut count = 0usize;
+    for binary in target.managed_versions.keys() {
+        count += 1;
+
+        let stado_program = format!("{home}/.stado/bin/{binary}");
+        let quoted_program = crate::deploy::shlex_quote(&stado_program);
+        let (root, version) = if host_channel::remote_test(
+            target,
+            &format!("-x {quoted_program}"),
+            runner,
+        )
+        .await?
+            && host_channel::remote_test(target, &format!("-f {quoted_program}"), runner).await?
+        {
+            let version = host_channel::remote_program_version(target, &stado_program, runner)
+                .await?
+                .unwrap_or_default();
+            (stado_program, version)
+        } else {
+            let root = artefact_root(target, runner, &home, binary).await?;
+            let version = if root.is_empty() {
+                String::new()
+            } else {
+                artefact_version(target, runner, &root).await?
+            };
+            (root, version)
+        };
+
+        let mut unit = "none".to_string();
+        let mut state = "none".to_string();
+        if let Some((label, path, kind)) =
+            unit_for_root(target, runner, &home, &services, &root).await?
+        {
+            state = unit_state(target, runner, &label, &path, &kind, &mut uid).await?;
+            unit = label;
+        }
+
+        out.push_str(&format!(
+            "binary={} version={} root={} unit={} state={}\n",
+            binary,
+            if version.is_empty() { UNKNOWN } else { &version },
+            if root.is_empty() { "none" } else { &root },
+            unit,
+            state,
+        ));
+    }
+    out.push_str(&format!("# binaries {count}\n"));
+    Ok(out)
 }
 
 /// The reporter's stdout, as a binary-to-report map.
@@ -816,7 +837,9 @@ fn version_order(left: &str, right: &str) -> Option<Ordering> {
         Some(triple)
     }
     fn prerelease(version: &str) -> &str {
-        version.split_once('-').map_or("", |(_, prerelease)| prerelease)
+        version
+            .split_once('-')
+            .map_or("", |(_, prerelease)| prerelease)
     }
     fn prerelease_order(left: &str, right: &str) -> Ordering {
         match (left.is_empty(), right.is_empty()) {

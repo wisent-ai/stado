@@ -48,17 +48,17 @@ include:
 - `stado host software <target>` — persists the host's software report under
   `software:<name>@<host>` with the target as the vantage, so it goes stale
   exactly as a reachability observation does ([cli](../cli.md)).
-- `stado directory connect` — records whether the proven route answered. A
-  record that cannot be written must not turn a successful connect into a
-  failure; the answer stands whether or not the host can keep notes
-  (`stado-rs/src/cli/directory.rs`).
+- `stado service directory connect` — records whether the proven route
+  answered. A record that cannot be written must not turn a successful
+  connect into a failure; the answer stands whether or not the host can keep
+  notes (`stado-rs/src/cli/directory.rs`).
 
 ## Who observes it
 
-- `stado directory show` prints each endpoint with its freshness on one line —
-  read alone, `from operator-host: http://127.0.0.1:8080` is a claim with no
-  author and no date, the exact rendering an operator believed for twelve
-  days (`stado-rs/src/cli/directory.rs`).
+- `stado service directory show` prints each endpoint with its freshness on
+  one line — read alone, `from operator-host: http://127.0.0.1:8080` is a
+  claim with no author and no date, the exact rendering an operator believed
+  for twelve days (`stado-rs/src/cli/directory.rs`).
 - `stado service list` carries an observed column per row.
 - `stado release status` reads software reports out of the observation file
   rather than opening one ssh connection per target, and a report older than
@@ -74,7 +74,7 @@ reader here is a routing decision (`stado-rs/src/observations.rs`).
 
 ```bash
 stado service verify
-stado directory show
+stado service directory show
 stado host software control-host
 stado release status
 ```

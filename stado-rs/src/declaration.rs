@@ -67,7 +67,10 @@ pub struct ServiceDeclaration {
 
 impl DeclarationRun {
     fn is_empty(&self) -> bool {
-        self.program.is_none() && self.args.is_empty() && self.env.is_empty() && self.extra.is_empty()
+        self.program.is_none()
+            && self.args.is_empty()
+            && self.env.is_empty()
+            && self.extra.is_empty()
     }
 }
 
@@ -115,7 +118,10 @@ pub fn validate(location: &str, declaration: &ServiceDeclaration) -> Vec<String>
         ));
     }
     let sha = declaration.source.sha256.as_str();
-    if !(sha.len() == 64 && sha.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()))
+    if !(sha.len() == 64
+        && sha
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()))
     {
         problems.push(format!(
             "{location}.declaration.source.sha256: must be 64 lowercase hex characters"
