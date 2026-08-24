@@ -402,7 +402,7 @@ unavailable.
 | `stado host inventory <target>` | The stado-managed binaries under `$HOME/.stado/bin`, the `$HOME/.stado/forwards/*.url` markers, the listening loopback TCP ports, the Skarbiec vault files under `$HOME/.stado` as metadata, whether the installed `stado` knows a fixed set of subcommands — and, the point of the command, whether each forward marker still matches a live listener. |
 | `stado host software [<target>] [--json]` | What a host actually runs: one row per program with its version, its SHA-256 and whether those exact bytes came out of a release Stado published. Naming a target takes the report over the audited channel and persists it as an observation; omitting the target prints what every host has already reported, ages included. The read counterpart of `host release`, and the evidence `stado release status` gates on. |
 | `stado host release <target> --binary NAME --version X.Y.Z` | Put one registry-declared managed binary on the host: fetch the exact coordinate, verify the operator's configured SHA-256, check the layout, stage it under a versioned directory, and only then atomically repoint the active binary and restart its declared unit. The write counterpart of `host inventory`. `--dry-run` probes read-only and reports the plan. |
-| `stado host precheck-runner install <target>` | Install or reconcile the isolated GitHub pre-check runner declared by Stado. The target address and platform come from the canonical registry; Stado obtains a short-lived organization token from the admin-scoped `GITHUB_TOKEN` credential, asks Skarbiec which vault field the `agent:kronika` resource maps to, verifies that field is readable, preserves every existing grant while ensuring the Stado admin reader can read that exact field, verifies the pinned runner archive, creates an unprivileged account, installs the service, materializes the signing secret as an owner-only runner file, publishes the non-secret agent ID beside the private Brama route, and applies the private-network boundary. |
+| `stado host precheck-runner install <target>` | Install or reconcile the isolated GitHub pre-check runner declared by Stado. The target address and platform come from the canonical registry; Stado obtains a short-lived organization token from the admin-scoped `GITHUB_TOKEN` credential, makes the Brama host's Skarbiec reconcile its capability routes from the live vault, resolves `agent:probierz` to the vault field chosen by Skarbiec, verifies and reads that field on the host without putting its value in argv, verifies the pinned runner archive, creates an unprivileged account, installs the service, materializes the signing secret as an owner-only runner file, publishes the non-secret `probierz` agent ID beside the private Brama route, and applies the private-network boundary. |
 | `stado host precheck-runner repository-add <repository>` | Reconcile GitHub's selected-repository access for the `stado-precheck` runner group. Stado resolves the repository ID and runner-group ID through GitHub using the admin-scoped `GITHUB_TOKEN` held in Skarbiec, keeps the group `selected`, enables public-repository admission only when the named repository is public, and idempotently grants access. Public callers must refuse fork pull requests before runner assignment. Runner installation alone cannot do this: GitHub stores runner registration and repository admission as separate resources. |
 | `stado host precheck-runner status <target>` | Read the service, runner identity, and nftables/PF boundary through the same registry-authorized channel. |
 | `stado host precheck-runner remove <target>` | Deregister the runner with a short-lived removal token, stop and delete its service and files, remove its account, and remove its network boundary. |
@@ -432,19 +432,20 @@ token. That token travels only on the host channel's stdin and is consumed by
 credential. The Actions Runner archive version and SHA-256 are pinned in the
 Rust release.
 
-The same install asks the target's Skarbiec for the `agent:kronika` route,
-verifies that its mapped item and field are readable, and idempotently widens
-the existing Stado admin reader grant for that exact field without rotating its
-bearer or dropping any other capability. It then reads the resolved field
-through the admin-scoped Skarbiec client and sends the value on host-channel
-stdin to `/usr/bin/install`. The result is
+The same install makes the Brama host's Skarbiec reconcile missing capability
+routes from its live vault, then asks for `agent:probierz`. Request-signing items
+carry their Brama identity in `id` and their secret in `agent_auth_secret`, so
+Skarbiec—not Stado—chooses and records the vault coordinate. Stado verifies the
+resolved item and field, reads that field with the host's Skarbiec binary, and
+sends the value on host-channel stdin to `/usr/bin/install`. The result is
 `.stado/kronika-agent-auth-secret`, owned by `stado-precheck` with mode `0600`;
 the value never enters argv, stdout, stderr, registry data, or the repository.
-The non-secret agent ID is published as `routes/kronika-agent-id` beside
-`routes/brama.url`. Quality workflows read those Stado-owned files and let
-Kronika sign the exact Brama request body. No Stado constant chooses the vault
-coordinate: changing the Skarbiec route changes the credential used by the next
-reconciliation.
+The non-secret `probierz` agent ID is published as
+`routes/kronika-agent-id` beside `routes/brama.url`. Kronika is the client
+running the audit; Probierz is the Brama identity whose credential authorizes
+that product workflow. Quality workflows read those Stado-owned files and let
+Kronika sign the exact Brama request body. Changing the Skarbiec route changes
+the credential used by the next reconciliation.
 
 The runner account is `stado-precheck`. Workspaces, diagnostics, package and
 toolchain caches, application caches, and `.stado` are the only writable
