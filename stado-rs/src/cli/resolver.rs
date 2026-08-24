@@ -114,7 +114,9 @@ fn validate_snapshot(payload: SnapshotPayload) -> Result<(Value, String, u64), S
     ))
 }
 
-pub(crate) async fn read_local_snapshot(store: &RegistryStore) -> Result<(Value, String, u64), String> {
+pub(crate) async fn read_local_snapshot(
+    store: &RegistryStore,
+) -> Result<(Value, String, u64), String> {
     let blob = store
         .read_versioned()
         .await
@@ -772,8 +774,8 @@ async fn load_startup(
             "resolver target {target:?} does not match this host ({detected_target:?})"
         )));
     }
-    let source =
-        snapshot_source(Arc::clone(local_store), &bootstrap, target).map_err(StartupError::Fatal)?;
+    let source = snapshot_source(Arc::clone(local_store), &bootstrap, target)
+        .map_err(StartupError::Fatal)?;
     let (document, store_version, directory_generation) = source
         .fetch(host_silence::READER_RESOLVER)
         .await

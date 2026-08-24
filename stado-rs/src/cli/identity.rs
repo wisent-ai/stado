@@ -25,12 +25,6 @@ use crate::targets::{load_registry_auto, ComputeTarget, IdentityBinding};
 
 const APPLE_ACCOUNT: &str = "apple-account";
 
-/// The per-user Apple-account probe, embedded in this binary and run as one
-/// fixed remote script by [`observe_user_apple_accounts`]. Kept as a checked-in
-/// file rather than a string literal so it is reviewed and read as the shell
-/// program it is.
-const APPLE_ACCOUNT_PROBE: &str = include_str!("../../scripts/probe-apple-account-holders.sh");
-
 /// Read a host's live Apple-account bindings through Stado's own approved channel.
 ///
 /// Not `ssh`. A one-liner over ssh is the same action with the audit trail removed,
@@ -78,8 +72,9 @@ async fn observe_apple_accounts(target_name: &str) -> Option<Vec<String>> {
     }
 }
 
-/// Ask the host which of its users hold Apple accounts, via the probe embedded
-/// in this binary.
+/// Ask the host which of its users hold Apple accounts, read natively over the
+/// host channel: one directory listing, two file tests and one `plutil -p`,
+/// with every branch taken here.
 ///
 /// `defaults read` answers only for the user the channel logs in as, so a binding
 /// naming anyone else could never be anything but `unknown`. That word covered two
@@ -87,35 +82,67 @@ async fn observe_apple_accounts(target_name: &str) -> Option<Vec<String>> {
 /// to look -- and an operator acts differently on each. The probe reports them
 /// apart: an account list, `none`, or `unreadable`.
 ///
-/// The probe travels with stado and runs as one fixed read-only remote script --
-/// the channel the retired helper pair used to be the long way around -- so a host
-/// that cannot answer is one the channel itself could not reach, and the answer
-/// stays `unknown`, which is the honest answer when nothing on that host can
-/// produce a better one.
+/// The probe rides Stado's own audited channel -- the one the retired helper
+/// pair used to be the long way around -- so a host that cannot answer is one
+/// the channel itself could not reach, and the answer stays `unknown`, which
+/// is the honest answer when nothing on that host can produce a better one.
 async fn observe_user_apple_accounts(target_name: &str, user: &str) -> Option<Vec<String>> {
     let runner = crate::deploy::production_runner();
-    let report =
-        crate::deploy::host_channel::run_fixed_script(target_name, APPLE_ACCOUNT_PROBE, &runner)
+    let target = crate::deploy::host_channel::canonical_target(target_name)
+        .await
+        .ok()?;
+
+    // The probe's per-user walk, narrowed to the one user the binding names:
+    // `ls /Users` decides which homes the host has, and `Shared`, `Guest` and
+    // dot-directories are not users. A user with no home directory on that
+    // host is a user the probe could not look at -- unknown, not absent.
+    let homes = crate::deploy::host_channel::run_program(&target, &["/bin/ls", "/Users"], &runner)
+        .await
+        .ok()?;
+    if !homes.ok()
+        || user == "Shared"
+        || user == "Guest"
+        || user.starts_with('.')
+        || !homes.stdout.lines().any(|name| name == user)
+    {
+        return None;
+    }
+
+    // Read the preference file directly: the account identifiers it holds,
+    // `unreadable` when the file exists but this channel may not open it, or
+    // `none` when there is no such file. Only the first is an observation; the
+    // other two are the probe admitting its limit, which is the distinction
+    // the whole thing exists to make. Read-only throughout: a preference file
+    // is opened and nothing is written anywhere.
+    let plist = format!("/Users/{user}/Library/Preferences/MobileMeAccounts.plist");
+    let quoted = crate::deploy::shlex_quote(&plist);
+    if !crate::deploy::host_channel::remote_test(&target, &format!("-f {quoted}"), &runner)
+        .await
+        .ok()?
+    {
+        return Some(Vec::new());
+    }
+    // `unreadable` is the probe declining to answer, which must stay unknown
+    // rather than becoming "not signed in".
+    if !crate::deploy::host_channel::remote_test(&target, &format!("-r {quoted}"), &runner)
+        .await
+        .ok()?
+    {
+        return None;
+    }
+    let printed =
+        crate::deploy::host_channel::run_program(&target, &["/usr/bin/plutil", "-p", &plist], &runner)
             .await
             .ok()?;
-    for line in report.lines() {
-        let mut columns = line.split('\t');
-        let named = columns.next()?;
-        let accounts = columns.next().unwrap_or_default().trim();
-        if named != user {
-            continue;
-        }
-        // `unreadable` is the probe declining to answer, which must stay unknown
-        // rather than becoming "not signed in".
-        if accounts == "unreadable" {
-            return None;
-        }
-        if accounts == "none" {
-            return Some(Vec::new());
-        }
-        return Some(accounts.split_whitespace().map(str::to_string).collect());
-    }
-    None
+    // A failed plutil is a pipeline whose awk found no AccountID lines -- the
+    // same `none` the retired probe reported for an empty list.
+    let accounts: Vec<String> = printed
+        .stdout
+        .lines()
+        .filter(|line| line.contains("AccountID"))
+        .filter_map(|line| line.split('"').nth(3).map(str::to_string))
+        .collect();
+    Some(accounts)
 }
 
 /// Does the approved channel land on the very user this binding names?

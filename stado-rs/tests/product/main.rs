@@ -15,7 +15,8 @@ for arg in "$@"; do
 done
 printf '],"products":[{"id":"jeden"},{"id":"ster"},{"id":"tama"}]}'
 "#,
-    ).unwrap();
+    )
+    .unwrap();
     use std::os::unix::fs::PermissionsExt;
     let mut mode = std::fs::metadata(&path).unwrap().permissions();
     mode.set_mode(0o755);
@@ -37,7 +38,11 @@ fn product_catalog_is_the_external_catalog() {
     let dir = tempfile::tempdir().unwrap();
     fake_products(dir.path());
     let out = stado(dir.path(), &["product", "catalog", "--json"]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(value["products"][1]["id"], "ster");
     assert_eq!(value["argv"], serde_json::json!(["catalog", "--json"]));
@@ -49,12 +54,33 @@ fn product_install_forwards_surface_and_host_exactly() {
     fake_products(dir.path());
     let out = stado(
         dir.path(),
-        &["product", "install", "weles", "--surface", "service", "--host", "mini", "--json"],
+        &[
+            "product",
+            "install",
+            "weles",
+            "--surface",
+            "service",
+            "--host",
+            "mini",
+            "--json",
+        ],
     );
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(
         value["argv"],
-        serde_json::json!(["install", "weles", "--surface", "service", "--host", "mini", "--json"])
+        serde_json::json!([
+            "install",
+            "weles",
+            "--surface",
+            "service",
+            "--host",
+            "mini",
+            "--json"
+        ])
     );
 }

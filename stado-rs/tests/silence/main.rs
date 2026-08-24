@@ -186,7 +186,10 @@ async fn a_silence_opens_on_the_crossing_and_closes_on_the_fresher_beacon() {
     .unwrap()
     .expect("a new observer updates the open record");
     assert_eq!(merged.observed_by, vec!["resolver", "cli"]);
-    assert_eq!(merged.first_reader_error.as_deref(), Some(AUTHORITY_SENTENCE));
+    assert_eq!(
+        merged.first_reader_error.as_deref(),
+        Some(AUTHORITY_SENTENCE)
+    );
     assert_eq!(
         blob_names(dir.path(), "state/host_silence/control-host"),
         vec!["20260819T182900.000000Z.json"],
@@ -265,18 +268,10 @@ async fn a_host_that_never_published_starts_its_silence_at_the_observation() {
     let store = store(dir.path());
     let now = at("2026-08-19T18:34:30Z");
 
-    let opened = observe_beacon_age_at(
-        &store,
-        "gpu-host",
-        None,
-        now,
-        300,
-        READER_CLI,
-        None,
-    )
-    .await
-    .unwrap()
-    .expect("no beacon at all is a silence");
+    let opened = observe_beacon_age_at(&store, "gpu-host", None, now, 300, READER_CLI, None)
+        .await
+        .unwrap()
+        .expect("no beacon at all is a silence");
 
     // Not the epoch: the product may not report an outage nobody lived
     // through just because it has no earlier evidence.
@@ -294,8 +289,16 @@ async fn a_host_that_never_published_starts_its_silence_at_the_observation() {
 fn the_transition_truth_table_needs_no_store() {
     let beacon = at("2026-08-19T18:29:00Z");
 
-    assert!(!beacon_is_silent(Some(beacon), at("2026-08-19T18:33:59Z"), 300));
-    assert!(beacon_is_silent(Some(beacon), at("2026-08-19T18:34:01Z"), 300));
+    assert!(!beacon_is_silent(
+        Some(beacon),
+        at("2026-08-19T18:33:59Z"),
+        300
+    ));
+    assert!(beacon_is_silent(
+        Some(beacon),
+        at("2026-08-19T18:34:01Z"),
+        300
+    ));
     assert!(
         beacon_is_silent(None, at("2026-08-19T18:34:01Z"), 300),
         "a host that never published is not a host that is fine"
@@ -542,7 +545,11 @@ async fn a_published_refusal_is_bounded_and_verbatim() {
     .await;
 
     let names = blob_names(dir.path(), "state/reader_refusals/silence-bounded-host");
-    assert_eq!(names.len(), 1, "the throttle let a duplicate through: {names:?}");
+    assert_eq!(
+        names.len(),
+        1,
+        "the throttle let a duplicate through: {names:?}"
+    );
     let record = on_disk(
         dir.path(),
         &format!("state/reader_refusals/silence-bounded-host/{}", names[0]),
@@ -659,7 +666,10 @@ fn an_unreachable_authority_publishes_its_own_sentence_as_a_refusal() {
     )
     .unwrap();
 
-    let out = stado(storage, &["resolver", "resolve", "brama", "--consumer", "lem"]);
+    let out = stado(
+        storage,
+        &["resolver", "resolve", "brama", "--consumer", "lem"],
+    );
     assert!(
         !out.status.success(),
         "an unreachable authority resolved: {}",

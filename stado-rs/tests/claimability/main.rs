@@ -36,7 +36,8 @@ const JOB_ID: &str = "2c4a47aa";
 const WAITED_SECONDS: i64 = 121 * 3600 + 38 * 60;
 /// The mini's declared queue agent, verbatim from the registry.
 const AGENT_LABEL: &str = "com.wisent.compute.service.stado-agent-mini";
-const AGENT_PLIST: &str = "/Users/charles/Library/LaunchAgents/com.wisent.compute.service.stado-agent-mini.plist";
+const AGENT_PLIST: &str =
+    "/Users/charles/Library/LaunchAgents/com.wisent.compute.service.stado-agent-mini.plist";
 
 /// Three `kind=local` hosts in the shape the live registry declares them: a
 /// pinned Mac mini that declares its queue agent as a user LaunchAgent, a
@@ -299,7 +300,12 @@ fn status_says_nothing_while_a_pinned_host_holds_a_matching_job() {
 fn status_blames_the_pin_when_no_queued_job_names_the_pinned_host() {
     let dir = fleet();
     let storage = dir.path();
-    queue_job(storage, JOB_ID, WAITED_SECONDS, "local-somewhere-else.local");
+    queue_job(
+        storage,
+        JOB_ID,
+        WAITED_SECONDS,
+        "local-somewhere-else.local",
+    );
     publish(
         storage,
         "local-mini.local",

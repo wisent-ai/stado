@@ -515,7 +515,14 @@ fn a_user_agent_of_a_graphical_session_is_resolved_to_gui() {
     let path = host.declare_agent(AGENT, &["agent", "--host", "fake-agent"]);
     host.declare_registry(&[(AGENT, &path)]);
 
-    let out = host.stado(&["service", "restart", AGENT, "--host", "fake-agent", "--json"]);
+    let out = host.stado(&[
+        "service",
+        "restart",
+        AGENT,
+        "--host",
+        "fake-agent",
+        "--json",
+    ]);
     assert!(
         out.status.success(),
         "restart failed: {}{}",
@@ -557,7 +564,14 @@ fn a_user_agent_without_a_graphical_session_falls_back_to_the_background_domain(
     let path = host.declare_agent(AGENT, &["agent", "--host", "fake-agent"]);
     host.declare_registry(&[(AGENT, &path)]);
 
-    let out = host.stado(&["service", "restart", AGENT, "--host", "fake-agent", "--json"]);
+    let out = host.stado(&[
+        "service",
+        "restart",
+        AGENT,
+        "--host",
+        "fake-agent",
+        "--json",
+    ]);
     assert!(
         out.status.success(),
         "an agent the background domain accepts is restarted there: {}{}",
@@ -573,10 +587,7 @@ fn a_user_agent_without_a_graphical_session_falls_back_to_the_background_domain(
          exist and a LaunchAgent has only the background domain user/501"
     );
     assert_eq!(report["status"], "restarted");
-    assert_eq!(
-        host.read_state("jobs"),
-        format!("user/501/{AGENT} 100\n")
-    );
+    assert_eq!(host.read_state("jobs"), format!("user/501/{AGENT} 100\n"));
     assert_eq!(
         report["postcondition"]["detail"],
         format!("user/501/{AGENT} pid 100")
@@ -596,7 +607,14 @@ fn a_restart_that_leaves_no_job_in_the_domain_it_used_refuses() {
     let path = host.declare_agent(AGENT, &["agent", "--host", "fake-agent"]);
     host.declare_registry(&[(AGENT, &path)]);
 
-    let out = host.stado(&["service", "restart", AGENT, "--host", "fake-agent", "--json"]);
+    let out = host.stado(&[
+        "service",
+        "restart",
+        AGENT,
+        "--host",
+        "fake-agent",
+        "--json",
+    ]);
     assert!(
         !out.status.success(),
         "a unit launchd does not have is not a restarted service: {}",
@@ -651,7 +669,14 @@ fn a_refusal_names_the_disowned_process_the_restart_ended() {
         &format!("5426 approved {PROGRAM} agent --host fake-agent\n"),
     );
 
-    let out = host.stado(&["service", "restart", AGENT, "--host", "fake-agent", "--json"]);
+    let out = host.stado(&[
+        "service",
+        "restart",
+        AGENT,
+        "--host",
+        "fake-agent",
+        "--json",
+    ]);
     assert!(!out.status.success(), "got: {}", stdout(&out));
     let report = report(&out);
     assert_eq!(report["status"], "not_loaded");
@@ -680,7 +705,14 @@ fn a_bootstrap_that_reports_success_and_creates_no_job_is_not_a_restart() {
     let path = host.declare_agent(AGENT, &["agent", "--host", "fake-agent"]);
     host.declare_registry(&[(AGENT, &path)]);
 
-    let out = host.stado(&["service", "restart", AGENT, "--host", "fake-agent", "--json"]);
+    let out = host.stado(&[
+        "service",
+        "restart",
+        AGENT,
+        "--host",
+        "fake-agent",
+        "--json",
+    ]);
     assert!(!out.status.success(), "got: {}", stdout(&out));
     let report = report(&out);
     assert_eq!(report["status"], "not_loaded");
@@ -702,12 +734,23 @@ fn a_bootstrap_that_reports_success_and_creates_no_job_is_not_a_restart() {
 fn a_system_daemon_is_resolved_to_the_system_domain() {
     let host = Harness::new();
     host.state("respawn", "");
-    let path = host.declare_daemon(OBJECT_API, &["dashboard", "--bind", "127.0.0.1", "--port", "8765"]);
+    let path = host.declare_daemon(
+        OBJECT_API,
+        &["dashboard", "--bind", "127.0.0.1", "--port", "8765"],
+    );
     host.declare_registry(&[(OBJECT_API, &path)]);
-    host.state("procs", &format!("62398 approved {PROGRAM} dashboard --bind 127.0.0.1 --port 8765\n"));
+    host.state(
+        "procs",
+        &format!("62398 approved {PROGRAM} dashboard --bind 127.0.0.1 --port 8765\n"),
+    );
 
     let out = host.stado(&[
-        "service", "restart", OBJECT_API, "--host", "fake-agent", "--json",
+        "service",
+        "restart",
+        OBJECT_API,
+        "--host",
+        "fake-agent",
+        "--json",
     ]);
     assert!(
         out.status.success(),
@@ -747,7 +790,12 @@ fn a_host_running_two_units_off_one_program_restarts_one_of_them() {
     );
 
     let out = host.stado(&[
-        "service", "restart", OBJECT_API, "--host", "fake-agent", "--json",
+        "service",
+        "restart",
+        OBJECT_API,
+        "--host",
+        "fake-agent",
+        "--json",
     ]);
     assert!(
         out.status.success(),
@@ -801,7 +849,12 @@ fn the_disowned_sweep_ends_only_the_processes_of_the_unit_it_restarts() {
     );
 
     let out = host.stado(&[
-        "service", "restart", OBJECT_API, "--host", "fake-agent", "--json",
+        "service",
+        "restart",
+        OBJECT_API,
+        "--host",
+        "fake-agent",
+        "--json",
     ]);
     assert!(
         out.status.success(),

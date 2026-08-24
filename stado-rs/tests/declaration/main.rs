@@ -155,12 +155,7 @@ impl Harness {
     fn declare_beacon(&self, host: &str, active: &[&str]) {
         let units: serde_json::Map<String, serde_json::Value> = active
             .iter()
-            .map(|unit| {
-                (
-                    (*unit).to_string(),
-                    serde_json::json!({"state": "active"}),
-                )
-            })
+            .map(|unit| ((*unit).to_string(), serde_json::json!({"state": "active"})))
             .collect();
         let beacon = serde_json::json!({
             "host": host,
@@ -247,7 +242,9 @@ fn domain_findings(out: &Output) -> Vec<serde_json::Value> {
         .and_then(serde_json::Value::as_array)
         .expect("a findings array")
         .iter()
-        .filter(|finding| finding.get("finding").and_then(serde_json::Value::as_str) == Some("misdeclared-domain"))
+        .filter(|finding| {
+            finding.get("finding").and_then(serde_json::Value::as_str) == Some("misdeclared-domain")
+        })
         .cloned()
         .collect()
 }
@@ -284,11 +281,15 @@ fn doctor_reports_a_user_agent_declared_on_an_always_on_host() {
 
     assert_eq!(findings.len(), 1, "one row, for the one misdeclared unit");
     assert_eq!(
-        findings[0].get("subject").and_then(serde_json::Value::as_str),
+        findings[0]
+            .get("subject")
+            .and_then(serde_json::Value::as_str),
         Some(ALWAYS_ON_HOST)
     );
     assert_eq!(
-        findings[0].get("detail").and_then(serde_json::Value::as_str),
+        findings[0]
+            .get("detail")
+            .and_then(serde_json::Value::as_str),
         Some(sentence().as_str())
     );
     // The sentence has to carry the command an operator runs next, verbatim,
@@ -304,7 +305,9 @@ fn doctor_reports_a_user_agent_declared_on_an_always_on_host() {
         "the finding names the privileged install command"
     );
     assert!(
-        detail.contains(&format!("/usr/bin/plutil -insert UserName -string {ACCOUNT} ")),
+        detail.contains(&format!(
+            "/usr/bin/plutil -insert UserName -string {ACCOUNT} "
+        )),
         "the install command keeps the daemon running as {ACCOUNT}"
     );
     // A divergence exits non-zero, the way every other doctor finding does.
@@ -319,7 +322,10 @@ fn doctor_stays_silent_for_a_user_agent_on_an_interactive_host() {
     // Both hosts declare a per-account LaunchAgent; only the always-on one is
     // a finding, so the interactive row is the control.
     harness.declare_registry(
-        &UnitSpec::new(WELES, "/Library/LaunchDaemons/com.wisent.always-on.weles.plist"),
+        &UnitSpec::new(
+            WELES,
+            "/Library/LaunchDaemons/com.wisent.always-on.weles.plist",
+        ),
         &UnitSpec::new(
             STREAM,
             "/Users/lukaszbartoszcze/Library/LaunchAgents/com.wisent.transcript-lake-stream.plist",
@@ -377,23 +383,33 @@ fn service_list_names_the_declared_domain_and_the_loadable_one() {
         .get("misdeclared_domain")
         .expect("the row carries the finding");
     assert_eq!(
-        misdeclared.get("declared_domain").and_then(serde_json::Value::as_str),
+        misdeclared
+            .get("declared_domain")
+            .and_then(serde_json::Value::as_str),
         Some("user")
     );
     assert_eq!(
-        misdeclared.get("loadable_domain").and_then(serde_json::Value::as_str),
+        misdeclared
+            .get("loadable_domain")
+            .and_then(serde_json::Value::as_str),
         Some("system")
     );
     assert_eq!(
-        misdeclared.get("daemon_path").and_then(serde_json::Value::as_str),
+        misdeclared
+            .get("daemon_path")
+            .and_then(serde_json::Value::as_str),
         Some(AGENT_DAEMON_PATH)
     );
     assert_eq!(
-        misdeclared.get("install_command").and_then(serde_json::Value::as_str),
+        misdeclared
+            .get("install_command")
+            .and_then(serde_json::Value::as_str),
         Some(INSTALL_COMMAND)
     );
     assert_eq!(
-        misdeclared.get("detail").and_then(serde_json::Value::as_str),
+        misdeclared
+            .get("detail")
+            .and_then(serde_json::Value::as_str),
         Some(sentence().as_str())
     );
     // The correctly declared daemon on the same host carries nothing.
@@ -402,7 +418,9 @@ fn service_list_names_the_declared_domain_and_the_loadable_one() {
         "a system LaunchDaemon on an always-on host is not a finding"
     );
     assert!(
-        service_row(&out, STREAM).get("misdeclared_domain").is_none(),
+        service_row(&out, STREAM)
+            .get("misdeclared_domain")
+            .is_none(),
         "a user agent on an interactive host is not a finding"
     );
 }
@@ -492,11 +510,15 @@ fn the_misdeclared_domain_replaces_the_missing_plist_symptom() {
 
     assert_eq!(about_agent.len(), 1, "one cause, one row: {about_agent:?}");
     assert_eq!(
-        about_agent[0].get("finding").and_then(serde_json::Value::as_str),
+        about_agent[0]
+            .get("finding")
+            .and_then(serde_json::Value::as_str),
         Some("misdeclared-domain")
     );
     assert_eq!(
-        about_agent[0].get("detail").and_then(serde_json::Value::as_str),
+        about_agent[0]
+            .get("detail")
+            .and_then(serde_json::Value::as_str),
         Some(sentence().as_str())
     );
 }

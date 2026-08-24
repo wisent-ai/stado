@@ -76,16 +76,6 @@ pub const UNKNOWN: &str = "unknown";
 /// back off the fact.
 const REPORT_KIND: &str = "software-report:";
 
-/// The reporter that reads every program on the host and states what it is,
-/// embedded in this binary and run as one fixed remote script.
-///
-/// Kept as a checked-in file rather than a string literal so it is reviewed and
-/// read as the shell program it is, exactly as `service_converge::VERSION_PROBE`
-/// is. Nothing is installed on the host: the helper channel that used to put
-/// scripts there was removed for putting unreviewed ones there, and this travels
-/// inside the binary instead.
-const REPORT_SOFTWARE: &str = include_str!("../scripts/report-host-software.sh");
-
 /// The canonical fact name for "what is this program on this host".
 ///
 /// One spelling, shared by the writer and by every reader, for the reason
@@ -294,26 +284,12 @@ impl Report {
 // Reading the host
 // ---------------------------------------------------------------------------
 
-/// [`REPORT_SOFTWARE`] with the caller's declarations bound ahead of it.
-///
-/// The unit files come from the registry and the extra programs from the
-/// release-control policy, because both are declarations and declarations live on
-/// the control plane. The host is asked to read files and hash bytes; it is never
-/// asked which of its files matter, which is how a reporter ends up carrying an
-/// opinion the registry never authorized.
-fn reporter(units: &[(String, String)], programs: &[String]) -> String {
-    let units: Vec<String> = units
-        .iter()
-        .map(|(kind, path)| format!("{kind}\t{path}"))
-        .collect();
-    format!(
-        "units={}\nprograms={}\n{REPORT_SOFTWARE}",
-        shlex_quote(&units.join("\n")),
-        shlex_quote(&programs.join("\n"))
-    )
-}
-
 /// The unit files TARGET declares, as `(kind, path)` pairs for the reporter.
+///
+/// The unit files come from the registry, because declarations live on the
+/// control plane. The host is asked to read files and hash bytes; it is never
+/// asked which of its files matter, which is how a reporter ends up carrying
+/// an opinion the registry never authorized.
 fn declared_units(target: &ComputeTarget) -> Vec<(String, String)> {
     service::declared_services(target)
         .into_iter()
@@ -322,33 +298,307 @@ fn declared_units(target: &ComputeTarget) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Ask TARGET what it runs.
+/// The host's SHA-256 tool, resolved once per report: `shasum` where macOS
+/// keeps it, `sha256sum` where Linux keeps it, and nothing — never a
+/// fabricated digest — when the host has neither, because the digest decides
+/// provenance and a fabricated one would decide it wrongly.
+enum Hasher {
+    Shasum,
+    Sha256sum(String),
+}
+
+impl Hasher {
+    async fn resolve(target: &ComputeTarget, runner: &Runner) -> Result<Option<Self>, DeployError> {
+        if host_channel::remote_test(target, "-x /usr/bin/shasum", runner).await? {
+            return Ok(Some(Self::Shasum));
+        }
+        let found = host_channel::run_command(target, "command -v sha256sum", runner).await?;
+        let path = found.stdout.trim();
+        Ok((!path.is_empty()).then(|| Self::Sha256sum(path.to_string())))
+    }
+
+    /// A file's SHA-256, or nothing when the read failed.
+    async fn digest(
+        &self,
+        target: &ComputeTarget,
+        path: &str,
+        runner: &Runner,
+    ) -> Result<String, DeployError> {
+        let output = match self {
+            Self::Shasum => {
+                host_channel::run_program(target, &["/usr/bin/shasum", "-a", "256", path], runner)
+                    .await?
+            }
+            Self::Sha256sum(program) => {
+                host_channel::run_program(target, &[program.as_str(), path], runner).await?
+            }
+        };
+        Ok(if output.ok() {
+            output
+                .stdout
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_string()
+        } else {
+            String::new()
+        })
+    }
+}
+
+/// The reporting pass over one host: the population rules, the per-program
+/// readings and the report text, composed here in the wire format
+/// [`parse`] reads.
+struct Reporter<'a> {
+    target: &'a ComputeTarget,
+    runner: &'a Runner,
+    home: String,
+    releases: String,
+    hasher: Option<Hasher>,
+    seen: BTreeSet<String>,
+    scripts: usize,
+    reported: usize,
+    out: String,
+}
+
+impl Reporter<'_> {
+    /// The program one declared unit runs, read out of the unit file itself
+    /// rather than guessed from its label: a label that merely mentions
+    /// "stado" is a guess, and a wrong program in this report is worse than
+    /// an admitted absence.
+    async fn unit_program(&self, kind: &str, path: &str) -> Result<Option<String>, DeployError> {
+        let path = if path.starts_with('/') {
+            path.to_string()
+        } else {
+            format!("{}/{}", self.home, path)
+        };
+        if !host_channel::remote_test(
+            self.target,
+            &format!("-f {}", shlex_quote(&path)),
+            self.runner,
+        )
+        .await?
+        {
+            return Ok(None);
+        }
+        if kind == "systemd" {
+            // `sed -n 's/^ExecStart=//p' | head -n 1 | awk '{print $1}'`.
+            let read = host_channel::run_command(
+                self.target,
+                &format!("sed -n 's/^ExecStart=//p' {} | head -n 1", shlex_quote(&path)),
+                self.runner,
+            )
+            .await?;
+            return Ok(read
+                .stdout
+                .lines()
+                .next()
+                .and_then(|line| line.split_whitespace().next())
+                .map(str::to_string));
+        }
+        let extracted = host_channel::run_program(
+            self.target,
+            &["/usr/bin/plutil", "-extract", "ProgramArguments.0", "raw", "-o", "-", &path],
+            self.runner,
+        )
+        .await?;
+        let program = extracted.stdout.trim();
+        Ok((extracted.ok() && !program.is_empty()).then(|| program.to_string()))
+    }
+
+    /// `release` when these exact bytes are also a staged release artefact
+    /// under `$HOME/.stado/releases`, else `unmanaged`.
+    ///
+    /// Matched on the basename as well as the digest: the staging trees are
+    /// the only place on the host where a verified published artefact is kept
+    /// under its own coordinate, and hashing every file beneath them to
+    /// answer one question would turn a status read into a full-tree walk of
+    /// every release ever delivered.
+    async fn provenance(&mut self, digest: &str, base: &str) -> Result<&'static str, DeployError> {
+        if digest.is_empty()
+            || !host_channel::remote_test(
+                self.target,
+                &format!("-d {}", shlex_quote(&self.releases)),
+                self.runner,
+            )
+            .await?
+        {
+            return Ok(UNMANAGED);
+        }
+        let found = host_channel::run_command(
+            self.target,
+            &format!(
+                "find {} -maxdepth 6 -type f -name {} 2>/dev/null",
+                shlex_quote(&self.releases),
+                shlex_quote(base),
+            ),
+            self.runner,
+        )
+        .await?;
+        for candidate in found.stdout.lines() {
+            if candidate.is_empty() {
+                continue;
+            }
+            if let Some(hasher) = &self.hasher {
+                if hasher.digest(self.target, candidate, self.runner).await? == digest {
+                    return Ok(RELEASE);
+                }
+            }
+        }
+        Ok(UNMANAGED)
+    }
+
+    /// One program, reported once. A path already reported is skipped rather
+    /// than repeated: `$HOME/.stado/bin/stado` is both an installed program
+    /// and the program a declared unit runs, and two rows for one file would
+    /// read as two programs disagreeing with each other.
+    async fn report_program(&mut self, path: &str) -> Result<(), DeployError> {
+        if path.is_empty()
+            || !host_channel::remote_test(
+                self.target,
+                &format!("-f {}", shlex_quote(path)),
+                self.runner,
+            )
+            .await?
+            || !self.seen.insert(path.to_string())
+        {
+            return Ok(());
+        }
+        let base = path.rsplit('/').next().unwrap_or(path);
+        // A `.previous` is the rollback copy of a program already reported
+        // under its own name, and a dotfile is this directory's own staging
+        // litter.
+        if base.starts_with('.') || base.ends_with(".previous") {
+            return Ok(());
+        }
+        // A compiled program is what a release pipeline produces; a shell
+        // script in the same directory is what the retired helper channel
+        // left there. Counted so the number is visible, not rowed so the
+        // real answers stay readable.
+        //
+        // Tested before the executable bit and not after, because the count
+        // has to match what `host helpers` reports and that command counts a
+        // leftover by its shebang alone. control-host carries 1393 of these
+        // against 28 programs and not one of them is executable any more;
+        // filtering on the exec bit first made every one of them vanish from
+        // the report instead of being counted, which is the accretion going
+        // quiet again in a command written to expose it.
+        let head = host_channel::run_program(
+            self.target,
+            &["/usr/bin/head", "-c", "2", path],
+            self.runner,
+        )
+        .await?;
+        if head.stdout == "#!" {
+            self.scripts += 1;
+            return Ok(());
+        }
+        // What is left has to be executable to be a program.
+        // `$HOME/.stado/bin` also holds `SHA256SUMS` and a
+        // `release-manifest.json` left by earlier installs, and reporting a
+        // checksum list as software this host runs would put a row in front
+        // of an operator that no version and no release could ever account
+        // for.
+        if !host_channel::remote_test(
+            self.target,
+            &format!("-x {}", shlex_quote(path)),
+            self.runner,
+        )
+        .await?
+        {
+            return Ok(());
+        }
+        let digest = match &self.hasher {
+            Some(hasher) => hasher.digest(self.target, path, self.runner).await?,
+            None => String::new(),
+        };
+        let version = host_channel::remote_program_version(self.target, path, self.runner)
+            .await?
+            .unwrap_or_default();
+        let provenance = self.provenance(&digest, base).await?;
+        self.reported += 1;
+        self.out.push_str(&format!(
+            "software name={} version={} sha256={} provenance={} path={}\n",
+            base,
+            if version.is_empty() { UNKNOWN } else { &version },
+            if digest.is_empty() { UNKNOWN } else { &digest },
+            provenance,
+            path,
+        ));
+        Ok(())
+    }
+}
+
+/// Ask TARGET what it runs, natively: the population rules and per-program
+/// readings of the retired reporter script, as individual remote commands
+/// over the same audited channel `host provenance` reads with, with every
+/// branch taken here and nothing installed on the host.
 ///
-/// One round trip on the same audited channel `host provenance` reads with, and
-/// nothing is installed on the host: the reporter travels with stado, so a
-/// failure here is the remote's own words about this read and never a remedy for
-/// a delivery channel that no longer exists. Reading what is installed is a
-/// status read, so it runs under the channel's ordinary read bound.
+/// Three sources make up the population, and all three are needed:
+///
+///   1. every program in `$HOME/.stado/bin` — what Stado placed on this host;
+///   2. every declared service unit's program — what this host actually runs,
+///      which is not the same set: a unit can name a program nothing
+///      installed;
+///   3. every release-control product install path bound by the caller —
+///      brama lives at `<install_root>/bin/brama` and appears in neither of
+///      the above.
+///
+/// The report is composed in the wire format [`parse`] reads, so the reader
+/// and every stored observation keep their contract byte-for-byte. Read-only,
+/// and strictly so: files are hashed, unit files are read, programs are asked
+/// their version, and nothing is written anywhere.
 pub async fn gather(
     target: &ComputeTarget,
     programs: &[String],
     runner: &Runner,
 ) -> Result<(Vec<HostSoftware>, usize), DeployError> {
-    let script = reporter(&declared_units(target), programs);
-    let output = host_channel::run_script_with_timeout(
+    let home = host_channel::remote_home(target, runner).await?;
+    let bin = format!("{home}/.stado/bin");
+    let mut reporter = Reporter {
         target,
-        &script,
-        host_channel::remote_timeout(),
         runner,
-    )
-    .await?;
-    if !output.ok() {
-        return Err(DeployError(host_channel::last_error_line(
-            &output,
-            "the software reporter did not complete",
-        )));
+        releases: format!("{home}/.stado/releases"),
+        hasher: Hasher::resolve(target, runner).await?,
+        seen: BTreeSet::new(),
+        scripts: 0,
+        reported: 0,
+        out: String::new(),
+        home,
+    };
+    reporter.out.push_str(&format!(
+        "# host software report at {}\n",
+        chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ")
+    ));
+
+    if host_channel::remote_test(target, &format!("-d {}", shlex_quote(&bin)), runner).await? {
+        let listed = host_channel::run_program(target, &["/bin/ls", &bin], runner).await?;
+        if listed.ok() {
+            for name in listed.stdout.lines() {
+                if !name.is_empty() {
+                    reporter.report_program(&format!("{bin}/{name}")).await?;
+                }
+            }
+        }
     }
-    Ok(parse(&output.stdout))
+
+    for (kind, path) in declared_units(target) {
+        if let Some(program) = reporter.unit_program(&kind, &path).await? {
+            reporter.report_program(&program).await?;
+        }
+    }
+    for program in programs {
+        reporter.report_program(program).await?;
+    }
+
+    // The trailer is a report line and not a comment, because the caller
+    // stores the script count and a `#` line is one the reader is contracted
+    // to ignore.
+    reporter.out.push_str(&format!(
+        "report reported={} scripts={}\n",
+        reporter.reported, reporter.scripts
+    ));
+    Ok(parse(&reporter.out))
 }
 
 /// The reporter's stdout, as one row per program plus the script count.

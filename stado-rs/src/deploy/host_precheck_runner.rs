@@ -24,6 +24,13 @@ pub const GITHUB_ORGANIZATION: &str = "wisent-ai";
 pub const GITHUB_CREDENTIAL_ITEM: &str = "GITHUB_TOKEN";
 pub const RUNNER_GROUP: &str = "stado-precheck";
 pub const RUNNER_USER: &str = "stado-precheck";
+pub const KRONIKA_AGENT_ID: &str = "kronika";
+pub const KRONIKA_AGENT_SECRET_ITEM: &str = "agent:kronika";
+pub const KRONIKA_AGENT_SECRET_FIELD: &str = "value";
+pub const LINUX_KRONIKA_AGENT_SECRET_FILE: &str =
+    "/opt/wisent/stado-precheck-runner/.stado/kronika-agent-auth-secret";
+pub const MACOS_KRONIKA_AGENT_SECRET_FILE: &str =
+    "/Users/Shared/stado-precheck-runner/.stado/kronika-agent-auth-secret";
 pub const RUNNER_VERSION: &str = "2.336.0";
 pub const LINUX_SHA256: &str = "04cf0be1aff4c3ec3554466c39124ca250e3effd8873bb7e8d68535aa9505d5d";
 pub const MACOS_SHA256: &str = "8e8839c49b7060b6b2154f4931f815df330c27f167d53ef2239ee3dfce28b079";
@@ -89,6 +96,13 @@ impl Platform {
             ))),
         }
     }
+
+    fn kronika_agent_secret_file(self) -> &'static str {
+        match self {
+            Self::LinuxAmd64 => LINUX_KRONIKA_AGENT_SECRET_FILE,
+            Self::DarwinArm64 => MACOS_KRONIKA_AGENT_SECRET_FILE,
+        }
+    }
 }
 
 fn shell_list(values: &[&str]) -> String {
@@ -133,6 +147,10 @@ fn linux_installer(
             ),
             ("__BLOCKED_IPV4__", shell_list(BLOCKED_IPV4_NETWORKS)),
             ("__BRAMA_URL__", super::shlex_quote(brama_url)),
+            (
+                "__KRONIKA_AGENT_ID__",
+                super::shlex_quote(KRONIKA_AGENT_ID),
+            ),
             ("__BRAMA_PORT__", brama_port.to_string()),
             ("__BLOCKED_IPV6__", shell_list(BLOCKED_IPV6_NETWORKS)),
         ],
@@ -161,6 +179,10 @@ fn macos_installer(
                 format!("https://github.com/{GITHUB_ORGANIZATION}"),
             ),
             ("__BRAMA_URL__", super::shlex_quote(brama_url)),
+            (
+                "__KRONIKA_AGENT_ID__",
+                super::shlex_quote(KRONIKA_AGENT_ID),
+            ),
             ("__BRAMA_PORT__", brama_port.to_string()),
             (
                 "__BLOCKED_NETWORKS__",
@@ -175,7 +197,7 @@ fn macos_installer(
     )
 }
 
-async fn github_credential() -> Result<String, DeployError> {
+async fn admin_credential(item: &str, field: &str) -> Result<String, DeployError> {
     let credentials = crate::credential_store::admin_credentials()
         .map_err(|error| DeployError(error.to_string()))?;
     let client = crate::skarbiec::Client::direct(
@@ -185,15 +207,19 @@ async fn github_credential() -> Result<String, DeployError> {
     )
     .map_err(|error| DeployError(error.to_string()))?;
     client
-        .read_string(GITHUB_CREDENTIAL_ITEM, "value")
+        .read_string(item, field)
         .await
         .map_err(|error| DeployError(error.to_string()))?
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| {
-            DeployError(format!(
-                "credential {GITHUB_CREDENTIAL_ITEM}.value is required"
-            ))
-        })
+        .ok_or_else(|| DeployError(format!("credential {item}.{field} is required")))
+}
+
+async fn github_credential() -> Result<String, DeployError> {
+    admin_credential(GITHUB_CREDENTIAL_ITEM, "value").await
+}
+
+async fn kronika_agent_secret() -> Result<String, DeployError> {
+    admin_credential(KRONIKA_AGENT_SECRET_ITEM, KRONIKA_AGENT_SECRET_FIELD).await
 }
 
 async fn configure_publisher_group() -> Result<(), DeployError> {
@@ -848,6 +874,41 @@ async fn private_brama_route(target_name: &str) -> Result<(String, u16), DeployE
     Ok((endpoint.url.trim_end_matches('/').to_string(), port))
 }
 
+async fn install_kronika_agent_secret(
+    target: &ComputeTarget,
+    platform: Platform,
+    secret: &str,
+) -> Result<(), DeployError> {
+    let secret_file = platform.kronika_agent_secret_file();
+    let output = host_channel::run_program_with_stdin(
+        target,
+        &[
+            "/usr/bin/sudo",
+            "-n",
+            "/usr/bin/install",
+            "-o",
+            RUNNER_USER,
+            "-g",
+            RUNNER_USER,
+            "-m",
+            "600",
+            "/dev/stdin",
+            secret_file,
+        ],
+        secret,
+        &production_runner(),
+    )
+    .await?;
+    if !output.ok() {
+        return Err(DeployError(format!(
+            "{}: Kronika signing identity installation failed: {}",
+            target.name,
+            host_channel::last_error_line(&output, "remote secret write failed")
+        )));
+    }
+    Ok(())
+}
+
 async fn install_profile(target_name: &str, profile: RunnerProfile) -> Result<Value, DeployError> {
     if profile.kind == PUBLISHER.kind {
         configure_publisher_group().await?;
@@ -855,6 +916,11 @@ async fn install_profile(target_name: &str, profile: RunnerProfile) -> Result<Va
     let target = host_channel::canonical_target(target_name).await?;
     let platform = Platform::for_target(&target)?;
     let (brama_url, brama_port) = private_brama_route(target_name).await?;
+    let kronika_secret = if profile.kind == PRECHECK.kind {
+        Some(kronika_agent_secret().await?)
+    } else {
+        None
+    };
     let token = github_runner_token("registration").await?;
     let script = match platform {
         Platform::LinuxAmd64 => linux_installer(&target, &token, &brama_url, brama_port, profile),
@@ -867,7 +933,7 @@ async fn install_profile(target_name: &str, profile: RunnerProfile) -> Result<Va
         &production_runner(),
     )
     .await?;
-    let value = report(&target, &output, "install", profile);
+    let mut value = report(&target, &output, "install", profile);
     if !output.ok() {
         return Err(DeployError(format!(
             "{}: {} runner installation failed: {}",
@@ -876,18 +942,36 @@ async fn install_profile(target_name: &str, profile: RunnerProfile) -> Result<Va
             command_failure(&output, "remote installer failed")
         )));
     }
+    if let Some(kronika_secret) = kronika_secret {
+        install_kronika_agent_secret(&target, platform, &kronika_secret).await?;
+        value["kronika_identity"] = json!({
+            "agent_id": KRONIKA_AGENT_ID,
+            "secret_item": KRONIKA_AGENT_SECRET_ITEM,
+            "secret_field": KRONIKA_AGENT_SECRET_FIELD,
+            "secret_file": platform.kronika_agent_secret_file(),
+            "status": "installed",
+        });
+    }
     Ok(value)
 }
 
 async fn status_profile(target_name: &str, profile: RunnerProfile) -> Result<Value, DeployError> {
     let target = host_channel::canonical_target(target_name).await?;
-    let script = profile_template(
-        match Platform::for_target(&target)? {
-            Platform::LinuxAmd64 => LINUX_STATUS,
-            Platform::DarwinArm64 => MACOS_STATUS,
-        },
-        profile,
-    );
+    let platform = Platform::for_target(&target)?;
+    let script = if profile.kind == PUBLISHER.kind {
+        match platform {
+            Platform::LinuxAmd64 => profile_template(LINUX_PUBLISHER_STATUS, profile),
+            Platform::DarwinArm64 => profile_template(MACOS_PUBLISHER_STATUS, profile),
+        }
+    } else {
+        profile_template(
+            match platform {
+                Platform::LinuxAmd64 => LINUX_STATUS,
+                Platform::DarwinArm64 => MACOS_STATUS,
+            },
+            profile,
+        )
+    };
     let output = host_channel::run_script(&target, &script, &production_runner()).await?;
     let value = report(&target, &output, "status", profile);
     if !output.ok() {
@@ -1009,8 +1093,8 @@ if [ ! -f "$runner_root/.runner" ]; then
   root mkdir -p "$runner_root"
   root tar -xzf "$archive" -C "$runner_root" --no-same-owner
   root chown -R "$runner_user:$runner_user" "$runner_root"
-  root mkdir -p "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache"
-  root chown "$runner_user:$runner_user" "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache"
+  root mkdir -p "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/.stado"
+  root chown "$runner_user:$runner_user" "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/.stado"
   printf '%s' "$token" > "$token_file"
   chmod 600 "$token_file"
   root install -o "$runner_user" -g "$runner_user" -m 0600 "$token_file" "$runner_root/.registration-token"
@@ -1028,17 +1112,19 @@ if [ ! -f "$runner_root/.runner" ]; then
   token=
 fi
 
-root mkdir -p "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache"
+root mkdir -p "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/.stado"
 root chown -R root:root "$runner_root"
 root chmod -R go-w "$runner_root"
-root chown "$runner_user:$runner_user" "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache"
-root chmod 700 "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache"
+root chown -R "$runner_user:$runner_user" "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/.stado"
+root chmod 700 "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/.stado"
 
 root mkdir -p "$runner_root/routes"
 printf '%s\n' __BRAMA_URL__ | root tee "$runner_root/routes/brama.url" >/dev/null
+printf '%s\n' __KRONIKA_AGENT_ID__ | root tee "$runner_root/routes/kronika-agent-id" >/dev/null
 root chown -R root:root "$runner_root/routes"
 root chmod 555 "$runner_root/routes"
 root chmod 444 "$runner_root/routes/brama.url"
+root chmod 444 "$runner_root/routes/kronika-agent-id"
 
 hook=$(mktemp)
 cat > "$hook" <<'HOOK'
@@ -1102,7 +1188,7 @@ ProtectControlGroups=true
 ProtectClock=true
 RestrictSUIDSGID=true
 LockPersonality=true
-ReadWritePaths=$runner_root/_work $runner_root/_diag
+ReadWritePaths=$runner_root/_work $runner_root/_diag $runner_root/.npm $runner_root/.cache $runner_root/.cargo $runner_root/.rustup
 
 [Install]
 WantedBy=multi-user.target
@@ -1171,8 +1257,8 @@ if [ ! -f "$runner_root/.runner" ]; then
   installer_user=$(id -un)
   installer_group=$(id -gn)
   root chown -R "$installer_user:$installer_group" "$runner_root"
-  root mkdir -p "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.tmp" "$runner_root/.dotnet"
-  root chown "$installer_user:$installer_group" "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.tmp" "$runner_root/.dotnet"
+  root mkdir -p "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.tmp" "$runner_root/.dotnet" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/Library/Caches" "$runner_root/.stado"
+  root chown "$installer_user:$installer_group" "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.tmp" "$runner_root/.dotnet" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/Library" "$runner_root/.stado"
   printf '%s' "$token" > "$token_file"
   chmod 600 "$token_file"
   if ! (cd "$runner_root" && /usr/bin/env \
@@ -1189,7 +1275,7 @@ if [ ! -f "$runner_root/.runner" ]; then
 fi
   root chown -R "$runner_user:$runner_user" "$runner_root"
 
-root mkdir -p "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.tmp" "$runner_root/.dotnet"
+root mkdir -p "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.tmp" "$runner_root/.dotnet" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/Library/Caches" "$runner_root/.stado"
 root chown -R root:wheel "$runner_root"
 root chmod -R go-w "$runner_root"
 for state_file in "$runner_root"/.credentials* "$runner_root"/.runner "$runner_root"/.service "$runner_root"/.path; do
@@ -1197,14 +1283,16 @@ for state_file in "$runner_root"/.credentials* "$runner_root"/.runner "$runner_r
   root chown "$runner_user:$runner_user" "$state_file"
   root chmod 600 "$state_file"
 done
-root chown "$runner_user:$runner_user" "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.tmp" "$runner_root/.dotnet"
-root chmod 700 "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.tmp" "$runner_root/.dotnet"
+root chown -R "$runner_user:$runner_user" "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.tmp" "$runner_root/.dotnet" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/Library" "$runner_root/.stado"
+root chmod 700 "$runner_root/_work" "$runner_root/_diag" "$runner_root/.npm" "$runner_root/.cache" "$runner_root/.tmp" "$runner_root/.dotnet" "$runner_root/.cargo" "$runner_root/.rustup" "$runner_root/Library" "$runner_root/Library/Caches" "$runner_root/.stado"
 
 root mkdir -p "$runner_root/routes"
 printf '%s\n' __BRAMA_URL__ | root tee "$runner_root/routes/brama.url" >/dev/null
+printf '%s\n' __KRONIKA_AGENT_ID__ | root tee "$runner_root/routes/kronika-agent-id" >/dev/null
 root chown -R root:wheel "$runner_root/routes"
 root chmod 555 "$runner_root/routes"
 root chmod 444 "$runner_root/routes/brama.url"
+root chmod 444 "$runner_root/routes/kronika-agent-id"
 
 hook=$(mktemp)
 cat > "$hook" <<'HOOK'
@@ -1262,12 +1350,40 @@ root launchctl print system/com.wisent.stado-precheck-runner | grep -F 'state = 
 printf 'runner service: running\nrunner identity: %s uid=%s\nrunner group: %s\nprivate-network egress: blocked except Stado route %s\n' "$runner_user" "$uid" "$runner_group" __BRAMA_URL__
 "#;
 
+const LINUX_PUBLISHER_STATUS: &str = r#"set -euo pipefail
+root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi; }
+root systemctl is-active wisent-stado-precheck-runner.service
+root systemctl is-enabled wisent-stado-precheck-runner.service
+id stado-precheck
+root nft list table inet stado_precheck
+root /usr/sbin/runuser --user stado-precheck -- /usr/bin/env HOME=/opt/wisent/stado-precheck-runner /opt/wisent/stado-precheck-runner/bin/Runner.Listener --version
+"#;
+
+const MACOS_PUBLISHER_STATUS: &str = r#"set -euo pipefail
+root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi; }
+if ! root launchctl print system/com.wisent.stado-precheck-runner; then
+  root plutil -lint /Library/LaunchDaemons/com.wisent.stado-precheck-runner.plist >&2 || true
+  root tail -n 80 /Users/Shared/stado-precheck-runner/_diag/launchd.stderr.log >&2 || true
+  exit 1
+fi
+dscl . -read /Users/stado-precheck UniqueID PrimaryGroupID NFSHomeDirectory UserShell Password
+root pfctl -a com.wisent.stado-precheck -sr
+root tail -n 40 /Users/Shared/stado-precheck-runner/_diag/launchd.stdout.log 2>/dev/null || true
+root tail -n 40 /Users/Shared/stado-precheck-runner/_diag/launchd.stderr.log >&2 2>/dev/null || true
+root sudo -u stado-precheck -H -- /usr/bin/env HOME=/Users/Shared/stado-precheck-runner TMPDIR=/Users/Shared/stado-precheck-runner/_work /Users/Shared/stado-precheck-runner/bin/Runner.Listener --version
+"#;
+
 const LINUX_STATUS: &str = r#"set -euo pipefail
 root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi; }
 root systemctl is-active wisent-stado-precheck-runner.service
 root systemctl is-enabled wisent-stado-precheck-runner.service
 id stado-precheck
 root nft list table inet stado_precheck
+agent_id=$(root cat /opt/wisent/stado-precheck-runner/routes/kronika-agent-id)
+[ -n "$agent_id" ]
+secret_meta=$(root stat -c '%U %G %a' /opt/wisent/stado-precheck-runner/.stado/kronika-agent-auth-secret)
+[ "$secret_meta" = "stado-precheck stado-precheck 600" ]
+printf 'kronika agent: %s\nkronika signing secret: owner=%s\n' "$agent_id" "$secret_meta"
 "#;
 
 const MACOS_STATUS: &str = r#"set -euo pipefail
@@ -1282,6 +1398,11 @@ root pfctl -a com.wisent.stado-precheck -sr
 root tail -n 40 /Users/Shared/stado-precheck-runner/_diag/launchd.stdout.log 2>/dev/null || true
 root tail -n 40 /Users/Shared/stado-precheck-runner/_diag/launchd.stderr.log >&2 2>/dev/null || true
 root sudo -u stado-precheck -H -- /usr/bin/env HOME=/Users/Shared/stado-precheck-runner TMPDIR=/Users/Shared/stado-precheck-runner/_work /Users/Shared/stado-precheck-runner/bin/Runner.Listener --version
+agent_id=$(root cat /Users/Shared/stado-precheck-runner/routes/kronika-agent-id)
+[ -n "$agent_id" ]
+secret_meta=$(root stat -f '%Su %Sg %Lp' /Users/Shared/stado-precheck-runner/.stado/kronika-agent-auth-secret)
+[ "$secret_meta" = "stado-precheck stado-precheck 600" ]
+printf 'kronika agent: %s\nkronika signing secret: owner=%s\n' "$agent_id" "$secret_meta"
 "#;
 
 const LINUX_REMOVE: &str = r#"set -euo pipefail

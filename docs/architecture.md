@@ -41,17 +41,9 @@ workload -> 127.0.0.1:stable-port -> local Stado resolver
                                       +-> direct loopback or registry SSH transport
 ```
 
-`service_directory.authority` names the one target and Stado binary allowed to
-serve canonical snapshots and commit routing changes. Every other resolver
-fetches that versioned snapshot over the authority target's registry-owned SSH
-transport; it never treats its bootstrap registry copy as current routing.
-`service_directory.generation` is the routing epoch. `placement move` delegates
-to the authority, then updates the active host for every service in the
-placement group and increments that epoch in the same compare-and-swapped
-registry commit that moves the service declarations. While the transaction lock
-exists, resolution for that profile fails closed. Resolver caches reject
-generation rollback and stop accepting connections after `max_stale_seconds`
-without a successful authority refresh.
+The directory's authority and generation contract — who serves snapshots, how
+`placement move` commits an epoch, and why resolution fails closed — along
+with its vocabulary and failure story: [service directory](primitives/directory.md).
 
 Physical endpoint URLs are host-relative loopback origins. A resolver on the
 active host connects directly; another host uses only the active target's

@@ -77,19 +77,26 @@ async fn invoke(arguments: Vec<String>) -> Result<(), CmdError> {
     Err(CmdError::click(if detail.is_empty() {
         format!("wisent-products exited with {}", output.status)
     } else {
-        detail.strip_prefix("Error: ").unwrap_or(&detail).to_string()
+        detail
+            .strip_prefix("Error: ")
+            .unwrap_or(&detail)
+            .to_string()
     }))
 }
 
 fn mutation_args(verb: &str, value: ProductMutation) -> Vec<String> {
     let mut args = vec![
-        verb.to_string(), value.product,
-        "--surface".to_string(), value.surface,
+        verb.to_string(),
+        value.product,
+        "--surface".to_string(),
+        value.surface,
     ];
     if let Some(host) = value.host {
         args.extend(["--host".to_string(), host]);
     }
-    if value.json { args.push("--json".to_string()); }
+    if value.json {
+        args.push("--json".to_string());
+    }
     args
 }
 
@@ -97,7 +104,9 @@ pub async fn dispatch(command: ProductCommands) -> Result<(), CmdError> {
     match command {
         ProductCommands::Catalog { json } => {
             let mut args = vec!["catalog".to_string()];
-            if json { args.push("--json".to_string()); }
+            if json {
+                args.push("--json".to_string());
+            }
             invoke(args).await
         }
         ProductCommands::Install(value) => invoke(mutation_args("install", value)).await,

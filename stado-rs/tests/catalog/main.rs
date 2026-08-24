@@ -31,7 +31,14 @@ fn the_catalog_lists_the_wisent_services() {
     let out = stado(dir.path(), &["service", "catalog"]);
     assert!(out.status.success(), "catalog failed: {}", stderr(&out));
     let text = stdout(&out);
-    for name in ["skarbiec", "brama", "weles", "stado", "oko", "transcript-lake"] {
+    for name in [
+        "skarbiec",
+        "brama",
+        "weles",
+        "stado",
+        "oko",
+        "transcript-lake",
+    ] {
         assert!(text.contains(name), "missing {name} in: {text}");
     }
 }
@@ -50,7 +57,10 @@ fn the_json_catalog_carries_program_and_args() {
         .find(|entry| entry["name"] == "skarbiec")
         .expect("skarbiec entry");
     assert_eq!(skarbiec["program"], "$HOME/.stado/bin/skarbiec");
-    assert_eq!(skarbiec["args"], serde_json::json!(["serve", "--port", "8895"]));
+    assert_eq!(
+        skarbiec["args"],
+        serde_json::json!(["serve", "--port", "8895"])
+    );
     let stado = services
         .iter()
         .find(|entry| entry["name"] == "stado")
@@ -79,9 +89,13 @@ fn a_name_outside_the_catalog_names_the_catalog_in_its_refusal() {
     let out = stado(
         dir.path(),
         &[
-            "service", "ensure", "no-such-thing",
-            "--host", "this-mac",
-            "--reason", "test",
+            "service",
+            "ensure",
+            "no-such-thing",
+            "--host",
+            "this-mac",
+            "--reason",
+            "test",
         ],
     );
     assert!(!out.status.success(), "an undeclared name must refuse");
