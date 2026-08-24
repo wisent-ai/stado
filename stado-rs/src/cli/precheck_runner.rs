@@ -98,6 +98,30 @@ pub async fn install_publisher(
 ) -> Result<(), CmdError> {
     render(target, "install", true, repositories, json).await
 }
+/// Grant one desktop repository the organization release secrets.
+pub async fn publisher_repository_add(repository: &str, json_output: bool) -> Result<(), CmdError> {
+    let report = crate::deploy::host_precheck_runner::reconcile_publisher_repository(repository)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if json_output {
+        println!(
+            "{}",
+            crate::deploy::host_recovery::to_sorted_pretty(&report)
+        );
+    } else {
+        println!(
+            "{}/{}: {} release secrets {}",
+            cell(report.get("organization")),
+            cell(report.get("repository")),
+            report
+                .get("release_secrets")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            cell(report.get("status"))
+        );
+    }
+    Ok(())
+}
 
 /// Read the installed desktop publisher service, identity and network boundary.
 pub async fn status_publisher(target: &str, json: bool) -> Result<(), CmdError> {
