@@ -5,8 +5,13 @@
 //! program over the audited host channel. No Python helper or operator shell is
 //! part of the lifecycle.
 
+use std::io::Write;
+use std::process::{Command, Stdio};
 use std::time::Duration;
 
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use ring::rand::{SecureRandom, SystemRandom};
+use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde_json::{json, Value};
 
 use super::{host_channel, production_runner, CommandOutput, DeployError};
@@ -49,6 +54,8 @@ const RELEASE_SECRETS: &[&str] = &[
     "AC_API_KEY_P8",
     "SPARKLE_PRIVATE_KEY",
 ];
+const APP_STORE_CONNECT_ITEM: &str = "api-appstoreconnect-weles";
+const SPARKLE_ITEM_PREFIX: &str = "desktop-release-sparkle-";
 
 // These are network classes, not fleet addresses. Keeping the policy here makes
 // the Linux nftables and macOS PF renderers consume one source of truth.
@@ -378,6 +385,133 @@ async fn grant_release_secrets(repositories: &[String]) -> Result<(), DeployErro
         }
     }
     Ok(())
+}
+fn set_repository_secret(
+    repository: &str,
+    name: &str,
+    value: &str,
+    github_token: &str,
+) -> Result<(), DeployError> {
+    let mut child = Command::new("gh")
+        .arg("secret")
+        .arg("set")
+        .arg(name)
+        .arg("--repo")
+        .arg(format!("{GITHUB_ORGANIZATION}/{repository}"))
+        .env("GH_TOKEN", github_token)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| DeployError(format!("could not start gh secret set: {error}")))?;
+    child
+        .stdin
+        .as_mut()
+        .ok_or_else(|| DeployError("gh secret set stdin is unavailable".to_string()))?
+        .write_all(value.as_bytes())
+        .map_err(|error| DeployError(format!("could not write gh secret set stdin: {error}")))?;
+    let output = child
+        .wait_with_output()
+        .map_err(|error| DeployError(format!("gh secret set failed: {error}")))?;
+    if !output.status.success() {
+        return Err(DeployError(format!(
+            "GitHub repository secret {name} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+                .replace(github_token, "[REDACTED]")
+                .trim()
+        )));
+    }
+    Ok(())
+}
+
+async fn sparkle_key_pair(repository: &str) -> Result<(String, String), DeployError> {
+    let item = format!("{SPARKLE_ITEM_PREFIX}{repository}");
+    let credentials = crate::credential_store::admin_credentials()
+        .map_err(|error| DeployError(error.to_string()))?;
+    let client = crate::skarbiec::Client::direct(
+        &credentials.url,
+        &credentials.consumer,
+        &credentials.token_file,
+    )
+    .map_err(|error| DeployError(error.to_string()))?;
+    let exists = client
+        .list_items()
+        .await
+        .map_err(|error| DeployError(error.to_string()))?
+        .iter()
+        .any(|candidate| candidate.id == item && candidate.deleted != Some(true));
+    if exists {
+        let private_key = crate::credential_store::owner::read_string(&item, "private_key")
+            .map_err(|error| DeployError(error.to_string()))?;
+        let public_key = crate::credential_store::owner::read_string(&item, "public_key")
+            .map_err(|error| DeployError(error.to_string()))?;
+        let seed = BASE64
+            .decode(&private_key)
+            .map_err(|_| DeployError(format!("{item}.private_key is not base64")))?;
+        let key = Ed25519KeyPair::from_seed_unchecked(&seed)
+            .map_err(|_| DeployError(format!("{item}.private_key is not an Ed25519 seed")))?;
+        if BASE64.encode(key.public_key().as_ref()) != public_key {
+            return Err(DeployError(format!(
+                "{item} public key does not match its private seed"
+            )));
+        }
+        return Ok((private_key, public_key));
+    }
+
+    let mut seed = [0_u8; 32];
+    SystemRandom::new()
+        .fill(&mut seed)
+        .map_err(|_| DeployError("could not generate Sparkle signing seed".to_string()))?;
+    let key = Ed25519KeyPair::from_seed_unchecked(&seed)
+        .map_err(|_| DeployError("generated Sparkle signing seed is invalid".to_string()))?;
+    let private_key = BASE64.encode(seed);
+    let public_key = BASE64.encode(key.public_key().as_ref());
+    crate::credential_store::owner::write_item(
+        &item,
+        "key-pair",
+        &json!({
+            "private_key": private_key,
+            "public_key": public_key,
+        }),
+        &json!({
+            "algorithm": "ed25519",
+            "purpose": "sparkle-update-signing",
+            "repository": format!("{GITHUB_ORGANIZATION}/{repository}"),
+        }),
+    )
+    .map_err(|error| DeployError(error.to_string()))?;
+    Ok((private_key, public_key))
+}
+
+pub async fn bootstrap_publisher_repository(repository: &str) -> Result<Value, DeployError> {
+    let repository = repository_name(repository)?;
+    let github_token = github_credential().await?;
+    let key_id = crate::credential_store::owner::read_string(APP_STORE_CONNECT_ITEM, "key_id")
+        .map_err(|error| DeployError(error.to_string()))?;
+    let issuer_id =
+        crate::credential_store::owner::read_string(APP_STORE_CONNECT_ITEM, "issuer_id")
+            .map_err(|error| DeployError(error.to_string()))?;
+    let app_store_private_key =
+        crate::credential_store::owner::read_string(APP_STORE_CONNECT_ITEM, "private_key")
+            .map_err(|error| DeployError(error.to_string()))?;
+    let app_store_private_key = BASE64.encode(app_store_private_key);
+    let (sparkle_private_key, sparkle_public_key) = sparkle_key_pair(repository).await?;
+    for (name, value) in [
+        ("RELEASE_BOOTSTRAP_TOKEN", github_token.as_str()),
+        ("AC_API_KEY_ID", key_id.as_str()),
+        ("AC_API_ISSUER_ID", issuer_id.as_str()),
+        ("AC_API_KEY_P8", app_store_private_key.as_str()),
+        ("SPARKLE_PRIVATE_KEY", sparkle_private_key.as_str()),
+    ] {
+        set_repository_secret(repository, name, value, &github_token)?;
+    }
+    Ok(json!({
+        "organization": GITHUB_ORGANIZATION,
+        "repository": repository,
+        "release_secrets": 5,
+        "sparkle_public_key": sparkle_public_key,
+        "status": "bootstrapped",
+    }))
 }
 async fn github_runner_token(kind: &str) -> Result<String, DeployError> {
     let credential = github_credential().await?;
