@@ -1306,6 +1306,7 @@ ReadWritePaths=$runner_root/_work $runner_root/_diag $runner_root/.npm $runner_r
 WantedBy=multi-user.target
 UNIT
 service_changed=0
+if [ ! -f "$runner_root/.service-reconciled" ]; then service_changed=1; fi
 if [ ! -f /etc/systemd/system/wisent-stado-precheck-runner.service ] || ! root cmp -s "$unit" /etc/systemd/system/wisent-stado-precheck-runner.service; then
   service_changed=1
 fi
@@ -1318,6 +1319,7 @@ else
   root systemctl enable --now wisent-stado-precheck-runner.service >/dev/null
 fi
 root systemctl is-active --quiet wisent-stado-precheck-runner.service
+root touch "$runner_root/.service-reconciled"
 printf 'runner service: active\nrunner identity: %s uid=%s\nrunner group: %s\nprivate-network egress: blocked except Stado route %s\n' "$runner_user" "$uid" "$runner_group" __BRAMA_URL__
 "#;
 
@@ -1434,6 +1436,7 @@ root pfctl -E >/dev/null 2>&1 || true
 rm -f "$anchor"
 
 service_changed=0
+if [ ! -f "$runner_root/.service-reconciled" ]; then service_changed=1; fi
 
 launcher=$(mktemp)
 cat > "$launcher" <<LAUNCHER
@@ -1479,6 +1482,7 @@ else
 fi
 root launchctl enable system/com.wisent.stado-precheck-runner
 root launchctl print system/com.wisent.stado-precheck-runner | grep -F 'state = running' >/dev/null
+root touch "$runner_root/.service-reconciled"
 printf 'runner service: running\nrunner identity: %s uid=%s\nrunner group: %s\nprivate-network egress: blocked except Stado route %s\n' "$runner_user" "$uid" "$runner_group" __BRAMA_URL__
 "#;
 
