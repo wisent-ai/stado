@@ -149,6 +149,35 @@ pub async fn bootstrap_publisher_repository(
     }
     Ok(())
 }
+/// Issue or reuse the shared Developer ID certificate and publish signing secrets.
+pub async fn bootstrap_developer_id(
+    target: &str,
+    account_item: &str,
+    repositories: &[String],
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let report = crate::deploy::host_precheck_runner::bootstrap_developer_id(
+        target,
+        account_item,
+        repositories,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if json_output {
+        println!(
+            "{}",
+            crate::deploy::host_recovery::to_sorted_pretty(&report)
+        );
+    } else {
+        println!(
+            "{}: Developer ID certificate {} ({})",
+            cell(report.get("target")),
+            cell(report.get("status")),
+            cell(report.get("identity"))
+        );
+    }
+    Ok(())
+}
 
 /// Read the installed desktop publisher service, identity and network boundary.
 pub async fn status_publisher(target: &str, json: bool) -> Result<(), CmdError> {

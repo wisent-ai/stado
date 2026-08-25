@@ -1134,6 +1134,20 @@ enum HostPublisherRunnerCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Issue or reuse the shared Developer ID certificate and grant it to repositories.
+    DeveloperId {
+        /// Registry host that runs the Account Holder Weles trajectory.
+        target: String,
+        /// Skarbiec item containing the Apple Account Holder credentials.
+        #[arg(long)]
+        account_item: String,
+        /// Desktop repository that receives signing secrets. Repeat as needed.
+        #[arg(long = "repository", required = true)]
+        repositories: Vec<String>,
+        /// Emit the bootstrap report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Read the installed runner service, identity and network boundary.
     Status {
         target: String,
@@ -2032,6 +2046,20 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 }
                 HostPublisherRunnerCommands::Bootstrap { repository, json } => {
                     precheck_runner::bootstrap_publisher_repository(&repository, json).await
+                }
+                HostPublisherRunnerCommands::DeveloperId {
+                    target,
+                    account_item,
+                    repositories,
+                    json,
+                } => {
+                    precheck_runner::bootstrap_developer_id(
+                        &target,
+                        &account_item,
+                        &repositories,
+                        json,
+                    )
+                    .await
                 }
                 HostPublisherRunnerCommands::Status { target, json } => {
                     precheck_runner::status_publisher(&target, json).await

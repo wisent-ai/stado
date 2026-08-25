@@ -707,6 +707,96 @@ impl Channel {
     }
 }
 
+/// Enqueue one non-capture action through the same registry-bound admission channel.
+///
+/// Callers still name a fixed action and platform in product code; this function
+/// does not expose an arbitrary-action CLI.
+pub async fn enqueue_action(
+    channel: &Channel,
+    action: &str,
+    platform: &str,
+    account_id: Option<&str>,
+    params: Value,
+) -> Result<String, DeployError> {
+    let data = channel
+        .call(
+            ENQUEUE_ROUTE,
+            &json!({
+                "jobs": [{
+                    "account_id": account_id,
+                    "action": action,
+                    "platform": platform,
+                    "params": params,
+                }]
+            }),
+        )
+        .await?;
+    let ids = data
+        .get("job_ids")
+        .and_then(Value::as_array)
+        .ok_or_else(|| DeployError("the Weles admission API returned no action id".to_string()))?;
+    if ids.len() != 1 {
+        return Err(DeployError(format!(
+            "the Weles admission API accepted one action and returned {} ids",
+            ids.len()
+        )));
+    }
+    ids[0]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            DeployError("the Weles admission API returned an invalid action id".to_string())
+        })
+}
+
+/// Read one action's recorded status and error from Weles.
+pub async fn action_status(
+    channel: &Channel,
+    action: &str,
+    action_id: &str,
+) -> Result<Option<(String, Option<String>)>, DeployError> {
+    let data = channel
+        .call(
+            QUERY_ROUTE,
+            &json!({ "action": action, "limit": QUERY_LIMIT }),
+        )
+        .await?;
+    let logs = data
+        .get("logs")
+        .and_then(Value::as_array)
+        .ok_or_else(|| DeployError("the Weles admission API returned no action log".to_string()))?;
+    Ok(logs.iter().find_map(|row| {
+        (row.get("id").and_then(Value::as_str) == Some(action_id)).then(|| {
+            (
+                row.get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_string(),
+                row.get("error").and_then(Value::as_str).map(str::to_string),
+            )
+        })
+    }))
+}
+
+/// Read the newest recorded row for one fixed action.
+pub async fn latest_action_log(
+    channel: &Channel,
+    action: &str,
+) -> Result<Option<Value>, DeployError> {
+    let data = channel
+        .call(
+            QUERY_ROUTE,
+            &json!({ "action": action, "limit": QUERY_LIMIT }),
+        )
+        .await?;
+    let logs = data
+        .get("logs")
+        .and_then(Value::as_array)
+        .ok_or_else(|| DeployError("the Weles admission API returned no action log".to_string()))?;
+    Ok(logs.first().cloned())
+}
+
 // ---------------------------------------------------------------------------
 // Enqueue
 // ---------------------------------------------------------------------------

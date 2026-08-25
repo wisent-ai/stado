@@ -64,6 +64,12 @@ const PUBLISHER: RunnerProfile = RunnerProfile {
 
 const APP_STORE_CONNECT_ITEM: &str = "api-appstoreconnect-weles";
 const SPARKLE_ITEM_PREFIX: &str = "desktop-release-sparkle-";
+const DEVELOPER_ID_ITEM: &str = "desktop-release-developer-id";
+const MACOS_CERT_P12_SECRET: &str = "MACOS_CERT_P12";
+const MACOS_CERT_PASSWORD_SECRET: &str = "MACOS_CERT_PASSWORD";
+const MACOS_SIGN_IDENTITY_SECRET: &str = "MACOS_SIGN_IDENTITY";
+const APPLE_DEVELOPER_ID_ACTION: &str = "apple_create_developer_id";
+const APPLE_PLATFORM: &str = "apple";
 
 // These are network classes, not fleet addresses. Keeping the policy here makes
 // the Linux nftables and macOS PF renderers consume one source of truth.
@@ -701,6 +707,252 @@ pub async fn bootstrap_publisher_repository(repository: &str) -> Result<Value, D
         "status": "bootstrapped",
     }))
 }
+
+fn publish_developer_id_secrets(
+    repositories: &[String],
+    p12: &str,
+    password: &str,
+    identity: &str,
+    github_token: &str,
+) -> Result<(), DeployError> {
+    for repository in repositories {
+        let repository = repository_name(repository)?;
+        for (name, value) in [
+            (MACOS_CERT_P12_SECRET, p12),
+            (MACOS_CERT_PASSWORD_SECRET, password),
+            (MACOS_SIGN_IDENTITY_SECRET, identity),
+        ] {
+            set_repository_secret(repository, name, value, github_token)?;
+        }
+    }
+    Ok(())
+}
+
+fn developer_id_bundle() -> Result<Option<(String, String, String, String)>, DeployError> {
+    if !crate::credential_store::owner::item_exists(DEVELOPER_ID_ITEM)
+        .map_err(|error| DeployError(error.to_string()))?
+    {
+        return Ok(None);
+    }
+    let read = |field| {
+        crate::credential_store::owner::read_string(DEVELOPER_ID_ITEM, field)
+            .map_err(|error| DeployError(error.to_string()))
+    };
+    Ok(Some((
+        read("p12")?,
+        read("password")?,
+        read("identity")?,
+        read("not_after")?,
+    )))
+}
+
+async fn required_remote_file(target: &ComputeTarget, path: &str) -> Result<String, DeployError> {
+    host_channel::remote_read_file(target, path, &production_runner())
+        .await?
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| DeployError(format!("{} did not produce {path}", target.name)))
+}
+
+/// Ensure one durable Developer ID bundle exists and grant it to desktop repositories.
+///
+/// The only interactive part is the Weles Account Holder trajectory. Stado creates
+/// the private key and CSR on the selected host, queues the guarded trajectory,
+/// waits for its downloaded certificate, stores the resulting PKCS#12 bundle in
+/// Skarbiec, and publishes repository secrets. A later run reuses that bundle.
+pub async fn bootstrap_developer_id(
+    target_name: &str,
+    account_item: &str,
+    repositories: &[String],
+) -> Result<Value, DeployError> {
+    if repositories.is_empty() {
+        return Err(DeployError(
+            "at least one desktop repository is required".to_string(),
+        ));
+    }
+    let github_token = github_credential().await?;
+    if let Some((p12, password, identity, not_after)) = developer_id_bundle()? {
+        publish_developer_id_secrets(repositories, &p12, &password, &identity, &github_token)?;
+        return Ok(json!({
+            "certificate": DEVELOPER_ID_ITEM,
+            "identity": identity,
+            "not_after": not_after,
+            "repositories": repositories,
+            "status": "reused",
+            "target": target_name,
+        }));
+    }
+
+    let target = host_channel::canonical_target(target_name).await?;
+    if Platform::for_target(&target)? != Platform::DarwinArm64 {
+        return Err(DeployError(format!(
+            "{} cannot issue a Developer ID certificate: its release platform is {}",
+            target.name, target.release_platform
+        )));
+    }
+    let remote_home = host_channel::remote_home(&target, &production_runner()).await?;
+    let work = format!("{remote_home}/.stado/apple-developer-id");
+    let prepare = replace(
+        DEVELOPER_ID_PREPARE,
+        &[("__WORK_DIR__", super::shlex_quote(&work))],
+    );
+    let prepare_output = host_channel::run_script(&target, &prepare, &production_runner()).await?;
+    if !prepare_output.ok() {
+        return Err(DeployError(format!(
+            "{}: Developer ID CSR preparation failed: {}",
+            target.name,
+            command_failure(&prepare_output, "remote CSR preparation failed")
+        )));
+    }
+
+    let finish = replace(
+        DEVELOPER_ID_FINISH,
+        &[("__WORK_DIR__", super::shlex_quote(&work))],
+    );
+    let mut finish_output =
+        host_channel::run_script(&target, &finish, &production_runner()).await?;
+    if !finish_output.ok() {
+        let admission = super::weles_capture::resolve_admission(&target.name).await?;
+        let channel = super::weles_capture::open_channel(&admission).await?;
+        if let Some(row) =
+            super::weles_capture::latest_action_log(&channel, APPLE_DEVELOPER_ID_ACTION).await?
+        {
+            let prior_certificate = row
+                .pointer("/params/apple_certificate_path")
+                .or_else(|| row.pointer("/params/certificate_path"))
+                .and_then(Value::as_str);
+            if matches!(
+                row.get("status").and_then(Value::as_str),
+                Some("completed" | "succeeded")
+            ) {
+                if let Some(prior_certificate) = prior_certificate {
+                    let home_prefix = format!("{remote_home}/");
+                    let relative = prior_certificate.strip_prefix(&home_prefix);
+                    if relative.is_some_and(|value| {
+                        !value.is_empty()
+                            && value.split('/').all(|component| {
+                                !component.is_empty() && !matches!(component, "." | "..")
+                            })
+                    }) {
+                        let recover = format!(
+                            "set -eu\ncp -- {} {}/certificate.cer\n",
+                            super::shlex_quote(prior_certificate),
+                            super::shlex_quote(&work),
+                        );
+                        let recovered =
+                            host_channel::run_script(&target, &recover, &production_runner())
+                                .await?;
+                        if recovered.ok() {
+                            finish_output =
+                                host_channel::run_script(&target, &finish, &production_runner())
+                                    .await?;
+                        }
+                    }
+                }
+            }
+        }
+        if finish_output.ok() {
+            // The interrupted Account Holder run had already issued the certificate.
+        } else {
+            let action_id = super::weles_capture::enqueue_action(
+                &channel,
+                APPLE_DEVELOPER_ID_ACTION,
+                APPLE_PLATFORM,
+                None,
+                json!({
+                    "account_item": account_item,
+                    "csr_path": format!("{work}/request.csr"),
+                    "output_path": format!("{work}/certificate.cer"),
+                    "system_consent": "account-holder-2fa",
+                }),
+            )
+            .await?;
+            let deadline = std::time::Instant::now() + Duration::from_secs(20 * 60);
+            loop {
+                if let Some((status, error)) = super::weles_capture::action_status(
+                    &channel,
+                    APPLE_DEVELOPER_ID_ACTION,
+                    &action_id,
+                )
+                .await?
+                {
+                    match status.as_str() {
+                        "completed" => break,
+                        "failed" => {
+                            return Err(DeployError(format!(
+                                "{}: Developer ID trajectory {action_id} failed: {}",
+                                target.name,
+                                error.as_deref().unwrap_or("no reason given")
+                            )));
+                        }
+                        _ => {}
+                    }
+                }
+                if std::time::Instant::now() >= deadline {
+                    return Err(DeployError(format!(
+                    "{}: Developer ID trajectory {action_id} did not finish within 1200 seconds",
+                    target.name
+                )));
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            finish_output =
+                host_channel::run_script(&target, &finish, &production_runner()).await?;
+            if !finish_output.ok() {
+                return Err(DeployError(format!(
+                    "{}: Developer ID bundle export failed: {}",
+                    target.name,
+                    command_failure(&finish_output, "remote certificate export failed")
+                )));
+            }
+        }
+    }
+
+    let p12 = required_remote_file(&target, &format!("{work}/certificate.p12.b64")).await?;
+    let password = required_remote_file(&target, &format!("{work}/certificate.password")).await?;
+    let identity = required_remote_file(&target, &format!("{work}/certificate.identity")).await?;
+    let not_after = required_remote_file(&target, &format!("{work}/certificate.not-after")).await?;
+    crate::credential_store::owner::write_item(
+        DEVELOPER_ID_ITEM,
+        "certificate",
+        &json!({
+            "identity": identity,
+            "not_after": not_after,
+            "p12": p12,
+            "password": password,
+        }),
+        &json!({
+            "issuer": "Apple Developer",
+            "purpose": "desktop-release-signing",
+            "target": target.name,
+        }),
+    )
+    .map_err(|error| DeployError(error.to_string()))?;
+    publish_developer_id_secrets(repositories, &p12, &password, &identity, &github_token)?;
+
+    let cleanup = replace(
+        "set -eu\nwork=__WORK_DIR__\nrm -f \"$work/private-key.pem\" \"$work/request.csr\" \"$work/certificate.cer\" \"$work/certificate.pem\" \"$work/certificate.p12\" \"$work/certificate.p12.b64\" \"$work/certificate.password\"\n",
+        &[("__WORK_DIR__", super::shlex_quote(&work))],
+    );
+    let cleanup_output = host_channel::run_script(&target, &cleanup, &production_runner()).await?;
+    if !cleanup_output.ok() {
+        return Err(DeployError(format!(
+            "{}: certificate was stored but remote private material cleanup failed: {}",
+            target.name,
+            command_failure(&cleanup_output, "remote cleanup failed")
+        )));
+    }
+
+    Ok(json!({
+        "certificate": DEVELOPER_ID_ITEM,
+        "identity": identity,
+        "not_after": not_after,
+        "repositories": repositories,
+        "status": "issued",
+        "target": target.name,
+    }))
+}
+
 async fn github_runner_token(kind: &str) -> Result<String, DeployError> {
     let credential = github_credential().await?;
     let endpoint =
@@ -1167,6 +1419,40 @@ pub async fn status_publisher(target_name: &str) -> Result<Value, DeployError> {
 pub async fn remove_publisher(target_name: &str) -> Result<Value, DeployError> {
     remove_profile(target_name, PUBLISHER).await
 }
+
+const DEVELOPER_ID_PREPARE: &str = r#"set -euo pipefail
+umask 077
+work=__WORK_DIR__
+mkdir -p "$work"
+if [ ! -s "$work/private-key.pem" ]; then
+  /usr/bin/openssl genrsa -out "$work/private-key.pem" 3072
+fi
+if [ ! -s "$work/request.csr" ]; then
+  /usr/bin/openssl req -new -sha256 -key "$work/private-key.pem" -out "$work/request.csr" -subj "/CN=Wisent Desktop Release"
+fi
+/usr/bin/openssl req -in "$work/request.csr" -noout -verify
+"#;
+
+const DEVELOPER_ID_FINISH: &str = r#"set -euo pipefail
+umask 077
+work=__WORK_DIR__
+[ -s "$work/private-key.pem" ]
+[ -s "$work/certificate.cer" ]
+if /usr/bin/openssl x509 -in "$work/certificate.cer" -noout >/dev/null 2>&1; then
+  /bin/cp "$work/certificate.cer" "$work/certificate.pem"
+else
+  /usr/bin/openssl x509 -inform DER -in "$work/certificate.cer" -out "$work/certificate.pem"
+fi
+identity=$(/usr/bin/openssl x509 -in "$work/certificate.pem" -noout -subject -nameopt RFC2253 | /usr/bin/sed -n 's/^subject=.*CN=\([^,]*\).*$/\1/p')
+[ -n "$identity" ]
+printf '%s\n' "$identity" | /usr/bin/grep -F 'Developer ID Application:' >/dev/null
+password=$(/usr/bin/openssl rand -hex 24)
+/usr/bin/openssl pkcs12 -export -inkey "$work/private-key.pem" -in "$work/certificate.pem" -out "$work/certificate.p12" -passout "pass:$password" -name "$identity"
+/usr/bin/base64 < "$work/certificate.p12" | /usr/bin/tr -d '\n' > "$work/certificate.p12.b64"
+printf '%s\n' "$password" > "$work/certificate.password"
+printf '%s\n' "$identity" > "$work/certificate.identity"
+/usr/bin/openssl x509 -in "$work/certificate.pem" -noout -enddate | /usr/bin/sed 's/^notAfter=//' > "$work/certificate.not-after"
+"#;
 
 const LINUX_INSTALLER: &str = r#"set -euo pipefail
 root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi; }
