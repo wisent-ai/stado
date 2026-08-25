@@ -3147,6 +3147,7 @@ pub async fn install_binary(
     source: Option<&str>,
     name: &str,
     rollback: bool,
+    last_known_registry: bool,
     json: bool,
 ) -> Result<(), CmdError> {
     if name.is_empty()
@@ -3159,7 +3160,7 @@ pub async fn install_binary(
         ));
     }
     if rollback {
-        return rollback_binary(target, name, json).await;
+        return rollback_binary(target, name, last_known_registry, json).await;
     }
     let source = source.ok_or_else(|| CmdError::usage("--from is required unless --rollback"))?;
     let bytes = std::fs::metadata(source)
@@ -3187,9 +3188,7 @@ pub async fn install_binary(
              this line."
         );
     }
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+    let resolved = install_binary_target(target, last_known_registry).await?;
     let ssh_target = resolved.ssh.clone().unwrap_or_default();
     if ssh_target.is_empty() {
         return Err(CmdError::click(format!(
@@ -3436,10 +3435,42 @@ previous="$dir/$name.previous"
 /// `--version` perfectly and still reject the arguments its launchd job passes.
 /// That failure appears after the swap, so the previous build is kept beside
 /// the new one and this is how it comes back.
-async fn rollback_binary(target: &str, name: &str, json: bool) -> Result<(), CmdError> {
-    let resolved = crate::deploy::host_channel::canonical_target(target)
-        .await
+async fn install_binary_target(
+    target: &str,
+    last_known_registry: bool,
+) -> Result<crate::targets::ComputeTarget, CmdError> {
+    if !last_known_registry {
+        return crate::deploy::host_channel::canonical_target(target)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()));
+    }
+    let home = std::env::var("HOME")
+        .map_err(|_| CmdError::click("HOME is not set, so the registry cache path is unknown"))?;
+    let path = std::path::Path::new(&home)
+        .join(".stado")
+        .join("cache")
+        .join("registry-last-good.json");
+    crate::targets::validate_registry_file(&path)
+        .map_err(|error| CmdError::click(format!("{}: {error}", path.display())))?;
+    let registry = crate::targets::load_registry_file(&path)
         .map_err(|error| CmdError::click(error.to_string()))?;
+    let resolved = crate::deploy::host_channel::resolve_target(&registry, target)
+        .map_err(|error| CmdError::click(error.to_string()))?
+        .clone();
+    eprintln!(
+        "{target}: RECOVERY -- the registry authority is not being consulted; routing this binary install through {}",
+        path.display()
+    );
+    Ok(resolved)
+}
+
+async fn rollback_binary(
+    target: &str,
+    name: &str,
+    last_known_registry: bool,
+    json: bool,
+) -> Result<(), CmdError> {
+    let resolved = install_binary_target(target, last_known_registry).await?;
     let runner = crate::deploy::production_runner();
     let quoted = crate::deploy::shlex_quote(name);
     let script = format!("set -euo pipefail\nname={quoted}\n{ROLLBACK_BODY}");

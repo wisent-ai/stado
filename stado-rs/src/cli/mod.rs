@@ -1145,6 +1145,9 @@ enum HostCommands {
         /// Put the previous build back instead of installing a new one.
         #[arg(long)]
         rollback: bool,
+        /// Recover through the fixed local last-good registry snapshot when the authority is down.
+        #[arg(long)]
+        last_known_registry: bool,
         /// Basename under $HOME/.stado/bin on the target.
         #[arg(long, default_value = "stado")]
         name: String,
@@ -1825,8 +1828,19 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 from,
                 name,
                 rollback,
+                last_known_registry,
                 json,
-            } => host::install_binary(&target, from.as_deref(), &name, rollback, json).await,
+            } => {
+                host::install_binary(
+                    &target,
+                    from.as_deref(),
+                    &name,
+                    rollback,
+                    last_known_registry,
+                    json,
+                )
+                .await
+            }
             HostCommands::InstallHelper {
                 target,
                 source,
