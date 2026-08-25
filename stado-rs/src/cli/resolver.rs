@@ -95,6 +95,13 @@ fn logical_name(value: &str) -> Result<&str, CmdError> {
 }
 
 const SNAPSHOT_LIMIT: usize = 1024 * 1024;
+/// Maximum wall time for one authority snapshot.
+///
+/// OpenSSH's connect and keepalive settings do not bound a remote command that
+/// stays alive without producing a snapshot. Without this deadline one stuck
+/// `resolver snapshot` blocks refresh forever while the local listener keeps
+/// accepting requests it can no longer answer.
+const AUTHORITY_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -256,16 +263,28 @@ impl SnapshotSource {
         reader: &str,
     ) -> Result<(Value, String, u64), String> {
         let remote_command = format!("{} resolver snapshot", crate::deploy::shlex_quote(command));
-        let output = match ssh_command()
-            .arg(ssh)
-            .arg(remote_command)
-            .stderr(Stdio::piped())
-            .output()
-            .await
+        let output = match tokio::time::timeout(
+            AUTHORITY_FETCH_TIMEOUT,
+            ssh_command()
+                .arg(ssh)
+                .arg(remote_command)
+                .stderr(Stdio::piped())
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
         {
-            Ok(output) => output,
-            Err(error) => {
+            Ok(Ok(output)) => output,
+            Ok(Err(error)) => {
                 let sentence = format!("registry authority SSH failed: {error}");
+                refuse_authority(target, reader, &sentence).await;
+                return Err(sentence);
+            }
+            Err(_) => {
+                let sentence = format!(
+                    "registry authority SSH timed out after {}s",
+                    AUTHORITY_FETCH_TIMEOUT.as_secs()
+                );
                 refuse_authority(target, reader, &sentence).await;
                 return Err(sentence);
             }
@@ -315,14 +334,16 @@ pub(crate) fn current_target(document: &Value) -> Result<String, String> {
 }
 
 pub(crate) fn snapshot_source(
-    local_store: Arc<RegistryStore>,
+    local_store: Option<Arc<RegistryStore>>,
     document: &Value,
     local_target: &str,
 ) -> Result<SnapshotSource, String> {
     let directory = service_resolution::directory(document)?
         .ok_or_else(|| "registry.service_directory is required".to_string())?;
     if directory.authority.target == local_target {
-        return Ok(SnapshotSource::Local(local_store));
+        return local_store
+            .map(SnapshotSource::Local)
+            .ok_or_else(|| "local registry authority backend is unavailable".to_string());
     }
     let registry = parsed_registry(document)?;
     let target = registry
@@ -372,7 +393,7 @@ async fn resolve_once(service: &str, consumer: &str, json_output: bool) -> Resul
     let store = Arc::new(RegistryStore::open().await?);
     let (bootstrap, _, _) = read_local_snapshot(&store).await.map_err(CmdError::click)?;
     let target = current_target(&bootstrap).map_err(CmdError::click)?;
-    let source = snapshot_source(store, &bootstrap, &target).map_err(CmdError::click)?;
+    let source = snapshot_source(Some(store), &bootstrap, &target).map_err(CmdError::click)?;
     let (document, _, _) = source
         .fetch(host_silence::READER_CLI)
         .await
@@ -408,7 +429,7 @@ struct Snapshot {
 }
 
 struct ResolverState {
-    local_store: Arc<RegistryStore>,
+    local_store: Option<Arc<RegistryStore>>,
     source: RwLock<SnapshotSource>,
     snapshot: RwLock<Snapshot>,
     max_stale: Duration,
@@ -423,7 +444,7 @@ impl ResolverState {
         let (document, store_version, generation) =
             source.fetch(host_silence::READER_RESOLVER).await?;
         let next_source =
-            snapshot_source(Arc::clone(&self.local_store), &document, &self.local_target)?;
+            snapshot_source(self.local_store.clone(), &document, &self.local_target)?;
         let next_config = service_resolution::resolver_config(&document, &self.local_target)?;
         if next_config != self.config {
             return Ok(true);
@@ -773,18 +794,27 @@ fn last_good_document() -> Result<Value, String> {
 /// on a malformed document is not a resolver waiting silently.
 async fn load_startup(
     target: &str,
-    local_store: &Arc<RegistryStore>,
+    local_store: Option<&Arc<RegistryStore>>,
 ) -> Result<Startup, StartupError> {
-    let (bootstrap, recovered) = match read_local_snapshot(local_store).await {
-        Ok((document, _, _)) => (document, false),
-        Err(authority_error) => {
-            let document = last_good_document().map_err(|cache_error| {
-                StartupError::Transient(format!(
-                    "registry authority failed ({authority_error}); recovery registry failed ({cache_error})"
-                ))
-            })?;
+    let (bootstrap, recovered) = match local_store {
+        Some(local_store) => match read_local_snapshot(local_store).await {
+            Ok((document, _, _)) => (document, false),
+            Err(authority_error) => {
+                let document = last_good_document().map_err(|cache_error| {
+                    StartupError::Transient(format!(
+                        "registry authority failed ({authority_error}); recovery registry failed ({cache_error})"
+                    ))
+                })?;
+                eprintln!(
+                    "stado resolver recovery: registry authority failed ({authority_error}); bootstrapping routing from the last-known-good registry"
+                );
+                (document, true)
+            }
+        },
+        None => {
+            let document = last_good_document().map_err(StartupError::Transient)?;
             eprintln!(
-                "stado resolver recovery: registry authority failed ({authority_error}); bootstrapping routing from the last-known-good registry"
+                "stado resolver recovery: registry backend construction failed; bootstrapping routing from the last-known-good registry"
             );
             (document, true)
         }
@@ -795,31 +825,31 @@ async fn load_startup(
             "resolver target {target:?} does not match this host ({detected_target:?})"
         )));
     }
-    let source = snapshot_source(Arc::clone(local_store), &bootstrap, target)
-        .map_err(StartupError::Fatal)?;
-    let (document, store_version, directory_generation) =
-        match source.fetch(host_silence::READER_RESOLVER).await {
-            Ok(snapshot) => snapshot,
-            Err(authority_error) if recovered => {
-                let directory = service_resolution::directory(&bootstrap)
-                    .map_err(StartupError::Fatal)?
-                    .ok_or_else(|| {
-                        StartupError::Fatal(
-                            "last-known-good registry has no service_directory".to_string(),
-                        )
-                    })?;
-                eprintln!(
-                    "stado resolver recovery: registry authority snapshot failed ({authority_error}); serving the last-known-good generation {} while retries continue",
-                    directory.generation
-                );
-                (
-                    bootstrap,
-                    "last-known-good".to_string(),
-                    directory.generation,
+    let source =
+        snapshot_source(local_store.cloned(), &bootstrap, target).map_err(StartupError::Fatal)?;
+    let (document, store_version, directory_generation) = if recovered {
+        let directory = service_resolution::directory(&bootstrap)
+            .map_err(StartupError::Fatal)?
+            .ok_or_else(|| {
+                StartupError::Fatal(
+                    "last-known-good registry has no service_directory".to_string(),
                 )
-            }
-            Err(error) => return Err(StartupError::Transient(error)),
-        };
+            })?;
+        eprintln!(
+            "stado resolver recovery: serving the last-known-good generation {} immediately while authority retries continue",
+            directory.generation
+        );
+        (
+            bootstrap,
+            "last-known-good".to_string(),
+            directory.generation,
+        )
+    } else {
+        source
+            .fetch(host_silence::READER_RESOLVER)
+            .await
+            .map_err(StartupError::Transient)?
+    };
     Ok(Startup {
         source,
         document,
@@ -838,7 +868,7 @@ async fn load_startup(
 /// still exits immediately, because no amount of waiting fixes it.
 async fn await_startup(
     target: &str,
-    local_store: &Arc<RegistryStore>,
+    local_store: Option<&Arc<RegistryStore>>,
 ) -> Result<Startup, CmdError> {
     publish(&PublishedState::starting(target));
     let mut attempt = 0_u32;
@@ -867,14 +897,20 @@ async fn await_startup(
 
 pub async fn serve(target: &str) -> Result<(), CmdError> {
     drop_stale_ssh_sockets();
-    let local_store = Arc::new(RegistryStore::open().await?);
+    let local_store = match RegistryStore::open().await {
+        Ok(store) => Some(Arc::new(store)),
+        Err(error) => {
+            eprintln!("stado resolver recovery: registry backend construction failed: {error}");
+            None
+        }
+    };
     let Startup {
         source,
         document,
         store_version,
         directory_generation,
         recovered,
-    } = await_startup(target, &local_store).await?;
+    } = await_startup(target, local_store.as_ref()).await?;
     let config = match service_resolution::resolver_config(&document, target) {
         Ok(config) => config,
         Err(detail) => {

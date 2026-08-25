@@ -124,7 +124,8 @@ async fn registry_document() -> Result<Value, CmdError> {
     let (bootstrap, _, _) = read_local_snapshot(&store).await.map_err(CmdError::click)?;
     let target = super::resolver::current_target(&bootstrap).map_err(CmdError::click)?;
     let source =
-        super::resolver::snapshot_source(store, &bootstrap, &target).map_err(CmdError::click)?;
+        super::resolver::snapshot_source(Some(store), &bootstrap, &target)
+            .map_err(CmdError::click)?;
     let (document, _, _) = source
         .fetch(crate::monitor::host_silence::READER_CLI)
         .await

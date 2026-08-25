@@ -12,6 +12,14 @@ if [ ! -x "$stado_bin" ]; then
   printf '%s\n' "Stado binary not found at $stado_bin" >&2
   exit 1
 fi
+managed_stado="$HOME/.stado/bin/stado"
+if [ "$stado_bin" != "$managed_stado" ]; then
+  mkdir -p "$HOME/.stado/bin"
+  cp "$stado_bin" "$managed_stado.new"
+  chmod u=rwx,go= "$managed_stado.new"
+  mv "$managed_stado.new" "$managed_stado"
+  stado_bin=$managed_stado
+fi
 
 target=${1:-}
 if [ -z "$target" ]; then
