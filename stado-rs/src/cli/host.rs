@@ -2034,6 +2034,119 @@ pub async fn declare_version(
     Ok(())
 }
 
+/// Add or remove one action in a target's canonical Weles declaration.
+///
+/// The worker reads a generated placement-policy file, not the registry
+/// directly. Keeping this command declaration-only preserves that boundary:
+/// `publish-placement-policy` remains the single path that stamps and delivers
+/// the registry generation to the host.
+pub async fn declare_weles_action(
+    target: &str,
+    action: &str,
+    remove: bool,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let action = action.trim();
+    if action.is_empty()
+        || action == "*"
+        || !action
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+    {
+        return Err(CmdError::usage(
+            "ACTION must contain only lowercase letters, digits and underscores",
+        ));
+    }
+
+    let (mut document, expected_generation) = super::registry::fetch_versioned_document().await?;
+    let targets = document
+        .get_mut("targets")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| CmdError::click("registry.targets: must be an array"))?;
+    let entry = targets
+        .iter_mut()
+        .find_map(|candidate| {
+            let object = candidate.as_object_mut()?;
+            (object.get("name").and_then(Value::as_str) == Some(target)).then_some(object)
+        })
+        .ok_or_else(|| CmdError::click(format!("registry declares no target {target:?}")))?;
+    let weles = entry
+        .get_mut("weles")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{target} declares no weles policy; refusing to invent one while adding an action"
+            ))
+        })?;
+    let enabled = weles
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| CmdError::click(format!("{target}.weles.enabled must be a boolean")))?;
+    let values = weles
+        .get("actions")
+        .and_then(Value::as_array)
+        .ok_or_else(|| CmdError::click(format!("{target}.weles.actions must be an array")))?;
+    let mut actions = values
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    CmdError::click(format!(
+                        "{target}.weles.actions contains a non-string value"
+                    ))
+                })
+        })
+        .collect::<Result<Vec<String>, CmdError>>()?;
+
+    let changed = if remove {
+        let before = actions.len();
+        actions.retain(|declared| declared != action);
+        before != actions.len()
+    } else if actions.iter().any(|declared| declared == action) {
+        false
+    } else {
+        actions.push(action.to_string());
+        true
+    };
+    if enabled && actions.is_empty() {
+        return Err(CmdError::click(format!(
+            "removing {action:?} would leave enabled {target}.weles.actions empty"
+        )));
+    }
+    actions.sort();
+    actions.dedup();
+
+    let generation = if changed {
+        weles.insert("actions".to_string(), json!(actions));
+        super::registry::push_document_if(&document, &expected_generation).await?
+    } else {
+        expected_generation
+    };
+    let state = if changed {
+        if remove { "removed" } else { "added" }
+    } else {
+        "unchanged"
+    };
+
+    if json_output {
+        print_json(&json!({
+            "target": target,
+            "action": action,
+            "state": state,
+            "generation": generation,
+            "publish_command": format!("stado host publish-placement-policy {target}"),
+        }));
+        return Ok(());
+    }
+    println!(
+        "{target}: Weles action {action} {state} in registry generation {generation}; \
+         publish with `stado host publish-placement-policy {target}`"
+    );
+    Ok(())
+}
+
 /// Promote one published version into fleet desired state in one fenced
 /// registry write. Every platform manifest must already exist and identify
 /// the canonical coordinate before `managed_versions` moves.

@@ -1379,6 +1379,20 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Add or remove one action in TARGET's registry-declared Weles policy.
+    ///
+    /// This changes only the canonical declaration. Publish it with
+    /// `stado host publish-placement-policy TARGET`.
+    #[command(name = "declare-weles-action")]
+    DeclareWelesAction {
+        target: String,
+        action: String,
+        /// Remove the action instead of adding it.
+        #[arg(long)]
+        remove: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// Promote one exact published version to every registry target.
     #[command(name = "promote-version")]
     PromoteVersion {
@@ -2077,6 +2091,12 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 version,
                 json,
             } => host::declare_version(&target, &binary, &version, json).await,
+            HostCommands::DeclareWelesAction {
+                target,
+                action,
+                remove,
+                json,
+            } => host::declare_weles_action(&target, &action, remove, json).await,
             HostCommands::PromoteVersion {
                 binary,
                 version,
