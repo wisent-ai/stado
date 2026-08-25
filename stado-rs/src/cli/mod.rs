@@ -1572,6 +1572,8 @@ enum HostBuildCacheCommands {
 enum HostGuiAutomationCommands {
     /// Report autologin, remote management, TCC and automation artifacts.
     Status { target: String },
+    /// Install the pinned signed CuaDriver app and grant Accessibility.
+    Enable { target: String },
     /// Grant the installed CuaDriver app Accessibility for the host's GUI user.
     #[command(name = "grant-accessibility")]
     GrantAccessibility { target: String },
@@ -1964,6 +1966,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             }
             HostCommands::GuiAutomation(HostGuiAutomationCommands::Status { target }) => {
                 host::gui_automation_status(&target).await
+            }
+            HostCommands::GuiAutomation(HostGuiAutomationCommands::Enable { target }) => {
+                host::gui_automation_enable(&target).await
             }
             HostCommands::GuiAutomation(HostGuiAutomationCommands::GrantAccessibility {
                 target,

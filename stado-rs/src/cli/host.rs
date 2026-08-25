@@ -458,13 +458,16 @@ fn print_report(
 pub async fn gui_automation_status(target: &str) -> Result<(), CmdError> {
     let resolved = registry_target(target).await?;
     let runner = crate::deploy::production_runner();
-    let report = crate::deploy::host_gui_automation::run_on_host(
-        &resolved,
-        crate::deploy::host_gui_automation::REMOTE_STATUS_SCRIPT,
-        "",
-        &runner,
-    )
-    .await;
+    let report = crate::deploy::host_gui_automation::status(&resolved, &runner).await;
+    print_report(&report)
+}
+
+/// `stado host gui-automation enable TARGET` — install the pinned signed
+/// CuaDriver app and grant Accessibility for the host's GUI user.
+pub async fn gui_automation_enable(target: &str) -> Result<(), CmdError> {
+    let resolved = registry_target(target).await?;
+    let runner = crate::deploy::production_runner();
+    let report = crate::deploy::host_gui_automation::enable(&resolved, &runner).await;
     print_report(&report)
 }
 
@@ -473,13 +476,8 @@ pub async fn gui_automation_status(target: &str) -> Result<(), CmdError> {
 pub async fn gui_automation_grant_accessibility(target: &str) -> Result<(), CmdError> {
     let resolved = registry_target(target).await?;
     let runner = crate::deploy::production_runner();
-    let report = crate::deploy::host_gui_automation::run_on_host(
-        &resolved,
-        crate::deploy::host_gui_automation::REMOTE_GRANT_ACCESSIBILITY_SCRIPT,
-        "",
-        &runner,
-    )
-    .await;
+    let report =
+        crate::deploy::host_gui_automation::grant_accessibility(&resolved, &runner).await;
     print_report(&report)
 }
 
@@ -488,13 +486,7 @@ pub async fn gui_automation_grant_accessibility(target: &str) -> Result<(), CmdE
 pub async fn gui_automation_disable(target: &str, bundle: &str) -> Result<(), CmdError> {
     let resolved = registry_target(target).await?;
     let runner = crate::deploy::production_runner();
-    let report = crate::deploy::host_gui_automation::run_on_host(
-        &resolved,
-        crate::deploy::host_gui_automation::REMOTE_DISABLE_SCRIPT,
-        bundle,
-        &runner,
-    )
-    .await;
+    let report = crate::deploy::host_gui_automation::disable(&resolved, bundle, &runner).await;
     print_report(&report)
 }
 
