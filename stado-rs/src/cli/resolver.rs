@@ -752,10 +752,20 @@ struct Startup {
     document: Value,
     store_version: String,
     directory_generation: u64,
+    recovered: bool,
 }
 
 /// One attempt at everything the resolver must read before it can bind.
 ///
+fn last_good_document() -> Result<Value, String> {
+    let path = targets::registry_last_good_path()
+        .ok_or_else(|| "last-known-good registry path is unavailable".to_string())?;
+    let bytes = std::fs::read(&path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    serde_json::from_slice(&bytes)
+        .map_err(|error| format!("{} is not valid registry JSON: {error}", path.display()))
+}
+
 /// A document that fails `validate_registry` is [`StartupError::Transient`]
 /// too, deliberately: the operator republishes the registry and this process
 /// picks it up on the next attempt, where exiting would need a restart to
@@ -765,9 +775,20 @@ async fn load_startup(
     target: &str,
     local_store: &Arc<RegistryStore>,
 ) -> Result<Startup, StartupError> {
-    let (bootstrap, _, _) = read_local_snapshot(local_store)
-        .await
-        .map_err(StartupError::Transient)?;
+    let (bootstrap, recovered) = match read_local_snapshot(local_store).await {
+        Ok((document, _, _)) => (document, false),
+        Err(authority_error) => {
+            let document = last_good_document().map_err(|cache_error| {
+                StartupError::Transient(format!(
+                    "registry authority failed ({authority_error}); recovery registry failed ({cache_error})"
+                ))
+            })?;
+            eprintln!(
+                "stado resolver recovery: registry authority failed ({authority_error}); bootstrapping routing from the last-known-good registry"
+            );
+            (document, true)
+        }
+    };
     let detected_target = current_target(&bootstrap).map_err(StartupError::Fatal)?;
     if detected_target != target {
         return Err(StartupError::Fatal(format!(
@@ -776,15 +797,35 @@ async fn load_startup(
     }
     let source = snapshot_source(Arc::clone(local_store), &bootstrap, target)
         .map_err(StartupError::Fatal)?;
-    let (document, store_version, directory_generation) = source
-        .fetch(host_silence::READER_RESOLVER)
-        .await
-        .map_err(StartupError::Transient)?;
+    let (document, store_version, directory_generation) =
+        match source.fetch(host_silence::READER_RESOLVER).await {
+            Ok(snapshot) => snapshot,
+            Err(authority_error) if recovered => {
+                let directory = service_resolution::directory(&bootstrap)
+                    .map_err(StartupError::Fatal)?
+                    .ok_or_else(|| {
+                        StartupError::Fatal(
+                            "last-known-good registry has no service_directory".to_string(),
+                        )
+                    })?;
+                eprintln!(
+                    "stado resolver recovery: registry authority snapshot failed ({authority_error}); serving the last-known-good generation {} while retries continue",
+                    directory.generation
+                );
+                (
+                    bootstrap,
+                    "last-known-good".to_string(),
+                    directory.generation,
+                )
+            }
+            Err(error) => return Err(StartupError::Transient(error)),
+        };
     Ok(Startup {
         source,
         document,
         store_version,
         directory_generation,
+        recovered,
     })
 }
 
@@ -832,6 +873,7 @@ pub async fn serve(target: &str) -> Result<(), CmdError> {
         document,
         store_version,
         directory_generation,
+        recovered,
     } = await_startup(target, &local_store).await?;
     let config = match service_resolution::resolver_config(&document, target) {
         Ok(config) => config,
@@ -863,25 +905,27 @@ pub async fn serve(target: &str) -> Result<(), CmdError> {
     // alternation ran 641 restarts while the desktop app quietly fell back to a
     // local vault and showed no subscriptions at all. Name the contradiction
     // once instead of oscillating between its two halves.
-    let store_url = crate::config::wc_stado_storage_url();
-    if let Ok(parsed) = url::Url::parse(store_url.trim()) {
-        if let (Some(host), Some(port)) = (parsed.host_str(), parsed.port()) {
-            let store_authority = format!("{host}:{port}");
-            if let Some(adapter) = config
-                .adapters
-                .iter()
-                .find(|adapter| adapter.bind.trim() == store_authority)
-            {
-                let detail = format!(
-                    "this resolver is declared to serve {} for service {:?}, and the registry \
-                     it must read first is configured at storage.stado.url = {}. One of the two \
-                     has to move: either place the object API somewhere this resolver does not \
-                     serve, or drop that adapter from the target's service_resolver policy. \
-                     Retrying cannot resolve it.",
-                    adapter.bind, adapter.service, store_url
-                );
-                publish(&PublishedState::failed(target, &detail));
-                return Err(CmdError::click(detail));
+    if !recovered {
+        let store_url = crate::config::wc_stado_storage_url();
+        if let Ok(parsed) = url::Url::parse(store_url.trim()) {
+            if let (Some(host), Some(port)) = (parsed.host_str(), parsed.port()) {
+                let store_authority = format!("{host}:{port}");
+                if let Some(adapter) = config
+                    .adapters
+                    .iter()
+                    .find(|adapter| adapter.bind.trim() == store_authority)
+                {
+                    let detail = format!(
+                        "this resolver is declared to serve {} for service {:?}, and the registry \
+                         it must read first is configured at storage.stado.url = {}. One of the two \
+                         has to move: either place the object API somewhere this resolver does not \
+                         serve, or drop that adapter from the target's service_resolver policy. \
+                         Retrying cannot resolve it.",
+                        adapter.bind, adapter.service, store_url
+                    );
+                    publish(&PublishedState::failed(target, &detail));
+                    return Err(CmdError::click(detail));
+                }
             }
         }
     }

@@ -34,6 +34,11 @@ case $(uname -s) in
         -e "s|{USER}|$resolver_user|g" \
         "$template_dir/com.wisent.stado-resolver.system.plist.tmpl" > "$rendered"
       destination=/Library/LaunchDaemons/com.wisent.stado-resolver.plist
+      # A system daemon does not inherit the login session's secrets. Remove
+      # the superseded user agent first, otherwise both jobs race for the same
+      # loopback adapters during bootstrap.
+      launchctl bootout "gui/$(id -u)/com.wisent.stado-resolver" >/dev/null 2>&1 || true
+      rm -f "$HOME/Library/LaunchAgents/com.wisent.stado-resolver.plist"
       sudo launchctl bootout system/com.wisent.stado-resolver >/dev/null 2>&1 || true
       sudo install -o root -g wheel -m 0644 "$rendered" "$destination"
       sudo launchctl bootstrap system "$destination"
