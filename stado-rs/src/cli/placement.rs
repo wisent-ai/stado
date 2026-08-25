@@ -731,8 +731,10 @@ async fn preflight(context: &MoveContext, runner: &Runner) -> Result<(), CmdErro
             )));
         }
     }
-    for probe in &source_profile.probes {
-        health_probe(&context.source, &probe.url, 1, runner).await?;
+    if !context.profile.allow_unhealthy_source {
+        for probe in &source_profile.probes {
+            health_probe(&context.source, &probe.url, 1, runner).await?;
+        }
     }
     for state in &context.profile.state {
         let exists = state_exists(&context.source, state, runner).await?;

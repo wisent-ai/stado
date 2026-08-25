@@ -25,6 +25,8 @@ pub struct PlacementProfile {
     pub state: Vec<PlacementState>,
     pub hosts: BTreeMap<String, PlacementHost>,
     #[serde(default)]
+    pub allow_unhealthy_source: bool,
+    #[serde(default)]
     pub routing: Vec<PlacementRoute>,
 }
 
