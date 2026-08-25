@@ -2249,13 +2249,13 @@ fi
 ///   `/Library/LaunchDaemons` on an ssh login with no Aqua session, which is
 ///   the case `deploy` fails on with `Could not switch to audit session ...
 ///   Operation not permitted`, having installed nothing.
-/// - It never unloads. `deploy` boots the label out before bootstrapping;
-///   that is the sequence that took the always-on host down when launchd
-///   still held children of the old job and the bootstrap back failed
-///   (see [`RESTART_BODY`]). A loaded job is kicked in place, and a loaded
-///   job whose definition names another program is REFUSED rather than
-///   silently overwritten: launchd holds the definition it bootstrapped, so
-///   a rewritten plist under a live job changes nothing an operator can see.
+/// - It never unloads a running job. A loaded job is kicked in place, and a
+///   loaded job whose definition names another program is REFUSED rather than
+///   silently overwritten: launchd holds the definition it bootstrapped, so a
+///   rewritten plist under a live job changes nothing an operator can see. A
+///   loaded job with no pid has already failed and cannot be kicked onto a new
+///   definition; only that dead label is booted out before its corrected plist
+///   is installed and bootstrapped.
 ///
 /// There is deliberately no fallback to `launchctl submit` or to a bare
 /// background process. Those two are how a host comes to run a program no
@@ -2337,9 +2337,16 @@ if [ \"$declared_argv\" = \"$argv\" ] && [ \"$serves\" = yes ]; then
   exit 0
 fi
 if [ \"$declared_argv\" != \"$argv\" ]; then
-  if [ \"$os\" = \"Darwin\" ] && [ \"$had_unit\" = yes ]; then
+  if [ \"$os\" = \"Darwin\" ] && [ \"$had_unit\" = yes ] && [ -n \"$pid\" ]; then
     say 'conflict' \"$domain/$unit is loaded and runs [$declared_argv], not [$argv]; retire it first\"
     exit 0
+  fi
+  if [ \"$os\" = \"Darwin\" ] && [ \"$had_unit\" = yes ]; then
+    # The label is loaded but has no process, so kickstart cannot replace the
+    # definition launchd already holds. Removing this dead label loses no
+    # running state and is the only safe point at which to correct its argv.
+    detail=$($launch bootout \"$domain/$unit\" 2>&1) || bail \"cannot remove dead $domain/$unit: $detail\"
+    had_unit=no
   fi
   if [ \"$os\" = \"Darwin\" ]; then
     /bin/mkdir -p \"$HOME/.stado/logs\" >/dev/null 2>&1 || bail 'cannot create the log directory'
