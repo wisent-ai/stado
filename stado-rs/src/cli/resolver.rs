@@ -469,27 +469,29 @@ impl ResolverState {
 
     async fn resolve(&self, service: &str, consumer: &str) -> Result<ResolvedService, String> {
         let current = self.snapshot.read().await;
-        if current.loaded_at.elapsed() > self.max_stale {
-            let sentence = format!(
-                "service directory cache is stale (store generation {})",
-                current.store_version
-            );
-            drop(current);
-            // The refusal is evidence about the host this resolver could not
-            // refresh FROM: a cache only goes stale because the authority
-            // stopped answering, and `stado host link <authority>` is where
-            // an operator looks for the reason. Detached, because every
-            // resolution refuses while the cache is stale and a workload is
-            // blocking on each one.
-            let subject = self.source.read().await.subject_host(&self.local_target);
-            host_silence::report_refusal_detached(
-                subject,
-                host_silence::READER_RESOLVER,
-                host_silence::REASON_DIRECTORY_CACHE_STALE,
-                sentence.clone(),
-            );
-            return Err(sentence);
+        if current.loaded_at.elapsed() <= self.max_stale {
+            return service_resolution::resolve(&current.document, service, consumer);
         }
+
+        let sentence = format!(
+            "service directory cache is stale (store generation {})",
+            current.store_version
+        );
+        drop(current);
+        // Staleness is published as a degraded state, but a structurally
+        // validated last-known-good route remains usable. Refusing it made a
+        // short authority outage recursive: the object adapter shut, so the
+        // authority could no longer carry the registry snapshot that would
+        // reopen the adapter. Keep serving the known route while the refresh
+        // loop retries and record the condition against the authority host.
+        let subject = self.source.read().await.subject_host(&self.local_target);
+        host_silence::report_refusal_detached(
+            subject,
+            host_silence::READER_RESOLVER,
+            host_silence::REASON_DIRECTORY_CACHE_STALE,
+            sentence,
+        );
+        let current = self.snapshot.read().await;
         service_resolution::resolve(&current.document, service, consumer)
     }
 
