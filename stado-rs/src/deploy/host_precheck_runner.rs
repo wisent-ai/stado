@@ -799,7 +799,11 @@ fn repository_name(repository: &str) -> Result<&str, DeployError> {
 /// GitHub resources. Registering a healthy runner does not make it visible to a
 /// repository when the group uses selected-repository access, which previously
 /// left jobs queued forever with an empty runner name.
-pub async fn reconcile_repository(repository: &str) -> Result<Value, DeployError> {
+pub async fn reconcile_repository_in_group(
+    repository: &str,
+    runner_group: &str,
+) -> Result<Value, DeployError> {
+    let runner_group = repository_name(runner_group)?;
     let repository = repository_name(repository)?;
     let credential = github_credential().await?;
     let groups_endpoint = format!(
@@ -812,20 +816,20 @@ pub async fn reconcile_repository(repository: &str) -> Result<Value, DeployError
         .and_then(|groups| {
             groups
                 .iter()
-                .find(|group| group.get("name").and_then(Value::as_str) == Some(RUNNER_GROUP))
+                .find(|group| group.get("name").and_then(Value::as_str) == Some(runner_group))
         })
-        .ok_or_else(|| DeployError(format!("GitHub runner group {RUNNER_GROUP:?} is missing")))?;
+        .ok_or_else(|| DeployError(format!("GitHub runner group {runner_group:?} is missing")))?;
     let group_id = group
         .get("id")
         .and_then(Value::as_u64)
-        .ok_or_else(|| DeployError(format!("GitHub runner group {RUNNER_GROUP:?} has no id")))?;
+        .ok_or_else(|| DeployError(format!("GitHub runner group {runner_group:?} has no id")))?;
     let visibility = group
         .get("visibility")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    if visibility != "selected" {
+    if !matches!(visibility, "selected" | "all") {
         return Err(DeployError(format!(
-            "GitHub runner group {RUNNER_GROUP:?} visibility is {visibility:?}, expected \"selected\""
+            "GitHub runner group {runner_group:?} visibility is {visibility:?}, expected \"selected\" or \"all\""
         )));
     }
 
@@ -850,13 +854,13 @@ pub async fn reconcile_repository(repository: &str) -> Result<Value, DeployError
         .get("allows_public_repositories")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let group_endpoint = format!(
+        "https://api.github.com/orgs/{GITHUB_ORGANIZATION}/actions/runner-groups/{group_id}"
+    );
     if repository_is_public && !public_repositories_enabled {
-        let group_endpoint = format!(
-            "https://api.github.com/orgs/{GITHUB_ORGANIZATION}/actions/runner-groups/{group_id}"
-        );
         let update = json!({
-            "name": RUNNER_GROUP,
-            "visibility": "selected",
+            "name": runner_group,
+            "visibility": visibility,
             "allows_public_repositories": true,
         });
         github_json(
@@ -867,20 +871,26 @@ pub async fn reconcile_repository(repository: &str) -> Result<Value, DeployError
         )
         .await?;
     }
-    let access_endpoint = format!(
-        "https://api.github.com/orgs/{GITHUB_ORGANIZATION}/actions/runner-groups/{group_id}/repositories/{repository_id}"
-    );
-    github_json(reqwest::Method::PUT, &access_endpoint, &credential, None).await?;
+    if visibility == "selected" {
+        let access_endpoint = format!(
+            "https://api.github.com/orgs/{GITHUB_ORGANIZATION}/actions/runner-groups/{group_id}/repositories/{repository_id}"
+        );
+        github_json(reqwest::Method::PUT, &access_endpoint, &credential, None).await?;
+    }
 
     Ok(json!({
         "organization": GITHUB_ORGANIZATION,
-        "runner_group": RUNNER_GROUP,
+        "runner_group": runner_group,
         "repository": repository,
         "repository_id": repository_id,
-        "access": "selected",
+        "access": visibility,
         "repository_visibility": if repository_is_public { "public" } else { "private" },
         "status": "reconciled",
     }))
+}
+
+pub async fn reconcile_repository(repository: &str) -> Result<Value, DeployError> {
+    reconcile_repository_in_group(repository, RUNNER_GROUP).await
 }
 
 fn command_failure(output: &CommandOutput, fallback: &str) -> String {

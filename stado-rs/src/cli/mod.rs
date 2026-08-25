@@ -1100,6 +1100,9 @@ enum HostPrecheckRunnerCommands {
     RepositoryAdd {
         /// Repository name inside the wisent-ai organization.
         repository: String,
+        /// Existing selected-repository runner group. Defaults to stado-precheck.
+        #[arg(long)]
+        runner_group: Option<String>,
         /// Emit the reconciliation report as JSON.
         #[arg(long)]
         json: bool,
@@ -2017,8 +2020,12 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 HostPrecheckRunnerCommands::Remove { target, json } => {
                     precheck_runner::remove(&target, json).await
                 }
-                HostPrecheckRunnerCommands::RepositoryAdd { repository, json } => {
-                    precheck_runner::repository_add(&repository, json).await
+                HostPrecheckRunnerCommands::RepositoryAdd {
+                    repository,
+                    runner_group,
+                    json,
+                } => {
+                    precheck_runner::repository_add(&repository, runner_group.as_deref(), json).await
                 }
             },
             HostCommands::PublisherRunner(command) => match command {

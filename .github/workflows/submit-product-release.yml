@@ -1,0 +1,74 @@
+name: Submit product release
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: Public wisent-ai repository name
+        required: true
+        type: string
+      revision:
+        description: Exact 40-character source commit
+        required: true
+        type: string
+      version:
+        description: Version declared by the source manifest
+        required: true
+        type: string
+      channel:
+        description: Release channel
+        required: true
+        default: stable
+        type: choice
+        options:
+          - stable
+          - preview
+
+jobs:
+  submit:
+    runs-on: [self-hosted, stado-control-plane]
+    concurrency:
+      group: product-release-${{ inputs.repository }}-${{ inputs.channel }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate immutable release identity
+        shell: bash
+        env:
+          REPOSITORY: ${{ inputs.repository }}
+          REVISION: ${{ inputs.revision }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          case "$REPOSITORY" in ''|*[!A-Za-z0-9._-]*) exit 2;; esac
+          case "$REVISION" in *[!0-9a-f]*|'') exit 2;; esac
+          test "${#REVISION}" = 40
+          case "$VERSION" in ''|*[!0-9A-Za-z.+-]*) exit 2;; esac
+      - uses: actions/checkout@v4
+        with:
+          repository: wisent-ai/${{ inputs.repository }}
+          ref: ${{ inputs.revision }}
+          path: product-source
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build Stado release client
+        working-directory: stado-rs
+        run: cargo build --locked --release --bin stado
+      - name: Submit exact product revision
+        shell: bash
+        env:
+          STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
+          EXPECTED_REVISION: ${{ inputs.revision }}
+          EXPECTED_VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          set -euo pipefail
+          test "$(git -C product-source rev-parse HEAD)" = "$EXPECTED_REVISION"
+          declared="$(sed -n 's/^version = "\(.*\)"/\1/p' product-source/Cargo.toml | head -1)"
+          test "$declared" = "$EXPECTED_VERSION"
+          stado-rs/target/release/stado release submit \
+            --source "$GITHUB_WORKSPACE/product-source" \
+            --version "$EXPECTED_VERSION" \
+            --channel "$CHANNEL"

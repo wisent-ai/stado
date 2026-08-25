@@ -54,10 +54,19 @@ async fn render(
 }
 
 /// Ensure one repository can schedule on the selected-repository runner group.
-pub async fn repository_add(repository: &str, json_output: bool) -> Result<(), CmdError> {
-    let report = crate::deploy::host_precheck_runner::reconcile_repository(repository)
-        .await
-        .map_err(|error| CmdError::click(error.to_string()))?;
+pub async fn repository_add(
+    repository: &str,
+    runner_group: Option<&str>,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    let report = match runner_group {
+        Some(group) => {
+            crate::deploy::host_precheck_runner::reconcile_repository_in_group(repository, group)
+                .await
+        }
+        None => crate::deploy::host_precheck_runner::reconcile_repository(repository).await,
+    }
+    .map_err(|error| CmdError::click(error.to_string()))?;
     if json_output {
         println!(
             "{}",
