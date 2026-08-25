@@ -1473,17 +1473,17 @@ root /usr/sbin/runuser --user stado-precheck -- /usr/bin/env HOME=/opt/wisent/st
 
 const MACOS_PUBLISHER_STATUS: &str = r#"set -euo pipefail
 root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi; }
-if ! root launchctl print system/com.wisent.stado-precheck-runner; then
-  root plutil -lint /Library/LaunchDaemons/com.wisent.stado-precheck-runner.plist >&2 || true
-  root tail -n 80 /Users/Shared/stado-precheck-runner/_diag/launchd.stderr.log >&2 || true
+if ! root launchctl print system/com.wisent.stado-publisher-runner; then
+  root plutil -lint /Library/LaunchDaemons/com.wisent.stado-publisher-runner.plist >&2 || true
+  root tail -n 80 /Users/Shared/stado-publisher-runner/_diag/launchd.stderr.log >&2 || true
   exit 1
 fi
-dscl . -read /Users/stado-precheck UniqueID PrimaryGroupID NFSHomeDirectory UserShell Password
-root pfctl -a com.wisent.stado-precheck -sr
-root tail -n 40 /Users/Shared/stado-precheck-runner/_diag/launchd.stdout.log 2>/dev/null || true
-root tail -n 40 /Users/Shared/stado-precheck-runner/_diag/launchd.stderr.log >&2 2>/dev/null || true
-root sudo -u stado-precheck -H -- /usr/bin/env HOME=/Users/Shared/stado-precheck-runner TMPDIR=/Users/Shared/stado-precheck-runner/_work /Users/Shared/stado-precheck-runner/bin/Runner.Listener --version
-identity_output=$(root sudo -u stado-precheck -H -- /usr/bin/security find-identity -v -p codesigning /Users/Shared/stado-publisher-runner/Library/Keychains/login.keychain-db 2>&1 || true)
+dscl . -read /Users/stado-publisher UniqueID PrimaryGroupID NFSHomeDirectory UserShell Password
+root pfctl -a com.wisent.stado-publisher -sr
+root tail -n 40 /Users/Shared/stado-publisher-runner/_diag/launchd.stdout.log 2>/dev/null || true
+root tail -n 40 /Users/Shared/stado-publisher-runner/_diag/launchd.stderr.log >&2 2>/dev/null || true
+root sudo -u stado-publisher -H -- /usr/bin/env HOME=/Users/Shared/stado-publisher-runner TMPDIR=/Users/Shared/stado-publisher-runner/_work /Users/Shared/stado-publisher-runner/bin/Runner.Listener --version
+identity_output=$(root sudo -u stado-publisher -H -- /usr/bin/security find-identity -v -p codesigning /Users/Shared/stado-publisher-runner/Library/Keychains/login.keychain-db 2>&1 || true)
 printf '%s\n' "$identity_output"
 printf '%s\n' "$identity_output" | grep -F '"Developer ID Application:' >/dev/null
 "#;
