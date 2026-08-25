@@ -246,6 +246,20 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   deficit means the numbers are lying.
 - Removed `stado-rs/scripts/reclaim-mini-disk-host.sh`. Every stage it had is a
   product command now: `stado host reclaim <host> [--dry-run|--apply --reason]`.
+- `stado host reclaim` now models the complete disk-pressure recovery that
+  restored `charless-mac-mini`: terminal queue workdirs, foreign macOS home
+  trees on Linux, exact rebuildable caches, one-hour stale Chromium clones and
+  strictly identified local Time Machine snapshots join the earlier stages.
+  Apply protects every path named by the process snapshot and stops
+  target-aware stages once the registry free-space target is met. The incident
+  measured 108 same-day Chromium code-sign clones using 158.3 GiB; 107 stale,
+  unheld clones plus rebuildable caches brought free space to 25 GiB and cleared
+  `disk_pressure_unresolved`.
+- Pinned-only queue eligibility now treats a registry host name such as
+  `charless-mac-mini` as the same machine as consumer
+  `local-Charless-Mac-mini.local`; the prior exact-string comparison made a
+  healthy, recovered host advertise `claiming: true` while its agent still
+  rejected the pinned release job.
 
 ### Release control
 
