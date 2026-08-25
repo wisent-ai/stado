@@ -3450,8 +3450,6 @@ async fn install_binary_target(
         .join(".stado")
         .join("cache")
         .join("registry-last-good.json");
-    crate::targets::validate_registry_file(&path)
-        .map_err(|error| CmdError::click(format!("{}: {error}", path.display())))?;
     let registry = crate::targets::load_registry_file(&path)
         .map_err(|error| CmdError::click(error.to_string()))?;
     let resolved = crate::deploy::host_channel::resolve_target(&registry, target)
