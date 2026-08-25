@@ -1214,14 +1214,17 @@ async fn owner_host_password(item: &str) -> Result<Option<String>, String> {
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
     }
-    let document: Value = serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("Skarbiec returned invalid JSON: {error}"))?;
-    Ok(document
-        .get("fields")
-        .and_then(|fields| fields.get("password"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .filter(|password| !password.is_empty()))
+    let raw = String::from_utf8(output.stdout)
+        .map_err(|error| format!("Skarbiec returned non-UTF-8 password bytes: {error}"))?;
+    let password = match serde_json::from_str::<Value>(&raw) {
+        Ok(document) => document
+            .get("fields")
+            .and_then(|fields| fields.get("password"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        Err(_) => Some(raw.trim_end_matches(['\n', '\r']).to_string()),
+    };
+    Ok(password.filter(|value| !value.is_empty()))
 }
 
 async fn restart(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdError> {
