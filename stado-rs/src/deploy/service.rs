@@ -3153,6 +3153,34 @@ async fn privileged_restart_system_daemon(
 ) -> Result<RemoteReport, DeployError> {
     validate_unit_id(service.unit_id())?;
     let qualified = format!("system/{}", service.unit_id());
+    let recovery = format!("system/{}-recovery", service.unit_id());
+    let recovery_stop = host_channel::run_program_with_stdin(
+        target,
+        &[
+            "/usr/bin/sudo",
+            "-S",
+            "-p",
+            "",
+            "/bin/launchctl",
+            "bootout",
+            &recovery,
+        ],
+        &format!("{password}\n"),
+        runner,
+    )
+    .await?;
+    if !recovery_stop.ok() {
+        let detail =
+            host_channel::last_error_line(&recovery_stop, "sudo or launchctl returned no detail");
+        if !detail.contains("Could not find specified service")
+            && !detail.contains("No such process")
+        {
+            return Err(DeployError(format!(
+                "privileged recovery stop failed on {} with exit {}: {}",
+                target.name, recovery_stop.code, detail
+            )));
+        }
+    }
     let mut output = host_channel::run_program_with_stdin(
         target,
         &[
@@ -3413,7 +3441,60 @@ fn validate_vault_reference(item: &str, field: &str) -> Result<(), DeployError> 
     }
 }
 
-/// Stop an unmanaged process that prevents launchd from reclaiming the probe port.
+/// Stop an explicitly declared per-login recovery label before taking over its
+/// listener. Recovery labels are not derived from the primary unit: older
+/// deployments used service names while the managed unit used launchd labels.
+pub async fn stop_recovery_unit(
+    target: &ComputeTarget,
+    unit: &str,
+    runner: &Runner,
+) -> Result<RemoteReport, DeployError> {
+    validate_unit_id(unit)?;
+    let uid_output = host_channel::run_program(target, &["/usr/bin/id", "-u"], runner).await?;
+    if !uid_output.ok() {
+        return Err(DeployError(format!(
+            "{}: cannot resolve the GUI user's uid: {}",
+            target.name,
+            host_channel::last_error_line(&uid_output, "id returned no detail")
+        )));
+    }
+    let uid = uid_output.stdout.trim();
+    if uid.is_empty() || !uid.chars().all(|character| character.is_ascii_digit()) {
+        return Err(DeployError(format!(
+            "{}: id returned an invalid uid: {}",
+            target.name, uid
+        )));
+    }
+    for domain in ["gui", "user"] {
+        let qualified = format!("{domain}/{uid}/{unit}");
+        let output =
+            host_channel::run_program(target, &["/bin/launchctl", "bootout", &qualified], runner)
+                .await?;
+        if !output.ok() {
+            let detail =
+                host_channel::last_error_line(&output, "launchctl returned no detail");
+            if !detail.contains("Could not find specified service")
+                && !detail.contains("No such process")
+            {
+                return Err(DeployError(format!(
+                    "{}: cannot stop recovery label {qualified}: {detail}",
+                    target.name
+                )));
+            }
+        }
+    }
+    Ok(RemoteReport {
+        os: "Darwin".to_string(),
+        unit: unit.to_string(),
+        status: "stopped".to_string(),
+        detail: "recovery label removed from gui and user launchd domains".to_string(),
+        postcondition: STOPPED_DESCRIBE.to_string(),
+        postcondition_state: host_channel::POSTCONDITION_MET.to_string(),
+        postcondition_detail: "launchctl bootout completed for both per-login domains".to_string(),
+        ..RemoteReport::default()
+    })
+}
+
 pub async fn reset_service_listener(
     target: &ComputeTarget,
     service: &ManagedService,
@@ -3459,31 +3540,34 @@ pub async fn stop_service_with_password(
         })?;
         validate_unit_id(service.unit_id())?;
         let qualified = format!("system/{}", service.unit_id());
-        let output = host_channel::run_program_with_stdin(
-            target,
-            &[
-                "/usr/bin/sudo",
-                "-S",
-                "-p",
-                "",
-                "/bin/launchctl",
-                "bootout",
-                &qualified,
-            ],
-            &format!("{password}\n"),
-            runner,
-        )
-        .await?;
-        if !output.ok() {
-            let detail =
-                host_channel::last_error_line(&output, "sudo or launchctl returned no detail");
-            if !detail.contains("Could not find specified service")
-                && !detail.contains("No such process")
-            {
-                return Err(DeployError(format!(
-                    "privileged launchd stop failed on {} with exit {}: {}",
-                    target.name, output.code, detail
-                )));
+        let recovery = format!("system/{}-recovery", service.unit_id());
+        for job in [&qualified, &recovery] {
+            let output = host_channel::run_program_with_stdin(
+                target,
+                &[
+                    "/usr/bin/sudo",
+                    "-S",
+                    "-p",
+                    "",
+                    "/bin/launchctl",
+                    "bootout",
+                    job,
+                ],
+                &format!("{password}\n"),
+                runner,
+            )
+            .await?;
+            if !output.ok() {
+                let detail =
+                    host_channel::last_error_line(&output, "sudo or launchctl returned no detail");
+                if !detail.contains("Could not find specified service")
+                    && !detail.contains("No such process")
+                {
+                    return Err(DeployError(format!(
+                        "privileged launchd stop failed on {} for {} with exit {}: {}",
+                        target.name, job, output.code, detail
+                    )));
+                }
             }
         }
         let body = STOP_BODY.replace("@DISOWNED_SWEEP@", DISOWNED_SWEEP);

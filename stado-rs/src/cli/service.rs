@@ -154,6 +154,12 @@ pub enum ServiceCommands {
         /// is managed.
         #[arg(long)]
         host: Option<String>,
+        /// Optional loopback URL whose stale listener is stopped before restart.
+        #[arg(long)]
+        take_over_listener: Option<String>,
+        /// Exact per-login recovery label to stop before listener takeover.
+        #[arg(long, requires = "take_over_listener")]
+        recovery_unit: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -628,8 +634,21 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
         ServiceCommands::Stop { name, host, listener_url, json } => {
             stop(&name, host.as_deref(), listener_url.as_deref(), json).await
         }
-        ServiceCommands::Restart { name, host, json } => {
-            restart(&name, host.as_deref(), json).await
+        ServiceCommands::Restart {
+            name,
+            host,
+            take_over_listener,
+            recovery_unit,
+            json,
+        } => {
+            restart(
+                &name,
+                host.as_deref(),
+                take_over_listener.as_deref(),
+                recovery_unit.as_deref(),
+                json,
+            )
+            .await
         }
         ServiceCommands::SecretSync {
             name,
@@ -1232,7 +1251,13 @@ async fn owner_host_password(item: &str) -> Result<Option<String>, String> {
     Ok(password.filter(|value| !value.is_empty()))
 }
 
-async fn restart(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdError> {
+async fn restart(
+    name: &str,
+    host: Option<&str>,
+    take_over_listener: Option<&str>,
+    recovery_unit: Option<&str>,
+    json: bool,
+) -> Result<(), CmdError> {
     let services = declared_matching(name, host).await?;
     let runner = production_runner();
     let mut payload: Vec<Value> = Vec::new();
@@ -1249,6 +1274,30 @@ async fn restart(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdEr
         } else {
             None
         };
+        if let Some(unit) = recovery_unit {
+            service::stop_recovery_unit(&target, unit, &runner)
+                .await
+                .map_err(click)?;
+        }
+        if let Some(url) = take_over_listener {
+            service::stop_service_with_password(
+                &target,
+                declared,
+                sudo_password.as_deref(),
+                &runner,
+            )
+            .await
+            .map_err(click)?;
+            let listener = service::reset_service_listener(&target, declared, url, &runner)
+                .await
+                .map_err(click)?;
+            if !listener.succeeded("listener_stopped")
+                && !listener.succeeded("listener_absent")
+            {
+                failures.push(format!("{}: {}", declared.host, listener.failure()));
+                continue;
+            }
+        }
         let report = service::restart_service_with_password(
             &target,
             declared,
