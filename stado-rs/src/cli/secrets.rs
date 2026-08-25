@@ -112,9 +112,13 @@ pub enum SecretsCommands {
         #[arg(long)]
         all: bool,
     },
-    /// Test unlock phrases found in transcripts against the vault, reporting
-    /// which source name worked. Never prints a phrase.
-    TryUnlock {},
+    /// Test unlock phrases found in transcripts against a local or remote
+    /// vault, reporting which source name worked. Never prints a phrase.
+    TryUnlock {
+        /// Registry host holding the protected vault. Omit for the local vault.
+        #[arg(long)]
+        host: Option<String>,
+    },
 }
 
 pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
@@ -133,7 +137,7 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
         }
         // Also answered without a client: a protected key that nothing can
         // unlock is precisely the state where every other verb is unavailable.
-        SecretsCommands::TryUnlock {} => try_unlock(),
+        SecretsCommands::TryUnlock { host } => try_unlock(host.as_deref()).await,
         SecretsCommands::Migrate { to } => migrate(to.as_deref()).await,
         SecretsCommands::Put { name, item_type } => {
             put(&client()?, &name, item_type.as_deref()).await
@@ -990,19 +994,26 @@ fn doctor(json: bool) -> Result<(), CmdError> {
 /// Reports the SOURCE NAME of the phrase that worked, never the phrase. A
 /// passphrase that leaked into a transcript should not also be printed to a
 /// terminal by the tool that found it.
-fn try_unlock() -> Result<(), CmdError> {
-    let binary = skarbiec_binary()?;
+async fn try_unlock(host: Option<&str>) -> Result<(), CmdError> {
     let candidates = crate::transcripts::unlock_candidates();
     if candidates.is_empty() {
         return Err(CmdError::click(
             "no unlock phrase of any kind survives in transcript runtime output",
         ));
     }
+    match host {
+        Some(host) => try_unlock_remote(host, &candidates).await,
+        None => try_unlock_local(&candidates),
+    }
+}
+
+fn try_unlock_local(candidates: &[(String, String)]) -> Result<(), CmdError> {
+    let binary = skarbiec_binary()?;
     println!(
         "testing {} distinct phrase(s) from transcript history",
         candidates.len()
     );
-    for (name, phrase) in &candidates {
+    for (name, phrase) in candidates {
         let output = std::process::Command::new(&binary)
             .arg("key-doctor")
             .env("SKARBIEC_UNLOCK", phrase)
@@ -1021,6 +1032,86 @@ fn try_unlock() -> Result<(), CmdError> {
         "none of the {} surviving phrase(s) opens the vault: the protected key's passphrase is not in any transcript",
         candidates.len()
     )))
+}
+
+async fn try_unlock_remote(
+    host: &str,
+    candidates: &[(String, String)],
+) -> Result<(), CmdError> {
+    use base64::Engine as _;
+
+    let target = crate::deploy::host_channel::canonical_target(host)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let mut encoded = String::new();
+    for (name, phrase) in candidates {
+        encoded.push_str(&base64::engine::general_purpose::STANDARD.encode(name.as_bytes()));
+        encoded.push(' ');
+        encoded.push_str(&base64::engine::general_purpose::STANDARD.encode(phrase.as_bytes()));
+        encoded.push('\n');
+    }
+    let script = format!(
+        r#"set -euo pipefail
+case "$(/usr/bin/uname -s)" in Darwin) decode=-D ;; *) decode=--decode ;; esac
+binary="$HOME/.stado/bin/skarbiec"
+vault="$HOME/.stado/skarbiec.vault.json"
+unlock="$HOME/.stado/skarbiec-unlock"
+while IFS=' ' read -r source_b64 phrase_b64; do
+  [ -n "$source_b64" ] || continue
+  phrase="$(printf '%s' "$phrase_b64" | /usr/bin/base64 "$decode")"
+  set +e
+  report="$(GNUPGHOME="$HOME/.gnupg" SKARBIEC_VAULT_FILE="$vault" SKARBIEC_UNLOCK="$phrase" "$binary" key-doctor 2>/dev/null)"
+  status=$?
+  set -e
+  if [ "$status" -eq 0 ] && printf '%s' "$report" | /usr/bin/grep -q '"status"[[:space:]]*:[[:space:]]*"readable"'; then
+    umask 077
+    printf '%s' "$phrase" > "$unlock.new"
+    /bin/chmod 600 "$unlock.new"
+    /bin/mv -f "$unlock.new" "$unlock"
+    printf 'STADO_UNLOCK\t%s\n' "$source_b64"
+    exit 0
+  fi
+done <<'STADO_UNLOCK_CANDIDATES'
+{encoded}STADO_UNLOCK_CANDIDATES
+printf '%s\n' 'no surviving transcript phrase opens the remote vault' >&2
+exit 2
+"#
+    );
+    println!(
+        "testing {} distinct phrase(s) against the vault on {host}",
+        candidates.len()
+    );
+    let runner = crate::deploy::production_runner();
+    let output = crate::deploy::host_channel::run_script_with_timeout(
+        &target,
+        &script,
+        std::time::Duration::from_secs(900),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !output.ok() {
+        return Err(CmdError::click(
+            crate::deploy::host_channel::last_error_line(
+                &output,
+                "remote vault unlock recovery failed",
+            ),
+        ));
+    }
+    let encoded_name = output
+        .stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("STADO_UNLOCK\t"))
+        .ok_or_else(|| CmdError::click("remote unlock recovery returned no source marker"))?;
+    let name = base64::engine::general_purpose::STANDARD
+        .decode(encoded_name)
+        .map_err(|error| CmdError::click(format!("remote unlock source is invalid: {error}")))?;
+    println!(
+        "the vault on {host} OPENS with the phrase recorded under {}",
+        String::from_utf8_lossy(&name)
+    );
+    println!("stored it in the host's owner-only persistent unlock file");
+    Ok(())
 }
 
 /// A readable vault exits zero; anything else is a failure an operator has to
