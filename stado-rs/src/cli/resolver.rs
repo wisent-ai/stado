@@ -173,6 +173,23 @@ fn ssh_command() -> Command {
     }
     command
 }
+/// SSH transport for high-volume adapter traffic.
+///
+/// Adapter requests share one authenticated connection; authority snapshots do
+/// not. Sharing the request path prevents a queue poll burst from creating one
+/// SSH process and one remote session per object read, while isolating snapshot
+/// reads prevents a stuck control master from freezing registry refresh.
+fn ssh_proxy_command() -> Command {
+    let mut command = ssh_command();
+    command.args(["-o", "ControlMaster=auto", "-o", "ControlPersist=60"]);
+    if let Ok(home) = std::env::var("HOME") {
+        command
+            .arg("-o")
+            .arg(format!("ControlPath={home}/.stado/resolver-ssh-%C"));
+    }
+    command
+}
+
 
 /// Publish one `authority_unreachable` refusal about the authority host.
 ///
@@ -1266,7 +1283,7 @@ async fn proxy_connection(
         )
     })?;
     let destination = format!("{host}:{port}");
-    let mut child = ssh_command()
+    let mut child = ssh_proxy_command()
         .args(["-W", &destination, &ssh])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
