@@ -1,0 +1,44 @@
+{
+  "product": "skarbiec",
+  "policy": {
+    "service": "skarbiec",
+    "config_schema": 1,
+    "state_schema": 1,
+    "install_root": "/Users/charles/.stado/services/skarbiec",
+    "binary": "bin/skarbiec",
+    "launcher": "bin/start",
+    "binary_env": "SKARBIEC_BIN",
+    "port_env": "SKARBIEC_PORT",
+    "runtime_env": "SKARBIEC_RUNTIME_DIR",
+    "environment": {
+      "SKARBIEC_AUDIT_FILE": "{home}/.stado/skarbiec.audit.jsonl",
+      "SKARBIEC_VAULT_FILE": "{home}/.stado/skarbiec.vault.json"
+    },
+    "signing_key_item": "",
+    "signing_key_id": "",
+    "strategy": {
+      "kind": "blue-green",
+      "readiness_timeout_seconds": 90,
+      "drain_timeout_seconds": 15,
+      "rollback_window_seconds": 60,
+      "automatic_rollback": true
+    },
+    "targets": {
+      "charless-mac-mini": {
+        "platform": "darwin-arm64",
+        "run_as_user": "charles",
+        "home": "/Users/charles",
+        "state_dir": "/Users/charles/.stado/release-state",
+        "runtime_root": "/Users/charles/.stado/run",
+        "logs_root": "/Users/charles/.stado/logs",
+        "stable_bind": "127.0.0.1:8895",
+        "candidate_ports": [18895, 18896],
+        "readiness_path": "/readyz",
+        "legacy_launchd_label": "com.wisent.always-on.skarbiec",
+        "legacy_launchd_plist": "/Library/LaunchDaemons/com.wisent.always-on.skarbiec.plist"
+      }
+    },
+    "desired": null,
+    "previous": null
+  }
+}

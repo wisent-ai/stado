@@ -8,6 +8,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use chrono::Utc;
 use clap::{Args, Subcommand};
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::release_control::{
@@ -26,6 +27,9 @@ use super::CmdError;
 pub enum ReleaseCommands {
     /// Generate an Ed25519 release authority key pair.
     Keygen(ReleaseKeygenArgs),
+    /// Apply one reviewed product rollout policy to the canonical registry.
+    #[command(name = "policy-apply")]
+    PolicyApply(ReleasePolicyApplyArgs),
     /// Snapshot, qualify, build, sign, publish, deliver, and promote a product.
     Submit(crate::cli::release_submit::ReleaseSubmitArgs),
     /// Manage the Stado-owned product and source policy catalog.
@@ -70,6 +74,21 @@ pub struct ReleaseKeygenArgs {
     public_key: PathBuf,
     #[arg(long)]
     key_id: String,
+}
+#[derive(Args)]
+pub struct ReleasePolicyApplyArgs {
+    /// JSON document containing exactly `product` and `policy`.
+    #[arg(long)]
+    file: PathBuf,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReleasePolicyDocument {
+    product: String,
+    policy: ProductReleasePolicy,
 }
 
 /// `stado release install-local` — the delivery contract's local endpoint.
@@ -563,6 +582,39 @@ fn platforms(policy: &ProductReleasePolicy) -> BTreeSet<String> {
         .collect()
 }
 
+async fn apply_policy(args: &ReleasePolicyApplyArgs) -> Result<(), CmdError> {
+    let bytes = std::fs::read(&args.file)?;
+    let declaration: ReleasePolicyDocument = serde_json::from_slice(&bytes)?;
+    let (document, expected_generation) = super::registry::fetch_versioned_document().await?;
+    let mut control = release_control::control(&document)?
+        .ok_or_else(|| CmdError::click("registry.release_control is not configured"))?;
+    control
+        .products
+        .insert(declaration.product.clone(), declaration.policy);
+    control.generation = control.generation.saturating_add(1);
+    let mut updated = document;
+    updated[release_control::RELEASE_CONTROL_KEY] = serde_json::to_value(&control)?;
+    release_control::validate_registry_contract(&updated).map_err(CmdError::click)?;
+    let store_generation =
+        super::registry::push_document_if(&updated, &expected_generation).await?;
+    let report = json!({
+        "product": declaration.product,
+        "release_control_generation": control.generation,
+        "store_generation": store_generation,
+        "status": "applied",
+    });
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!(
+            "applied rollout policy for {} at release-control generation {}",
+            report["product"].as_str().unwrap_or_default(),
+            control.generation
+        );
+    }
+    Ok(())
+}
+
 async fn promote(args: &ReleasePromoteArgs) -> Result<(), CmdError> {
     let (document, expected_generation) = super::registry::fetch_versioned_document().await?;
     let mut control = release_control::control(&document)?
@@ -1016,6 +1068,7 @@ async fn install_local(args: &ReleaseInstallLocalArgs) -> Result<(), CmdError> {
 pub async fn dispatch(command: ReleaseCommands) -> Result<(), CmdError> {
     match command {
         ReleaseCommands::Keygen(args) => keygen(&args).await,
+        ReleaseCommands::PolicyApply(args) => apply_policy(&args).await,
         ReleaseCommands::Submit(args) => crate::cli::release_submit::submit(&args).await,
         ReleaseCommands::Catalog(args) => crate::cli::release_catalog::dispatch(args).await,
         ReleaseCommands::Worker(args) => crate::cli::release_submit::worker(&args).await,
