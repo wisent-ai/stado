@@ -114,6 +114,10 @@ pub const BUILD_WORK_ROOT: &str = ".stado/build-work";
 /// fresh, so age is the guard that does not depend on a process being visible
 /// to `ps` at the instant the sweep runs.
 pub const MIN_AGE_DAYS: &str = "1";
+/// Chromium creates more than 100 full-bundle clones in a day on an active
+/// Weles host. Process ownership and newest-clone guards make one hour enough
+/// to survive launch races without allowing the clone root to fill the disk.
+pub const CLONE_MIN_AGE_MINUTES: &str = "60";
 
 /// `mode` for a run that measured and removed nothing.
 pub const DRY_RUN_MODE: &str = "dry_run";
@@ -130,6 +134,8 @@ pub const DELIVERED_TREES_STAGE: &str = "delivered_trees";
 pub const CHROMIUM_CLONES_STAGE: &str = "chromium_clones";
 /// The stage name for terminal queue-job workdirs and bootstrap scratch.
 pub const QUEUE_WORKDIRS_STAGE: &str = "queue_workdirs";
+/// Rebuildable package/browser caches owned by build tooling.
+pub const REBUILDABLE_CACHES_STAGE: &str = "rebuildable_caches";
 /// The stage name for macOS-style home trees found on a Linux host.
 pub const FOREIGN_HOME_TREES_STAGE: &str = "foreign_home_trees";
 /// The stage name for eligible local Time Machine APFS snapshots.
@@ -167,6 +173,7 @@ const APPLY_MARK: &str = "@APPLY@";
 const WC_WORDS_MARK: &str = "@WC_WORDS@";
 const SERVICES_ROOT_MARK: &str = "@SERVICES_ROOT@";
 const BUILD_WORK_MARK: &str = "@BUILD_WORK@";
+const CLONE_AGE_MINUTES_MARK: &str = "@CLONE_AGE_MINUTES@";
 const AGE_DAYS_MARK: &str = "@AGE_DAYS@";
 const LIVE_JOBS_MARK: &str = "@LIVE_JOBS@";
 const WORK_ROOTS_MARK: &str = "@WORK_ROOTS@";
@@ -190,6 +197,7 @@ const REMOTE_SCRIPT_TEMPLATE: &str = r#"set -u
 apply=@APPLY@
 scratch="$HOME/@BUILD_WORK@"
 services="$HOME/@SERVICES_ROOT@"
+target_free_kb=@TARGET_FREE_KB@
 
 free_kb() { /bin/df -Pk / 2>/dev/null | /usr/bin/awk 'NR==2 {print $4}'; }
 
@@ -208,6 +216,10 @@ held() {
 # so the candidates come from exactly one enumeration -- see below.
 stale() {
   [ -n "$(/usr/bin/find "$1" -maxdepth 0 -mtime +@AGE_DAYS@ 2>/dev/null)" ]
+}
+
+stale_minutes() {
+  [ -n "$(/usr/bin/find "$1" -maxdepth 0 -mmin +@CLONE_AGE_MINUTES@ 2>/dev/null)" ]
 }
 
 # The only place anything is removed. A held path is skipped silently -- it is
@@ -367,6 +379,59 @@ before=$(free_kb)
 # that answer inside a session; getconf is the same answer when a session
 # stripped the variable. Anything not under the one prefix macOS uses is not a
 # container and is refused.
+before=$(free_kb)
+# Exact cache roots, not a general cache sweep. Cargo recreates git checkouts
+# from its bare db and Playwright reinstalls browser bundles from package pins.
+# Age and process guards keep active builds untouched.
+for cache_root in "$HOME/.cargo/git/checkouts" "$HOME/Library/Caches/ms-playwright"; do
+  [ -d "$cache_root" ] || continue
+  for entry in "$cache_root"/*; do
+    [ -d "$entry" ] || continue
+    if [ -L "$entry" ]; then continue; fi
+    stale "$entry" || continue
+    if [ "$apply" = 1 ] && [ "$target_free_kb" -gt 0 ] && [ "$(free_kb)" -ge "$target_free_kb" ]; then
+      break
+    fi
+    reclaim "$entry" rebuildable_caches
+  done
+done
+# Old release probes are complete throwaway workspaces.
+for entry in "$HOME/.local/share/weles-release-probe"/* "$HOME/.npm/_cacache"/*; do
+  [ -d "$entry" ] || continue
+  if [ -L "$entry" ]; then continue; fi
+  stale "$entry" || continue
+  if [ "$apply" = 1 ] && [ "$target_free_kb" -gt 0 ] && [ "$(free_kb)" -ge "$target_free_kb" ]; then
+    break
+  fi
+  reclaim "$entry" rebuildable_caches
+done
+# Interrupted worker downloads are disposable staging directories. An hour is
+# enough to exclude an active delivery while preventing today's failed
+# downloads from surviving until tomorrow under disk pressure.
+for entry in "$HOME/.local/share/weles-worker"/.worker-download.*; do
+  [ -d "$entry" ] || continue
+  if [ -L "$entry" ]; then continue; fi
+  stale_minutes "$entry" || continue
+  if [ "$apply" = 1 ] && [ "$target_free_kb" -gt 0 ] && [ "$(free_kb)" -ge "$target_free_kb" ]; then
+    break
+  fi
+  reclaim "$entry" rebuildable_caches
+done
+# Git dependency checkouts are also rebuildable. The process snapshot remains
+# the ownership gate; the shorter age only allows the cache to recover from a
+# same-day build storm once no compiler names the checkout anymore.
+for entry in "$HOME/.cargo/git/checkouts"/*; do
+  [ -d "$entry" ] || continue
+  if [ -L "$entry" ]; then continue; fi
+  stale_minutes "$entry" || continue
+  if [ "$apply" = 1 ] && [ "$target_free_kb" -gt 0 ] && [ "$(free_kb)" -ge "$target_free_kb" ]; then
+    break
+  fi
+  reclaim "$entry" rebuildable_caches
+done
+printf 'STADO_RECLAIM_STAGE\trebuildable_caches\t%s\t%s\n' "$before" "$(free_kb)"
+before=$(free_kb)
+
 container=${TMPDIR:-$(/usr/bin/getconf DARWIN_USER_TEMP_DIR 2>/dev/null || true)}
 clones=""
 case "$container" in
@@ -400,14 +465,16 @@ if [ -n "$clones" ] && [ -d "$clones" ]; then
     [ -d "$clone" ] || continue
     if [ -L "$clone" ]; then continue; fi
     [ "$clone" = "$newest" ] && continue
-    stale "$clone" || continue
+    stale_minutes "$clone" || continue
+    if [ "$apply" = 1 ] && [ "$target_free_kb" -gt 0 ] && [ "$(free_kb)" -ge "$target_free_kb" ]; then
+      break
+    fi
     reclaim "$clone" chromium_clones
   done
 fi
 printf 'STADO_RECLAIM_STAGE\tchromium_clones\t%s\t%s\n' "$before" "$(free_kb)"
 
 before=$(free_kb)
-target_free_kb=@TARGET_FREE_KB@
 if [ "$(/usr/bin/uname 2>/dev/null || /bin/uname)" != "Darwin" ]; then
   printf 'STADO_RECLAIM_UNAVAILABLE\tlocal_apfs_snapshots\t%s\n' 'host is not macOS'
 elif [ "$target_free_kb" -le 0 ]; then
@@ -502,6 +569,7 @@ pub fn remote_script(
         .replace(BUILD_WORK_MARK, BUILD_WORK_ROOT)
         .replace(AGE_DAYS_MARK, MIN_AGE_DAYS)
         .replace(LIVE_JOBS_MARK, &live_words)
+        .replace(CLONE_AGE_MINUTES_MARK, CLONE_MIN_AGE_MINUTES)
         .replace(WORK_ROOTS_MARK, work_roots)
         .replace(CONTAINER_PREFIX_MARK, CONTAINER_PREFIX)
         .replace(CLONE_CONTAINER_MARK, chromium_clones::CLONE_CONTAINER)
