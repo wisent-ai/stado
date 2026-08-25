@@ -59,31 +59,53 @@ pub const OK_STATUS: &str = "ok";
 const STATE_PATH_MARK: &str = "@STATE_PATH@";
 
 /// The fixed remote program, with the janitor's state path spliced in by
-/// [`remote_script`]. Read-only: one `df`, one `cat`, one snapshot listing.
-const REMOTE_SCRIPT_TEMPLATE: &str = "set -u
+/// [`remote_script`]. Read-only: disk usage, cleanup state, snapshots, and a
+/// bounded two-level inventory of the two writable roots that dominate macOS.
+const REMOTE_SCRIPT_TEMPLATE: &str = r#"set -u
 /bin/df -Pk / 2>/dev/null | while IFS= read -r row; do
   set -- $row
-  case \"${1:-}\" in
-    Filesystem|\"\") continue ;;
+  case "${1:-}" in
+    Filesystem|"") continue ;;
   esac
-  printf 'STADO_DISK\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \\
-    \"${1:-}\" \"${2:-}\" \"${3:-}\" \"${4:-}\" \"${5:-}\" \"${6:-}\"
+  printf 'STADO_DISK\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "${1:-}" "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${6:-}"
 done
-state=\"$HOME/@STATE_PATH@\"
-if [ -r \"$state\" ]; then
-  printf 'STADO_CLEANUP_STATE\\t%s\\n' \"$(/usr/bin/tr -d '\\t\\r\\n' < \"$state\")\"
+state="$HOME/@STATE_PATH@"
+if [ -r "$state" ]; then
+  printf 'STADO_CLEANUP_STATE\t%s\n' "$(/usr/bin/tr -d '\t\r\n' < "$state")"
 else
-  printf 'STADO_CLEANUP_STATE_MISSING\\t%s\\n' \"$state\"
+  printf 'STADO_CLEANUP_STATE_MISSING\t%s\n' "$state"
 fi
 if [ -x /usr/bin/tmutil ]; then
   /usr/bin/tmutil listlocalsnapshots / 2>/dev/null | while IFS= read -r row; do
-    case \"$row\" in
-      com.apple.*) printf 'STADO_SNAPSHOT\\t%s\\n' \"$row\" ;;
+    case "$row" in
+      com.apple.*) printf 'STADO_SNAPSHOT\t%s\n' "$row" ;;
     esac
   done
-  printf 'STADO_SNAPSHOT_END\\t%s\\n' 'listed'
+  printf 'STADO_SNAPSHOT_END\t%s\n' 'listed'
 fi
-";
+if [ "$(/usr/bin/uname 2>/dev/null || /bin/uname)" = "Darwin" ]; then
+  for spec in "$HOME:2" "/private/var:2" "/private/var/folders:5" "$HOME/.local/share:4" "$HOME/.local/state:4" "$HOME/Library/Caches:3" "$HOME/.cargo/git:3" "$HOME/.stado/local-storage:4" "$HOME/.stado/local-backup:4"; do
+    root=${spec%:*}
+    depth=${spec##*:}
+    [ -d "$root" ] || continue
+    /usr/bin/du -xk -d "$depth" "$root" 2>/dev/null |
+      /usr/bin/sort -nr |
+      /usr/bin/head -n 40 |
+      while IFS='	' read -r blocks path; do
+        [ -n "$blocks" ] && [ -n "$path" ] || continue
+        printf 'STADO_DISK_ITEM\t%s\t%s\n' "$blocks" "$path"
+      done
+  done
+for clone_root in /private/var/folders/*/*/X/org.chromium.Chromium.code_sign_clone; do
+  [ -d "$clone_root" ] || continue
+  total=$(/usr/bin/find "$clone_root" -maxdepth 1 -type d -name 'code_sign_clone.*' 2>/dev/null | /usr/bin/wc -l | /usr/bin/tr -d ' ')
+  day_old=$(/usr/bin/find "$clone_root" -maxdepth 1 -type d -name 'code_sign_clone.*' -mtime +0 2>/dev/null | /usr/bin/wc -l | /usr/bin/tr -d ' ')
+  hour_old=$(/usr/bin/find "$clone_root" -maxdepth 1 -type d -name 'code_sign_clone.*' -mmin +60 2>/dev/null | /usr/bin/wc -l | /usr/bin/tr -d ' ')
+  printf 'STADO_CLONE_SUMMARY\t%s\t%s\t%s\t%s\n' "$clone_root" "$total" "$hour_old" "$day_old"
+done
+fi
+"#;
 
 /// The remote program with the janitor's state path in place.
 pub fn remote_script() -> String {
@@ -173,12 +195,29 @@ pub struct LocalSnapshots {
     pub names: Vec<String>,
 }
 
+/// One measured directory in the bounded host inventory.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DiskItem {
+    pub blocks_kb: i64,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CloneSummary {
+    pub path: String,
+    pub total: i64,
+    pub older_than_hour: i64,
+    pub older_than_day: i64,
+}
+
 /// Everything one host answered.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DiskReading {
     pub usage: Option<DiskUsage>,
+    pub clone_summaries: Vec<CloneSummary>,
     pub state: CleanupState,
     pub snapshots: LocalSnapshots,
+    pub inventory: Vec<DiskItem>,
 }
 
 /// Fold the marker lines of stdout into a reading.
@@ -213,6 +252,26 @@ pub fn parse_output(stdout: &str, policy_interval_seconds: Option<i64>) -> DiskR
             // with no snapshots at all is told apart from a host nobody could
             // ask.
             ["STADO_SNAPSHOT_END", _] => reading.snapshots.supported = true,
+            ["STADO_DISK_ITEM", blocks, path] => {
+                if let Ok(blocks_kb) = blocks.parse::<i64>() {
+                    reading.inventory.push(DiskItem {
+                        blocks_kb,
+                        path: (*path).to_string(),
+                    });
+                }
+            }
+            ["STADO_CLONE_SUMMARY", path, total, hour, day] => {
+                if let (Ok(total), Ok(older_than_hour), Ok(older_than_day)) =
+                    (total.parse::<i64>(), hour.parse::<i64>(), day.parse::<i64>())
+                {
+                    reading.clone_summaries.push(CloneSummary {
+                        path: (*path).to_string(),
+                        total,
+                        older_than_hour,
+                        older_than_day,
+                    });
+                }
+            }
             _ => {}
         }
     }
@@ -330,8 +389,38 @@ pub fn to_report(target: &ComputeTarget, reading: &DiskReading) -> Map<String, V
             "supported": snapshots.supported,
             "count": snapshots.names.len(),
             "names": snapshots.names,
-            "reclaimable_by_stado": false,
+            "reclaimable_by_stado": snapshots.names.iter().any(|name| {
+                name.starts_with("com.apple.TimeMachine.") && name.ends_with(".local")
+            }),
         }),
+    );
+    report.insert(
+        "inventory".to_string(),
+        Value::Array(
+            reading
+                .inventory
+                .iter()
+                .map(|item| json!({
+                    "path": item.path,
+                    "size_gb": gib_from_blocks(item.blocks_kb as f64),
+                }))
+                .collect(),
+        ),
+    );
+    report.insert(
+        "chromium_clones".to_string(),
+        Value::Array(
+            reading
+                .clone_summaries
+                .iter()
+                .map(|summary| json!({
+                    "path": summary.path,
+                    "total": summary.total,
+                    "older_than_hour": summary.older_than_hour,
+                    "older_than_day": summary.older_than_day,
+                }))
+                .collect(),
+        ),
     );
     report
 }

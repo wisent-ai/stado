@@ -241,9 +241,6 @@ fn assemble(
     if diag_flag(payload, QUEUE_PAUSED) == Some(true) {
         blockers.push(QUEUE_PAUSED.to_string());
     }
-    if diag_flag(payload, PINNED_ONLY) == Some(true) || target.pinned_only {
-        blockers.push(PINNED_ONLY.to_string());
-    }
 
     // The note fires only while the disk is the reason this host claims
     // nothing: snapshots on a healthy box are a backup policy, not a finding,
@@ -254,6 +251,9 @@ fn assemble(
         .supported
         .then_some(reading.snapshots.names.len());
     let mut notes: Vec<String> = Vec::new();
+    if diag_flag(payload, PINNED_ONLY) == Some(true) || target.pinned_only {
+        notes.push(PINNED_ONLY.to_string());
+    }
     if disk_pressure_unresolved && local_snapshots.is_some_and(|count| count > 0) {
         notes.push(LOCAL_SNAPSHOTS_UNRECLAIMABLE.to_string());
     }
