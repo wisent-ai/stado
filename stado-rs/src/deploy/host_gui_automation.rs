@@ -840,9 +840,16 @@ async fn reconcile_runtime(
     let socket = format!("{caches}/probierz.sock");
     let stdout = format!("{logs}/probierz-cua-driver.out");
     let stderr = format!("{logs}/probierz-cua-driver.err");
-    let binary = format!("{CUA_DRIVER_APP}/Contents/MacOS/cua-driver");
+    // LaunchServices supplies the WindowServer/Aqua responsibility chain that
+    // AppKit (including NSPasteboard and Accessibility) requires. Starting the
+    // Mach-O directly from launchd leaves those APIs unavailable.
     let arguments = serde_json::to_string(&[
-        binary.as_str(),
+        "/usr/bin/open",
+        "-n",
+        "-g",
+        "-a",
+        "CuaDriver",
+        "--args",
         "serve",
         "--socket",
         socket.as_str(),
@@ -868,7 +875,6 @@ async fn reconcile_runtime(
     for (key, value) in [
         ("Label", CUA_DRIVER_RUNTIME_LABEL),
         ("ProgramArguments", arguments.as_str()),
-        ("ProcessType", "Interactive"),
         ("LimitLoadToSessionType", "Aqua"),
         ("StandardOutPath", stdout.as_str()),
         ("StandardErrorPath", stderr.as_str()),
@@ -886,22 +892,20 @@ async fn reconcile_runtime(
         )
         .await?;
     }
-    for key in ["RunAtLoad", "KeepAlive"] {
-        run(
-            target,
-            &[
-                "/usr/bin/plutil",
-                "-insert",
-                key,
-                "-bool",
-                "true",
-                &staged,
-            ],
-            "write CuaDriver LaunchAgent",
-            runner,
-        )
-        .await?;
-    }
+    run(
+        target,
+        &[
+            "/usr/bin/plutil",
+            "-insert",
+            "RunAtLoad",
+            "-bool",
+            "true",
+            &staged,
+        ],
+        "write CuaDriver LaunchAgent",
+        runner,
+    )
+    .await?;
     run(
         target,
         &["/usr/bin/plutil", "-lint", &staged],
