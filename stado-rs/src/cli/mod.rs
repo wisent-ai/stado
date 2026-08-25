@@ -1527,6 +1527,17 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Read TARGET's effective Stado configuration through its fleet channel.
+    ConfigShow {
+        target: String,
+    },
+    /// Persist one dotted Stado configuration value on TARGET.
+    ConfigSet {
+        target: String,
+        key: String,
+        /// JSON value, or a bare string as accepted by `stado config set`.
+        value: String,
+    },
     /// Deliver one registry-declared managed binary to TARGET.
     Release {
         target: String,
@@ -2123,6 +2134,10 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 batch,
                 json,
             } => host::weles_capture_status(&target, &batch, json).await,
+            HostCommands::ConfigShow { target } => host::config_show(&target).await,
+            HostCommands::ConfigSet { target, key, value } => {
+                host::config_set(&target, &key, &value).await
+            }
             HostCommands::Release {
                 target,
                 binary,

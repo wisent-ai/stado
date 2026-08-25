@@ -234,6 +234,9 @@ pub enum ServiceCommands {
         /// Restrict to one registry host; omit to stop it everywhere it is managed.
         #[arg(long)]
         host: Option<String>,
+        /// Optional loopback URL whose disowned listener must also be gone.
+        #[arg(long)]
+        listener_url: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -622,7 +625,9 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             .await
         }
         ServiceCommands::Show { name, host, json } => show(&name, host.as_deref(), json).await,
-        ServiceCommands::Stop { name, host, json } => stop(&name, host.as_deref(), json).await,
+        ServiceCommands::Stop { name, host, listener_url, json } => {
+            stop(&name, host.as_deref(), listener_url.as_deref(), json).await
+        }
         ServiceCommands::Restart { name, host, json } => {
             restart(&name, host.as_deref(), json).await
         }
@@ -1778,7 +1783,12 @@ async fn show(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdError
     Ok(())
 }
 
-async fn stop(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdError> {
+async fn stop(
+    name: &str,
+    host: Option<&str>,
+    listener_url: Option<&str>,
+    json: bool,
+) -> Result<(), CmdError> {
     let services = declared_matching(name, host).await?;
     let runner = production_runner();
     let mut payload: Vec<Value> = Vec::new();
@@ -1789,9 +1799,30 @@ async fn stop(name: &str, host: Option<&str>, json: bool) -> Result<(), CmdError
         let target = host_channel::canonical_target(&declared.host)
             .await
             .map_err(click)?;
-        let report = service::stop_service(&target, declared, &runner)
-            .await
-            .map_err(click)?;
+        let sudo_password = if UnitDomain::from_path(&declared.path).requires_privileged_bootstrap()
+        {
+            host_sudo_password(&target).await?
+        } else {
+            None
+        };
+        let report = service::stop_service_with_password(
+            &target,
+            declared,
+            sudo_password.as_deref(),
+            &runner,
+        )
+        .await
+        .map_err(click)?;
+        if let Some(url) = listener_url {
+            let listener = service::reset_service_listener(&target, declared, url, &runner)
+                .await
+                .map_err(click)?;
+            if !listener.succeeded("listener_stopped")
+                && !listener.succeeded("listener_absent")
+            {
+                failures.push(format!("{}: {}", declared.host, listener.failure()));
+            }
+        }
         if !report.succeeded("stopped") {
             failures.push(format!("{}: {}", declared.host, report.failure()));
         }

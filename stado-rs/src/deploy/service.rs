@@ -3432,37 +3432,70 @@ pub async fn reset_service_listener(
 
 /// Stop one managed service for a fenced recovery cutover. Unlike
 /// [`retire_service`], this leaves the unit enabled and registered.
-///
-/// The fence is only a fence if the writer is actually gone, so the intended
-/// end state is checked on the host: a stop that boots out a label and
-/// leaves the program serving is reported as a failed stop, not as a stop.
-///
-/// A system LaunchDaemon is refused before the host is contacted, and unlike
-/// a restart there is no unprivileged route to add. Everything this body
-/// does to a daemon fails silently or lies: `sudo -n launchctl bootout
-/// system/<label>` is refused for want of a password, the disowned-process
-/// sweep then ends the process, launchd's `KeepAlive` starts another one
-/// within seconds, and [`STOPPED_PROBE`] reads `launchctl print
-/// system/<label>` — which an unprivileged login cannot read either — as
-/// "no job at system/<label>" and calls the end state met. So the command
-/// reported a stopped service, the fence had no writer behind it, and the
-/// daemon went on serving.
 pub async fn stop_service(
     target: &ComputeTarget,
     service: &ManagedService,
     runner: &Runner,
 ) -> Result<RemoteReport, DeployError> {
+    stop_service_with_password(target, service, None, runner).await
+}
+
+/// Stop a managed service, using the host account credential when the unit is
+/// a system LaunchDaemon. The credential travels only on stdin to `sudo -S`.
+pub async fn stop_service_with_password(
+    target: &ComputeTarget,
+    service: &ManagedService,
+    sudo_password: Option<&str>,
+    runner: &Runner,
+) -> Result<RemoteReport, DeployError> {
     if UnitDomain::from_path(&service.path).requires_privileged_bootstrap() {
-        return Err(DeployError(format!(
-            "{} on {} is a system LaunchDaemon at {}; the approved channel is unprivileged and \
-             cannot boot it out, and ending its process is not a stop — launchd starts another one \
-             within seconds for a KeepAlive job. Stopping it needs one privileged command on the \
-             host: sudo launchctl bootout system/{}",
-            service.unit_id(),
-            service.host,
-            service.path,
-            service.unit_id()
-        )));
+        let password = sudo_password.ok_or_else(|| {
+            DeployError(format!(
+                "{} on {} is a system LaunchDaemon and {} has no readable host-account password",
+                service.unit_id(),
+                service.host,
+                target.name
+            ))
+        })?;
+        validate_unit_id(service.unit_id())?;
+        let qualified = format!("system/{}", service.unit_id());
+        let output = host_channel::run_program_with_stdin(
+            target,
+            &[
+                "/usr/bin/sudo",
+                "-S",
+                "-p",
+                "",
+                "/bin/launchctl",
+                "bootout",
+                &qualified,
+            ],
+            &format!("{password}\n"),
+            runner,
+        )
+        .await?;
+        if !output.ok() {
+            let detail =
+                host_channel::last_error_line(&output, "sudo or launchctl returned no detail");
+            if !detail.contains("Could not find specified service")
+                && !detail.contains("No such process")
+            {
+                return Err(DeployError(format!(
+                    "privileged launchd stop failed on {} with exit {}: {}",
+                    target.name, output.code, detail
+                )));
+            }
+        }
+        let body = STOP_BODY.replace("@DISOWNED_SWEEP@", DISOWNED_SWEEP);
+        let prelude = remote_prelude(service.unit_id(), "", &service.path)?;
+        return run_remote_checked(
+            target,
+            &prelude,
+            &body,
+            &end_state(STOPPED_DESCRIBE, STOPPED_PROBE),
+            runner,
+        )
+        .await;
     }
     let body = STOP_BODY.replace("@DISOWNED_SWEEP@", DISOWNED_SWEEP);
     let prelude = remote_prelude(service.unit_id(), "", &service.path)?;

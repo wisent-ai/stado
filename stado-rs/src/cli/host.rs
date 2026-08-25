@@ -5180,3 +5180,62 @@ async fn print_reports(hosts: &[String], json: bool) -> Result<(), CmdError> {
     );
     Err(CmdError::silent(super::CLICK_ERROR_CODE))
 }
+
+/// Read the effective configuration on a fleet host using the same installed
+/// Stado binary and config path its services consume.
+pub async fn config_show(target: &str) -> Result<(), CmdError> {
+    remote_config(target, None).await
+}
+
+/// Persist one configuration field on a fleet host. Values travel base64
+/// encoded inside the audited script and are decoded into argv, never parsed by
+/// a remote shell.
+pub async fn config_set(target: &str, key: &str, value: &str) -> Result<(), CmdError> {
+    if key.trim().is_empty() || key.chars().any(char::is_whitespace) {
+        return Err(CmdError::click("configuration key must be a non-empty dotted name"));
+    }
+    remote_config(target, Some((key, value))).await
+}
+
+async fn remote_config(target: &str, update: Option<(&str, &str)>) -> Result<(), CmdError> {
+    let target = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let action = match update {
+        None => "\"$binary\" config show".to_string(),
+        Some((key, value)) => format!(
+            "key=\"$(printf '%s' '{}' | /usr/bin/base64 \"$decode\")\"\n\
+             value=\"$(printf '%s' '{}' | /usr/bin/base64 \"$decode\")\"\n\
+             \"$binary\" config set \"$key\" \"$value\"\n\
+             \"$binary\" config show",
+            STANDARD.encode(key.as_bytes()),
+            STANDARD.encode(value.as_bytes())
+        ),
+    };
+    let script = format!(
+        "set -euo pipefail\n\
+         case \"$(/usr/bin/uname -s)\" in Darwin) decode=-D ;; *) decode=--decode ;; esac\n\
+         export STADO_CONFIG=\"$HOME/.config/stado/config.json\"\n\
+         binary=\"$HOME/.stado/bin/stado\"\n\
+         test -x \"$binary\"\n\
+         {action}\n"
+    );
+    let output = crate::deploy::host_channel::run_script_with_timeout(
+        &target,
+        &script,
+        std::time::Duration::from_secs(60),
+        &crate::deploy::production_runner(),
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !output.ok() {
+        return Err(CmdError::click(
+            crate::deploy::host_channel::last_error_line(
+                &output,
+                "remote Stado configuration command failed",
+            ),
+        ));
+    }
+    print!("{}", output.stdout);
+    Ok(())
+}
