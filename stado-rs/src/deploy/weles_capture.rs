@@ -50,38 +50,31 @@ pub const PLAN_SCHEMA: &str = "wisent.weles-capture-plan.v1";
 /// refuses any name outside that file, so there is nothing to select here.
 pub const CAPTURE_ACTION: &str = "generic_capture";
 
-/// The platform half of Weles's `platform_verb` route key for that action.
-const CAPTURE_PLATFORM: &str = "generic";
 
-/// Service-directory key of the Weles admission API. The port is read from the
-/// directory entry and never from a flag, so this command cannot be pointed at
-/// a listener the fleet has not declared.
+/// Service-directory key retained for callers; its endpoint is the current
+/// synchronous Weles API, not the removed database admission server.
 const ADMISSION_SERVICE: &str = "weles-admission";
 
 /// Namespace every capture artifact and sidecar lands in.
 pub const ARTIFACT_NAMESPACE: &str = "weles-captures";
 
-/// Credential item carrying the admission API bearer token, for a host whose
-/// listener is configured to want one.
+/// Credential item carrying the Weles Echo admission API bearer token, for a
+/// host whose listener is configured to want one.
 ///
 /// Read through Stado's selected credential store on THIS machine and sent as
 /// an `Authorization` header. It is never written to a remote command line: a
 /// token in `argv` on the far side is readable by every process on that host.
-const ADMISSION_TOKEN_ITEM: &str = "weles-admission-api";
+const ADMISSION_TOKEN_ITEM: &str = "echo-weles-api";
 const ADMISSION_TOKEN_FIELD: &str = "token";
 
-const ENQUEUE_ROUTE: &str = "/v1/echo/jobs/enqueue-batch";
+const RUN_ROUTE: &str = "/run";
 const QUERY_ROUTE: &str = "/v1/echo/action-logs/query";
-
-/// `MAX_ROWS` in Weles's `src/api/admission-server.ts`: the admission API
-/// refuses a `jobs` array longer than this. A larger plan is posted as several
-/// requests rather than being truncated or refused here.
-const ENQUEUE_CHUNK: usize = 100;
-
-/// `MAX_ANALYTICS_LIMIT` in Weles's `src/api/echo-store.ts`, which is also the
-/// ceiling the admission API clamps a query limit to. Asking for the ceiling is
-/// what lets one status read cover a whole manifest.
 const QUERY_LIMIT: usize = 5000;
+const MAX_STEPS: usize = 100;
+
+/// The Weles API executes captures synchronously. The removed database-backed
+/// admission API used to cap batches; there is no queue or chunk boundary now.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 /// How long the forward gets to start accepting connections. The ssh connect
 /// half is already bounded by the inherited `ConnectTimeout`, so this bounds
@@ -91,10 +84,6 @@ const FORWARD_DEADLINE: Duration = Duration::from_secs(20);
 /// Gap between probes of the forwarded port.
 const FORWARD_POLL: Duration = Duration::from_millis(100);
 
-/// Wall-clock cap on one admission API request. Enqueueing a hundred rows is a
-/// single insert on the far side; a minute is generous and still fails rather
-/// than hanging a runner.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The five axes a landing-page capture belongs to. A sixth would be a change
 /// to the capture contract, so an unknown one is refused instead of forwarded
@@ -296,9 +285,9 @@ fn parse_capture(index: usize, entry: &Value, batch: &str) -> Result<Capture, De
                 "capture {index} steps must be an array of objects carrying op and value"
             ))
         })?;
-    if steps.len() > ENQUEUE_CHUNK {
+    if steps.len() > MAX_STEPS {
         return Err(DeployError(format!(
-            "capture {index} carries {} steps; the Weles admission API accepts at most {ENQUEUE_CHUNK} per capture",
+            "capture {index} carries {} steps; Weles accepts at most {MAX_STEPS} per capture",
             steps.len()
         )));
     }
@@ -657,10 +646,8 @@ impl Channel {
         }
     }
 
-    /// One admission API call. The API answers `{ok, data}` on success and
-    /// `{ok: false, error}` on refusal, and both halves are reported: a
-    /// transport failure and a validation refusal send an operator to
-    /// different places.
+    /// One Weles API call. Successful responses are returned in full because
+    /// the synchronous `/run` surface has no `{ data }` envelope.
     async fn call(&self, route: &str, body: &Value) -> Result<Value, DeployError> {
         let mut request = self
             .client
@@ -670,20 +657,16 @@ impl Channel {
             request = request.bearer_auth(token);
         }
         let response = request.send().await.map_err(|error| {
-            DeployError(format!(
-                "the Weles admission API did not answer {route}: {error}"
-            ))
+            DeployError(format!("the Weles API did not answer {route}: {error}"))
         })?;
         let status = response.status();
         let body = response.text().await.map_err(|error| {
-            DeployError(format!(
-                "the Weles admission API answered {route} unreadably: {error}"
-            ))
+            DeployError(format!("the Weles API answered {route} unreadably: {error}"))
         })?;
         let payload: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
         if status == reqwest::StatusCode::UNAUTHORIZED {
             return Err(DeployError(format!(
-                "the Weles admission API requires a bearer token and {}",
+                "the Weles API requires a bearer token and {}",
                 self.token.describe()
             )));
         }
@@ -700,10 +683,10 @@ impl Channel {
                         .to_string()
                 });
             return Err(DeployError(format!(
-                "the Weles admission API refused {route} with {status}: {detail}"
+                "the Weles API refused {route} with {status}: {detail}"
             )));
         }
-        Ok(payload.get("data").cloned().unwrap_or(Value::Null))
+        Ok(payload)
     }
 }
 
@@ -720,59 +703,39 @@ pub struct Enqueued {
     pub artifact_prefix: String,
 }
 
-/// Enqueue every capture in the plan as a `generic_capture` action.
+/// Execute every capture through Weles's current synchronous `/run` surface.
 ///
-/// Posted in chunks because the admission API caps a `jobs` array at
-/// [`ENQUEUE_CHUNK`]; the batch id is what ties the chunks back together, and
-/// it lives in each action's own params rather than in a wrapper this side
-/// would have to remember.
+/// The old admission API and its database queue were removed from Weles.
+/// Returning only after each run finishes means an accepted row already has a
+/// final run id and its artifacts have either been uploaded or the command has
+/// failed with the worker's exact reason.
 pub async fn enqueue(channel: &Channel, plan: &Plan) -> Result<Vec<Enqueued>, DeployError> {
     let mut accepted = Vec::with_capacity(plan.captures.len());
-    for chunk in plan.captures.chunks(ENQUEUE_CHUNK) {
-        let jobs: Vec<Value> = chunk
-            .iter()
-            .map(|capture| {
-                json!({
-                    "account_id": Value::Null,
+    for capture in &plan.captures {
+        let payload = channel
+            .call(
+                RUN_ROUTE,
+                &json!({
                     "action": CAPTURE_ACTION,
-                    "platform": CAPTURE_PLATFORM,
                     "params": Value::Object(capture.params.clone()),
-                })
-            })
-            .collect();
-        let data = channel
-            .call(ENQUEUE_ROUTE, &json!({ "jobs": jobs }))
+                    "creds": "redact",
+                    "timeout_ms": REQUEST_TIMEOUT.as_millis(),
+                }),
+            )
             .await?;
-        let ids = data
-            .get("job_ids")
-            .and_then(Value::as_array)
+        let run_id = payload
+            .get("run_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
             .ok_or_else(|| {
-                DeployError(
-                    "the Weles admission API accepted the captures and returned no action ids"
-                        .to_string(),
-                )
+                DeployError("the Weles API completed the capture and returned no run id".to_string())
             })?;
-        if ids.len() != chunk.len() {
-            return Err(DeployError(format!(
-                "the Weles admission API accepted {} capture(s) and returned {} action id(s)",
-                chunk.len(),
-                ids.len()
-            )));
-        }
-        for (capture, id) in chunk.iter().zip(ids) {
-            let action_id = id.as_str().ok_or_else(|| {
-                DeployError(
-                    "the Weles admission API returned an action id that is not a string"
-                        .to_string(),
-                )
-            })?;
-            accepted.push(Enqueued {
-                action_id: action_id.to_string(),
-                site_slug: capture.site_slug.clone(),
-                axis: capture.axis.clone(),
-                artifact_prefix: capture.artifact_prefix.clone(),
-            });
-        }
+        accepted.push(Enqueued {
+            action_id: run_id.to_string(),
+            site_slug: capture.site_slug.clone(),
+            axis: capture.axis.clone(),
+            artifact_prefix: capture.artifact_prefix.clone(),
+        });
     }
     Ok(accepted)
 }

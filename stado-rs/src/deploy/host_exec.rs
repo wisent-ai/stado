@@ -219,6 +219,27 @@ pub const APPROVED_COMMANDS: &[ApprovedCommand] = &[
               and account names are not secrets",
     },
     ApprovedCommand {
+        argv: &["/usr/bin/xcrun", "simctl", "list", "devices", "available"],
+        why: "lists installed iOS Simulator runtimes and devices without booting or mutating \
+              one; this is the prerequisite check for native iOS capture placement",
+    },
+    ApprovedCommand {
+        argv: &["/usr/bin/xcrun", "devicectl", "list", "devices"],
+        why: "lists Apple devices visible to CoreDevice without installing, launching, or \
+              changing anything; physical-device availability decides whether App Store \
+              binaries can be captured rather than simulator-only builds",
+    },
+    ApprovedCommand {
+        argv: &["/bin/ls", "/Applications"],
+        why: "lists system-wide installed application bundle names under the fixed public \
+              Applications directory; it reads no user documents and changes nothing",
+    },
+    ApprovedCommand {
+        argv: &["/usr/bin/which", "adb"],
+        why: "reports whether Android platform-tools are on the managed login's PATH; it takes \
+              a fixed executable name, reads no application state, and writes nothing",
+    },
+    ApprovedCommand {
         argv: &[
             "/usr/sbin/sysctl",
             "-n",
