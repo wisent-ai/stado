@@ -132,6 +132,8 @@ pub const CHROMIUM_CLONES_STAGE: &str = "chromium_clones";
 pub const QUEUE_WORKDIRS_STAGE: &str = "queue_workdirs";
 /// The stage name for macOS-style home trees found on a Linux host.
 pub const FOREIGN_HOME_TREES_STAGE: &str = "foreign_home_trees";
+/// The stage name for eligible local Time Machine APFS snapshots.
+pub const LOCAL_APFS_SNAPSHOTS_STAGE: &str = "local_apfs_snapshots";
 
 /// The only prefix a macOS temporary container has, and the guard on the one
 /// root this module does not spell itself.
@@ -176,6 +178,7 @@ const CLONE_ROOT_MARK: &str = "@CLONE_ROOT@";
 const CLONE_PREFIX_MARK: &str = "@CLONE_PREFIX@";
 const CONTAINER_PREFIX_MARK: &str = "@CONTAINER_PREFIX@";
 const SUPERSEDED_ROOTS_MARK: &str = "@SUPERSEDED_ROOTS@";
+const TARGET_FREE_KB_MARK: &str = "@TARGET_FREE_KB@";
 
 /// The fixed remote program.
 ///
@@ -403,6 +406,49 @@ if [ -n "$clones" ] && [ -d "$clones" ]; then
 fi
 printf 'STADO_RECLAIM_STAGE\tchromium_clones\t%s\t%s\n' "$before" "$(free_kb)"
 
+before=$(free_kb)
+target_free_kb=@TARGET_FREE_KB@
+if [ "$(/usr/bin/uname 2>/dev/null || /bin/uname)" != "Darwin" ]; then
+  printf 'STADO_RECLAIM_UNAVAILABLE\tlocal_apfs_snapshots\t%s\n' 'host is not macOS'
+elif [ "$target_free_kb" -le 0 ]; then
+  printf 'STADO_RECLAIM_UNAVAILABLE\tlocal_apfs_snapshots\t%s\n' 'registry declares no disk cleanup target'
+elif [ ! -x /usr/bin/tmutil ]; then
+  printf 'STADO_RECLAIM_UNAVAILABLE\tlocal_apfs_snapshots\t%s\n' 'tmutil is unavailable'
+else
+  snapshots=$(/usr/bin/tmutil listlocalsnapshots / 2>/dev/null) || {
+    printf 'STADO_RECLAIM_UNAVAILABLE\tlocal_apfs_snapshots\t%s\n' 'tmutil could not enumerate local snapshots'
+    snapshots=""
+  }
+  saved_ifs=$IFS
+  IFS='
+'
+  for line in $snapshots; do
+    case "$line" in
+      com.apple.TimeMachine.*.local)
+        stamp=${line#com.apple.TimeMachine.}
+        stamp=${stamp%.local}
+        case "$stamp" in
+          ????-??-??-??????) ;;
+          *)
+            printf 'STADO_RECLAIM_REFUSED\tlocal_apfs_snapshots\t%s\t%s\n' "$line" 'unrecognized Time Machine snapshot identifier'
+            continue
+            ;;
+        esac
+        printf 'STADO_RECLAIM_ITEM\tlocal_apfs_snapshots\t%s\n' "$line"
+        if [ "$apply" = 1 ] && [ "$(free_kb)" -lt "$target_free_kb" ]; then
+          if ! result=$(/usr/bin/tmutil deletelocalsnapshots "$stamp" 2>&1); then
+            printf 'STADO_RECLAIM_REFUSED\tlocal_apfs_snapshots\t%s\t%s\n' "$line" "$result"
+          fi
+        fi
+        ;;
+      Snapshot*|Snapshots*|"") ;;
+      *) printf 'STADO_RECLAIM_REFUSED\tlocal_apfs_snapshots\t%s\t%s\n' "$line" 'snapshot is not an eligible local Time Machine snapshot' ;;
+    esac
+  done
+  IFS=$saved_ifs
+fi
+printf 'STADO_RECLAIM_STAGE\tlocal_apfs_snapshots\t%s\t%s\n' "$before" "$(free_kb)"
+
 printf 'STADO_RECLAIM_FREE\tafter\t%s\n' "$(free_kb)"
 "#;
 
@@ -432,16 +478,17 @@ fn superseded_words() -> String {
 /// `work_roots` is substituted verbatim into the queue-workdirs sweep;
 /// production callers pass [`DEFAULT_WORK_ROOTS`], tests pass their scratch
 /// directory so an executed apply can never leave the fixture.
-pub fn remote_script(apply: bool, live_jobs: &[String], work_roots: &str) -> String {
+pub fn remote_script(
+    apply: bool,
+    live_jobs: &[String],
+    work_roots: &str,
+    target_free_gb: Option<i64>,
+) -> String {
     let wc_words = WC_CANDIDATES
         .iter()
         .map(|value| format!("\"{value}\""))
         .collect::<Vec<String>>()
         .join(" ");
-    // Job ids are hex identifiers; anything else is dropped rather than
-    // spliced into a shell word. Losing a malformed id from the KEEP list is
-    // fail-safe only because held() still protects a workdir some live
-    // process names in its argv.
     let live_words = live_jobs
         .iter()
         .filter(|id| !id.is_empty() && id.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-'))
@@ -461,6 +508,13 @@ pub fn remote_script(apply: bool, live_jobs: &[String], work_roots: &str) -> Str
         .replace(CLONE_ROOT_MARK, chromium_clones::CLONE_ROOT_NAME)
         .replace(CLONE_PREFIX_MARK, chromium_clones::CLONE_ENTRY_PREFIX)
         .replace(SUPERSEDED_ROOTS_MARK, &superseded_words())
+        .replace(
+            TARGET_FREE_KB_MARK,
+            &target_free_gb
+                .and_then(|gb| gb.checked_mul(1024 * 1024))
+                .unwrap_or_default()
+                .to_string(),
+        )
 }
 
 /// One stage, as the host measured it.
@@ -479,6 +533,8 @@ pub struct Stage {
     pub paths: Vec<String>,
     /// Why the stage could not run, for the host's own words in the rendering.
     pub detail: Option<String>,
+    /// Snapshot identifiers refused by the native ownership/type checks.
+    pub refused: Vec<String>,
 }
 
 /// Everything one reclamation did.
@@ -521,6 +577,7 @@ pub fn parse_output(stdout: &str, apply: bool) -> Reclamation {
         ..Reclamation::default()
     };
     let mut pending: Vec<(String, String)> = Vec::new();
+    let mut refused: Vec<(String, String)> = Vec::new();
     // Item lines are drained by the stage marker that closes them, through a
     // free function so the pending list stays borrowable by the arm that fills
     // it.
@@ -531,8 +588,12 @@ pub fn parse_output(stdout: &str, apply: bool) -> Reclamation {
             ["STADO_RECLAIM_ITEM", stage, path] => {
                 pending.push(((*stage).to_string(), (*path).to_string()));
             }
+            ["STADO_RECLAIM_REFUSED", stage, item, detail] => {
+                refused.push(((*stage).to_string(), format!("{item}: {detail}")));
+            }
             ["STADO_RECLAIM_STAGE", stage, before, after] => {
                 let paths = drain(&mut pending, stage);
+                let stage_refused = drain(&mut refused, stage);
                 reclamation.stages.push(Stage {
                     stage: (*stage).to_string(),
                     free_kb_before: blocks(before),
@@ -540,6 +601,7 @@ pub fn parse_output(stdout: &str, apply: bool) -> Reclamation {
                     items: paths.len(),
                     paths,
                     detail: None,
+                    refused: stage_refused,
                 });
             }
             ["STADO_RECLAIM_CLEANUP", before, after, plan] => {
@@ -573,6 +635,7 @@ pub fn parse_output(stdout: &str, apply: bool) -> Reclamation {
                     items: usize::try_from(counted).unwrap_or_default(),
                     paths: Vec::new(),
                     detail: None,
+                    refused: Vec::new(),
                 });
             }
             ["STADO_RECLAIM_UNAVAILABLE", stage, detail] => {
@@ -593,6 +656,7 @@ fn unavailable(stage: &str, detail: &str) -> Stage {
         items: 0,
         paths: Vec::new(),
         detail: Some(detail.to_string()),
+        refused: Vec::new(),
     }
 }
 
@@ -618,6 +682,9 @@ pub fn to_report(target: &ComputeTarget, reclamation: &Reclamation) -> Map<Strin
                         "free_gb_before": free(stage.free_kb_before),
                         "free_gb_after": free(stage.free_kb_after),
                         "items": stage.items,
+                        "paths": stage.paths,
+                        "refused": stage.refused,
+                        "detail": stage.detail,
                     })
                 })
                 .collect(),
@@ -674,7 +741,14 @@ pub async fn record_audit(
         "stages": reclamation
             .stages
             .iter()
-            .map(|stage| json!({"stage": stage.stage, "items": stage.items}))
+            .map(|stage| json!({
+                "stage": stage.stage,
+                "items": stage.items,
+                "paths": stage.paths,
+                "refused": stage.refused,
+                "free_gb_before": stage.free_kb_before.map(|kb| gib_from_blocks(kb as f64)),
+                "free_gb_after": stage.free_kb_after.map(|kb| gib_from_blocks(kb as f64)),
+            }))
             .collect::<Vec<Value>>(),
     });
     let script = AUDIT_SCRIPT_TEMPLATE
@@ -738,9 +812,13 @@ pub async fn reclaim_host(
                 .to_string(),
         ));
     };
+    let target_free_gb = target
+        .disk_cleanup
+        .as_ref()
+        .map(|policy| policy.target_free_gb);
     let output = host_channel::run_script(
         &target,
-        &remote_script(apply, &live_jobs, DEFAULT_WORK_ROOTS),
+        &remote_script(apply, &live_jobs, DEFAULT_WORK_ROOTS, target_free_gb),
         runner,
     )
     .await?;
