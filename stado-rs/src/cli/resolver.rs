@@ -154,15 +154,8 @@ fn ssh_command() -> Command {
         "-o",
         "ServerAliveCountMax=2",
         "-o",
-        "ControlMaster=auto",
-        "-o",
-        "ControlPersist=60",
+        "ControlMaster=no",
     ]);
-    if let Ok(home) = std::env::var("HOME") {
-        command
-            .arg("-o")
-            .arg(format!("ControlPath={home}/.stado/resolver-ssh-%C"));
-    }
     let key_file = std::env::var("STADO_RESOLVER_SSH_KEY_FILE")
         .ok()
         .filter(|path| !path.trim().is_empty())
