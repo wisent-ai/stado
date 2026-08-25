@@ -1300,7 +1300,10 @@ async fn proxy_connection(
         .take()
         .ok_or_else(|| "SSH transport has no stdout".to_string())?;
     let (mut client_read, mut client_write) = client.into_split();
-    let connect = Duration::from_secs(adapter.connect_seconds);
+    // Ten seconds is enough for a direct TCP dial, not for a cold SSH control
+    // connection on a busy GUI host. Keep the configured value when it is
+    // larger, but never turn transient host pressure into an immediate 502.
+    let connect = Duration::from_secs(adapter.connect_seconds.max(30));
     // Establishment is the one window `idle_seconds` cannot bound: nothing has
     // flowed yet, so a dead backend would otherwise hold the client for the
     // whole idle window. Forward whatever the client sends so the upstream has
