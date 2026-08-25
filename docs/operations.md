@@ -114,12 +114,16 @@ Stado resolves the host address and `release_platform` from the canonical
 registry. `install` exchanges `GITHUB_TOKEN.value` through Stado's
 admin-scoped Skarbiec coordinates for a short-lived organization registration
 token, transports the installer and token on host-channel stdin, verifies the
-pinned Actions Runner archive, and installs the OS service. It also resolves
-`agent:kronika.value` from Skarbiec and installs it through stdin as the
-runner-owned, mode-`0600` `.stado/kronika-agent-auth-secret`; the non-secret
-agent ID is published as `routes/kronika-agent-id` beside `routes/brama.url`.
-`remove` uses a short-lived removal token before deleting the service, account,
-files, and network rule.
+pinned Actions Runner archive, and installs the OS service. It also makes the
+Brama host's Skarbiec reconcile missing routes from its live vault, resolves
+`agent:probierz` to the request-signing item and field selected by Skarbiec,
+reads that field on the host without putting its value in argv, and installs the
+resolved value through stdin as the runner-owned, mode-`0600`
+`.stado/kronika-agent-auth-secret`; the non-secret `probierz` agent ID is
+published as `routes/kronika-agent-id` beside `routes/brama.url`. Kronika runs
+the audit, while Probierz is the Brama client identity authorizing that product
+workflow. `remove` uses a short-lived removal token before deleting the service,
+account, files, and network rule.
 
 The runner has one unprivileged `stado-precheck` account and a root-owned
 pre/post-job cleanup hook. Workspaces, diagnostics, package and toolchain

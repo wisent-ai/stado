@@ -114,9 +114,7 @@ cross-provider disaster recovery. The config validator states the contract
 directly: the replica is read fallback only and is never promoted
 automatically. `stado doctor` says the same about the default layout — a local
 backup path mirroring the local primary is temporary same-disk protection
-only — and the [2026-07-27 GCP billing outage
-report](incidents/2026-07-27-gcp-billing-outage.md) records the operator
-config carrying that exact warning. Cross-provider DR is an explicit,
+only —. Cross-provider DR is an explicit,
 fenced migration (steps 2–3), never an automatic failover. See
 [configuration](configuration.md) for the storage layout.
 

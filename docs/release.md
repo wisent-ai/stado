@@ -179,7 +179,7 @@ Every candidate and stable release records:
 - upgrade and rollback instructions;
 - acceptance evidence and exclusions.
 
-User-visible history lives in [`CHANGELOG.md`](../CHANGELOG.md). Incident detail belongs under `docs/incidents/`, not in the changelog.
+User-visible history lives in [`CHANGELOG.md`](../CHANGELOG.md). Incident detail is operator material and stays out of this repository.
 
 ## Promotion gate
 

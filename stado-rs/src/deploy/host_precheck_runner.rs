@@ -24,9 +24,8 @@ pub const GITHUB_ORGANIZATION: &str = "wisent-ai";
 pub const GITHUB_CREDENTIAL_ITEM: &str = "GITHUB_TOKEN";
 pub const RUNNER_GROUP: &str = "stado-precheck";
 pub const RUNNER_USER: &str = "stado-precheck";
-pub const KRONIKA_AGENT_ID: &str = "kronika";
-pub const KRONIKA_AGENT_SECRET_ITEM: &str = "agent:kronika";
-pub const KRONIKA_AGENT_SECRET_FIELD: &str = "value";
+pub const PROBIERZ_AGENT_ID: &str = "probierz";
+pub const PROBIERZ_AGENT_RESOURCE: &str = "agent:probierz";
 pub const LINUX_KRONIKA_AGENT_SECRET_FILE: &str =
     "/opt/wisent/stado-precheck-runner/.stado/kronika-agent-auth-secret";
 pub const MACOS_KRONIKA_AGENT_SECRET_FILE: &str =
@@ -34,6 +33,12 @@ pub const MACOS_KRONIKA_AGENT_SECRET_FILE: &str =
 pub const RUNNER_VERSION: &str = "2.336.0";
 pub const LINUX_SHA256: &str = "04cf0be1aff4c3ec3554466c39124ca250e3effd8873bb7e8d68535aa9505d5d";
 pub const MACOS_SHA256: &str = "8e8839c49b7060b6b2154f4931f815df330c27f167d53ef2239ee3dfce28b079";
+
+struct ProbierzAgentCredential {
+    item: String,
+    field: String,
+    secret: String,
+}
 
 #[derive(Debug, Clone, Copy)]
 struct RunnerProfile {
@@ -142,7 +147,7 @@ fn linux_installer(
             ("__BRAMA_URL__", super::shlex_quote(brama_url)),
             (
                 "__KRONIKA_AGENT_ID__",
-                super::shlex_quote(KRONIKA_AGENT_ID),
+                super::shlex_quote(PROBIERZ_AGENT_ID),
             ),
             ("__BRAMA_PORT__", brama_port.to_string()),
             ("__BLOCKED_IPV6__", shell_list(BLOCKED_IPV6_NETWORKS)),
@@ -174,7 +179,7 @@ fn macos_installer(
             ("__BRAMA_URL__", super::shlex_quote(brama_url)),
             (
                 "__KRONIKA_AGENT_ID__",
-                super::shlex_quote(KRONIKA_AGENT_ID),
+                super::shlex_quote(PROBIERZ_AGENT_ID),
             ),
             ("__BRAMA_PORT__", brama_port.to_string()),
             (
@@ -207,12 +212,215 @@ async fn admin_credential(item: &str, field: &str) -> Result<String, DeployError
         .ok_or_else(|| DeployError(format!("credential {item}.{field} is required")))
 }
 
+fn brama_service_path(document: &str, key: &str, home: &str) -> Result<String, DeployError> {
+    let prefix = format!("{key}=");
+    let raw = document
+        .lines()
+        .map(str::trim)
+        .map(|line| line.strip_prefix("export ").unwrap_or(line))
+        .find_map(|line| line.strip_prefix(&prefix))
+        .map(str::trim)
+        .ok_or_else(|| DeployError(format!("Brama service environment has no {key}")))?;
+    let value = if raw.len() >= 2
+        && ((raw.starts_with('"') && raw.ends_with('"'))
+            || (raw.starts_with('\'') && raw.ends_with('\'')))
+    {
+        &raw[1..raw.len() - 1]
+    } else {
+        raw
+    };
+    let expanded = if let Some(rest) = value.strip_prefix("$HOME/") {
+        format!("{home}/{rest}")
+    } else if let Some(rest) = value.strip_prefix("${HOME}/") {
+        format!("{home}/{rest}")
+    } else if let Some(rest) = value.strip_prefix("~/") {
+        format!("{home}/{rest}")
+    } else {
+        value.to_string()
+    };
+    let home_prefix = format!("{home}/");
+    let relative = expanded.strip_prefix(&home_prefix).ok_or_else(|| {
+        DeployError(format!(
+            "Brama service environment {key} must be an absolute path below the managed home"
+        ))
+    })?;
+    if relative.is_empty()
+        || relative
+            .split('/')
+            .any(|component| component.is_empty() || matches!(component, "." | ".."))
+        || expanded.chars().any(char::is_control)
+    {
+        return Err(DeployError(format!(
+            "Brama service environment {key} must be an absolute path below the managed home"
+        )));
+    }
+    Ok(expanded)
+}
+
 async fn github_credential() -> Result<String, DeployError> {
     admin_credential(GITHUB_CREDENTIAL_ITEM, "value").await
 }
 
-async fn kronika_agent_secret() -> Result<String, DeployError> {
-    admin_credential(KRONIKA_AGENT_SECRET_ITEM, KRONIKA_AGENT_SECRET_FIELD).await
+async fn kronika_agent_credential(
+    target: &ComputeTarget,
+) -> Result<ProbierzAgentCredential, DeployError> {
+    let runner = production_runner();
+    let home = host_channel::remote_home(target, &runner).await?;
+    let service_env = format!("{home}/.config/brama/service.env");
+    let service_paths = host_channel::run_program(
+        target,
+        &[
+            "/usr/bin/grep",
+            "-E",
+            "^(export )?(SKARBIEC_(VAULT_FILE|CAPABILITY_ROUTES_FILE)|BRAMA_GNUPG_HOME)=",
+            &service_env,
+        ],
+        &runner,
+    )
+    .await?;
+    if !service_paths.ok() {
+        return Err(DeployError(format!(
+            "{}: cannot read Brama's Skarbiec path declarations: {}",
+            target.name,
+            command_failure(
+                &service_paths,
+                "Brama service environment path lookup failed"
+            )
+        )));
+    }
+    let vault_path = brama_service_path(&service_paths.stdout, "SKARBIEC_VAULT_FILE", &home)?;
+    let routes_path = brama_service_path(
+        &service_paths.stdout,
+        "SKARBIEC_CAPABILITY_ROUTES_FILE",
+        &home,
+    )?;
+    let gnupg_path = brama_service_path(&service_paths.stdout, "BRAMA_GNUPG_HOME", &home)?;
+    let skarbiec = format!("{home}/.stado/bin/skarbiec");
+    let vault = format!("SKARBIEC_VAULT_FILE={vault_path}");
+    let routes = format!("SKARBIEC_CAPABILITY_ROUTES_FILE={routes_path}");
+    let gnupg = format!("GNUPGHOME={gnupg_path}");
+    let program_path = "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+    let reconciled_routes = host_channel::run_program(
+        target,
+        &[
+            "/usr/bin/env",
+            &vault,
+            &routes,
+            &gnupg,
+            program_path,
+            &skarbiec,
+            "routes",
+            "reconcile",
+        ],
+        &runner,
+    )
+    .await?;
+    if !reconciled_routes.ok() {
+        return Err(DeployError(format!(
+            "{}: Skarbiec cannot reconcile credential routes: {}",
+            target.name,
+            command_failure(&reconciled_routes, "capability route reconciliation failed")
+        )));
+    }
+
+    let listed = host_channel::run_program(
+        target,
+        &[
+            "/usr/bin/env",
+            &vault,
+            &routes,
+            &gnupg,
+            program_path,
+            &skarbiec,
+            "routes",
+            "list",
+            PROBIERZ_AGENT_ID,
+        ],
+        &runner,
+    )
+    .await?;
+    if !listed.ok() {
+        return Err(DeployError(format!(
+            "{}: cannot resolve {PROBIERZ_AGENT_RESOURCE} through Skarbiec: {}",
+            target.name,
+            command_failure(&listed, "capability route lookup failed")
+        )));
+    }
+    let document: Value = serde_json::from_str(&listed.stdout)
+        .map_err(|error| DeployError(format!("Skarbiec route report is invalid: {error}")))?;
+    let route = document
+        .get("routes")
+        .and_then(Value::as_array)
+        .and_then(|routes| {
+            routes.iter().find(|route| {
+                route.get("resource").and_then(Value::as_str) == Some(PROBIERZ_AGENT_RESOURCE)
+            })
+        })
+        .ok_or_else(|| {
+            let detail = reconciled_routes.stdout.trim();
+            let detail = if detail.is_empty() {
+                "Skarbiec reported no reconciliation detail"
+            } else {
+                detail
+            };
+            DeployError(format!(
+                "Skarbiec maps no credential for {PROBIERZ_AGENT_RESOURCE}; reconciliation: {detail}"
+            ))
+        })?;
+    if route.get("item_present") != Some(&Value::Bool(true))
+        || route.get("field_present") != Some(&Value::Bool(true))
+    {
+        return Err(DeployError(format!(
+            "Skarbiec route {PROBIERZ_AGENT_RESOURCE} does not resolve to a readable field"
+        )));
+    }
+    let item = route
+        .get("item")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty() && !value.chars().any(char::is_control))
+        .map(str::to_string)
+        .ok_or_else(|| DeployError("Probierz agent route has no valid item".to_string()))?;
+    let field = route
+        .get("field")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty() && !value.chars().any(char::is_control))
+        .map(str::to_string)
+        .ok_or_else(|| DeployError("Probierz agent route has no valid field".to_string()))?;
+    let read = host_channel::run_program(
+        target,
+        &[
+            "/usr/bin/env",
+            &vault,
+            &routes,
+            &gnupg,
+            program_path,
+            &skarbiec,
+            "get",
+            &item,
+            "--field",
+            &field,
+        ],
+        &runner,
+    )
+    .await?;
+    if !read.ok() {
+        return Err(DeployError(format!(
+            "{}: cannot read {PROBIERZ_AGENT_RESOURCE} through its Skarbiec route: {}",
+            target.name,
+            command_failure(&read, "routed credential read failed")
+        )));
+    }
+    let secret = read.stdout.trim();
+    if secret.is_empty() || secret.chars().any(char::is_control) {
+        return Err(DeployError(format!(
+            "Skarbiec route {PROBIERZ_AGENT_RESOURCE} returned an empty or malformed credential"
+        )));
+    }
+    Ok(ProbierzAgentCredential {
+        item,
+        field,
+        secret: secret.to_string(),
+    })
 }
 
 async fn configure_publisher_group() -> Result<(), DeployError> {
@@ -751,8 +959,13 @@ async fn install_kronika_agent_secret(
     platform: Platform,
     secret: &str,
 ) -> Result<(), DeployError> {
+    let runner = production_runner();
     let secret_file = platform.kronika_agent_secret_file();
-    let output = host_channel::run_program_with_stdin(
+    // macOS install(1) rejects /dev/stdin as a source. Create the destination
+    // with its final owner and mode first, then let that owner replace only its
+    // bytes through dd. The secret never appears in argv or command output, and
+    // there is no interval where another account can read the file.
+    let prepared = host_channel::run_program(
         target,
         &[
             "/usr/bin/sudo",
@@ -764,18 +977,40 @@ async fn install_kronika_agent_secret(
             RUNNER_USER,
             "-m",
             "600",
-            "/dev/stdin",
+            "/dev/null",
             secret_file,
         ],
-        secret,
-        &production_runner(),
+        &runner,
     )
     .await?;
-    if !output.ok() {
+    if !prepared.ok() {
         return Err(DeployError(format!(
-            "{}: Kronika signing identity installation failed: {}",
+            "{}: cannot prepare the Probierz signing credential file: {}",
             target.name,
-            host_channel::last_error_line(&output, "remote secret write failed")
+            command_failure(&prepared, "remote secret file preparation failed")
+        )));
+    }
+    let destination = format!("of={secret_file}");
+    let written = host_channel::run_program_with_stdin(
+        target,
+        &[
+            "/usr/bin/sudo",
+            "-n",
+            "-u",
+            RUNNER_USER,
+            "/bin/dd",
+            &destination,
+            "bs=4096",
+        ],
+        secret,
+        &runner,
+    )
+    .await?;
+    if !written.ok() {
+        return Err(DeployError(format!(
+            "{}: Probierz signing identity installation failed: {}",
+            target.name,
+            command_failure(&written, "remote secret write failed")
         )));
     }
     Ok(())
@@ -788,8 +1023,8 @@ async fn install_profile(target_name: &str, profile: RunnerProfile) -> Result<Va
     let target = host_channel::canonical_target(target_name).await?;
     let platform = Platform::for_target(&target)?;
     let (brama_url, brama_port) = private_brama_route(target_name).await?;
-    let kronika_secret = if profile.kind == PRECHECK.kind {
-        Some(kronika_agent_secret().await?)
+    let kronika_credential = if profile.kind == PRECHECK.kind {
+        Some(kronika_agent_credential(&target).await?)
     } else {
         None
     };
@@ -814,12 +1049,13 @@ async fn install_profile(target_name: &str, profile: RunnerProfile) -> Result<Va
             command_failure(&output, "remote installer failed")
         )));
     }
-    if let Some(kronika_secret) = kronika_secret {
-        install_kronika_agent_secret(&target, platform, &kronika_secret).await?;
+    if let Some(kronika_credential) = kronika_credential {
+        install_kronika_agent_secret(&target, platform, &kronika_credential.secret).await?;
         value["kronika_identity"] = json!({
-            "agent_id": KRONIKA_AGENT_ID,
-            "secret_item": KRONIKA_AGENT_SECRET_ITEM,
-            "secret_field": KRONIKA_AGENT_SECRET_FIELD,
+            "agent_id": PROBIERZ_AGENT_ID,
+            "resource": PROBIERZ_AGENT_RESOURCE,
+            "secret_item": kronika_credential.item,
+            "secret_field": kronika_credential.field,
             "secret_file": platform.kronika_agent_secret_file(),
             "status": "installed",
         });
