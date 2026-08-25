@@ -85,6 +85,12 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   program matches its declaration, idempotently ensures a unit only after the
   endpoint is proven unreachable, and persists each run with deduplicated
   failure alerts, mutation leases, action limits and circuit-breaker feedback.
+- Added `stado host forward-stop TARGET NAME`. New `forward-remote`
+  channels carry an OpenSSH control socket and stop through it; channels made
+  by older Stado versions stop only after Stado proves that the process owning
+  the marked loopback port is the matching SSH forward. Successful shutdown
+  removes both lifecycle files, and a stale marker is cleaned without touching
+  an unrelated listener.
 
 - Rooted every autonomy object under `state/`. The object gateway authorizes a
   write by prefix, no namespace declares `autonomy/`, and so placement,

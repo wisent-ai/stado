@@ -1368,6 +1368,16 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Stop a named local SSH forwarding channel and remove its marker.
+    #[command(name = "forward-stop")]
+    ForwardStop {
+        target: String,
+        /// Name passed to `host forward-remote`.
+        name: String,
+        /// Emit the shutdown report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Declare the exact version TARGET must run for one managed binary.
     #[command(name = "declare-version")]
     DeclareVersion {
@@ -2075,6 +2085,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 local_port,
                 json,
             } => host::forward_remote(&target, &name, remote_port, local_port, json).await,
+            HostCommands::ForwardStop { target, name, json } => {
+                host::forward_stop(&target, &name, json).await
+            }
             HostCommands::Exec {
                 target,
                 json,

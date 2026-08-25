@@ -2089,14 +2089,11 @@ pub async fn declare_weles_action(
     let mut actions = values
         .iter()
         .map(|value| {
-            value
-                .as_str()
-                .map(str::to_string)
-                .ok_or_else(|| {
-                    CmdError::click(format!(
-                        "{target}.weles.actions contains a non-string value"
-                    ))
-                })
+            value.as_str().map(str::to_string).ok_or_else(|| {
+                CmdError::click(format!(
+                    "{target}.weles.actions contains a non-string value"
+                ))
+            })
         })
         .collect::<Result<Vec<String>, CmdError>>()?;
 
@@ -2125,7 +2122,11 @@ pub async fn declare_weles_action(
         expected_generation
     };
     let state = if changed {
-        if remove { "removed" } else { "added" }
+        if remove {
+            "removed"
+        } else {
+            "added"
+        }
     } else {
         "unchanged"
     };
@@ -2958,7 +2959,6 @@ pub async fn release(
 /// credential, a helper, or anything else Stado keeps there.
 const DELIVERED_FILES_DIR: &str = ".stado/files";
 
-
 pub(crate) async fn install_secret_value_at_home(
     target: &str,
     name: &str,
@@ -3072,10 +3072,12 @@ async fn register_acquisition_scopes(
         found.to_string()
     };
 
-    let public_key = match acquisition_scratch(resolved, &home, "weles-acquisition-public.XXXXXX", runner).await {
-        Ok(path) => path,
-        Err(detail) => return Err(refused(detail)),
-    };
+    let public_key =
+        match acquisition_scratch(resolved, &home, "weles-acquisition-public.XXXXXX", runner).await
+        {
+            Ok(path) => path,
+            Err(detail) => return Err(refused(detail)),
+        };
 
     // Skarbiec accepts only an Ed25519 workload key. A host still holding an
     // older key gets one Ed25519 replacement, and the new private key takes
@@ -3085,19 +3087,29 @@ async fn register_acquisition_scopes(
     let mut new_private_key: Option<String> = None;
     let described = host_channel::run_program(
         resolved,
-        &[openssl.as_str(), "pkey", "-in", private_key.as_str(), "-text", "-noout"],
+        &[
+            openssl.as_str(),
+            "pkey",
+            "-in",
+            private_key.as_str(),
+            "-text",
+            "-noout",
+        ],
         runner,
     )
     .await
     .map_err(|error| CmdError::click(error.to_string()))?;
     if !described.stdout.contains("ED25519") {
-        let fresh = match acquisition_scratch(resolved, &home, "weles-acquisition-private.XXXXXX", runner).await {
-            Ok(path) => path,
-            Err(detail) => {
-                remove_remote(resolved, &[public_key.as_str()], runner).await;
-                return Err(refused(detail));
-            }
-        };
+        let fresh =
+            match acquisition_scratch(resolved, &home, "weles-acquisition-private.XXXXXX", runner)
+                .await
+            {
+                Ok(path) => path,
+                Err(detail) => {
+                    remove_remote(resolved, &[public_key.as_str()], runner).await;
+                    return Err(refused(detail));
+                }
+            };
         for words in [
             vec![
                 openssl.as_str(),
@@ -4618,6 +4630,18 @@ pub async fn forward_remote(
         .ssh
         .as_deref()
         .ok_or_else(|| CmdError::click("registry target has no SSH destination"))?;
+    let home = std::env::var("HOME").map_err(|_| CmdError::click("HOME is not set"))?;
+    let marker_directory = std::path::Path::new(&home).join(".stado").join("forwards");
+    std::fs::create_dir_all(&marker_directory)?;
+    let marker_path = marker_directory.join(format!("{name}.url"));
+    let control_path = marker_directory.join(format!("{name}.control"));
+    if marker_path.exists() || control_path.exists() {
+        return Err(CmdError::click(format!(
+            "{name}: forward state already exists; stop it with `stado host forward-stop {target} {name}`"
+        )));
+    }
+    let endpoint = format!("http://127.0.0.1:{local_port}");
+    std::fs::write(&marker_path, format!("{endpoint}\n"))?;
     let mut argv = crate::deploy::host_channel::ssh_options(ssh);
     let destination = argv
         .pop()
@@ -4631,6 +4655,12 @@ pub async fn forward_remote(
         "ServerAliveInterval=30".to_string(),
         "-o".to_string(),
         "ServerAliveCountMax=3".to_string(),
+        "-o".to_string(),
+        "ControlMaster=yes".to_string(),
+        "-o".to_string(),
+        format!("ControlPath={}", control_path.display()),
+        "-o".to_string(),
+        "ControlPersist=no".to_string(),
         "-L".to_string(),
         format!("127.0.0.1:{local_port}:127.0.0.1:{remote_port}"),
         destination,
@@ -4644,6 +4674,8 @@ pub async fn forward_remote(
         .output()
         .await?;
     if !output.status.success() {
+        let _ = std::fs::remove_file(&marker_path);
+        let _ = std::fs::remove_file(&control_path);
         return Err(CmdError::click(format!(
             "{target}: SSH forwarding failed: {}",
             String::from_utf8_lossy(&output.stderr)
@@ -4652,12 +4684,6 @@ pub async fn forward_remote(
                 .unwrap_or("ssh forwarding failed")
         )));
     }
-    let endpoint = format!("http://127.0.0.1:{local_port}");
-    let home = std::env::var("HOME").map_err(|_| CmdError::click("HOME is not set"))?;
-    let marker_directory = std::path::Path::new(&home).join(".stado").join("forwards");
-    std::fs::create_dir_all(&marker_directory)?;
-    let marker_path = marker_directory.join(format!("{name}.url"));
-    std::fs::write(&marker_path, format!("{endpoint}\n"))?;
     if json {
         println!(
             "{}",
@@ -4666,6 +4692,7 @@ pub async fn forward_remote(
                 "remote": format!("127.0.0.1:{remote_port}"),
                 "local": format!("127.0.0.1:{local_port}"),
                 "marker": marker_path,
+                "control": control_path,
                 "transport": "ssh",
                 "status": "forwarding",
             }))?
@@ -4674,6 +4701,160 @@ pub async fn forward_remote(
         println!(
             "{target}: forwarding local 127.0.0.1:{local_port} to 127.0.0.1:{remote_port} over SSH"
         );
+    }
+    Ok(())
+}
+
+/// Stop one named `forward-remote` channel.
+///
+/// Current forwards have an OpenSSH control socket and shut down through that
+/// socket. Forwards created by older Stado versions have only the URL marker;
+/// those are stopped only when the process listening on the marker's loopback
+/// port is provably the matching SSH `-L` command to this registry target.
+pub async fn forward_stop(target: &str, name: &str, json: bool) -> Result<(), CmdError> {
+    release_component("forward name", name)?;
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if crate::deploy::host_channel::target_is_this_host(&resolved) {
+        return Err(CmdError::usage(
+            "forward-stop requires a remote registry target",
+        ));
+    }
+    let ssh = resolved
+        .ssh
+        .as_deref()
+        .ok_or_else(|| CmdError::click("registry target has no SSH destination"))?;
+    let home = std::env::var("HOME").map_err(|_| CmdError::click("HOME is not set"))?;
+    let marker_directory = std::path::Path::new(&home).join(".stado").join("forwards");
+    let marker_path = marker_directory.join(format!("{name}.url"));
+    let control_path = marker_directory.join(format!("{name}.control"));
+    let endpoint = std::fs::read_to_string(&marker_path).ok();
+    let local_port = endpoint
+        .as_deref()
+        .and_then(crate::deploy::host_inventory::marker_port);
+
+    if !marker_path.exists() && !control_path.exists() {
+        return Err(CmdError::click(format!(
+            "{name}: no forward state exists in {}",
+            marker_directory.display()
+        )));
+    }
+
+    let mut stopped = false;
+    let mut method = "control";
+    if control_path.exists() {
+        let mut argv = crate::deploy::host_channel::ssh_options(ssh);
+        let destination = argv
+            .pop()
+            .ok_or_else(|| CmdError::click("SSH channel has no destination"))?;
+        argv.extend([
+            "-S".to_string(),
+            control_path.display().to_string(),
+            "-O".to_string(),
+            "exit".to_string(),
+            destination,
+        ]);
+        let (program, arguments) = argv
+            .split_first()
+            .ok_or_else(|| CmdError::click("SSH channel is empty"))?;
+        stopped = tokio::process::Command::new(program)
+            .args(arguments)
+            .output()
+            .await?
+            .status
+            .success();
+    }
+
+    if !stopped {
+        method = "verified-legacy-process";
+        if let Some(port) = local_port {
+            let output = tokio::process::Command::new("/usr/sbin/lsof")
+                .args(["-nP", "-t", &format!("-iTCP:{port}"), "-sTCP:LISTEN"])
+                .output()
+                .await?;
+            let mut pids: Vec<i32> = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .filter_map(|line| line.trim().parse().ok())
+                .collect();
+            pids.sort_unstable();
+            pids.dedup();
+            if pids.len() > 1 {
+                return Err(CmdError::click(format!(
+                    "{name}: refusing to stop {port}; more than one process owns the listener"
+                )));
+            }
+            if let Some(pid) = pids.first().copied() {
+                let process = tokio::process::Command::new("/bin/ps")
+                    .args(["-p", &pid.to_string(), "-o", "command="])
+                    .output()
+                    .await?;
+                let command = String::from_utf8_lossy(&process.stdout);
+                let executable = command
+                    .split_whitespace()
+                    .next()
+                    .and_then(|value| std::path::Path::new(value).file_name())
+                    .and_then(|value| value.to_str());
+                let forward = format!("127.0.0.1:{port}:127.0.0.1:");
+                if executable != Some("ssh")
+                    || !command.contains(&forward)
+                    || !command.contains(ssh)
+                {
+                    return Err(CmdError::click(format!(
+                        "{name}: refusing to stop pid {pid}; it is not the matching SSH forward"
+                    )));
+                }
+                nix::sys::signal::kill(
+                    nix::unistd::Pid::from_raw(pid),
+                    nix::sys::signal::Signal::SIGTERM,
+                )
+                .map_err(|error| {
+                    CmdError::click(format!("{name}: could not stop forward pid {pid}: {error}"))
+                })?;
+                for _ in 0..20 {
+                    if nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_err() {
+                        stopped = true;
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+                if !stopped {
+                    return Err(CmdError::click(format!(
+                        "{name}: forward pid {pid} did not stop after SIGTERM"
+                    )));
+                }
+            } else {
+                method = "stale-state";
+                stopped = true;
+            }
+        }
+    }
+
+    if !stopped {
+        return Err(CmdError::click(format!(
+            "{name}: no controllable SSH forward or verifiable legacy listener was found"
+        )));
+    }
+    if marker_path.exists() {
+        std::fs::remove_file(&marker_path)?;
+    }
+    if control_path.exists() {
+        std::fs::remove_file(&control_path)?;
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": target,
+                "name": name,
+                "local": local_port.map(|port| format!("127.0.0.1:{port}")),
+                "method": method,
+                "status": "stopped",
+            }))?
+        );
+    } else {
+        println!("{target}: stopped forward {name} ({method})");
     }
     Ok(())
 }
