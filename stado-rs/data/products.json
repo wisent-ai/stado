@@ -27,7 +27,7 @@
     },
     {
       "name": "skarbiec",
-      "why": "the credential CLI; invoked per call by launchers, so no unit owns it",
+      "why": "the credential service and CLI; the always-on daemon owns fleet secret delivery",
       "source": {
         "product": "skarbiec",
         "member": "skarbiec"
@@ -44,6 +44,11 @@
         "kind": "program",
         "argument": "version",
         "shape": "json"
+      },
+      "unit": {
+        "label": "com.wisent.always-on.skarbiec",
+        "kind": "launchd",
+        "path": "/Library/LaunchDaemons/com.wisent.always-on.skarbiec.plist"
       }
     },
     {

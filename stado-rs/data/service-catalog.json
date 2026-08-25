@@ -21,7 +21,8 @@
         "serve",
         "--port",
         "8895"
-      ]
+      ],
+      "unit": "com.wisent.always-on.skarbiec"
     },
     {
       "name": "stado",

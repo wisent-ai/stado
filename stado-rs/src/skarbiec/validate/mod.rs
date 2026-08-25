@@ -19,12 +19,9 @@ pub use release::validate_release_verifier;
 pub use service::validate_service_verifier;
 
 /// Read one `token` field per item through one shared verifier client, with
-/// bounded concurrency. The Skarbiec listener is thread-per-connection, so
-/// sweeping N items serially multiplies the vault's gpg latency by N, while
-/// opening one connection per item floods the listener and the caller's
-/// deadline elapses with requests still queued. The bound is the machine's
-/// parallelism, which is what the listener can actually serve at once.
-/// Results come back in the same order as `items`.
+/// bounded concurrency. The bound stays below Skarbiec's own request and GPG
+/// admission limits, so a verifier sweep makes progress without monopolizing
+/// credential delivery. Results come back in the same order as `items`.
 pub(crate) async fn read_token_fields(
     client: &Client,
     items: Vec<&str>,

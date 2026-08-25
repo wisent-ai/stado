@@ -47,9 +47,9 @@
 //!   the host-local paths a delivery must leave alone (`preserve`), because
 //!   `$HOME/weles` holds `recordings/`, `var/` and `.work/` that no release
 //!   produced and no release may take away.
-//! - **the owning unit** ([`Unit`]), when one exists — `skarbiec` is a CLI
-//!   invoked per call and declares none, and is reported as having no unit
-//!   rather than silently "restarted".
+//! - **the owning unit** ([`Unit`]), when one exists — the Skarbiec program is
+//!   both a CLI and the executable behind `com.wisent.always-on.skarbiec`, so a
+//!   versioned delivery can converge the daemon instead of leaving stale bytes.
 //! - **how the installed version is read back** ([`Readback`]) — running the
 //!   program for a program, one member of one JSON file inside the tree for a
 //!   tree. This is the field that decides whether a host is already at the

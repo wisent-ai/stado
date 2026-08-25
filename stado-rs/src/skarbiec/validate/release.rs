@@ -50,9 +50,8 @@ pub async fn validate_release_verifier() -> Result<usize, SkarbiecError> {
     })?;
     let object_client = Client::object_verifier()?;
     let mut token_owners = HashMap::<Vec<u8>, String>::new();
-    // Both sweeps share their verifier client concurrently: the Skarbiec
-    // listener is thread-per-connection, so serial reads would multiply the
-    // vault's gpg latency by the item count for no benefit.
+    // Both sweeps share their verifier client concurrently while Skarbiec's
+    // bounded admission and GPG executors retain control of broker capacity.
     let object_reads: Vec<(&str, Result<Option<String>, SkarbiecError>)> =
         futures::future::join_all(object_namespaces.iter().map(|(namespace, policy)| {
             let object_client = &object_client;
