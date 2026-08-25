@@ -261,14 +261,20 @@ pub fn job_eligible(
 ) -> bool {
     let pinned_host = job.pinned_host.to_lowercase();
     let cid = consumer_id.to_lowercase();
-    if !pinned_host.is_empty() && pinned_host != cid {
+    let kind_prefix = format!("{}-", kind.to_lowercase());
+    let consumer_machine = cid.strip_prefix(&kind_prefix).unwrap_or(&cid);
+    let machine = consumer_machine
+        .strip_suffix(".local")
+        .unwrap_or(consumer_machine);
+    let pin_matches = !pinned_host.is_empty() && (pinned_host == cid || pinned_host == machine);
+    if !pinned_host.is_empty() && !pin_matches {
         return false;
     }
     let assigned = job.assigned_to.as_str();
     if !assigned.is_empty() && !consumer_id.is_empty() && assigned != consumer_id {
         return false;
     }
-    if pinned_only && pinned_host != cid && assigned != consumer_id {
+    if pinned_only && !pin_matches && assigned != consumer_id {
         return false;
     }
     if job.exclusive && active_slot_count > 0 {
