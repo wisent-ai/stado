@@ -12,6 +12,8 @@ use crate::targets::ComputeTarget;
 pub const CUA_DRIVER_VERSION: &str = "0.22.0";
 pub const CUA_DRIVER_BUNDLE_ID: &str = "com.trycua.driver";
 pub const CUA_DRIVER_APP: &str = "/Applications/CuaDriver.app";
+const CUA_DRIVER_EXECUTABLE: &str =
+    "/Applications/CuaDriver.app/Contents/MacOS/cua-driver";
 pub const CUA_DRIVER_ARCHIVE_SHA256: &str =
     "59603bc7e5f8d9d70f165d87158e577f99227ffcbb91d5fd9f9c688f4beb3727";
 pub const CUA_DRIVER_ARCHIVE_URL: &str = "https://github.com/trycua/cua/releases/download/\
@@ -774,9 +776,12 @@ async fn grant_accessibility_inner(
         )
         .await?;
     }
+    // CuaDriver is launched directly by launchd and may also be reached through
+    // its app bundle. TCC identifies those two responsibility chains
+    // differently, so keep both grants tied to the same signed requirement.
     let sql = format!(
-        "BEGIN IMMEDIATE; DELETE FROM access WHERE service = '{ACCESSIBILITY_SERVICE}' AND client = '{}' AND client_type = 0; INSERT INTO access (service, client, client_type, auth_value, auth_reason, auth_version, csreq, policy_id, indirect_object_identifier_type, indirect_object_identifier, indirect_object_code_identity, flags, last_modified) VALUES ('{ACCESSIBILITY_SERVICE}', '{}', 0, 2, 3, 1, X'{}', NULL, 0, 'UNUSED', NULL, 0, strftime('%s','now')); COMMIT;",
-        identity.bundle, identity.bundle, csreq
+        "BEGIN IMMEDIATE; DELETE FROM access WHERE service = '{ACCESSIBILITY_SERVICE}' AND ((client = '{}' AND client_type = 0) OR (client = '{CUA_DRIVER_EXECUTABLE}' AND client_type = 1)); INSERT INTO access (service, client, client_type, auth_value, auth_reason, auth_version, csreq, policy_id, indirect_object_identifier_type, indirect_object_identifier, indirect_object_code_identity, flags, last_modified) VALUES ('{ACCESSIBILITY_SERVICE}', '{}', 0, 2, 3, 1, X'{}', NULL, 0, 'UNUSED', NULL, 0, strftime('%s','now')); INSERT INTO access (service, client, client_type, auth_value, auth_reason, auth_version, csreq, policy_id, indirect_object_identifier_type, indirect_object_identifier, indirect_object_code_identity, flags, last_modified) VALUES ('{ACCESSIBILITY_SERVICE}', '{CUA_DRIVER_EXECUTABLE}', 1, 2, 3, 1, X'{}', NULL, 0, 'UNUSED', NULL, 0, strftime('%s','now')); COMMIT;",
+        identity.bundle, identity.bundle, csreq, csreq
     );
     run_sudo(
         target,
@@ -786,7 +791,7 @@ async fn grant_accessibility_inner(
     )
     .await?;
     let verify_sql = format!(
-        "SELECT auth_value FROM access WHERE service = '{ACCESSIBILITY_SERVICE}' AND client = '{}' AND client_type = 0 ORDER BY last_modified DESC LIMIT 1;",
+        "SELECT COUNT(*) FROM access WHERE service = '{ACCESSIBILITY_SERVICE}' AND auth_value = 2 AND ((client = '{}' AND client_type = 0) OR (client = '{CUA_DRIVER_EXECUTABLE}' AND client_type = 1));",
         identity.bundle
     );
     let granted = run_sudo(
@@ -799,7 +804,8 @@ async fn grant_accessibility_inner(
     .stdout;
     if granted.trim() != "2" {
         return Err(DeployError(
-            "the CuaDriver Accessibility grant was not read back".to_string(),
+            "the CuaDriver bundle and executable Accessibility grants were not read back"
+                .to_string(),
         ));
     }
     items.push(("accessibility".to_string(), "granted".to_string()));
@@ -903,6 +909,26 @@ async fn reconcile_runtime(
         runner,
     )
     .await?;
+
+    let qualified = format!("gui/{uid}/{CUA_DRIVER_RUNTIME_LABEL}");
+    let definition_matches =
+        host_channel::run_program(target, &["/usr/bin/cmp", "-s", &staged, &plist], runner)
+            .await?
+            .ok();
+    let runtime_loaded =
+        host_channel::run_program(target, &["/bin/launchctl", "print", &qualified], runner)
+            .await?
+            .ok();
+    let socket_ready =
+        host_channel::run_program(target, &["/bin/test", "-S", &socket], runner)
+            .await?
+            .ok();
+    if definition_matches && runtime_loaded && socket_ready {
+        remove_if_present(target, &staged, false, runner).await?;
+        items.push(("cua-driver-runtime".to_string(), "running".to_string()));
+        items.push(("cua-driver-socket".to_string(), socket));
+        return Ok(());
+    }
 
     for label in [CUA_DRIVER_RUNTIME_LABEL, LEGACY_CUA_DRIVER_RUNTIME_LABEL] {
         let qualified = format!("gui/{uid}/{label}");
@@ -1030,7 +1056,7 @@ async fn status_inner(
     let user = login_user(target, runner).await?;
     let database = format!("/Users/{user}/Library/Application Support/com.apple.TCC/TCC.db");
     let query = format!(
-        "SELECT auth_value FROM access WHERE service = '{ACCESSIBILITY_SERVICE}' AND client = '{}' AND client_type = 0 ORDER BY last_modified DESC LIMIT 1;",
+        "SELECT COUNT(*) FROM access WHERE service = '{ACCESSIBILITY_SERVICE}' AND auth_value = 2 AND ((client = '{}' AND client_type = 0) OR (client = '{CUA_DRIVER_EXECUTABLE}' AND client_type = 1));",
         identity.bundle
     );
     let value = optional_sudo(target, &["/usr/bin/sqlite3", &database, &query], runner)
@@ -1038,7 +1064,7 @@ async fn status_inner(
         .unwrap_or_default();
     let state = match value.trim() {
         "2" => "granted".to_string(),
-        "" => "not-set".to_string(),
+        "0" | "1" | "" => "not-set".to_string(),
         other => format!("refused:{other}"),
     };
     items.push(("accessibility".to_string(), state.clone()));
