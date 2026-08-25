@@ -11,6 +11,11 @@ All user-visible Stado changes are recorded here. Stado follows Semantic Version
   fields and treat unknown codes as non-retryable, and a breaking change
   increments `schema_version`, which consumers must refuse when unknown.
 
+- Added `stado host gui-automation grant-accessibility`: it grants an installed,
+  signed CuaDriver app Accessibility on a registry-managed Mac without opening
+  System Settings, binds the TCC decision to the app's designated code
+  requirement, backs up the prior database once, and verifies the written row.
+
 ### Configuration
 
 - Removed Wisent's deployment profiles and bundled fleet registry from the

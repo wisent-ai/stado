@@ -468,6 +468,21 @@ pub async fn gui_automation_status(target: &str) -> Result<(), CmdError> {
     print_report(&report)
 }
 
+/// `stado host gui-automation grant-accessibility TARGET` — grant the
+/// installed, signed CuaDriver app Accessibility for the host's GUI user.
+pub async fn gui_automation_grant_accessibility(target: &str) -> Result<(), CmdError> {
+    let resolved = registry_target(target).await?;
+    let runner = crate::deploy::production_runner();
+    let report = crate::deploy::host_gui_automation::run_on_host(
+        &resolved,
+        crate::deploy::host_gui_automation::REMOTE_GRANT_ACCESSIBILITY_SCRIPT,
+        "",
+        &runner,
+    )
+    .await;
+    print_report(&report)
+}
+
 /// `stado host gui-automation disable TARGET [--bundle ID]` — revert the
 /// enablement and report every item it touched.
 pub async fn gui_automation_disable(target: &str, bundle: &str) -> Result<(), CmdError> {

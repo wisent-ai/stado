@@ -1214,7 +1214,7 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Report or revert the GUI-automation enablement of TARGET.
+    /// Manage the GUI-automation enablement of TARGET.
     #[command(name = "gui-automation", subcommand)]
     GuiAutomation(HostGuiAutomationCommands),
     /// Report or reclaim tagged build caches on TARGET.
@@ -1572,6 +1572,9 @@ enum HostBuildCacheCommands {
 enum HostGuiAutomationCommands {
     /// Report autologin, remote management, TCC and automation artifacts.
     Status { target: String },
+    /// Grant the installed CuaDriver app Accessibility for the host's GUI user.
+    #[command(name = "grant-accessibility")]
+    GrantAccessibility { target: String },
     /// Revert the enablement: autologin, kcpassword, remote management,
     /// the driver's accessibility grant, and the installed artifacts.
     Disable {
@@ -1962,6 +1965,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::GuiAutomation(HostGuiAutomationCommands::Status { target }) => {
                 host::gui_automation_status(&target).await
             }
+            HostCommands::GuiAutomation(HostGuiAutomationCommands::GrantAccessibility {
+                target,
+            }) => host::gui_automation_grant_accessibility(&target).await,
             HostCommands::GuiAutomation(HostGuiAutomationCommands::Disable { target, bundle }) => {
                 host::gui_automation_disable(&target, bundle.as_deref().unwrap_or("")).await
             }

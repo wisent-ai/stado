@@ -1,17 +1,17 @@
-//! Report and revert the GUI-automation enablement of a registry-managed
-//! macOS host.
+//! Report, grant, and revert the GUI-automation enablement of a
+//! registry-managed macOS host.
 //!
 //! A headless mac needs a console session before any native UI test can run,
 //! and getting one means autologin, an accessibility grant for the driver, and
 //! remote-management access. Those were previously arranged by hand over ad-hoc
 //! SSH, which left a host carrying an autologin password and a pre-seeded TCC
-//! row with nothing in stado that knew about it, could report it, or could take
-//! it away. This module is that missing half: the state is enumerated and
-//! reverted through the same approved channel `host user create` uses.
+//! row with nothing in Stado that knew about it, could report it, or could take
+//! it away. This module owns that state through the same approved channel
+//! `host user create` uses.
 //!
-//! `status` reads; `disable` reverts. Both are idempotent, and both name every
-//! item they touched so the report is the evidence. The remote scripts report
-//! raw values and never compare them, so interpretation stays on this side.
+//! `status` reads, `grant-accessibility` performs the same per-user TCC write as
+//! the System Settings switch, and `disable` reverts. Every mutation is
+//! idempotent and reports the state read back from the host.
 
 use std::time::Duration;
 
@@ -25,6 +25,100 @@ pub const STATUS_PREFIX: &str = "STADO_GUI\t";
 /// Environment variable carrying the driver bundle id whose accessibility
 /// grant should be revoked. Empty means "leave TCC alone" rather than guess.
 pub const BUNDLE_ENV: &str = "STADO_GUI_BUNDLE";
+
+/// Grant CuaDriver Accessibility to the console user, or to the remote-login
+/// user when the host is sitting at the login window. The application must
+/// already be installed and validly signed; the designated requirement stored
+/// with the TCC row binds the grant to those signed bytes instead of trusting a
+/// bundle identifier alone.
+pub const REMOTE_GRANT_ACCESSIBILITY_SCRIPT: &str = r#"set -eu
+app=/Applications/CuaDriver.app
+login_user="${STADO_GUI_LOGIN_USER:-}"
+console_user=$(/usr/bin/stat -f %Su /dev/console 2>/dev/null || true)
+case "$console_user" in
+  ""|root|loginwindow|_mbsetupuser) user="$login_user" ;;
+  *) user="$console_user" ;;
+esac
+case "$user" in
+  ""|root|loginwindow|_mbsetupuser)
+    printf 'STADO_GUI\taccessibility\t%s\n' no-user
+    exit 1
+    ;;
+esac
+case "$user" in
+  *[!A-Za-z0-9._-]*)
+    printf 'STADO_GUI\taccessibility\t%s\n' invalid-user
+    exit 1
+    ;;
+esac
+if [ ! -d "$app" ]; then
+  printf 'STADO_GUI\taccessibility\t%s\n' app-missing
+  exit 1
+fi
+/usr/bin/codesign --verify --deep --strict "$app"
+bundle=$(/usr/bin/defaults read "$app/Contents/Info" CFBundleIdentifier)
+case "$bundle" in
+  ""|*[!A-Za-z0-9._-]*)
+    printf 'STADO_GUI\taccessibility\t%s\n' invalid-bundle
+    exit 1
+    ;;
+esac
+requirement=$(/usr/bin/codesign -dr - "$app" 2>&1)
+requirement=${requirement#* => }
+csreq=$(/usr/bin/csreq -r "$requirement" -b /dev/stdout | /usr/bin/xxd -p | /usr/bin/tr -d '\n')
+if [ -z "$csreq" ]; then
+  printf 'STADO_GUI\taccessibility\t%s\n' missing-code-requirement
+  exit 1
+fi
+home="/Users/$user"
+db="$home/Library/Application Support/com.apple.TCC/TCC.db"
+if [ ! -f "$db" ]; then
+  printf 'STADO_GUI\taccessibility\t%s\n' tcc-database-missing
+  exit 1
+fi
+columns=$(/usr/bin/sqlite3 "$db" "SELECT group_concat(name, ',') FROM pragma_table_info('access');")
+for required in service client client_type auth_value auth_reason auth_version csreq indirect_object_identifier_type indirect_object_identifier flags last_modified; do
+  case ",$columns," in
+    *",$required,"*) ;;
+    *)
+      printf 'STADO_GUI\taccessibility\tunsupported-tcc-schema:%s\n' "$required"
+      exit 1
+      ;;
+  esac
+done
+backup_dir="$home/.stado/backups"
+backup="$backup_dir/TCC.db.before-stado-accessibility"
+/bin/mkdir -p "$backup_dir"
+if [ ! -f "$backup" ]; then
+  /usr/bin/sqlite3 "$db" ".backup '$backup'"
+  /usr/sbin/chown "$user":staff "$backup"
+  /bin/chmod 600 "$backup"
+fi
+/usr/bin/sqlite3 "$db" "BEGIN IMMEDIATE;
+DELETE FROM access
+ WHERE service = 'kTCCServiceAccessibility'
+   AND client = '$bundle'
+   AND client_type = 0;
+INSERT INTO access (
+  service, client, client_type, auth_value, auth_reason, auth_version,
+  csreq, policy_id, indirect_object_identifier_type,
+  indirect_object_identifier, indirect_object_code_identity, flags,
+  last_modified
+) VALUES (
+  'kTCCServiceAccessibility', '$bundle', 0, 2, 3, 1,
+  X'$csreq', NULL, 0, 'UNUSED', NULL, 0, strftime('%s','now')
+);
+COMMIT;"
+granted=$(/usr/bin/sqlite3 "$db" "SELECT auth_value FROM access WHERE service = 'kTCCServiceAccessibility' AND client = '$bundle' AND client_type = 0 ORDER BY last_modified DESC LIMIT 1;")
+if [ "$granted" != 2 ]; then
+  printf 'STADO_GUI\taccessibility\t%s\n' write-not-observed
+  exit 1
+fi
+printf 'STADO_GUI\taccessibility\t%s\n' granted
+printf 'STADO_GUI\taccessibility-user\t%s\n' "$user"
+printf 'STADO_GUI\taccessibility-client\t%s\n' "$bundle"
+printf 'STADO_GUI\taccessibility-backup\t%s\n' "$backup"
+"#;
 
 /// Enumerate the enablement state. Every line is `STADO_GUI\t<item>\t<state>`.
 pub const REMOTE_STATUS_SCRIPT: &str = r#"set -eu
@@ -51,6 +145,29 @@ done
 
 console=$(/usr/bin/stat -f %Su /dev/console 2>/dev/null || echo unknown)
 printf 'STADO_GUI\tconsole\t%s\n' "$console"
+case "$console" in
+  ""|root|loginwindow|_mbsetupuser) user="${STADO_GUI_LOGIN_USER:-}" ;;
+  *) user="$console" ;;
+esac
+if [ -d /Applications/CuaDriver.app ]; then
+  bundle=$(/usr/bin/defaults read /Applications/CuaDriver.app/Contents/Info CFBundleIdentifier 2>/dev/null || true)
+  db="/Users/$user/Library/Application Support/com.apple.TCC/TCC.db"
+  if [ -n "$bundle" ] && [ -f "$db" ]; then
+    value=$(/usr/bin/sqlite3 "$db" "SELECT auth_value FROM access WHERE service = 'kTCCServiceAccessibility' AND client = '$bundle' AND client_type = 0 ORDER BY last_modified DESC LIMIT 1;" 2>/dev/null || true)
+    case "$value" in
+      2) state=granted ;;
+      "") state=not-set ;;
+      *) state="refused:$value" ;;
+    esac
+    printf 'STADO_GUI\taccessibility\t%s\n' "$state"
+    printf 'STADO_GUI\taccessibility-user\t%s\n' "$user"
+    printf 'STADO_GUI\taccessibility-client\t%s\n' "$bundle"
+  else
+    printf 'STADO_GUI\taccessibility\t%s\n' unavailable
+  fi
+else
+  printf 'STADO_GUI\taccessibility\t%s\n' app-missing
+fi
 "#;
 
 /// Revert every item `status` reports. The TCC grant is revoked only for the
@@ -114,15 +231,16 @@ pub struct GuiAutomationReport {
 
 /// Wrap a script in the privilege escalation `host user create` uses: run it
 /// directly when already root, otherwise through non-interactive sudo. The
-/// bundle id travels as an environment assignment, never in the script text.
+/// original login user is captured before sudo so a host at the login window
+/// still has an unambiguous per-user TCC database.
 pub fn remote_command(script: &str, bundle: &str) -> String {
     let assignment = format!("{BUNDLE_ENV}={}", shlex_quote(bundle));
     let invocation = format!(
-        "/usr/bin/env {assignment} /bin/sh -c {}",
+        "/usr/bin/env {assignment} STADO_GUI_LOGIN_USER=\"$login_user\" /bin/sh -c {}",
         shlex_quote(script)
     );
     format!(
-        "if [ \"$(/usr/bin/id -u)\" -eq 0 ]; then exec {invocation}; else exec /usr/bin/sudo -n {invocation}; fi"
+        "login_user=$(/usr/bin/id -un); if [ \"$(/usr/bin/id -u)\" -eq 0 ]; then exec {invocation}; else exec /usr/bin/sudo -n {invocation}; fi"
     )
 }
 
