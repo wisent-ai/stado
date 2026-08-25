@@ -20,6 +20,19 @@ if [ "$stado_bin" != "$managed_stado" ]; then
   mv "$managed_stado.new" "$managed_stado"
   stado_bin=$managed_stado
 fi
+bootstrap_user_agent() {
+  domain=$1
+  plist=$2
+  attempt=0
+  while ! launchctl bootstrap "$domain" "$plist"; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -ge 10 ]; then
+      printf '%s\n' "Resolver bootstrap did not become available after ${attempt}s" >&2
+      return 1
+    fi
+    sleep 1
+  done
+}
 
 target=${1:-}
 if [ -z "$target" ]; then
@@ -60,7 +73,7 @@ case $(uname -s) in
         -e "s|{HOME}|$HOME|g" \
         "$template_dir/com.wisent.stado-resolver.plist.tmpl" > "$destination"
       launchctl bootout "gui/$(id -u)/com.wisent.stado-resolver" >/dev/null 2>&1 || true
-      launchctl bootstrap "gui/$(id -u)" "$destination"
+      bootstrap_user_agent "gui/$(id -u)" "$destination"
       launchctl enable "gui/$(id -u)/com.wisent.stado-resolver"
       # Clean cutover: the resolver supersedes the host-pinned SSH forward.
       launchctl bootout "gui/$(id -u)/com.wisent.always-on-forward" >/dev/null 2>&1 || true

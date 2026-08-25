@@ -47,6 +47,7 @@ mod fleet_join;
 mod integration;
 
 use futures::stream::{FuturesUnordered, StreamExt};
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
@@ -55,6 +56,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Mutex as AsyncMutex;
 
 use crate::config;
 use crate::deploy::{host_channel, production_runner, service};
@@ -288,6 +290,15 @@ fn enrollment_route_allowed(method: &str, path: &str) -> bool {
         .any(|(allowed_method, allowed_path)| *allowed_method == method && *allowed_path == path)
 }
 
+const OBJECT_TOKEN_FRESH_FOR: Duration = Duration::from_secs(60);
+const OBJECT_TOKEN_STALE_FOR: Duration = Duration::from_secs(10 * 60);
+
+#[derive(Clone)]
+struct CachedObjectToken {
+    value: Option<String>,
+    loaded_at: Instant,
+}
+
 #[derive(Clone)]
 pub struct Dashboard {
     store: JobStorage,
@@ -296,6 +307,11 @@ pub struct Dashboard {
     /// Every boundary's live verdict. Written by startup validation and by
     /// the inline recheck a request runs when it finds its boundary closed.
     boundaries: Arc<RwLock<BoundaryAvailability>>,
+    /// Namespace bearer cache. Object traffic must not turn into one Skarbiec
+    /// read per object request: that exhausted the broker's request capacity
+    /// and made the whole object plane answer 503. One async lock also folds a
+    /// cold-start burst into one vault read.
+    object_tokens: Arc<AsyncMutex<BTreeMap<String, CachedObjectToken>>>,
     /// Serve only [`ENROLLMENT_ROUTES`]; every other request is refused
     /// before authorization, before the store and before the vault.
     enrollment_only: bool,
@@ -307,6 +323,7 @@ impl Dashboard {
         Self {
             rate_limiter: RateLimiter::new(store.clone()),
             boundaries: Arc::new(RwLock::new(BoundaryAvailability::default())),
+            object_tokens: Arc::new(AsyncMutex::new(BTreeMap::new())),
             store,
             enrollment_only: false,
         }
@@ -318,6 +335,63 @@ impl Dashboard {
     pub fn with_enrollment_only(mut self, enrollment_only: bool) -> Self {
         self.enrollment_only = enrollment_only;
         self
+    }
+    async fn object_token(&self, namespace: &str, item: &str) -> Result<String, ()> {
+        let mut tokens = self.object_tokens.lock().await;
+        let now = Instant::now();
+        if let Some(cached) = tokens.get(namespace) {
+            if now.duration_since(cached.loaded_at) <= OBJECT_TOKEN_FRESH_FOR {
+                return cached.value.clone().ok_or(());
+            }
+        }
+
+        match crate::skarbiec::read_object_token(item, "token").await {
+            Ok(Some(value)) if !value.is_empty() => {
+                tokens.insert(
+                    namespace.to_string(),
+                    CachedObjectToken {
+                        value: Some(value.clone()),
+                        loaded_at: now,
+                    },
+                );
+                Ok(value)
+            }
+            Ok(_) => {
+                eprintln!(
+                    "[dashboard] object verifier item unavailable for namespace {namespace}"
+                );
+                tokens.insert(
+                    namespace.to_string(),
+                    CachedObjectToken {
+                        value: None,
+                        loaded_at: now,
+                    },
+                );
+                Err(())
+            }
+            Err(error) => {
+                if let Some(cached) = tokens.get(namespace) {
+                    if let Some(value) = &cached.value {
+                        if now.duration_since(cached.loaded_at) <= OBJECT_TOKEN_STALE_FOR {
+                            eprintln!(
+                                "[dashboard] object verifier refresh failed for namespace {namespace}; using the last token loaded {}s ago: {error}",
+                                now.duration_since(cached.loaded_at).as_secs()
+                            );
+                            return Ok(value.clone());
+                        }
+                    }
+                }
+                eprintln!("[dashboard] object verifier failed for namespace {namespace}: {error}");
+                tokens.insert(
+                    namespace.to_string(),
+                    CachedObjectToken {
+                        value: None,
+                        loaded_at: now,
+                    },
+                );
+                Err(())
+            }
+        }
     }
 
     /// Run exactly one boundary's verifier once, bounded by
@@ -671,7 +745,7 @@ impl Dashboard {
                 authorize_release(request, &policy_key, false).await
             }
         } else {
-            authorize_object(request, object.namespace(), object.key(), false, "put").await
+            authorize_object(self, request, object.namespace(), object.key(), false, "put").await
         };
         match authorized {
             Ok(true) => {}
@@ -778,7 +852,7 @@ impl Dashboard {
                 let listing = list && namespace != "system";
                 authorize_release(request, &policy_key, listing).await
             } else {
-                authorize_object(request, &namespace, &key_or_prefix, list, action).await
+                authorize_object(self, request, &namespace, &key_or_prefix, list, action).await
             };
             match authorized {
                 Ok(true) => {}
@@ -1594,7 +1668,7 @@ impl Dashboard {
                 authorize_release(request, &policy_key, false).await
             }
         } else {
-            authorize_object(request, object.namespace(), object.key(), false, "put").await
+            authorize_object(self, request, object.namespace(), object.key(), false, "put").await
         };
         match authorized {
             Ok(true) => {}
@@ -1644,7 +1718,9 @@ impl Dashboard {
                 &json!({"error": "object authorization unavailable"}),
             );
         }
-        match authorize_object(request, object.namespace(), object.key(), false, "delete").await {
+        match authorize_object(self, request, object.namespace(), object.key(), false, "delete")
+            .await
+        {
             Ok(true) => {}
             Ok(false) => return send_json(http_status("401"), &json!({"error": "unauthorized"})),
             Err(()) => {
@@ -2368,6 +2444,7 @@ async fn authorize_host_health(request: &Request) -> bool {
 }
 
 async fn authorize_object(
+    dashboard: &Dashboard,
     request: &Request,
     namespace: &str,
     key_or_prefix: &str,
@@ -2388,17 +2465,7 @@ async fn authorize_object(
     if !in_scope {
         return Ok(false);
     }
-    let expected = match crate::skarbiec::read_object_token(policy.item(), "token").await {
-        Ok(Some(value)) if !value.is_empty() => value,
-        Ok(_) => {
-            eprintln!("[dashboard] object verifier item unavailable for namespace {namespace}");
-            return Err(());
-        }
-        Err(error) => {
-            eprintln!("[dashboard] object verifier failed for namespace {namespace}: {error}");
-            return Err(());
-        }
-    };
+    let expected = dashboard.object_token(namespace, policy.item()).await?;
     let authorization = request.header("authorization").unwrap_or("").trim();
     let supplied = authorization.strip_prefix("Bearer ").unwrap_or_default();
     Ok(constant_time_eq(expected.as_bytes(), supplied.as_bytes()))
