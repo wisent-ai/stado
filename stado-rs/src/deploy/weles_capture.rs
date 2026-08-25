@@ -64,10 +64,12 @@ pub const ARTIFACT_NAMESPACE: &str = "weles-captures";
 /// Credential item carrying the admission API bearer token, for a host whose
 /// listener is configured to want one.
 ///
+/// Weles names this authority `echo-weles-api`; the Stado service-directory
+/// name is `weles-admission`, but service names are not credential item names.
 /// Read through Stado's selected credential store on THIS machine and sent as
 /// an `Authorization` header. It is never written to a remote command line: a
 /// token in `argv` on the far side is readable by every process on that host.
-const ADMISSION_TOKEN_ITEM: &str = "weles-admission-api";
+const ADMISSION_TOKEN_ITEM: &str = "echo-weles-api";
 const ADMISSION_TOKEN_FIELD: &str = "token";
 
 const ENQUEUE_ROUTE: &str = "/v1/echo/jobs/enqueue-batch";
