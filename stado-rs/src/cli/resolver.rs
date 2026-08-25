@@ -453,6 +453,9 @@ impl ResolverState {
         let source = self.source.read().await.clone();
         let (document, store_version, generation) =
             source.fetch(host_silence::READER_RESOLVER).await?;
+        let serialized = serde_json::to_string(&document)
+            .map_err(|error| format!("cannot serialize validated registry snapshot: {error}"))?;
+        targets::store_last_good(&serialized, &store_version);
         let next_source =
             snapshot_source(self.local_store.clone(), &document, &self.local_target)?;
         let next_config = service_resolution::resolver_config(&document, &self.local_target)?;

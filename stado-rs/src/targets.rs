@@ -2575,7 +2575,7 @@ fn write_atomic(path: &Path, content: &str) -> std::io::Result<()> {
 /// document dated by the older sidecar, which OVERSTATES the age; the other
 /// order understates it, and a registry that reads fresher than it is, is
 /// the exact lie this cache exists to prevent.
-fn store_last_good(text: &str, generation: &str) {
+pub(crate) fn store_last_good(text: &str, generation: &str) {
     let (Some(document), Some(meta)) = (registry_last_good_path(), registry_last_good_meta_path())
     else {
         return;
