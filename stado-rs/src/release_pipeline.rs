@@ -14,6 +14,9 @@ use serde_json::Value;
 pub const PRODUCT_MANIFEST: &str = ".wisent-release.json";
 pub const SCHEMA_VERSION: u32 = 1;
 pub const RUNNER_PLATFORMS: [&str; 2] = ["darwin-arm64", "linux-amd64"];
+fn default_required() -> bool {
+    true
+}
 
 // One manifest is parsed per release operation and the two variants are the two
 // shapes a product may legally declare. Boxing the release arm would put an
@@ -77,6 +80,8 @@ pub struct PlatformRecipe {
     pub stage: BTreeMap<String, String>,
     #[serde(default)]
     pub secret_env: BTreeMap<String, String>,
+    #[serde(default = "default_required")]
+    pub required: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

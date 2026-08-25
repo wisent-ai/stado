@@ -979,7 +979,11 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
                 let platform = run.platforms.get_mut(p).unwrap();
                 platform.state = PlatformRunState::Failed;
                 platform.failure = Some(error.to_string());
-                return Err(persist_failure(&mut run, error).await);
+                if m.platforms[p].required {
+                    return Err(persist_failure(&mut run, error).await);
+                }
+                save(&mut run).await?;
+                continue;
             }
         };
         save(&mut run).await?;
