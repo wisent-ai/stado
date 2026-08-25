@@ -1572,7 +1572,7 @@ enum HostBuildCacheCommands {
 enum HostGuiAutomationCommands {
     /// Report autologin, remote management, TCC and automation artifacts.
     Status { target: String },
-    /// Install the pinned signed CuaDriver app and grant Accessibility.
+    /// Configure persistent GUI login, install CuaDriver, and grant Accessibility.
     Enable { target: String },
     /// Grant the installed CuaDriver app Accessibility for the host's GUI user.
     #[command(name = "grant-accessibility")]

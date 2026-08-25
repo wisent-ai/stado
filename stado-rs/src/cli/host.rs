@@ -462,12 +462,19 @@ pub async fn gui_automation_status(target: &str) -> Result<(), CmdError> {
     print_report(&report)
 }
 
-/// `stado host gui-automation enable TARGET` — install the pinned signed
-/// CuaDriver app and grant Accessibility for the host's GUI user.
+/// `stado host gui-automation enable TARGET` — configure persistent GUI login,
+/// install the pinned signed CuaDriver app and grant Accessibility.
 pub async fn gui_automation_enable(target: &str) -> Result<(), CmdError> {
     let resolved = registry_target(target).await?;
+    let password = super::service::host_sudo_password(&resolved)
+        .await?
+        .ok_or_else(|| CmdError::click(format!(
+            "{} has no readable host-account password",
+            resolved.name
+        )))?;
     let runner = crate::deploy::production_runner();
-    let report = crate::deploy::host_gui_automation::enable(&resolved, &runner).await;
+    let report =
+        crate::deploy::host_gui_automation::enable(&resolved, &password, &runner).await;
     print_report(&report)
 }
 

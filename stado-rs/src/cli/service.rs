@@ -1174,7 +1174,7 @@ fn render_status(
 // ---------------------------------------------------------------------------
 // Restart
 // ---------------------------------------------------------------------------
-async fn host_sudo_password(
+pub(crate) async fn host_sudo_password(
     target: &crate::targets::ComputeTarget,
 ) -> Result<Option<String>, CmdError> {
     let Some(item) = target.account_ref.as_deref() else {
