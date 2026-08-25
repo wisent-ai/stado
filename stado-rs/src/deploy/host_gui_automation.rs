@@ -752,11 +752,12 @@ async fn status_inner(
     )
     .await?
     .unwrap_or_else(|| "unknown".to_string());
-    items.push(("console".to_string(), console));
+    items.push(("console".to_string(), console.clone()));
 
     let Some(identity) = app_identity(target, CUA_DRIVER_APP, runner).await? else {
         items.push(("cua-driver-app".to_string(), "absent".to_string()));
         items.push(("accessibility".to_string(), "app-missing".to_string()));
+        items.push(("gui-ready".to_string(), "no".to_string()));
         return Ok(());
     };
     items.push(("cua-driver-app".to_string(), "present".to_string()));
@@ -776,8 +777,14 @@ async fn status_inner(
         "" => "not-set".to_string(),
         other => format!("refused:{other}"),
     };
-    items.push(("accessibility".to_string(), state));
+    items.push(("accessibility".to_string(), state.clone()));
     items.push(("accessibility-user".to_string(), user));
+    let console_ready = !matches!(console.as_str(), "" | "root" | "loginwindow" | "unknown");
+    let gui_ready = console_ready && state == "granted";
+    items.push((
+        "gui-ready".to_string(),
+        if gui_ready { "yes" } else { "no" }.to_string(),
+    ));
     Ok(())
 }
 
