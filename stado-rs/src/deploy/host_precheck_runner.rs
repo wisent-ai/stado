@@ -69,7 +69,6 @@ const MACOS_CERT_P12_SECRET: &str = "MACOS_CERT_P12";
 const MACOS_CERT_PASSWORD_SECRET: &str = "MACOS_CERT_PASSWORD";
 const MACOS_SIGN_IDENTITY_SECRET: &str = "MACOS_SIGN_IDENTITY";
 const APPLE_DEVELOPER_ID_ACTION: &str = "apple_create_developer_id";
-const APPLE_PLATFORM: &str = "apple";
 
 // These are network classes, not fleet addresses. Keeping the policy here makes
 // the Linux nftables and macOS PF renderers consume one source of truth.
@@ -854,11 +853,9 @@ pub async fn bootstrap_developer_id(
         if finish_output.ok() {
             // The interrupted Account Holder run had already issued the certificate.
         } else {
-            let action_id = super::weles_capture::enqueue_action(
+            let _action_id = super::weles_capture::run_action(
                 &channel,
                 APPLE_DEVELOPER_ID_ACTION,
-                APPLE_PLATFORM,
-                None,
                 json!({
                     "account_item": account_item,
                     "csr_path": format!("{work}/request.csr"),
@@ -867,35 +864,6 @@ pub async fn bootstrap_developer_id(
                 }),
             )
             .await?;
-            let deadline = std::time::Instant::now() + Duration::from_secs(20 * 60);
-            loop {
-                if let Some((status, error)) = super::weles_capture::action_status(
-                    &channel,
-                    APPLE_DEVELOPER_ID_ACTION,
-                    &action_id,
-                )
-                .await?
-                {
-                    match status.as_str() {
-                        "completed" => break,
-                        "failed" => {
-                            return Err(DeployError(format!(
-                                "{}: Developer ID trajectory {action_id} failed: {}",
-                                target.name,
-                                error.as_deref().unwrap_or("no reason given")
-                            )));
-                        }
-                        _ => {}
-                    }
-                }
-                if std::time::Instant::now() >= deadline {
-                    return Err(DeployError(format!(
-                    "{}: Developer ID trajectory {action_id} did not finish within 1200 seconds",
-                    target.name
-                )));
-                }
-                tokio::time::sleep(Duration::from_secs(2)).await;
-            }
             finish_output =
                 host_channel::run_script(&target, &finish, &production_runner()).await?;
             if !finish_output.ok() {

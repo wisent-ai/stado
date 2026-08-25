@@ -24,6 +24,10 @@ const KICKSTART: &str = "/System/Library/CoreServices/RemoteManagement/ARDAgent.
     Resources/kickstart";
 const REMOTE_MANAGEMENT_PREFS: &str = "/Library/Preferences/com.apple.RemoteManagement";
 const ACCESSIBILITY_SERVICE: &str = "kTCCServiceAccessibility";
+const CUA_DRIVER_RUNTIME_LABEL: &str = "com.wisent.probierz-cua-driver";
+const LEGACY_CUA_DRIVER_RUNTIME_LABEL: &str =
+    "com.wisent.compute.service.com.wisent.probierz-cua-driver";
+
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuiAutomationReport {
@@ -805,6 +809,151 @@ async fn grant_accessibility_inner(
     Ok(())
 }
 
+async fn reconcile_runtime(
+    target: &ComputeTarget,
+    items: &mut Vec<(String, String)>,
+    runner: &Runner,
+) -> Result<(), DeployError> {
+    require_target(target)?;
+    let user = login_user(target, runner).await?;
+    let uid_output =
+        run(target, &["/usr/bin/id", "-u", &user], "resolve GUI user id", runner).await?;
+    let uid = uid_output.stdout.trim();
+    if uid.is_empty() || !uid.chars().all(|character| character.is_ascii_digit()) {
+        return Err(DeployError(format!(
+            "{} returned an invalid GUI user id: {}",
+            target.name, uid
+        )));
+    }
+    let home = format!("/Users/{user}");
+    let launch_agents = format!("{home}/Library/LaunchAgents");
+    let caches = format!("{home}/Library/Caches/cua-driver");
+    let logs = format!("{home}/.stado/logs");
+    let plist = format!("{launch_agents}/{CUA_DRIVER_RUNTIME_LABEL}.plist");
+    let staged = format!("{plist}.stado");
+    let socket = format!("{caches}/probierz.sock");
+    let stdout = format!("{logs}/probierz-cua-driver.out");
+    let stderr = format!("{logs}/probierz-cua-driver.err");
+    let binary = format!("{CUA_DRIVER_APP}/Contents/MacOS/cua-driver");
+    let arguments = serde_json::to_string(&[
+        binary.as_str(),
+        "serve",
+        "--socket",
+        socket.as_str(),
+        "--no-permissions-gate",
+    ])
+    .map_err(|error| DeployError(format!("cannot encode CuaDriver arguments: {error}")))?;
+
+    run(
+        target,
+        &["/bin/mkdir", "-p", &launch_agents, &caches, &logs],
+        "create CuaDriver runtime directories",
+        runner,
+    )
+    .await?;
+    remove_if_present(target, &staged, false, runner).await?;
+    run(
+        target,
+        &["/usr/bin/plutil", "-create", "xml1", &staged],
+        "create CuaDriver LaunchAgent",
+        runner,
+    )
+    .await?;
+    for (key, value) in [
+        ("Label", CUA_DRIVER_RUNTIME_LABEL),
+        ("ProgramArguments", arguments.as_str()),
+        ("ProcessType", "Interactive"),
+        ("LimitLoadToSessionType", "Aqua"),
+        ("StandardOutPath", stdout.as_str()),
+        ("StandardErrorPath", stderr.as_str()),
+    ] {
+        let kind = if key == "ProgramArguments" {
+            "-json"
+        } else {
+            "-string"
+        };
+        run(
+            target,
+            &["/usr/bin/plutil", "-insert", key, kind, value, &staged],
+            "write CuaDriver LaunchAgent",
+            runner,
+        )
+        .await?;
+    }
+    for key in ["RunAtLoad", "KeepAlive"] {
+        run(
+            target,
+            &[
+                "/usr/bin/plutil",
+                "-insert",
+                key,
+                "-bool",
+                "true",
+                &staged,
+            ],
+            "write CuaDriver LaunchAgent",
+            runner,
+        )
+        .await?;
+    }
+    run(
+        target,
+        &["/usr/bin/plutil", "-lint", &staged],
+        "validate CuaDriver LaunchAgent",
+        runner,
+    )
+    .await?;
+
+    for label in [CUA_DRIVER_RUNTIME_LABEL, LEGACY_CUA_DRIVER_RUNTIME_LABEL] {
+        let qualified = format!("gui/{uid}/{label}");
+        let _ =
+            host_channel::run_program(target, &["/bin/launchctl", "bootout", &qualified], runner)
+                .await?;
+    }
+    remove_if_present(target, &socket, false, runner).await?;
+    run(
+        target,
+        &["/bin/mv", "-f", &staged, &plist],
+        "install CuaDriver LaunchAgent",
+        runner,
+    )
+    .await?;
+    let domain = format!("gui/{uid}");
+    run(
+        target,
+        &["/bin/launchctl", "bootstrap", &domain, &plist],
+        "bootstrap CuaDriver LaunchAgent",
+        runner,
+    )
+    .await?;
+    let qualified = format!("{domain}/{CUA_DRIVER_RUNTIME_LABEL}");
+    run(
+        target,
+        &["/bin/launchctl", "kickstart", "-k", &qualified],
+        "start CuaDriver LaunchAgent",
+        runner,
+    )
+    .await?;
+
+    let mut socket_ready = false;
+    for _ in 0..20 {
+        let probe = host_channel::run_program(target, &["/bin/test", "-S", &socket], runner).await?;
+        if probe.ok() {
+            socket_ready = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+    if !socket_ready {
+        return Err(DeployError(format!(
+            "CuaDriver LaunchAgent started but did not create {socket}"
+        )));
+    }
+    items.push(("cua-driver-runtime".to_string(), "running".to_string()));
+    items.push(("cua-driver-socket".to_string(), socket));
+    Ok(())
+}
+
 async fn status_inner(
     target: &ComputeTarget,
     items: &mut Vec<(String, String)>,
@@ -893,9 +1042,35 @@ async fn status_inner(
         other => format!("refused:{other}"),
     };
     items.push(("accessibility".to_string(), state.clone()));
-    items.push(("accessibility-user".to_string(), user));
+    items.push(("accessibility-user".to_string(), user.clone()));
+    let uid = optional(target, &["/usr/bin/id", "-u", &user], runner)
+        .await?
+        .unwrap_or_default();
+    let qualified = format!("gui/{}/{CUA_DRIVER_RUNTIME_LABEL}", uid.trim());
+    let runtime = if uid.trim().bytes().all(|byte| byte.is_ascii_digit())
+        && optional(
+            target,
+            &["/bin/launchctl", "print", &qualified],
+            runner,
+        )
+        .await?
+        .is_some()
+    {
+        "running"
+    } else {
+        "absent"
+    };
+    let socket = format!("/Users/{user}/Library/Caches/cua-driver/probierz.sock");
+    let socket_ready = optional(target, &["/bin/test", "-S", &socket], runner)
+        .await?
+        .is_some();
+    items.push(("cua-driver-runtime".to_string(), runtime.to_string()));
+    items.push((
+        "cua-driver-socket".to_string(),
+        if socket_ready { "ready" } else { "absent" }.to_string(),
+    ));
     let console_ready = !matches!(console.as_str(), "" | "root" | "loginwindow" | "unknown");
-    let gui_ready = console_ready && state == "granted";
+    let gui_ready = console_ready && state == "granted" && runtime == "running" && socket_ready;
     items.push((
         "gui-ready".to_string(),
         if gui_ready { "yes" } else { "no" }.to_string(),
@@ -1009,6 +1184,36 @@ async fn disable_inner(
         items.push(("tcc-revoked".to_string(), bundle.to_string()));
     }
     let home = host_channel::remote_home(target, runner).await?;
+    let user = login_user(target, runner).await?;
+    let uid = run(
+        target,
+        &["/usr/bin/id", "-u", &user],
+        "resolve GUI user id",
+        runner,
+    )
+    .await?
+    .stdout;
+    for label in [CUA_DRIVER_RUNTIME_LABEL, LEGACY_CUA_DRIVER_RUNTIME_LABEL] {
+        let qualified = format!("gui/{}/{label}", uid.trim());
+        let _ =
+            host_channel::run_program(target, &["/bin/launchctl", "bootout", &qualified], runner)
+                .await?;
+    }
+    remove_if_present(
+        target,
+        &format!("{home}/Library/LaunchAgents/{CUA_DRIVER_RUNTIME_LABEL}.plist"),
+        false,
+        runner,
+    )
+    .await?;
+    remove_if_present(
+        target,
+        &format!("{home}/Library/Caches/cua-driver/probierz.sock"),
+        false,
+        runner,
+    )
+    .await?;
+    items.push(("cua-driver-runtime".to_string(), "removed".to_string()));
     remove_if_present(target, CUA_DRIVER_APP, true, runner).await?;
     remove_if_present(
         target,
@@ -1043,7 +1248,8 @@ pub async fn enable(
     let result = async {
         reconcile_app(target, &mut items, runner).await?;
         reconcile_autologin(target, password, &mut items, runner).await?;
-        grant_accessibility_inner(target, &mut items, runner).await
+        grant_accessibility_inner(target, &mut items, runner).await?;
+        reconcile_runtime(target, &mut items, runner).await
     }
     .await;
     report(target, items, result)
@@ -1051,7 +1257,11 @@ pub async fn enable(
 
 pub async fn grant_accessibility(target: &ComputeTarget, runner: &Runner) -> GuiAutomationReport {
     let mut items = Vec::new();
-    let result = grant_accessibility_inner(target, &mut items, runner).await;
+    let result = async {
+        grant_accessibility_inner(target, &mut items, runner).await?;
+        reconcile_runtime(target, &mut items, runner).await
+    }
+    .await;
     report(target, items, result)
 }
 
