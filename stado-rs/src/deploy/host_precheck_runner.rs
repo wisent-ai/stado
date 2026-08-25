@@ -1305,10 +1305,18 @@ ReadWritePaths=$runner_root/_work $runner_root/_diag $runner_root/.npm $runner_r
 [Install]
 WantedBy=multi-user.target
 UNIT
+service_changed=0
+if [ ! -f /etc/systemd/system/wisent-stado-precheck-runner.service ] || ! root cmp -s "$unit" /etc/systemd/system/wisent-stado-precheck-runner.service; then
+  service_changed=1
+fi
 root install -o root -g root -m 0644 "$unit" /etc/systemd/system/wisent-stado-precheck-runner.service
 rm -f "$unit"
 root systemctl daemon-reload
-root systemctl enable --now wisent-stado-precheck-runner.service >/dev/null
+if root systemctl is-active --quiet wisent-stado-precheck-runner.service; then
+  if [ "$service_changed" -eq 1 ]; then root systemctl restart wisent-stado-precheck-runner.service; fi
+else
+  root systemctl enable --now wisent-stado-precheck-runner.service >/dev/null
+fi
 root systemctl is-active --quiet wisent-stado-precheck-runner.service
 printf 'runner service: active\nrunner identity: %s uid=%s\nrunner group: %s\nprivate-network egress: blocked except Stado route %s\n' "$runner_user" "$uid" "$runner_group" __BRAMA_URL__
 "#;
@@ -1425,6 +1433,8 @@ root pfctl -a com.wisent.stado-precheck -f /etc/pf.anchors/com.wisent.stado-prec
 root pfctl -E >/dev/null 2>&1 || true
 rm -f "$anchor"
 
+service_changed=0
+
 launcher=$(mktemp)
 cat > "$launcher" <<LAUNCHER
 #!/bin/sh
@@ -1433,6 +1443,9 @@ set -eu
 /sbin/pfctl -E >/dev/null 2>&1 || true
 exec /usr/bin/sudo -u $runner_user -H -- /usr/bin/env HOME=$runner_root TMPDIR=$runner_root/.tmp DOTNET_BUNDLE_EXTRACT_BASE_DIR=$runner_root/.dotnet PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin ACTIONS_RUNNER_HOOK_JOB_COMPLETED=$runner_root/clean-work.sh $runner_root/bin/runsvc.sh
 LAUNCHER
+if [ ! -f "$runner_root/start-runner.sh" ] || ! root cmp -s "$launcher" "$runner_root/start-runner.sh"; then
+  service_changed=1
+fi
 root install -o root -g wheel -m 0755 "$launcher" "$runner_root/start-runner.sh"
 rm -f "$launcher"
 
@@ -1452,9 +1465,16 @@ cat > "$plist" <<PLIST
 </dict></plist>
 PLIST
 root plutil -lint "$plist" >/dev/null
+if [ ! -f /Library/LaunchDaemons/com.wisent.stado-precheck-runner.plist ] || ! root cmp -s "$plist" /Library/LaunchDaemons/com.wisent.stado-precheck-runner.plist; then
+  service_changed=1
+fi
 root install -o root -g wheel -m 0644 "$plist" /Library/LaunchDaemons/com.wisent.stado-precheck-runner.plist
 rm -f "$plist"
-if ! root launchctl print system/com.wisent.stado-precheck-runner >/dev/null 2>&1; then
+if root launchctl print system/com.wisent.stado-precheck-runner >/dev/null 2>&1; then
+  if [ "$service_changed" -eq 1 ]; then
+    root launchctl kickstart -k system/com.wisent.stado-precheck-runner
+  fi
+else
   root launchctl bootstrap system /Library/LaunchDaemons/com.wisent.stado-precheck-runner.plist
 fi
 root launchctl enable system/com.wisent.stado-precheck-runner
