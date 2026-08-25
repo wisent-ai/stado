@@ -1312,11 +1312,8 @@ async fn update(
         .nth(usize::from(true))
         .and_then(|rest| rest.split('/').next())
         .filter(|segment| !segment.is_empty())
-        .ok_or_else(|| {
-            CmdError::click(format!(
-                "{host}: {name} runs {program:?}, which is not under a managed services directory,                  so there is no artifact directory to update"
-            ))
-        })?;
+        .map(str::to_string)
+        .unwrap_or_else(|| declared.name.clone());
     // Two sources, one install. A published artifact is the durable route; a
     // local archive is how a bundle reaches a host before there is an object
     // store the whole fleet can read, and it is checksummed on the far side the
@@ -1324,7 +1321,7 @@ async fn update(
     if let Some(version) = rollback_to {
         let script = format!(
             "set -euo pipefail\nname={}\nversion={}\n{ROLLBACK_BODY}",
-            crate::deploy::shlex_quote(directory),
+            crate::deploy::shlex_quote(&directory),
             crate::deploy::shlex_quote(version),
         );
         let output = host_channel::run_script(&target, &script, &runner)
@@ -1340,8 +1337,8 @@ async fn update(
         return Ok(());
     }
     let installed = match (reference, archive) {
-        (Some(reference), None) => install_from_artifact(&target, directory, reference).await?,
-        (None, Some(path)) => install_from_archive(&target, directory, path, &runner).await?,
+        (Some(reference), None) => install_from_artifact(&target, &directory, reference).await?,
+        (None, Some(path)) => install_from_archive(&target, &directory, path, &runner).await?,
         (None, None) => {
             return Err(CmdError::click(
                 "update needs --from-artifact REF or --from-archive PATH",
@@ -1358,7 +1355,7 @@ async fn update(
     // deployment reports success and the machine runs what it ran before. Point
     // it at `current`, which is what makes a later install or a rollback a
     // relink rather than a redeploy.
-    let followed = follow_current(&target, declared, directory, &runner).await?;
+    let followed = follow_current(&target, declared, &directory, &runner).await?;
     if json {
         print_json(&json!({
             "host": host,
@@ -3531,16 +3528,27 @@ async fn follow_current(
         .map_err(click)?;
     let program = report.detail.trim();
     let marker = format!("/services/{directory}/");
-    let Some((root, rest)) = program.split_once(&marker) else {
-        return Ok(false);
+    let wanted = if let Some((root, rest)) = program.split_once(&marker) {
+        let Some((segment, tail)) = rest.split_once('/') else {
+            return Ok(false);
+        };
+        if segment == "current" {
+            return Ok(false);
+        }
+        format!("{root}{marker}current/{tail}")
+    } else {
+        let executable = std::path::Path::new(program)
+            .file_name()
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                CmdError::click(format!(
+                    "{} runs {program:?}, which has no executable filename",
+                    declared.unit_id()
+                ))
+            })?;
+        format!(".stado/services/{directory}/current/darwin-arm/{executable}")
     };
-    let Some((segment, tail)) = rest.split_once('/') else {
-        return Ok(false);
-    };
-    if segment == "current" {
-        return Ok(false);
-    }
-    let wanted = format!("{root}{marker}current/{tail}");
     let script = format!(
         "set -euo pipefail\nunit_path={}\nwanted={}\n{REPOINT_BODY}",
         crate::deploy::shlex_quote(&declared.path),
@@ -3566,6 +3574,10 @@ const REPOINT_BODY: &str = r#"
 case "$unit_path" in
   /Library/*) sudo_prefix="/usr/bin/sudo -n" ;;
   *) sudo_prefix="" ;;
+esac
+case "$wanted" in
+  /*) ;;
+  *) wanted="$HOME/$wanted" ;;
 esac
 $sudo_prefix /usr/libexec/PlistBuddy -c "Set :ProgramArguments:0 $wanted" "$unit_path"   || $sudo_prefix /usr/libexec/PlistBuddy -c "Set :Program $wanted" "$unit_path"
 printf '%s
