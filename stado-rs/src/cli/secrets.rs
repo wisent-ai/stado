@@ -118,6 +118,9 @@ pub enum SecretsCommands {
         /// Registry host holding the protected vault. Omit for the local vault.
         #[arg(long)]
         host: Option<String>,
+        /// Test only the macOS Keychain entry, without replaying transcript phrases.
+        #[arg(long, requires = "host")]
+        keychain_only: bool,
     },
 }
 
@@ -137,7 +140,9 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
         }
         // Also answered without a client: a protected key that nothing can
         // unlock is precisely the state where every other verb is unavailable.
-        SecretsCommands::TryUnlock { host } => try_unlock(host.as_deref()).await,
+        SecretsCommands::TryUnlock { host, keychain_only } => {
+            try_unlock(host.as_deref(), keychain_only).await
+        }
         SecretsCommands::Migrate { to } => migrate(to.as_deref()).await,
         SecretsCommands::Put { name, item_type } => {
             put(&client()?, &name, item_type.as_deref()).await
@@ -994,15 +999,19 @@ fn doctor(json: bool) -> Result<(), CmdError> {
 /// Reports the SOURCE NAME of the phrase that worked, never the phrase. A
 /// passphrase that leaked into a transcript should not also be printed to a
 /// terminal by the tool that found it.
-async fn try_unlock(host: Option<&str>) -> Result<(), CmdError> {
-    let candidates = crate::transcripts::unlock_candidates();
-    if candidates.is_empty() {
+async fn try_unlock(host: Option<&str>, keychain_only: bool) -> Result<(), CmdError> {
+    let candidates = if keychain_only {
+        Vec::new()
+    } else {
+        crate::transcripts::unlock_candidates()
+    };
+    if candidates.is_empty() && !keychain_only {
         return Err(CmdError::click(
             "no unlock phrase of any kind survives in transcript runtime output",
         ));
     }
     match host {
-        Some(host) => try_unlock_remote(host, &candidates).await,
+        Some(host) => try_unlock_remote(host, &candidates, keychain_only).await,
         None => try_unlock_local(&candidates),
     }
 }
@@ -1037,6 +1046,7 @@ fn try_unlock_local(candidates: &[(String, String)]) -> Result<(), CmdError> {
 async fn try_unlock_remote(
     host: &str,
     candidates: &[(String, String)],
+    keychain_only: bool,
 ) -> Result<(), CmdError> {
     use base64::Engine as _;
 
@@ -1050,15 +1060,22 @@ async fn try_unlock_remote(
         encoded.push_str(&base64::engine::general_purpose::STANDARD.encode(phrase.as_bytes()));
         encoded.push('\n');
     }
+    let keychain_source = base64::engine::general_purpose::STANDARD
+        .encode(b"macOS Keychain service skarbiec-vault");
+    let failure = if keychain_only {
+        "the host keychain entry does not open the remote vault"
+    } else {
+        "neither the host keychain nor any surviving transcript phrase opens the remote vault"
+    };
     let script = format!(
         r#"set -euo pipefail
 case "$(/usr/bin/uname -s)" in Darwin) decode=-D ;; *) decode=--decode ;; esac
 binary="$HOME/.stado/bin/skarbiec"
 vault="$HOME/.stado/skarbiec.vault.json"
 unlock="$HOME/.stado/skarbiec-unlock"
-while IFS=' ' read -r source_b64 phrase_b64; do
-  [ -n "$source_b64" ] || continue
-  phrase="$(printf '%s' "$phrase_b64" | /usr/bin/base64 "$decode")"
+try_phrase() {{
+  source_b64="$1"
+  phrase="$2"
   set +e
   report="$(GNUPGHOME="$HOME/.gnupg" SKARBIEC_VAULT_FILE="$vault" SKARBIEC_UNLOCK="$phrase" "$binary" key-doctor 2>/dev/null)"
   status=$?
@@ -1071,21 +1088,59 @@ while IFS=' ' read -r source_b64 phrase_b64; do
     printf 'STADO_UNLOCK\t%s\n' "$source_b64"
     exit 0
   fi
+}}
+while IFS= read -r candidate; do
+  [ "$candidate" != "$vault" ] || continue
+  set +e
+  report="$(GNUPGHOME="$HOME/.gnupg" SKARBIEC_VAULT_FILE="$candidate" "$binary" key-doctor 2>/dev/null)"
+  status=$?
+  set -e
+  if [ "$status" -eq 0 ] && printf '%s' "$report" | /usr/bin/grep -q '"status"[[:space:]]*:[[:space:]]*"readable"'; then
+    stamp="$(/bin/date -u +%Y%m%dT%H%M%SZ)"
+    /bin/cp -p "$vault" "$vault.unreadable-$stamp"
+    /bin/cp -p "$candidate" "$vault.new"
+    /bin/chmod 600 "$vault.new"
+    /bin/mv -f "$vault.new" "$vault"
+    printf 'STADO_BACKUP\t%s\n' "$candidate"
+    exit 0
+  fi
+done < <(/usr/bin/find "$HOME/.stado" -maxdepth 4 -type f \( -name '*skarbiec*vault*.json*' -o -name '*skarbiec*.bak' \) -print)
+if [ "$(/usr/bin/uname -s)" = Darwin ]; then
+  keychain_phrase="$(/bin/launchctl asuser "$(/usr/bin/id -u)" /usr/bin/security find-generic-password -s skarbiec-vault -w 2>/dev/null || true)"
+  if [ -z "$keychain_phrase" ]; then
+    keychain_phrase="$(/usr/bin/security find-generic-password -s skarbiec-vault -w 2>/dev/null || true)"
+  fi
+  if [ -n "$keychain_phrase" ]; then
+    try_phrase "{keychain_source}" "$keychain_phrase"
+  fi
+fi
+while IFS=' ' read -r source_b64 phrase_b64; do
+  [ -n "$source_b64" ] || continue
+  phrase="$(printf '%s' "$phrase_b64" | /usr/bin/base64 "$decode")"
+  try_phrase "$source_b64" "$phrase"
 done <<'STADO_UNLOCK_CANDIDATES'
 {encoded}STADO_UNLOCK_CANDIDATES
-printf '%s\n' 'no surviving transcript phrase opens the remote vault' >&2
+printf '%s\n' '{failure}' >&2
 exit 2
 "#
     );
-    println!(
-        "testing {} distinct phrase(s) against the vault on {host}",
-        candidates.len()
-    );
+    if keychain_only {
+        println!("testing the host keychain against the vault on {host}");
+    } else {
+        println!(
+            "testing the host keychain and {} distinct transcript phrase(s) against the vault on {host}",
+            candidates.len()
+        );
+    }
     let runner = crate::deploy::production_runner();
     let output = crate::deploy::host_channel::run_script_with_timeout(
         &target,
         &script,
-        std::time::Duration::from_secs(900),
+        if keychain_only {
+            std::time::Duration::from_secs(30)
+        } else {
+            std::time::Duration::from_secs(900)
+        },
         &runner,
     )
     .await
@@ -1097,6 +1152,15 @@ exit 2
                 "remote vault unlock recovery failed",
             ),
         ));
+    }
+    if let Some(path) = output
+        .stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("STADO_BACKUP\t"))
+    {
+        println!("restored the readable vault backup {path} on {host}");
+        println!("preserved the unreadable vault beside it with a UTC suffix");
+        return Ok(());
     }
     let encoded_name = output
         .stdout
