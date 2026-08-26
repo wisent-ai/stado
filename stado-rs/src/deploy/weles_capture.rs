@@ -723,12 +723,23 @@ pub async fn latest_action_log(
     channel: &Channel,
     action: &str,
 ) -> Result<Option<Value>, DeployError> {
-    let data = channel
+    let data = match channel
         .call(
             QUERY_ROUTE,
             &json!({ "action": action, "limit": QUERY_LIMIT }),
         )
-        .await?;
+        .await
+    {
+        Ok(data) => data,
+        Err(error)
+            if error
+                .0
+                .contains("refused /v1/echo/action-logs/query with 404 Not Found") =>
+        {
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    };
     let logs = data
         .get("logs")
         .and_then(Value::as_array)
