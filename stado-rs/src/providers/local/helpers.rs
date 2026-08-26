@@ -271,10 +271,11 @@ pub fn job_eligible(
         return false;
     }
     let assigned = job.assigned_to.as_str();
-    if !assigned.is_empty() && !consumer_id.is_empty() && assigned != consumer_id {
+    let assigned_matches = !assigned.is_empty() && assigned.eq_ignore_ascii_case(consumer_id);
+    if !assigned.is_empty() && !consumer_id.is_empty() && !assigned_matches {
         return false;
     }
-    if pinned_only && !pin_matches && assigned != consumer_id {
+    if pinned_only && !pin_matches && !assigned_matches {
         return false;
     }
     if job.exclusive && active_slot_count > 0 {
