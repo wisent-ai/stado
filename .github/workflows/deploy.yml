@@ -29,8 +29,7 @@ jobs:
     permissions:
       contents: read
     env:
-      WC_STADO_STORAGE_URL: http://127.0.0.1:18776
-      WC_STADO_STORAGE_NAMESPACE: probierz
+      STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
     steps:
       # v4 runs on Node 20, which GitHub has deprecated and already forces onto Node
       # 24; v5 is the first major that targets Node 24 itself. It needs a runner of at
@@ -113,6 +112,25 @@ jobs:
       - name: Build native release publisher CLI
         run: cargo build --manifest-path stado-rs/Cargo.toml --locked --release --bin stado
 
+      - name: Ensure the declared object service
+        run: |
+          set -euo pipefail
+          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
+          host="$("$stado_bin" registry self --name-only)"
+          test -n "$host"
+          "$stado_bin" service ensure stado-object-api \
+            --host "$host" \
+            --as-daemon \
+            --reason "Stado release publication requires the canonical object store"
+          state="$("$stado_bin" storage stat \
+            stado://releases/stado/__release_preflight__ --json | jq -r '.state // ""')"
+          case "$state" in
+            present|absent) ;;
+            *)
+              echo "::error::stado-object-api returned no release state after ensure: ${state:-none}"
+              false ;;
+          esac
+
       - name: Create Linux release manifest
         run: |
           machine_schema="$(
@@ -178,6 +196,13 @@ jobs:
             "git+https://github.com/lbartoszcze/AutoVersion@v0.1.0"
           rule="$RUNNER_TEMP/autoversion/bin/autoversion"
 
+          # Recover the baseline from an immutable release that this exact
+          # channel serves. It is a temporary input to the decision, never a
+          # repository file someone can advance by assertion.
+          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
+          baseline="$RUNNER_TEMP/released-surface.json"
+          python3 scripts/baseline.py --best --stado "$stado_bin" --output "$baseline"
+
           # Nothing so far has asked whether what was installed can still answer, and
           # a liveness probe would not settle it: a rule that replied a constant
           # `internal` satisfies every branch below, because with the declared version
@@ -188,15 +213,15 @@ jobs:
           # step also proves the frozen file is readable and is the one reaching the
           # decision. It consults only that file and writes only to RUNNER_TEMP, so it
           # cannot touch the release channel.
-          jq '{surface: (.surface - [(.surface | sort | first)])}' released-surface.json \
+          jq '{surface: (.surface - [(.surface | sort | first)])}' "$baseline" \
             > "$RUNNER_TEMP/arm-removed.json"
-          jq '{surface: .surface}' released-surface.json > "$RUNNER_TEMP/arm-identical.json"
+          jq '{surface: .surface}' "$baseline" > "$RUNNER_TEMP/arm-identical.json"
           if [ "$(jq -r '.surface | length' "$RUNNER_TEMP/arm-removed.json")" = \
-               "$(jq -r '.surface | length' released-surface.json)" ]; then
+               "$(jq -r '.surface | length' "$baseline")" ]; then
             echo "::error::the removal arm removed nothing, so it would prove nothing"
             false
           fi
-          baseline_version="$(jq -r .version released-surface.json)"
+          baseline_version="$(jq -r .version "$baseline")"
           for arm in removed:breaking identical:internal; do
             name="${arm%%:*}"
             want="${arm##*:}"
@@ -204,7 +229,7 @@ jobs:
             # substitution containing a pipeline the rule's status is discarded and
             # `set -e` does not reach, so a dead rule would read as an empty answer.
             if ! "$rule" decide --current "$baseline_version" \
-                 --published-surface released-surface.json \
+                 --published-surface "$baseline" \
                  --candidate-surface "$RUNNER_TEMP/arm-$name.json" --json \
                  > "$RUNNER_TEMP/verdict-$name.json"; then
               echo "::error::the rule just installed failed outright on the $name arm," \
@@ -233,7 +258,8 @@ jobs:
           # Stado store is the source of truth; public ingress is deployment
           # output and therefore cannot be a release prerequisite.
           unset STADO_API_URL STADO_API_TOKEN
-          AUTOVERSION="$RUNNER_TEMP/autoversion/bin/autoversion" \
+          BASELINE="$baseline" \
+            AUTOVERSION="$RUNNER_TEMP/autoversion/bin/autoversion" \
             STADO_BIN="$stado_bin" \
             scripts/version_check.sh "$RUNNER_TEMP/candidate-surface.json"
 
@@ -245,13 +271,13 @@ jobs:
           for source in "$RUNNER_TEMP"/stado-release/*; do
             name="${source##*/}"
             uri="stado://releases/stado/$STADO_VERSION/linux-amd64/$name"
-            if "$stado_bin" storage put "$uri" "$source" --if-absent; then
-              continue
+            if ! "$stado_bin" storage put "$uri" "$source" --if-absent; then
+              echo "Object already exists or the create was refused; reading $uri back"
             fi
-            existing="$RUNNER_TEMP/existing-$name"
-            "$stado_bin" storage get "$uri" "$existing"
-            if ! cmp --silent "$source" "$existing"; then
-              echo "::error::Immutable release collision at $uri"
+            stored="$RUNNER_TEMP/stored-$name"
+            "$stado_bin" storage get "$uri" "$stored"
+            if ! cmp --silent "$source" "$stored"; then
+              echo "::error::Published release object differs from its source at $uri"
               false
             fi
           done
@@ -267,8 +293,6 @@ jobs:
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
       COORD_TARGET: ${{ vars.STADO_COORDINATOR_TARGET }}
       STADO_API_URL: ${{ vars.STADO_API_URL }}
-      WC_STADO_STORAGE_URL: http://127.0.0.1:18776
-      WC_STADO_STORAGE_NAMESPACE: probierz
       WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
       WC_SKARBIEC_CONSUMER: stado-release-publisher
       WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
@@ -373,17 +397,16 @@ jobs:
           for source in "$release_dir"/*; do
             name="${source##*/}"
             uri="stado://releases/stado/$version/$platform/$name"
-            if "$stado_bin" storage put "$uri" "$source" --if-absent; then
-              continue
+            if ! "$stado_bin" storage put "$uri" "$source" --if-absent; then
+              echo "Object already exists or the create was refused; reading $uri back"
             fi
-            existing="$RUNNER_TEMP/existing-native-$name"
-            "$stado_bin" storage get "$uri" "$existing"
-            if ! cmp --silent "$source" "$existing"; then
-              echo "::error::Immutable release collision at $uri"
+            stored="$RUNNER_TEMP/stored-native-$name"
+            "$stado_bin" storage get "$uri" "$stored"
+            if ! cmp --silent "$source" "$stored"; then
+              echo "::error::Published release object differs from its source at $uri"
               false
             fi
           done
-          STADO_RELEASE_VERSION="$version" \
           STADO_RELEASE_PLATFORM="$platform" \
           STADO_RELEASE_DIR="$release_dir" \
             bash "$STADO_SOURCE_DIR/deploy/deploy_stado_rust.sh"

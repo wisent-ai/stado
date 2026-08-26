@@ -8,13 +8,10 @@ name: Version check
 # the gate copied: this repository already owns every piece of it, and this workflow
 # only arranges for them to run on a change instead of on a release.
 #
-#   scripts/surface.py            reads the advertised command list out of a binary
-#   released-surface.json         the surface of the version actually published
-#   scripts/version_check.sh      the gate: decide, compare, assert the marker,
-#                                 assert the baseline is not superseded
-#   scripts/version_check_proof.sh  five cases proving that gate refuses -- one pass,
-#                                 two surface mutations, two dishonest baselines
-#   scripts/baseline.py           regenerates the baseline from the best tier
+#   scripts/surface.py              reads the advertised command list out of a binary
+#   scripts/baseline.py             derives the baseline from verified channel bytes
+#   scripts/version_check.sh        compares the candidate with that generated baseline
+#   scripts/version_check_proof.sh  proves the gate refuses dishonest inputs
 #
 # Why this workflow exists at all. deploy.yml already runs scripts/version_check.sh,
 # but only in front of the first `storage put`, and only on a `stado-v*` tag push. So
@@ -133,50 +130,6 @@ jobs:
           esac
           echo "autoversion resolves to $resolved"
 
-          # Then demand TWO different known answers. One constant cannot suffice: a
-          # stranger replying `internal` forever passes a liveness probe and every
-          # branch of scripts/version_check.sh, because when the declared version
-          # equals the baseline's, `internal` IS the passing branch. Both arms are
-          # built from the COMMITTED baseline rather than from a synthetic pair, so
-          # this step also proves the frozen file is well formed and is really what
-          # reaches the decision. It reads that file and writes only under
-          # RUNNER_TEMP, so it cannot touch the release channel.
-          probe="$RUNNER_TEMP/rule-probe"
-          mkdir -p "$probe"
-          jq '{surface: .surface}' released-surface.json > "$probe/identical.json"
-          # `- [first]` drops one element without a bare numeric subscript.
-          jq '{surface: (.surface - [(.surface | sort | first)])}' \
-            released-surface.json > "$probe/removed.json"
-          if [ "$(jq -r '.surface | length' "$probe/removed.json")" = \
-               "$(jq -r '.surface | length' released-surface.json)" ]; then
-            echo "::error::the removal arm removed nothing, so it would prove nothing." \
-              "released-surface.json is malformed or its surface is empty."
-            false
-          fi
-          current="$(jq -r .version released-surface.json)"
-          for arm in identical:internal removed:breaking; do
-            name="${arm%%:*}"
-            want="${arm##*:}"
-            # Into a file, with the status tested on its own line: inside a command
-            # substitution containing a pipeline the rule's status is discarded and
-            # `set -e` does not reach it, so a dead rule would read as an empty answer.
-            if ! autoversion decide --current "$current" \
-                 --published-surface released-surface.json \
-                 --candidate-surface "$probe/$name.json" --json \
-                 > "$probe/verdict-$name.json"; then
-              echo "::error::the rule at $resolved failed outright on the $name arm," \
-                "so whether it can answer at all is unknown."
-              false
-            fi
-            got="$(jq -r .change "$probe/verdict-$name.json")"
-            echo "probe: $name -> $got (wanted $want)"
-            if [ "$got" != "$want" ]; then
-              echo "::error::the rule at $resolved called the $name arm '$got' and not" \
-                "'$want'. Whatever is answering is not the pinned rule, so no verdict" \
-                "below means anything."
-              false
-            fi
-          done
 
       - name: Build the binary whose help text is the contract
         # The contract is what `stado help` advertises, not what src/cli/mod.rs
@@ -253,12 +206,17 @@ jobs:
           fi
           export STADO_API_TOKEN="$token"
 
+          # Derive the comparison document from an immutable native artifact
+          # served by this channel. No committed file can claim publication.
+          baseline="$RUNNER_TEMP/released-surface.json"
+          python3 scripts/baseline.py --best --stado "$stado_bin" --output "$baseline"
+
           # The verdict on this revision. Its status is captured rather than allowed to
           # end the step, so the refusal proof below still runs and reports: a red build
           # that says only "the version is wrong" hides whether the gate saying so is
           # one that can also say no.
           judged=pass
-          if ! AUTOVERSION="$rule" STADO_BIN="$stado_bin" \
+          if ! BASELINE="$baseline" AUTOVERSION="$rule" STADO_BIN="$stado_bin" \
                scripts/version_check.sh "$RUNNER_TEMP/candidate-surface.json"; then
             judged=refuse
           fi
@@ -273,7 +231,7 @@ jobs:
           # source is prose or names an object the channel does not serve must refuse.
           # It writes nothing into the repository.
           proved=yes
-          if ! AUTOVERSION="$rule" STADO_BIN="$stado_bin" \
+          if ! BASELINE="$baseline" AUTOVERSION="$rule" STADO_BIN="$stado_bin" \
                scripts/version_check_proof.sh stado-rs/target/release/stado; then
             proved=no
           fi

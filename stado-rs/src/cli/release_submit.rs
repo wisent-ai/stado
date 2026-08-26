@@ -24,6 +24,10 @@ use crate::release_pipeline::{
     WorkerRequest, PRODUCT_MANIFEST,
 };
 
+const OBJECT_API_SERVICE: &str = "stado-object-api";
+const OBJECT_API_REASON: &str =
+    "release submission requires the canonical object store before its first write";
+
 #[derive(Args)]
 pub struct ReleaseSubmitArgs {
     #[arg(long)]
@@ -860,6 +864,13 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
             "requested channel is forbidden by promotion policy",
         ));
     }
+    super::service::ensure_local_dependency(OBJECT_API_SERVICE, OBJECT_API_REASON, true)
+        .await
+        .map_err(|error| {
+            CmdError::click(format!(
+                "cannot ensure required service {OBJECT_API_SERVICE}: {error}"
+            ))
+        })?;
     let (commit, archive) = snapshot(&root)?;
     let source_sha = release_control::sha256_bytes(&archive);
     let manifest_sha = release_control::sha256_bytes(&manifest_bytes);

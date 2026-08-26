@@ -3032,6 +3032,39 @@ async fn catalog(json: bool) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// Ensure one dependency on the machine running this CLI.
+///
+/// Release submission uses this before its first object write. Keeping the
+/// call inside the binary means every caller gets the same repair; a workflow
+/// cannot accidentally rely on a listener left behind by an earlier run.
+pub(crate) async fn ensure_local_dependency(
+    name: &str,
+    reason: &str,
+    as_daemon: bool,
+) -> Result<(), CmdError> {
+    let hostname = crate::providers::vast::system_hostname();
+    let registry = super::registry::read_registry().await?;
+    let host = registry
+        .lookup_self(&hostname)
+        .map_err(|error| CmdError::click(error.to_string()))?
+        .map(|target| target.name.clone())
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "cannot ensure {name}: this machine {hostname:?} is not a registry target"
+            ))
+        })?;
+    ensure(EnsureOptions {
+        name,
+        host: &host,
+        from: None,
+        args: &[],
+        reason,
+        as_daemon,
+        as_json: false,
+    })
+    .await
+}
+
 /// `service ensure NAME --host HOST [--from PATH] --reason WHY`.
 ///
 /// The idempotent half of `deploy`, and the only one that works on an ssh

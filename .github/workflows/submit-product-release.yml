@@ -56,6 +56,25 @@ jobs:
       - name: Build Stado release client
         working-directory: stado-rs
         run: cargo build --locked --release --bin stado
+      - name: Ensure the declared object service
+        shell: bash
+        run: |
+          set -euo pipefail
+          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
+          host="$("$stado_bin" registry self --name-only)"
+          test -n "$host"
+          "$stado_bin" service ensure stado-object-api \
+            --host "$host" \
+            --as-daemon \
+            --reason "product release submission requires the canonical object store"
+          state="$("$stado_bin" storage stat \
+            stado://sources/__release_preflight__ --json | jq -r '.state // ""')"
+          case "$state" in
+            present|absent) ;;
+            *)
+              echo "::error::stado-object-api returned no storage state after ensure: ${state:-none}"
+              false ;;
+          esac
       - name: Submit exact product revision
         shell: bash
         env:
