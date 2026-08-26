@@ -22,8 +22,8 @@ hardware. All accessible through one simple client.
 
 Give your AI the muscle it needs.
 
-[Quick start](#quick-start) · [CLI reference](docs/cli.md) ·
-[Architecture](docs/architecture.md) · [Operations](docs/operations.md)
+[Quick start](#quick-start) · [CLI reference](https://stado.wisent.com/docs/cli) ·
+[Architecture](https://stado.wisent.com/docs/architecture) · [Operations](https://stado.wisent.com/docs/operations)
 
 Current proof boundary: the 0.5 contract has a stable local-filesystem execution
 scope for macOS arm64 and Linux amd64 release candidates. Cloud storage and VM
@@ -240,8 +240,8 @@ Trust boundaries:
 - public release readers can read only immutable release objects;
 - dashboard and MCP reads do not inherit mutation authority.
 
-See [Architecture](docs/architecture.md) for components, durable state, and
-trust boundaries.
+See [Architecture](https://stado.wisent.com/docs/architecture) for components,
+durable state, and trust boundaries.
 
 ## Quick start
 
@@ -256,17 +256,17 @@ a cloud account, cloud credential, Skarbiec, GPU, or Python.
 - the runtime required by the workload itself.
 
 Install an exact verified release before following the
-[complete onboarding path](docs/onboarding.md). A machine joins a fleet by one
+[complete onboarding path](https://stado.wisent.com/docs/onboarding). A machine joins a fleet by one
 of four methods — `invite` (send a fragment, or a one-line code where the
 control point is published; touch nothing either way), `adopt` (Stado
 installs the key over a session you already have), `join` (the machine
 announces itself) and `declare` (assert the entry, verify later) — all four
 listed by `stado fleet methods` and described under
-[Onboard another machine](docs/onboarding.md#onboard-another-machine). In every
+[Onboard another machine](https://stado.wisent.com/docs/onboarding#onboard-another-machine). In every
 one of them the private half of the channel key stays in the operator's
 credential store and only the public line reaches the machine. If you are
 attaching your own computer to a fleet someone else operates, read
-[Add your own machine](docs/add-your-machine.md) instead. For source
+[Add your own machine](https://stado.wisent.com/docs/add-your-machine) instead. For source
 development only, install Rust and Cargo and build from `stado-rs/`.
 
 ### 1. Create the minimal local configuration
@@ -316,7 +316,7 @@ Expected result: the job reaches `completed` and `./results` contains its
 command output and result evidence.
 
 If any step fails, run `stado doctor --fix-hints` and follow the
-[onboarding failure guidance](docs/onboarding.md#failure-guidance).
+[onboarding failure guidance](https://stado.wisent.com/docs/onboarding#failure-guidance).
 Do not add cloud credentials to make the local path work.
 
 ## Primary interfaces
@@ -341,7 +341,7 @@ stado doctor
 stado capabilities --json
 ```
 
-See the [CLI reference](docs/cli.md) for arguments and exit semantics.
+See the [CLI reference](https://stado.wisent.com/docs/cli) for arguments and exit semantics.
 
 ### Machine JSON
 
@@ -349,7 +349,7 @@ Automation uses `stado machine`. Successful and failed calls use a versioned
 JSON envelope with `schema_version`, `ok`, and exactly one of `result` or
 `error`. Automation must not parse human tables.
 
-The [CLI reference](docs/cli.md) defines the noninteractive command and error
+The [CLI reference](https://stado.wisent.com/docs/cli) defines the noninteractive command and error
 contract.
 
 ### MCP
@@ -378,8 +378,8 @@ under operator authority in `stado fleet approve`. All three serve the `invite`
 method's one-line mode, and therefore only a machine that can reach this
 listener — which a loopback binding does not allow; the method's offline mode
 exists so that adding a machine never depends on them. See
-[the invite endpoints](docs/cli.md#invite-endpoints-on-the-dashboard) and
-[the control-point check](docs/cli.md#the-control-point-check).
+[the invite endpoints](https://stado.wisent.com/docs/cli#invite-endpoints-on-the-dashboard) and
+[the control-point check](https://stado.wisent.com/docs/cli#the-control-point-check).
 
 ### Desktop operator screens
 
@@ -426,7 +426,7 @@ order, disabled providers, storage, deployment identity, API verifiers,
 ownership, and policy. Environment variables are limited to documented
 route-local overrides.
 
-See [Configuration and credentials](docs/configuration.md).
+See [Configuration and credentials](https://stado.wisent.com/docs/configuration).
 
 ### State and ownership
 
@@ -449,8 +449,8 @@ Operators pin an exact immutable version and platform. Upgrade requires a
 verified release manifest, compatible schema range, backup, health check, and
 rollback coordinate. No runtime follows a mutable `latest` binary.
 
-See [Release and compatibility](docs/release.md) and
-[Operations](docs/operations.md) for release and recovery procedures.
+See [Release and compatibility](https://stado.wisent.com/docs/release) and
+[Operations](https://stado.wisent.com/docs/operations) for release and recovery procedures.
 
 ### Observability and recovery
 
@@ -458,8 +458,8 @@ See [Release and compatibility](docs/release.md) and
 inventory, billing signals, and result manifests provide evidence. An
 unreachable store must be reported as unreachable, not as an empty queue.
 
-Incident and recovery procedures live under `docs/incidents/` and in
-[Operations](docs/operations.md).
+Incident and recovery procedures are published separately from product documentation.
+See [Operations](https://stado.wisent.com/docs/operations).
 
 ## Project status and support
 
@@ -486,20 +486,18 @@ Support:
   [GitHub Security Advisory](https://github.com/wisent-ai/stado/security/advisories/new)
   and do not open a public issue;
 - release, compatibility, and rollback policy:
-  [docs/release.md](docs/release.md).
+  [stado.wisent.com/docs/release](https://stado.wisent.com/docs/release).
 
 Documentation:
 
-- [Release and compatibility](docs/release.md)
-- [Changelog](CHANGELOG.md)
-- [Onboarding](docs/onboarding.md)
-- [Add your own machine](docs/add-your-machine.md)
-- [Examples](docs/examples/README.md)
-- [Architecture](docs/architecture.md)
-- [Integration contracts and lifecycle](docs/integrations.md)
-- [CLI reference](docs/cli.md)
-- [Configuration and credentials](docs/configuration.md)
-- [Operations](docs/operations.md)
-- [Rust implementation notes](stado-rs/README.md)
+- [Release and compatibility](https://stado.wisent.com/docs/release)
+- [Onboarding](https://stado.wisent.com/docs/onboarding)
+- [Add your own machine](https://stado.wisent.com/docs/add-your-machine)
+- [Examples](https://stado.wisent.com/docs/examples)
+- [Architecture](https://stado.wisent.com/docs/architecture)
+- [Integration contracts and lifecycle](https://stado.wisent.com/docs/integrations)
+- [CLI reference](https://stado.wisent.com/docs/cli)
+- [Configuration and credentials](https://stado.wisent.com/docs/configuration)
+- [Operations](https://stado.wisent.com/docs/operations)
 
 Stado is licensed under the Apache License 2.0. See [LICENSE](LICENSE).
