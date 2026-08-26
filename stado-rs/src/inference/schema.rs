@@ -69,6 +69,16 @@ pub struct Registry {
     pub routes: BTreeMap<String, String>,
     #[serde(default)]
     pub fallbacks: BTreeMap<String, Vec<String>>,
+    /// Declared purpose per model repository (for example
+    /// `TheDrummer/Cydonia-24B-v4.3` -> `erotic-roleplay`). A model with a
+    /// declared purpose may only be selected by an alias whose first segment
+    /// is that purpose, as a route or as a fallback. Models without an entry
+    /// are unrestricted. This exists because on 2026-08-26 the fleet's agent
+    /// aliases (`weles/agent/primary`, `wisent-backend/chat/*`) were found
+    /// pointing at an erotic-roleplay finetune: nothing in the registry said
+    /// what the model was for, so nothing could refuse the binding.
+    #[serde(default)]
+    pub model_purposes: BTreeMap<String, String>,
 }
 
 fn identifier(value: &str) -> bool {
@@ -380,6 +390,54 @@ pub fn validate(document: &Value) -> Result<(), String> {
                     "registry.inference.fallbacks.{alias}: duplicate destination '{destination}'"
                 ));
             }
+        }
+    }
+    for (repository, purpose) in &registry.model_purposes {
+        if !safe_reference(repository, "/") || !identifier(purpose) {
+            return Err(format!(
+                "registry.inference.model_purposes.{repository}: purpose must be a lowercase identifier for a safe model repository"
+            ));
+        }
+    }
+    // A destination names a model either directly (`provider/repo`) or through
+    // a named deployment. When that model carries a declared purpose, the only
+    // aliases allowed to select it are the ones living under that purpose
+    // (`<purpose>/...`) — a general-purpose alias silently serving a
+    // special-purpose model is exactly the binding this refuses.
+    let destination_purpose = |destination: &str| -> Option<&str> {
+        let repository = match destination.split_once('/') {
+            Some((_, repository)) => repository,
+            None => registry
+                .deployments
+                .iter()
+                .find(|deployment| deployment.name == destination)
+                .map(|deployment| deployment.model.repository.as_str())?,
+        };
+        registry
+            .model_purposes
+            .get(repository)
+            .or_else(|| registry.model_purposes.get(destination))
+            .map(String::as_str)
+    };
+    let alias_bindings = registry
+        .routes
+        .iter()
+        .map(|(alias, destination)| (alias, destination, "routes"))
+        .chain(registry.fallbacks.iter().flat_map(|(alias, fallbacks)| {
+            fallbacks
+                .iter()
+                .map(move |destination| (alias, destination, "fallbacks"))
+        }));
+    for (alias, destination, table) in alias_bindings {
+        let Some(purpose) = destination_purpose(destination) else {
+            continue;
+        };
+        let namespace = alias.split('/').next().unwrap_or_default();
+        if namespace != purpose {
+            return Err(format!(
+                "registry.inference.{table}.{alias}: model '{destination}' is declared \
+                 {purpose}-only and may only serve aliases under '{purpose}/'"
+            ));
         }
     }
     Ok(())
