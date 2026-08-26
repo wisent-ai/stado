@@ -411,6 +411,18 @@ jobs:
           STADO_RELEASE_DIR="$release_dir" \
             bash "$STADO_SOURCE_DIR/deploy/deploy_stado_rust.sh"
 
+      - name: Reconcile public release ingress
+        run: |
+          tailscale_bin=/Applications/Tailscale.app/Contents/MacOS/tailscale
+          "$tailscale_bin" funnel --bg --yes 8765
+          "$tailscale_bin" funnel --bg --yes --set-path /api/release/object 18776
+          "$tailscale_bin" serve status --json |
+            jq -e '
+              .Web | to_entries[] |
+              .value.Handlers["/"].Proxy == "http://127.0.0.1:8765" and
+              .value.Handlers["/api/release/object"].Proxy == "http://127.0.0.1:18776"
+            '
+
       - name: Reload TLS reverse proxy
         if: ${{ vars.STADO_ENABLE_AZURE_DEPLOY == 'true' }}
         run: |
