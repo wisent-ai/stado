@@ -22,8 +22,11 @@ jq --arg host "$host" --arg control_host "$control_host" '
   | (.targets[] | select(.name == $control_host) | .services[] |
       select(.name == "com.wisent.always-on.stado-object-api")) |=
       (. + {
-        program: "/Users/charles/.stado/bin/stado",
-        args: ["dashboard", "--bind", "127.0.0.1", "--port", "8765"]
+        program: "/Users/charles/.stado/services/com.wisent.always-on.stado-object-api/current/darwin-arm/stado",
+        args: [
+          "dashboard", "--bind", "127.0.0.1", "--port", "8765",
+          "dashboard", "--bind", "127.0.0.1", "--port", "8765"
+        ]
       })
 ' "$before" > "$after"
 
@@ -40,8 +43,11 @@ route="$(jq -r '.service_directory.services["stado-object-api"].managed_service'
 program_count="$(jq --arg control_host "$control_host" '[.targets[] |
   select(.name == $control_host) | .services[] |
   select(.name == "com.wisent.always-on.stado-object-api" and
-    .program == "/Users/charles/.stado/bin/stado" and
-    .args == ["dashboard", "--bind", "127.0.0.1", "--port", "8765"])] | length' "$after")"
+    .program == "/Users/charles/.stado/services/com.wisent.always-on.stado-object-api/current/darwin-arm/stado" and
+    .args == [
+      "dashboard", "--bind", "127.0.0.1", "--port", "8765",
+      "dashboard", "--bind", "127.0.0.1", "--port", "8765"
+    ])] | length' "$after")"
 [ "$program_count" = 1 ] || { echo "object API service program is not declared once" >&2; exit 1; }
 "$stado_bin" registry push "$after"
 "$stado_bin" service ensure com.wisent.always-on.stado-object-api \
