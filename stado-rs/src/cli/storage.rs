@@ -1347,6 +1347,11 @@ impl RemoteObjectApi {
         }
         let Some(policy_key) = crate::object_store::release_policy_key(namespace, key_or_prefix)
         else {
+            if namespace == "system" && key_or_prefix.starts_with("release-catalog/") {
+                return Err(CmdError::click(
+                    "aggregate release catalog operations have no single publisher credential; fetch exact release-catalog/<product>.json objects",
+                ));
+            }
             return Ok(None);
         };
         let publisher = crate::config::release_publisher_for_key(&policy_key).ok_or_else(|| {

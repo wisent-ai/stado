@@ -225,11 +225,17 @@ async fn sync_catalog(path: &Path, json: bool) -> Result<(), CmdError> {
 }
 
 async fn audit(json: bool) -> Result<(), CmdError> {
-    let uris = super::storage::list_object_uris("system", &format!("{CATALOG_PREFIX}/")).await?;
+    let publishers = crate::config::release_api_publishers().map_err(|problems| {
+        CmdError::click(format!(
+            "release catalog audit refused invalid release_api.publishers: {}",
+            problems.join("; ")
+        ))
+    })?;
     let mut products = BTreeSet::new();
     let mut entries = Vec::new();
     let mut failures = Vec::new();
-    for uri in uris {
+    for product in publishers.keys() {
+        let uri = catalog_uri(product);
         match super::storage::fetch_object(&uri).await.and_then(|bytes| {
             let entry: ReleaseCatalogEntry = serde_json::from_slice(&bytes)?;
             release_pipeline::validate_catalog_entry(&entry).map_err(CmdError::click)?;
