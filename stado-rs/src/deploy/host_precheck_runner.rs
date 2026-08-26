@@ -428,77 +428,6 @@ async fn kronika_agent_credential(
     })
 }
 
-async fn configure_publisher_group() -> Result<(), DeployError> {
-    let credential = github_credential().await?;
-    let endpoint =
-        format!("https://api.github.com/orgs/{GITHUB_ORGANIZATION}/actions/runner-groups");
-    let client = reqwest::Client::new();
-    let response = client
-        .get(&endpoint)
-        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
-        .header(reqwest::header::USER_AGENT, "wisent-stado-publisher-runner")
-        .header("X-GitHub-Api-Version", "2022-11-28")
-        .bearer_auth(&credential)
-        .send()
-        .await
-        .map_err(|error| DeployError(format!("GitHub runner group request failed: {error}")))?;
-    let status = response.status();
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|error| DeployError(format!("GitHub runner group response failed: {error}")))?;
-    if !status.is_success() {
-        let detail = String::from_utf8_lossy(&bytes).replace(&credential, "[REDACTED]");
-        return Err(DeployError(format!(
-            "GitHub runner group request returned HTTP {}: {}",
-            status.as_u16(),
-            detail.trim()
-        )));
-    }
-    let groups: Value = serde_json::from_slice(&bytes).map_err(|error| {
-        DeployError(format!("GitHub runner group response is invalid: {error}"))
-    })?;
-    let group_id = groups
-        .get("runner_groups")
-        .and_then(Value::as_array)
-        .and_then(|groups| {
-            groups.iter().find_map(|group| {
-                (group.get("name").and_then(Value::as_str) == Some(PUBLISHER.group))
-                    .then(|| group.get("id").and_then(Value::as_u64))
-                    .flatten()
-            })
-        })
-        .ok_or_else(|| DeployError("GitHub Default runner group is unavailable".to_string()))?;
-    let response = client
-        .patch(format!("{endpoint}/{group_id}"))
-        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
-        .header(reqwest::header::USER_AGENT, "wisent-stado-publisher-runner")
-        .header("X-GitHub-Api-Version", "2022-11-28")
-        .bearer_auth(&credential)
-        .json(&json!({
-            "name": PUBLISHER.group,
-            "visibility": "all",
-            "allows_public_repositories": true,
-        }))
-        .send()
-        .await
-        .map_err(|error| DeployError(format!("GitHub runner group update failed: {error}")))?;
-    if !response.status().is_success() {
-        let status = response.status();
-        let bytes = response.bytes().await.map_err(|error| {
-            DeployError(format!(
-                "GitHub runner group update response failed: {error}"
-            ))
-        })?;
-        let detail = String::from_utf8_lossy(&bytes).replace(&credential, "[REDACTED]");
-        return Err(DeployError(format!(
-            "GitHub runner group update returned HTTP {}: {}",
-            status.as_u16(),
-            detail.trim()
-        )));
-    }
-    Ok(())
-}
 
 fn set_repository_secret(
     repository: &str,
@@ -744,6 +673,54 @@ fn developer_id_bundle() -> Result<Option<(String, String, String, String)>, Dep
         read("not_after")?,
     )))
 }
+fn issue_apple_capability(
+    agent: &str,
+    purpose: &str,
+    resource: &str,
+    authorization_id: &str,
+) -> Result<Value, DeployError> {
+    let output = Command::new("skarbiec")
+        .args([
+            "capability-issue",
+            "--agent",
+            agent,
+            "--purpose",
+            purpose,
+            "--resource",
+            resource,
+            "--target",
+            "weles",
+            "--ttl",
+            "3600",
+            "--max-uses",
+            "1",
+            "--authorization-id",
+            authorization_id,
+        ])
+        .output()
+        .map_err(|error| DeployError(format!("could not start Skarbiec capability issuance: {error}")))?;
+    if !output.status.success() {
+        return Err(DeployError(format!(
+            "Skarbiec refused Apple capability: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    let issued: Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| DeployError(format!("Skarbiec returned unreadable capability JSON: {error}")))?;
+    let capability_id = issued
+        .get("capability_id")
+        .and_then(Value::as_str)
+        .filter(|value| value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .ok_or_else(|| DeployError("Skarbiec returned an invalid capability id".to_string()))?;
+    Ok(json!({
+        "capability_id": capability_id,
+        "purpose": purpose,
+        "resource": resource,
+        "target": "weles",
+        "authorization_id": authorization_id,
+    }))
+}
+
 
 async fn required_remote_file(target: &ComputeTarget, path: &str) -> Result<String, DeployError> {
     host_channel::remote_read_file(target, path, &production_runner())
@@ -853,14 +830,45 @@ pub async fn bootstrap_developer_id(
         if finish_output.ok() {
             // The interrupted Account Holder run had already issued the certificate.
         } else {
+            let guard_id = uuid::Uuid::new_v4().to_string();
+            let execution_agent = "weles-worker";
+            let email = issue_apple_capability(
+                execution_agent,
+                "weles.browser.fill",
+                "origin:https://idmsa.apple.com/email",
+                &guard_id,
+            )?;
+            let password = issue_apple_capability(
+                execution_agent,
+                "weles.browser.fill",
+                "origin:https://idmsa.apple.com/password",
+                &guard_id,
+            )?;
+            let two_factor = issue_apple_capability(
+                execution_agent,
+                "weles.apple.2fa",
+                &format!("challenge:apple/{guard_id}"),
+                &guard_id,
+            )?;
             let _action_id = super::weles_capture::run_action(
                 &channel,
                 APPLE_DEVELOPER_ID_ACTION,
                 json!({
                     "account_item": account_item,
-                    "csr_path": format!("{work}/request.csr"),
-                    "output_path": format!("{work}/certificate.cer"),
+                    "apple_csr_path": format!("{work}/request.csr"),
+                    "apple_certificate_path": format!("{work}/certificate.cer"),
                     "system_consent": "account-holder-2fa",
+                    "apple_auth_guard_id": guard_id,
+                    "apple_execution_host": target.name,
+                    "apple_execution_agent": execution_agent,
+                    "apple_login_capabilities": {
+                        "email": email,
+                        "password": password,
+                        "two_factor": {
+                            "mode": "capability",
+                            "capability": two_factor,
+                        },
+                    },
                 }),
             )
             .await?;
@@ -1247,9 +1255,6 @@ async fn install_kronika_agent_secret(
 }
 
 async fn install_profile(target_name: &str, profile: RunnerProfile) -> Result<Value, DeployError> {
-    if profile.kind == PUBLISHER.kind {
-        configure_publisher_group().await?;
-    }
     let target = host_channel::canonical_target(target_name).await?;
     let platform = Platform::for_target(&target)?;
     let (brama_url, brama_port) = private_brama_route(target_name).await?;
@@ -1258,7 +1263,18 @@ async fn install_profile(target_name: &str, profile: RunnerProfile) -> Result<Va
     } else {
         None
     };
-    let token = github_runner_token("registration").await?;
+    let runner_root = match platform {
+        Platform::LinuxAmd64 => format!("/opt/wisent/{}-runner", profile.slug),
+        Platform::DarwinArm64 => format!("/Users/Shared/{}-runner", profile.slug),
+    };
+    let probe = format!("test -f {}/.runner", super::shlex_quote(&runner_root));
+    let already_registered =
+        host_channel::run_script(&target, &probe, &production_runner()).await?.ok();
+    let token = if already_registered {
+        String::new()
+    } else {
+        github_runner_token("registration").await?
+    };
     let script = match platform {
         Platform::LinuxAmd64 => linux_installer(&target, &token, &brama_url, brama_port, profile),
         Platform::DarwinArm64 => macos_installer(&target, &token, &brama_url, brama_port, profile),
@@ -1374,20 +1390,12 @@ pub async fn install_publisher(
 ) -> Result<Value, DeployError> {
     for repository in repositories {
         bootstrap_publisher_repository(repository).await?;
-        reconcile_repository(repository).await?;
     }
     install_profile(target_name, PUBLISHER).await
 }
 
 pub async fn reconcile_publisher_repository(repository: &str) -> Result<Value, DeployError> {
-    let report = bootstrap_publisher_repository(repository).await?;
-    reconcile_repository(repository).await?;
-    Ok(json!({
-        "organization": GITHUB_ORGANIZATION,
-        "repository": repository,
-        "release_secrets": report["release_secrets"],
-        "status": "reconciled",
-    }))
+    bootstrap_publisher_repository(repository).await
 }
 
 pub async fn status_publisher(target_name: &str) -> Result<Value, DeployError> {
