@@ -3708,26 +3708,74 @@ pub async fn retag_vault_item(
     }
     Ok(())
 }
+/// Reconcile the object verifier on TARGET to the exact configured namespace set.
+pub async fn reconcile_object_verifier(target: &str, json_output: bool) -> Result<(), CmdError> {
+    let namespaces = crate::config::object_api_namespaces().map_err(|problems| {
+        CmdError::click(format!(
+            "invalid object_api.namespaces: {}",
+            problems.join("; ")
+        ))
+    })?;
+    let items = namespaces
+        .values()
+        .map(|policy| policy.item().to_string())
+        .collect::<std::collections::BTreeSet<_>>();
+    reconcile_verifier(
+        target,
+        json_output,
+        "object",
+        "object_api.namespaces",
+        crate::config::OBJECT_API_VERIFIER_CONSUMER,
+        "WC_OBJECT_SKARBIEC_TOKEN_FILE",
+        "stado-object-api-verifier-skarbiec-token",
+        items,
+    )
+    .await
+}
+
 /// Reconcile the service verifier on TARGET to the exact configured deployer set.
-///
-/// Configuration changes must not strand the object API behind a stale,
-/// over-broad verifier grant. The host already owns both the encrypted vault
-/// and the verifier bearer file, so reconciliation happens there. The bearer
-/// and its expiry are preserved; neither is printed or placed in argv.
 pub async fn reconcile_service_verifier(target: &str, json_output: bool) -> Result<(), CmdError> {
-    let deployers = crate::config::service_api_deployers()
-        .map_err(|problems| CmdError::click(format!("invalid service_api.deployers: {}", problems.join("; "))))?;
+    let deployers = crate::config::service_api_deployers().map_err(|problems| {
+        CmdError::click(format!(
+            "invalid service_api.deployers: {}",
+            problems.join("; ")
+        ))
+    })?;
     let items = deployers
         .values()
         .map(|policy| policy.item().to_string())
         .collect::<std::collections::BTreeSet<_>>();
+    reconcile_verifier(
+        target,
+        json_output,
+        "service",
+        "service_api.deployers",
+        crate::config::SERVICE_API_VERIFIER_CONSUMER,
+        "WC_SERVICE_SKARBIEC_TOKEN_FILE",
+        "stado-service-api-verifier-skarbiec-token",
+        items,
+    )
+    .await
+}
+
+/// Preserve an isolated verifier bearer while making its capabilities match config.
+async fn reconcile_verifier(
+    target: &str,
+    json_output: bool,
+    kind: &str,
+    config_name: &str,
+    consumer: &str,
+    token_file_env: &str,
+    token_file_default: &str,
+    items: std::collections::BTreeSet<String>,
+) -> Result<(), CmdError> {
     if items.is_empty() {
-        return Err(CmdError::click(
-            "service_api.deployers is empty; refusing to mint an unusable verifier grant",
-        ));
+        return Err(CmdError::click(format!(
+            "{config_name} is empty; refusing to mint an unusable verifier grant"
+        )));
     }
     for item in &items {
-        vault_word("service deployer item", item)?;
+        vault_word(&format!("{kind} verifier item"), item)?;
     }
 
     let resolved = crate::deploy::host_channel::canonical_target(target)
@@ -3737,18 +3785,21 @@ pub async fn reconcile_service_verifier(target: &str, json_output: bool) -> Resu
     let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
         .await
         .map_err(|error| CmdError::click(error.to_string()))?;
+    let environment_command = format!(
+        "printf '%s\\n%s\\n%s\\n' \"${{SKARBIEC_VAULT_FILE:-$HOME/.stado/skarbiec.vault.json}}\" \
+         \"${{GNUPGHOME:-$HOME/.gnupg}}\" \
+         \"${{{token_file_env}:-$HOME/.stado/{token_file_default}}}\""
+    );
     let environment = crate::deploy::host_channel::run_command(
         &resolved,
-        "printf '%s\\n%s\\n%s\\n' \"${SKARBIEC_VAULT_FILE:-$HOME/.stado/skarbiec.vault.json}\" \
-         \"${GNUPGHOME:-$HOME/.gnupg}\" \
-         \"${WC_SERVICE_SKARBIEC_TOKEN_FILE:-$HOME/.stado/stado-service-api-verifier-skarbiec-token}\"",
+        &environment_command,
         &runner,
     )
     .await
     .map_err(|error| CmdError::click(error.to_string()))?;
     if !environment.ok() {
         return Err(CmdError::click(format!(
-            "{}: service verifier environment could not be read: {}",
+            "{}: {kind} verifier environment could not be read: {}",
             resolved.name,
             crate::deploy::host_channel::last_error_line(&environment, "remote command failed")
         )));
@@ -3786,18 +3837,17 @@ pub async fn reconcile_service_verifier(target: &str, json_output: bool) -> Resu
     let grant = document
         .get("tokens")
         .and_then(Value::as_object)
-        .and_then(|tokens| tokens.get(crate::config::SERVICE_API_VERIFIER_CONSUMER))
+        .and_then(|tokens| tokens.get(consumer))
         .ok_or_else(|| {
             CmdError::click(format!(
-                "{}: {} has no existing grant",
-                resolved.name,
-                crate::config::SERVICE_API_VERIFIER_CONSUMER
+                "{}: {consumer} has no existing grant",
+                resolved.name
             ))
         })?;
     let expires_at = grant
         .get("expires_at")
         .and_then(Value::as_u64)
-        .ok_or_else(|| CmdError::click("service verifier grant has no numeric expiry"))?;
+        .ok_or_else(|| CmdError::click(format!("{kind} verifier grant has no numeric expiry")))?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|error| CmdError::click(error.to_string()))?
@@ -3805,7 +3855,7 @@ pub async fn reconcile_service_verifier(target: &str, json_output: bool) -> Resu
     let ttl = expires_at
         .checked_sub(now)
         .filter(|ttl| *ttl > 0)
-        .ok_or_else(|| CmdError::click("service verifier grant is already expired"))?;
+        .ok_or_else(|| CmdError::click(format!("{kind} verifier grant is already expired")))?;
     let capabilities = items
         .iter()
         .map(|item| format!("read:{item}#token"))
@@ -3817,7 +3867,7 @@ pub async fn reconcile_service_verifier(target: &str, json_output: bool) -> Resu
         crate::deploy::shlex_quote(&gnupg_home),
         crate::deploy::shlex_quote(&vault),
         crate::deploy::shlex_quote(&skarbiec),
-        crate::deploy::shlex_quote(crate::config::SERVICE_API_VERIFIER_CONSUMER),
+        crate::deploy::shlex_quote(consumer),
         crate::deploy::shlex_quote(&capabilities),
         crate::deploy::shlex_quote(&token_file),
         ttl,
@@ -3827,7 +3877,7 @@ pub async fn reconcile_service_verifier(target: &str, json_output: bool) -> Resu
         .map_err(|error| CmdError::click(error.to_string()))?;
     if !reconciled.ok() {
         return Err(CmdError::click(format!(
-            "{}: service verifier reconciliation failed: {}",
+            "{}: {kind} verifier reconciliation failed: {}",
             resolved.name,
             crate::deploy::host_channel::last_error_line(&reconciled, "remote command failed")
         )));
@@ -3839,7 +3889,7 @@ pub async fn reconcile_service_verifier(target: &str, json_output: bool) -> Resu
             "{}",
             serde_json::to_string_pretty(&json!({
                 "target": resolved.name,
-                "consumer": crate::config::SERVICE_API_VERIFIER_CONSUMER,
+                "consumer": consumer,
                 "items": item_list,
                 "bearer_preserved": true,
                 "expires_at": expires_at,
@@ -3847,9 +3897,8 @@ pub async fn reconcile_service_verifier(target: &str, json_output: bool) -> Resu
         );
     } else {
         println!(
-            "{}: {} now reads exactly {}",
+            "{}: {consumer} now reads exactly {}",
             resolved.name,
-            crate::config::SERVICE_API_VERIFIER_CONSUMER,
             item_list.join(",")
         );
     }

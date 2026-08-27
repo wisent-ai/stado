@@ -1337,6 +1337,17 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Make TARGET's object-verifier grant match object_api.namespaces exactly.
+    ///
+    /// The existing bearer and expiry are preserved. Stale capabilities are
+    /// removed and missing reads are added without printing the bearer.
+    #[command(name = "reconcile-object-verifier")]
+    ReconcileObjectVerifier {
+        target: String,
+        /// Emit the reconciled item set as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Make TARGET's service-verifier grant match service_api.deployers exactly.
     ///
     /// The existing bearer and expiry are preserved. Stale capabilities are
@@ -2110,6 +2121,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 tags,
                 json,
             } => host::retag_vault_item(&target, &item, &tags, json).await,
+            HostCommands::ReconcileObjectVerifier { target, json } => {
+                host::reconcile_object_verifier(&target, json).await
+            }
             HostCommands::ReconcileServiceVerifier { target, json } => {
                 host::reconcile_service_verifier(&target, json).await
             }
