@@ -1,11 +1,11 @@
 import { execFile } from 'node:child_process';
 import { strict as assert } from 'node:assert';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 const exec = promisify(execFile);
-const repo = resolve(process.env.PROBIERZ_APP_REPO || process.cwd());
-const crate = resolve(repo, 'stado-rs');
+const crate = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
 // Pin the current immutable native release. Its disappearance is a contract
 // failure; the test never follows a moving "latest" alias.
