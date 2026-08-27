@@ -1584,6 +1584,19 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Complete a Skrzynka Gmail OAuth consent on TARGET through Weles. The
+    /// authorization URL must be Google's HTTPS endpoint with a loopback
+    /// callback; Weles refuses any flow that requires an external prompt.
+    #[command(name = "weles-gmail-authorize")]
+    WelesGmailAuthorize {
+        target: String,
+        #[arg(long)]
+        url: String,
+        #[arg(long)]
+        email: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Per-action state of one capture batch — queued, running, done or
     /// failed — plus the artifact keys already present in Stado storage under
     /// the batch prefix. Read-only. Retrieval is `stado storage get`.
@@ -2232,6 +2245,12 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 batch,
                 json,
             } => host::weles_capture(&target, &plan, batch.as_deref(), json).await,
+            HostCommands::WelesGmailAuthorize {
+                target,
+                url,
+                email,
+                json,
+            } => host::weles_gmail_authorize(&target, &url, &email, json).await,
             HostCommands::WelesCaptureStatus {
                 target,
                 batch,
