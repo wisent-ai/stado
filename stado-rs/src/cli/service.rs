@@ -21,6 +21,8 @@
 //!   validates before it writes, so a mutation that would produce an
 //!   invalid registry is refused with nothing uploaded.
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use clap::Subcommand;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -272,6 +274,53 @@ pub enum ServiceCommands {
         /// Restart the service after a successful atomic sync.
         #[arg(long)]
         restart: bool,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Synchronize one local file into a managed service's target home.
+    ///
+    /// The content travels only inside the approved encrypted channel's
+    /// request body. It is never printed or placed in an argument vector, and
+    /// the destination is replaced atomically with owner-only permissions.
+    FileSync {
+        /// Service whose host-local process uses the file.
+        name: String,
+        /// The single registry host to update.
+        #[arg(long)]
+        host: String,
+        /// Absolute regular file on this operator host.
+        #[arg(long)]
+        source_file: String,
+        /// File on the target, absolute or rooted at $HOME.
+        #[arg(long)]
+        target_file: String,
+        /// Install mode 0700 instead of 0600.
+        #[arg(long)]
+        executable: bool,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Replace one key in a managed service's owner-controlled env file.
+    ///
+    /// The value is read from an owner-only local file and travels only inside
+    /// the approved encrypted channel's request body.
+    EnvSet {
+        /// Service whose host-local process reads the environment.
+        name: String,
+        /// The single registry host to update.
+        #[arg(long)]
+        host: String,
+        /// Exact environment variable name.
+        #[arg(long)]
+        key: String,
+        /// Environment file on the target, absolute or rooted at $HOME.
+        #[arg(long)]
+        env_file: String,
+        /// Absolute owner-only local file containing the value.
+        #[arg(long)]
+        value_file: String,
         #[arg(long)]
         json: bool,
     },
@@ -704,13 +753,49 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             })
             .await
         }
+        ServiceCommands::FileSync {
+            name,
+            host,
+            source_file,
+            target_file,
+            executable,
+            json,
+        } => {
+            file_sync(FileSyncOptions {
+                name: &name,
+                host: &host,
+                source_file: &source_file,
+                target_file: &target_file,
+                executable,
+                as_json: json,
+            })
+            .await
+        }
+        ServiceCommands::EnvSet {
+            name,
+            host,
+            key,
+            env_file,
+            value_file,
+            json,
+        } => {
+            env_set(EnvSetOptions {
+                name: &name,
+                host: &host,
+                key: &key,
+                env_file: &env_file,
+                value_file: &value_file,
+                as_json: json,
+            })
+            .await
+        }
         ServiceCommands::GrantSync {
             name,
             host,
             consumer,
             capabilities,
-            token_file,
             vault_file,
+            token_file,
             ttl_seconds,
             audience,
             json,
@@ -1307,7 +1392,7 @@ async fn owner_host_password(item: &str) -> Result<Option<String>, String> {
     Ok(password.filter(|value| !value.is_empty()))
 }
 
-async fn restart(
+pub(crate) async fn restart(
     name: &str,
     host: Option<&str>,
     take_over_listener: Option<&str>,
@@ -2066,6 +2151,189 @@ async fn secret_sync(options: SecretSyncOptions<'_>) -> Result<(), CmdError> {
         table::print(&["HOST", "UNIT", "SYNC", "RESTART", "DETAIL"], &cells);
     }
     fail_if_any(&failures, "secret sync")
+}
+
+struct FileSyncOptions<'a> {
+    name: &'a str,
+    host: &'a str,
+    source_file: &'a str,
+    target_file: &'a str,
+    executable: bool,
+    as_json: bool,
+}
+
+async fn file_sync(options: FileSyncOptions<'_>) -> Result<(), CmdError> {
+    let FileSyncOptions {
+        name,
+        host,
+        source_file,
+        target_file,
+        executable,
+        as_json,
+    } = options;
+    let source = std::path::Path::new(source_file);
+    if !source.is_absolute() {
+        return Err(CmdError::click("--source-file must be absolute"));
+    }
+    let metadata = std::fs::symlink_metadata(source)
+        .map_err(|error| CmdError::click(format!("cannot read {source_file}: {error}")))?;
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        return Err(CmdError::click(format!(
+            "{source_file} must be a regular file, not a symlink"
+        )));
+    }
+    if metadata.len() > 1_048_576 {
+        return Err(CmdError::click(format!(
+            "{source_file} exceeds the 1 MiB service file limit"
+        )));
+    }
+    #[cfg(unix)]
+    if !executable && metadata.permissions().mode() & 0o077 != 0 {
+        return Err(CmdError::click(format!(
+            "{source_file} must be owner-only unless --executable is set"
+        )));
+    }
+    let content = std::fs::read(source)
+        .map_err(|error| CmdError::click(format!("cannot read {source_file}: {error}")))?;
+    if content.is_empty() {
+        return Err(CmdError::click(format!("{source_file} is empty")));
+    }
+    let mode = if executable { 0o700 } else { 0o600 };
+
+    let services = declared_matching(name, Some(host)).await?;
+    let runner = production_runner();
+    let mut payload = Vec::new();
+    let mut cells = Vec::new();
+    let mut failures = Vec::new();
+
+    for declared in &services {
+        let target = host_channel::canonical_target(&declared.host)
+            .await
+            .map_err(click)?;
+        let synced =
+            service::sync_service_file(&target, target_file, &content, mode, &runner)
+                .await
+                .map_err(click)?;
+        if !synced.succeeded("file_synced") {
+            failures.push(format!("{}: {}", declared.host, synced.failure()));
+        }
+        cells.push(vec![
+            declared.host.clone(),
+            declared.unit_id().to_string(),
+            dash(&synced.status),
+            dash(&synced.detail),
+        ]);
+        payload.push(json!({
+            "host": declared.host,
+            "unit": declared.unit_id(),
+            "target_file": target_file,
+            "mode": format!("{mode:04o}"),
+            "sync": synced.to_json(),
+        }));
+    }
+
+    if as_json {
+        print_json(&Value::Array(payload))?;
+    } else {
+        table::print(&["HOST", "UNIT", "SYNC", "DETAIL"], &cells);
+    }
+    fail_if_any(&failures, "file sync")
+}
+
+struct EnvSetOptions<'a> {
+    name: &'a str,
+    host: &'a str,
+    key: &'a str,
+    env_file: &'a str,
+    value_file: &'a str,
+    as_json: bool,
+}
+
+async fn env_set(options: EnvSetOptions<'_>) -> Result<(), CmdError> {
+    let EnvSetOptions {
+        name,
+        host,
+        key,
+        env_file,
+        value_file,
+        as_json,
+    } = options;
+    if key.is_empty()
+        || key
+            .as_bytes()
+            .first()
+            .is_some_and(|byte| byte.is_ascii_digit())
+        || !key.chars().all(|character| {
+            character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
+        })
+    {
+        return Err(CmdError::click(
+            "--key must be an uppercase environment variable name",
+        ));
+    }
+    let source = std::path::Path::new(value_file);
+    if !source.is_absolute() {
+        return Err(CmdError::click("--value-file must be absolute"));
+    }
+    let metadata = std::fs::symlink_metadata(source)
+        .map_err(|error| CmdError::click(format!("cannot read {value_file}: {error}")))?;
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        return Err(CmdError::click(format!(
+            "{value_file} must be a regular file, not a symlink"
+        )));
+    }
+    #[cfg(unix)]
+    if metadata.permissions().mode() & 0o077 != 0 {
+        return Err(CmdError::click(format!("{value_file} must be owner-only")));
+    }
+    let value = std::fs::read_to_string(source)
+        .map_err(|error| CmdError::click(format!("cannot read {value_file}: {error}")))?;
+    let value = value.trim();
+    if value.is_empty() || value.chars().any(|character| matches!(character, '\r' | '\n')) {
+        return Err(CmdError::click(format!(
+            "{value_file} must contain one non-empty value"
+        )));
+    }
+
+    let services = declared_matching(name, Some(host)).await?;
+    let runner = production_runner();
+    let mut payload = Vec::new();
+    let mut cells = Vec::new();
+    let mut failures = Vec::new();
+
+    for declared in &services {
+        let target = host_channel::canonical_target(&declared.host)
+            .await
+            .map_err(click)?;
+        let updated = service::set_env_key_on_host(&target, env_file, key, value, &runner)
+            .await
+            .map_err(click)?;
+        if !updated.succeeded("env_set") {
+            failures.push(format!("{}: {}", declared.host, updated.failure()));
+        }
+        cells.push(vec![
+            declared.host.clone(),
+            declared.unit_id().to_string(),
+            key.to_string(),
+            dash(&updated.status),
+            dash(&updated.detail),
+        ]);
+        payload.push(json!({
+            "host": declared.host,
+            "unit": declared.unit_id(),
+            "key": key,
+            "env_file": env_file,
+            "value_file": value_file,
+            "update": updated.to_json(),
+        }));
+    }
+
+    if as_json {
+        print_json(&Value::Array(payload))?;
+    } else {
+        table::print(&["HOST", "UNIT", "KEY", "UPDATE", "DETAIL"], &cells);
+    }
+    fail_if_any(&failures, "environment update")
 }
 
 struct GrantSyncOptions<'a> {

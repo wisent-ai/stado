@@ -35,6 +35,7 @@ pub mod disk_cleanup;
 pub mod doctor;
 pub mod fleet;
 pub mod host;
+pub mod egress;
 pub mod identity;
 pub mod inference;
 pub mod instances;
@@ -535,6 +536,9 @@ enum Commands {
     /// adopt, retire, deploy, logs, env.
     #[command(subcommand)]
     Service(service::ServiceCommands),
+    /// Run host-local network egress processes under Stado service management.
+    #[command(subcommand)]
+    Egress(egress::EgressCommands),
     /// Install, inspect, update, roll back and remove canonical Wisent products.
     #[command(subcommand)]
     Product(product::ProductCommands),
@@ -1337,6 +1341,17 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Make TARGET's object-verifier grant match object_api.namespaces exactly.
+    ///
+    /// The existing bearer and expiry are preserved. Stale capabilities are
+    /// removed and missing reads are added without printing the bearer.
+    #[command(name = "reconcile-object-verifier")]
+    ReconcileObjectVerifier {
+        target: String,
+        /// Emit the reconciled item set as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Make TARGET's service-verifier grant match service_api.deployers exactly.
     ///
     /// The existing bearer and expiry are preserved. Stale capabilities are
@@ -1346,6 +1361,13 @@ enum HostCommands {
     ReconcileServiceVerifier {
         target: String,
         /// Emit the reconciled item set as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Recover an audit-lock stall in Skarbiec and its loaded local dependants.
+    #[command(name = "recover-skarbiec-audit")]
+    RecoverSkarbiecAudit {
+        target: String,
         #[arg(long)]
         json: bool,
     },
@@ -1563,6 +1585,10 @@ enum HostCommands {
         key: String,
         /// JSON value, or a bare string as accepted by `stado config set`.
         value: String,
+        /// Reconcile this registry-managed service after the atomic write so
+        /// long-lived processes observe the new configuration immediately.
+        #[arg(long)]
+        reload_service: Option<String>,
     },
     /// Deliver one registry-declared managed binary to TARGET.
     Release {
@@ -2110,8 +2136,14 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 tags,
                 json,
             } => host::retag_vault_item(&target, &item, &tags, json).await,
+            HostCommands::ReconcileObjectVerifier { target, json } => {
+                host::reconcile_object_verifier(&target, json).await
+            }
             HostCommands::ReconcileServiceVerifier { target, json } => {
                 host::reconcile_service_verifier(&target, json).await
+            }
+            HostCommands::RecoverSkarbiecAudit { target, json } => {
+                host::recover_skarbiec_audit(&target, json).await
             }
             HostCommands::UnitLog {
                 target,
@@ -2178,8 +2210,13 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 json,
             } => host::weles_capture_status(&target, &batch, json).await,
             HostCommands::ConfigShow { target } => host::config_show(&target).await,
-            HostCommands::ConfigSet { target, key, value } => {
-                host::config_set(&target, &key, &value).await
+            HostCommands::ConfigSet {
+                target,
+                key,
+                value,
+                reload_service,
+            } => {
+                host::config_set(&target, &key, &value, reload_service.as_deref()).await
             }
             HostCommands::Release {
                 target,
@@ -2202,6 +2239,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Queue(sub) => queue::dispatch(sub).await,
         Commands::Alerts(sub) => alerts::dispatch(sub).await,
         Commands::Service(sub) => service::dispatch(sub).await,
+        Commands::Egress(sub) => egress::dispatch(sub).await,
         Commands::Product(sub) => product::dispatch(sub).await,
         Commands::Placement(sub) => placement::dispatch(sub).await,
         Commands::Resolver(sub) => resolver::dispatch(sub).await,

@@ -4366,12 +4366,68 @@ pub async fn fetch_unit_file(
     })
 }
 
+/// Atomically replace one owner-only file on a managed host.
+///
+/// The content rides inside the approved channel's request body as base64,
+/// never argv or output. The destination stays under the target account's
+/// real home and a symlink is refused rather than followed.
+pub async fn sync_service_file(
+    target: &ComputeTarget,
+    target_path: &str,
+    content: &[u8],
+    mode: u32,
+    runner: &Runner,
+) -> Result<RemoteReport, DeployError> {
+    if !matches!(mode, 0o600 | 0o700) {
+        return Err(DeployError(format!(
+            "service file mode must be 0600 or 0700, got {mode:04o}"
+        )));
+    }
+    let body = r#"set -eu
+fail() {
+  printf 'STADO_SERVICE\tfile-sync\tfile_sync_failed\t%s\n' "$1"
+  exit 0
+}
+decode=-D
+if [ "$(uname)" = "Linux" ]; then decode=--decode; fi
+target_path=$(printf '%s' '@TARGET_PATH_B64@' | /usr/bin/base64 "$decode") || exit 1
+case "$target_path" in
+  \$HOME/*) target_path="$HOME/${target_path#\$HOME/}" ;;
+  "$HOME"/*) ;;
+  *) fail 'target path must be under the target home' ;;
+esac
+if [ -e "$target_path" ] || [ -L "$target_path" ]; then
+  [ -f "$target_path" ] && [ ! -L "$target_path" ] || fail 'target path is not a regular file'
+fi
+parent=$(/usr/bin/dirname "$target_path") || fail 'target parent unavailable'
+/bin/mkdir -p "$parent" || fail 'cannot create target parent'
+if ! /usr/bin/python3 -c 'import os,sys; home=os.path.realpath(sys.argv[1]); parent=os.path.realpath(sys.argv[2]); raise SystemExit(0 if os.path.commonpath((home,parent)) == home else 1)' "$HOME" "$parent"; then
+  fail 'target parent escapes the target home'
+fi
+tmp="$target_path.stado-file-sync.$$"
+trap '/bin/rm -f "$tmp"' EXIT HUP INT TERM
+umask u=rw,go=
+printf '%s' '@CONTENT_B64@' | /usr/bin/base64 "$decode" > "$tmp" || fail 'cannot stage file'
+/bin/chmod @MODE@ "$tmp" || fail 'cannot protect file'
+/bin/mv -f "$tmp" "$target_path" || fail 'cannot install file'
+trap - EXIT HUP INT TERM
+printf 'STADO_SERVICE\tfile-sync\tfile_synced\t%s\n' "$target_path"
+"#;
+    let body = body
+        .replace("@TARGET_PATH_B64@", &STANDARD.encode(target_path.as_bytes()))
+        .replace("@CONTENT_B64@", &STANDARD.encode(content))
+        .replace("@MODE@", &format!("{mode:04o}"));
+    let output = host_channel::run_script(target, &body, runner).await?;
+    Ok(report_from(output))
+}
+
 /// Replace `consumer`'s complete grant against the target's authoritative
 /// vault while preserving the bearer already held in `token_path`.
 ///
 /// Both files stay on the managed host. Skarbiec reads the raw bearer itself
 /// and records only its hash; the value never enters Stado output, argv, or
 /// the control-plane process.
+#[allow(clippy::too_many_arguments)]
 pub async fn remint_consumer_grant_on_host(
     target: &ComputeTarget,
     consumer: &str,
@@ -4431,8 +4487,8 @@ printf 'STADO_SERVICE\t%s\tgrant_synced\t%s\n' "$consumer" "$token_path"
     Ok(report_from(output))
 }
 
-/// Atomically replace one line (KEY=VALUE) in a remote env file. Creates a
-/// backup before writing. Only the named key changes.
+/// Atomically replace one assignment in an owner-controlled remote env file.
+/// The value travels only inside the approved host-channel request body.
 pub async fn set_env_key_on_host(
     target: &ComputeTarget,
     env_path: &str,
@@ -4441,68 +4497,43 @@ pub async fn set_env_key_on_host(
     runner: &Runner,
 ) -> Result<RemoteReport, DeployError> {
     let body = r#"set -eu
-fail() { echo 'env_set_failed' "$1"; exit 1; }
+fail() { printf 'env_set_failed\t%s\n' "$1"; exit 1; }
 decode=-D
 if [ "$(uname)" = "Linux" ]; then decode=--decode; fi
+home=$HOME
 env_path=$(printf '%s' '@ENV_PATH_B64@' | /usr/bin/base64 "$decode")
-key=@KEY@
+case "$env_path" in
+  '$HOME'/*) env_path="$home/${env_path#\$HOME/}" ;;
+  "$home"/*) ;;
+  /*) fail 'target must be inside the target home' ;;
+  *) env_path="$home/$env_path" ;;
+esac
+case "$env_path" in "$home"/*) ;; *) fail 'target must be inside the target home' ;; esac
+[ ! -L "$env_path" ] || fail 'target cannot be a symlink'
+[ -f "$env_path" ] || fail 'environment file must already exist'
+parent=$(/usr/bin/dirname "$env_path")
+real_parent=$(/usr/bin/python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$parent")
+/usr/bin/python3 -c 'import os,sys; home=os.path.realpath(sys.argv[1]); parent=sys.argv[2]; sys.exit(0 if os.path.commonpath((home,parent)) == home else 1)' "$home" "$real_parent" || fail 'resolved target leaves the target home'
+key=$(printf '%s' '@KEY_B64@' | /usr/bin/base64 "$decode")
 value=$(printf '%s' '@VALUE_B64@' | /usr/bin/base64 "$decode")
-[ -f "$env_path" ] || fail 'environment file not found'
-/bin/cp "$env_path" "$env_path.before-set-key.$$"
-/usr/bin/awk -v key="$key" -v val="$value" '
-  BEGIN { found = 0 }
-  $0 ~ "^" key "=" { print key "=" val; found = 1; next }
-  { print }
-  END { if (!found) print key "=" val }
-' "$env_path" > "$tmp_placeholder"
-/bin/mv -f "$tmp_placeholder" "$env_path"
-echo 'STADO_ENV_SET	ok'"#;
+tmp="$parent/.stado-env-set.$$"
+trap '/bin/rm -f "$tmp"' EXIT HUP INT TERM
+/usr/bin/awk -v key="$key" '$0 !~ "^" key "=" { print }' "$env_path" > "$tmp"
+printf '%s=%s\n' "$key" "$value" >> "$tmp"
+/bin/chmod 0600 "$tmp"
+/bin/mv -f "$tmp" "$env_path"
+trap - EXIT HUP INT TERM
+printf 'STADO_SERVICE\tenv-set\tenv_set\t%s\n' "$env_path"
+"#;
     let body = body
         .replace("@ENV_PATH_B64@", &STANDARD.encode(env_path.as_bytes()))
-        .replace("@KEY@", key)
-        .replace("@VALUE_B64@", &STANDARD.encode(value.as_bytes()))
-        .replace("$tmp_placeholder", "$env_path.set-key.$$");
+        .replace("@KEY_B64@", &STANDARD.encode(key.as_bytes()))
+        .replace("@VALUE_B64@", &STANDARD.encode(value.as_bytes()));
     let output = host_channel::run_script(target, &body, runner).await?;
-    if !output.stdout.contains("STADO_ENV_SET") {
-        return Err(DeployError(format!(
-            "{}: could not set {} in {}: {}",
-            target.name,
-            key,
-            env_path,
-            output.stderr.trim_end()
-        )));
-    }
     Ok(report_from(output))
 }
 
-/// Write a base64-encoded payload to an absolute path on the host.
-/// Creates parent directories and sets owner-only permissions.
-pub async fn write_file_on_host(
-    target: &ComputeTarget,
-    path: &str,
-    content_b64: &str,
-    runner: &Runner,
-) -> Result<RemoteReport, DeployError> {
-    let body = r#"set -eu
-b64=@CONTENT_B64@
-path=$(printf '%s' '@PATH_B64@' | /usr/bin/base64 -D)
-/bin/mkdir -p "$(dirname "$path")"
-printf '%s' "$b64" | /usr/bin/base64 -D > "$path"
-/usr/bin/chmod u=rw,go= "$path"
-echo 'STADO_FILE_WRITTEN	ok'"#;
-    let body = body
-        .replace("@CONTENT_B64@", content_b64)
-        .replace("@PATH_B64@", &STANDARD.encode(path.as_bytes()));
-    let output = host_channel::run_script(target, &body, runner).await?;
-    if !output.stdout.contains("STADO_FILE_WRITTEN") {
-        return Err(DeployError(format!(
-            "{}: could not write file: {}",
-            target.name,
-            output.stderr.trim_end()
-        )));
-    }
-    Ok(report_from(output))
-}
+
 
 /// Write one vault item field on the host using its own Skarbiec binary
 /// and vault file. The value file must already exist on the host.
