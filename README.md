@@ -500,11 +500,13 @@ stado host recover TARGET --release 0.7.34
 ```
 
 The command reads the last valid canonical registry snapshot (or the bundled
-snapshot when `--bundled-registry` is explicitly supplied), downloads the exact
-canonical signed artifact without using the local resolver or a remote Stado
-binary, and verifies its release manifest, signature, and SHA-256 before any
-activation. It preserves the previous binary, installs by atomic replacement,
-and probes the new binary remotely with `stado resolver --help`. A failed probe
+snapshot when `--bundled-registry` is explicitly supplied), restores the
+registry-selected release object API before its first catalog read, and
+downloads the exact canonical signed artifact without using the local resolver
+or a remote Stado binary. It verifies the release manifest, signature, and
+SHA-256 before activation. It preserves the previous binary, installs by
+atomic replacement, and probes the new binary remotely with
+`stado resolver --help`. A failed probe
 atomically restores that backup (or removes the invalid install when no prior
 binary existed); only a successful probe continues into the existing host
 recovery. Do not split those stages into manual copy or SSH steps.

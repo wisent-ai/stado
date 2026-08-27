@@ -928,7 +928,7 @@ final class MachineEnrollmentStore: ObservableObject {
         releaseVersion: String
     ) -> [MachineRecoveryStageResult] {
         initialRecoverySteps(releaseVersion: releaseVersion).map { result in
-            let firstStage: MachineRecoveryStage = releaseVersion.isEmpty ? .recovery : .download
+            let firstStage: MachineRecoveryStage = releaseVersion.isEmpty ? .recovery : .objectAPI
             guard result.stage == firstStage else { return result }
             return MachineRecoveryStageResult(
                 stage: result.stage,
@@ -983,6 +983,21 @@ final class MachineEnrollmentStore: ObservableObject {
             reported[stage] = step
         }
         return MachineRecoveryStage.allCases.map { stage in
+            if stage == .objectAPI {
+                guard let objectAPI = command.objectAPI else {
+                    return MachineRecoveryStageResult(
+                        stage: stage,
+                        state: .notConfirmed,
+                        detail: "The command did not report the release object API boundary."
+                    )
+                }
+                return MachineRecoveryStageResult(
+                    stage: stage,
+                    state: reportedStageState(objectAPI.status),
+                    detail: objectAPI.detail ?? "Stado reported \(objectAPI.status) for the release object API.",
+                    reportedStatus: objectAPI.status
+                )
+            }
             guard let step = reported[stage] else {
                 if stage == .rollback {
                     return MachineRecoveryStageResult(
@@ -1008,7 +1023,7 @@ final class MachineEnrollmentStore: ObservableObject {
 
     private static func reportedStageState(_ status: String) -> MachineRecoveryStageState {
         switch status.lowercased() {
-        case "ok", "restored", "removed":
+        case "ok", "healthy", "restored", "removed":
             return .complete
         case "failed":
             return .failed

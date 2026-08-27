@@ -120,6 +120,7 @@ struct MachineEnrollmentCheck: Codable, Equatable, Sendable {
 /// the desktop does not reproduce any release work. Rollback is conditional
 /// and appears only when the new binary fails its resolver probe.
 enum MachineRecoveryStage: String, CaseIterable, Hashable, Identifiable, Sendable {
+    case objectAPI = "object_api"
     case download
     case verify
     case backup
@@ -132,6 +133,7 @@ enum MachineRecoveryStage: String, CaseIterable, Hashable, Identifiable, Sendabl
 
     var title: String {
         switch self {
+        case .objectAPI: "Restore the release object API"
         case .download: "Download the signed artifact"
         case .verify: "Verify manifest, signature, and SHA-256"
         case .backup: "Preserve the previous binary"
@@ -179,7 +181,18 @@ struct MachineRecoveryStageResult: Identifiable, Sendable {
 /// Unknown outer fields remain the CLI's concern. The desktop reads only the
 /// exact version and ordered step evidence the command added for this surface.
 struct MachineRecoveryCommandReport: Decodable, Sendable {
+    let objectAPI: MachineRecoveryObjectAPIReport?
     let release: MachineRecoveryReleaseReport?
+
+    enum CodingKeys: String, CodingKey {
+        case objectAPI = "object_api"
+        case release
+    }
+}
+
+struct MachineRecoveryObjectAPIReport: Decodable, Sendable {
+    let status: String
+    let detail: String?
 }
 
 struct MachineRecoveryReleaseReport: Decodable, Sendable {

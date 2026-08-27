@@ -386,7 +386,7 @@ struct EnrollmentProofSection: View {
                     .accessibilityLabel("Exact Stado recovery version")
                     Text(store.recoveryVersion.isEmpty
                          ? "Leave empty to recover with the installed binary, exactly as before."
-                         : "This downloads and verifies the signed \(store.recoveryVersion) artifact before recovery. The prior binary remains available if installation cannot complete.")
+                         : "This restores the release object API, then downloads and verifies the signed \(store.recoveryVersion) artifact before recovery. The prior binary is restored if its resolver probe fails.")
                         .font(WisentTypeScale.caption())
                         .foregroundStyle(WisentDesign.secondary)
                         .fixedSize(horizontal: false, vertical: true)
