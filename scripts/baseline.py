@@ -11,6 +11,8 @@ import re
 import subprocess
 import tarfile
 import tempfile
+import time
+
 from pathlib import Path
 
 TAG = re.compile(r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?$")
@@ -90,9 +92,38 @@ def run_stado(stado: Path, *args: str) -> subprocess.CompletedProcess[str]:
         text=True,
     )
 
+def run_storage(stado: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    """Run a read-only release-channel operation through transient outages.
+
+    The release boundary and its authorization service reload independently.
+    Retry only failures the Stado CLI classifies as infrastructure/transient;
+    auth, malformed requests, and absent objects remain immediate failures.
+    """
+    attempts = 12
+    for attempt in range(1, attempts + 1):
+        result = run_stado(stado, "storage", *args)
+        if result.returncode == 0:
+            return result
+        detail = result.stderr.lower()
+        transient = any(
+            marker in detail
+            for marker in (
+                "http 502",
+                "http 503",
+                "[infra_down]",
+                "infrastructure we depend on is unreachable",
+                "unreachable, not absent",
+            )
+        )
+        if not transient or attempt == attempts:
+            return result
+        time.sleep(attempt * 2)
+    raise AssertionError("storage retry loop exhausted without returning")
+
+
 
 def state(stado: Path, uri: str) -> str:
-    result = run_stado(stado, "storage", "stat", uri, "--json")
+    result = run_storage(stado, "stat", uri, "--json")
     if result.returncode:
         raise SystemExit(result.stderr.strip() or f"storage stat failed for {uri}")
     try:
@@ -102,7 +133,7 @@ def state(stado: Path, uri: str) -> str:
 
 
 def get(stado: Path, uri: str, destination: Path) -> None:
-    result = run_stado(stado, "storage", "get", uri, str(destination))
+    result = run_storage(stado, "get", uri, str(destination))
     if result.returncode:
         raise SystemExit(result.stderr.strip() or f"storage get failed for {uri}")
 
