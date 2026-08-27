@@ -325,6 +325,23 @@ pub enum ServiceCommands {
         json: bool,
     },
 
+    /// Remove one key from a managed service's owner-controlled env file.
+    EnvUnset {
+        /// Service whose host-local process reads the environment.
+        name: String,
+        /// The single registry host to update.
+        #[arg(long)]
+        host: String,
+        /// Exact environment variable name.
+        #[arg(long)]
+        key: String,
+        /// Environment file on the target, absolute or rooted at $HOME.
+        #[arg(long)]
+        env_file: String,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Reconcile one Skarbiec consumer grant with an existing owner-only token file.
     ///
     /// The bearer never leaves the managed host: its local Skarbiec reads the
@@ -785,6 +802,22 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
                 key: &key,
                 env_file: &env_file,
                 value_file: &value_file,
+                as_json: json,
+            })
+            .await
+        }
+        ServiceCommands::EnvUnset {
+            name,
+            host,
+            key,
+            env_file,
+            json,
+        } => {
+            env_unset(EnvUnsetOptions {
+                name: &name,
+                host: &host,
+                key: &key,
+                env_file: &env_file,
                 as_json: json,
             })
             .await
@@ -2240,6 +2273,23 @@ async fn file_sync(options: FileSyncOptions<'_>) -> Result<(), CmdError> {
     fail_if_any(&failures, "file sync")
 }
 
+fn validate_env_key(key: &str) -> Result<(), CmdError> {
+    if key.is_empty()
+        || key
+            .as_bytes()
+            .first()
+            .is_some_and(|byte| byte.is_ascii_digit())
+        || !key.chars().all(|character| {
+            character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
+        })
+    {
+        return Err(CmdError::click(
+            "--key must be an uppercase environment variable name",
+        ));
+    }
+    Ok(())
+}
+
 struct EnvSetOptions<'a> {
     name: &'a str,
     host: &'a str,
@@ -2258,19 +2308,7 @@ async fn env_set(options: EnvSetOptions<'_>) -> Result<(), CmdError> {
         value_file,
         as_json,
     } = options;
-    if key.is_empty()
-        || key
-            .as_bytes()
-            .first()
-            .is_some_and(|byte| byte.is_ascii_digit())
-        || !key.chars().all(|character| {
-            character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
-        })
-    {
-        return Err(CmdError::click(
-            "--key must be an uppercase environment variable name",
-        ));
-    }
+    validate_env_key(key)?;
     let source = std::path::Path::new(value_file);
     if !source.is_absolute() {
         return Err(CmdError::click("--value-file must be absolute"));
@@ -2324,6 +2362,63 @@ async fn env_set(options: EnvSetOptions<'_>) -> Result<(), CmdError> {
             "key": key,
             "env_file": env_file,
             "value_file": value_file,
+            "update": updated.to_json(),
+        }));
+    }
+
+    if as_json {
+        print_json(&Value::Array(payload))?;
+    } else {
+        table::print(&["HOST", "UNIT", "KEY", "UPDATE", "DETAIL"], &cells);
+    }
+    fail_if_any(&failures, "environment update")
+}
+
+struct EnvUnsetOptions<'a> {
+    name: &'a str,
+    host: &'a str,
+    key: &'a str,
+    env_file: &'a str,
+    as_json: bool,
+}
+
+async fn env_unset(options: EnvUnsetOptions<'_>) -> Result<(), CmdError> {
+    let EnvUnsetOptions {
+        name,
+        host,
+        key,
+        env_file,
+        as_json,
+    } = options;
+    validate_env_key(key)?;
+    let services = declared_matching(name, Some(host)).await?;
+    let runner = production_runner();
+    let mut payload = Vec::new();
+    let mut cells = Vec::new();
+    let mut failures = Vec::new();
+
+    for declared in &services {
+        let target = host_channel::canonical_target(&declared.host)
+            .await
+            .map_err(click)?;
+        let updated = service::unset_env_key_on_host(&target, env_file, key, &runner)
+            .await
+            .map_err(click)?;
+        if !updated.succeeded("env_unset") {
+            failures.push(format!("{}: {}", declared.host, updated.failure()));
+        }
+        cells.push(vec![
+            declared.host.clone(),
+            declared.unit_id().to_string(),
+            key.to_string(),
+            dash(&updated.status),
+            dash(&updated.detail),
+        ]);
+        payload.push(json!({
+            "host": declared.host,
+            "unit": declared.unit_id(),
+            "key": key,
+            "env_file": env_file,
             "update": updated.to_json(),
         }));
     }
