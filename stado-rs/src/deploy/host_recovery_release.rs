@@ -6,11 +6,13 @@
 //! origin, verifies them against the already-loaded registry, and carries only
 //! the verified binary over the approved SSH channel.
 
+use std::io::Write;
 use std::time::Duration;
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 
 use super::{host_recovery, shlex_quote, CommandSpec, DeployError, Runner};
 use crate::release_control::{
@@ -19,7 +21,7 @@ use crate::release_control::{
 use crate::targets::{ComputeTarget, Registry};
 
 pub const RECOVERY_RELEASE_ORIGIN: &str = "https://stado.wisent.com";
-const MAX_RELEASE_BYTES: usize = 2 * 1024 * 1024 * 1024;
+const MAX_RELEASE_METADATA_BYTES: usize = 1024 * 1024;
 
 /// Direct reader for the public emergency release route. Production constructs
 /// this only with [`canonical`]; the explicit constructor exists for isolated
@@ -61,7 +63,7 @@ impl RecoveryReleaseClient {
             .join("/api/release/object")
             .map_err(|error| DeployError(format!("invalid recovery release endpoint: {error}")))?;
         endpoint.query_pairs_mut().append_pair("uri", uri);
-        let response = self
+        let mut response = self
             .http
             .get(endpoint)
             .send()
@@ -75,29 +77,38 @@ impl RecoveryReleaseClient {
         }
         if response
             .content_length()
-            .is_some_and(|length| length > MAX_RELEASE_BYTES as u64)
+            .is_some_and(|length| length > MAX_RELEASE_METADATA_BYTES as u64)
         {
             return Err(DeployError(format!(
                 "signed release object {uri} exceeds the recovery size limit"
             )));
         }
-        let bytes = response
-            .bytes()
+        let mut bytes = Vec::with_capacity(
+            response
+                .content_length()
+                .unwrap_or_default()
+                .min(MAX_RELEASE_METADATA_BYTES as u64) as usize,
+        );
+        while let Some(chunk) = response
+            .chunk()
             .await
-            .map_err(|error| DeployError(format!("signed release download failed for {uri}: {error}")))?;
-        if bytes.len() > MAX_RELEASE_BYTES {
-            return Err(DeployError(format!(
-                "signed release object {uri} exceeds the recovery size limit"
-            )));
+            .map_err(|error| DeployError(format!("signed release download failed for {uri}: {error}")))?
+        {
+            if bytes.len().saturating_add(chunk.len()) > MAX_RELEASE_METADATA_BYTES {
+                return Err(DeployError(format!(
+                    "signed release object {uri} exceeds the recovery size limit"
+                )));
+            }
+            bytes.extend_from_slice(&chunk);
         }
-        Ok(bytes.to_vec())
+        Ok(bytes)
     }
 
-    async fn download(
+    async fn download_metadata(
         &self,
         version: &str,
         platform: &str,
-    ) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), DeployError> {
+    ) -> Result<(Vec<u8>, Vec<u8>), DeployError> {
         let base = release_control::release_base("stado", version, platform).map_err(DeployError)?;
         let manifest = self
             .get(&format!("{base}/{}", release_control::RELEASE_MANIFEST_NAME))
@@ -105,10 +116,72 @@ impl RecoveryReleaseClient {
         let signature = self
             .get(&format!("{base}/{}", release_control::RELEASE_SIGNATURE_NAME))
             .await?;
-        let archive = self
-            .get(&format!("{base}/{}", release_control::RELEASE_ARCHIVE_NAME))
-            .await?;
-        Ok((manifest, signature, archive))
+        Ok((manifest, signature))
+    }
+
+    async fn download_archive(
+        &self,
+        uri: &str,
+        manifest: &ReleaseManifest,
+        destination: &mut std::fs::File,
+    ) -> Result<(), DeployError> {
+        let mut endpoint = self
+            .origin
+            .join("/api/release/object")
+            .map_err(|error| DeployError(format!("invalid recovery release endpoint: {error}")))?;
+        endpoint.query_pairs_mut().append_pair("uri", uri);
+        let mut response = self
+            .http
+            .get(endpoint)
+            .send()
+            .await
+            .map_err(|error| DeployError(format!("signed release download failed for {uri}: {error}")))?;
+        if !response.status().is_success() {
+            return Err(DeployError(format!(
+                "signed release object {uri} returned HTTP {}",
+                response.status()
+            )));
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length != manifest.artifact_bytes)
+        {
+            return Err(DeployError(
+                "release archive size differs from its signed manifest".to_string(),
+            ));
+        }
+        let mut received = 0_u64;
+        let mut digest = Sha256::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|error| DeployError(format!("signed release download failed for {uri}: {error}")))?
+        {
+            received = received
+                .checked_add(chunk.len() as u64)
+                .ok_or_else(|| DeployError("release archive size overflowed".to_string()))?;
+            if received > manifest.artifact_bytes {
+                return Err(DeployError(
+                    "release archive exceeds its signed artifact_bytes".to_string(),
+                ));
+            }
+            digest.update(&chunk);
+            destination
+                .write_all(&chunk)
+                .map_err(|error| DeployError(format!("cannot stage signed release archive: {error}")))?;
+        }
+        destination
+            .flush()
+            .and_then(|()| destination.sync_all())
+            .map_err(|error| DeployError(format!("cannot commit signed release archive: {error}")))?;
+        if received != manifest.artifact_bytes
+            || hex::encode(digest.finalize()) != manifest.artifact_sha256
+        {
+            return Err(DeployError(
+                "release archive differs from its signed manifest".to_string(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -187,13 +260,12 @@ fn release_policy(
     Ok((control, artifact))
 }
 
-fn verify_release_objects(
+fn verify_release_metadata(
     version: &str,
     platform: &str,
     control: &ReleaseControl,
     manifest_bytes: &[u8],
     signature: &[u8],
-    archive: &[u8],
 ) -> Result<(ReleaseManifest, ReleaseArtifactRef), DeployError> {
     let base = release_control::release_base("stado", version, platform).map_err(DeployError)?;
     let manifest_uri = format!("{base}/{}", release_control::RELEASE_MANIFEST_NAME);
@@ -224,13 +296,6 @@ fn verify_release_objects(
     let signature = std::str::from_utf8(signature)
         .map_err(|_| DeployError("release signature is not UTF-8".to_string()))?;
     release_control::verify_manifest(public, &manifest, signature).map_err(DeployError)?;
-    if archive.len() as u64 != manifest.artifact_bytes
-        || release_control::sha256_bytes(archive) != manifest.artifact_sha256
-    {
-        return Err(DeployError(
-            "release archive differs from its signed manifest".to_string(),
-        ));
-    }
     let artifact = ReleaseArtifactRef {
         manifest_uri,
         signature_uri,
@@ -397,13 +462,9 @@ pub async fn recover_with_client(
     let (control, expected) = release_policy(registry, target, version)?;
     let platform = target.release_platform.as_str();
     let mut steps = Vec::new();
-    let (manifest_bytes, signature, archive) = match client.download(version, platform).await {
+    let (manifest_bytes, signature) = match client.download_metadata(version, platform).await {
         Ok(objects) => {
-            steps.push(step(
-                "download",
-                "ok",
-                "release.json, release.sig, release.tar.gz",
-            ));
+            steps.push(step("download", "ok", "release.json, release.sig"));
             objects
         }
         Err(error) => {
@@ -412,13 +473,12 @@ pub async fn recover_with_client(
             return Ok(failed(target_name, version, steps, detail, 1));
         }
     };
-    let (manifest, artifact) = match verify_release_objects(
+    let (manifest, artifact) = match verify_release_metadata(
         version,
         platform,
         &control,
         &manifest_bytes,
         &signature,
-        &archive,
     ) {
         Ok(verified) => verified,
         Err(error) => {
@@ -433,10 +493,41 @@ pub async fn recover_with_client(
         return Ok(failed(target_name, version, steps, detail, 1));
     }
 
+    let mut archive = tempfile::NamedTempFile::new()
+        .map_err(|error| DeployError(format!("cannot create private release archive: {error}")))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        archive
+            .as_file()
+            .set_permissions(std::fs::Permissions::from_mode(0o600))
+            .map_err(|error| DeployError(format!("cannot protect release archive: {error}")))?;
+    }
+    if let Err(error) = client
+        .download_archive(&artifact.archive_uri, &manifest, archive.as_file_mut())
+        .await
+    {
+        let detail = error.to_string();
+        if detail.contains("download failed") || detail.contains("returned HTTP") {
+            steps[0] = step("download", "failed", &detail);
+        } else {
+            steps.push(step("verify", "failed", &detail));
+        }
+        return Ok(failed(target_name, version, steps, detail, 1));
+    }
+    steps[0] = step(
+        "download",
+        "ok",
+        "release.json, release.sig, release.tar.gz",
+    );
     let extracted = tempfile::tempdir()
         .map_err(|error| DeployError(format!("cannot create release staging directory: {error}")))?;
     let release_root = extracted.path().join("release");
-    if let Err(error) = release_control::safe_extract_archive(&archive, &release_root) {
+    if let Err(error) = release_control::safe_extract_archive_file(
+        archive.path(),
+        manifest.artifact_bytes,
+        &release_root,
+    ) {
         steps.push(step("verify", "failed", &error));
         return Ok(failed(target_name, version, steps, error, 1));
     }
