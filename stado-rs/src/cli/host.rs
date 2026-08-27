@@ -3898,6 +3898,7 @@ async fn reconcile_verifier(
                 uuid::Uuid::new_v4().simple()
             );
             let payload = serde_json::to_string(&serde_json::json!({
+                "schema": "skarbiec.item.v2",
                 "kind": "token",
                 "fields": { "token": token },
                 "context": {}
