@@ -1337,6 +1337,18 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Make TARGET's service-verifier grant match service_api.deployers exactly.
+    ///
+    /// The existing bearer and expiry are preserved. Stale capabilities are
+    /// removed and missing read capabilities are added without printing the
+    /// bearer or moving it through argv.
+    #[command(name = "reconcile-service-verifier")]
+    ReconcileServiceVerifier {
+        target: String,
+        /// Emit the reconciled item set as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// The tail of one managed unit's own log on TARGET.
     ///
     /// A crash-looping unit says why in its log and nowhere else: the health
@@ -2098,6 +2110,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 tags,
                 json,
             } => host::retag_vault_item(&target, &item, &tags, json).await,
+            HostCommands::ReconcileServiceVerifier { target, json } => {
+                host::reconcile_service_verifier(&target, json).await
+            }
             HostCommands::UnitLog {
                 target,
                 unit,

@@ -3708,6 +3708,153 @@ pub async fn retag_vault_item(
     }
     Ok(())
 }
+/// Reconcile the service verifier on TARGET to the exact configured deployer set.
+///
+/// Configuration changes must not strand the object API behind a stale,
+/// over-broad verifier grant. The host already owns both the encrypted vault
+/// and the verifier bearer file, so reconciliation happens there. The bearer
+/// and its expiry are preserved; neither is printed or placed in argv.
+pub async fn reconcile_service_verifier(target: &str, json_output: bool) -> Result<(), CmdError> {
+    let deployers = crate::config::service_api_deployers()
+        .map_err(|problems| CmdError::click(format!("invalid service_api.deployers: {}", problems.join("; "))))?;
+    let items = deployers
+        .values()
+        .map(|policy| policy.item().to_string())
+        .collect::<std::collections::BTreeSet<_>>();
+    if items.is_empty() {
+        return Err(CmdError::click(
+            "service_api.deployers is empty; refusing to mint an unusable verifier grant",
+        ));
+    }
+    for item in &items {
+        vault_word("service deployer item", item)?;
+    }
+
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let home = crate::deploy::host_channel::remote_home(&resolved, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let environment = crate::deploy::host_channel::run_command(
+        &resolved,
+        "printf '%s\\n%s\\n%s\\n' \"${SKARBIEC_VAULT_FILE:-$HOME/.stado/skarbiec.vault.json}\" \
+         \"${GNUPGHOME:-$HOME/.gnupg}\" \
+         \"${WC_SERVICE_SKARBIEC_TOKEN_FILE:-$HOME/.stado/stado-service-api-verifier-skarbiec-token}\"",
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !environment.ok() {
+        return Err(CmdError::click(format!(
+            "{}: service verifier environment could not be read: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(&environment, "remote command failed")
+        )));
+    }
+    let mut variables = environment.stdout.lines();
+    let vault = variables.next().unwrap_or_default().to_string();
+    let gnupg_home = variables.next().unwrap_or_default().to_string();
+    let token_file = variables.next().unwrap_or_default().to_string();
+    let skarbiec = format!("{home}/.stado/bin/skarbiec");
+    for (label, path, test) in [
+        ("Skarbiec binary", skarbiec.as_str(), "-x"),
+        ("vault", vault.as_str(), "-f"),
+        ("verifier token file", token_file.as_str(), "-f"),
+    ] {
+        let present = crate::deploy::host_channel::remote_test(
+            &resolved,
+            &format!("{test} {}", crate::deploy::shlex_quote(path)),
+            &runner,
+        )
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+        if !present {
+            return Err(CmdError::click(format!(
+                "{}: no {label} at {path}",
+                resolved.name
+            )));
+        }
+    }
+
+    let vault_text = crate::deploy::host_channel::remote_read_file(&resolved, &vault, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?
+        .ok_or_else(|| CmdError::click(format!("{}: vault could not be read", resolved.name)))?;
+    let document: Value = serde_json::from_str(&vault_text)?;
+    let grant = document
+        .get("tokens")
+        .and_then(Value::as_object)
+        .and_then(|tokens| tokens.get(crate::config::SERVICE_API_VERIFIER_CONSUMER))
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{}: {} has no existing grant",
+                resolved.name,
+                crate::config::SERVICE_API_VERIFIER_CONSUMER
+            ))
+        })?;
+    let expires_at = grant
+        .get("expires_at")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| CmdError::click("service verifier grant has no numeric expiry"))?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| CmdError::click(error.to_string()))?
+        .as_secs();
+    let ttl = expires_at
+        .checked_sub(now)
+        .filter(|ttl| *ttl > 0)
+        .ok_or_else(|| CmdError::click("service verifier grant is already expired"))?;
+    let capabilities = items
+        .iter()
+        .map(|item| format!("read:{item}#token"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let command = format!(
+        "GNUPGHOME={} SKARBIEC_VAULT_FILE={} {} token-mint {} \
+         --capabilities {} --replace-capabilities --token-file {} --ttl-seconds {} > /dev/null",
+        crate::deploy::shlex_quote(&gnupg_home),
+        crate::deploy::shlex_quote(&vault),
+        crate::deploy::shlex_quote(&skarbiec),
+        crate::deploy::shlex_quote(crate::config::SERVICE_API_VERIFIER_CONSUMER),
+        crate::deploy::shlex_quote(&capabilities),
+        crate::deploy::shlex_quote(&token_file),
+        ttl,
+    );
+    let reconciled = crate::deploy::host_channel::run_command(&resolved, &command, &runner)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    if !reconciled.ok() {
+        return Err(CmdError::click(format!(
+            "{}: service verifier reconciliation failed: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(&reconciled, "remote command failed")
+        )));
+    }
+
+    let item_list = items.iter().cloned().collect::<Vec<_>>();
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": resolved.name,
+                "consumer": crate::config::SERVICE_API_VERIFIER_CONSUMER,
+                "items": item_list,
+                "bearer_preserved": true,
+                "expires_at": expires_at,
+            }))?
+        );
+    } else {
+        println!(
+            "{}: {} now reads exactly {}",
+            resolved.name,
+            crate::config::SERVICE_API_VERIFIER_CONSUMER,
+            item_list.join(",")
+        );
+    }
+    Ok(())
+}
 
 /// One declared log path out of a unit plist: `StandardOutPath` or
 /// `StandardErrorPath`, or nothing when the plist does not declare it.
