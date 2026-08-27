@@ -5610,12 +5610,11 @@ cargo test --test ci-cd a_real_release_builds_publishes_and_installs_its_binary 
     .await
     .map_err(|error| CmdError::click(error.to_string()))?;
     if !output.ok() {
+        let detail = format!("{}\n{}", output.stdout, output.stderr);
+        let tail = detail.lines().rev().take(80).collect::<Vec<_>>();
         return Err(CmdError::click(format!(
-            "{target}: platform verification failed: {}",
-            crate::deploy::host_channel::last_error_line(
-                &output,
-                "remote platform verification failed",
-            )
+            "{target}: platform verification failed:\n{}",
+            tail.into_iter().rev().collect::<Vec<_>>().join("\n")
         )));
     }
     if json_output {

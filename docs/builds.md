@@ -65,15 +65,12 @@ A successful process exit without every declared artifact is a failed build. A h
 
 ## Verify every supported platform
 
-The release platform matrix runs both real journeys on the fleet's macOS ARM64 and Linux AMD64 workers. It checks out one exact public commit on each host, builds Skarbiec there for the isolated signing grant, then runs the native-build and complete release journeys:
+The release platform matrix runs both real journeys on the fleet's macOS ARM64 and Linux AMD64 workers. It checks out one exact public commit on each host, builds Skarbiec there for the isolated signing grant, then runs the native-build and complete release journeys.
+
+For an online host reachable through Stado's managed host channel:
 
 ```console
 stado host verify-release-platform charless-mac-mini \
-  --repo https://github.com/wisent-ai/stado.git \
-  --ref <full-lowercase-commit> \
-  --json
-
-stado host verify-release-platform ubuntu-server-rtx-pro-6000 \
   --repo https://github.com/wisent-ai/stado.git \
   --ref <full-lowercase-commit> \
   --json
@@ -81,7 +78,7 @@ stado host verify-release-platform ubuntu-server-rtx-pro-6000 \
 
 The command accepts only a public HTTPS repository and a full 40-character lowercase commit. Source is cloned into the host's managed `~/.stado/work` area and removed when the run ends. A platform passes only when the build artifact is downloaded and verified and the signed release is published, installed, and executed on that same platform.
 
-Probierz owns the combined `platform-matrix` journey in `stado-rs/tests/platform-matrix/`. The journey runs the two hosts one after another because both release checks use the same canonical test product and version.
+Probierz owns the combined `platform-matrix` journey in `stado-rs/tests/platform-matrix/`. It runs macOS through the managed host channel and submits Linux to the pinned `local-ubuntu-server` worker through the normal Stado queue, so an inbound SSH port is not a requirement. The journey runs the platforms one after another because both release checks use the same canonical test product and version.
 
 ## Evidence
 
