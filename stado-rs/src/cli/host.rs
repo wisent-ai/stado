@@ -3905,6 +3905,43 @@ async fn reconcile_verifier(
     Ok(())
 }
 
+/// Recover a local Skarbiec audit-lock stall and restart only its loaded dependants.
+pub async fn recover_skarbiec_audit(target: &str, json_output: bool) -> Result<(), CmdError> {
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let recovered = crate::deploy::host_channel::run_script_with_timeout(
+        &resolved,
+        include_str!("../../../scripts/recover-skarbiec-audit-lock.sh"),
+        std::time::Duration::from_secs(90),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !recovered.ok() {
+        return Err(CmdError::click(format!(
+            "{}: Skarbiec audit recovery failed: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(&recovered, "remote command failed")
+        )));
+    }
+    let detail = recovered.stdout.trim();
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": resolved.name,
+                "recovered": detail.contains("recovered"),
+                "detail": detail,
+            }))?
+        );
+    } else {
+        println!("{}: {detail}", resolved.name);
+    }
+    Ok(())
+}
+
 /// One declared log path out of a unit plist: `StandardOutPath` or
 /// `StandardErrorPath`, or nothing when the plist does not declare it.
 /// PlistBuddy writes its "does not exist" to stderr and prints nothing, so a
@@ -5385,12 +5422,23 @@ pub async fn config_show(target: &str) -> Result<(), CmdError> {
 
 /// Persist one configuration field on a fleet host. Values travel base64
 /// encoded inside the audited script and are decoded into argv, never parsed by
-/// a remote shell.
-pub async fn config_set(target: &str, key: &str, value: &str) -> Result<(), CmdError> {
+/// a remote shell. When `reload_service` is named, the existing service
+/// reconciler activates the new configuration only after the atomic write
+/// succeeds.
+pub async fn config_set(
+    target: &str,
+    key: &str,
+    value: &str,
+    reload_service: Option<&str>,
+) -> Result<(), CmdError> {
     if key.trim().is_empty() || key.chars().any(char::is_whitespace) {
         return Err(CmdError::click("configuration key must be a non-empty dotted name"));
     }
-    remote_config(target, Some((key, value))).await
+    remote_config(target, Some((key, value))).await?;
+    if let Some(service) = reload_service {
+        super::service::restart(service, Some(target), None, None, false).await?;
+    }
+    Ok(())
 }
 
 async fn remote_config(target: &str, update: Option<(&str, &str)>) -> Result<(), CmdError> {

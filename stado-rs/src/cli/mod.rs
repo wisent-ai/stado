@@ -1364,6 +1364,13 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Recover an audit-lock stall in Skarbiec and its loaded local dependants.
+    #[command(name = "recover-skarbiec-audit")]
+    RecoverSkarbiecAudit {
+        target: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// The tail of one managed unit's own log on TARGET.
     ///
     /// A crash-looping unit says why in its log and nowhere else: the health
@@ -1578,6 +1585,10 @@ enum HostCommands {
         key: String,
         /// JSON value, or a bare string as accepted by `stado config set`.
         value: String,
+        /// Reconcile this registry-managed service after the atomic write so
+        /// long-lived processes observe the new configuration immediately.
+        #[arg(long)]
+        reload_service: Option<String>,
     },
     /// Deliver one registry-declared managed binary to TARGET.
     Release {
@@ -2131,6 +2142,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::ReconcileServiceVerifier { target, json } => {
                 host::reconcile_service_verifier(&target, json).await
             }
+            HostCommands::RecoverSkarbiecAudit { target, json } => {
+                host::recover_skarbiec_audit(&target, json).await
+            }
             HostCommands::UnitLog {
                 target,
                 unit,
@@ -2196,8 +2210,13 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 json,
             } => host::weles_capture_status(&target, &batch, json).await,
             HostCommands::ConfigShow { target } => host::config_show(&target).await,
-            HostCommands::ConfigSet { target, key, value } => {
-                host::config_set(&target, &key, &value).await
+            HostCommands::ConfigSet {
+                target,
+                key,
+                value,
+                reload_service,
+            } => {
+                host::config_set(&target, &key, &value, reload_service.as_deref()).await
             }
             HostCommands::Release {
                 target,
