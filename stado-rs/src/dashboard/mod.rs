@@ -981,7 +981,20 @@ impl Dashboard {
             };
             (value.content.into_bytes(), Some(value.version))
         } else {
-            let Some(bytes) = self.store.read_bytes(&path).await? else {
+            let bytes = if object.namespace() == "releases" {
+                // A Stado-object backend is itself namespaced. Asking its plain
+                // object route for `ecosystem/releases/...` prefixes the queue
+                // namespace again and reports a published release absent.
+                // `download_release` uses the backend's cross-namespace public
+                // route; local/cloud backends keep the literal storage path.
+                self.store
+                    .backend()
+                    .download_release(&object.to_string())
+                    .await?
+            } else {
+                self.store.read_bytes(&path).await?
+            };
+            let Some(bytes) = bytes else {
                 return Ok(send_json(
                     http_status("404"),
                     &json!({"state": "absent", "uri": object.to_string()}),
