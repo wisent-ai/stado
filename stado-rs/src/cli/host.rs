@@ -3897,7 +3897,11 @@ async fn reconcile_verifier(
                 uuid::Uuid::new_v4().simple(),
                 uuid::Uuid::new_v4().simple()
             );
-            let payload = serde_json::to_string(&serde_json::json!({ "token": token }))?;
+            let payload = serde_json::to_string(&serde_json::json!({
+                "kind": "token",
+                "fields": { "token": token },
+                "context": {}
+            }))?;
             let created = crate::deploy::host_channel::run_program_with_stdin(
                 &resolved,
                 &[
