@@ -24,7 +24,7 @@
 //! nothing.
 
 use std::io::Write;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use clap::Subcommand;
 use serde_json::json;
@@ -41,6 +41,10 @@ use super::{table, CmdError};
 /// than the writer writes only multiplies storage round-trips, so the tail
 /// rides the fleet's own cadence.
 const WATCH_POLL_INTERVAL: Duration = Duration::from_secs(POLL_INTERVAL_S);
+/// A successful submit can become visible through the object-backed queue a
+/// few polls after its ID is returned. `--follow` waits through that bounded
+/// publication window instead of turning normal propagation into NOT_FOUND.
+const WATCH_APPEARANCE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Bytes requested per log page. [`MachineFacade::read_logs`] slices an
 /// already-downloaded buffer, so the cheapest page is "all of it" — one
@@ -268,7 +272,7 @@ async fn watch(job_id: &str, follow: bool, json: bool) -> Result<(), CmdError> {
         // already stopped writing, so the drain below cannot miss its last
         // bytes. The other order would read the log, watch the job go
         // terminal, and exit having dropped whatever landed in between.
-        let job = facade.lookup_job(job_id).await.map_err(cmd_error)?;
+        let job = lookup_visible_job(&facade, job_id, follow && cursor == i64::default()).await?;
         let terminal = job_state::is_terminal(&job.state);
         drain(&facade, job_id, &mut cursor, &mut buffered, json).await?;
         if terminal || !follow {
@@ -302,6 +306,25 @@ async fn watch(job_id: &str, follow: bool, json: bool) -> Result<(), CmdError> {
         );
     }
     outcome(&job, terminal)
+}
+
+async fn lookup_visible_job(
+    facade: &MachineFacade,
+    job_id: &str,
+    wait_for_publication: bool,
+) -> Result<Job, CmdError> {
+    let deadline = Instant::now() + WATCH_APPEARANCE_TIMEOUT;
+    loop {
+        match facade.lookup_job(job_id).await {
+            Ok(job) => return Ok(job),
+            Err(exc)
+                if wait_for_publication && exc.code == "NOT_FOUND" && Instant::now() < deadline =>
+            {
+                tokio::time::sleep(WATCH_POLL_INTERVAL).await;
+            }
+            Err(exc) => return Err(cmd_error(exc)),
+        }
+    }
 }
 
 /// Print (or buffer) every byte past `cursor` and advance it, returning
