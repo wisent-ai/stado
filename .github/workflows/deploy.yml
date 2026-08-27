@@ -120,18 +120,16 @@ jobs:
             python3 scripts/baseline.py --best --stado "$stado_bin"
           )"
           if [[ "$baseline_identity" == bootstrap:* ]]; then
-            # One-time channel bootstrap: both verifier grants predate inline
-            # boundary recovery. Reconcile them from their declared policies
-            # and reload exactly the managed object API unit. Once a complete
-            # release exists, baseline.py returns stado:<version> and this
-            # branch is unreachable.
+            # One-time channel bootstrap: reconcile both verifier grants from
+            # their declared policies. The object API watches the grant and
+            # recovers its authorization boundary in place, so this must not
+            # cycle the control-plane process serving the Stado connection.
+            # Once a complete release exists, baseline.py returns
+            # stado:<version> and this branch is unreachable.
             "$stado_bin" host reconcile-object-verifier \
               charless-mac-mini --json
             "$stado_bin" host reconcile-release-verifier \
               charless-mac-mini --json
-            "$stado_bin" service restart \
-              com.wisent.always-on.stado-object-api \
-              --host charless-mac-mini --json
           fi
           preflight() {
             # `releases/` is public and cannot prove the private object
@@ -155,16 +153,19 @@ jobs:
                  "$RUNNER_TEMP/object-preflight.err"; then
               false
             fi
-            # The verifier grant is host-local. Reconcile its exact namespace
-            # item set, then restart only the declared object API unit so the
-            # old process reloads that grant. Newer object APIs recover inline;
-            # this branch remains the upgrade path from releases that did not.
+            # Reconcile the exact host-local verifier policy first. Current
+            # object APIs recover inline, which preserves every connection.
             "$stado_bin" host reconcile-object-verifier \
               charless-mac-mini --json
-            "$stado_bin" service restart \
-              com.wisent.always-on.stado-object-api \
-              --host charless-mac-mini --json
-            wait_for_preflight
+            if ! wait_for_preflight; then
+              # Upgrade path for an older object API that cannot reload its
+              # grant inline. Restarting can close the transport carrying this
+              # command, so the service's subsequent health is authoritative.
+              "$stado_bin" service restart \
+                com.wisent.always-on.stado-object-api \
+                --host charless-mac-mini --json || true
+              wait_for_preflight
+            fi
           fi
           state="$(jq -r '.state // ""' "$RUNNER_TEMP/object-preflight.json")"
           case "$state" in
