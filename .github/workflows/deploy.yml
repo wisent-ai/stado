@@ -116,6 +116,22 @@ jobs:
         run: |
           set -euo pipefail
           stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
+          baseline_identity="$(
+            python3 scripts/baseline.py --best --stado "$stado_bin"
+          )"
+          if [[ "$baseline_identity" == bootstrap:* ]]; then
+            # One-time channel bootstrap: both verifier grants predate inline
+            # boundary recovery. Reconcile them from their declared policies
+            # and reload exactly the managed object API unit. Once a complete
+            # release exists, baseline.py returns stado:<version> and this
+            # branch is unreachable.
+            "$stado_bin" host reconcile-object-verifier \
+              charless-mac-mini --json
+            "$stado_bin" host reconcile-release-verifier \
+              charless-mac-mini --json
+            "$stado_bin" service restart stado-object-api \
+              --host charless-mac-mini --json
+          fi
           preflight() {
             # `releases/` is public and cannot prove the private object
             # verifier. Probe the runner's configured writable namespace.

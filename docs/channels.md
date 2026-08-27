@@ -38,7 +38,15 @@ The verifier bearer lives in `WC_OBJECT_SKARBIEC_TOKEN_FILE` on the object API h
 stado host reconcile-object-verifier <target> --json
 ```
 
-The command derives the item set from `object_api.namespaces`, asks Skarbiec on the target to bind the existing bearer to that exact set, and reports item names and expiry only. It never prints the bearer. A release preflight performs this reconciliation automatically when the object API answers `503 object authorization unavailable`; old object API releases are then restarted through the declared managed-service unit so they reload the grant, while current releases revalidate the boundary inline.
+The command derives the item set from `object_api.namespaces`, asks Skarbiec on the target to bind the existing bearer to that exact set, and reports item names and expiry only. It never prints the bearer.
+
+Release publication has a separate verifier and policy set. Its equivalent command is:
+
+```console
+stado host reconcile-release-verifier <target> --json
+```
+
+The first immutable Stado release reconciles both verifier grants and reloads exactly the managed object API unit because there is no older release with inline boundary recovery. Once that release exists, the bootstrap branch cannot run again. Normal release preflight probes an authenticated private namespace; a public `releases/` stat cannot prove that object authorization works.
 
 Use `stado storage stat <stado-uri> --json` as the smallest final check. `present` and `absent` are both authoritative answers. `503 object authorization unavailable` means the verifier boundary failed; it is not evidence that the requested object is absent.
 
