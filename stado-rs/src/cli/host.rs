@@ -5560,3 +5560,76 @@ async fn remote_config(target: &str, update: Option<(&str, &str)>) -> Result<(),
     print!("{}", output.stdout);
     Ok(())
 }
+
+pub async fn verify_release_platform(
+    target: &str,
+    repo: &str,
+    revision: &str,
+    json_output: bool,
+) -> Result<(), CmdError> {
+    if !repo.starts_with("https://") {
+        return Err(CmdError::click("--repo must be an https:// clone URL"));
+    }
+    if revision.len() != 40
+        || !revision
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        return Err(CmdError::click("--ref must be a full lowercase Git commit"));
+    }
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let repo = crate::deploy::shlex_quote(repo);
+    let revision = crate::deploy::shlex_quote(revision);
+    let script = format!(
+        r#"set -euo pipefail
+export PATH="$HOME/.cargo/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"
+root="$HOME/.stado/work"
+/bin/mkdir -p "$root"
+work=$(/usr/bin/mktemp -d "$root/release-platform.XXXXXX")
+trap '/bin/rm -rf "$work"' EXIT HUP INT TERM
+/usr/bin/git -C "$work" init -q source
+/usr/bin/git -C "$work/source" remote add origin {repo}
+/usr/bin/git -C "$work/source" fetch -q --depth 1 origin {revision}
+/usr/bin/git -C "$work/source" checkout -q --detach FETCH_HEAD
+/usr/bin/git clone -q --depth 1 https://github.com/wisent-ai/skarbiec.git "$work/skarbiec"
+cargo build --release --manifest-path "$work/skarbiec/Cargo.toml"
+export SKARBIEC_TEST_BIN="$work/skarbiec/target/release/skarbiec"
+cd "$work/source/stado-rs"
+cargo test --test builds build_recipe_polls_public_git_runs_on_matching_worker_and_publishes_artifact -- --ignored --nocapture --test-threads=1
+cargo test --test ci-cd a_real_release_builds_publishes_and_installs_its_binary -- --ignored --nocapture --test-threads=1
+"#
+    );
+    let output = crate::deploy::host_channel::run_script_with_timeout(
+        &resolved,
+        &script,
+        std::time::Duration::from_secs(45 * 60),
+        &crate::deploy::production_runner(),
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !output.ok() {
+        return Err(CmdError::click(format!(
+            "{target}: platform verification failed: {}",
+            crate::deploy::host_channel::last_error_line(
+                &output,
+                "remote platform verification failed",
+            )
+        )));
+    }
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "target": target,
+                "revision": revision.trim_matches('\''),
+                "verified": true,
+                "output": output.stdout,
+            }))?
+        );
+    } else {
+        print!("{}", output.stdout);
+    }
+    Ok(())
+}

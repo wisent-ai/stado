@@ -63,6 +63,26 @@ A recipe accepts only an `https://` clone URL. Credentials do not belong in the 
 
 A successful process exit without every declared artifact is a failed build. A host merely declaring a platform is insufficient: a live worker must publish capacity for that platform.
 
+## Verify every supported platform
+
+The release platform matrix runs both real journeys on the fleet's macOS ARM64 and Linux AMD64 workers. It checks out one exact public commit on each host, builds Skarbiec there for the isolated signing grant, then runs the native-build and complete release journeys:
+
+```console
+stado host verify-release-platform charless-mac-mini \
+  --repo https://github.com/wisent-ai/stado.git \
+  --ref <full-lowercase-commit> \
+  --json
+
+stado host verify-release-platform ubuntu-server-rtx-pro-6000 \
+  --repo https://github.com/wisent-ai/stado.git \
+  --ref <full-lowercase-commit> \
+  --json
+```
+
+The command accepts only a public HTTPS repository and a full 40-character lowercase commit. Source is cloned into the host's managed `~/.stado/work` area and removed when the run ends. A platform passes only when the build artifact is downloaded and verified and the signed release is published, installed, and executed on that same platform.
+
+Probierz owns the combined `platform-matrix` journey in `stado-rs/tests/platform-matrix/`. The journey runs the two hosts one after another because both release checks use the same canonical test product and version.
+
 ## Evidence
 
 The real build journey lives in `stado-rs/tests/builds/`. It writes a recipe through the compiled CLI, lets the coordinator observe the public Stado repository, lets a real platform-matching worker claim the job, downloads `build-output.txt`, and verifies its bytes. Probierz registers this as the `native-build` journey and retains the source-bound report.

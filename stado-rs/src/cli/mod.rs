@@ -1398,6 +1398,17 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Run Stado's native build and signed release journeys on TARGET.
+    #[command(name = "verify-release-platform")]
+    VerifyReleasePlatform {
+        target: String,
+        #[arg(long)]
+        repo: String,
+        #[arg(long = "ref")]
+        revision: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Open an encrypted reverse SSH forwarding channel to TARGET.
     #[command(name = "forward-local")]
     ForwardLocal {
@@ -2165,6 +2176,12 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 lines,
                 json,
             } => host::unit_log(&target, &unit, lines, json).await,
+            HostCommands::VerifyReleasePlatform {
+                target,
+                repo,
+                revision,
+                json,
+            } => host::verify_release_platform(&target, &repo, &revision, json).await,
             HostCommands::ForwardLocal {
                 target,
                 name,
