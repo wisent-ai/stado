@@ -210,6 +210,33 @@ def best(stado: Path, output: Path | None) -> str:
             baseline = surface_from_release(stado, version, release_platform, root)
         output.write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
         return f"stado:{version}"
+
+    # Bootstrap exactly once when the channel has no verified release. There
+    # is no older immutable artifact to compare against; the binary compiled
+    # from this tagged commit becomes the initial public contract. Every later
+    # release is compared with the immutable object created from this one.
+    if current is not None:
+        if output is None:
+            return f"bootstrap:{current}"
+        surface = json.loads(command("python3", "scripts/surface.py", "--binary", str(stado)))
+        commands = surface.get("surface")
+        if not isinstance(commands, list) or not commands or not all(
+            isinstance(item, str) for item in commands
+        ):
+            raise SystemExit("candidate binary advertised an invalid bootstrap command surface")
+        output.write_text(
+            json.dumps(
+                {
+                    "version": current,
+                    "source": "bootstrap from the candidate binary; release channel was empty",
+                    "surface": commands,
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return f"bootstrap:{current}"
     raise SystemExit("release channel contains no complete verified Stado release")
 
 
