@@ -1752,7 +1752,12 @@ fi
 root install -o root -g wheel -m 0644 "$plist" /Library/LaunchDaemons/com.wisent.stado-precheck-runner.plist
 rm -f "$plist"
 if root launchctl print system/com.wisent.stado-precheck-runner >/dev/null 2>&1; then
-  if [ "$service_changed" -eq 1 ]; then
+  if [ "$service_changed" -eq 1 ] ||
+     ! root launchctl print system/com.wisent.stado-precheck-runner |
+       grep -F 'state = running' >/dev/null; then
+    # KeepAlive jobs can stop after repeated upstream failures while remaining
+    # loaded. Reconciliation must recover that state without requiring a
+    # separate manual service cycle.
     root launchctl kickstart -k system/com.wisent.stado-precheck-runner
   fi
 else

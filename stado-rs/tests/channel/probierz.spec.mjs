@@ -10,7 +10,7 @@ const crate = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 // Pin the current immutable native release. Its disappearance is a contract
 // failure; the test never follows a moving "latest" alias.
 const channel = 'https://stado.wisent.com';
-const version = '0.7.50';
+const version = '0.7.51';
 const platform = 'darwin-arm64';
 
 let stdout;
