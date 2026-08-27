@@ -258,10 +258,7 @@ impl SnapshotSource {
                 command,
             } => Self::fetch_authority(target, ssh, command, reader)
                 .await
-                .map_err(|error| {
-                    drop_stale_ssh_sockets();
-                    error
-                }),
+                .inspect_err(|_| drop_stale_ssh_sockets()),
         }
     }
 
@@ -1212,7 +1209,7 @@ async fn refuse_connection<R, W>(
             _ => None,
         },
     };
-    if head.map_or(false, http_request_head) {
+    if head.is_some_and(http_request_head) {
         let _ = writer.write_all(UPSTREAM_REFUSAL).await;
     }
     let _ = writer.shutdown().await;

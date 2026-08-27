@@ -3795,6 +3795,7 @@ pub async fn reconcile_service_verifier(target: &str, json_output: bool) -> Resu
 }
 
 /// Preserve an isolated verifier bearer while making its capabilities match config.
+#[allow(clippy::too_many_arguments)]
 async fn reconcile_verifier(
     target: &str,
     json_output: bool,

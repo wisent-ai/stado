@@ -3350,6 +3350,9 @@ pub async fn sync_service_item_secret(
 /// [`check_service_bearer`] with the bearer resolved on the host from one
 /// Skarbiec item field. The probe reports only its HTTP outcome; the bearer
 /// itself never leaves the host.
+// Each argument is one independently validated piece of the fixed remote
+// authentication probe; bundling them would only obscure the call contract.
+#[allow(clippy::too_many_arguments)]
 pub async fn check_service_item_bearer(
     target: &ComputeTarget,
     service: &ManagedService,
@@ -3388,6 +3391,9 @@ pub async fn check_service_item_bearer(
 /// runtime environment file -- the exact assignment the running process was
 /// started with. This is the zero-grant diagnostic path: no Skarbiec read is
 /// involved on either side.
+// This mirrors the item-backed probe while selecting an environment bearer;
+// the explicit arguments keep the two security boundaries visible.
+#[allow(clippy::too_many_arguments)]
 pub async fn check_service_env_bearer(
     target: &ComputeTarget,
     service: &ManagedService,

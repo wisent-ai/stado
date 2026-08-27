@@ -1279,8 +1279,7 @@ fn render_status(
                 let fact = observations::service_fact(&row.service.name, &row.service.host);
                 entry["observed"] = json!(observations::describe_in(&seen, &fact));
                 if let Some(failure) = failures.iter().find(|failure| {
-                    failure.host == row.service.host
-                        && failure.unit == row.service.unit_id().to_string()
+                    failure.host == row.service.host && failure.unit == row.service.unit_id()
                 }) {
                     entry["failure"] = failure.to_json();
                 }
@@ -2572,6 +2571,9 @@ async fn auth_check(options: AuthCheckOptions<'_>) -> Result<(), CmdError> {
     // either a Skarbiec item read on the host by its own identity, or the
     // exact runtime assignment the unit already runs with. Neither mode
     // brings the secret back over the channel; only the HTTP outcome does.
+    // This internal dispatcher preserves the CLI's two mutually exclusive
+    // bearer sources; grouping the flags would only duplicate AuthCheckOptions.
+    #[allow(clippy::too_many_arguments)]
     async fn check(
         target: &crate::targets::ComputeTarget,
         declared: &ManagedService,

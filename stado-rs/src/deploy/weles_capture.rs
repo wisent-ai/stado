@@ -619,8 +619,7 @@ async fn forward_error(child: &mut tokio::process::Child) -> String {
     }
     detail
         .lines()
-        .filter(|line| !line.trim().is_empty())
-        .next_back()
+        .rfind(|line| !line.trim().is_empty())
         .unwrap_or("ssh forwarding failed")
         .to_string()
 }
@@ -677,8 +676,7 @@ impl Channel {
                 .map(str::to_string)
                 .unwrap_or_else(|| {
                     body.lines()
-                        .filter(|line| !line.trim().is_empty())
-                        .next_back()
+                        .rfind(|line| !line.trim().is_empty())
                         .unwrap_or("no reason given")
                         .to_string()
                 });

@@ -530,7 +530,7 @@ fn kcpassword_hex(password: &str) -> Result<String, DeployError> {
     ];
     let mut bytes = password.as_bytes().to_vec();
     bytes.push(0);
-    while bytes.len() % KEY.len() != 0 {
+    while !bytes.len().is_multiple_of(KEY.len()) {
         bytes.push(0);
     }
     Ok(bytes
