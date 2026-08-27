@@ -352,25 +352,124 @@ struct EnrollmentCheckPanel: View {
 /// The two proofs that a registry entry is a working machine and not a row.
 ///
 /// They are the same two commands whichever way the machine got in, so they
-/// are one view rather than one per method.
+/// are one view rather than one per method. The release field only extends the
+/// second command; leaving it empty remains the established recovery path.
 struct EnrollmentProofSection: View {
     @ObservedObject var store: MachineEnrollmentStore
 
     var body: some View {
         WisentSectionBox(
             title: "The two proofs",
-            detail: "The first opens the channel with the stored key and reads back the hostname the machine answers with. The second asks Stado to recover the host, which is what makes it start publishing the capacity reports the Hosts table reads."
+            detail: "First open the stored channel. Then run the one canonical host recovery command, optionally installing one exact signed Stado release before the existing recovery."
         ) {
-            VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x4) {
                 EnrollmentCheckPanel(
                     check: store.draft.channelCheck,
                     fallbackCommand: "stado fleet key check \(store.draft.machineName)"
                 )
+
+                VStack(alignment: .leading, spacing: WisentDesign.Space.x2) {
+                    Text("EXACT STADO VERSION · OPTIONAL")
+                        .font(WisentTypeScale.eyebrow())
+                        .tracking(0.8)
+                        .foregroundStyle(WisentDesign.muted)
+                    TextField(
+                        "For example, 0.7.34",
+                        text: Binding(
+                            get: { store.recoveryRelease },
+                            set: { store.setRecoveryRelease($0) }
+                        )
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .font(WisentTypeScale.identifier())
+                    .disabled(store.isRunning)
+                    .accessibilityLabel("Exact Stado recovery version")
+                    Text(store.recoveryVersion.isEmpty
+                         ? "Leave empty to recover with the installed binary, exactly as before."
+                         : "This restores the release object API, then downloads and verifies the signed \(store.recoveryVersion) artifact before recovery. The prior binary is restored if its resolver probe fails.")
+                        .font(WisentTypeScale.caption())
+                        .foregroundStyle(WisentDesign.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(verbatim: store.recoveryCommand)
+                        .font(WisentTypeScale.identifierSmall())
+                        .foregroundStyle(WisentDesign.muted)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                VStack(alignment: .leading, spacing: WisentDesign.Space.x3) {
+                    ForEach(store.recoverySteps) { result in
+                        RecoveryStageRow(result: result)
+                    }
+                }
+
                 EnrollmentCheckPanel(
                     check: store.draft.agentRecovery,
-                    fallbackCommand: "stado host recover \(store.draft.machineName)"
+                    fallbackCommand: store.recoveryCommand
                 )
             }
+        }
+    }
+}
+
+private struct RecoveryStageRow: View {
+    let result: MachineRecoveryStageResult
+
+    var body: some View {
+        HStack(alignment: .top, spacing: WisentDesign.Space.x3) {
+            Image(systemName: symbol)
+                .foregroundStyle(tone.color)
+                .frame(width: WisentDesign.Space.x5)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: WisentDesign.Space.x1) {
+                HStack(alignment: .firstTextBaseline, spacing: WisentDesign.Space.x2) {
+                    Text(result.stage.title)
+                        .font(WisentTypeScale.bodyStrong())
+                        .foregroundStyle(WisentDesign.ink)
+                    Spacer(minLength: WisentDesign.Space.x2)
+                    WisentStatusChip(text: stateLabel, tone: tone)
+                }
+                Text(result.detail)
+                    .font(WisentTypeScale.caption())
+                    .foregroundStyle(WisentDesign.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var stateLabel: String {
+        if let reportedStatus = result.reportedStatus {
+            return reportedStatus
+        }
+        switch result.state {
+        case .waiting: "Waiting"
+        case .running: "Running"
+        case .complete: "Complete"
+        case .failed: "Failed"
+        case .notConfirmed: "Not confirmed"
+        case .notRequired: "Not requested"
+        }
+    }
+
+    private var tone: WisentTone {
+        switch result.state {
+        case .waiting, .notRequired: .neutral
+        case .running: .brand
+        case .complete: .success
+        case .failed: .danger
+        case .notConfirmed: .warning
+        }
+    }
+
+    private var symbol: String {
+        switch result.state {
+        case .waiting: "circle"
+        case .running: "arrow.triangle.2.circlepath"
+        case .complete: "checkmark.circle.fill"
+        case .failed: "xmark.octagon.fill"
+        case .notConfirmed: "exclamationmark.triangle"
+        case .notRequired: "minus.circle"
         }
     }
 }
