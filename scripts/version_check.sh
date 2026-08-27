@@ -78,6 +78,22 @@ fi
 # hand-written phrase, tag, or guessed coordinate has no accepted spelling.
 marker="$(jq -r '.source | split(" ") | first' "$baseline")"
 echo "baseline marker: $marker"
+if [ "$marker" = bootstrap ]; then
+  source="$(jq -r .source "$baseline")"
+  if [ "$source" != "bootstrap from the candidate binary; release channel was empty" ] ||
+     [ "$released" != "$declared" ]; then
+    echo "::error::invalid bootstrap baseline: source '$source', baseline '$released'," \
+      "declared '$declared'."
+    false
+  fi
+  best="$(python3 scripts/baseline.py --best --stado "$stado_bin")"
+  if [ "$best" != "bootstrap:$released" ]; then
+    echo "::error::bootstrap baseline claims an empty channel, but generator returned '$best'."
+    false
+  fi
+  echo "The release channel is empty; $declared establishes its first immutable baseline."
+  exit 0
+fi
 case "$marker" in
   stado://releases/stado/*/release-manifest-*.json) ;;
   *)
