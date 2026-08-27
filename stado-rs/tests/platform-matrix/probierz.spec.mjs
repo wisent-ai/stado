@@ -8,8 +8,6 @@ const exec = promisify(execFile);
 const crate = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const repository = resolve(crate, '..');
 const remote = 'https://github.com/wisent-ai/stado.git';
-const stado = resolve(crate, 'target/release/stado');
-const linuxWorker = 'local-ubuntu-server';
 
 const { stdout: revisionOutput } = await exec('git', ['rev-parse', 'HEAD'], { cwd: repository });
 const revision = revisionOutput.trim();
@@ -49,38 +47,48 @@ const verifyDarwin = async () => {
 
 const linuxCommand = [
   'set -eu',
-  'export PATH="$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/bin:$PATH"',
-  'export SKARBIEC_TEST_BIN="$(command -v skarbiec || printf %s "$HOME/.stado/bin/skarbiec")"',
+  'export PATH="/usr/local/cargo/bin:/usr/local/bin:/usr/bin:/bin:$PATH"',
+  'export CARGO_TARGET_DIR="/cargo-target"',
+  'mkdir -p "$CARGO_TARGET_DIR"',
+  'curl -fsSLo .probierz-skarbiec.tar.gz https://github.com/wisent-ai/skarbiec/releases/download/v0.1.3/skarbiec-v0.1.3-linux-amd64.tar.gz',
+  'printf "4433afe3372d2c35cb33420307f5efe8b6e3b01bd7907b18d1d9c2b471f9ee68  .probierz-skarbiec.tar.gz\\n" | sha256sum -c -',
+  'mkdir .probierz-skarbiec-bin',
+  'tar -xzf .probierz-skarbiec.tar.gz -C .probierz-skarbiec-bin',
+  'export SKARBIEC_TEST_BIN="$PWD/.probierz-skarbiec-bin/skarbiec"',
   'test -x "$SKARBIEC_TEST_BIN"',
   'cd stado-rs',
   'cargo test --test builds build_recipe_polls_public_git_runs_on_matching_worker_and_publishes_artifact -- --ignored --nocapture --test-threads=1',
   'cargo test --test ci-cd a_real_release_builds_publishes_and_installs_its_binary -- --ignored --nocapture --test-threads=1',
 ].join(' && ');
-
 const verifyLinux = async () => {
-  const submitted = await exec(stado, [
-    'submit', linuxCommand,
-    '--provider', 'local',
-    '--pin-provider',
-    '--pinned-host', linuxWorker,
-    '--repo', remote,
-    '--repo-ref', revision,
-    '--repo-extras', '',
-  ], { cwd: repository, timeout: 120_000, maxBuffer: 4 * 1024 * 1024 });
-  const jobId = submitted.stdout.match(/Job ID: ([0-9a-f]{8})/i)?.[1];
-  assert.ok(jobId, `submit on ${linuxWorker} returned no job id: ${submitted.stdout}\n${submitted.stderr}`);
-
-  const watched = await exec(stado, ['job', 'watch', jobId, '--follow', '--json'], {
+  const checkout = [
+    'git init -q /work',
+    'cd /work',
+    `git remote add origin ${remote}`,
+    `git fetch -q --depth 1 origin ${revision}`,
+    'git checkout -q --detach FETCH_HEAD',
+    linuxCommand,
+  ].join(' && ');
+  const { stdout, stderr } = await exec('docker', [
+    'run', '--rm',
+    '--platform', 'linux/amd64',
+    '-v', 'stado-platform-matrix-target:/cargo-target',
+    'rust:1-bookworm',
+    'bash', '-lc', checkout,
+  ], {
     cwd: repository,
     timeout: 50 * 60 * 1000,
     maxBuffer: 16 * 1024 * 1024,
   });
-  const evidence = `${watched.stdout}\n${watched.stderr}`;
+  const evidence = `${stdout}\n${stderr}`;
   assert.match(evidence, /verified recipe=probierz-native-build; job=.+; platform=linux-amd64; artifact=build-output.txt/);
   assert.match(evidence, /verified release platform=linux-amd64; installed=ci-release-probe 1.0.0/);
   assert.equal(evidence.includes('test result: FAILED'), false, evidence);
-  return `verified host=${linuxWorker}; platform=linux-amd64; job=${jobId}`;
+  return 'verified runtime=docker-linux-amd64; platform=linux-amd64';
 };
-
-const verified = [await verifyDarwin(), await verifyLinux()];
+const platform = process.env.PROBIERZ_PLATFORM;
+const verified = [];
+if (!platform || platform === 'darwin-arm64') verified.push(await verifyDarwin());
+if (!platform || platform === 'linux-amd64') verified.push(await verifyLinux());
+assert.ok(verified.length > 0, `unsupported PROBIERZ_PLATFORM=${platform}`);
 process.stdout.write(`${verified.join('\n')}\n`);
