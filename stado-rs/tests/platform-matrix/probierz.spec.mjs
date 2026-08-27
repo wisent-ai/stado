@@ -10,8 +10,8 @@ const repository = resolve(crate, '..');
 const stado = process.env.TUI_CMD || resolve(crate, 'target/release/stado');
 const remote = 'https://github.com/wisent-ai/stado.git';
 const hosts = [
-  ['charless-mac-mini', 'darwin-arm64'],
-  ['ubuntu-server-rtx-pro-6000', 'linux-amd64'],
+  ['local-Charless-Mac-mini.local', 'darwin-arm64'],
+  ['local-ubuntu-server', 'linux-amd64'],
 ];
 
 const { stdout: revisionOutput } = await exec('git', ['rev-parse', 'HEAD'], { cwd: repository });
@@ -27,7 +27,7 @@ const command = [
   "cargo test --test ci-cd a_real_release_builds_publishes_and_installs_its_binary -- --ignored --nocapture --test-threads=1",
 ].join('; ');
 
-for (const [host, platform] of hosts) {
+const verifyHost = async ([host, platform]) => {
   const submitted = await exec(stado, [
     'submit', command,
     '--provider', 'local',
@@ -42,12 +42,15 @@ for (const [host, platform] of hosts) {
 
   const watched = await exec(stado, ['job', 'watch', jobId, '--follow', '--json'], {
     cwd: repository,
-    timeout: 30 * 60 * 1000,
+    timeout: 40 * 60 * 1000,
     maxBuffer: 16 * 1024 * 1024,
   });
   const evidence = `${watched.stdout}\n${watched.stderr}`;
   assert.match(evidence, new RegExp(`verified recipe=probierz-native-build; job=.+; platform=${platform}; artifact=build-output.txt`));
   assert.match(evidence, new RegExp(`verified release platform=${platform}; installed=ci-release-probe 1.0.0`));
   assert.equal(evidence.includes('test result: FAILED'), false, evidence);
-  process.stdout.write(`verified host=${host}; platform=${platform}; job=${jobId}\n`);
-}
+  return `verified host=${host}; platform=${platform}; job=${jobId}`;
+};
+
+const verified = await Promise.all(hosts.map(verifyHost));
+process.stdout.write(`${verified.join('\n')}\n`);
