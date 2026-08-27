@@ -50,13 +50,18 @@ const verifyDarwin = async () => {
 const linuxCommand = [
   'set -eu',
   'export PATH="$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/bin:$PATH"',
-  'export SKARBIEC_TEST_BIN="$(command -v skarbiec || printf %s "$HOME/.stado/bin/skarbiec")"',
+  'export CARGO_TARGET_DIR="$HOME/.stado/work/platform-matrix-cargo-target"',
+  'mkdir -p "$CARGO_TARGET_DIR"',
+  'curl -fsSLo .probierz-skarbiec.tar.gz https://github.com/wisent-ai/skarbiec/releases/download/v0.1.3/skarbiec-v0.1.3-linux-amd64.tar.gz',
+  'printf "4433afe3372d2c35cb33420307f5efe8b6e3b01bd7907b18d1d9c2b471f9ee68  .probierz-skarbiec.tar.gz\\n" | sha256sum -c -',
+  'mkdir .probierz-skarbiec-bin',
+  'tar -xzf .probierz-skarbiec.tar.gz -C .probierz-skarbiec-bin',
+  'export SKARBIEC_TEST_BIN="$PWD/.probierz-skarbiec-bin/skarbiec"',
   'test -x "$SKARBIEC_TEST_BIN"',
   'cd stado-rs',
   'cargo test --test builds build_recipe_polls_public_git_runs_on_matching_worker_and_publishes_artifact -- --ignored --nocapture --test-threads=1',
   'cargo test --test ci-cd a_real_release_builds_publishes_and_installs_its_binary -- --ignored --nocapture --test-threads=1',
 ].join(' && ');
-
 const verifyLinux = async () => {
   const submitted = await exec(stado, [
     'submit', linuxCommand,
@@ -81,6 +86,9 @@ const verifyLinux = async () => {
   assert.equal(evidence.includes('test result: FAILED'), false, evidence);
   return `verified host=${linuxWorker}; platform=linux-amd64; job=${jobId}`;
 };
-
-const verified = [await verifyDarwin(), await verifyLinux()];
+const platform = process.env.PROBIERZ_PLATFORM;
+const verified = [];
+if (!platform || platform === 'darwin-arm64') verified.push(await verifyDarwin());
+if (!platform || platform === 'linux-amd64') verified.push(await verifyLinux());
+assert.ok(verified.length > 0, `unsupported PROBIERZ_PLATFORM=${platform}`);
 process.stdout.write(`${verified.join('\n')}\n`);

@@ -338,10 +338,17 @@ jobs:
             uri="stado://releases/stado/$STADO_VERSION/linux-amd64/$name"
             stored="$RUNNER_TEMP/stored-$name"
             published=false
-            for attempt in 1 2 3 4; do
+            # The object boundary reloads its authorization independently of
+            # the release runner. A reconciled service may therefore return
+            # `object authorization unavailable` for longer than the old
+            # four-attempt (20 second) window. Every retry is still safe:
+            # creation is if-absent and each attempt reads the immutable bytes
+            # back before declaring success.
+            max_attempts=12
+            for attempt in $(seq 1 "$max_attempts"); do
               rm -f "$stored"
               if ! "$stado_bin" storage put "$uri" "$source" --if-absent; then
-                echo "Create attempt $attempt did not complete; reading $uri back"
+                echo "Create attempt $attempt/$max_attempts did not complete; reading $uri back"
               fi
               if "$stado_bin" storage get "$uri" "$stored"; then
                 if ! cmp --silent "$source" "$stored"; then
@@ -354,7 +361,7 @@ jobs:
               sleep "$((attempt * 2))"
             done
             if [ "$published" != true ]; then
-              echo "::error::Could not create and read back $uri after four attempts"
+              echo "::error::Could not create and read back $uri after $max_attempts attempts"
               false
             fi
           done
