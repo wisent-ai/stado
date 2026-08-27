@@ -75,12 +75,20 @@ impl SkarbiecFixture {
                 .spawn()
                 .unwrap();
             if let Some(body) = stdin {
-                child.stdin.as_mut().unwrap().write_all(body.as_bytes()).unwrap();
+                child
+                    .stdin
+                    .as_mut()
+                    .unwrap()
+                    .write_all(body.as_bytes())
+                    .unwrap();
             }
             child.wait_with_output().unwrap()
         };
         let initialized = command(
-            &["init", "Stado release test <stado-release-test@example.invalid>"],
+            &[
+                "init",
+                "Stado release test <stado-release-test@example.invalid>",
+            ],
             None,
         );
         assert!(
@@ -169,7 +177,12 @@ impl Drop for SkarbiecFixture {
         let _ = self.server.kill();
         let _ = self.server.wait();
         let _ = Command::new("gpgconf")
-            .args(["--homedir", self.gnupg.path().to_str().unwrap(), "--kill", "gpg-agent"])
+            .args([
+                "--homedir",
+                self.gnupg.path().to_str().unwrap(),
+                "--kill",
+                "gpg-agent",
+            ])
             .output();
     }
 }
@@ -199,7 +212,10 @@ fn release_env(command: &mut Command, home: &Path, storage: &Path, vault: &Skarb
         .env("WC_STADO_STORAGE_NAMESPACE", "ci-release")
         .env("STADO_CONFIG", home.join("nonexistent-config.json"))
         .env("WC_SKARBIEC_URL", vault.url())
-        .env("WC_RELEASE_SIGNING_SKARBIEC_CONSUMER", "stado-release-coordinator")
+        .env(
+            "WC_RELEASE_SIGNING_SKARBIEC_CONSUMER",
+            "stado-release-coordinator",
+        )
         .env("WC_RELEASE_SIGNING_SKARBIEC_TOKEN_FILE", &vault.token)
         .env("WC_VAST_AUTO_LIST", "false")
         .env("STADO_RELEASE_SIGNING_KEY_ITEM", "ci-release-signing")
@@ -279,7 +295,6 @@ fn fixture_source(home: &Path, platform: &str) -> PathBuf {
     git(&source, &["commit", "-qm", "release source"]);
     source
 }
-
 
 fn registry(home: &Path, storage: &Path, public_key: &str, platform: &str) {
     let hostname = String::from_utf8(run(Command::new("hostname").arg("-f")).stdout)

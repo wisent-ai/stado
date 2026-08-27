@@ -846,6 +846,9 @@ async fn publish_status(state: &HostReleaseState) -> Result<(), String> {
 
 /// Publish the committed outcome of a generic managed-service activation into
 /// the same status document `stado release status` reads.
+// The status document is a flat wire contract; keeping its fields explicit
+// makes accidental schema changes visible at every publication call.
+#[allow(clippy::too_many_arguments)]
 pub async fn publish_service_release_status(
     product: &str,
     target: &str,

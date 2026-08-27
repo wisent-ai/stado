@@ -130,10 +130,13 @@ async fn observe_user_apple_accounts(target_name: &str, user: &str) -> Option<Ve
     {
         return None;
     }
-    let printed =
-        crate::deploy::host_channel::run_program(&target, &["/usr/bin/plutil", "-p", &plist], &runner)
-            .await
-            .ok()?;
+    let printed = crate::deploy::host_channel::run_program(
+        &target,
+        &["/usr/bin/plutil", "-p", &plist],
+        &runner,
+    )
+    .await
+    .ok()?;
     // A failed plutil is a pipeline whose awk found no AccountID lines -- the
     // same `none` the retired probe reported for an empty list.
     let accounts: Vec<String> = printed

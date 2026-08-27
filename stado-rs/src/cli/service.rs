@@ -21,11 +21,11 @@
 //!   validates before it writes, so a mutation that would produce an
 //!   invalid registry is refused with nothing uploaded.
 
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use clap::Subcommand;
 use serde::Deserialize;
 use serde_json::{json, Value};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 use crate::deploy::service::{
     self, ManagedService, ServiceEnv, ServiceLog, ServiceStatus, UnitDomain, SOURCE_RECOVERY,
@@ -729,9 +729,12 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
             .await
         }
         ServiceCommands::Show { name, host, json } => show(&name, host.as_deref(), json).await,
-        ServiceCommands::Stop { name, host, listener_url, json } => {
-            stop(&name, host.as_deref(), listener_url.as_deref(), json).await
-        }
+        ServiceCommands::Stop {
+            name,
+            host,
+            listener_url,
+            json,
+        } => stop(&name, host.as_deref(), listener_url.as_deref(), json).await,
         ServiceCommands::Restart {
             name,
             host,
@@ -1276,8 +1279,7 @@ fn render_status(
                 let fact = observations::service_fact(&row.service.name, &row.service.host);
                 entry["observed"] = json!(observations::describe_in(&seen, &fact));
                 if let Some(failure) = failures.iter().find(|failure| {
-                    failure.host == row.service.host
-                        && failure.unit == row.service.unit_id().to_string()
+                    failure.host == row.service.host && failure.unit == row.service.unit_id()
                 }) {
                     entry["failure"] = failure.to_json();
                 }
@@ -1465,9 +1467,7 @@ pub(crate) async fn restart(
             let listener = service::reset_service_listener(&target, declared, url, &runner)
                 .await
                 .map_err(click)?;
-            if !listener.succeeded("listener_stopped")
-                && !listener.succeeded("listener_absent")
-            {
+            if !listener.succeeded("listener_stopped") && !listener.succeeded("listener_absent") {
                 failures.push(format!("{}: {}", declared.host, listener.failure()));
                 continue;
             }
@@ -2040,9 +2040,7 @@ async fn stop(
             let listener = service::reset_service_listener(&target, declared, url, &runner)
                 .await
                 .map_err(click)?;
-            if !listener.succeeded("listener_stopped")
-                && !listener.succeeded("listener_absent")
-            {
+            if !listener.succeeded("listener_stopped") && !listener.succeeded("listener_absent") {
                 failures.push(format!("{}: {}", declared.host, listener.failure()));
             }
         }
@@ -2215,7 +2213,11 @@ async fn file_sync(options: FileSyncOptions<'_>) -> Result<(), CmdError> {
             "{source_file} must be a regular file, not a symlink"
         )));
     }
-    let max_bytes = if executable { 96 * 1_048_576 } else { 1_048_576 };
+    let max_bytes = if executable {
+        96 * 1_048_576
+    } else {
+        1_048_576
+    };
     if metadata.len() > max_bytes {
         return Err(CmdError::click(format!(
             "{source_file} exceeds the {} MiB service file limit",
@@ -2245,10 +2247,9 @@ async fn file_sync(options: FileSyncOptions<'_>) -> Result<(), CmdError> {
         let target = host_channel::canonical_target(&declared.host)
             .await
             .map_err(click)?;
-        let synced =
-            service::sync_service_file(&target, target_file, &content, mode, &runner)
-                .await
-                .map_err(click)?;
+        let synced = service::sync_service_file(&target, target_file, &content, mode, &runner)
+            .await
+            .map_err(click)?;
         if !synced.succeeded("file_synced") {
             failures.push(format!("{}: {}", declared.host, synced.failure()));
         }
@@ -2329,7 +2330,11 @@ async fn env_set(options: EnvSetOptions<'_>) -> Result<(), CmdError> {
     let value = std::fs::read_to_string(source)
         .map_err(|error| CmdError::click(format!("cannot read {value_file}: {error}")))?;
     let value = value.trim();
-    if value.is_empty() || value.chars().any(|character| matches!(character, '\r' | '\n')) {
+    if value.is_empty()
+        || value
+            .chars()
+            .any(|character| matches!(character, '\r' | '\n'))
+    {
         return Err(CmdError::click(format!(
             "{value_file} must contain one non-empty value"
         )));
@@ -2510,10 +2515,7 @@ async fn grant_sync(options: GrantSyncOptions<'_>) -> Result<(), CmdError> {
     if as_json {
         print_json(&Value::Array(payload))?;
     } else {
-        table::print(
-            &["HOST", "UNIT", "CONSUMER", "SYNC", "DETAIL"],
-            &cells,
-        );
+        table::print(&["HOST", "UNIT", "CONSUMER", "SYNC", "DETAIL"], &cells);
     }
     fail_if_any(&failures, "grant sync")
 }
@@ -2569,6 +2571,9 @@ async fn auth_check(options: AuthCheckOptions<'_>) -> Result<(), CmdError> {
     // either a Skarbiec item read on the host by its own identity, or the
     // exact runtime assignment the unit already runs with. Neither mode
     // brings the secret back over the channel; only the HTTP outcome does.
+    // This internal dispatcher preserves the CLI's two mutually exclusive
+    // bearer sources; grouping the flags would only duplicate AuthCheckOptions.
+    #[allow(clippy::too_many_arguments)]
     async fn check(
         target: &crate::targets::ComputeTarget,
         declared: &ManagedService,
@@ -3694,13 +3699,9 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
         .as_deref()
         .or_else(|| existing.and_then(declared_label))
     {
-        Some(label) => service::plan_deploy_labelled(
-            options.name,
-            label,
-            &unit.program,
-            &unit.args,
-            &unit_env,
-        ),
+        Some(label) => {
+            service::plan_deploy_labelled(options.name, label, &unit.program, &unit.args, &unit_env)
+        }
         None => service::plan_deploy(options.name, &unit.program, &unit.args),
     }
     .map_err(click)?;

@@ -1280,9 +1280,17 @@ async fn apply_policy(resolved: &ComputeTarget, runner: &Runner) -> Result<Strin
     if !host_channel::remote_test(resolved, &format!("-f {quoted_source}"), runner).await? {
         return Err(refuse("no delivered document at that path"));
     }
-    if !jq_eval(resolved, runner, jq, None, false, r#"type == "object""#, &source)
-        .await?
-        .ok()
+    if !jq_eval(
+        resolved,
+        runner,
+        jq,
+        None,
+        false,
+        r#"type == "object""#,
+        &source,
+    )
+    .await?
+    .ok()
     {
         return Err(refuse("it does not parse as a JSON object"));
     }
@@ -1349,35 +1357,41 @@ async fn apply_policy(resolved: &ComputeTarget, runner: &Runner) -> Result<Strin
             "refusing to write through a symlink: {dest}"
         )));
     }
-    let previous = if !host_channel::remote_test(resolved, &format!("-e {quoted_dest}"), runner)
-        .await?
-    {
-        "absent\t-\t-".to_string()
-    } else {
-        let summarized = jq_eval(
-            resolved,
-            runner,
-            jq,
-            Some(host.as_str()),
-            true,
-            &summarize_query,
-            &dest,
-        )
-        .await?;
-        match summarized.ok().then(|| summarized.stdout.trim().to_string()) {
-            Some(line) if !line.is_empty() => line,
-            _ => "unreadable\t-\t-".to_string(),
-        }
-    };
+    let previous =
+        if !host_channel::remote_test(resolved, &format!("-e {quoted_dest}"), runner).await? {
+            "absent\t-\t-".to_string()
+        } else {
+            let summarized = jq_eval(
+                resolved,
+                runner,
+                jq,
+                Some(host.as_str()),
+                true,
+                &summarize_query,
+                &dest,
+            )
+            .await?;
+            match summarized
+                .ok()
+                .then(|| summarized.stdout.trim().to_string())
+            {
+                Some(line) if !line.is_empty() => line,
+                _ => "unreadable\t-\t-".to_string(),
+            }
+        };
 
-    let made = host_channel::run_program(resolved, &["/bin/mkdir", "-p", &dest_dir], runner).await?;
+    let made =
+        host_channel::run_program(resolved, &["/bin/mkdir", "-p", &dest_dir], runner).await?;
     if !made.ok() {
         return Err(DeployError(host_channel::last_error_line(
             &made,
             "could not create the policy directory",
         )));
     }
-    let temporary = format!("{dest_dir}/.placement-policy.json.stado-apply-{}", std::process::id());
+    let temporary = format!(
+        "{dest_dir}/.placement-policy.json.stado-apply-{}",
+        std::process::id()
+    );
     for words in [
         vec!["/bin/cp", source.as_str(), temporary.as_str()],
         vec!["/bin/chmod", "600", temporary.as_str()],
@@ -1388,8 +1402,8 @@ async fn apply_policy(resolved: &ComputeTarget, runner: &Runner) -> Result<Strin
             // A failed install leaves no half-written destination and no
             // staging litter: the temporary file goes, exactly as the retired
             // script's EXIT trap removed it.
-            let _ = host_channel::run_program(resolved, &["/bin/rm", "-f", &temporary], runner)
-                .await;
+            let _ =
+                host_channel::run_program(resolved, &["/bin/rm", "-f", &temporary], runner).await;
             return Err(DeployError(host_channel::last_error_line(
                 &stepped,
                 "remote install failed",
@@ -1662,19 +1676,17 @@ pub async fn publish_placement_policy(
     let (delivered, bytes) = super::host::deliver_file(&resolved.name, source, POLICY_FILE).await?;
 
     let runner = production_runner();
-    let reported = apply_policy(&resolved, &runner)
-        .await
-        .map_err(|error| {
-            // Delivered and not installed is a real state, and the operator has
-            // to be told which half happened: the worker is still running the
-            // old list, and a file it does not read is sitting next to it. The
-            // refusal names exactly which check the document failed.
-            CmdError::click(format!(
-                "{name}: the policy reached {delivered} and was NOT installed: {error}. \
+    let reported = apply_policy(&resolved, &runner).await.map_err(|error| {
+        // Delivered and not installed is a real state, and the operator has
+        // to be told which half happened: the worker is still running the
+        // old list, and a file it does not read is sitting next to it. The
+        // refusal names exactly which check the document failed.
+        CmdError::click(format!(
+            "{name}: the policy reached {delivered} and was NOT installed: {error}. \
                  Settle the refusal and publish again",
-                name = resolved.name
-            ))
-        })?;
+            name = resolved.name
+        ))
+    })?;
 
     let installed = snapshot(&reported, "installed").ok_or_else(|| {
         CmdError::click(format!(

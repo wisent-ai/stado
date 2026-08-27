@@ -440,8 +440,12 @@ async fn unit_program(
     path: &str,
     kind: &str,
 ) -> Result<Option<String>, DeployError> {
-    if !host_channel::remote_test(target, &format!("-f {}", crate::deploy::shlex_quote(path)), runner)
-        .await?
+    if !host_channel::remote_test(
+        target,
+        &format!("-f {}", crate::deploy::shlex_quote(path)),
+        runner,
+    )
+    .await?
     {
         return Ok(None);
     }
@@ -464,7 +468,15 @@ async fn unit_program(
     }
     let extracted = host_channel::run_program(
         target,
-        &["/usr/bin/plutil", "-extract", "ProgramArguments.0", "raw", "-o", "-", path],
+        &[
+            "/usr/bin/plutil",
+            "-extract",
+            "ProgramArguments.0",
+            "raw",
+            "-o",
+            "-",
+            path,
+        ],
         runner,
     )
     .await?;
@@ -562,7 +574,8 @@ async fn systemd_state(
     if found.stdout.trim().is_empty() {
         return Ok("no-systemctl".to_string());
     }
-    let asked = host_channel::run_program(target, &["systemctl", "is-active", label], runner).await?;
+    let asked =
+        host_channel::run_program(target, &["systemctl", "is-active", label], runner).await?;
     Ok(asked.stdout.trim().to_string())
 }
 
@@ -635,9 +648,13 @@ async fn artefact_version(
     runner: &Runner,
     root: &str,
 ) -> Result<String, DeployError> {
-    if let Some(text) =
-        host_channel::remote_json_member(target, &format!("{root}/package.json"), &["version"], runner)
-            .await?
+    if let Some(text) = host_channel::remote_json_member(
+        target,
+        &format!("{root}/package.json"),
+        &["version"],
+        runner,
+    )
+    .await?
     {
         if let Some(version) = host_channel::extract_semver(&text) {
             return Ok(version);
@@ -727,27 +744,24 @@ async fn probe_installed_versions(
 
         let stado_program = format!("{home}/.stado/bin/{binary}");
         let quoted_program = crate::deploy::shlex_quote(&stado_program);
-        let (root, version) = if host_channel::remote_test(
-            target,
-            &format!("-x {quoted_program}"),
-            runner,
-        )
-        .await?
-            && host_channel::remote_test(target, &format!("-f {quoted_program}"), runner).await?
-        {
-            let version = host_channel::remote_program_version(target, &stado_program, runner)
-                .await?
-                .unwrap_or_default();
-            (stado_program, version)
-        } else {
-            let root = artefact_root(target, runner, &home, binary).await?;
-            let version = if root.is_empty() {
-                String::new()
+        let (root, version) =
+            if host_channel::remote_test(target, &format!("-x {quoted_program}"), runner).await?
+                && host_channel::remote_test(target, &format!("-f {quoted_program}"), runner)
+                    .await?
+            {
+                let version = host_channel::remote_program_version(target, &stado_program, runner)
+                    .await?
+                    .unwrap_or_default();
+                (stado_program, version)
             } else {
-                artefact_version(target, runner, &root).await?
+                let root = artefact_root(target, runner, &home, binary).await?;
+                let version = if root.is_empty() {
+                    String::new()
+                } else {
+                    artefact_version(target, runner, &root).await?
+                };
+                (root, version)
             };
-            (root, version)
-        };
 
         let mut unit = "none".to_string();
         let mut state = "none".to_string();
@@ -761,7 +775,11 @@ async fn probe_installed_versions(
         out.push_str(&format!(
             "binary={} version={} root={} unit={} state={}\n",
             binary,
-            if version.is_empty() { UNKNOWN } else { &version },
+            if version.is_empty() {
+                UNKNOWN
+            } else {
+                &version
+            },
             if root.is_empty() { "none" } else { &root },
             unit,
             state,

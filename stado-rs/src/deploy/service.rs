@@ -3350,6 +3350,9 @@ pub async fn sync_service_item_secret(
 /// [`check_service_bearer`] with the bearer resolved on the host from one
 /// Skarbiec item field. The probe reports only its HTTP outcome; the bearer
 /// itself never leaves the host.
+// Each argument is one independently validated piece of the fixed remote
+// authentication probe; bundling them would only obscure the call contract.
+#[allow(clippy::too_many_arguments)]
 pub async fn check_service_item_bearer(
     target: &ComputeTarget,
     service: &ManagedService,
@@ -3388,6 +3391,9 @@ pub async fn check_service_item_bearer(
 /// runtime environment file -- the exact assignment the running process was
 /// started with. This is the zero-grant diagnostic path: no Skarbiec read is
 /// involved on either side.
+// This mirrors the item-backed probe while selecting an environment bearer;
+// the explicit arguments keep the two security boundaries visible.
+#[allow(clippy::too_many_arguments)]
 pub async fn check_service_env_bearer(
     target: &ComputeTarget,
     service: &ManagedService,
@@ -3471,8 +3477,7 @@ pub async fn stop_recovery_unit(
             host_channel::run_program(target, &["/bin/launchctl", "bootout", &qualified], runner)
                 .await?;
         if !output.ok() {
-            let detail =
-                host_channel::last_error_line(&output, "launchctl returned no detail");
+            let detail = host_channel::last_error_line(&output, "launchctl returned no detail");
             if !detail.contains("Could not find specified service")
                 && !detail.contains("No such process")
             {
@@ -4414,7 +4419,10 @@ trap - EXIT HUP INT TERM
 printf 'STADO_SERVICE\tfile-sync\tfile_synced\t%s\n' "$target_path"
 "#;
     let body = body
-        .replace("@TARGET_PATH_B64@", &STANDARD.encode(target_path.as_bytes()))
+        .replace(
+            "@TARGET_PATH_B64@",
+            &STANDARD.encode(target_path.as_bytes()),
+        )
         .replace("@CONTENT_B64@", &STANDARD.encode(content))
         .replace("@MODE@", &format!("{mode:04o}"));
     let output = host_channel::run_script(target, &body, runner).await?;
@@ -4573,8 +4581,6 @@ printf 'STADO_SERVICE\tenv-unset\tenv_unset\t%s\n' "$env_path"
     let output = host_channel::run_script(target, &body, runner).await?;
     Ok(report_from(output))
 }
-
-
 
 /// Write one vault item field on the host using its own Skarbiec binary
 /// and vault file. The value file must already exist on the host.

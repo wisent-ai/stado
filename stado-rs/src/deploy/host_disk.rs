@@ -261,9 +261,11 @@ pub fn parse_output(stdout: &str, policy_interval_seconds: Option<i64>) -> DiskR
                 }
             }
             ["STADO_CLONE_SUMMARY", path, total, hour, day] => {
-                if let (Ok(total), Ok(older_than_hour), Ok(older_than_day)) =
-                    (total.parse::<i64>(), hour.parse::<i64>(), day.parse::<i64>())
-                {
+                if let (Ok(total), Ok(older_than_hour), Ok(older_than_day)) = (
+                    total.parse::<i64>(),
+                    hour.parse::<i64>(),
+                    day.parse::<i64>(),
+                ) {
                     reading.clone_summaries.push(CloneSummary {
                         path: (*path).to_string(),
                         total,
@@ -400,10 +402,12 @@ pub fn to_report(target: &ComputeTarget, reading: &DiskReading) -> Map<String, V
             reading
                 .inventory
                 .iter()
-                .map(|item| json!({
-                    "path": item.path,
-                    "size_gb": gib_from_blocks(item.blocks_kb as f64),
-                }))
+                .map(|item| {
+                    json!({
+                        "path": item.path,
+                        "size_gb": gib_from_blocks(item.blocks_kb as f64),
+                    })
+                })
                 .collect(),
         ),
     );
@@ -413,12 +417,14 @@ pub fn to_report(target: &ComputeTarget, reading: &DiskReading) -> Map<String, V
             reading
                 .clone_summaries
                 .iter()
-                .map(|summary| json!({
-                    "path": summary.path,
-                    "total": summary.total,
-                    "older_than_hour": summary.older_than_hour,
-                    "older_than_day": summary.older_than_day,
-                }))
+                .map(|summary| {
+                    json!({
+                        "path": summary.path,
+                        "total": summary.total,
+                        "older_than_hour": summary.older_than_hour,
+                        "older_than_day": summary.older_than_day,
+                    })
+                })
                 .collect(),
         ),
     );

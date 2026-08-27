@@ -18,7 +18,8 @@ use tar::Archive;
 const PRODUCT: &str = "stado";
 
 fn required(name: &str) -> String {
-    std::env::var(name).unwrap_or_else(|_| panic!("{name} is required by the public channel journey"))
+    std::env::var(name)
+        .unwrap_or_else(|_| panic!("{name} is required by the public channel journey"))
 }
 
 fn stado(home: &Path, origin: &str, args: &[&str]) -> Output {
@@ -64,7 +65,9 @@ fn manifest(path: &Path, version: &str, platform: &str) -> Value {
     assert_eq!(value["product"], PRODUCT);
     assert_eq!(value["version"], version);
     assert_eq!(value["platform"], platform);
-    let digest = value["sha256"].as_str().expect("manifest sha256 is a string");
+    let digest = value["sha256"]
+        .as_str()
+        .expect("manifest sha256 is a string");
     assert_eq!(digest.len(), 64, "manifest sha256 has 64 hex digits");
     assert!(digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
     let source_commit = value["source_commit"]
@@ -76,11 +79,16 @@ fn manifest(path: &Path, version: &str, platform: &str) -> Value {
 }
 
 fn release_binary(archive: &Path, destination: &Path) -> PathBuf {
-    Archive::new(GzDecoder::new(fs::File::open(archive).expect("release archive opens")))
-        .unpack(destination)
-        .expect("verified release archive extracts");
+    Archive::new(GzDecoder::new(
+        fs::File::open(archive).expect("release archive opens"),
+    ))
+    .unpack(destination)
+    .expect("verified release archive extracts");
     let binary = destination.join("stado");
-    assert!(binary.is_file(), "release archive contains the stado binary");
+    assert!(
+        binary.is_file(),
+        "release archive contains the stado binary"
+    );
     binary
 }
 
@@ -89,7 +97,9 @@ fn release_binary(archive: &Path, destination: &Path) -> PathBuf {
 fn public_release_channel_serves_a_verified_executable_native_release() {
     let origin = required("STADO_RELEASE_CHANNEL_URL");
     assert!(
-        origin.starts_with("https://") && !origin.contains("localhost") && !origin.contains("127.0.0.1"),
+        origin.starts_with("https://")
+            && !origin.contains("localhost")
+            && !origin.contains("127.0.0.1"),
         "the release-channel journey must use public HTTPS, got {origin}",
     );
     let version = required("STADO_RELEASE_CHANNEL_VERSION");
@@ -101,7 +111,11 @@ fn public_release_channel_serves_a_verified_executable_native_release() {
     let manifest_name = format!("release-manifest-{platform}.json");
     let manifest_uri = uri(&version, &platform, &manifest_name);
     let stat = successful(
-        stado(&home, &origin, &["storage", "stat", &manifest_uri, "--json"]),
+        stado(
+            &home,
+            &origin,
+            &["storage", "stat", &manifest_uri, "--json"],
+        ),
         &format!("storage stat {manifest_uri}"),
     );
     let presence: Value = serde_json::from_slice(&stat).expect("storage stat emits JSON");

@@ -243,6 +243,7 @@ fn as_daemon_ensure_addresses_the_system_daemon_file() {
         "com.wisent.compute.service.stado-agent-mini",
         "/home/operator/.stado/bin/stado",
         &["agent".to_string(), "--auto".to_string()],
+        &[],
     )
     .expect("plan renders");
 

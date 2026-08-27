@@ -58,7 +58,10 @@ fn interface_ipv4(interface: &str) -> Result<Ipv4Addr, CmdError> {
         if address.interface_name != interface {
             continue;
         }
-        let Some(socket) = address.address.and_then(|value| value.as_sockaddr_in().copied()) else {
+        let Some(socket) = address
+            .address
+            .and_then(|value| value.as_sockaddr_in().copied())
+        else {
             continue;
         };
         let ip = socket.ip();

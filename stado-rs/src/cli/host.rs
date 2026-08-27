@@ -468,13 +468,14 @@ pub async fn gui_automation_enable(target: &str) -> Result<(), CmdError> {
     let resolved = registry_target(target).await?;
     let password = super::service::host_sudo_password(&resolved)
         .await?
-        .ok_or_else(|| CmdError::click(format!(
-            "{} has no readable host-account password",
-            resolved.name
-        )))?;
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{} has no readable host-account password",
+                resolved.name
+            ))
+        })?;
     let runner = crate::deploy::production_runner();
-    let report =
-        crate::deploy::host_gui_automation::enable(&resolved, &password, &runner).await;
+    let report = crate::deploy::host_gui_automation::enable(&resolved, &password, &runner).await;
     print_report(&report)
 }
 
@@ -483,8 +484,7 @@ pub async fn gui_automation_enable(target: &str) -> Result<(), CmdError> {
 pub async fn gui_automation_grant_accessibility(target: &str) -> Result<(), CmdError> {
     let resolved = registry_target(target).await?;
     let runner = crate::deploy::production_runner();
-    let report =
-        crate::deploy::host_gui_automation::grant_accessibility(&resolved, &runner).await;
+    let report = crate::deploy::host_gui_automation::grant_accessibility(&resolved, &runner).await;
     print_report(&report)
 }
 
@@ -2859,7 +2859,6 @@ pub async fn release(
 /// credential, a helper, or anything else Stado keeps there.
 const DELIVERED_FILES_DIR: &str = ".stado/files";
 
-
 pub(crate) async fn install_secret_value_at_home(
     target: &str,
     name: &str,
@@ -2973,10 +2972,12 @@ async fn register_acquisition_scopes(
         found.to_string()
     };
 
-    let public_key = match acquisition_scratch(resolved, &home, "weles-acquisition-public.XXXXXX", runner).await {
-        Ok(path) => path,
-        Err(detail) => return Err(refused(detail)),
-    };
+    let public_key =
+        match acquisition_scratch(resolved, &home, "weles-acquisition-public.XXXXXX", runner).await
+        {
+            Ok(path) => path,
+            Err(detail) => return Err(refused(detail)),
+        };
 
     // Skarbiec accepts only an Ed25519 workload key. A host still holding an
     // older key gets one Ed25519 replacement, and the new private key takes
@@ -2986,19 +2987,29 @@ async fn register_acquisition_scopes(
     let mut new_private_key: Option<String> = None;
     let described = host_channel::run_program(
         resolved,
-        &[openssl.as_str(), "pkey", "-in", private_key.as_str(), "-text", "-noout"],
+        &[
+            openssl.as_str(),
+            "pkey",
+            "-in",
+            private_key.as_str(),
+            "-text",
+            "-noout",
+        ],
         runner,
     )
     .await
     .map_err(|error| CmdError::click(error.to_string()))?;
     if !described.stdout.contains("ED25519") {
-        let fresh = match acquisition_scratch(resolved, &home, "weles-acquisition-private.XXXXXX", runner).await {
-            Ok(path) => path,
-            Err(detail) => {
-                remove_remote(resolved, &[public_key.as_str()], runner).await;
-                return Err(refused(detail));
-            }
-        };
+        let fresh =
+            match acquisition_scratch(resolved, &home, "weles-acquisition-private.XXXXXX", runner)
+                .await
+            {
+                Ok(path) => path,
+                Err(detail) => {
+                    remove_remote(resolved, &[public_key.as_str()], runner).await;
+                    return Err(refused(detail));
+                }
+            };
         for words in [
             vec![
                 openssl.as_str(),
@@ -3784,6 +3795,7 @@ pub async fn reconcile_service_verifier(target: &str, json_output: bool) -> Resu
 }
 
 /// Preserve an isolated verifier bearer while making its capabilities match config.
+#[allow(clippy::too_many_arguments)]
 async fn reconcile_verifier(
     target: &str,
     json_output: bool,
@@ -3815,13 +3827,10 @@ async fn reconcile_verifier(
          \"${{GNUPGHOME:-$HOME/.gnupg}}\" \
          \"${{{token_file_env}:-$HOME/.stado/{token_file_default}}}\""
     );
-    let environment = crate::deploy::host_channel::run_command(
-        &resolved,
-        &environment_command,
-        &runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    let environment =
+        crate::deploy::host_channel::run_command(&resolved, &environment_command, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
     if !environment.ok() {
         return Err(CmdError::click(format!(
             "{}: {kind} verifier environment could not be read: {}",
@@ -5504,7 +5513,9 @@ pub async fn config_set(
     reload_service: Option<&str>,
 ) -> Result<(), CmdError> {
     if key.trim().is_empty() || key.chars().any(char::is_whitespace) {
-        return Err(CmdError::click("configuration key must be a non-empty dotted name"));
+        return Err(CmdError::click(
+            "configuration key must be a non-empty dotted name",
+        ));
     }
     remote_config(target, Some((key, value))).await?;
     if let Some(service) = reload_service {

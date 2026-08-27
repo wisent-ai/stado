@@ -385,7 +385,10 @@ impl Reporter<'_> {
             // `sed -n 's/^ExecStart=//p' | head -n 1 | awk '{print $1}'`.
             let read = host_channel::run_command(
                 self.target,
-                &format!("sed -n 's/^ExecStart=//p' {} | head -n 1", shlex_quote(&path)),
+                &format!(
+                    "sed -n 's/^ExecStart=//p' {} | head -n 1",
+                    shlex_quote(&path)
+                ),
                 self.runner,
             )
             .await?;
@@ -398,7 +401,15 @@ impl Reporter<'_> {
         }
         let extracted = host_channel::run_program(
             self.target,
-            &["/usr/bin/plutil", "-extract", "ProgramArguments.0", "raw", "-o", "-", &path],
+            &[
+                "/usr/bin/plutil",
+                "-extract",
+                "ProgramArguments.0",
+                "raw",
+                "-o",
+                "-",
+                &path,
+            ],
             self.runner,
         )
         .await?;
@@ -520,7 +531,11 @@ impl Reporter<'_> {
         self.out.push_str(&format!(
             "software name={} version={} sha256={} provenance={} path={}\n",
             base,
-            if version.is_empty() { UNKNOWN } else { &version },
+            if version.is_empty() {
+                UNKNOWN
+            } else {
+                &version
+            },
             if digest.is_empty() { UNKNOWN } else { &digest },
             provenance,
             path,

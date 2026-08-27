@@ -40,12 +40,11 @@ impl Journey {
             .unwrap();
         let storage = home.path().join("store");
         fs::create_dir_all(&storage).unwrap();
-        let hostname = String::from_utf8(
-            Command::new("hostname").arg("-f").output().unwrap().stdout,
-        )
-        .unwrap()
-        .trim()
-        .to_ascii_lowercase();
+        let hostname =
+            String::from_utf8(Command::new("hostname").arg("-f").output().unwrap().stdout)
+                .unwrap()
+                .trim()
+                .to_ascii_lowercase();
         let registry = json!({
             "schema_version": 2,
             "targets": [{
@@ -154,10 +153,12 @@ impl Journey {
     fn wait_for_terminal_job(&mut self, job_id: &str) {
         let deadline = Instant::now() + Duration::from_secs(180);
         while Instant::now() < deadline {
-            if ["completed", "uploaded", "failed"]
-                .iter()
-                .any(|prefix| self.storage.join(prefix).join(format!("{job_id}.json")).exists())
-            {
+            if ["completed", "uploaded", "failed"].iter().any(|prefix| {
+                self.storage
+                    .join(prefix)
+                    .join(format!("{job_id}.json"))
+                    .exists()
+            }) {
                 return;
             }
             if self.agent.as_mut().unwrap().try_wait().unwrap().is_some() {
@@ -188,26 +189,63 @@ fn build_recipe_polls_public_git_runs_on_matching_worker_and_publishes_artifact(
     let mut journey = Journey::new();
 
     let malformed = journey.invoke(&[
-        "builds", "add", "--name", "bad-build", "--repo", "file:///not-public",
-        "--branch", "main", "--command", "true", "--artifact", "out",
-        "--platform", platform,
+        "builds",
+        "add",
+        "--name",
+        "bad-build",
+        "--repo",
+        "file:///not-public",
+        "--branch",
+        "main",
+        "--command",
+        "true",
+        "--artifact",
+        "out",
+        "--platform",
+        platform,
     ]);
     assert_eq!(malformed.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&malformed.stderr)
-        .contains("--repo must be an https:// clone URL"));
+    assert!(
+        String::from_utf8_lossy(&malformed.stderr).contains("--repo must be an https:// clone URL")
+    );
 
     let added = journey.invoke_ok(&[
-        "builds", "add", "--name", RECIPE, "--repo", SOURCE, "--branch", "main",
-        "--command", "printf 'built by stado\\n' > build-output.txt",
-        "--artifact", "build-output.txt", "--platform", platform,
-        "--interval-seconds", "1", "--json",
+        "builds",
+        "add",
+        "--name",
+        RECIPE,
+        "--repo",
+        SOURCE,
+        "--branch",
+        "main",
+        "--command",
+        "printf 'built by stado\\n' > build-output.txt",
+        "--artifact",
+        "build-output.txt",
+        "--platform",
+        platform,
+        "--interval-seconds",
+        "1",
+        "--json",
     ]);
     let added: Value = serde_json::from_slice(&added.stdout).unwrap();
     assert_eq!(added["enabled"], false);
 
     let duplicate = journey.invoke(&[
-        "builds", "add", "--name", RECIPE, "--repo", SOURCE, "--branch", "main",
-        "--command", "true", "--artifact", "out", "--platform", platform,
+        "builds",
+        "add",
+        "--name",
+        RECIPE,
+        "--repo",
+        SOURCE,
+        "--branch",
+        "main",
+        "--command",
+        "true",
+        "--artifact",
+        "out",
+        "--platform",
+        platform,
     ]);
     assert_eq!(duplicate.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&duplicate.stderr)
@@ -229,7 +267,9 @@ fn build_recipe_polls_public_git_runs_on_matching_worker_and_publishes_artifact(
     assert_eq!(run["status"], "succeeded", "{completed}");
     assert_eq!(completed["job_states"][platform], "completed");
     assert_eq!(run["declared"], false);
-    assert!(run["artifact_uris"].as_array().is_some_and(|items| !items.is_empty()));
+    assert!(run["artifact_uris"]
+        .as_array()
+        .is_some_and(|items| !items.is_empty()));
 
     let destination = journey.home.path().join("results");
     journey.invoke_ok(&["results", job_id, destination.to_str().unwrap()]);

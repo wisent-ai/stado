@@ -140,9 +140,10 @@ pub async fn dispatch(command: SecretsCommands) -> Result<(), CmdError> {
         }
         // Also answered without a client: a protected key that nothing can
         // unlock is precisely the state where every other verb is unavailable.
-        SecretsCommands::TryUnlock { host, keychain_only } => {
-            try_unlock(host.as_deref(), keychain_only).await
-        }
+        SecretsCommands::TryUnlock {
+            host,
+            keychain_only,
+        } => try_unlock(host.as_deref(), keychain_only).await,
         SecretsCommands::Migrate { to } => migrate(to.as_deref()).await,
         SecretsCommands::Put { name, item_type } => {
             put(&client()?, &name, item_type.as_deref()).await
@@ -1060,8 +1061,8 @@ async fn try_unlock_remote(
         encoded.push_str(&base64::engine::general_purpose::STANDARD.encode(phrase.as_bytes()));
         encoded.push('\n');
     }
-    let keychain_source = base64::engine::general_purpose::STANDARD
-        .encode(b"macOS Keychain service skarbiec-vault");
+    let keychain_source =
+        base64::engine::general_purpose::STANDARD.encode(b"macOS Keychain service skarbiec-vault");
     let failure = if keychain_only {
         "the host keychain entry does not open the remote vault"
     } else {

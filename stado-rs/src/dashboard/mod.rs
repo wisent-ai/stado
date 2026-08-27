@@ -357,9 +357,7 @@ impl Dashboard {
                 Ok(value)
             }
             Ok(_) => {
-                eprintln!(
-                    "[dashboard] object verifier item unavailable for namespace {namespace}"
-                );
+                eprintln!("[dashboard] object verifier item unavailable for namespace {namespace}");
                 tokens.insert(
                     namespace.to_string(),
                     CachedObjectToken {
@@ -745,7 +743,15 @@ impl Dashboard {
                 authorize_release(request, &policy_key, false).await
             }
         } else {
-            authorize_object(self, request, object.namespace(), object.key(), false, "put").await
+            authorize_object(
+                self,
+                request,
+                object.namespace(),
+                object.key(),
+                false,
+                "put",
+            )
+            .await
         };
         match authorized {
             Ok(true) => {}
@@ -1681,7 +1687,15 @@ impl Dashboard {
                 authorize_release(request, &policy_key, false).await
             }
         } else {
-            authorize_object(self, request, object.namespace(), object.key(), false, "put").await
+            authorize_object(
+                self,
+                request,
+                object.namespace(),
+                object.key(),
+                false,
+                "put",
+            )
+            .await
         };
         match authorized {
             Ok(true) => {}
@@ -1731,8 +1745,15 @@ impl Dashboard {
                 &json!({"error": "object authorization unavailable"}),
             );
         }
-        match authorize_object(self, request, object.namespace(), object.key(), false, "delete")
-            .await
+        match authorize_object(
+            self,
+            request,
+            object.namespace(),
+            object.key(),
+            false,
+            "delete",
+        )
+        .await
         {
             Ok(true) => {}
             Ok(false) => return send_json(http_status("401"), &json!({"error": "unauthorized"})),

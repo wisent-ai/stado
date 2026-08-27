@@ -1209,8 +1209,7 @@ impl RemoteObjectApi {
             return Ok(None);
         };
         let configured_token = std::env::var("STADO_API_TOKEN");
-        let explicit_token =
-            matches!(&configured_token, Ok(value) if !value.trim().is_empty());
+        let explicit_token = matches!(&configured_token, Ok(value) if !value.trim().is_empty());
         let token = match configured_token {
             Ok(value) if !value.trim().is_empty() => value.trim().to_string(),
             Ok(_) | Err(std::env::VarError::NotPresent) => {

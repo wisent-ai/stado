@@ -610,8 +610,10 @@ pub async fn observe_beacon_age(
 // refusals, published best effort
 // ---------------------------------------------------------------------------
 
-static REFUSAL_THROTTLE: LazyLock<Mutex<HashMap<(String, String, String), Instant>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+type RefusalKey = (String, String, String);
+type RefusalThrottle = Mutex<HashMap<RefusalKey, Instant>>;
+
+static REFUSAL_THROTTLE: LazyLock<RefusalThrottle> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Whether this (host, reader, reason) may write again, marking it written.
 ///

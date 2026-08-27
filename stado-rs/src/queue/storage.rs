@@ -95,7 +95,6 @@ impl JobStorage {
         Ok(storage)
     }
 
-
     /// Like [`JobStorage::new`] but binds the "gcs" backend to an explicit
     /// bucket (Python `JobStorage(bucket)`). The "local" backend ignores the
     /// bucket for routing — it is rooted at `config::wc_local_storage_path()`
