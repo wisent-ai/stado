@@ -147,15 +147,15 @@ jobs:
 
           fi
           preflight() {
-            # The private namespace proves the object verifier. The public
-            # release namespace separately proves that the release endpoint
-            # has finished recovering; one cannot stand in for the other.
+            # The private namespace proves the object verifier. Listing the
+            # product's release prefix separately proves the release verifier:
+            # unlike a public stat/get, list is authenticated but read-only.
             "$stado_bin" storage stat \
               stado://probierz/__release_preflight__ --json \
               > "$RUNNER_TEMP/object-preflight.json" \
               2> "$RUNNER_TEMP/object-preflight.err" &&
-            "$stado_bin" storage stat \
-              stado://releases/__release_preflight__ --json \
+            "$stado_bin" storage ls \
+              stado://releases/stado/__release_preflight__ --json \
               > "$RUNNER_TEMP/release-preflight.json" \
               2> "$RUNNER_TEMP/release-preflight.err"
           }
@@ -187,13 +187,13 @@ jobs:
               wait_for_preflight
             fi
           fi
-          for result in object-preflight release-preflight; do
-            state="$(jq -r '.state // ""' "$RUNNER_TEMP/$result.json")"
-            case "$state" in
-              present|absent) ;;
-              *) echo "::error::$result is ${state:-unanswered}"; false ;;
-            esac
-          done
+          state="$(jq -r '.state // ""' "$RUNNER_TEMP/object-preflight.json")"
+          case "$state" in
+            present|absent) ;;
+            *) echo "::error::object preflight is ${state:-unanswered}"; false ;;
+          esac
+          jq -e '.objects | type == "array"' \
+            "$RUNNER_TEMP/release-preflight.json" >/dev/null
 
       - name: Create Linux release manifest
         run: |
