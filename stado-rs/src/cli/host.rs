@@ -3934,7 +3934,7 @@ async fn reconcile_verifier(
         .collect::<Vec<_>>()
         .join(",");
     let command = format!(
-        "GNUPGHOME={} SKARBIEC_VAULT_FILE={} {} token-mint {} \
+        "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin GNUPGHOME={} SKARBIEC_VAULT_FILE={} {} token-mint {} \
          --capabilities {} --replace-capabilities --token-file {} --ttl-seconds {} > /dev/null",
         crate::deploy::shlex_quote(&gnupg_home),
         crate::deploy::shlex_quote(&vault),
