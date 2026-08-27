@@ -66,6 +66,35 @@ impl JobStorage {
     pub async fn new() -> Result<Self, StorageError> {
         Self::with_bucket(config::bucket()).await
     }
+    /// Build the backing store used by the Stado API server itself.
+    ///
+    /// A client may select the `stado` adapter because it reaches this server,
+    /// but the server cannot route its own queue and registry reads back through
+    /// its listener before that listener has bound. In that topology the
+    /// independently declared backup endpoint is the server's direct backing
+    /// store. Any other primary remains unchanged.
+    pub async fn for_server() -> Result<Self, StorageError> {
+        let primary = super::copy::Endpoint::configured_primary();
+        if primary.adapter() != Some(StorageAdapter::StadoObject) {
+            return Self::new().await;
+        }
+        let endpoint = super::copy::Endpoint::configured_backup().ok_or_else(|| {
+            StorageError::Other(
+                "WC_STORAGE_BACKEND=stado cannot back the Stado API server itself; configure a direct WC_BACKUP_STORAGE_BACKEND".to_string(),
+            )
+        })?;
+        if endpoint.adapter() == Some(StorageAdapter::StadoObject) {
+            return Err(StorageError::Other(
+                "the Stado API server backup backend must be direct, not stado".to_string(),
+            ));
+        }
+        let backend = endpoint.build().await?;
+        let storage =
+            Self::with_backend_and_bucket(backend, endpoint.kind.clone(), endpoint.bucket.clone());
+        storage.ensure_layout().await?;
+        Ok(storage)
+    }
+
 
     /// Like [`JobStorage::new`] but binds the "gcs" backend to an explicit
     /// bucket (Python `JobStorage(bucket)`). The "local" backend ignores the

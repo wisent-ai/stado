@@ -1857,7 +1857,7 @@ pub async fn serve(
     let port = port.unwrap_or_else(config::dashboard_port);
     let port = u16::try_from(port)
         .map_err(|_| DashboardError::Other(format!("dashboard port out of range: {port}")))?;
-    let store = JobStorage::new().await?;
+    let store = JobStorage::for_server().await?;
     Dashboard::new(store)
         .with_enrollment_only(enrollment_only)
         .serve_with(&host, port)

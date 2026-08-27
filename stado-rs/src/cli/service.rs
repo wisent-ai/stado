@@ -2215,9 +2215,11 @@ async fn file_sync(options: FileSyncOptions<'_>) -> Result<(), CmdError> {
             "{source_file} must be a regular file, not a symlink"
         )));
     }
-    if metadata.len() > 1_048_576 {
+    let max_bytes = if executable { 64 * 1_048_576 } else { 1_048_576 };
+    if metadata.len() > max_bytes {
         return Err(CmdError::click(format!(
-            "{source_file} exceeds the 1 MiB service file limit"
+            "{source_file} exceeds the {} MiB service file limit",
+            max_bytes / 1_048_576
         )));
     }
     #[cfg(unix)]
