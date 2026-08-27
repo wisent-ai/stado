@@ -147,46 +147,53 @@ jobs:
 
           fi
           preflight() {
-            # `releases/` is public and cannot prove the private object
-            # verifier. Probe the runner's configured writable namespace.
+            # The private namespace proves the object verifier. The public
+            # release namespace separately proves that the release endpoint
+            # has finished recovering; one cannot stand in for the other.
             "$stado_bin" storage stat \
-              stado://probierz/__release_preflight__ --json
+              stado://probierz/__release_preflight__ --json \
+              > "$RUNNER_TEMP/object-preflight.json" \
+              2> "$RUNNER_TEMP/object-preflight.err" &&
+            "$stado_bin" storage stat \
+              stado://releases/__release_preflight__ --json \
+              > "$RUNNER_TEMP/release-preflight.json" \
+              2> "$RUNNER_TEMP/release-preflight.err"
           }
           wait_for_preflight() {
             for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
-              if preflight > "$RUNNER_TEMP/object-preflight.json" \
-                   2> "$RUNNER_TEMP/object-preflight.err"; then
+              if preflight; then
                 return 0
               fi
               sleep 5
             done
             cat "$RUNNER_TEMP/object-preflight.err" >&2
+            cat "$RUNNER_TEMP/release-preflight.err" >&2
             return 1
           }
           if ! wait_for_preflight; then
-            if ! grep -Fq "object authorization unavailable" \
-                 "$RUNNER_TEMP/object-preflight.err"; then
-              false
-            fi
-            # Reconcile the exact host-local verifier policy first. Current
-            # object APIs recover inline, which preserves every connection.
+            # Reconcile both declared verifier policies. Current object APIs
+            # recover inline, which preserves every connection.
             retry_command "$stado_bin" host reconcile-object-verifier \
+              charless-mac-mini --json
+            retry_command "$stado_bin" host reconcile-release-verifier \
               charless-mac-mini --json
             if ! wait_for_preflight; then
               # Upgrade path for an older object API that cannot reload its
-              # grant inline. Restarting can close the transport carrying this
-              # command, so the service's subsequent health is authoritative.
+              # grants inline. Restarting can close the transport carrying this
+              # command, so both subsequent preflights are authoritative.
               "$stado_bin" service restart \
                 com.wisent.always-on.stado-object-api \
                 --host charless-mac-mini --json || true
               wait_for_preflight
             fi
           fi
-          state="$(jq -r '.state // ""' "$RUNNER_TEMP/object-preflight.json")"
-          case "$state" in
-            present|absent) ;;
-            *) echo "::error::release object plane is ${state:-unanswered}"; false ;;
-          esac
+          for result in object-preflight release-preflight; do
+            state="$(jq -r '.state // ""' "$RUNNER_TEMP/$result.json")"
+            case "$state" in
+              present|absent) ;;
+              *) echo "::error::$result is ${state:-unanswered}"; false ;;
+            esac
+          done
 
       - name: Create Linux release manifest
         run: |
