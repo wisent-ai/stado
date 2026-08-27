@@ -322,10 +322,18 @@ jobs:
           # Stado store is the source of truth; public ingress is deployment
           # output and therefore cannot be a release prerequisite.
           unset STADO_API_URL STADO_API_TOKEN
-          BASELINE="$baseline" \
-            AUTOVERSION="$RUNNER_TEMP/autoversion/bin/autoversion" \
-            STADO_BIN="$stado_bin" \
-            scripts/version_check.sh "$RUNNER_TEMP/candidate-surface.json"
+          version_checked=false
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            if BASELINE="$baseline" \
+                 AUTOVERSION="$RUNNER_TEMP/autoversion/bin/autoversion" \
+                 STADO_BIN="$stado_bin" \
+                 scripts/version_check.sh "$RUNNER_TEMP/candidate-surface.json"; then
+              version_checked=true
+              break
+            fi
+            sleep 5
+          done
+          [ "$version_checked" = true ]
 
       - name: Create immutable Linux release through Stado
         run: |
