@@ -3733,6 +3733,31 @@ pub async fn reconcile_object_verifier(target: &str, json_output: bool) -> Resul
     .await
 }
 
+/// Reconcile the release verifier on TARGET to the exact configured publisher set.
+pub async fn reconcile_release_verifier(target: &str, json_output: bool) -> Result<(), CmdError> {
+    let publishers = crate::config::release_api_publishers().map_err(|problems| {
+        CmdError::click(format!(
+            "invalid release_api.publishers: {}",
+            problems.join("; ")
+        ))
+    })?;
+    let items = publishers
+        .values()
+        .map(|policy| policy.item().to_string())
+        .collect::<std::collections::BTreeSet<_>>();
+    reconcile_verifier(
+        target,
+        json_output,
+        "release",
+        "release_api.publishers",
+        crate::config::RELEASE_API_VERIFIER_CONSUMER,
+        "WC_RELEASE_SKARBIEC_TOKEN_FILE",
+        "stado-release-api-verifier-skarbiec-token",
+        items,
+    )
+    .await
+}
+
 /// Reconcile the service verifier on TARGET to the exact configured deployer set.
 pub async fn reconcile_service_verifier(target: &str, json_output: bool) -> Result<(), CmdError> {
     let deployers = crate::config::service_api_deployers().map_err(|problems| {

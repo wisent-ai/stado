@@ -1352,6 +1352,17 @@ enum HostCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Make TARGET's release-verifier grant match release_api.publishers exactly.
+    ///
+    /// The existing bearer and expiry are preserved. Missing publisher reads
+    /// are added without printing the bearer or moving it through argv.
+    #[command(name = "reconcile-release-verifier")]
+    ReconcileReleaseVerifier {
+        target: String,
+        /// Emit the reconciled item set as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Make TARGET's service-verifier grant match service_api.deployers exactly.
     ///
     /// The existing bearer and expiry are preserved. Stale capabilities are
@@ -2138,6 +2149,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             } => host::retag_vault_item(&target, &item, &tags, json).await,
             HostCommands::ReconcileObjectVerifier { target, json } => {
                 host::reconcile_object_verifier(&target, json).await
+            }
+            HostCommands::ReconcileReleaseVerifier { target, json } => {
+                host::reconcile_release_verifier(&target, json).await
             }
             HostCommands::ReconcileServiceVerifier { target, json } => {
                 host::reconcile_service_verifier(&target, json).await

@@ -12,3 +12,4 @@ stado-rs/target/
 stado-rs/target-*/
 migration/
 .stado-precheck-release/
+.wisent-output/

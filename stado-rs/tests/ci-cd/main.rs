@@ -8,69 +8,158 @@
 //! installed binary and checks its version output. No fleet host or operator
 //! registry is read or changed.
 use std::fs::{self, File};
-use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpListener};
+use std::io::Write;
+use std::net::{TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
-use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-struct SigningVault {
-    addr: SocketAddr,
+struct SkarbiecFixture {
+    gnupg: PathBuf,
+    token: PathBuf,
+    port: u16,
+    server: Child,
 }
 
-impl SigningVault {
-    fn spawn(private_key: &[u8]) -> Self {
+impl SkarbiecFixture {
+    fn start(home: &Path, private_key: &Path) -> Self {
         use base64::Engine;
 
-        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let addr = listener.local_addr().unwrap();
-        let encoded = Arc::new(base64::engine::general_purpose::STANDARD.encode(private_key));
-        thread::spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(mut stream) = stream else { continue };
-                let encoded = Arc::clone(&encoded);
-                thread::spawn(move || {
-                    let mut head = Vec::new();
-                    let mut byte = [0_u8; 1];
-                    while stream.read_exact(&mut byte).is_ok() {
-                        head.push(byte[0]);
-                        if head.ends_with(b"\r\n\r\n") {
-                            break;
-                        }
-                    }
-                    let head = String::from_utf8_lossy(&head);
-                    let length = head
-                        .lines()
-                        .find_map(|line| {
-                            line.split_once(':').and_then(|(name, value)| {
-                                name.eq_ignore_ascii_case("content-length")
-                                    .then(|| value.trim().parse::<usize>().ok())
-                                    .flatten()
-                            })
-                        })
-                        .unwrap_or(0);
-                    let mut body = vec![0_u8; length];
-                    let _ = stream.read_exact(&mut body);
-                    let payload = format!(r#"{{"value":"{}"}}"#, encoded);
-                    let answer = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                        payload.len(),
-                        payload
-                    );
-                    let _ = stream.write_all(answer.as_bytes());
-                });
+        let binary = PathBuf::from(
+            std::env::var("SKARBIEC_TEST_BIN")
+                .expect("SKARBIEC_TEST_BIN must name the real Skarbiec executable"),
+        );
+        assert!(binary.is_file(), "SKARBIEC_TEST_BIN names no file");
+        let gnupg = home.join("gnupg");
+        fs::create_dir_all(&gnupg).unwrap();
+        fs::set_permissions(&gnupg, fs::Permissions::from_mode(0o700)).unwrap();
+        let vault = home.join("skarbiec.json");
+        let token = home.join("release-signing-grant");
+        let port = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+
+        let command = |args: &[&str], stdin: Option<&str>| {
+            let mut child = Command::new(&binary)
+                .args(args)
+                .env_clear()
+                .env("HOME", home)
+                .env("GNUPGHOME", &gnupg)
+                .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+                .env("SKARBIEC_VAULT_FILE", &vault)
+                .env("SKARBIEC_AUDIT_FILE", home.join("skarbiec-audit.jsonl"))
+                .stdin(if stdin.is_some() {
+                    Stdio::piped()
+                } else {
+                    Stdio::null()
+                })
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            if let Some(body) = stdin {
+                child.stdin.as_mut().unwrap().write_all(body.as_bytes()).unwrap();
             }
+            child.wait_with_output().unwrap()
+        };
+        let initialized = command(
+            &["init", "Stado release test <stado-release-test@example.invalid>"],
+            None,
+        );
+        assert!(
+            initialized.status.success(),
+            "real Skarbiec init failed: {}",
+            String::from_utf8_lossy(&initialized.stderr)
+        );
+        let encoded =
+            base64::engine::general_purpose::STANDARD.encode(fs::read(private_key).unwrap());
+        let item = json!({
+            "schema": "skarbiec.item.v2",
+            "kind": "credential",
+            "fields": {"private_key": encoded},
+            "context": {"service": "stado-release"}
         });
-        Self { addr }
+        let seeded = command(
+            &["set-json", "ci-release-signing", "--type", "credential"],
+            Some(&item.to_string()),
+        );
+        assert!(
+            seeded.status.success(),
+            "real Skarbiec seed failed: {}",
+            String::from_utf8_lossy(&seeded.stderr)
+        );
+        let minted = command(
+            &[
+                "token-mint",
+                "stado-release-coordinator",
+                "--capabilities",
+                "read:ci-release-signing#private_key",
+            ],
+            None,
+        );
+        assert!(
+            minted.status.success(),
+            "real Skarbiec grant failed: {}",
+            String::from_utf8_lossy(&minted.stderr)
+        );
+        let grant: Value = serde_json::from_slice(&minted.stdout).unwrap();
+        fs::write(&token, grant["token"].as_str().unwrap()).unwrap();
+        fs::set_permissions(&token, fs::Permissions::from_mode(0o600)).unwrap();
+
+        let stdout = File::create(home.join("skarbiec.out")).unwrap();
+        let stderr = File::create(home.join("skarbiec.err")).unwrap();
+        let server = Command::new(&binary)
+            .args(["serve", "--port", &port.to_string()])
+            .env_clear()
+            .env("HOME", home)
+            .env("GNUPGHOME", &gnupg)
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("SKARBIEC_VAULT_FILE", &vault)
+            .env("SKARBIEC_AUDIT_FILE", home.join("skarbiec-audit.jsonl"))
+            .stdin(Stdio::null())
+            .stdout(stdout)
+            .stderr(stderr)
+            .spawn()
+            .unwrap();
+        let mut fixture = Self {
+            gnupg,
+            token,
+            port,
+            server,
+        };
+        for _ in 0..100 {
+            if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+                return fixture;
+            }
+            if fixture.server.try_wait().unwrap().is_some() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        panic!(
+            "real Skarbiec did not become ready: {}",
+            fs::read_to_string(home.join("skarbiec.err")).unwrap_or_default()
+        );
     }
 
     fn url(&self) -> String {
-        format!("http://{}", self.addr)
+        format!("http://127.0.0.1:{}", self.port)
+    }
+}
+
+impl Drop for SkarbiecFixture {
+    fn drop(&mut self) {
+        let _ = self.server.kill();
+        let _ = self.server.wait();
+        let _ = Command::new("gpgconf")
+            .args(["--homedir", self.gnupg.to_str().unwrap(), "--kill", "gpg-agent"])
+            .output();
     }
 }
 
@@ -89,7 +178,7 @@ fn git(source: &Path, args: &[&str]) {
     run(Command::new("git").current_dir(source).args(args));
 }
 
-fn release_env(command: &mut Command, home: &Path, storage: &Path, vault: &SigningVault) {
+fn release_env(command: &mut Command, home: &Path, storage: &Path, vault: &SkarbiecFixture) {
     command
         .env_clear()
         .env("HOME", home)
@@ -99,12 +188,9 @@ fn release_env(command: &mut Command, home: &Path, storage: &Path, vault: &Signi
         .env("WC_STADO_STORAGE_NAMESPACE", "ci-release")
         .env("STADO_CONFIG", home.join("nonexistent-config.json"))
         .env("WC_SKARBIEC_URL", vault.url())
+        .env("WC_RELEASE_SIGNING_SKARBIEC_CONSUMER", "stado-release-coordinator")
+        .env("WC_RELEASE_SIGNING_SKARBIEC_TOKEN_FILE", &vault.token)
         .env("WC_VAST_AUTO_LIST", "false")
-        .env(
-            "WC_RELEASE_SIGNING_SKARBIEC_TOKEN_FILE",
-            home.join("release-signing-grant"),
-        )
-        .env("WC_SKARBIEC_TOKEN_FILE", home.join("coordinator-grant"))
         .env("STADO_RELEASE_SIGNING_KEY_ITEM", "ci-release-signing")
         .env("STADO_RELEASE_SIGNING_KEY_ID", "ci-release-key");
     let operator_home = PathBuf::from(std::env::var_os("HOME").unwrap());
@@ -183,10 +269,6 @@ fn fixture_source(home: &Path) -> PathBuf {
     source
 }
 
-fn write_grant(path: &Path) {
-    fs::write(path, "ci-grant").unwrap();
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
-}
 
 fn registry(home: &Path, storage: &Path, public_key: &str) {
     let hostname = String::from_utf8(run(Command::new("hostname").arg("-f")).stdout)
@@ -362,6 +444,7 @@ fn wait_for_submit(
 }
 
 #[test]
+#[ignore = "Probierz supplies the real Skarbiec executable"]
 fn a_real_release_builds_publishes_and_installs_its_binary() {
     let run_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/ci-cd-runs");
     fs::create_dir_all(&run_root).unwrap();
@@ -393,9 +476,7 @@ fn a_real_release_builds_publishes_and_installs_its_binary() {
         "ci-release-key",
     ]));
     let public_key = fs::read_to_string(&public).unwrap();
-    let vault = SigningVault::spawn(&fs::read(&private).unwrap());
-    write_grant(&home.path().join("release-signing-grant"));
-    write_grant(&home.path().join("coordinator-grant"));
+    let vault = SkarbiecFixture::start(home.path(), &private);
     registry(home.path(), &storage, &public_key);
 
     let agent_out = File::create(home.path().join("agent.out")).unwrap();
