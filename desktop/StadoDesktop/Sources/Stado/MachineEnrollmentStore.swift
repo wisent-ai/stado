@@ -32,6 +32,14 @@ final class MachineEnrollmentStore: ObservableObject {
     @Published private(set) var mintedInvite: MachineInvite?
     @Published private(set) var outcome: WisentMutationOutcome = .idle
     @Published private(set) var failure: MachineEnrollmentFailure?
+    /// Optional exact version passed to the existing host-recovery action.
+    ///
+    /// Empty deliberately remains the old `stado host recover TARGET` path.
+    /// It has no second persisted field: the exact command and its JSON answer
+    /// live in `agentRecovery`, and a reopened screen restores the version and
+    /// per-step evidence from that audit-visible proof.
+    @Published private(set) var recoveryRelease = ""
+    @Published private(set) var recoverySteps = MachineEnrollmentStore.initialRecoverySteps(releaseVersion: "")
     /// Why a step or a method the operator just clicked did not open. A locked
     /// row that says nothing is indistinguishable from a broken one.
     @Published private(set) var navigationBlock: String?
@@ -68,6 +76,22 @@ final class MachineEnrollmentStore: ObservableObject {
             ?? MachineEnrollmentDraft()
         plan = Self.load(MachineEnrollmentPlan.self, key: Self.planKey, from: defaults)
             ?? MachineEnrollmentPlan()
+        if let previousRecovery = draft.agentRecovery,
+           let report: MachineRecoveryCommandReport = Self.decode(from: previousRecovery.output),
+           let release = report.release {
+            recoveryRelease = release.version
+            recoverySteps = Self.finishedRecoverySteps(
+                releaseVersion: release.version,
+                succeeded: previousRecovery.ok,
+                output: previousRecovery.output
+            )
+        } else if let previousRecovery = draft.agentRecovery {
+            recoverySteps = Self.finishedRecoverySteps(
+                releaseVersion: "",
+                succeeded: previousRecovery.ok,
+                output: previousRecovery.output
+            )
+        }
     }
 
     var address: OperationsDashboardAddress? {
@@ -81,6 +105,22 @@ final class MachineEnrollmentStore: ObservableObject {
     var step: MachineEnrollmentStep { draft.step }
 
     var flow: MachineEnrollmentFlow { plan.flow }
+
+    var recoveryVersion: String {
+        recoveryRelease.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var recoveryArguments: [String] {
+        var arguments = ["host", "recover", draft.machineName]
+        if !recoveryVersion.isEmpty {
+            arguments.append(contentsOf: ["--release", recoveryVersion])
+        }
+        return arguments
+    }
+
+    var recoveryCommand: String {
+        StadoCLI.commandLine(recoveryArguments)
+    }
 
     /// The requests worth showing beside an invitation or the join method:
     /// machines still waiting for a decision.
@@ -111,6 +151,7 @@ final class MachineEnrollmentStore: ObservableObject {
         guard draft.endpoint != normalized || plan.endpoint != normalized else { return }
         draft = MachineEnrollmentDraft(endpoint: normalized)
         plan = MachineEnrollmentPlan(endpoint: normalized)
+        resetRecoverySelection()
         persistDraft()
         persistPlan()
     }
@@ -183,6 +224,7 @@ final class MachineEnrollmentStore: ObservableObject {
             draft = MachineEnrollmentDraft(endpoint: addressString)
             plan.approvedName = nil
             plan.decision = nil
+            resetRecoverySelection()
             persistDraft()
         }
         plan.flow = .methods
@@ -202,6 +244,14 @@ final class MachineEnrollmentStore: ObservableObject {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed != draft.sshTarget else { return }
         draft.sshTarget = trimmed
+        persistDraft()
+    }
+
+    func setRecoveryRelease(_ value: String) {
+        guard value != recoveryRelease else { return }
+        recoveryRelease = value
+        draft.agentRecovery = nil
+        recoverySteps = Self.initialRecoverySteps(releaseVersion: recoveryVersion)
         persistDraft()
     }
 
@@ -270,6 +320,7 @@ final class MachineEnrollmentStore: ObservableObject {
     /// revoked on its own screen, by name.
     func startAnother() {
         draft = MachineEnrollmentDraft(endpoint: addressString)
+        resetRecoverySelection()
         mintedInvite = nil
         outcome = .idle
         failure = nil
@@ -774,7 +825,8 @@ final class MachineEnrollmentStore: ObservableObject {
         }
     }
 
-    /// `stado fleet key check NAME` then `stado host recover NAME` — the two
+    /// `stado fleet key check NAME` then either the existing
+    /// `stado host recover NAME` or its exact-version recovery form — the two
     /// proofs that the entry is a working machine rather than a row.
     ///
     /// They belong to every method, so their precondition is the registry
@@ -792,8 +844,10 @@ final class MachineEnrollmentStore: ObservableObject {
             return
         }
         let machine = draft.machineName
+        let releaseVersion = recoveryVersion
+        let recoveryArguments = self.recoveryArguments
         failure = nil
-        outcome = .working("Opening the channel to \(machine) with the stored key, then asking its agent to report.")
+        outcome = .working("Opening the channel to \(machine) with the stored key, then running \(StadoCLI.commandLine(recoveryArguments)).")
         do {
             let channel = try await run(["fleet", "key", "check", machine])
             draft.channelCheck = MachineEnrollmentCheck(
@@ -803,12 +857,18 @@ final class MachineEnrollmentStore: ObservableObject {
                 ranAt: Date()
             )
             persistDraft()
-            let recovery = try await run(["host", "recover", machine])
+            recoverySteps = Self.runningRecoverySteps(releaseVersion: releaseVersion)
+            let recovery = try await run(recoveryArguments)
             draft.agentRecovery = MachineEnrollmentCheck(
-                command: "stado host recover \(machine)",
+                command: StadoCLI.commandLine(recoveryArguments),
                 ok: recovery.ok,
                 output: recovery.message,
                 ranAt: Date()
+            )
+            recoverySteps = Self.finishedRecoverySteps(
+                releaseVersion: releaseVersion,
+                succeeded: recovery.ok,
+                output: recovery.standardOutput
             )
             persistDraft()
             outcome = channel.ok && recovery.ok
@@ -816,6 +876,10 @@ final class MachineEnrollmentStore: ObservableObject {
                 : .failed(channel.ok ? recovery.message : channel.message)
         } catch {
             let message = Self.describe(error)
+            recoverySteps = Self.unconfirmedRecoverySteps(
+                releaseVersion: releaseVersion,
+                detail: "The dashboard transport stopped before Stado could confirm this stage."
+            )
             failure = .transport(message)
             outcome = .failed(message)
         }
@@ -825,6 +889,161 @@ final class MachineEnrollmentStore: ObservableObject {
 
     private var displayName: String {
         draft.machineName.isEmpty ? "this machine" : draft.machineName
+    }
+
+    private func resetRecoverySelection() {
+        recoveryRelease = ""
+        recoverySteps = Self.initialRecoverySteps(releaseVersion: "")
+    }
+
+    private static func initialRecoverySteps(
+        releaseVersion: String
+    ) -> [MachineRecoveryStageResult] {
+        MachineRecoveryStage.allCases.map { stage in
+            if releaseVersion.isEmpty, stage != .recovery {
+                return MachineRecoveryStageResult(
+                    stage: stage,
+                    state: .notRequired,
+                    detail: "No exact release selected; the installed Stado binary stays in place."
+                )
+            }
+            if stage == .rollback {
+                return MachineRecoveryStageResult(
+                    stage: stage,
+                    state: .notRequired,
+                    detail: "Runs only if the newly installed binary fails its resolver probe."
+                )
+            }
+            return MachineRecoveryStageResult(
+                stage: stage,
+                state: .waiting,
+                detail: stage == .recovery
+                    ? "The existing host recovery runs after every requested release step succeeds."
+                    : "Waiting for stado host recover to report this boundary."
+            )
+        }
+    }
+
+    private static func runningRecoverySteps(
+        releaseVersion: String
+    ) -> [MachineRecoveryStageResult] {
+        initialRecoverySteps(releaseVersion: releaseVersion).map { result in
+            let firstStage: MachineRecoveryStage = releaseVersion.isEmpty ? .recovery : .download
+            guard result.stage == firstStage else { return result }
+            return MachineRecoveryStageResult(
+                stage: result.stage,
+                state: .running,
+                detail: "The one recovery command is running; its bounded result arrives as one answer."
+            )
+        }
+    }
+
+    private static func finishedRecoverySteps(
+        releaseVersion: String,
+        succeeded: Bool,
+        output: String
+    ) -> [MachineRecoveryStageResult] {
+        if releaseVersion.isEmpty {
+            return MachineRecoveryStage.allCases.map { stage in
+                guard stage == .recovery else {
+                    return MachineRecoveryStageResult(
+                        stage: stage,
+                        state: .notRequired,
+                        detail: "No exact release selected; the installed Stado binary stayed in place."
+                    )
+                }
+                return MachineRecoveryStageResult(
+                    stage: stage,
+                    state: succeeded ? .complete : .failed,
+                    detail: succeeded
+                        ? "The existing host recovery completed."
+                        : "The existing host recovery did not complete; its verbatim answer is below."
+                )
+            }
+        }
+
+        guard let command: MachineRecoveryCommandReport = decode(from: output),
+              let release = command.release
+        else {
+            return unconfirmedRecoverySteps(
+                releaseVersion: releaseVersion,
+                detail: "Stado returned no versioned step report. Its verbatim answer is below."
+            )
+        }
+        guard release.version == releaseVersion else {
+            return unconfirmedRecoverySteps(
+                releaseVersion: releaseVersion,
+                detail: "Stado reported release \(release.version), not the requested \(releaseVersion)."
+            )
+        }
+
+        var reported: [MachineRecoveryStage: MachineRecoveryReportedStep] = [:]
+        for step in release.steps {
+            guard let stage = MachineRecoveryStage(rawValue: step.step) else { continue }
+            reported[stage] = step
+        }
+        return MachineRecoveryStage.allCases.map { stage in
+            guard let step = reported[stage] else {
+                if stage == .rollback {
+                    return MachineRecoveryStageResult(
+                        stage: stage,
+                        state: .notRequired,
+                        detail: "The resolver probe did not report a rollback."
+                    )
+                }
+                return MachineRecoveryStageResult(
+                    stage: stage,
+                    state: .notConfirmed,
+                    detail: "The command did not report this required stage."
+                )
+            }
+            return MachineRecoveryStageResult(
+                stage: stage,
+                state: reportedStageState(step.status),
+                detail: step.detail ?? "Stado reported \(step.status) for this stage.",
+                reportedStatus: step.status
+            )
+        }
+    }
+
+    private static func reportedStageState(_ status: String) -> MachineRecoveryStageState {
+        switch status.lowercased() {
+        case "ok", "restored", "removed":
+            return .complete
+        case "failed":
+            return .failed
+        case "absent":
+            return .notRequired
+        default:
+            return .notConfirmed
+        }
+    }
+
+    private static func unconfirmedRecoverySteps(
+        releaseVersion: String,
+        detail: String
+    ) -> [MachineRecoveryStageResult] {
+        MachineRecoveryStage.allCases.map { stage in
+            if releaseVersion.isEmpty, stage != .recovery {
+                return MachineRecoveryStageResult(
+                    stage: stage,
+                    state: .notRequired,
+                    detail: "No exact release selected; the installed Stado binary stayed in place."
+                )
+            }
+            if stage == .rollback {
+                return MachineRecoveryStageResult(
+                    stage: stage,
+                    state: .notConfirmed,
+                    detail: "The command did not confirm whether rollback was required."
+                )
+            }
+            return MachineRecoveryStageResult(
+                stage: stage,
+                state: .notConfirmed,
+                detail: detail
+            )
+        }
     }
 
     private func mintKey() async {

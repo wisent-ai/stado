@@ -114,6 +114,85 @@ struct MachineEnrollmentCheck: Codable, Equatable, Sendable {
     let output: String
     let ranAt: Date
 }
+/// The observable boundaries of a versioned host recovery.
+///
+/// They mirror the order owned and reported by `stado host recover --release`:
+/// the desktop does not reproduce any release work. Rollback is conditional
+/// and appears only when the new binary fails its resolver probe.
+enum MachineRecoveryStage: String, CaseIterable, Hashable, Identifiable, Sendable {
+    case download
+    case verify
+    case backup
+    case install
+    case resolver
+    case rollback
+    case recovery
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .download: "Download the signed artifact"
+        case .verify: "Verify manifest, signature, and SHA-256"
+        case .backup: "Preserve the previous binary"
+        case .install: "Install the new binary atomically"
+        case .resolver: "Check stado resolver --help remotely"
+        case .rollback: "Restore the previous binary"
+        case .recovery: "Run host recovery"
+        }
+    }
+}
+
+/// What the single recovery invocation established about one stage.
+enum MachineRecoveryStageState: Sendable {
+    case waiting
+    case running
+    case complete
+    case failed
+    case notConfirmed
+    case notRequired
+}
+
+struct MachineRecoveryStageResult: Identifiable, Sendable {
+    let stage: MachineRecoveryStage
+    let state: MachineRecoveryStageState
+    let detail: String
+    let reportedStatus: String?
+
+    init(
+        stage: MachineRecoveryStage,
+        state: MachineRecoveryStageState,
+        detail: String,
+        reportedStatus: String? = nil
+    ) {
+        self.stage = stage
+        self.state = state
+        self.detail = detail
+        self.reportedStatus = reportedStatus
+    }
+
+    var id: String { stage.id }
+}
+
+/// The release extension in the command's existing recovery JSON document.
+///
+/// Unknown outer fields remain the CLI's concern. The desktop reads only the
+/// exact version and ordered step evidence the command added for this surface.
+struct MachineRecoveryCommandReport: Decodable, Sendable {
+    let release: MachineRecoveryReleaseReport?
+}
+
+struct MachineRecoveryReleaseReport: Decodable, Sendable {
+    let version: String
+    let steps: [MachineRecoveryReportedStep]
+}
+
+struct MachineRecoveryReportedStep: Decodable, Sendable {
+    let step: String
+    let status: String
+    let detail: String?
+}
+
 
 /// A failure told as what it is.
 ///
