@@ -129,7 +129,8 @@ jobs:
               charless-mac-mini --json
             "$stado_bin" host reconcile-release-verifier \
               charless-mac-mini --json
-            "$stado_bin" service restart stado-object-api \
+            "$stado_bin" service restart \
+              com.wisent.always-on.stado-object-api \
               --host charless-mac-mini --json
           fi
           preflight() {
@@ -149,8 +150,10 @@ jobs:
             # item set, then restart only the declared object API unit so the
             # old process reloads that grant. Newer object APIs recover inline;
             # this branch remains the upgrade path from releases that did not.
-            "$stado_bin" host reconcile-object-verifier charless-mac-mini --json
-            "$stado_bin" service restart stado-object-api \
+            "$stado_bin" host reconcile-object-verifier \
+              charless-mac-mini --json
+            "$stado_bin" service restart \
+              com.wisent.always-on.stado-object-api \
               --host charless-mac-mini --json
             preflight > "$RUNNER_TEMP/object-preflight.json"
           fi
