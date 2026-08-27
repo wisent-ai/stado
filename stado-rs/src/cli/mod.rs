@@ -1199,6 +1199,17 @@ enum HostCommands {
         /// Use the bundled registry snapshot when the canonical registry cannot be read.
         #[arg(long)]
         bundled_registry: bool,
+        /// Replace Stado from an exact registry-trusted signed release before recovery.
+        #[arg(long, value_name = "VERSION")]
+        release: Option<String>,
+    },
+    /// Restore the core object API from its physical local store.
+    #[command(name = "recover-object-api")]
+    RecoverObjectApi {
+        target: String,
+        /// Emit the recovery report as JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Request a graceful reboot of TARGET through its approved channel.
     Reboot { target: String },
@@ -2008,7 +2019,11 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::Recover {
                 target,
                 bundled_registry,
-            } => host::recover(&target, bundled_registry).await,
+                release,
+            } => host::recover(&target, bundled_registry, release.as_deref()).await,
+            HostCommands::RecoverObjectApi { target, json } => {
+                host::recover_object_api(&target, json).await
+            }
             HostCommands::Reboot { target } => host::reboot(&target).await,
             HostCommands::User(HostUserCommands::Create {
                 username,

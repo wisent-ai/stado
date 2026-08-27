@@ -619,6 +619,32 @@ pub fn safe_extract_archive(bytes: &[u8], destination: &Path) -> Result<(), Stri
     if bytes.is_empty() || bytes.len() as u64 > MAX_RELEASE_BYTES {
         return Err("release archive size is outside the supported range".to_string());
     }
+    safe_extract_archive_reader(bytes, destination)
+}
+
+/// Extract an already-verified archive without reading it back into memory.
+/// The exact signed byte count is checked again at the file boundary.
+pub fn safe_extract_archive_file(
+    archive_path: &Path,
+    expected_bytes: u64,
+    destination: &Path,
+) -> Result<(), String> {
+    let file = File::open(archive_path)
+        .map_err(|error| format!("cannot open release archive {}: {error}", archive_path.display()))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("cannot stat release archive {}: {error}", archive_path.display()))?;
+    if !metadata.is_file()
+        || expected_bytes == 0
+        || expected_bytes > MAX_RELEASE_BYTES
+        || metadata.len() != expected_bytes
+    {
+        return Err("release archive size differs from its signed manifest".to_string());
+    }
+    safe_extract_archive_reader(file, destination)
+}
+
+fn safe_extract_archive_reader(reader: impl Read, destination: &Path) -> Result<(), String> {
     if destination.exists() {
         return Err(format!(
             "immutable release directory already exists: {}",
@@ -638,7 +664,7 @@ pub fn safe_extract_archive(bytes: &[u8], destination: &Path) -> Result<(), Stri
         )
     })?;
     let result = (|| {
-        let decoder = flate2::read::GzDecoder::new(bytes);
+        let decoder = flate2::read::GzDecoder::new(reader);
         let mut archive = tar::Archive::new(decoder);
         let entries = archive
             .entries()

@@ -325,36 +325,58 @@ async fn host_health_api_token() -> Result<String, CmdError> {
     Ok(token)
 }
 
-/// `stado host recover TARGET` — recover a registry-managed macOS host
-/// through its approved channel (Python `host_recover` in cli.py: prints
-/// the report as sorted-keys JSON, exits 1 when status != "ok").
+/// `stado host recover TARGET [--release VERSION]` — optionally replace the
+/// remote Stado binary from the registry-trusted signed emergency channel,
+/// then recover a registry-managed macOS host through its approved channel.
 ///
 /// The canonical remote registry remains the default and fleet-survival
 /// authority. `bundled_registry` is an explicit break-glass path for repairing
 /// the storage or authorization outage that made that authority unreadable.
-///
-/// `host_recovery::STATUS_BLOCKED` reaches that same exit 1: a pass that ran
-/// to its last line while leaving a managed unit unloaded is not a recovery,
-/// and the `skipped` and `blockers` arrays of the printed document say which
-/// unit and what to run. Exit 0 from this command means every managed unit is
-/// loaded.
-pub async fn recover(target: &str, bundled_registry: bool) -> Result<(), CmdError> {
+/// The selected registry is loaded exactly once: release trust and host
+/// identity must come from the same last-known-good or explicit bundled copy.
+pub async fn recover(
+    target: &str,
+    bundled_registry: bool,
+    release: Option<&str>,
+) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
-    let report = if bundled_registry {
-        let registry = crate::targets::load_bundled_registry()
-            .map_err(|exc| CmdError::click(exc.to_string()))?;
-        crate::deploy::host_recovery::recover_host_with_registry(&registry, target, &runner).await
+    let registry = if bundled_registry {
+        crate::targets::load_bundled_registry().map_err(|exc| CmdError::click(exc.to_string()))?
     } else {
-        crate::deploy::host_recovery::recover_host(target, &runner).await
+        crate::deploy::host_channel::canonical_registry()
+            .await
+            .map_err(|exc| CmdError::click(exc.to_string()))?
+    };
+    let resolved = registry
+        .lookup(target)
+        .cloned()
+        .ok_or_else(|| CmdError::click(format!("target not in registry: {target}")))?;
+    // Repair the authority before any release catalog read. This path uses the
+    // already loaded registry identity and the host's physical local store, so
+    // the object API does not need to be available in order to recover itself.
+    let object_api = recover_object_api_on_target(&resolved, &runner).await?;
+    let mut report = match release {
+        Some(version) => {
+            crate::deploy::host_recovery_release::recover(&registry, target, version, &runner).await
+        }
+        None => {
+            crate::deploy::host_recovery::recover_host_with_registry(&registry, target, &runner)
+                .await
+        }
     }
     .map_err(|exc| CmdError::click(exc.to_string()))?;
+    if let Some(object) = report.as_object_mut() {
+        object.insert(
+            "object_api".to_string(),
+            json!({"status": "healthy", "detail": object_api}),
+        );
+    }
     println!(
         "{}",
         crate::deploy::host_recovery::to_sorted_pretty(&report)
     );
     if report.get("status").and_then(Value::as_str) != Some(crate::deploy::host_recovery::STATUS_OK)
     {
-        // click.exceptions.Exit(1): nothing more to print.
         return Err(CmdError::silent(1));
     }
     Ok(())
@@ -4014,6 +4036,55 @@ pub async fn recover_skarbiec_audit(target: &str, json_output: bool) -> Result<(
             serde_json::to_string_pretty(&json!({
                 "target": resolved.name,
                 "recovered": detail.contains("recovered"),
+                "detail": detail,
+            }))?
+        );
+    } else {
+        println!("{}: {detail}", resolved.name);
+    }
+    Ok(())
+}
+
+/// Restore the core object API without depending on the API being available.
+///
+/// The checked-in host helper only mutates an unavailable listener. It pins the
+/// service to the physical local store, preserves the previous system plist and
+/// verifies the loopback health endpoint after launchd has loaded the new unit.
+async fn recover_object_api_on_target(
+    resolved: &ComputeTarget,
+    runner: &crate::deploy::Runner,
+) -> Result<String, CmdError> {
+    let recovered = crate::deploy::host_channel::run_script_with_timeout(
+        resolved,
+        include_str!("../../../deploy/recover_object_api.sh"),
+        std::time::Duration::from_secs(240),
+        runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !recovered.ok() {
+        return Err(CmdError::click(format!(
+            "{}: object API recovery failed: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(&recovered, "remote command failed")
+        )));
+    }
+    Ok(recovered.stdout.trim().to_string())
+}
+
+/// Run the object-API boundary repair as a focused operator command.
+pub async fn recover_object_api(target: &str, json_output: bool) -> Result<(), CmdError> {
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let detail = recover_object_api_on_target(&resolved, &runner).await?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": resolved.name,
+                "healthy": true,
                 "detail": detail,
             }))?
         );
