@@ -70,7 +70,9 @@ decides where and when to run it, then records what happened.
 - cost, capacity, quota, inventory, health, and ownership evidence where the
   selected provider adapter declares support;
 - a human CLI, versioned machine JSON interface, dashboard, and read-only MCP
-  interface.
+  interface;
+- a loopback mobile-egress proxy whose upstream sockets are pinned to a named
+  tether interface and whose process lifecycle is managed as a Stado service.
 
 ### Explicit non-goals for 0.5
 
@@ -336,12 +338,46 @@ stado machine ...
 stado artifact ...
 stado host ...
 stado service ...
+stado egress mobile serve ...
 stado resources ...
 stado doctor
 stado capabilities --json
 ```
 
 See the [CLI reference](https://stado.wisent.com/docs/cli) for arguments and exit semantics.
+
+### Weles mobile egress
+
+`stado egress mobile serve` is the data path for a Weles browser that must
+leave through a tethered phone. It accepts HTTP proxy and HTTPS `CONNECT`
+traffic on loopback, resolves the phone interface's IPv4 address at startup,
+and binds every upstream connection to that address. It refuses LAN/public
+listeners so the proxy cannot become an unauthenticated network service.
+
+```sh
+stado egress mobile serve --interface en7 --port 8781
+```
+
+The interface name comes from the target host; Stado does not guess one.
+For a persistent process, deploy the same binary and arguments through the
+service manager:
+
+```sh
+stado service ensure weles-mobile-egress \
+  --host <weles-host> \
+  --from /Users/<service-account>/.stado/bin/stado \
+  --arg egress --arg mobile --arg serve \
+  --arg=--interface --arg en7 \
+  --arg=--port --arg 8781 \
+  --reason "Weles mobile egress"
+```
+
+Weles on that host consumes `http://127.0.0.1:8781`. Stado owns process
+placement, persistence, status, and logs; Weles owns which trajectory may use
+the route and whether the realized exit quality is acceptable. The real-device
+contract is `stado-rs/tests/egress/`: Probierz supplies a trusted phone tether,
+runs the built binary, and requires the public exit to be classified as mobile
+and not hosting or a public proxy.
 
 ### Machine JSON
 

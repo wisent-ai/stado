@@ -35,6 +35,7 @@ pub mod disk_cleanup;
 pub mod doctor;
 pub mod fleet;
 pub mod host;
+pub mod egress;
 pub mod identity;
 pub mod inference;
 pub mod instances;
@@ -535,6 +536,9 @@ enum Commands {
     /// adopt, retire, deploy, logs, env.
     #[command(subcommand)]
     Service(service::ServiceCommands),
+    /// Run host-local network egress processes under Stado service management.
+    #[command(subcommand)]
+    Egress(egress::EgressCommands),
     /// Install, inspect, update, roll back and remove canonical Wisent products.
     #[command(subcommand)]
     Product(product::ProductCommands),
@@ -2216,6 +2220,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
         Commands::Queue(sub) => queue::dispatch(sub).await,
         Commands::Alerts(sub) => alerts::dispatch(sub).await,
         Commands::Service(sub) => service::dispatch(sub).await,
+        Commands::Egress(sub) => egress::dispatch(sub).await,
         Commands::Product(sub) => product::dispatch(sub).await,
         Commands::Placement(sub) => placement::dispatch(sub).await,
         Commands::Resolver(sub) => resolver::dispatch(sub).await,
