@@ -3481,6 +3481,28 @@ pub(crate) async fn ensure_local_dependency(
     .await
 }
 
+/// Re-render one declared service after its managed configuration changes.
+///
+/// This uses the same idempotent declaration, environment, unit, and process
+/// reconciliation as `stado service ensure`; config mutation must not grow a
+/// second lifecycle path that unloads a healthy unit directly.
+pub(crate) async fn reconcile_after_config_change(
+    name: &str,
+    host: &str,
+    reason: &str,
+) -> Result<(), CmdError> {
+    ensure(EnsureOptions {
+        name,
+        host,
+        from: None,
+        args: &[],
+        reason,
+        as_daemon: true,
+        as_json: false,
+    })
+    .await
+}
+
 /// `service ensure NAME --host HOST [--from PATH] --reason WHY`.
 ///
 /// The idempotent half of `deploy`, and the only one that works on an ssh

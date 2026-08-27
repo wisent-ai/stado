@@ -5461,7 +5461,12 @@ pub async fn config_set(
     }
     remote_config(target, Some((key, value))).await?;
     if let Some(service) = reload_service {
-        super::service::restart(service, Some(target), None, None, false).await?;
+        super::service::reconcile_after_config_change(
+            service,
+            target,
+            &format!("managed configuration {key} changed"),
+        )
+        .await?;
     }
     Ok(())
 }
