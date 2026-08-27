@@ -123,7 +123,7 @@
       ],
       "required": true,
       "secret_env": {},
-      "target": "operator-host"
+      "target": "lukasz-macbook"
     },
     {
       "name": "fleet-mini",
@@ -135,7 +135,7 @@
       ],
       "required": true,
       "secret_env": {},
-      "target": "control-host"
+      "target": "charless-mac-mini"
     },
     {
       "name": "fleet-linux",
@@ -147,7 +147,7 @@
       ],
       "required": true,
       "secret_env": {},
-      "target": "gpu-host"
+      "target": "ubuntu-server-rtx-pro-6000"
     }
   ]
 }
