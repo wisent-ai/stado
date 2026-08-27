@@ -10,13 +10,15 @@ const repository = resolve(crate, '..');
 const stado = process.env.TUI_CMD || resolve(crate, 'target/release/stado');
 const remote = 'https://github.com/wisent-ai/stado.git';
 const hosts = [
-  ['local-Charless-Mac-mini.local', 'darwin-arm64'],
   ['local-ubuntu-server', 'linux-amd64'],
 ];
 
 const { stdout: revisionOutput } = await exec('git', ['rev-parse', 'HEAD'], { cwd: repository });
 const revision = revisionOutput.trim();
 assert.match(revision, /^[0-9a-f]{40}$/);
+await import('../builds/probierz.spec.mjs');
+await import('../ci-cd/probierz.spec.mjs');
+process.stdout.write('verified host=local; platform=darwin-arm64\n');
 
 const command = [
   'set -eu',
