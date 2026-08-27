@@ -1,0 +1,59 @@
+name: product release
+run-name: product-release ${{ github.event.client_payload.repository }}@${{ github.event.client_payload.ref }}
+
+on:
+  repository_dispatch:
+    types: [product-release]
+
+concurrency:
+  group: product-release-${{ github.event.client_payload.repository }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: [self-hosted, macOS, ARM64, stado-control-plane]
+    permissions:
+      contents: read
+    env:
+      STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Validate immutable release request
+        env:
+          PRODUCT_REPOSITORY: ${{ github.event.client_payload.repository }}
+          PRODUCT_REF: ${{ github.event.client_payload.ref }}
+          PRODUCT_VERSION: ${{ github.event.client_payload.version }}
+          PRODUCT_CHANNEL: ${{ github.event.client_payload.channel }}
+        run: |
+          set -euo pipefail
+          case "$PRODUCT_REPOSITORY" in
+            wisent-ai/*) ;;
+            *) echo "::error::repository must belong to wisent-ai"; false ;;
+          esac
+          [[ "$PRODUCT_REF" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PRODUCT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]
+          case "$PRODUCT_CHANNEL" in
+            candidate|stable) ;;
+            *) echo "::error::channel must be candidate or stable"; false ;;
+          esac
+      - uses: actions/checkout@v5
+        with:
+          repository: ${{ github.event.client_payload.repository }}
+          ref: ${{ github.event.client_payload.ref }}
+          path: product
+          persist-credentials: false
+      - name: Build release coordinator
+        run: cargo build --locked --release --manifest-path stado-rs/Cargo.toml --bin stado
+      - name: Submit exact product revision
+        env:
+          PRODUCT_VERSION: ${{ github.event.client_payload.version }}
+          PRODUCT_CHANNEL: ${{ github.event.client_payload.channel }}
+        run: |
+          set -euo pipefail
+          unset STADO_API_URL STADO_API_TOKEN
+          stado-rs/target/release/stado release submit \
+            --source "$GITHUB_WORKSPACE/product" \
+            --version "$PRODUCT_VERSION" \
+            --channel "$PRODUCT_CHANNEL"
