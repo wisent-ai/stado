@@ -25,7 +25,7 @@ try {
   throw new Error(`native build journey failed with exit code ${error.code ?? 'unknown'}`);
 }
 assert.equal(stderr.includes('FAILED'), false, stderr);
-assert.match(stdout, /build_recipe_polls_public_git_runs_on_matching_worker_and_publishes_artifact \.\.\.\s+ok/);
+assert.match(stdout, /build_recipe_polls_public_git_runs_on_matching_worker_and_publishes_artifact \.\.\./);
 assert.match(stdout, /verified recipe=probierz-native-build; job=.+; platform=(darwin-arm64|linux-amd64); artifact=build-output.txt/);
 assert.ok(stdout.includes('test result: ok. 1 passed; 0 failed'));
 process.stdout.write(stdout);
