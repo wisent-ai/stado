@@ -30,7 +30,6 @@ jobs:
       contents: read
     env:
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
-      STADO_API_URL: ${{ vars.STADO_OBJECT_API_INTERNAL_URL }}
     steps:
       # v4 runs on Node 20, which GitHub has deprecated and already forces onto Node
       # 24; v5 is the first major that targets Node 24 itself. It needs a runner of at
@@ -345,7 +344,7 @@ jobs:
       STADO_ENABLE_AZURE_DEPLOY: ${{ vars.STADO_ENABLE_AZURE_DEPLOY }}
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
       COORD_TARGET: ${{ vars.STADO_COORDINATOR_TARGET }}
-      STADO_API_URL: ${{ vars.STADO_OBJECT_API_INTERNAL_URL }}
+      STADO_API_URL: ${{ vars.STADO_API_URL }}
       WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
       WC_SKARBIEC_CONSUMER: stado-release-publisher
       WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
