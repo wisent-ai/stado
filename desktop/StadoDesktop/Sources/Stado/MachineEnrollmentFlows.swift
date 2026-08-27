@@ -443,12 +443,12 @@ private struct RecoveryStageRow: View {
             return reportedStatus
         }
         switch result.state {
-        case .waiting: "Waiting"
-        case .running: "Running"
-        case .complete: "Complete"
-        case .failed: "Failed"
-        case .notConfirmed: "Not confirmed"
-        case .notRequired: "Not requested"
+        case .waiting: return "Waiting"
+        case .running: return "Running"
+        case .complete: return "Complete"
+        case .failed: return "Failed"
+        case .notConfirmed: return "Not confirmed"
+        case .notRequired: return "Not requested"
         }
     }
 

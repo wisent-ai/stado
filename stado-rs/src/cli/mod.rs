@@ -33,9 +33,9 @@ pub mod database;
 pub mod directory;
 pub mod disk_cleanup;
 pub mod doctor;
+pub mod egress;
 pub mod fleet;
 pub mod host;
-pub mod egress;
 pub mod identity;
 pub mod inference;
 pub mod instances;
@@ -1203,6 +1203,14 @@ enum HostCommands {
         #[arg(long, value_name = "VERSION")]
         release: Option<String>,
     },
+    /// Restore the core object API from its physical local store.
+    #[command(name = "recover-object-api")]
+    RecoverObjectApi {
+        target: String,
+        /// Emit the recovery report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Request a graceful reboot of TARGET through its approved channel.
     Reboot { target: String },
     /// Manage local macOS and Linux user accounts.
@@ -1590,9 +1598,7 @@ enum HostCommands {
         json: bool,
     },
     /// Read TARGET's effective Stado configuration through its fleet channel.
-    ConfigShow {
-        target: String,
-    },
+    ConfigShow { target: String },
     /// Persist one dotted Stado configuration value on TARGET.
     ConfigSet {
         target: String,
@@ -2004,6 +2010,9 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 bundled_registry,
                 release,
             } => host::recover(&target, bundled_registry, release.as_deref()).await,
+            HostCommands::RecoverObjectApi { target, json } => {
+                host::recover_object_api(&target, json).await
+            }
             HostCommands::Reboot { target } => host::reboot(&target).await,
             HostCommands::User(HostUserCommands::Create {
                 username,
@@ -2103,7 +2112,8 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                     runner_group,
                     json,
                 } => {
-                    precheck_runner::repository_add(&repository, runner_group.as_deref(), json).await
+                    precheck_runner::repository_add(&repository, runner_group.as_deref(), json)
+                        .await
                 }
             },
             HostCommands::PublisherRunner(command) => match command {
@@ -2233,9 +2243,7 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
                 key,
                 value,
                 reload_service,
-            } => {
-                host::config_set(&target, &key, &value, reload_service.as_deref()).await
-            }
+            } => host::config_set(&target, &key, &value, reload_service.as_deref()).await,
             HostCommands::Release {
                 target,
                 binary,

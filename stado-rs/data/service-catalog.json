@@ -29,11 +29,20 @@
     },
     {
       "name": "stado",
-      "summary": "The complete local Stado control plane as one managed service.",
-      "program": "$HOME/.stado/bin/stado",
+      "summary": "The core object API for registry, queue and release state.",
+      "program": "$HOME/.stado/services/com.wisent.always-on.stado-object-api/current/$STADO_PLATFORM/stado",
       "args": [
-        "local-control-plane"
-      ]
+        "dashboard",
+        "--bind",
+        "127.0.0.1",
+        "--port",
+        "8765"
+      ],
+      "unit": "com.wisent.always-on.stado-object-api",
+      "env": {
+        "WC_STORAGE_BACKEND": "local",
+        "WC_LOCAL_STORAGE_PATH": "$HOME/.stado/local-storage"
+      }
     },
     {
       "name": "oko",

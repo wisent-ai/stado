@@ -341,22 +341,23 @@ pub async fn recover(
 ) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
     let registry = if bundled_registry {
-        crate::targets::load_bundled_registry()
-            .map_err(|exc| CmdError::click(exc.to_string()))?
+        crate::targets::load_bundled_registry().map_err(|exc| CmdError::click(exc.to_string()))?
     } else {
         crate::deploy::host_channel::canonical_registry()
             .await
             .map_err(|exc| CmdError::click(exc.to_string()))?
     };
-    let report = match release {
+    let resolved = registry
+        .lookup(target)
+        .cloned()
+        .ok_or_else(|| CmdError::click(format!("target not in registry: {target}")))?;
+    // Repair the authority before any release catalog read. This path uses the
+    // already loaded registry identity and the host's physical local store, so
+    // the object API does not need to be available in order to recover itself.
+    let object_api = recover_object_api_on_target(&resolved, &runner).await?;
+    let mut report = match release {
         Some(version) => {
-            crate::deploy::host_recovery_release::recover(
-                &registry,
-                target,
-                version,
-                &runner,
-            )
-            .await
+            crate::deploy::host_recovery_release::recover(&registry, target, version, &runner).await
         }
         None => {
             crate::deploy::host_recovery::recover_host_with_registry(&registry, target, &runner)
@@ -364,12 +365,17 @@ pub async fn recover(
         }
     }
     .map_err(|exc| CmdError::click(exc.to_string()))?;
+    if let Some(object) = report.as_object_mut() {
+        object.insert(
+            "object_api".to_string(),
+            json!({"status": "healthy", "detail": object_api}),
+        );
+    }
     println!(
         "{}",
         crate::deploy::host_recovery::to_sorted_pretty(&report)
     );
-    if report.get("status").and_then(Value::as_str)
-        != Some(crate::deploy::host_recovery::STATUS_OK)
+    if report.get("status").and_then(Value::as_str) != Some(crate::deploy::host_recovery::STATUS_OK)
     {
         return Err(CmdError::silent(1));
     }
@@ -484,13 +490,14 @@ pub async fn gui_automation_enable(target: &str) -> Result<(), CmdError> {
     let resolved = registry_target(target).await?;
     let password = super::service::host_sudo_password(&resolved)
         .await?
-        .ok_or_else(|| CmdError::click(format!(
-            "{} has no readable host-account password",
-            resolved.name
-        )))?;
+        .ok_or_else(|| {
+            CmdError::click(format!(
+                "{} has no readable host-account password",
+                resolved.name
+            ))
+        })?;
     let runner = crate::deploy::production_runner();
-    let report =
-        crate::deploy::host_gui_automation::enable(&resolved, &password, &runner).await;
+    let report = crate::deploy::host_gui_automation::enable(&resolved, &password, &runner).await;
     print_report(&report)
 }
 
@@ -499,8 +506,7 @@ pub async fn gui_automation_enable(target: &str) -> Result<(), CmdError> {
 pub async fn gui_automation_grant_accessibility(target: &str) -> Result<(), CmdError> {
     let resolved = registry_target(target).await?;
     let runner = crate::deploy::production_runner();
-    let report =
-        crate::deploy::host_gui_automation::grant_accessibility(&resolved, &runner).await;
+    let report = crate::deploy::host_gui_automation::grant_accessibility(&resolved, &runner).await;
     print_report(&report)
 }
 
@@ -2875,7 +2881,6 @@ pub async fn release(
 /// credential, a helper, or anything else Stado keeps there.
 const DELIVERED_FILES_DIR: &str = ".stado/files";
 
-
 pub(crate) async fn install_secret_value_at_home(
     target: &str,
     name: &str,
@@ -2989,10 +2994,12 @@ async fn register_acquisition_scopes(
         found.to_string()
     };
 
-    let public_key = match acquisition_scratch(resolved, &home, "weles-acquisition-public.XXXXXX", runner).await {
-        Ok(path) => path,
-        Err(detail) => return Err(refused(detail)),
-    };
+    let public_key =
+        match acquisition_scratch(resolved, &home, "weles-acquisition-public.XXXXXX", runner).await
+        {
+            Ok(path) => path,
+            Err(detail) => return Err(refused(detail)),
+        };
 
     // Skarbiec accepts only an Ed25519 workload key. A host still holding an
     // older key gets one Ed25519 replacement, and the new private key takes
@@ -3002,19 +3009,29 @@ async fn register_acquisition_scopes(
     let mut new_private_key: Option<String> = None;
     let described = host_channel::run_program(
         resolved,
-        &[openssl.as_str(), "pkey", "-in", private_key.as_str(), "-text", "-noout"],
+        &[
+            openssl.as_str(),
+            "pkey",
+            "-in",
+            private_key.as_str(),
+            "-text",
+            "-noout",
+        ],
         runner,
     )
     .await
     .map_err(|error| CmdError::click(error.to_string()))?;
     if !described.stdout.contains("ED25519") {
-        let fresh = match acquisition_scratch(resolved, &home, "weles-acquisition-private.XXXXXX", runner).await {
-            Ok(path) => path,
-            Err(detail) => {
-                remove_remote(resolved, &[public_key.as_str()], runner).await;
-                return Err(refused(detail));
-            }
-        };
+        let fresh =
+            match acquisition_scratch(resolved, &home, "weles-acquisition-private.XXXXXX", runner)
+                .await
+            {
+                Ok(path) => path,
+                Err(detail) => {
+                    remove_remote(resolved, &[public_key.as_str()], runner).await;
+                    return Err(refused(detail));
+                }
+            };
         for words in [
             vec![
                 openssl.as_str(),
@@ -3831,13 +3848,10 @@ async fn reconcile_verifier(
          \"${{GNUPGHOME:-$HOME/.gnupg}}\" \
          \"${{{token_file_env}:-$HOME/.stado/{token_file_default}}}\""
     );
-    let environment = crate::deploy::host_channel::run_command(
-        &resolved,
-        &environment_command,
-        &runner,
-    )
-    .await
-    .map_err(|error| CmdError::click(error.to_string()))?;
+    let environment =
+        crate::deploy::host_channel::run_command(&resolved, &environment_command, &runner)
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
     if !environment.ok() {
         return Err(CmdError::click(format!(
             "{}: {kind} verifier environment could not be read: {}",
@@ -4021,6 +4035,55 @@ pub async fn recover_skarbiec_audit(target: &str, json_output: bool) -> Result<(
             serde_json::to_string_pretty(&json!({
                 "target": resolved.name,
                 "recovered": detail.contains("recovered"),
+                "detail": detail,
+            }))?
+        );
+    } else {
+        println!("{}: {detail}", resolved.name);
+    }
+    Ok(())
+}
+
+/// Restore the core object API without depending on the API being available.
+///
+/// The checked-in host helper only mutates an unavailable listener. It pins the
+/// service to the physical local store, preserves the previous system plist and
+/// verifies the loopback health endpoint after launchd has loaded the new unit.
+async fn recover_object_api_on_target(
+    resolved: &ComputeTarget,
+    runner: &crate::deploy::Runner,
+) -> Result<String, CmdError> {
+    let recovered = crate::deploy::host_channel::run_script_with_timeout(
+        resolved,
+        include_str!("../../../deploy/recover_object_api.sh"),
+        std::time::Duration::from_secs(240),
+        runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
+    if !recovered.ok() {
+        return Err(CmdError::click(format!(
+            "{}: object API recovery failed: {}",
+            resolved.name,
+            crate::deploy::host_channel::last_error_line(&recovered, "remote command failed")
+        )));
+    }
+    Ok(recovered.stdout.trim().to_string())
+}
+
+/// Run the object-API boundary repair as a focused operator command.
+pub async fn recover_object_api(target: &str, json_output: bool) -> Result<(), CmdError> {
+    let resolved = crate::deploy::host_channel::canonical_target(target)
+        .await
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let runner = crate::deploy::production_runner();
+    let detail = recover_object_api_on_target(&resolved, &runner).await?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "target": resolved.name,
+                "healthy": true,
                 "detail": detail,
             }))?
         );
@@ -5520,7 +5583,9 @@ pub async fn config_set(
     reload_service: Option<&str>,
 ) -> Result<(), CmdError> {
     if key.trim().is_empty() || key.chars().any(char::is_whitespace) {
-        return Err(CmdError::click("configuration key must be a non-empty dotted name"));
+        return Err(CmdError::click(
+            "configuration key must be a non-empty dotted name",
+        ));
     }
     remote_config(target, Some((key, value))).await?;
     if let Some(service) = reload_service {
