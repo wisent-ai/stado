@@ -130,15 +130,20 @@ jobs:
           }
           if [[ "$baseline_identity" == bootstrap:* ]]; then
             # One-time channel bootstrap: reconcile both verifier grants from
-            # their declared policies. The object API watches the grant and
-            # recovers its authorization boundary in place, so this must not
-            # cycle the control-plane process serving the Stado connection.
+            # their declared policies. The currently deployed object API
+            # predates inline boundary recovery, so reload its exact managed
+            # unit after both grants exist. The restart transport may close
+            # while launchd replaces the process; the following preflight,
+            # not that connection, decides whether recovery succeeded.
             # Once a complete release exists, baseline.py returns
             # stado:<version> and this branch is unreachable.
             retry_command "$stado_bin" host reconcile-object-verifier \
               charless-mac-mini --json
             retry_command "$stado_bin" host reconcile-release-verifier \
               charless-mac-mini --json
+            "$stado_bin" service restart \
+              com.wisent.always-on.stado-object-api \
+              --host charless-mac-mini --json || true
 
           fi
           preflight() {
