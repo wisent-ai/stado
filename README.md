@@ -489,6 +489,34 @@ rollback coordinate. No runtime follows a mutable `latest` binary.
 See [Release and compatibility](https://stado.wisent.com/docs/release) and
 [Operations](https://stado.wisent.com/docs/operations) for release and recovery procedures.
 
+#### Recover the Stado binary on a host
+
+Use the versioned recovery path only when the target's Stado binary or resolver
+is missing or broken badly enough that routine delivery cannot run. The
+canonical operation is one command:
+
+```sh
+stado host recover TARGET --release 0.7.34
+```
+
+The command reads the last valid canonical registry snapshot (or the bundled
+snapshot when `--bundled-registry` is explicitly supplied), restores the
+registry-selected release object API before its first catalog read, and
+downloads the exact canonical signed artifact without using the local resolver
+or a remote Stado binary. It verifies the release manifest, signature, and
+SHA-256 before activation. It preserves the previous binary, installs by
+atomic replacement, and probes the new binary remotely with
+`stado resolver --help`. A failed probe
+atomically restores that backup (or removes the invalid install when no prior
+binary existed); only a successful probe continues into the existing host
+recovery. Do not split those stages into manual copy or SSH steps.
+
+`stado host release TARGET --binary stado --version VERSION` remains the normal
+declaration-driven delivery path for a healthy fleet. `host recover --release`
+is the break-glass bootstrap for restoring Stado itself when the resolver or
+remote binary that normal delivery depends on is unavailable. Leaving
+`--release` out preserves the original recovery behavior.
+
 ### Observability and recovery
 
 `stado overview`, `stado doctor`, queue state, heartbeats, leases, provider
