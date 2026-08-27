@@ -120,6 +120,12 @@ jobs:
           test -n "$host"
           "$stado_bin" service ensure stado-object-api \
             --host "$host" \
+            --from "$stado_bin" \
+            --arg=dashboard \
+            --arg=--bind \
+            --arg=127.0.0.1 \
+            --arg=--port \
+            --arg=18776 \
             --as-daemon \
             --reason "Stado release publication requires the canonical object store"
           state="$("$stado_bin" storage stat \
