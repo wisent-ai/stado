@@ -284,13 +284,25 @@ jobs:
           for source in "$RUNNER_TEMP"/stado-release/*; do
             name="${source##*/}"
             uri="stado://releases/stado/$STADO_VERSION/linux-amd64/$name"
-            if ! "$stado_bin" storage put "$uri" "$source" --if-absent; then
-              echo "Object already exists or the create was refused; reading $uri back"
-            fi
             stored="$RUNNER_TEMP/stored-$name"
-            "$stado_bin" storage get "$uri" "$stored"
-            if ! cmp --silent "$source" "$stored"; then
-              echo "::error::Published release object differs from its source at $uri"
+            published=false
+            for attempt in 1 2 3 4; do
+              rm -f "$stored"
+              if ! "$stado_bin" storage put "$uri" "$source" --if-absent; then
+                echo "Create attempt $attempt did not complete; reading $uri back"
+              fi
+              if "$stado_bin" storage get "$uri" "$stored"; then
+                if ! cmp --silent "$source" "$stored"; then
+                  echo "::error::Published release object differs from its source at $uri"
+                  false
+                fi
+                published=true
+                break
+              fi
+              sleep "$((attempt * 2))"
+            done
+            if [ "$published" != true ]; then
+              echo "::error::Could not create and read back $uri after four attempts"
               false
             fi
           done
