@@ -864,8 +864,13 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
             "requested channel is forbidden by promotion policy",
         ));
     }
-    let api_url = crate::config::stado_api_url();
-    if api_url.is_empty() || crate::deploy::host_release::loopback_http_origin(&api_url) {
+    // An explicit endpoint may be a Stado-managed loopback forward to the
+    // control host. Only an absent endpoint means this caller owns the local
+    // object daemon and must ensure it before publishing.
+    if crate::config::stado_api_url().is_empty()
+        && crate::capabilities::storage_adapter(crate::config::wc_storage_backend())
+            != Some(crate::capabilities::StorageAdapter::Local)
+    {
         super::service::ensure_local_dependency(OBJECT_API_SERVICE, OBJECT_API_REASON, true)
             .await
             .map_err(|error| {

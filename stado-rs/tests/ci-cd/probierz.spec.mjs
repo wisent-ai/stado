@@ -27,6 +27,6 @@ try {
   throw new Error(`release journey failed with exit code ${error.code ?? 'unknown'}`);
 }
 assert.equal(stderr.includes('FAILED'), false, stderr);
-assert.match(stdout, /a_real_release_builds_publishes_and_installs_its_binary \.\.\. ok/);
+assert.match(stdout, /a_real_release_builds_publishes_and_installs_its_binary \.\.\.\s+ok/);
 assert.ok(stdout.includes('test result: ok. 1 passed; 0 failed'));
 process.stdout.write(stdout);

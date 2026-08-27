@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 struct SkarbiecFixture {
-    gnupg: PathBuf,
+    gnupg: tempfile::TempDir,
     token: PathBuf,
     port: u16,
     server: Child,
@@ -34,9 +34,13 @@ impl SkarbiecFixture {
                 .expect("SKARBIEC_TEST_BIN must name the real Skarbiec executable"),
         );
         assert!(binary.is_file(), "SKARBIEC_TEST_BIN names no file");
-        let gnupg = home.join("gnupg");
-        fs::create_dir_all(&gnupg).unwrap();
-        fs::set_permissions(&gnupg, fs::Permissions::from_mode(0o700)).unwrap();
+        let scratch = PathBuf::from(std::env::var_os("HOME").unwrap()).join(".stado/work");
+        fs::create_dir_all(&scratch).unwrap();
+        let gnupg = tempfile::Builder::new()
+            .prefix("release-gpg-")
+            .tempdir_in(scratch)
+            .unwrap();
+        fs::set_permissions(gnupg.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let vault = home.join("skarbiec.json");
         let token = home.join("release-signing-grant");
         let port = TcpListener::bind("127.0.0.1:0")
@@ -50,7 +54,7 @@ impl SkarbiecFixture {
                 .args(args)
                 .env_clear()
                 .env("HOME", home)
-                .env("GNUPGHOME", &gnupg)
+                .env("GNUPGHOME", gnupg.path())
                 .env("PATH", std::env::var_os("PATH").unwrap_or_default())
                 .env("SKARBIEC_VAULT_FILE", &vault)
                 .env("SKARBIEC_AUDIT_FILE", home.join("skarbiec-audit.jsonl"))
@@ -81,12 +85,12 @@ impl SkarbiecFixture {
             base64::engine::general_purpose::STANDARD.encode(fs::read(private_key).unwrap());
         let item = json!({
             "schema": "skarbiec.item.v2",
-            "kind": "credential",
+            "kind": "key-pair",
             "fields": {"private_key": encoded},
             "context": {"service": "stado-release"}
         });
         let seeded = command(
-            &["set-json", "ci-release-signing", "--type", "credential"],
+            &["set-json", "ci-release-signing", "--type", "key-pair"],
             Some(&item.to_string()),
         );
         assert!(
@@ -118,7 +122,7 @@ impl SkarbiecFixture {
             .args(["serve", "--port", &port.to_string()])
             .env_clear()
             .env("HOME", home)
-            .env("GNUPGHOME", &gnupg)
+            .env("GNUPGHOME", gnupg.path())
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("SKARBIEC_VAULT_FILE", &vault)
             .env("SKARBIEC_AUDIT_FILE", home.join("skarbiec-audit.jsonl"))
@@ -158,7 +162,7 @@ impl Drop for SkarbiecFixture {
         let _ = self.server.kill();
         let _ = self.server.wait();
         let _ = Command::new("gpgconf")
-            .args(["--homedir", self.gnupg.to_str().unwrap(), "--kill", "gpg-agent"])
+            .args(["--homedir", self.gnupg.path().to_str().unwrap(), "--kill", "gpg-agent"])
             .output();
     }
 }
@@ -518,14 +522,9 @@ fn a_real_release_builds_publishes_and_installs_its_binary() {
     };
     let _ = agent.kill();
     let _ = agent.wait();
-    let agent_log = format!(
-        "{}\n{}",
-        fs::read_to_string(home.path().join("agent.out")).unwrap(),
-        fs::read_to_string(home.path().join("agent.err")).unwrap()
-    );
     assert!(
         result.status.success(),
-        "release submit failed:\nstdout:\n{}\nstderr:\n{}\nagent:\n{agent_log}",
+        "release submit failed:\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&result.stdout),
         String::from_utf8_lossy(&result.stderr)
     );
