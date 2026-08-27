@@ -15,6 +15,13 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 const RECIPE: &str = "probierz-native-build";
+fn build_platform() -> &'static str {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "darwin-arm64",
+        ("linux", "x86_64") => "linux-amd64",
+        (os, arch) => panic!("build journey has no platform mapping for {os}-{arch}"),
+    }
+}
 const SOURCE: &str = "https://github.com/wisent-ai/stado.git";
 
 struct Journey {
@@ -45,7 +52,7 @@ impl Journey {
                 "name": "build-runner",
                 "kind": "local",
                 "ssh": "nobody@127.0.0.1",
-                "release_platform": "darwin-arm64",
+                "release_platform": build_platform(),
                 "hostnames": [hostname],
                 "slots": 1,
                 "disk_cleanup": {
@@ -177,12 +184,13 @@ impl Drop for Journey {
 #[test]
 #[ignore = "Probierz records the real public Git and Stado worker journey"]
 fn build_recipe_polls_public_git_runs_on_matching_worker_and_publishes_artifact() {
+    let platform = build_platform();
     let mut journey = Journey::new();
 
     let malformed = journey.invoke(&[
         "builds", "add", "--name", "bad-build", "--repo", "file:///not-public",
         "--branch", "main", "--command", "true", "--artifact", "out",
-        "--platform", "darwin-arm64",
+        "--platform", platform,
     ]);
     assert_eq!(malformed.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&malformed.stderr)
@@ -191,7 +199,7 @@ fn build_recipe_polls_public_git_runs_on_matching_worker_and_publishes_artifact(
     let added = journey.invoke_ok(&[
         "builds", "add", "--name", RECIPE, "--repo", SOURCE, "--branch", "main",
         "--command", "printf 'built by stado\\n' > build-output.txt",
-        "--artifact", "build-output.txt", "--platform", "darwin-arm64",
+        "--artifact", "build-output.txt", "--platform", platform,
         "--interval-seconds", "1", "--json",
     ]);
     let added: Value = serde_json::from_slice(&added.stdout).unwrap();
@@ -199,7 +207,7 @@ fn build_recipe_polls_public_git_runs_on_matching_worker_and_publishes_artifact(
 
     let duplicate = journey.invoke(&[
         "builds", "add", "--name", RECIPE, "--repo", SOURCE, "--branch", "main",
-        "--command", "true", "--artifact", "out", "--platform", "darwin-arm64",
+        "--command", "true", "--artifact", "out", "--platform", platform,
     ]);
     assert_eq!(duplicate.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&duplicate.stderr)
@@ -209,17 +217,17 @@ fn build_recipe_polls_public_git_runs_on_matching_worker_and_publishes_artifact(
     journey.start_agent();
     journey.invoke_ok(&["coordinator", "--once"]);
     let submitted = journey.status();
-    let run = &submitted["recipe"]["runs"]["darwin-arm64"];
+    let run = &submitted["recipe"]["runs"][platform];
     assert_eq!(run["status"], "running", "{submitted}");
     let job_id = run["job_id"].as_str().unwrap();
-    assert_eq!(submitted["job_states"]["darwin-arm64"], "queue");
+    assert_eq!(submitted["job_states"][platform], "queue");
 
     journey.wait_for_terminal_job(job_id);
     journey.invoke_ok(&["coordinator", "--once"]);
     let completed = journey.status();
-    let run = &completed["recipe"]["runs"]["darwin-arm64"];
+    let run = &completed["recipe"]["runs"][platform];
     assert_eq!(run["status"], "succeeded", "{completed}");
-    assert_eq!(completed["job_states"]["darwin-arm64"], "completed");
+    assert_eq!(completed["job_states"][platform], "completed");
     assert_eq!(run["declared"], false);
     assert!(run["artifact_uris"].as_array().is_some_and(|items| !items.is_empty()));
 
@@ -230,6 +238,6 @@ fn build_recipe_polls_public_git_runs_on_matching_worker_and_publishes_artifact(
         "built by stado\n"
     );
     println!(
-        "verified recipe={RECIPE}; job={job_id}; platform=darwin-arm64; artifact=build-output.txt"
+        "verified recipe={RECIPE}; job={job_id}; platform={platform}; artifact=build-output.txt"
     );
 }

@@ -28,5 +28,6 @@ try {
 }
 assert.equal(stderr.includes('FAILED'), false, stderr);
 assert.match(stdout, /a_real_release_builds_publishes_and_installs_its_binary \.\.\.\s+ok/);
+assert.match(stdout, /verified release platform=(darwin-arm64|linux-amd64); installed=ci-release-probe 1.0.0/);
 assert.ok(stdout.includes('test result: ok. 1 passed; 0 failed'));
 process.stdout.write(stdout);
