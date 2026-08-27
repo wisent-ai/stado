@@ -3903,16 +3903,16 @@ async fn reconcile_verifier(
                 "fields": { "token": token },
                 "context": {}
             }))?;
+            let create_command = format!(
+                "GNUPGHOME={} SKARBIEC_VAULT_FILE={} {} set-json {}",
+                crate::deploy::shlex_quote(&gnupg_home),
+                crate::deploy::shlex_quote(&vault),
+                crate::deploy::shlex_quote(&skarbiec),
+                crate::deploy::shlex_quote(item),
+            );
             let created = crate::deploy::host_channel::run_program_with_stdin(
                 &resolved,
-                &[
-                    "/usr/bin/env",
-                    &format!("GNUPGHOME={gnupg_home}"),
-                    &format!("SKARBIEC_VAULT_FILE={vault}"),
-                    &skarbiec,
-                    "set-json",
-                    item,
-                ],
+                &["/bin/sh", "-c", &create_command],
                 &payload,
                 &runner,
             )
