@@ -117,8 +117,10 @@ jobs:
           set -euo pipefail
           stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
           preflight() {
+            # `releases/` is public and cannot prove the private object
+            # verifier. Probe the runner's configured writable namespace.
             "$stado_bin" storage stat \
-              stado://releases/stado/__release_preflight__ --json
+              stado://probierz/__release_preflight__ --json
           }
           if ! preflight > "$RUNNER_TEMP/object-preflight.json" \
                2> "$RUNNER_TEMP/object-preflight.err"; then
