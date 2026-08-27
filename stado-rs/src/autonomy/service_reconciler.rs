@@ -130,6 +130,7 @@ fn resolved_plan(
     let mut unit =
         crate::cli::service::unit_program(&target.name, &declared.name, None, &[], Some(declared))
             .map_err(|error| error.to_string())?;
+    let mut unit_env: Vec<(String, String)> = Vec::new();
     if unit.source == "catalog" {
         let entry = crate::deploy::service_catalog::CatalogService {
             name: declared.name.clone(),
@@ -137,8 +138,9 @@ fn resolved_plan(
             unit: unit.unit.clone(),
             program: unit.program.clone(),
             args: unit.args.clone(),
+            env: unit.env.clone(),
         };
-        let (program, args) = crate::deploy::service_catalog::resolve_entry(
+        let (program, args, env) = crate::deploy::service_catalog::resolve_entry(
             &entry,
             &crate::deploy::service_catalog::home_for(target),
             Some(&target.release_platform),
@@ -146,15 +148,20 @@ fn resolved_plan(
         );
         unit.program = program;
         unit.args = args;
+        unit_env = env;
     }
     let plan = match unit
         .unit
         .as_deref()
         .or_else(|| crate::cli::service::declared_label(declared))
     {
-        Some(label) => {
-            service::plan_deploy_labelled(&declared.name, label, &unit.program, &unit.args)
-        }
+        Some(label) => service::plan_deploy_labelled(
+            &declared.name,
+            label,
+            &unit.program,
+            &unit.args,
+            &unit_env,
+        ),
         None => service::plan_deploy(&declared.name, &unit.program, &unit.args),
     }
     .map_err(|error| error.to_string())?;

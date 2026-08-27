@@ -3054,6 +3054,9 @@ pub(crate) struct UnitProgram {
     pub(crate) source: &'static str,
     /// Stable unit identity supplied by a registry or catalog declaration.
     pub(crate) unit: Option<String>,
+    /// Environment the catalog declares for the unit, placeholders intact;
+    /// empty for every other source, which declares none.
+    pub(crate) env: std::collections::BTreeMap<String, String>,
 }
 pub(crate) fn declared_label(service: &ManagedService) -> Option<&str> {
     let unit_id = service.unit_id();
@@ -3085,6 +3088,7 @@ pub(crate) fn unit_program(
             args: args.to_vec(),
             source: "flag",
             unit: None,
+            env: Default::default(),
         });
     }
     if !args.is_empty() {
@@ -3099,6 +3103,7 @@ pub(crate) fn unit_program(
             args: declared.args.clone(),
             source: "registry",
             unit: Some(declared.unit_id().to_string()),
+            env: Default::default(),
         });
     }
     // The shipped Wisent catalog answers by name, on any host, with no
@@ -3115,6 +3120,7 @@ pub(crate) fn unit_program(
             args: entry.args,
             source: "catalog",
             unit: entry.unit,
+            env: entry.env,
         });
     }
     let bundled =
@@ -3132,6 +3138,7 @@ pub(crate) fn unit_program(
             args: shipped.args,
             source: "shipped",
             unit: Some(unit),
+            env: Default::default(),
         });
     }
     Err(CmdError::usage(format!(
@@ -3230,15 +3237,32 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
     // unit. An older registry may carry only the latter; treating that as no
     // declaration minted a duplicate unit beside the canonical daemon.
     let declared = service::declared_services(&target);
-    let catalog_unit = crate::deploy::service_catalog::lookup(options.name)
-        .map_err(|error| CmdError::click(error.to_string()))?
-        .and_then(|entry| entry.unit);
+    let catalog_entry = crate::deploy::service_catalog::lookup(options.name)
+        .map_err(|error| CmdError::click(error.to_string()))?;
+    let catalog_unit = catalog_entry.as_ref().and_then(|entry| entry.unit.clone());
     let existing = declared.iter().find(|candidate| {
         candidate.matches(options.name)
             || catalog_unit
                 .as_deref()
                 .is_some_and(|unit| candidate.matches(unit))
     });
+    // The catalog's environment is the product's own requirement for the
+    // unit, so it applies whatever declared the program: a registry entry
+    // adopted from a hand-installed plist names the same binary and still
+    // needs the same variables. Program and args keep their resolution
+    // order; only the environment is defaulted from the catalog.
+    let mut unit_env: Vec<(String, String)> = catalog_entry
+        .as_ref()
+        .map(|entry| {
+            crate::deploy::service_catalog::resolve_entry(
+                entry,
+                &crate::deploy::service_catalog::home_for(&target),
+                Some(&target.release_platform),
+                &target.name,
+            )
+            .2
+        })
+        .unwrap_or_default();
     let mut unit = unit_program(&host, options.name, options.from, options.args, existing)?;
     if unit.source == "catalog" {
         let entry = crate::deploy::service_catalog::CatalogService {
@@ -3247,8 +3271,9 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
             unit: unit.unit.clone(),
             program: unit.program.clone(),
             args: unit.args.clone(),
+            env: unit.env.clone(),
         };
-        let (program, args) = crate::deploy::service_catalog::resolve_entry(
+        let (program, args, env) = crate::deploy::service_catalog::resolve_entry(
             &entry,
             &crate::deploy::service_catalog::home_for(&target),
             Some(&target.release_platform),
@@ -3256,6 +3281,7 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
         );
         unit.program = program;
         unit.args = args;
+        unit_env = env;
         eprintln!(
             "{host} declares no program for {}; rendering the unit from the Wisent service \
              catalog this build ships: {} {}",
@@ -3281,9 +3307,13 @@ async fn ensure(options: EnsureOptions<'_>) -> Result<(), CmdError> {
         .as_deref()
         .or_else(|| existing.and_then(declared_label))
     {
-        Some(label) => {
-            service::plan_deploy_labelled(options.name, label, &unit.program, &unit.args)
-        }
+        Some(label) => service::plan_deploy_labelled(
+            options.name,
+            label,
+            &unit.program,
+            &unit.args,
+            &unit_env,
+        ),
         None => service::plan_deploy(options.name, &unit.program, &unit.args),
     }
     .map_err(click)?;
