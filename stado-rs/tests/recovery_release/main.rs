@@ -9,7 +9,6 @@ use std::process::{Command, Output};
 use serde_json::{json, Value};
 
 const MUTATION_ACK: &str = "dedicated-recovery-fixture";
-const OTHER_ED25519_KEY: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 
 struct Journey {
     work: tempfile::TempDir,
@@ -23,25 +22,6 @@ fn required(name: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| panic!("{name} is required by the recovery journey"))
 }
 
-fn promoted_artifact_mut<'a>(
-    registry: &'a mut Value,
-    target: &str,
-    version: &str,
-) -> &'a mut Value {
-    let policy = &mut registry["release_control"]["products"]["stado"];
-    for slot in ["desired", "previous"] {
-        if policy[slot]["version"].as_str() == Some(version) {
-            let platform = policy["targets"][target]["platform"]
-                .as_str()
-                .unwrap_or_else(|| panic!("Stado target policy for {target:?} declares a platform"))
-                .to_string();
-            return policy[slot]["artifacts"]
-                .get_mut(&platform)
-                .unwrap_or_else(|| panic!("Stado {version} has no {platform} artifact"));
-        }
-    }
-    panic!("Stado {version} is neither desired nor previous in the supplied registry")
-}
 
 impl Journey {
     fn load(version_variable: &str) -> Self {
@@ -53,6 +33,10 @@ impl Journey {
         .expect("recovery registry is JSON");
         let target = required("STADO_RECOVERY_TARGET");
         let version = required(version_variable);
+        assert!(
+            registry["release_control"]["products"].get("stado").is_none(),
+            "the recovery journey covers an operator-pinned Stado release, not rollout desired state"
+        );
         let entry = registry["targets"]
             .as_array()
             .and_then(|targets| targets.iter().find(|entry| entry["name"] == target))
@@ -132,39 +116,81 @@ fn step_status<'a>(report: &'a Value, name: &str) -> Option<&'a str> {
 }
 
 #[test]
-#[ignore = "Probierz supplies a registry coordinate published by the real signed release channel"]
-fn cli_refuses_untrusted_signature_and_registry_hash_before_contacting_the_host() {
+#[ignore = "Probierz supplies a registry key and a release from the real signed channel"]
+fn cli_refuses_a_manifest_whose_key_is_not_trusted_by_the_loaded_registry() {
     let journey = Journey::load("STADO_RECOVERY_VERSION");
-
     let mut wrong_key = journey.registry.clone();
-    let artifact =
-        promoted_artifact_mut(&mut wrong_key, &journey.target, &journey.version);
-    let key_id = artifact["key_id"]
-        .as_str()
-        .expect("promoted artifact declares key_id")
-        .to_string();
-    wrong_key["release_control"]["trusted_keys"]
+    let keys = wrong_key["release_control"]["trusted_keys"]
         .as_object_mut()
-        .expect("trusted_keys is an object")
-        .insert(key_id, json!(OTHER_ED25519_KEY));
+        .expect("trusted_keys is an object");
+    let old_keys = std::mem::take(keys);
+    let mut renamed = serde_json::Map::new();
+    for (index, (old_id, public_key)) in old_keys.into_iter().enumerate() {
+        let new_id = format!("unrelated-recovery-key-{index}");
+        keys.insert(new_id.clone(), public_key);
+        renamed.insert(old_id, json!(new_id));
+    }
+    for product in wrong_key["release_control"]["products"]
+        .as_object_mut()
+        .expect("products is an object")
+        .values_mut()
+    {
+        for slot in ["desired", "previous"] {
+            let Some(artifacts) = product[slot]["artifacts"].as_object_mut() else {
+                continue;
+            };
+            for artifact in artifacts.values_mut() {
+                let Some(old_id) = artifact["key_id"].as_str() else {
+                    continue;
+                };
+                if let Some(new_id) = renamed.get(old_id) {
+                    artifact["key_id"] = new_id.clone();
+                }
+            }
+        }
+    }
     let rejected = journey.stado(&wrong_key);
-    assert!(!rejected.status.success(), "wrong trusted key must be refused");
+    assert!(!rejected.status.success(), "untrusted signing key must be refused");
+    let rejected = report(&rejected);
+    assert_eq!(step_status(&rejected, "download"), Some("ok"));
+    assert_eq!(step_status(&rejected, "verify"), Some("failed"));
+    assert!(
+        rejected["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("not trusted by registry")),
+        "the refusal names the release trust failure: {rejected}"
+    );
+    assert_eq!(step_status(&rejected, "install"), None);
+}
+
+#[test]
+#[ignore = "Probierz supplies a signed canonical-channel fixture with mismatched release identity"]
+fn cli_refuses_a_signed_manifest_whose_identity_differs_from_its_coordinate() {
+    let journey = Journey::load("STADO_RECOVERY_IDENTITY_VERSION");
+    let rejected = journey.stado(&journey.registry);
+    assert!(!rejected.status.success(), "identity mismatch must be refused");
     let rejected = report(&rejected);
     assert_eq!(step_status(&rejected, "download"), Some("ok"));
     assert_eq!(step_status(&rejected, "verify"), Some("failed"));
     assert!(rejected["error"]
         .as_str()
-        .is_some_and(|error| error.contains("signature verification failed")));
+        .is_some_and(|error| error.contains("identity does not match its object coordinate")));
     assert_eq!(step_status(&rejected, "install"), None);
+}
 
-    let mut wrong_hash = journey.registry.clone();
-    promoted_artifact_mut(&mut wrong_hash, &journey.target, &journey.version)
-        ["artifact_sha256"] = json!("0".repeat(64));
-    let rejected = journey.stado(&wrong_hash);
-    assert!(!rejected.status.success(), "registry hash mismatch must be refused");
+#[test]
+#[ignore = "Probierz supplies a signed canonical-channel fixture whose archive mismatches its manifest"]
+fn cli_refuses_an_archive_that_differs_from_its_signed_digest_or_size() {
+    let journey = Journey::load("STADO_RECOVERY_ARCHIVE_MISMATCH_VERSION");
+    let rejected = journey.stado(&journey.registry);
+    assert!(!rejected.status.success(), "archive mismatch must be refused");
     let rejected = report(&rejected);
     assert_eq!(step_status(&rejected, "download"), Some("ok"));
     assert_eq!(step_status(&rejected, "verify"), Some("failed"));
+    assert!(rejected["error"].as_str().is_some_and(|error| {
+        error.contains("differs from its signed manifest")
+            || error.contains("exceeds its signed artifact_bytes")
+    }));
     assert_eq!(step_status(&rejected, "install"), None);
 }
 

@@ -214,50 +214,12 @@ fn failed(
 }
 
 
-fn release_policy(
-    registry: &Registry,
-    target: &ComputeTarget,
-    version: &str,
-) -> Result<(ReleaseControl, ReleaseArtifactRef), DeployError> {
-    let control = release_control::control(&registry.to_document())
+fn recovery_control(registry: &Registry) -> Result<ReleaseControl, DeployError> {
+    release_control::control(&registry.to_document())
         .map_err(DeployError)?
-        .ok_or_else(|| DeployError("registry.release_control is required for release recovery".to_string()))?;
-    let product = control
-        .products
-        .get("stado")
-        .ok_or_else(|| DeployError("registry.release_control.products.stado is required".to_string()))?;
-    let target_policy = product.targets.get(&target.name).ok_or_else(|| {
-        DeployError(format!(
-            "registry.release_control.products.stado.targets has no {:?}",
-            target.name
-        ))
-    })?;
-    if target_policy.platform != target.release_platform {
-        return Err(DeployError(format!(
-            "Stado release policy platform {:?} does not match target platform {:?}",
-            target_policy.platform, target.release_platform
-        )));
-    }
-    let promoted = [product.desired.as_ref(), product.previous.as_ref()]
-        .into_iter()
-        .flatten()
-        .find(|release| release.version == version)
         .ok_or_else(|| {
-            DeployError(format!(
-                "Stado {version} is neither desired nor previous in the loaded registry"
-            ))
-        })?;
-    let artifact = promoted
-        .artifacts
-        .get(&target_policy.platform)
-        .cloned()
-        .ok_or_else(|| {
-            DeployError(format!(
-                "Stado {version} has no {} artifact in the loaded registry",
-                target_policy.platform
-            ))
-        })?;
-    Ok((control, artifact))
+            DeployError("registry.release_control is required for release recovery".to_string())
+        })
 }
 
 fn verify_release_metadata(
@@ -308,32 +270,7 @@ fn verify_release_metadata(
     Ok((manifest, artifact))
 }
 
-fn verify_policy(
-    control: &ReleaseControl,
-    target: &ComputeTarget,
-    expected: &ReleaseArtifactRef,
-    manifest: &ReleaseManifest,
-    artifact: &ReleaseArtifactRef,
-) -> Result<(), DeployError> {
-    if artifact != expected {
-        return Err(DeployError(
-            "verified release metadata does not match the loaded registry".to_string(),
-        ));
-    }
-    let product = &control.products["stado"];
-    let target_policy = &product.targets[&target.name];
-    if manifest.binary != product.binary
-        || manifest.launcher != product.launcher
-        || manifest.config_schema != product.config_schema
-        || manifest.state_schema != product.state_schema
-        || manifest.platform != target_policy.platform
-    {
-        return Err(DeployError(
-            "signed Stado manifest does not match the loaded release policy".to_string(),
-        ));
-    }
-    Ok(())
-}
+const STAGED_STADO_BINARY: &str = "bin/stado";
 
 fn install_script(target: &ComputeTarget, binary: &[u8], digest: &str) -> String {
     let identities = host_recovery::identity_values(target)
@@ -459,7 +396,7 @@ pub async fn recover_with_client(
     if !super::host_release::is_exact_semver(version) {
         return Err(DeployError(format!("{version:?} is not an exact semantic version")));
     }
-    let (control, expected) = release_policy(registry, target, version)?;
+    let control = recovery_control(registry)?;
     let platform = target.release_platform.as_str();
     let mut steps = Vec::new();
     let (manifest_bytes, signature) = match client.download_metadata(version, platform).await {
@@ -487,11 +424,6 @@ pub async fn recover_with_client(
             return Ok(failed(target_name, version, steps, detail, 1));
         }
     };
-    if let Err(error) = verify_policy(&control, target, &expected, &manifest, &artifact) {
-        let detail = error.to_string();
-        steps.push(step("verify", "failed", &detail));
-        return Ok(failed(target_name, version, steps, detail, 1));
-    }
 
     let mut archive = tempfile::NamedTempFile::new()
         .map_err(|error| DeployError(format!("cannot create private release archive: {error}")))?;
@@ -531,16 +463,16 @@ pub async fn recover_with_client(
         steps.push(step("verify", "failed", &error));
         return Ok(failed(target_name, version, steps, error, 1));
     }
-    let binary_path = release_root.join(&manifest.binary);
+    let binary_path = release_root.join(STAGED_STADO_BINARY);
     let metadata = match std::fs::symlink_metadata(&binary_path) {
         Ok(metadata) if metadata.file_type().is_file() && metadata.len() > 0 => metadata,
         Ok(_) => {
-            let detail = "signed release binary is not a non-empty regular file";
+            let detail = "signed release member bin/stado is not a non-empty regular file";
             steps.push(step("verify", "failed", detail));
             return Ok(failed(target_name, version, steps, detail, 1));
         }
         Err(error) => {
-            let detail = format!("signed release binary is unavailable: {error}");
+            let detail = format!("signed release member bin/stado is unavailable: {error}");
             steps.push(step("verify", "failed", &detail));
             return Ok(failed(target_name, version, steps, detail, 1));
         }

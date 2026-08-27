@@ -1200,7 +1200,7 @@ enum HostCommands {
         #[arg(long)]
         bundled_registry: bool,
         /// Replace Stado from an exact registry-trusted signed release before recovery.
-        #[arg(long)]
+        #[arg(long, value_name = "VERSION")]
         release: Option<String>,
     },
     /// Request a graceful reboot of TARGET through its approved channel.
