@@ -1317,9 +1317,21 @@ async fn proxy_connection(
     let mut upstream_head = [0_u8; 16 * 1024];
     let mut client_head: Option<Vec<u8>> = None;
     let establishment = async {
+        // A large request can legitimately produce no response bytes until
+        // its complete body reaches the service. Bound silence, not total
+        // upload time: every client byte proves the channel is still making
+        // progress and renews the establishment budget.
+        let silence = tokio::time::sleep(connect);
+        tokio::pin!(silence);
         let mut buffer = [0_u8; 16 * 1024];
         loop {
             tokio::select! {
+                _ = &mut silence => {
+                    return Err(format!(
+                        "no channel progress within the {}s connect budget",
+                        connect.as_secs()
+                    ));
+                }
                 status = child.wait() => {
                     let status = status
                         .map_err(|error| format!("SSH transport wait failed: {error}"))?;
@@ -1350,6 +1362,7 @@ async fn proxy_connection(
                             ssh_stdin.write_all(&buffer[..read]).await.map_err(|error| {
                                 format!("SSH transport write failed: {error}")
                             })?;
+                            silence.as_mut().reset(tokio::time::Instant::now() + connect);
                         }
                         Err(error) => return Err(format!("client read failed: {error}")),
                     }
@@ -1357,9 +1370,9 @@ async fn proxy_connection(
             }
         }
     };
-    let established = match tokio::time::timeout(connect, establishment).await {
-        Ok(Ok(read)) => read,
-        Ok(Err(cause)) => {
+    let established = match establishment.await {
+        Ok(read) => read,
+        Err(cause) => {
             let _ = child.kill().await;
             let _ = child.wait().await;
             refuse_connection(
@@ -1368,23 +1381,6 @@ async fn proxy_connection(
                 adapter,
                 &destination,
                 &cause,
-                client_head.as_deref(),
-            )
-            .await;
-            return Ok(());
-        }
-        Err(_) => {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
-            refuse_connection(
-                &mut client_read,
-                &mut client_write,
-                adapter,
-                &destination,
-                &format!(
-                    "no upstream bytes within the {}s connect budget",
-                    adapter.connect_seconds
-                ),
                 client_head.as_deref(),
             )
             .await;
