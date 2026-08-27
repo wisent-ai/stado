@@ -86,3 +86,7 @@ path = "src/bin/stado_fleet/main.rs"
 [[bin]]
 name = "stado_migrate"
 path = "src/bin/stado_migrate/main.rs"
+
+[[test]]
+name = "channel"
+path = "tests/channel/main.rs"
