@@ -163,13 +163,33 @@ jobs:
             echo "::error::object and release preflight did not remain healthy for three consecutive checks" >&2
             return 1
           }
+          reconcile_release_lifecycles() {
+            retry_command "$stado_bin" host reconcile-release-verifier \
+              charless-mac-mini --json \
+              > "$RUNNER_TEMP/release-lifecycles.json"
+            jq -e '
+              (.items | type == "array" and length > 0) and
+              (.publisher_lifecycles | type == "array") and
+              (.publisher_lifecycles | length) == (.items | length) and
+              all(
+                .publisher_lifecycles[];
+                (.item | type == "string" and length > 0) and
+                (.controller | type == "string" and length > 0) and
+                (.mode == "owner" or .mode == "managed" or .mode == "external") and
+                .readable == true
+              )
+            ' "$RUNNER_TEMP/release-lifecycles.json" >/dev/null
+          }
+          # Publisher items belong to their recorded controllers. Prove every
+          # declared lifecycle and exact token read before the verifier grant
+          # is refreshed; only then may the public writer canary run.
+          reconcile_release_lifecycles
           if ! wait_for_preflight; then
             # Reconcile both declared verifier policies. Current object APIs
             # recover inline, which preserves every connection.
             retry_command "$stado_bin" host reconcile-object-verifier \
               charless-mac-mini --json
-            retry_command "$stado_bin" host reconcile-release-verifier \
-              charless-mac-mini --json
+            reconcile_release_lifecycles
             if ! wait_for_preflight; then
               # Upgrade path for an older object API that cannot reload its
               # grants inline. Restarting can close the transport carrying this
