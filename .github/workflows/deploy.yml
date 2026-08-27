@@ -139,11 +139,20 @@ jobs:
             "$stado_bin" storage stat \
               stado://probierz/__release_preflight__ --json
           }
-          if ! preflight > "$RUNNER_TEMP/object-preflight.json" \
-               2> "$RUNNER_TEMP/object-preflight.err"; then
+          wait_for_preflight() {
+            for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+              if preflight > "$RUNNER_TEMP/object-preflight.json" \
+                   2> "$RUNNER_TEMP/object-preflight.err"; then
+                return 0
+              fi
+              sleep 5
+            done
+            cat "$RUNNER_TEMP/object-preflight.err" >&2
+            return 1
+          }
+          if ! wait_for_preflight; then
             if ! grep -Fq "object authorization unavailable" \
                  "$RUNNER_TEMP/object-preflight.err"; then
-              cat "$RUNNER_TEMP/object-preflight.err" >&2
               false
             fi
             # The verifier grant is host-local. Reconcile its exact namespace
@@ -155,7 +164,7 @@ jobs:
             "$stado_bin" service restart \
               com.wisent.always-on.stado-object-api \
               --host charless-mac-mini --json
-            preflight > "$RUNNER_TEMP/object-preflight.json"
+            wait_for_preflight
           fi
           state="$(jq -r '.state // ""' "$RUNNER_TEMP/object-preflight.json")"
           case "$state" in
