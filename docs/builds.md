@@ -65,7 +65,7 @@ A successful process exit without every declared artifact is a failed build. A h
 
 ## Verify every supported platform
 
-The release platform matrix runs both real journeys on the fleet's macOS ARM64 and Linux AMD64 workers. It checks out one exact public commit on each host, builds Skarbiec there for the isolated signing grant, then runs the native-build and complete release journeys.
+The release platform matrix runs both real journeys on the fleet's macOS ARM64 and Linux AMD64 workers. It checks out one exact public commit on each host, uses a real host-local Skarbiec binary for the isolated signing grant, then runs the native-build and complete release journeys.
 
 For an online host reachable through Stado's managed host channel:
 

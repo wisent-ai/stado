@@ -50,9 +50,8 @@ const verifyDarwin = async () => {
 const linuxCommand = [
   'set -eu',
   'export PATH="$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/bin:$PATH"',
-  'git clone --depth 1 https://github.com/wisent-ai/skarbiec.git .probierz-skarbiec',
-  'cargo build --release --manifest-path .probierz-skarbiec/Cargo.toml',
-  'export SKARBIEC_TEST_BIN="$PWD/.probierz-skarbiec/target/release/skarbiec"',
+  'export SKARBIEC_TEST_BIN="$(command -v skarbiec || printf %s "$HOME/.stado/bin/skarbiec")"',
+  'test -x "$SKARBIEC_TEST_BIN"',
   'cd stado-rs',
   'cargo test --test builds build_recipe_polls_public_git_runs_on_matching_worker_and_publishes_artifact -- --ignored --nocapture --test-threads=1',
   'cargo test --test ci-cd a_real_release_builds_publishes_and_installs_its_binary -- --ignored --nocapture --test-threads=1',
