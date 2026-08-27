@@ -33,6 +33,9 @@ jobs:
       # Release objects use the same Tailscale Funnel installers verify in
       # version-check.yml. stado.wisent.com is the documentation hostname.
       STADO_API_URL: https://lukaszs-macbook-pro-4007-2.tail6443b3.ts.net
+      WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
+      WC_SKARBIEC_CONSUMER: stado-release-publisher
+      WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
     steps:
       # v4 runs on Node 20, which GitHub has deprecated and already forces onto Node
       # 24; v5 is the first major that targets Node 24 itself. It needs a runner of at
