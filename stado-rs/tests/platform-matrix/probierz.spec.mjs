@@ -49,6 +49,7 @@ const verifyDarwin = async () => {
 
 const linuxCommand = [
   'set -eu',
+  'export PATH="$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/bin:$PATH"',
   'git clone --depth 1 https://github.com/wisent-ai/skarbiec.git .probierz-skarbiec',
   'cargo build --release --manifest-path .probierz-skarbiec/Cargo.toml',
   'export SKARBIEC_TEST_BIN="$PWD/.probierz-skarbiec/target/release/skarbiec"',
