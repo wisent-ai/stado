@@ -3912,56 +3912,6 @@ async fn reconcile_verifier(
         .checked_sub(now)
         .filter(|ttl| *ttl > 0)
         .ok_or_else(|| CmdError::click(format!("{kind} verifier grant is already expired")))?;
-    // Release publisher credentials are authored on the control plane that
-    // runs the release pipeline. Reconcile their payloads as well as the
-    // target verifier's read grant: preserving a stale target item makes a
-    // read-only verifier check pass while every authenticated write is 401.
-    // Payloads travel only in the SSH request body and are never printed.
-    if kind == "release" {
-        for item in &items {
-            let token = crate::skarbiec::read_release_token(item, "token")
-                .await
-                .map_err(|error| {
-                    CmdError::click(format!(
-                        "cannot read authoritative release publisher item {item}: {error}"
-                    ))
-                })?
-                .ok_or_else(|| {
-                    CmdError::click(format!(
-                        "authoritative release publisher item {item} has no token field"
-                    ))
-                })?;
-            let payload = serde_json::to_string(&serde_json::json!({
-                "schema": "skarbiec.item.v2",
-                "kind": "token",
-                "fields": { "token": token },
-                "context": {}
-            }))?;
-            let set_command = format!(
-                "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin GNUPGHOME={} SKARBIEC_VAULT_FILE={} {} set-json {}",
-                crate::deploy::shlex_quote(&gnupg_home),
-                crate::deploy::shlex_quote(&vault),
-                crate::deploy::shlex_quote(&skarbiec),
-                crate::deploy::shlex_quote(item),
-            );
-            let synchronized = crate::deploy::host_channel::run_program_with_stdin(
-                &resolved,
-                &["/bin/sh", "-c", &set_command],
-                &payload,
-                &runner,
-            )
-            .await
-            .map_err(|error| CmdError::click(error.to_string()))?;
-            if !synchronized.ok() {
-                return Err(CmdError::click(format!(
-                    "{}: release publisher item {item} could not be synchronized: stdout={:?}; stderr={:?}",
-                    resolved.name,
-                    synchronized.stdout.trim(),
-                    synchronized.stderr.trim(),
-                )));
-            }
-        }
-    }
     let capabilities = items
         .iter()
         .map(|item| format!("read:{item}#token"))
