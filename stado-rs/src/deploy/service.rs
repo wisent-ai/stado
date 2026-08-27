@@ -4352,60 +4352,68 @@ pub async fn fetch_unit_file(
     })
 }
 
-/// Mint a fresh bearer for CONSUMER against the host's own authoritative
-/// vault and land it at TOKEN_PATH, owner-only. The value never crosses the
-/// channel.
+/// Replace `consumer`'s complete grant against the target's authoritative
+/// vault while preserving the bearer already held in `token_path`.
+///
+/// Both files stay on the managed host. Skarbiec reads the raw bearer itself
+/// and records only its hash; the value never enters Stado output, argv, or
+/// the control-plane process.
 pub async fn remint_consumer_grant_on_host(
     target: &ComputeTarget,
     consumer: &str,
     capabilities: &str,
     token_path: &str,
     vault_file: &str,
+    ttl_seconds: u64,
+    audience: &str,
     runner: &Runner,
 ) -> Result<RemoteReport, DeployError> {
     let body = r#"set -eu
-fail() { echo 'remint_failed' "$1"; exit 1; }
+fail() {
+  printf 'STADO_SERVICE\t%s\tgrant_sync_failed\t%s\n' "$consumer" "$1"
+  exit 0
+}
 decode=-D
 if [ "$(uname)" = "Linux" ]; then decode=--decode; fi
-vault=$(printf '%s' '@VAULT_B64@' | /usr/bin/base64 "$decode")
-consumer=$(printf '%s' '@CONSUMER_B64@' | /usr/bin/base64 "$decode")
-caps=$(printf '%s' '@CAPS_B64@' | /usr/bin/base64 "$decode")
-token_path=$(printf '%s' '@TOKEN_PATH_B64@' | /usr/bin/base64 "$decode")
+vault=$(printf '%s' '@VAULT_B64@' | /usr/bin/base64 "$decode") || exit 1
+consumer=$(printf '%s' '@CONSUMER_B64@' | /usr/bin/base64 "$decode") || exit 1
+caps=$(printf '%s' '@CAPS_B64@' | /usr/bin/base64 "$decode") || exit 1
+token_path=$(printf '%s' '@TOKEN_PATH_B64@' | /usr/bin/base64 "$decode") || exit 1
+audience=$(printf '%s' '@AUDIENCE_B64@' | /usr/bin/base64 "$decode") || exit 1
+case "$vault" in
+  \$HOME/*) vault="$HOME/${vault#\$HOME/}" ;;
+  "$HOME"/*) ;;
+  *) fail 'vault path must be under the target home' ;;
+esac
+case "$token_path" in
+  \$HOME/*) token_path="$HOME/${token_path#\$HOME/}" ;;
+  "$HOME"/*) ;;
+  *) fail 'token path must be under the target home' ;;
+esac
+[ -f "$vault" ] && [ ! -L "$vault" ] || fail 'authoritative vault is not a regular file'
+[ -f "$token_path" ] && [ ! -L "$token_path" ] || fail 'token file is not a regular file'
+/bin/chmod 600 "$token_path" || fail 'cannot protect token file'
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export GNUPGHOME="$HOME/.gnupg"
 export SKARBIEC_VAULT_FILE="$vault"
-out=$("$HOME/.stado/bin/skarbiec" token-mint "$consumer" --capabilities "$caps" --replace-capabilities 2>&1)
-token=$(printf '%s' "$out" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
-[ -n "$token" ] || fail "empty bearer from mint"
-umask u=rw,go=
-printf '%s' "$token" > "$token_path"
-# Ensure the admin integration item exists with a fresh token so the
-# launcher's required-secrets loop finds it.
-admin_item="wisent-backend-admin-integration-api"
-existing=$(SKARBIEC_VAULT_FILE="$vault" "$HOME/.stado/bin/skarbiec" get \
-    "$admin_item" --field token 2>/dev/null || true)
-if [ -z "$existing" ]; then
-  admin_token=$(/usr/bin/python3 -c 'import secrets; print(secrets.token_hex(32))')
-  tmp_item="$probe_dir/admin-item.json"
-  printf '{"token": "%s"}' "$admin_token" > "$tmp_item"
-  SKARBIEC_VAULT_FILE="$vault" "$HOME/.stado/bin/skarbiec" set-json \
-    "$admin_item" --from-file "$tmp_item"
-  /bin/rm -f "$tmp_item"
+if ! report=$("$HOME/.stado/bin/skarbiec" token-mint "$consumer" \
+    --capabilities "$caps" \
+    --token-file "$token_path" \
+    --replace-capabilities \
+    --ttl-seconds '@TTL_SECONDS@' \
+    --audience "$audience" 2>&1); then
+  fail "$report"
 fi
-echo 'STADO_REMINT	ok'"#;
+printf 'STADO_SERVICE\t%s\tgrant_synced\t%s\n' "$consumer" "$token_path"
+"#;
     let body = body
         .replace("@VAULT_B64@", &STANDARD.encode(vault_file.as_bytes()))
         .replace("@CONSUMER_B64@", &STANDARD.encode(consumer.as_bytes()))
         .replace("@CAPS_B64@", &STANDARD.encode(capabilities.as_bytes()))
-        .replace("@TOKEN_PATH_B64@", &STANDARD.encode(token_path.as_bytes()));
+        .replace("@TOKEN_PATH_B64@", &STANDARD.encode(token_path.as_bytes()))
+        .replace("@AUDIENCE_B64@", &STANDARD.encode(audience.as_bytes()))
+        .replace("@TTL_SECONDS@", &ttl_seconds.to_string());
     let output = host_channel::run_script(target, &body, runner).await?;
-    if !output.stdout.contains("STADO_REMINT") {
-        return Err(DeployError(format!(
-            "{}: remint failed: {}",
-            target.name,
-            output.stderr.trim_end()
-        )));
-    }
     Ok(report_from(output))
 }
 

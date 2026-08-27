@@ -276,6 +276,38 @@ pub enum ServiceCommands {
         json: bool,
     },
 
+    /// Reconcile one Skarbiec consumer grant with an existing owner-only token file.
+    ///
+    /// The bearer never leaves the managed host: its local Skarbiec reads the
+    /// raw file and records only its hash while replacing the declared grant.
+    GrantSync {
+        /// Service whose host-local deployer uses the grant.
+        name: String,
+        /// The single registry host to update.
+        #[arg(long)]
+        host: String,
+        /// Exact Skarbiec consumer name.
+        #[arg(long)]
+        consumer: String,
+        /// One complete grant capability; repeat for every capability.
+        #[arg(long = "capability", required = true)]
+        capabilities: Vec<String>,
+        /// Existing raw bearer file on the target, absolute or rooted at $HOME.
+        #[arg(long)]
+        token_file: String,
+        /// Authoritative Skarbiec vault on the target, absolute or rooted at $HOME.
+        #[arg(long, default_value = "$HOME/.stado/skarbiec.vault.json")]
+        vault_file: String,
+        /// Lifetime of the replacement grant.
+        #[arg(long, default_value_t = 2_592_000)]
+        ttl_seconds: u64,
+        /// Grant audience; defaults to the consumer.
+        #[arg(long)]
+        audience: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Verify a managed service's bearer against a read-only loopback endpoint.
     ///
     /// With `--repair`, a failed check atomically synchronizes the secret,
@@ -668,6 +700,30 @@ pub async fn dispatch(command: ServiceCommands) -> Result<(), CmdError> {
                 variable: &variable,
                 env_file: &env_file,
                 restart_after_sync: restart,
+                as_json: json,
+            })
+            .await
+        }
+        ServiceCommands::GrantSync {
+            name,
+            host,
+            consumer,
+            capabilities,
+            token_file,
+            vault_file,
+            ttl_seconds,
+            audience,
+            json,
+        } => {
+            grant_sync(GrantSyncOptions {
+                name: &name,
+                host: &host,
+                consumer: &consumer,
+                capabilities: &capabilities,
+                token_file: &token_file,
+                vault_file: &vault_file,
+                ttl_seconds,
+                audience: audience.as_deref(),
                 as_json: json,
             })
             .await
@@ -2010,6 +2066,91 @@ async fn secret_sync(options: SecretSyncOptions<'_>) -> Result<(), CmdError> {
         table::print(&["HOST", "UNIT", "SYNC", "RESTART", "DETAIL"], &cells);
     }
     fail_if_any(&failures, "secret sync")
+}
+
+struct GrantSyncOptions<'a> {
+    name: &'a str,
+    host: &'a str,
+    consumer: &'a str,
+    capabilities: &'a [String],
+    token_file: &'a str,
+    vault_file: &'a str,
+    ttl_seconds: u64,
+    audience: Option<&'a str>,
+    as_json: bool,
+}
+
+async fn grant_sync(options: GrantSyncOptions<'_>) -> Result<(), CmdError> {
+    let GrantSyncOptions {
+        name,
+        host,
+        consumer,
+        capabilities,
+        token_file,
+        vault_file,
+        ttl_seconds,
+        audience,
+        as_json,
+    } = options;
+    if ttl_seconds == 0 {
+        return Err(CmdError::click("--ttl-seconds must be positive"));
+    }
+    let capabilities = capabilities.join(",");
+    let audience = audience.unwrap_or(consumer);
+    let services = declared_matching(name, Some(host)).await?;
+    let runner = production_runner();
+    let mut payload = Vec::new();
+    let mut cells = Vec::new();
+    let mut failures = Vec::new();
+
+    for declared in &services {
+        let target = host_channel::canonical_target(&declared.host)
+            .await
+            .map_err(click)?;
+        let synced = service::remint_consumer_grant_on_host(
+            &target,
+            consumer,
+            &capabilities,
+            token_file,
+            vault_file,
+            ttl_seconds,
+            audience,
+            &runner,
+        )
+        .await
+        .map_err(click)?;
+        if !synced.succeeded("grant_synced") {
+            failures.push(format!("{}: {}", declared.host, synced.failure()));
+        }
+        cells.push(vec![
+            declared.host.clone(),
+            declared.unit_id().to_string(),
+            consumer.to_string(),
+            dash(&synced.status),
+            dash(&synced.detail),
+        ]);
+        payload.push(json!({
+            "host": declared.host,
+            "unit": declared.unit_id(),
+            "consumer": consumer,
+            "capabilities": options.capabilities,
+            "token_file": token_file,
+            "vault_file": vault_file,
+            "ttl_seconds": ttl_seconds,
+            "audience": audience,
+            "sync": synced.to_json(),
+        }));
+    }
+
+    if as_json {
+        print_json(&Value::Array(payload))?;
+    } else {
+        table::print(
+            &["HOST", "UNIT", "CONSUMER", "SYNC", "DETAIL"],
+            &cells,
+        );
+    }
+    fail_if_any(&failures, "grant sync")
 }
 
 struct AuthCheckOptions<'a> {
