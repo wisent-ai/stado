@@ -3881,6 +3881,50 @@ async fn reconcile_verifier(
         .checked_sub(now)
         .filter(|ttl| *ttl > 0)
         .ok_or_else(|| CmdError::click(format!("{kind} verifier grant is already expired")))?;
+    // Release policy may add a source producer before it has ever published.
+    // Provision that publisher's bearer through stdin, never argv, before the
+    // verifier grant is expanded to read it. Other verifier kinds point at
+    // externally owned credentials and must continue to fail when absent.
+    if kind == "release" {
+        let existing = document
+            .get("items")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        for item in items.iter().filter(|item| !existing.contains_key(*item)) {
+            let token = format!(
+                "{}{}",
+                uuid::Uuid::new_v4().simple(),
+                uuid::Uuid::new_v4().simple()
+            );
+            let payload = serde_json::to_string(&serde_json::json!({ "token": token }))?;
+            let created = crate::deploy::host_channel::run_program_with_stdin(
+                &resolved,
+                &[
+                    "/usr/bin/env",
+                    &format!("GNUPGHOME={gnupg_home}"),
+                    &format!("SKARBIEC_VAULT_FILE={vault}"),
+                    &skarbiec,
+                    "set-json",
+                    item,
+                ],
+                &payload,
+                &runner,
+            )
+            .await
+            .map_err(|error| CmdError::click(error.to_string()))?;
+            if !created.ok() {
+                return Err(CmdError::click(format!(
+                    "{}: release publisher item {item} could not be provisioned: {}",
+                    resolved.name,
+                    crate::deploy::host_channel::last_error_line(
+                        &created,
+                        "remote publisher provisioning failed"
+                    )
+                )));
+            }
+        }
+    }
     let capabilities = items
         .iter()
         .map(|item| format!("read:{item}#token"))
