@@ -4533,6 +4533,47 @@ printf 'STADO_SERVICE\tenv-set\tenv_set\t%s\n' "$env_path"
     Ok(report_from(output))
 }
 
+/// Atomically remove one assignment from an owner-controlled remote env file.
+pub async fn unset_env_key_on_host(
+    target: &ComputeTarget,
+    env_path: &str,
+    key: &str,
+    runner: &Runner,
+) -> Result<RemoteReport, DeployError> {
+    let body = r#"set -eu
+fail() { printf 'env_unset_failed\t%s\n' "$1"; exit 1; }
+decode=-D
+if [ "$(uname)" = "Linux" ]; then decode=--decode; fi
+home=$HOME
+env_path=$(printf '%s' '@ENV_PATH_B64@' | /usr/bin/base64 "$decode")
+case "$env_path" in
+  '$HOME'/*) env_path="$home/${env_path#\$HOME/}" ;;
+  "$home"/*) ;;
+  /*) fail 'target must be inside the target home' ;;
+  *) env_path="$home/$env_path" ;;
+esac
+case "$env_path" in "$home"/*) ;; *) fail 'target must be inside the target home' ;; esac
+[ ! -L "$env_path" ] || fail 'target cannot be a symlink'
+[ -f "$env_path" ] || fail 'environment file must already exist'
+parent=$(/usr/bin/dirname "$env_path")
+real_parent=$(/usr/bin/python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$parent")
+/usr/bin/python3 -c 'import os,sys; home=os.path.realpath(sys.argv[1]); parent=sys.argv[2]; sys.exit(0 if os.path.commonpath((home,parent)) == home else 1)' "$home" "$real_parent" || fail 'resolved target leaves the target home'
+key=$(printf '%s' '@KEY_B64@' | /usr/bin/base64 "$decode")
+tmp="$parent/.stado-env-unset.$$"
+trap '/bin/rm -f "$tmp"' EXIT HUP INT TERM
+/usr/bin/awk -v key="$key" '$0 !~ "^" key "=" { print }' "$env_path" > "$tmp"
+/bin/chmod 0600 "$tmp"
+/bin/mv -f "$tmp" "$env_path"
+trap - EXIT HUP INT TERM
+printf 'STADO_SERVICE\tenv-unset\tenv_unset\t%s\n' "$env_path"
+"#;
+    let body = body
+        .replace("@ENV_PATH_B64@", &STANDARD.encode(env_path.as_bytes()))
+        .replace("@KEY_B64@", &STANDARD.encode(key.as_bytes()));
+    let output = host_channel::run_script(target, &body, runner).await?;
+    Ok(report_from(output))
+}
+
 
 
 /// Write one vault item field on the host using its own Skarbiec binary

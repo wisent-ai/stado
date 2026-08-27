@@ -3914,20 +3914,21 @@ async fn reconcile_verifier(
                 uuid::Uuid::new_v4().simple()
             );
             let payload = serde_json::to_string(&serde_json::json!({
+                "schema": "skarbiec.item.v2",
                 "kind": "token",
                 "fields": { "token": token },
                 "context": {}
             }))?;
+            let create_command = format!(
+                "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin GNUPGHOME={} SKARBIEC_VAULT_FILE={} {} set-json {}",
+                crate::deploy::shlex_quote(&gnupg_home),
+                crate::deploy::shlex_quote(&vault),
+                crate::deploy::shlex_quote(&skarbiec),
+                crate::deploy::shlex_quote(item),
+            );
             let created = crate::deploy::host_channel::run_program_with_stdin(
                 &resolved,
-                &[
-                    "/usr/bin/env",
-                    &format!("GNUPGHOME={gnupg_home}"),
-                    &format!("SKARBIEC_VAULT_FILE={vault}"),
-                    &skarbiec,
-                    "set-json",
-                    item,
-                ],
+                &["/bin/sh", "-c", &create_command],
                 &payload,
                 &runner,
             )
@@ -3935,12 +3936,10 @@ async fn reconcile_verifier(
             .map_err(|error| CmdError::click(error.to_string()))?;
             if !created.ok() {
                 return Err(CmdError::click(format!(
-                    "{}: release publisher item {item} could not be provisioned: {}",
+                    "{}: release publisher item {item} could not be provisioned: stdout={:?}; stderr={:?}",
                     resolved.name,
-                    crate::deploy::host_channel::last_error_line(
-                        &created,
-                        "remote publisher provisioning failed"
-                    )
+                    created.stdout.trim(),
+                    created.stderr.trim(),
                 )));
             }
         }
@@ -3951,7 +3950,7 @@ async fn reconcile_verifier(
         .collect::<Vec<_>>()
         .join(",");
     let command = format!(
-        "GNUPGHOME={} SKARBIEC_VAULT_FILE={} {} token-mint {} \
+        "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin GNUPGHOME={} SKARBIEC_VAULT_FILE={} {} token-mint {} \
          --capabilities {} --replace-capabilities --token-file {} --ttl-seconds {} > /dev/null",
         crate::deploy::shlex_quote(&gnupg_home),
         crate::deploy::shlex_quote(&vault),

@@ -17,6 +17,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
+fn release_platform() -> &'static str {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "darwin-arm64",
+        ("linux", "x86_64") => "linux-amd64",
+        (os, arch) => panic!("release journey has no platform mapping for {os}-{arch}"),
+    }
+}
 
 struct SkarbiecFixture {
     gnupg: tempfile::TempDir,
@@ -203,7 +210,7 @@ fn release_env(command: &mut Command, home: &Path, storage: &Path, vault: &Skarb
         .env("RUSTUP_HOME", operator_home.join(".rustup"));
 }
 
-fn fixture_source(home: &Path) -> PathBuf {
+fn fixture_source(home: &Path, platform: &str) -> PathBuf {
     let source = home.join("source");
     fs::create_dir_all(source.join("src")).unwrap();
     fs::write(
@@ -228,8 +235,8 @@ fn fixture_source(home: &Path) -> PathBuf {
                 "pattern": "(?m)^version\\s*=\\s*\\\"(?P<version>[^\\\"]+)\\\"\\s*$"
             },
             "platforms": {
-                "darwin-arm64": {
-                    "runner_platform": "darwin-arm64",
+                (platform): {
+                    "runner_platform": platform,
                     "quality": [{
                         "name": "cargo-check",
                         "argv": ["cargo", "check", "--locked"]
@@ -248,7 +255,7 @@ fn fixture_source(home: &Path) -> PathBuf {
             },
             "deliveries": [{
                 "name": "install-on-builder",
-                "platform": "darwin-arm64",
+                "platform": platform,
                 "argv": [
                     "stado", "release", "install-local",
                     "--member", "bin/ci-release-probe",
@@ -274,7 +281,7 @@ fn fixture_source(home: &Path) -> PathBuf {
 }
 
 
-fn registry(home: &Path, storage: &Path, public_key: &str) {
+fn registry(home: &Path, storage: &Path, public_key: &str, platform: &str) {
     let hostname = String::from_utf8(run(Command::new("hostname").arg("-f")).stdout)
         .unwrap()
         .trim()
@@ -285,7 +292,7 @@ fn registry(home: &Path, storage: &Path, public_key: &str) {
             "name": "ci-runner",
             "kind": "local",
             "ssh": "nobody@127.0.0.1",
-            "release_platform": "darwin-arm64",
+            "release_platform": platform,
             "hostnames": [hostname],
             "disk_cleanup": {
                 "mode": "off",
@@ -352,7 +359,7 @@ fn registry(home: &Path, storage: &Path, public_key: &str) {
                     },
                     "targets": {
                         "ci-runner": {
-                            "platform": "darwin-arm64",
+                            "platform": platform,
                             "run_as_user": "ci-release",
                             "home": home,
                             "state_dir": home.join(".stado/release-state"),
@@ -450,6 +457,7 @@ fn wait_for_submit(
 #[test]
 #[ignore = "Probierz supplies the real Skarbiec executable"]
 fn a_real_release_builds_publishes_and_installs_its_binary() {
+    let platform = release_platform();
     let run_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/ci-cd-runs");
     fs::create_dir_all(&run_root).unwrap();
     let home = tempfile::Builder::new()
@@ -461,7 +469,7 @@ fn a_real_release_builds_publishes_and_installs_its_binary() {
     std::os::unix::fs::symlink(operator_home.join(".cargo"), home.path().join(".cargo")).unwrap();
     std::os::unix::fs::symlink(operator_home.join(".rustup"), home.path().join(".rustup")).unwrap();
     fs::create_dir_all(&storage).unwrap();
-    let source = fixture_source(home.path());
+    let source = fixture_source(home.path(), platform);
 
     let private = home.path().join("release-private");
     let public = home.path().join("release-public");
@@ -481,7 +489,7 @@ fn a_real_release_builds_publishes_and_installs_its_binary() {
     ]));
     let public_key = fs::read_to_string(&public).unwrap();
     let vault = SkarbiecFixture::start(home.path(), &private);
-    registry(home.path(), &storage, &public_key);
+    registry(home.path(), &storage, &public_key, platform);
 
     let agent_out = File::create(home.path().join("agent.out")).unwrap();
     let agent_err = File::create(home.path().join("agent.err")).unwrap();
@@ -530,7 +538,7 @@ fn a_real_release_builds_publishes_and_installs_its_binary() {
     );
     let release: Value = serde_json::from_slice(&result.stdout).unwrap();
     assert_eq!(release["state"], "completed");
-    assert_eq!(release["platforms"]["darwin-arm64"]["state"], "published");
+    assert_eq!(release["platforms"][platform]["state"], "published");
     assert_eq!(
         release["deliveries"]["install-on-builder"]["state"],
         "passed"
@@ -543,4 +551,5 @@ fn a_real_release_builds_publishes_and_installs_its_binary() {
         String::from_utf8(output.stdout).unwrap().trim(),
         "ci-release-probe 1.0.0"
     );
+    println!("verified release platform={platform}; installed=ci-release-probe 1.0.0");
 }
