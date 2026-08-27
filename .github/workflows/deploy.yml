@@ -295,9 +295,10 @@ jobs:
           python3 scripts/surface.py --help-text "$RUNNER_TEMP/stado-help.txt" \
             > "$RUNNER_TEMP/candidate-surface.json"
 
-          # Release bytes stay on the fleet network. Public ingress is deployment
-          # output and its proxy timeout cannot decide whether a large artifact exists.
-          unset STADO_API_TOKEN
+          # The publisher is on the owner control-plane host. Its configured
+          # Stado store is the source of truth; public ingress is deployment
+          # output and therefore cannot be a release prerequisite.
+          unset STADO_API_URL STADO_API_TOKEN
           BASELINE="$baseline" \
             AUTOVERSION="$RUNNER_TEMP/autoversion/bin/autoversion" \
             STADO_BIN="$stado_bin" \
@@ -307,7 +308,7 @@ jobs:
         run: |
           stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
           test -x "$stado_bin"
-          unset STADO_API_TOKEN
+          unset STADO_API_URL STADO_API_TOKEN
           for source in "$RUNNER_TEMP"/stado-release/*; do
             name="${source##*/}"
             uri="stado://releases/stado/$STADO_VERSION/linux-amd64/$name"
@@ -443,9 +444,9 @@ jobs:
           STADO_RELEASE_PREVIEW_INTEGRATIONS="gcs-storage,s3-storage,azure-blob-storage,gcp-compute,aws-ec2,azure-vm,box,vast" \
             "$STADO_SOURCE_DIR/scripts/release_manifest.sh"
           mv "$archive" "$release_dir/stado-v$version-$platform.tar.gz"
-          # Publish over the fleet endpoint; public ingress has a bounded request
-          # timeout and is not the transport for release binaries.
-          unset STADO_API_TOKEN
+          # Publish through the host's configured Stado store before replacing
+          # the host runtime or reloading its public ingress.
+          unset STADO_API_URL STADO_API_TOKEN
           for source in "$release_dir"/*; do
             name="${source##*/}"
             uri="stado://releases/stado/$version/$platform/$name"
