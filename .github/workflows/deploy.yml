@@ -119,6 +119,17 @@ jobs:
           baseline_identity="$(
             python3 scripts/baseline.py --best --stado "$stado_bin"
           )"
+          restart_object_service() {
+            for attempt in 1 2 3 4 5 6; do
+              if "$stado_bin" service restart \
+                   com.wisent.always-on.stado-object-api \
+                   --host charless-mac-mini --json; then
+                return 0
+              fi
+              sleep 5
+            done
+            return 1
+          }
           if [[ "$baseline_identity" == bootstrap:* ]]; then
             # One-time channel bootstrap: both verifier grants predate inline
             # boundary recovery. Reconcile them from their declared policies
@@ -129,9 +140,7 @@ jobs:
               charless-mac-mini --json
             "$stado_bin" host reconcile-release-verifier \
               charless-mac-mini --json
-            "$stado_bin" service restart \
-              com.wisent.always-on.stado-object-api \
-              --host charless-mac-mini --json
+            restart_object_service
           fi
           preflight() {
             # `releases/` is public and cannot prove the private object
@@ -161,9 +170,7 @@ jobs:
             # this branch remains the upgrade path from releases that did not.
             "$stado_bin" host reconcile-object-verifier \
               charless-mac-mini --json
-            "$stado_bin" service restart \
-              com.wisent.always-on.stado-object-api \
-              --host charless-mac-mini --json
+            restart_object_service
             wait_for_preflight
           fi
           state="$(jq -r '.state // ""' "$RUNNER_TEMP/object-preflight.json")"
