@@ -325,36 +325,52 @@ async fn host_health_api_token() -> Result<String, CmdError> {
     Ok(token)
 }
 
-/// `stado host recover TARGET` — recover a registry-managed macOS host
-/// through its approved channel (Python `host_recover` in cli.py: prints
-/// the report as sorted-keys JSON, exits 1 when status != "ok").
+/// `stado host recover TARGET [--release VERSION]` — optionally replace the
+/// remote Stado binary from the registry-trusted signed emergency channel,
+/// then recover a registry-managed macOS host through its approved channel.
 ///
 /// The canonical remote registry remains the default and fleet-survival
 /// authority. `bundled_registry` is an explicit break-glass path for repairing
 /// the storage or authorization outage that made that authority unreadable.
-///
-/// `host_recovery::STATUS_BLOCKED` reaches that same exit 1: a pass that ran
-/// to its last line while leaving a managed unit unloaded is not a recovery,
-/// and the `skipped` and `blockers` arrays of the printed document say which
-/// unit and what to run. Exit 0 from this command means every managed unit is
-/// loaded.
-pub async fn recover(target: &str, bundled_registry: bool) -> Result<(), CmdError> {
+/// The selected registry is loaded exactly once: release trust and host
+/// identity must come from the same last-known-good or explicit bundled copy.
+pub async fn recover(
+    target: &str,
+    bundled_registry: bool,
+    release: Option<&str>,
+) -> Result<(), CmdError> {
     let runner = crate::deploy::production_runner();
-    let report = if bundled_registry {
-        let registry = crate::targets::load_bundled_registry()
-            .map_err(|exc| CmdError::click(exc.to_string()))?;
-        crate::deploy::host_recovery::recover_host_with_registry(&registry, target, &runner).await
+    let registry = if bundled_registry {
+        crate::targets::load_bundled_registry()
+            .map_err(|exc| CmdError::click(exc.to_string()))?
     } else {
-        crate::deploy::host_recovery::recover_host(target, &runner).await
+        crate::deploy::host_channel::canonical_registry()
+            .await
+            .map_err(|exc| CmdError::click(exc.to_string()))?
+    };
+    let report = match release {
+        Some(version) => {
+            crate::deploy::host_recovery_release::recover(
+                &registry,
+                target,
+                version,
+                &runner,
+            )
+            .await
+        }
+        None => {
+            crate::deploy::host_recovery::recover_host_with_registry(&registry, target, &runner)
+                .await
+        }
     }
     .map_err(|exc| CmdError::click(exc.to_string()))?;
     println!(
         "{}",
         crate::deploy::host_recovery::to_sorted_pretty(&report)
     );
-    if report.get("status").and_then(Value::as_str) != Some(crate::deploy::host_recovery::STATUS_OK)
+    if report.get("status").and_then(Value::as_str)
+        != Some(crate::deploy::host_recovery::STATUS_OK)
     {
-        // click.exceptions.Exit(1): nothing more to print.
         return Err(CmdError::silent(1));
     }
     Ok(())

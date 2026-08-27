@@ -1199,6 +1199,9 @@ enum HostCommands {
         /// Use the bundled registry snapshot when the canonical registry cannot be read.
         #[arg(long)]
         bundled_registry: bool,
+        /// Replace Stado from an exact registry-trusted signed release before recovery.
+        #[arg(long)]
+        release: Option<String>,
     },
     /// Request a graceful reboot of TARGET through its approved channel.
     Reboot { target: String },
@@ -1999,7 +2002,8 @@ async fn dispatch(cli: Cli) -> Result<(), CmdError> {
             HostCommands::Recover {
                 target,
                 bundled_registry,
-            } => host::recover(&target, bundled_registry).await,
+                release,
+            } => host::recover(&target, bundled_registry, release.as_deref()).await,
             HostCommands::Reboot { target } => host::reboot(&target).await,
             HostCommands::User(HostUserCommands::Create {
                 username,
