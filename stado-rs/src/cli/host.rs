@@ -3904,7 +3904,7 @@ async fn reconcile_verifier(
                 "context": {}
             }))?;
             let create_command = format!(
-                "GNUPGHOME={} SKARBIEC_VAULT_FILE={} {} set-json {}",
+                "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin GNUPGHOME={} SKARBIEC_VAULT_FILE={} {} set-json {}",
                 crate::deploy::shlex_quote(&gnupg_home),
                 crate::deploy::shlex_quote(&vault),
                 crate::deploy::shlex_quote(&skarbiec),
@@ -3920,12 +3920,10 @@ async fn reconcile_verifier(
             .map_err(|error| CmdError::click(error.to_string()))?;
             if !created.ok() {
                 return Err(CmdError::click(format!(
-                    "{}: release publisher item {item} could not be provisioned: {}",
+                    "{}: release publisher item {item} could not be provisioned: stdout={:?}; stderr={:?}",
                     resolved.name,
-                    crate::deploy::host_channel::last_error_line(
-                        &created,
-                        "remote publisher provisioning failed"
-                    )
+                    created.stdout.trim(),
+                    created.stderr.trim(),
                 )));
             }
         }
