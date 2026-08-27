@@ -53,6 +53,29 @@ jobs:
         run: |
           set -euo pipefail
           unset STADO_API_URL STADO_API_TOKEN
+          internal_url=http://127.0.0.1:18779
+          "$HOME/.stado/bin/stado" host forward-remote \
+            charless-mac-mini product-release-object-api \
+            --remote-port 8765 --local-port 18779 \
+            > "$RUNNER_TEMP/product-release-channel.log" 2>&1 &
+          channel_pid=$!
+          trap 'kill "$channel_pid" 2>/dev/null || true' EXIT
+          export WC_STORAGE_BACKEND=stado
+          export WC_STADO_STORAGE_URL="$internal_url"
+          export WC_STADO_STORAGE_NAMESPACE=probierz
+          ready=false
+          for attempt in $(seq 1 24); do
+            if stado-rs/target/release/stado storage stat \
+                 stado://probierz/registry.json --json >/dev/null 2>&1; then
+              ready=true
+              break
+            fi
+            sleep 5
+          done
+          if [ "$ready" != true ]; then
+            cat "$RUNNER_TEMP/product-release-channel.log" >&2
+            false
+          fi
           stado-rs/target/release/stado release submit \
             --source "$GITHUB_WORKSPACE/product" \
             --version "$PRODUCT_VERSION" \
