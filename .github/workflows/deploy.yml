@@ -116,11 +116,14 @@ jobs:
         run: |
           set -euo pipefail
           stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
-          # Release publication uses the already-declared object plane. A
-          # release job must not invent a second launchd unit or cycle the
-          # live store merely because it is about to write; prove the exact
-          # cross-namespace route the following step needs.
-          "$stado_bin" storage objects releases stado --json >/dev/null
+          # release-channel stat is public and distinguishes an explicit
+          # absence from an unreachable route without borrowing a publisher.
+          state="$("$stado_bin" storage stat \
+            stado://releases/stado/__release_preflight__ --json | jq -r '.state // ""')"
+          case "$state" in
+            present|absent) ;;
+            *) echo "::error::release object plane is ${state:-unanswered}"; false ;;
+          esac
 
       - name: Create Linux release manifest
         run: |
