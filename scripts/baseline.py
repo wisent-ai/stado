@@ -176,7 +176,11 @@ def best(stado: Path, output: Path | None) -> str:
     if current is not None:
         versions.add(current)
     release_platform = native_platform()
-    required_platforms = ("linux-amd64", "darwin-arm64")
+    # The baseline is a command surface, which is architecture-independent.
+    # Verify and execute the release matching this runner. Requiring every
+    # platform here made the Linux publisher depend on the later Darwin
+    # control-plane job, while that job depends on this publisher succeeding.
+    required_platforms = (release_platform,)
     for version in sorted(versions, key=lambda value: version_key(f"v{value}"), reverse=True):
         states = {
             candidate: state(
