@@ -15,6 +15,8 @@
 //! host-scoped shipped declarations. An explicit declaration always beats the
 //! catalog; the catalog is the default, never an override.
 
+use std::collections::BTreeMap;
+
 use serde::Deserialize;
 
 /// One preconfigured Wisent service. Internal processes stay internal: the
@@ -31,6 +33,14 @@ pub struct CatalogService {
     pub program: String,
     #[serde(default)]
     pub args: Vec<String>,
+    /// Environment the unit must carry beyond the rendered PATH, in the same
+    /// placeholder language as `program`. The fleet broker is why this
+    /// exists: `skarbiec serve` finds its vault through
+    /// `SKARBIEC_VAULT_FILE`, and a unit that does not say so serves the
+    /// uninitialized default path on every fresh start while the operator
+    /// vault sits untouched beside it.
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -77,13 +87,23 @@ pub fn resolve_entry(
     home: &str,
     release_platform: Option<&str>,
     host: &str,
-) -> (String, Vec<String>) {
+) -> (String, Vec<String>, Vec<(String, String)>) {
     (
         resolve_word(&entry.program, home, release_platform, host),
         entry
             .args
             .iter()
             .map(|arg| resolve_word(arg, home, release_platform, host))
+            .collect(),
+        entry
+            .env
+            .iter()
+            .map(|(name, value)| {
+                (
+                    name.clone(),
+                    resolve_word(value, home, release_platform, host),
+                )
+            })
             .collect(),
     )
 }

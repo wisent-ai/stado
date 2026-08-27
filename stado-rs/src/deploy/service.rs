@@ -3664,7 +3664,7 @@ const REMOTE_USER_PLACEHOLDER: &str = "__STADO_USER__";
 pub fn plan_deploy(name: &str, program: &str, args: &[String]) -> Result<DeployPlan, DeployError> {
     validate_service_name(name)?;
     let label = local_install::label(DEPLOY_KIND, name);
-    plan_deploy_labelled(name, &label, program, args)
+    plan_deploy_labelled(name, &label, program, args, &[])
 }
 
 /// [`plan_deploy`] at a label the declaration already carries.
@@ -3682,12 +3682,24 @@ pub fn plan_deploy_labelled(
     label: &str,
     program: &str,
     args: &[String],
+    extra_env: &[(String, String)],
 ) -> Result<DeployPlan, DeployError> {
     validate_service_name(name)?;
     validate_service_name(label)?;
     validate_program(program)?;
     for arg in args {
         validate_unit_argument(arg)?;
+    }
+    // Environment rides into the rendered unit verbatim, so it is held to the
+    // same shape the runtime env-file writer enforces: an exported name and a
+    // single-line value. A line break here is a second plist key, not a value.
+    for (variable, value) in extra_env {
+        validate_env_variable(variable)?;
+        if value.contains('\n') || value.contains('\r') {
+            return Err(DeployError(format!(
+                "environment variable {variable} carries a line break"
+            )));
+        }
     }
     let label = label.to_string();
     let render = |os: LocalOs| {
@@ -3704,7 +3716,9 @@ pub fn plan_deploy_labelled(
             os,
             label: label.clone(),
             exec_args,
-            env: vec![("PATH".to_string(), path.to_string())],
+            env: std::iter::once(("PATH".to_string(), path.to_string()))
+                .chain(extra_env.iter().cloned())
+                .collect(),
         }
     };
     let darwin = render(LocalOs::Darwin);
