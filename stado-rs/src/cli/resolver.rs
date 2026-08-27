@@ -1328,9 +1328,23 @@ async fn proxy_connection(
                 status = child.wait() => {
                     let status = status
                         .map_err(|error| format!("SSH transport wait failed: {error}"))?;
-                    return Err(format!(
-                        "SSH transport exited before the upstream answered: {status}"
-                    ));
+                    if !status.success() {
+                        return Err(format!(
+                            "SSH transport exited before the upstream answered: {status}"
+                        ));
+                    }
+                    // A short HTTP response can be fully written while the SSH
+                    // child exits. In that case both wait() and stdout are ready,
+                    // and select! may observe the clean exit first. Drain the
+                    // buffered response before calling that successful transport
+                    // a refusal.
+                    return match ssh_stdout.read(&mut upstream_head).await {
+                        Ok(0) => Err(
+                            "SSH transport closed before the upstream answered".to_string()
+                        ),
+                        Ok(read) => Ok(read),
+                        Err(error) => Err(format!("SSH transport read failed: {error}")),
+                    };
                 }
                 read = ssh_stdout.read(&mut upstream_head) => {
                     return match read {

@@ -163,14 +163,21 @@ jobs:
               2> "$RUNNER_TEMP/release-preflight.err"
           }
           wait_for_preflight() {
-            for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            consecutive=0
+            for attempt in $(seq 1 24); do
               if preflight; then
-                return 0
+                consecutive=$((consecutive + 1))
+                if [[ "$consecutive" -ge 3 ]]; then
+                  return 0
+                fi
+              else
+                consecutive=0
               fi
               sleep 5
             done
             cat "$RUNNER_TEMP/object-preflight.err" >&2
             cat "$RUNNER_TEMP/release-preflight.err" >&2
+            echo "::error::object and release preflight did not remain healthy for three consecutive checks" >&2
             return 1
           }
           if ! wait_for_preflight; then
