@@ -864,13 +864,16 @@ pub async fn submit(args: &ReleaseSubmitArgs) -> Result<(), CmdError> {
             "requested channel is forbidden by promotion policy",
         ));
     }
-    super::service::ensure_local_dependency(OBJECT_API_SERVICE, OBJECT_API_REASON, true)
-        .await
-        .map_err(|error| {
-            CmdError::click(format!(
-                "cannot ensure required service {OBJECT_API_SERVICE}: {error}"
-            ))
-        })?;
+    let api_url = crate::config::stado_api_url();
+    if api_url.is_empty() || crate::deploy::host_release::loopback_http_origin(&api_url) {
+        super::service::ensure_local_dependency(OBJECT_API_SERVICE, OBJECT_API_REASON, true)
+            .await
+            .map_err(|error| {
+                CmdError::click(format!(
+                    "cannot ensure required service {OBJECT_API_SERVICE}: {error}"
+                ))
+            })?;
+    }
     let (commit, archive) = snapshot(&root)?;
     let source_sha = release_control::sha256_bytes(&archive);
     let manifest_sha = release_control::sha256_bytes(&manifest_bytes);
