@@ -166,7 +166,8 @@ impl SkarbiecFixture {
             "read:stado-cli-login#username",
         ]);
         assert_success(&minted, "mint one-field Stado grant");
-        let document: Value = serde_json::from_slice(&minted.stdout).expect("token response is JSON");
+        let document: Value =
+            serde_json::from_slice(&minted.stdout).expect("token response is JSON");
         let bearer = document
             .get("token")
             .and_then(Value::as_str)
@@ -216,7 +217,12 @@ impl Drop for SkarbiecFixture {
             let _ = server.wait();
         }
         let _ = Command::new("gpgconf")
-            .args(["--homedir", self.gnupg.to_str().unwrap_or_default(), "--kill", "gpg-agent"])
+            .args([
+                "--homedir",
+                self.gnupg.to_str().unwrap_or_default(),
+                "--kill",
+                "gpg-agent",
+            ])
             .output();
         let _ = fs::remove_dir_all(&self.root);
     }

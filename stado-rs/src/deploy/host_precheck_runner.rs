@@ -428,7 +428,6 @@ async fn kronika_agent_credential(
     })
 }
 
-
 fn set_repository_secret(
     repository: &str,
     name: &str,
@@ -698,15 +697,22 @@ fn issue_apple_capability(
             authorization_id,
         ])
         .output()
-        .map_err(|error| DeployError(format!("could not start Skarbiec capability issuance: {error}")))?;
+        .map_err(|error| {
+            DeployError(format!(
+                "could not start Skarbiec capability issuance: {error}"
+            ))
+        })?;
     if !output.status.success() {
         return Err(DeployError(format!(
             "Skarbiec refused Apple capability: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    let issued: Value = serde_json::from_slice(&output.stdout)
-        .map_err(|error| DeployError(format!("Skarbiec returned unreadable capability JSON: {error}")))?;
+    let issued: Value = serde_json::from_slice(&output.stdout).map_err(|error| {
+        DeployError(format!(
+            "Skarbiec returned unreadable capability JSON: {error}"
+        ))
+    })?;
     let capability_id = issued
         .get("capability_id")
         .and_then(Value::as_str)
@@ -720,7 +726,6 @@ fn issue_apple_capability(
         "authorization_id": authorization_id,
     }))
 }
-
 
 async fn required_remote_file(target: &ComputeTarget, path: &str) -> Result<String, DeployError> {
     host_channel::remote_read_file(target, path, &production_runner())
@@ -1268,8 +1273,9 @@ async fn install_profile(target_name: &str, profile: RunnerProfile) -> Result<Va
         Platform::DarwinArm64 => format!("/Users/Shared/{}-runner", profile.slug),
     };
     let probe = format!("test -f {}/.runner", super::shlex_quote(&runner_root));
-    let already_registered =
-        host_channel::run_script(&target, &probe, &production_runner()).await?.ok();
+    let already_registered = host_channel::run_script(&target, &probe, &production_runner())
+        .await?
+        .ok();
     let token = if already_registered {
         String::new()
     } else {

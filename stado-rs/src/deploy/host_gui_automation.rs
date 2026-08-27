@@ -12,8 +12,7 @@ use crate::targets::ComputeTarget;
 pub const CUA_DRIVER_VERSION: &str = "0.22.0";
 pub const CUA_DRIVER_BUNDLE_ID: &str = "com.trycua.driver";
 pub const CUA_DRIVER_APP: &str = "/Applications/CuaDriver.app";
-const CUA_DRIVER_EXECUTABLE: &str =
-    "/Applications/CuaDriver.app/Contents/MacOS/cua-driver";
+const CUA_DRIVER_EXECUTABLE: &str = "/Applications/CuaDriver.app/Contents/MacOS/cua-driver";
 pub const CUA_DRIVER_ARCHIVE_SHA256: &str =
     "59603bc7e5f8d9d70f165d87158e577f99227ffcbb91d5fd9f9c688f4beb3727";
 pub const CUA_DRIVER_ARCHIVE_URL: &str = "https://github.com/trycua/cua/releases/download/\
@@ -29,7 +28,6 @@ const ACCESSIBILITY_SERVICE: &str = "kTCCServiceAccessibility";
 const CUA_DRIVER_RUNTIME_LABEL: &str = "com.wisent.probierz-cua-driver";
 const LEGACY_CUA_DRIVER_RUNTIME_LABEL: &str =
     "com.wisent.compute.service.com.wisent.probierz-cua-driver";
-
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GuiAutomationReport {
@@ -638,7 +636,6 @@ async fn reconcile_autologin(
     Ok(())
 }
 
-
 async fn grant_accessibility_inner(
     target: &ComputeTarget,
     items: &mut Vec<(String, String)>,
@@ -822,8 +819,13 @@ async fn reconcile_runtime(
 ) -> Result<(), DeployError> {
     require_target(target)?;
     let user = login_user(target, runner).await?;
-    let uid_output =
-        run(target, &["/usr/bin/id", "-u", &user], "resolve GUI user id", runner).await?;
+    let uid_output = run(
+        target,
+        &["/usr/bin/id", "-u", &user],
+        "resolve GUI user id",
+        runner,
+    )
+    .await?;
     let uid = uid_output.stdout.trim();
     if uid.is_empty() || !uid.chars().all(|character| character.is_ascii_digit()) {
         return Err(DeployError(format!(
@@ -923,10 +925,9 @@ async fn reconcile_runtime(
         host_channel::run_program(target, &["/bin/launchctl", "print", &qualified], runner)
             .await?
             .ok();
-    let socket_ready =
-        host_channel::run_program(target, &["/bin/test", "-S", &socket], runner)
-            .await?
-            .ok();
+    let socket_ready = host_channel::run_program(target, &["/bin/test", "-S", &socket], runner)
+        .await?
+        .ok();
     if definition_matches && runtime_loaded && socket_ready {
         remove_if_present(target, &staged, false, runner).await?;
         items.push(("cua-driver-runtime".to_string(), "running".to_string()));
@@ -967,7 +968,8 @@ async fn reconcile_runtime(
 
     let mut socket_ready = false;
     for _ in 0..20 {
-        let probe = host_channel::run_program(target, &["/bin/test", "-S", &socket], runner).await?;
+        let probe =
+            host_channel::run_program(target, &["/bin/test", "-S", &socket], runner).await?;
         if probe.ok() {
             socket_ready = true;
             break;
@@ -1078,13 +1080,9 @@ async fn status_inner(
         .unwrap_or_default();
     let qualified = format!("gui/{}/{CUA_DRIVER_RUNTIME_LABEL}", uid.trim());
     let runtime = if uid.trim().bytes().all(|byte| byte.is_ascii_digit())
-        && optional(
-            target,
-            &["/bin/launchctl", "print", &qualified],
-            runner,
-        )
-        .await?
-        .is_some()
+        && optional(target, &["/bin/launchctl", "print", &qualified], runner)
+            .await?
+            .is_some()
     {
         "running"
     } else {

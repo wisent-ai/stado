@@ -13,10 +13,12 @@ use std::time::Duration;
 use serde_json::Value;
 
 const INTELLIGENCE_HOST: &str = "ip-api.com";
-const INTELLIGENCE_PATH: &str = "/json/?fields=status,message,query,mobile,proxy,hosting,isp,org,as,countryCode";
+const INTELLIGENCE_PATH: &str =
+    "/json/?fields=status,message,query,mobile,proxy,hosting,isp,org,as,countryCode";
 
 fn required(name: &str) -> String {
-    std::env::var(name).unwrap_or_else(|_| panic!("{name} must name the trusted phone tether interface"))
+    std::env::var(name)
+        .unwrap_or_else(|_| panic!("{name} must name the trusted phone tether interface"))
 }
 
 fn unused_loopback_port() -> u16 {
@@ -73,7 +75,10 @@ fn request_through_proxy(proxy: SocketAddr) -> Value {
         .position(|window| window == b"\r\n\r\n")
         .expect("the response contains HTTP headers");
     let status = String::from_utf8_lossy(&response[..separator]);
-    assert!(status.starts_with("HTTP/1.1 200") || status.starts_with("HTTP/1.0 200"), "{status}");
+    assert!(
+        status.starts_with("HTTP/1.1 200") || status.starts_with("HTTP/1.0 200"),
+        "{status}"
+    );
     serde_json::from_slice(&response[separator + 4..]).expect("IP intelligence body is JSON")
 }
 
@@ -88,12 +93,26 @@ fn mobile_egress_uses_the_phone_interface_and_public_ip_is_mobile() {
     let status = proxy.wait().expect("the proxy process is reaped");
 
     assert_eq!(assessment["status"], "success", "{assessment}");
-    assert_eq!(assessment["mobile"], true, "exit is not classified as mobile: {assessment}");
-    assert_eq!(assessment["hosting"], false, "exit is classified as hosting: {assessment}");
-    assert_eq!(assessment["proxy"], false, "carrier exit is listed as a public proxy: {assessment}");
-    let ip = assessment["query"].as_str().expect("assessment carries the public IP");
+    assert_eq!(
+        assessment["mobile"], true,
+        "exit is not classified as mobile: {assessment}"
+    );
+    assert_eq!(
+        assessment["hosting"], false,
+        "exit is classified as hosting: {assessment}"
+    );
+    assert_eq!(
+        assessment["proxy"], false,
+        "carrier exit is listed as a public proxy: {assessment}"
+    );
+    let ip = assessment["query"]
+        .as_str()
+        .expect("assessment carries the public IP");
     assert!(!ip.is_empty());
-    assert!(!status.success(), "the long-running proxy stopped before test cleanup");
+    assert!(
+        !status.success(),
+        "the long-running proxy stopped before test cleanup"
+    );
     println!(
         "mobile egress verified: interface={interface}; public_ip={ip}; isp={}; country={}",
         assessment["isp"], assessment["countryCode"],

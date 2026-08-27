@@ -50,7 +50,6 @@ pub const PLAN_SCHEMA: &str = "wisent.weles-capture-plan.v1";
 /// refuses any name outside that file, so there is nothing to select here.
 pub const CAPTURE_ACTION: &str = "generic_capture";
 
-
 /// Service-directory key retained for callers; its endpoint is the current
 /// synchronous Weles API, not the removed database admission server.
 const ADMISSION_SERVICE: &str = "weles-admission";
@@ -83,7 +82,6 @@ const FORWARD_DEADLINE: Duration = Duration::from_secs(20);
 
 /// Gap between probes of the forwarded port.
 const FORWARD_POLL: Duration = Duration::from_millis(100);
-
 
 /// The five axes a landing-page capture belongs to. A sixth would be a change
 /// to the capture contract, so an unknown one is refused instead of forwarded
@@ -661,7 +659,9 @@ impl Channel {
         })?;
         let status = response.status();
         let body = response.text().await.map_err(|error| {
-            DeployError(format!("the Weles API answered {route} unreadably: {error}"))
+            DeployError(format!(
+                "the Weles API answered {route} unreadably: {error}"
+            ))
         })?;
         let payload: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
         if status == reqwest::StatusCode::UNAUTHORIZED {
@@ -714,9 +714,10 @@ pub async fn run_action(
         .and_then(Value::as_str)
         .filter(|id| !id.is_empty())
         .map(str::to_string)
-        .ok_or_else(|| DeployError("the Weles API completed the action and returned no run id".to_string()))
+        .ok_or_else(|| {
+            DeployError("the Weles API completed the action and returned no run id".to_string())
+        })
 }
-
 
 /// Read the newest recorded row for one fixed action.
 pub async fn latest_action_log(
@@ -785,7 +786,9 @@ pub async fn enqueue(channel: &Channel, plan: &Plan) -> Result<Vec<Enqueued>, De
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty())
             .ok_or_else(|| {
-                DeployError("the Weles API completed the capture and returned no run id".to_string())
+                DeployError(
+                    "the Weles API completed the capture and returned no run id".to_string(),
+                )
             })?;
         accepted.push(Enqueued {
             action_id: run_id.to_string(),

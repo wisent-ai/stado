@@ -190,7 +190,6 @@ fn ssh_proxy_command() -> Command {
     command
 }
 
-
 /// Publish one `authority_unreachable` refusal about the authority host.
 ///
 /// The evidence belongs to the AUTHORITY, not to the machine that noticed.
@@ -456,8 +455,7 @@ impl ResolverState {
         let serialized = serde_json::to_string(&document)
             .map_err(|error| format!("cannot serialize validated registry snapshot: {error}"))?;
         targets::store_last_good(&serialized, &store_version);
-        let next_source =
-            snapshot_source(self.local_store.clone(), &document, &self.local_target)?;
+        let next_source = snapshot_source(self.local_store.clone(), &document, &self.local_target)?;
         let next_config = service_resolution::resolver_config(&document, &self.local_target)?;
         if next_config != self.config {
             return Ok(true);
@@ -796,8 +794,8 @@ struct Startup {
 fn last_good_document() -> Result<Value, String> {
     let path = targets::registry_last_good_path()
         .ok_or_else(|| "last-known-good registry path is unavailable".to_string())?;
-    let bytes = std::fs::read(&path)
-        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    let bytes =
+        std::fs::read(&path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
     serde_json::from_slice(&bytes)
         .map_err(|error| format!("{} is not valid registry JSON: {error}", path.display()))
 }
@@ -846,9 +844,7 @@ async fn load_startup(
         let directory = service_resolution::directory(&bootstrap)
             .map_err(StartupError::Fatal)?
             .ok_or_else(|| {
-                StartupError::Fatal(
-                    "last-known-good registry has no service_directory".to_string(),
-                )
+                StartupError::Fatal("last-known-good registry has no service_directory".to_string())
             })?;
         eprintln!(
             "stado resolver recovery: serving the last-known-good generation {} immediately while authority retries continue",

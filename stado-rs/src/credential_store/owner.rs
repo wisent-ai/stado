@@ -210,9 +210,7 @@ pub fn read_string(id: &str, field: &str) -> Result<String, SkarbiecError> {
         .and_then(Value::as_object)
         .and_then(|fields| fields.get(field))
         .and_then(Value::as_str)
-        .ok_or_else(|| {
-            SkarbiecError::Deployment(format!("{id} has no string field {field}"))
-        })?
+        .ok_or_else(|| SkarbiecError::Deployment(format!("{id} has no string field {field}")))?
         .to_string();
     if value.is_empty() {
         return Err(SkarbiecError::Deployment(format!("{id}.{field} is empty")));
