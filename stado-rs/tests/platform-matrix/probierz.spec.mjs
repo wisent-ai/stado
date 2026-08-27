@@ -37,7 +37,7 @@ for (const [host, platform] of hosts) {
     '--repo-ref', revision,
     '--repo-extras', '',
   ], { cwd: repository, timeout: 120_000, maxBuffer: 4 * 1024 * 1024 });
-  const jobId = submitted.stdout.match(/[0-9a-f]{8}-[0-9a-f-]{27,}/i)?.[0];
+  const jobId = submitted.stdout.match(/Job ID: ([0-9a-f]{8})/i)?.[1];
   assert.ok(jobId, `submit on ${host} returned no job id: ${submitted.stdout}\n${submitted.stderr}`);
 
   const watched = await exec(stado, ['job', 'watch', jobId, '--follow', '--json'], {
