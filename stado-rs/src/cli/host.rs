@@ -4732,7 +4732,7 @@ pub async fn weles_gmail_authorize(
             "url": authorization_url,
             "objective": objective,
             "flow_name": "skrzynka_gmail_oauth",
-            "session_label": "google-lukasz",
+            "session_label": "codex_login",
         }),
     )
     .await
