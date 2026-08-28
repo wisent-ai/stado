@@ -170,17 +170,18 @@ jobs:
             *) echo "::error::release writer must use the declared loopback resolver"; false ;;
           esac
           export STADO_API_URL="$STADO_WRITER_API_URL"
-          "$stado_bin" resolver status --target lukasz-macbook --json \
+          # This job is a resolver workload, not an authority operator. Prove
+          # the live resolver grants this exact consumer the object-storage
+          # route; `resolver status` additionally refreshes the global registry
+          # authority and can reject a healthy, fresh workload data plane when
+          # an unrelated authority transport is unavailable.
+          "$stado_bin" resolver resolve stado-object-api \
+            --consumer stado-local-agent --json \
             > "$RUNNER_TEMP/release-resolver.json"
           jq -e '
-            .verdict == "ready" and
-            any(
-              .adapters[];
-              .service == "stado-object-api" and
-              .consumer == "stado-local-agent" and
-              .bind == "127.0.0.1:18776" and
-              .listening == true
-            )
+            .service == "stado://service/stado-object-api" and
+            (.generation | type == "number") and
+            (.capabilities | index("object-storage") != null)
           ' "$RUNNER_TEMP/release-resolver.json" >/dev/null
           retry_command() {
             for attempt in 1 2 3 4 5 6; do
