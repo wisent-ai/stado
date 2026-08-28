@@ -16,7 +16,10 @@ jobs:
       contents: read
     env:
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
-      STADO_API_URL: ${{ vars.STADO_OBJECT_API_INTERNAL_URL }}
+      # The release writer is the declared local resolver adapter. It owns
+      # authenticated transport to the host-local object API; workflows never
+      # address that loopback-only service directly.
+      STADO_WRITER_API_URL: http://127.0.0.1:18776
       WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
       WC_SKARBIEC_CONSUMER: stado-release-publisher
       WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
@@ -57,14 +60,31 @@ jobs:
         run: |
           set -euo pipefail
           unset STADO_API_TOKEN
+          case "$STADO_WRITER_API_URL" in
+            http://127.0.0.1:18776) ;;
+            *) echo "::error::release writer must use the declared loopback resolver"; false ;;
+          esac
+          export STADO_API_URL="$STADO_WRITER_API_URL"
           export WC_STORAGE_BACKEND=stado
-          export WC_STADO_STORAGE_URL="$STADO_API_URL"
+          export WC_STADO_STORAGE_URL="$STADO_WRITER_API_URL"
           export WC_STADO_STORAGE_NAMESPACE=probierz
           # The object API deliberately fails closed when its host-local Skarbiec
           # grant expires. Repair both declared verifier grants before probing the
           # channel, so a Skarbiec release does not depend on an already-healthy
           # Skarbiec authorization path.
           stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
+          "$stado_bin" resolver status --target lukasz-macbook --json \
+            > "$RUNNER_TEMP/product-release-resolver.json"
+          jq -e '
+            .verdict == "ready" and
+            any(
+              .adapters[];
+              .service == "stado-object-api" and
+              .consumer == "stado-local-agent" and
+              .bind == "127.0.0.1:18776" and
+              .listening == true
+            )
+          ' "$RUNNER_TEMP/product-release-resolver.json" >/dev/null
           retry_reconcile() {
             for attempt in $(seq 1 6); do
               if "$@"; then
@@ -111,9 +131,8 @@ jobs:
               --host charless-mac-mini --json || true
             # The restart can close its own host transport before returning a
             # receipt. Only the authenticated write/read postcondition below
-            # decides whether it succeeded. The declared internal object
-            # channel is independent of the host-control connection used for
-            # the restart.
+            # decides whether it succeeded. The declared local resolver
+            # remains available when the host-control connection is replaced.
             wait_for_channel
           fi
           "$stado_bin" release submit \
