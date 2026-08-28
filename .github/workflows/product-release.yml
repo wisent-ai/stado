@@ -81,20 +81,33 @@ jobs:
             charless-mac-mini --json
           retry_reconcile "$stado_bin" host reconcile-release-verifier \
             charless-mac-mini --json
-          ready=false
-          for attempt in $(seq 1 24); do
-            if stado-rs/target/release/stado storage stat \
-                 stado://probierz/registry.json --json >/dev/null 2>&1; then
-              ready=true
-              break
+          wait_for_channel() {
+            for attempt in $(seq 1 24); do
+              if "$stado_bin" storage stat \
+                   stado://probierz/registry.json --json >/dev/null 2>&1 &&
+                 "$stado_bin" storage ls \
+                   stado://sources/__release_preflight__ --json >/dev/null 2>&1 &&
+                 "$stado_bin" storage ls \
+                   stado://releases/skarbiec/__release_preflight__ --json >/dev/null 2>&1; then
+                return 0
+              fi
+              sleep 5
+            done
+            return 1
+          }
+          if ! wait_for_channel; then
+            # Older object API processes load verifier grants only at startup.
+            # The declared service operation preserves the unit and Stado waits
+            # for the real authenticated channel below before publication.
+            "$stado_bin" service restart \
+              com.wisent.always-on.stado-object-api \
+              --host charless-mac-mini --json
+            if ! wait_for_channel; then
+              cat "$RUNNER_TEMP/product-release-channel.log" >&2
+              false
             fi
-            sleep 5
-          done
-          if [ "$ready" != true ]; then
-            cat "$RUNNER_TEMP/product-release-channel.log" >&2
-            false
           fi
-          stado-rs/target/release/stado release submit \
+          "$stado_bin" release submit \
             --source "$GITHUB_WORKSPACE/product" \
             --version "$PRODUCT_VERSION" \
             --channel "$PRODUCT_CHANNEL"
