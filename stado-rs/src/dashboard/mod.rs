@@ -1000,17 +1000,22 @@ impl Dashboard {
             };
             (value.content.into_bytes(), Some(value.version))
         } else {
-            let bytes = if object.namespace() == "releases" {
-                // A Stado-object backend is itself namespaced. Asking its plain
-                // object route for `ecosystem/releases/...` prefixes the queue
-                // namespace again and reports a published release absent.
-                // `download_release` uses the backend's cross-namespace public
-                // route; local/cloud backends keep the literal storage path.
+            let public_release_route = request
+                .path
+                .split_once('?')
+                .map_or(request.path.as_str(), |(path, _)| path)
+                == "/api/release/object";
+            let bytes = if object.namespace() == "releases" && public_release_route {
+                // Public delivery may traverse a namespaced Stado-object backend,
+                // so it uses that backend's cross-namespace release route.
                 self.store
                     .backend()
                     .download_release(&object.to_string())
                     .await?
             } else {
+                // Authenticated /api/object reads the same local storage path as
+                // PUT. Sending this path through the public route made a successful
+                // write immediately unreadable and broke publisher preflight.
                 self.store.read_bytes(&path).await?
             };
             let Some(bytes) = bytes else {
