@@ -16,6 +16,7 @@ jobs:
       contents: read
     env:
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
+      STADO_API_URL: https://stado.wisent.com
       WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
       WC_SKARBIEC_CONSUMER: stado-release-publisher
       WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
@@ -55,20 +56,9 @@ jobs:
           PRODUCT_CHANNEL: ${{ github.event.client_payload.channel }}
         run: |
           set -euo pipefail
-          unset STADO_API_URL STADO_API_TOKEN
-          internal_url=http://127.0.0.1:18779
-          start_channel() {
-            local local_port="$1"
-            "$HOME/.stado/bin/stado" host forward-remote \
-              charless-mac-mini product-release-object-api \
-              --remote-port 8765 --local-port "$local_port" \
-              > "$RUNNER_TEMP/product-release-channel.log" 2>&1 &
-            channel_pid=$!
-          }
-          start_channel 18779
-          trap 'kill "$channel_pid" 2>/dev/null || true' EXIT
+          unset STADO_API_TOKEN
           export WC_STORAGE_BACKEND=stado
-          export WC_STADO_STORAGE_URL="$internal_url"
+          export WC_STADO_STORAGE_URL="$STADO_API_URL"
           export WC_STADO_STORAGE_NAMESPACE=probierz
           # The object API deliberately fails closed when its host-local Skarbiec
           # grant expires. Repair both declared verifier grants before probing the
@@ -121,17 +111,9 @@ jobs:
               --host charless-mac-mini --json || true
             # The restart can close its own host transport before returning a
             # receipt. Only the authenticated write/read postcondition below
-            # decides whether it succeeded.
-            # Restarting the remote endpoint closes the forwarding transport by
-            # design; reconnect before asking the endpoint for its postcondition.
-            kill "$channel_pid" 2>/dev/null || true
-            internal_url=http://127.0.0.1:18780
-            export WC_STADO_STORAGE_URL="$internal_url"
-            start_channel 18780
-            if ! wait_for_channel; then
-              cat "$RUNNER_TEMP/product-release-channel.log" >&2
-              false
-            fi
+            # decides whether it succeeded. The canonical HTTPS channel is
+            # independent of the host-control connection used for the restart.
+            wait_for_channel
           fi
           "$stado_bin" release submit \
             --source "$GITHUB_WORKSPACE/product" \
