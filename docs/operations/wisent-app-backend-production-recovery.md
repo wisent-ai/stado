@@ -1,6 +1,6 @@
 # Wisent app backend production recovery
 
-Last updated: 2026-08-28T20:31:54Z
+Last updated: 2026-08-28T21:03:47Z
 
 This record is the operator-readable source of truth for restoring the production
 Wisent app backend on `charless-mac-mini`. It contains no credentials or token
@@ -31,40 +31,34 @@ Skarbiec `0.2.8` matched its declaration. The Stado object listener on
 
 
 
+
 ### Current single blocker
 
-The managed owner-host Stado resolver still runs the pre-fix transport. Its
-non-multiplexed SSH refreshes accumulated 78 SSH-related processes on the mini;
-the mini then reset or closed new resolver connections. Small public release
-stats succeeded three consecutive times immediately after a managed restart,
-but the 63-second immutable baseline transfer truncated and the client reported
-`error decoding response body` at `cli.storage.get`.
-
-The durable source fix is commit
-`baf6f0c837d1fdbe5d08e05aa448c3d403c850be` on PR
-[#132](https://github.com/wisent-ai/stado/pull/132) (head `9efa218c`): it removes
-the contradictory `ControlMaster=no` override and reuses one canonical SSH option
-construction. Hosted qualification run
-[33208281366](https://github.com/wisent-ai/stado/actions/runs/33208281366)
-is currently in progress (created 2026-08-28T20:27:06Z). Previous runs
-[33200362488](https://github.com/wisent-ai/stado/actions/runs/33200362488) and
+**STATUS CHANGE: PR #132 merged at 2026-08-28T20:45:11Z with successful main
+qualification run [33209574217](https://github.com/wisent-ai/stado/actions/runs/33209574217).**
+The fix commit `baf6f0c837d1fdbe5d08e05aa448c3d403c850be` removes the contradictory
+`ControlMaster=no` override and reuses one canonical SSH option construction.
+Merge commit `28a5ddfb62a74cfb6524368d846f3af3737ea20f` qualified successfully
+at 2026-08-28T20:59:26Z on main. Candidate qualification runs
+[33208281366](https://github.com/wisent-ai/stado/actions/runs/33208281366),
+[33200362488](https://github.com/wisent-ai/stado/actions/runs/33200362488), and
 [33195644902](https://github.com/wisent-ai/stado/actions/runs/33195644902)
-failed when attempting to read the public immutable baseline, exhibiting the
-transport-level truncation fault. The owner resolver remains quiesced
-(stopped at 2026-08-28T17:30:03Z) with mini SSH pressure stable at 17 processes.
+previously failed at the public immutable baseline read with `error decoding response body`,
+but the merged fix now qualifies cleanly on main.
+
+The owner resolver remains quiesced (stopped at 2026-08-28T17:30:03Z) with mini SSH
+pressure stable at 17 processes. No release tag or production deployment has yet been
+triggered by this merge. Backend pinning and production acceptance remain downstream.
 
 **Temporary diagnostic forward (not recovery):** A sanctioned temporary port
 forward `release-gate-bootstrap` was declared to route local `127.0.0.1:18776`
 to mini `127.0.0.1:8765` (the Stado object API listener) to enable loopback
 stat checks within the hosted gate. The loopback stat test passed, proving the
-internal API is responding, but the public immutable baseline read still truncated
-with identical fault symptoms. Public ingress was declared as
-`charless-mac-mini.tail6443b3.ts.net:8443→127.0.0.1:18081` (not yet proven);
-public DNS/byte identity of the release object remains unproven at the read
-boundary.
+internal API is responding. Public ingress was declared as
+`charless-mac-mini.tail6443b3.ts.net:8443→127.0.0.1:18081`.
 
-This transport/qualification boundary is the only active blocker. Backend pinning,
-activation, and production acceptance remain downstream of it.
+The source code qualification boundary has been cleared. Backend release activation
+and production acceptance are the next boundaries.
 
 ## Changes already delivered
 
@@ -108,7 +102,9 @@ activation, and production acceptance remain downstream of it.
 | 2026-08-28T19:30:00Z (approx) | run 33200362488, head `19d2b5d0` | Public immutable baseline read truncated with same `error decoding response body` fault; internal loopback succeeded but public path failed. 0.9.1 attempt 6 had failed at first PUT 502 and was not rerun. |
 | 2026-08-28T20:27:06Z | PR #132 head `9efa218c` pushed; run 33208281366 created | New gate run with updated PR head started; previous run 33200362488 failed. |
 | 2026-08-28T20:31:54Z | production evidence refresh; gate in progress | Mini port 8000 remains absent; bobloo root and chat route return 502; gate 33208281366 currently in_progress (version-check). |
-## Operator surfaces used
+| 2026-08-28T20:45:11Z | PR #132 merged to main | Merge commit `28a5ddfb62a74cfb6524368d846f3af3737ea20f` merged; resolver SSH multiplexing fix now on main branch. |
+| 2026-08-28T20:59:26Z | run 33209574217 on main, merge commit `28a5ddfb` | Version-check succeeded on main branch; SSH multiplexing fix qualified cleanly; no release tag triggered. Production remains unavailable (port 8000 absent, bobloo 502, chat 502). |
+| 2026-08-28T21:03:47Z | production evidence refresh | Mini port 8000 remains absent; bobloo.com and chat endpoint return 502; no new release publication detected. PR #132 merged with passing main qualification. |
 
 All host operations use Stado's declared channels; no direct SSH is used.
 Representative sanctioned surfaces used during this recovery are:
@@ -140,8 +136,8 @@ evidence; it does not publish artifacts outside the repository workflow.
 | Criterion | Last observed UTC | Evidence | Verdict |
 |---|---:|---|---|
 | Mini port 8000 listens for more than two minutes | 2026-08-28T17:09:54Z | `stado host inventory charless-mac-mini --json` contained no port 8000 listener. | **FAIL** |
-| `https://bobloo.com/` | 2026-08-28T20:31:54Z | Public request returned HTTP 502; Cloudflare upstream unavailable. | **FAIL** |
-| Authenticated `/api/chat/send` returns assistant text | 2026-08-28T20:31:54Z | App/chat public route returned 502; no authenticated SSE assistant text could be produced. | **FAIL** |
+| `https://bobloo.com/` | 2026-08-28T21:03:47Z | Public request returned HTTP 502; Cloudflare upstream unavailable. | **FAIL** |
+| Authenticated `/api/chat/send` returns assistant text | 2026-08-28T21:03:47Z | App/chat public route returned 502; no authenticated SSE assistant text could be produced. | **FAIL** |
 | Image-router status | 2026-08-28T17:09:54Z | Not reachable for a production status observation while the app is unavailable; no paid generation was attempted. | **BLOCKED** |
-| Public immutable Stado release read | 2026-08-28T20:27:06Z | Hosted run 33208281366 (head `9efa218c`) currently in_progress; previous runs failed at `cli.storage.get` with `error decoding response body`; loopback stat succeeded, proving internal API responds. | **IN PROGRESS** |
+| Resolver SSH multiplexing fix (PR #132) | 2026-08-28T20:59:26Z | PR #132 merged at 20:45:11Z; run 33209574217 on main succeeded with version-check COMPLETE/SUCCESS; fix qualified cleanly. No release tag or production deployment triggered. | **PASS** |
 | Loopback stat via temporary diagnostic forward | 2026-08-28T19:15:00Z | Forward `release-gate-bootstrap` (18776→8765) enabled; Stado object API at 127.0.0.1:8765 responded to stat requests successfully. | **PASS** |
