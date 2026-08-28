@@ -84,14 +84,24 @@ jobs:
             charless-mac-mini --json
           retry_reconcile "$stado_bin" host reconcile-release-verifier \
             charless-mac-mini --json
+          canary="$RUNNER_TEMP/product-release-write-preflight.json"
+          printf '{"schema":"stado.product-release-write-preflight.v1","source_commit":"%s"}\n' \
+            "$GITHUB_SHA" > "$canary"
+          canary_sha="$(openssl dgst -sha256 "$canary" | sed 's/^.*= //')"
+          canary_uri="stado://sources/__release_preflight__/$canary_sha.json"
           wait_for_channel() {
             for attempt in $(seq 1 24); do
+              stored="$RUNNER_TEMP/product-release-write-preflight.stored.json"
+              rm -f "$stored"
               if "$stado_bin" storage stat \
                    stado://probierz/registry.json --json >/dev/null 2>&1 &&
                  "$stado_bin" storage ls \
-                   stado://sources/__release_preflight__ --json >/dev/null 2>&1 &&
-                 "$stado_bin" storage ls \
-                   stado://releases/skarbiec/__release_preflight__ --json >/dev/null 2>&1; then
+                   stado://releases/skarbiec/__release_preflight__ --json >/dev/null 2>&1 &&
+                 { "$stado_bin" storage put "$canary_uri" "$canary" --if-absent \
+                     >/dev/null 2>&1 || true; } &&
+                 "$stado_bin" storage get "$canary_uri" "$stored" \
+                   >/dev/null 2>&1 &&
+                 cmp --silent "$canary" "$stored"; then
                 return 0
               fi
               sleep 5
