@@ -1,6 +1,6 @@
 # Wisent app backend production recovery
 
-Last updated: 2026-08-28T19:45:00Z
+Last updated: 2026-08-28T20:31:54Z
 
 This record is the operator-readable source of truth for restoring the production
 Wisent app backend on `charless-mac-mini`. It contains no credentials or token
@@ -42,12 +42,15 @@ but the 63-second immutable baseline transfer truncated and the client reported
 
 The durable source fix is commit
 `baf6f0c837d1fdbe5d08e05aa448c3d403c850be` on PR
-[#132](https://github.com/wisent-ai/stado/pull/132) (head `19d2b5d0`): it removes
+[#132](https://github.com/wisent-ai/stado/pull/132) (head `9efa218c`): it removes
 the contradictory `ControlMaster=no` override and reuses one canonical SSH option
 construction. Hosted qualification run
-[33200362488](https://github.com/wisent-ai/stado/actions/runs/33200362488)
+[33208281366](https://github.com/wisent-ai/stado/actions/runs/33208281366)
+is currently in progress (created 2026-08-28T20:27:06Z). Previous runs
+[33200362488](https://github.com/wisent-ai/stado/actions/runs/33200362488) and
+[33195644902](https://github.com/wisent-ai/stado/actions/runs/33195644902)
 failed when attempting to read the public immutable baseline, exhibiting the
-same transport-level truncation fault. The owner resolver remains quiesced
+transport-level truncation fault. The owner resolver remains quiesced
 (stopped at 2026-08-28T17:30:03Z) with mini SSH pressure stable at 17 processes.
 
 **Temporary diagnostic forward (not recovery):** A sanctioned temporary port
@@ -103,7 +106,8 @@ activation, and production acceptance remain downstream of it.
 | 2026-08-28T19:00:00Z (approx) | PR #132 head `19d2b5d0` pushed; temporary diagnostic forward declared | `release-gate-bootstrap` forward local 18776→mini 8765 enabled for loopback testing; public ingress charless-mac-mini.tail6443b3.ts.net:8443→127.0.0.1:18081 declared. |
 | 2026-08-28T19:15:00Z (approx) | loopback stat test within forward | Stado object API at 127.0.0.1:8765 responding to stat requests; public DNS/byte identity unproven at read boundary. |
 | 2026-08-28T19:30:00Z (approx) | run 33200362488, head `19d2b5d0` | Public immutable baseline read truncated with same `error decoding response body` fault; internal loopback succeeded but public path failed. 0.9.1 attempt 6 had failed at first PUT 502 and was not rerun. |
-
+| 2026-08-28T20:27:06Z | PR #132 head `9efa218c` pushed; run 33208281366 created | New gate run with updated PR head started; previous run 33200362488 failed. |
+| 2026-08-28T20:31:54Z | production evidence refresh; gate in progress | Mini port 8000 remains absent; bobloo root and chat route return 502; gate 33208281366 currently in_progress (version-check). |
 ## Operator surfaces used
 
 All host operations use Stado's declared channels; no direct SSH is used.
@@ -136,8 +140,8 @@ evidence; it does not publish artifacts outside the repository workflow.
 | Criterion | Last observed UTC | Evidence | Verdict |
 |---|---:|---|---|
 | Mini port 8000 listens for more than two minutes | 2026-08-28T17:09:54Z | `stado host inventory charless-mac-mini --json` contained no port 8000 listener. | **FAIL** |
-| `https://bobloo.com/` | 2026-08-28T18:03:02Z | Public request returned HTTP 502 in 0.340 s; Cloudflare upstream unavailable. | **FAIL** |
-| Authenticated `/api/chat/send` returns assistant text | 2026-08-28T18:03:02Z | App/chat public route returned 502; no authenticated SSE assistant text could be produced. | **FAIL** |
+| `https://bobloo.com/` | 2026-08-28T20:31:54Z | Public request returned HTTP 502; Cloudflare upstream unavailable. | **FAIL** |
+| Authenticated `/api/chat/send` returns assistant text | 2026-08-28T20:31:54Z | App/chat public route returned 502; no authenticated SSE assistant text could be produced. | **FAIL** |
 | Image-router status | 2026-08-28T17:09:54Z | Not reachable for a production status observation while the app is unavailable; no paid generation was attempted. | **BLOCKED** |
-| Public immutable Stado release read | 2026-08-28T19:30:00Z | Hosted run 33200362488 failed at `cli.storage.get`: `error decoding response body`; loopback stat from forward succeeded, proving internal API responds; public DNS/byte identity unproven. | **FAIL** |
+| Public immutable Stado release read | 2026-08-28T20:27:06Z | Hosted run 33208281366 (head `9efa218c`) currently in_progress; previous runs failed at `cli.storage.get` with `error decoding response body`; loopback stat succeeded, proving internal API responds. | **IN PROGRESS** |
 | Loopback stat via temporary diagnostic forward | 2026-08-28T19:15:00Z | Forward `release-gate-bootstrap` (18776→8765) enabled; Stado object API at 127.0.0.1:8765 responded to stat requests successfully. | **PASS** |
