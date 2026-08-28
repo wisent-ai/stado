@@ -569,12 +569,15 @@ jobs:
         run: |
           tailscale_bin=/Applications/Tailscale.app/Contents/MacOS/tailscale
           "$tailscale_bin" funnel --bg --yes 8765
-          "$tailscale_bin" funnel --bg --yes --set-path /api/release/object 18776
+          # A path-scoped Funnel strips its public prefix before proxying, so
+          # declare the same path on the resolver origin instead of sending `/`.
+          "$tailscale_bin" funnel --bg --yes --set-path /api/release/object \
+            http://127.0.0.1:18776/api/release/object
           "$tailscale_bin" serve status --json |
             jq -e '
               .Web | to_entries[] |
               .value.Handlers["/"].Proxy == "http://127.0.0.1:8765" and
-              .value.Handlers["/api/release/object"].Proxy == "http://127.0.0.1:18776"
+              .value.Handlers["/api/release/object"].Proxy == "http://127.0.0.1:18776/api/release/object"
             '
 
       - name: Reload TLS reverse proxy
