@@ -1,6 +1,6 @@
 # Wisent app backend production recovery
 
-Last updated: 2026-08-28T20:31:54Z
+Last updated: 2026-08-28T22:15:58Z
 
 This record is the operator-readable source of truth for restoring the production
 Wisent app backend on `charless-mac-mini`. It contains no credentials or token
@@ -33,39 +33,40 @@ Skarbiec `0.2.8` matched its declaration. The Stado object listener on
 
 ### Current single blocker
 
-The managed owner-host Stado resolver still runs the pre-fix transport. Its
-non-multiplexed SSH refreshes accumulated 78 SSH-related processes on the mini;
-the mini then reset or closed new resolver connections. Small public release
-stats succeeded three consecutive times immediately after a managed restart,
-but the 63-second immutable baseline transfer truncated and the client reported
-`error decoding response body` at `cli.storage.get`.
+**FIXED: SSH multiplexing issue** (PR #132, merged 2026-08-28T20:45:11Z):
+Commit `baf6f0c837d1fdbe5d08e05aa448c3d403c850be` removed contradictory `ControlMaster=no`
+override, reused one canonical SSH option construction. Main qualification run
+[33209574217](https://github.com/wisent-ai/stado/actions/runs/33209574217)
+succeeded at 2026-08-28T20:59:26Z. Triggered release pipeline.
 
-The durable source fix is commit
-`baf6f0c837d1fdbe5d08e05aa448c3d403c850be` on PR
-[#132](https://github.com/wisent-ai/stado/pull/132) (head `9efa218c`): it removes
-the contradictory `ControlMaster=no` override and reuses one canonical SSH option
-construction. Hosted qualification run
-[33208281366](https://github.com/wisent-ai/stado/actions/runs/33208281366)
-is currently in progress (created 2026-08-28T20:27:06Z). Previous runs
-[33200362488](https://github.com/wisent-ai/stado/actions/runs/33200362488) and
-[33195644902](https://github.com/wisent-ai/stado/actions/runs/33195644902)
-failed when attempting to read the public immutable baseline, exhibiting the
-transport-level truncation fault. The owner resolver remains quiesced
-(stopped at 2026-08-28T17:30:03Z) with mini SSH pressure stable at 17 processes.
+**Current blocker: Funnel-path release delivery failures and fixes in flight.**
 
-**Temporary diagnostic forward (not recovery):** A sanctioned temporary port
-forward `release-gate-bootstrap` was declared to route local `127.0.0.1:18776`
-to mini `127.0.0.1:8765` (the Stado object API listener) to enable loopback
-stat checks within the hosted gate. The loopback stat test passed, proving the
-internal API is responding, but the public immutable baseline read still truncated
-with identical fault symptoms. Public ingress was declared as
-`charless-mac-mini.tail6443b3.ts.net:8443→127.0.0.1:18081` (not yet proven);
-public DNS/byte identity of the release object remains unproven at the read
-boundary.
+**Recorded 0.9.2 deployment failure (run 33212229611):** "Validate public Linux
+release delivery" step failed repeatedly with "Stado object API returned HTTP 502
+Bad Gateway: <empty response body>" (21:39:07Z-21:41:52Z). Could not serve immutable
+`stado://releases/stado/0.9.2/linux-amd64/SHA256SUMS` through public release delivery
+route. Failed step: release; skipped: deploy-control-plane.
 
-This transport/qualification boundary is the only active blocker. Backend pinning,
-activation, and production acceptance remain downstream of it.
+**Fixes in flight:**
+- **PR #131 "Preserve release path through Funnel"** (merged 2026-08-28T14:00:45Z,
+  commit 2705a0672cf31b0495de6c5002b2e7d778119626, run 33177085951 SUCCESS):
+  Recorded issue: Public release handler stripped `/api/release/object` before proxying
+  to canonical resolver, so published immutable bytes answered 404 through Funnel.
+  Fix: Point path-scoped handler at same path on `127.0.0.1:18776`, assert exact
+  declaration in both canonical deployment flows (deploy.yml and deploy-existing-release.yml).
 
+- **PR #134 "Mount Stado release delivery beside mini ingress"** (merged
+  2026-08-28T22:00:51Z, commit d5fbe82f9d7d767d71c68dafe2f95ab931f60824, run
+  33214002442 SUCCESS): Fixes the 0.9.2 deploy failure by reconciling only the
+  path-scoped public release route on mini's existing 443 Funnel, preserving Brama
+  root and its separate 8443 route. Change: explicit port 8443 instead of implicit
+  443 in STADO_API_URL and tailscale serve handler assertions.
+
+**Merge qualification run in progress:** Run
+[33215035738](https://github.com/wisent-ai/stado/actions/runs/33215035738)
+(PR #134 merge, created 2026-08-28T22:00:54Z) version-check job in_progress.
+Once this qualifies, release deployment will be triggered. Production unchanged
+(port 8000 absent, bobloo/chat 502).
 ## Changes already delivered
 
 - PR [#118](https://github.com/wisent-ai/stado/pull/118), merge
@@ -108,7 +109,15 @@ activation, and production acceptance remain downstream of it.
 | 2026-08-28T19:30:00Z (approx) | run 33200362488, head `19d2b5d0` | Public immutable baseline read truncated with same `error decoding response body` fault; internal loopback succeeded but public path failed. 0.9.1 attempt 6 had failed at first PUT 502 and was not rerun. |
 | 2026-08-28T20:27:06Z | PR #132 head `9efa218c` pushed; run 33208281366 created | New gate run with updated PR head started; previous run 33200362488 failed. |
 | 2026-08-28T20:31:54Z | production evidence refresh; gate in progress | Mini port 8000 remains absent; bobloo root and chat route return 502; gate 33208281366 currently in_progress (version-check). |
-## Operator surfaces used
+| 2026-08-28T20:45:11Z | PR #132 merged to main (SSH multiplexing fix) | Merge commit `28a5ddfb62a74cfb6524368d846f3af3737ea20f` merged; resolver SSH multiplexing fix now on main branch. |
+| 2026-08-28T20:59:26Z | run 33209574217 on main, merge commit `28a5ddfb` | Version-check succeeded on main branch; SSH multiplexing fix qualified cleanly; release pipeline triggered. |
+| 2026-08-28T21:02:02Z–21:11:21Z | run 33210783452: Release Stado 0.9.2 | Release pipeline triggered after main qualification; version-check job succeeded. Tag stado-v0.9.2 (sha: 41456b1f) created. |
+| 2026-08-28T21:11:46Z | PR #133 merged: Release Stado 0.9.2 | Release branch merged to main; deployment pipeline activated. |
+| 2026-08-28T21:11:49Z–21:21:15Z | run 33211496795: Merge PR #133 | Release merge run completed with success conclusion. |
+| 2026-08-28T21:21:55Z–21:41:56Z | run 33212229611: Release deployment (0.9.2) | Deployment attempt after 0.9.2 release. Release job failed in "Validate public Linux release delivery" step; HTTP 502 from Stado object API for `stado://releases/stado/0.9.2/linux-amd64/SHA256SUMS` (21:39:07Z–21:41:52Z). Failure details: "Stado object API returned HTTP 502 Bad Gateway: <empty response body>" with retries up to 12 times, error_code=infra_down. Deploy-control-plane job skipped due to release failure. Production unchanged (port 8000 absent, bobloo/chat 502). |
+| 2026-08-28T22:00:51Z | PR #134 merged: Mount Stado release delivery beside mini ingress | Fixes the 0.9.2 deployment failure (run 33212229611) by reconciling path-scoped public release route on mini's existing 443 Funnel. Merge commit `3eb5465367e8177159e6b14efa945767fe9ad946`. |
+| 2026-08-28T21:46:28Z–22:00:23Z | run 33214002442: PR #134 merge qualification | PR branch run completed with success conclusion before merge. |
+| 2026-08-28T22:00:54Z–in_progress | run 33215035738: Merge qualification for PR #134 | Post-merge qualification run started; version-check job in_progress (started 22:00:54Z, still running at 22:15:58Z). Once this qualifies, release deployment will be triggered again. |
 
 All host operations use Stado's declared channels; no direct SSH is used.
 Representative sanctioned surfaces used during this recovery are:
@@ -140,8 +149,10 @@ evidence; it does not publish artifacts outside the repository workflow.
 | Criterion | Last observed UTC | Evidence | Verdict |
 |---|---:|---|---|
 | Mini port 8000 listens for more than two minutes | 2026-08-28T17:09:54Z | `stado host inventory charless-mac-mini --json` contained no port 8000 listener. | **FAIL** |
-| `https://bobloo.com/` | 2026-08-28T20:31:54Z | Public request returned HTTP 502; Cloudflare upstream unavailable. | **FAIL** |
-| Authenticated `/api/chat/send` returns assistant text | 2026-08-28T20:31:54Z | App/chat public route returned 502; no authenticated SSE assistant text could be produced. | **FAIL** |
+| `https://bobloo.com/` | 2026-08-28T22:15:58Z | Public request returned HTTP 502; Cloudflare upstream unavailable. | **FAIL** |
+| Authenticated `/api/chat/send` returns assistant text | 2026-08-28T22:15:58Z | App/chat public route returned 502; no authenticated SSE assistant text could be produced. | **FAIL** |
 | Image-router status | 2026-08-28T17:09:54Z | Not reachable for a production status observation while the app is unavailable; no paid generation was attempted. | **BLOCKED** |
-| Public immutable Stado release read | 2026-08-28T20:27:06Z | Hosted run 33208281366 (head `9efa218c`) currently in_progress; previous runs failed at `cli.storage.get` with `error decoding response body`; loopback stat succeeded, proving internal API responds. | **IN PROGRESS** |
+| SSH multiplexing fix (PR #132) | 2026-08-28T20:59:26Z | PR #132 merged at 20:45:11Z; run 33209574217 on main succeeded with version-check COMPLETE/SUCCESS; fix qualified cleanly and triggered release pipeline. | **PASS** |
+| Stado 0.9.2 release tag | 2026-08-28T21:11:46Z | Tag stado-v0.9.2 (sha: 41456b1f) created; Release run 33210783452 completed SUCCESS (21:02:02Z-21:11:21Z); PR #133 merged 21:11:46Z. | **PASS** |
+| 0.9.2 deployment failure and Funnel-path fixes | 2026-08-28T22:15:58Z | Run 33212229611 failed (21:22:08Z-21:41:56Z) in "Validate public Linux release delivery" with HTTP 502 from Stado object API; recorded failure: "Stado object API returned HTTP 502 Bad Gateway: <empty response body>" trying to serve `stado://releases/stado/0.9.2/linux-amd64/SHA256SUMS`. Fixes in flight: PR #131 "Preserve release path through Funnel" (merged 14:00:45Z, run 33177085951 SUCCESS) and PR #134 "Mount Stado release delivery beside mini ingress" (merged 22:00:51Z, run 33214002442 SUCCESS). Merge qualification run 33215035738 in_progress (version-check, started 22:00:54Z). | **IN PROGRESS** |
 | Loopback stat via temporary diagnostic forward | 2026-08-28T19:15:00Z | Forward `release-gate-bootstrap` (18776→8765) enabled; Stado object API at 127.0.0.1:8765 responded to stat requests successfully. | **PASS** |
