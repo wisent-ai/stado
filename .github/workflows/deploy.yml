@@ -123,14 +123,6 @@ jobs:
         run: |
           set -euo pipefail
           stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
-          internal_url=http://127.0.0.1:18779
-          "$HOME/.stado/bin/stado" host forward-remote \
-            charless-mac-mini stado-release-object-api \
-            --remote-port 8765 --local-port 18779 \
-            > "$RUNNER_TEMP/stado-release-channel.log" 2>&1 &
-          channel_pid=$!
-          trap 'kill "$channel_pid" 2>/dev/null || true' EXIT
-          export STADO_API_URL="$internal_url"
           retry_command() {
             for attempt in 1 2 3 4 5 6; do
               if "$@"; then
@@ -370,14 +362,6 @@ jobs:
       - name: Create immutable Linux release through Stado
         run: |
           stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
-          internal_url=http://127.0.0.1:18779
-          "$HOME/.stado/bin/stado" host forward-remote \
-            charless-mac-mini stado-release-object-api \
-            --remote-port 8765 --local-port 18779 \
-            > "$RUNNER_TEMP/stado-release-channel.log" 2>&1 &
-          channel_pid=$!
-          trap 'kill "$channel_pid" 2>/dev/null || true' EXIT
-          export STADO_API_URL="$internal_url"
           test -x "$stado_bin"
           for source in "$RUNNER_TEMP"/stado-release/*; do
             name="${source##*/}"
