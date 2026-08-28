@@ -46,7 +46,7 @@ Release publication has a separate verifier and policy set. Its equivalent comma
 stado host reconcile-release-verifier <target> --json
 ```
 
-The first immutable Stado release reconciles both verifier grants and reloads exactly the managed object API unit because there is no older release with inline boundary recovery. Once that release exists, the bootstrap branch cannot run again. Normal release preflight probes an authenticated private namespace; a public `releases/` stat cannot prove that object authorization works.
+This command changes the release verifier's host-local read grant and target-local verifier shadows. Publisher credentials remain owned by the control plane that runs `stado release submit`; reconciliation reads those authoritative values without rotating them, writes target-owned shadows into a staged vault copy, and atomically installs that copy. Release preflight proves the caller credential with an authenticated private operation, while verifier reconciliation proves that the release API can read the matching shadow. A public `releases/` stat proves neither boundary.
 
 Use `stado storage stat <stado-uri> --json` as the smallest final check. `present` and `absent` are both authoritative answers. `503 object authorization unavailable` means the verifier boundary failed; it is not evidence that the requested object is absent.
 

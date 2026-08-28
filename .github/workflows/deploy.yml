@@ -4,24 +4,78 @@ on:
   push:
     tags:
       - "stado-v*"
-  workflow_dispatch:
-    inputs:
-      channel:
-        description: "Immutable release channel"
-        required: true
-        type: choice
-        options:
-          - nightly
-          - candidate
-          - stable
-        default: nightly
 
 concurrency:
-  group: wisent-compute-deploy
-  cancel-in-progress: false
+  # A newer canonical tag supersedes every older release train, including one
+  # already waiting for the control-plane runner. Publication is create-only and
+  # every write below is followed by immutable read-back, so a cancelled attempt
+  # can be resumed safely by its successor without mutating published bytes.
+  group: wisent-compute-release-train
+  cancel-in-progress: true
 
 jobs:
+  qualification:
+    # Do not occupy the sole publisher runner while the exact source revision is
+    # still queued for qualification. The Version check workflow owns the verdict;
+    # this workflow consumes that one verdict instead of implementing a second gate.
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Require successful exact-head Version check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 180); do
+            runs="$(
+              gh api \
+                "repos/$GITHUB_REPOSITORY/actions/workflows/version-check.yml/runs?head_sha=$SOURCE_SHA&event=push&per_page=100"
+            )"
+            verdict="$(
+              jq -r --arg sha "$SOURCE_SHA" '
+                [.workflow_runs[]
+                  | select(
+                      .head_sha == $sha and
+                      .head_branch == "main" and
+                      .event == "push"
+                    )]
+                | sort_by(.run_number)
+                | last
+                | if . == null then
+                    "missing\t\t"
+                  else
+                    [.status, (.conclusion // ""), .html_url] | @tsv
+                  end
+              ' <<<"$runs"
+            )"
+            IFS=$'\t' read -r status conclusion url <<<"$verdict"
+            case "$status:$conclusion" in
+              completed:success)
+                echo "Exact source qualification passed: $url"
+                exit 0
+                ;;
+              completed:*)
+                echo "::error::Exact source qualification concluded ${conclusion:-without a verdict}: $url"
+                exit 1
+                ;;
+              missing:|queued:|in_progress:|waiting:|pending:|requested:)
+                echo "Waiting for Version check on $SOURCE_SHA (attempt $attempt/180): $status"
+                sleep 20
+                ;;
+              *)
+                echo "::error::Unrecognized Version check state '$status:$conclusion': $url"
+                exit 1
+                ;;
+            esac
+          done
+          echo "::error::Timed out waiting for exact source qualification on $SOURCE_SHA"
+          exit 1
+
   release:
+    needs: qualification
     outputs:
       channel: ${{ steps.release_identity.outputs.channel }}
       version: ${{ steps.release_identity.outputs.version }}
@@ -30,10 +84,11 @@ jobs:
       contents: read
     env:
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
-      # Publication and public read-back must reach the same object API host.
-      # Writing through the control-plane laptop and reading through
-      # stado.wisent.com split one immutable release across two local stores.
-      STADO_API_URL: https://stado.wisent.com
+      # The writer uses one declared resolver adapter for both mutation and
+      # authenticated read-back. Fleet delivery verifies the public read-only
+      # Funnel separately after publication.
+      STADO_WRITER_API_URL: http://127.0.0.1:18776
+      STADO_PUBLIC_RELEASE_API_URL: https://lukaszs-macbook-pro-4007-2.tail6443b3.ts.net
       WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
       WC_SKARBIEC_CONSUMER: stado-release-publisher
       WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
@@ -54,8 +109,6 @@ jobs:
           command -v cargo-zigbuild >/dev/null || cargo install cargo-zigbuild --locked
       - name: Resolve exact release identity
         id: release_identity
-        env:
-          REQUESTED_CHANNEL: ${{ inputs.channel }}
         run: |
           die() {
             printf 'FATAL: %s\n' "$*" > /dev/stderr
@@ -65,34 +118,17 @@ jobs:
           version="${version_line#*\"}"
           version="${version%%\"*}"
           test -n "$version" || die "Cargo release version is unresolved"
-          if [ "$GITHUB_EVENT_NAME" = push ]; then
-            test "$GITHUB_REF_NAME" = "stado-v$version" ||
-              die "tag $GITHUB_REF_NAME must equal stado-v$version"
-            case "$version" in
-              *-*) channel=candidate ;;
-              *) channel=stable ;;
-            esac
-          else
-            channel="$REQUESTED_CHANNEL"
-          fi
-          case "$channel" in
-            nightly|candidate|stable) ;;
-            *) die "unsupported release channel: $channel" ;;
+          test "$GITHUB_REF_NAME" = "stado-v$version" ||
+            die "tag $GITHUB_REF_NAME must equal stado-v$version"
+          case "$version" in
+            *-*) channel=candidate ;;
+            *) channel=stable ;;
           esac
           echo "STADO_VERSION=$version" >> "$GITHUB_ENV"
           echo "STADO_RELEASE_CHANNEL=$channel" >> "$GITHUB_ENV"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
 
-      - name: Make tags and history visible to the version check
-        # actions/checkout fetches one commit and no tags, so `git tag --list` is
-        # empty on a runner however many tags the remote holds. The version check
-        # asks whether a better baseline than the committed one has become reachable,
-        # and a tag it cannot see is a tag it cannot notice: the check would pass
-        # while asleep, which is worse than not having it. Unshallowing matters
-        # separately, because recovering a tag's surface needs that tag's tree; the
-        # fallback is there because --unshallow refuses on a complete repository.
-        run: git fetch --force --tags --unshallow || git fetch --force --tags
 
       - name: Build provider-neutral Rust release
         # The control-plane runner is an arm64 Mac. Build the exact Linux x86_64
@@ -123,9 +159,23 @@ jobs:
         run: |
           set -euo pipefail
           stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
-          baseline_identity="$(
-            python3 scripts/baseline.py --best --stado "$stado_bin"
-          )"
+          case "$STADO_WRITER_API_URL" in
+            http://127.0.0.1:18776) ;;
+            *) echo "::error::release writer must use the declared loopback resolver"; false ;;
+          esac
+          export STADO_API_URL="$STADO_WRITER_API_URL"
+          "$stado_bin" resolver status --target lukasz-macbook --json \
+            > "$RUNNER_TEMP/release-resolver.json"
+          jq -e '
+            .verdict == "ready" and
+            any(
+              .adapters[];
+              .service == "stado-object-api" and
+              .consumer == "stado-local-agent" and
+              .bind == "127.0.0.1:18776" and
+              .listening == true
+            )
+          ' "$RUNNER_TEMP/release-resolver.json" >/dev/null
           retry_command() {
             for attempt in 1 2 3 4 5 6; do
               if "$@"; then
@@ -135,24 +185,6 @@ jobs:
             done
             return 1
           }
-          if [[ "$baseline_identity" == bootstrap:* ]]; then
-            # One-time channel bootstrap: reconcile both verifier grants from
-            # their declared policies. The currently deployed object API
-            # predates inline boundary recovery, so reload its exact managed
-            # unit after both grants exist. The restart transport may close
-            # while launchd replaces the process; the following preflight,
-            # not that connection, decides whether recovery succeeded.
-            # Once a complete release exists, baseline.py returns
-            # stado:<version> and this branch is unreachable.
-            retry_command "$stado_bin" host reconcile-object-verifier \
-              charless-mac-mini --json
-            retry_command "$stado_bin" host reconcile-release-verifier \
-              charless-mac-mini --json
-            "$stado_bin" service restart \
-              com.wisent.always-on.stado-object-api \
-              --host charless-mac-mini --json || true
-
-          fi
           preflight() {
             # The private namespace proves the object verifier. Listing the
             # product's release prefix separately proves the release verifier:
@@ -184,13 +216,33 @@ jobs:
             echo "::error::object and release preflight did not remain healthy for three consecutive checks" >&2
             return 1
           }
+          reconcile_release_lifecycles() {
+            retry_command "$stado_bin" host reconcile-release-verifier \
+              charless-mac-mini --json \
+              > "$RUNNER_TEMP/release-lifecycles.json"
+            jq -e '
+              (.items | type == "array" and length > 0) and
+              (.publisher_lifecycles | type == "array") and
+              (.publisher_lifecycles | length) == (.items | length) and
+              all(
+                .publisher_lifecycles[];
+                (.item | type == "string" and length > 0) and
+                (.controller | type == "string" and length > 0) and
+                (.mode == "owner" or .mode == "managed" or .mode == "external") and
+                .readable == true
+              )
+            ' "$RUNNER_TEMP/release-lifecycles.json" >/dev/null
+          }
+          # Publisher items belong to their recorded controllers. Prove every
+          # declared lifecycle and exact token read before the verifier grant
+          # is refreshed; only then may the public writer canary run.
+          reconcile_release_lifecycles
           if ! wait_for_preflight; then
             # Reconcile both declared verifier policies. Current object APIs
             # recover inline, which preserves every connection.
             retry_command "$stado_bin" host reconcile-object-verifier \
               charless-mac-mini --json
-            retry_command "$stado_bin" host reconcile-release-verifier \
-              charless-mac-mini --json
+            reconcile_release_lifecycles
             if ! wait_for_preflight; then
               # Upgrade path for an older object API that cannot reload its
               # grants inline. Restarting can close the transport carrying this
@@ -208,18 +260,20 @@ jobs:
           esac
           jq -e '.objects | type == "array"' \
             "$RUNNER_TEMP/release-preflight.json" >/dev/null
-          # A read grant cannot prove that the release publisher presented by
-          # this runner matches the target's publisher item. Retain one
-          # content-addressed canary per source revision so the same
-          # create-if-absent and read-back contract guards every real publish.
+          # A read grant cannot prove that this runner presents the publisher
+          # token expected by the target. Retain one content-addressed canary:
+          # create-if-absent plus exact authenticated read-back must both pass
+          # through the validated writer resolver before publication starts.
           canary="$RUNNER_TEMP/release-write-preflight.json"
           printf '{"schema":"stado.release-write-preflight.v1","source_commit":"%s"}\n' \
             "$GITHUB_SHA" > "$canary"
           canary_sha="$(openssl dgst -sha256 "$canary" | sed 's/^.*= //')"
           canary_uri="stado://releases/stado/__release_preflight__/$canary_sha.json"
           "$stado_bin" storage put "$canary_uri" "$canary" --if-absent
-          "$stado_bin" storage get "$canary_uri" "$RUNNER_TEMP/release-write-preflight.stored.json"
-          cmp --silent "$canary" "$RUNNER_TEMP/release-write-preflight.stored.json"
+          "$stado_bin" storage get \
+            "$canary_uri" "$RUNNER_TEMP/release-write-preflight.stored.json"
+          cmp --silent \
+            "$canary" "$RUNNER_TEMP/release-write-preflight.stored.json"
 
       - name: Create Linux release manifest
         run: |
@@ -262,107 +316,11 @@ jobs:
             scripts/release_manifest.sh
           mv "$archive" "$release_dir/stado-v$STADO_VERSION-linux-amd64.tar.gz"
 
-      - name: Refuse a release whose version disagrees with its contract
-        # The public contract of this product is the command list `stado help`
-        # advertises. The rule that turns a surface change into a version lives in one
-        # place for the whole fleet and is not copied here:
-        # https://github.com/lbartoszcze/AutoVersion. This step supplies only what
-        # this repository knows — the surface of the artifact built above, and the
-        # version that artifact declares.
-        #
-        # It sits in front of the first `storage put` on purpose. Release objects are
-        # create-only, so a version published wrongly cannot be corrected afterwards;
-        # a check behind the publish would only describe the damage. Everything
-        # downstream, including the native release in deploy-control-plane, is gated
-        # through this job's `needs`.
-        run: |
-          set -euo pipefail
-
-          # Into a virtual environment under RUNNER_TEMP, because this control-plane
-          # runner carries no global pip, and invoked by ABSOLUTE path below rather
-          # than through PATH -- so there is no name for a stranger to answer to.
-          python3 -m venv "$RUNNER_TEMP/autoversion"
-          "$RUNNER_TEMP/autoversion/bin/python" -m pip install --quiet \
-            "git+https://github.com/lbartoszcze/AutoVersion@v0.1.0"
-          rule="$RUNNER_TEMP/autoversion/bin/autoversion"
-
-          # Recover the baseline from an immutable release that this exact
-          # channel serves. It is a temporary input to the decision, never a
-          # repository file someone can advance by assertion.
-          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
-          baseline="$RUNNER_TEMP/released-surface.json"
-          python3 scripts/baseline.py --best --stado "$stado_bin" --output "$baseline"
-
-          # Nothing so far has asked whether what was installed can still answer, and
-          # a liveness probe would not settle it: a rule that replied a constant
-          # `internal` satisfies every branch below, because with the declared version
-          # equal to the baseline's, `internal` IS the passing branch. This gate stands
-          # in front of create-only release objects, so a fabricated verdict here is
-          # not correctable afterwards. Demand two answers no constant can give, built
-          # from the COMMITTED baseline rather than from a synthetic pair, so the same
-          # step also proves the frozen file is readable and is the one reaching the
-          # decision. It consults only that file and writes only to RUNNER_TEMP, so it
-          # cannot touch the release channel.
-          jq '{surface: (.surface - [(.surface | sort | first)])}' "$baseline" \
-            > "$RUNNER_TEMP/arm-removed.json"
-          jq '{surface: .surface}' "$baseline" > "$RUNNER_TEMP/arm-identical.json"
-          if [ "$(jq -r '.surface | length' "$RUNNER_TEMP/arm-removed.json")" = \
-               "$(jq -r '.surface | length' "$baseline")" ]; then
-            echo "::error::the removal arm removed nothing, so it would prove nothing"
-            false
-          fi
-          baseline_version="$(jq -r .version "$baseline")"
-          for arm in removed:breaking identical:internal; do
-            name="${arm%%:*}"
-            want="${arm##*:}"
-            # Into a file, with the status tested on its own line: inside a command
-            # substitution containing a pipeline the rule's status is discarded and
-            # `set -e` does not reach, so a dead rule would read as an empty answer.
-            if ! "$rule" decide --current "$baseline_version" \
-                 --published-surface "$baseline" \
-                 --candidate-surface "$RUNNER_TEMP/arm-$name.json" --json \
-                 > "$RUNNER_TEMP/verdict-$name.json"; then
-              echo "::error::the rule just installed failed outright on the $name arm," \
-                   "so whether this gate can refuse is unknown"
-              false
-            fi
-            got="$(jq -r .change "$RUNNER_TEMP/verdict-$name.json")"
-            echo "self-test: $name -> $got (wanted $want)"
-            if [ "$got" != "$want" ]; then
-              echo "::error::the rule at $rule called the $name arm '$got' and not '$want'," \
-                   "so no verdict of its about this release can be trusted"
-              false
-            fi
-          done
-
-          # The public CLI is architecture-independent. Read it from the native
-          # binary compiled from this exact SHA; the separately cross-compiled
-          # Linux bytes carry the same command surface and need no emulator or
-          # manually-running container daemon.
-          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
-          "$stado_bin" help > "$RUNNER_TEMP/stado-help.txt"
-          python3 scripts/surface.py --help-text "$RUNNER_TEMP/stado-help.txt" \
-            > "$RUNNER_TEMP/candidate-surface.json"
-
-          # The release gate reads the same HTTPS channel installers consume.
-          # A successful private preflight above cannot substitute for this
-          # public contract.
-          version_checked=false
-          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
-            if BASELINE="$baseline" \
-                 AUTOVERSION="$RUNNER_TEMP/autoversion/bin/autoversion" \
-                 STADO_BIN="$stado_bin" \
-                 scripts/version_check.sh "$RUNNER_TEMP/candidate-surface.json"; then
-              version_checked=true
-              break
-            fi
-            sleep 5
-          done
-          [ "$version_checked" = true ]
 
       - name: Create immutable Linux release through Stado
         run: |
           stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
+          export STADO_API_URL="$STADO_WRITER_API_URL"
           test -x "$stado_bin"
           for source in "$RUNNER_TEMP"/stado-release/*; do
             name="${source##*/}"
@@ -397,6 +355,30 @@ jobs:
             fi
           done
 
+      - name: Validate public Linux release delivery
+        run: |
+          export STADO_API_URL="$STADO_PUBLIC_RELEASE_API_URL"
+          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
+          for source in "$RUNNER_TEMP"/stado-release/*; do
+            name="${source##*/}"
+            uri="stado://releases/stado/$STADO_VERSION/linux-amd64/$name"
+            delivered="$RUNNER_TEMP/public-$name"
+            visible=false
+            for attempt in $(seq 1 12); do
+              rm -f "$delivered"
+              if "$stado_bin" storage get "$uri" "$delivered" &&
+                 cmp --silent "$source" "$delivered"; then
+                visible=true
+                break
+              fi
+              sleep "$((attempt * 2))"
+            done
+            if [ "$visible" != true ]; then
+              echo "::error::Public release delivery did not serve immutable $uri"
+              false
+            fi
+          done
+
   deploy-control-plane:
     needs: release
     if: needs.release.outputs.channel == 'stable'
@@ -404,10 +386,11 @@ jobs:
     permissions:
       contents: read
     env:
+      STADO_WRITER_API_URL: http://127.0.0.1:18776
+      STADO_PUBLIC_RELEASE_API_URL: https://lukaszs-macbook-pro-4007-2.tail6443b3.ts.net
       STADO_ENABLE_AZURE_DEPLOY: ${{ vars.STADO_ENABLE_AZURE_DEPLOY }}
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
       COORD_TARGET: ${{ vars.STADO_COORDINATOR_TARGET }}
-      STADO_API_URL: https://stado.wisent.com
       WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
       WC_SKARBIEC_CONSUMER: stado-release-publisher
       WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
@@ -506,8 +489,9 @@ jobs:
           STADO_RELEASE_PREVIEW_INTEGRATIONS="gcs-storage,s3-storage,azure-blob-storage,gcp-compute,aws-ec2,azure-vm,box,vast" \
             "$STADO_SOURCE_DIR/scripts/release_manifest.sh"
           mv "$archive" "$release_dir/stado-v$version-$platform.tar.gz"
-          # Publish through the same release channel the verification job and
-          # installers read.
+          # Publish and read back through the authoritative service's declared
+          # resolver adapter; public delivery is verified in the next step.
+          export STADO_API_URL="$STADO_WRITER_API_URL"
           for source in "$release_dir"/*; do
             name="${source##*/}"
             uri="stado://releases/stado/$version/$platform/$name"
@@ -521,8 +505,39 @@ jobs:
               false
             fi
           done
-          STADO_RELEASE_PLATFORM="$platform" \
-          STADO_RELEASE_DIR="$release_dir" \
+          echo "STADO_NATIVE_RELEASE_PLATFORM=$platform" >> "$GITHUB_ENV"
+          echo "STADO_NATIVE_RELEASE_DIR=$release_dir" >> "$GITHUB_ENV"
+          echo "STADO_NATIVE_RELEASE_VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Validate public native release delivery
+        run: |
+          export STADO_API_URL="$STADO_PUBLIC_RELEASE_API_URL"
+          stado_bin="$STADO_SOURCE_DIR/stado-rs/target/release/stado"
+          for source in "$STADO_NATIVE_RELEASE_DIR"/*; do
+            name="${source##*/}"
+            uri="stado://releases/stado/$STADO_NATIVE_RELEASE_VERSION/$STADO_NATIVE_RELEASE_PLATFORM/$name"
+            delivered="$RUNNER_TEMP/public-native-$name"
+            visible=false
+            for attempt in $(seq 1 12); do
+              rm -f "$delivered"
+              if "$stado_bin" storage get "$uri" "$delivered" &&
+                 cmp --silent "$source" "$delivered"; then
+                visible=true
+                break
+              fi
+              sleep "$((attempt * 2))"
+            done
+            if [ "$visible" != true ]; then
+              echo "::error::Public release delivery did not serve immutable $uri"
+              false
+            fi
+          done
+
+      - name: Deliver verified native release
+        run: |
+          STADO_API_URL="$STADO_PUBLIC_RELEASE_API_URL" \
+          STADO_RELEASE_PLATFORM="$STADO_NATIVE_RELEASE_PLATFORM" \
+          STADO_RELEASE_DIR="$STADO_NATIVE_RELEASE_DIR" \
             bash "$STADO_SOURCE_DIR/deploy/deploy_stado_rust.sh"
 
       - name: Reconcile public release ingress

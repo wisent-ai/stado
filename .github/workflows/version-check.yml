@@ -13,27 +13,17 @@ name: Version check
 #   scripts/version_check.sh        compares the candidate with that generated baseline
 #   scripts/version_check_proof.sh  proves the gate refuses dishonest inputs
 #
-# Why this workflow exists at all. deploy.yml already runs scripts/version_check.sh,
-# but only in front of the first `storage put`, and only on a `stado-v*` tag push. So
-# until somebody cut a release nothing measured the contract, and the answer arrived
-# at the one moment it is most expensive to act on: release objects are create-only.
-# This workflow asks the same question on the change that causes it.
+# deploy.yml consumes this workflow's exact-SHA verdict before it allocates the
+# publisher runner. Keeping qualification here means a tag can enqueue while its
+# source is still being judged without either publishing unqualified bytes or
+# starving the judgement behind the single control-plane runner.
 #
-# Why it runs on the control plane and not on ubuntu-latest. scripts/version_check.sh
-# refuses without an executable `stado` that can read the release channel, and it is
-# right to: `stado storage objects` requires STADO_API_TOKEN against STADO_API_URL,
-# while `stado storage stat` -- the control that keeps silence from being read as
-# absence -- answers about the host's own configured store. On a hosted runner with
-# neither, the listing and the stat would both answer about an empty local directory
-# and agree that nothing is published, which is exactly the false green the baseline
-# assertions exist to prevent. This runner is the one machine that holds the
-# credential, so it is the one machine where the answer means anything.
-#
-# The cost of that is the fork guard below. This repository is public, and a
-# pull_request from a fork would otherwise run its own code on a self-hosted runner
-# that holds the release publisher's credential. A fork's change is not left
-# unchecked: it is checked by the push to main that lands it, and a maintainer can
-# run this workflow against any ref by hand.
+# The candidate binary reads its baseline through the public, bearer-free
+# `/api/release/object` route. That route is the installer contract and needs no
+# control-plane credential or host-local store, so qualification belongs on a
+# GitHub-hosted runner. A configured public origin remains mandatory: without it,
+# `stado storage stat` could answer from a runner-local empty store and manufacture
+# a false absence.
 
 on:
   pull_request:
@@ -45,38 +35,23 @@ permissions:
   contents: read
 
 concurrency:
-  # Deliberately not deploy.yml's group: a superseded check may be cancelled, a
-  # half-finished publish may not.
+  # Only the newest revision of a ref can become qualified. deploy.yml waits on
+  # this exact SHA's completed verdict on a hosted runner before it allocates the
+  # publisher runner, and a newer canonical tag supersedes older publication.
   group: wisent-compute-version-check-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   version-check:
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, stado-control-plane]
+    runs-on: ubuntu-latest
     env:
-      # The release gate runs on the control-plane host but must query the same
-      # public HTTPS ingress as installers. The Tailscale Funnel is that ingress;
-      # stado.wisent.com is a Namecheap zone and cannot target a Cloudflare
-      # Tunnel by an unproxied CNAME.
+      # Query the same bearer-free HTTPS release ingress used by installers.
+      # stado.wisent.com is the public product site; this Tailscale Funnel is the
+      # declared release-object delivery origin.
       STADO_API_URL: https://lukaszs-macbook-pro-4007-2.tail6443b3.ts.net
-      # This job only reads the release channel; it never publishes to it. Reading it
-      # as `stado-release-publisher` borrowed the publishing identity to answer a
-      # question, and that identity's grant file on this control plane is stale --
-      # its bearer matches none of the store's tokens, so every run since it was
-      # re-minted has died at the first credential read. `stado-release-api-verifier`
-      # is the identity that exists for exactly this: read on the release-publisher
-      # token and nothing else. `WC_SKARBIEC_URL` is not set here on purpose -- it
-      # named a repository variable that does not exist, so it always expanded to
-      # empty and the store came from the host's configured `secrets.skarbiec.url`
-      # anyway. Naming it added a second, silent source of truth.
-      WC_SKARBIEC_CONSUMER: stado-release-api-verifier
-      WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-api-verifier-skarbiec-token
     steps:
-      # Held at the same major as deploy.yml, for the same reason: v4 runs on a Node
-      # GitHub has deprecated, and this control plane is the runner both jobs share.
+      # v5 targets Node 24 directly rather than relying on GitHub's forced
+      # replacement for the deprecated Node 20 runtime in v4.
       - uses: actions/checkout@v5
 
       - name: Make tags and history visible to the version check
@@ -94,18 +69,11 @@ jobs:
       - name: Install the shared rule and establish that it is the one answering
         run: |
           set -euo pipefail
-          # Into a virtual environment. A bare `pip install` cannot succeed on a
-          # current runner image -- python3 there carries the externally-managed
-          # marker and the install dies before any check runs -- and this control
-          # plane carries no global pip at all, which deploy.yml already had to work
-          # around. RUNNER_TEMP and GITHUB_PATH exist only on a runner, hence the
-          # fallbacks, which are also what let this body be extracted and run by hand.
+          # Keep the shared rule isolated from the runner image and pin the exact
+          # coordinate whose verdict this workflow records.
           : "${RUNNER_TEMP:=$(mktemp -d)}"
           : "${GITHUB_PATH:=$(mktemp)}"
           python3 -m venv "$RUNNER_TEMP/rule"
-          # The same pinned coordinate deploy.yml installs. A moving rule would change
-          # what a release is allowed to be called without anybody editing this
-          # repository.
           "$RUNNER_TEMP/rule/bin/python" -m pip install --quiet \
             "git+https://github.com/lbartoszcze/AutoVersion@v0.1.0"
           echo "$RUNNER_TEMP/rule/bin" >> "$GITHUB_PATH"
@@ -191,20 +159,6 @@ jobs:
               "be answered by this runner's local store instead of the release channel."
             false
           fi
-          # `if ! var="$(cmd)"` rather than a bare assignment: the credential store
-          # failing and the credential being empty are different faults, and a bare
-          # assignment would end the step on the first with no message naming it.
-          if ! token="$("$stado_bin" secrets get stado-release-publisher --field token)"; then
-            echo "::error::the credential store would not answer for" \
-              "stado-release-publisher, so nothing below could read the release channel."
-            false
-          fi
-          if [ -z "$token" ]; then
-            echo "::error::the release publisher credential read empty, so every answer" \
-              "about the channel below would be a local store's answer."
-            false
-          fi
-          export STADO_API_TOKEN="$token"
 
           # Derive the comparison document from an immutable native artifact
           # served by this channel. No committed file can claim publication.

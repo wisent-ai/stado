@@ -16,6 +16,9 @@ jobs:
       contents: read
     env:
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
+      WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
+      WC_SKARBIEC_CONSUMER: stado-release-publisher
+      WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
     steps:
       - uses: actions/checkout@v5
         with:
@@ -54,29 +57,80 @@ jobs:
           set -euo pipefail
           unset STADO_API_URL STADO_API_TOKEN
           internal_url=http://127.0.0.1:18779
-          "$HOME/.stado/bin/stado" host forward-remote \
-            charless-mac-mini product-release-object-api \
-            --remote-port 8765 --local-port 18779 \
-            > "$RUNNER_TEMP/product-release-channel.log" 2>&1 &
-          channel_pid=$!
+          start_channel() {
+            "$HOME/.stado/bin/stado" host forward-remote \
+              charless-mac-mini product-release-object-api \
+              --remote-port 8765 --local-port 18779 \
+              > "$RUNNER_TEMP/product-release-channel.log" 2>&1 &
+            channel_pid=$!
+          }
+          start_channel
           trap 'kill "$channel_pid" 2>/dev/null || true' EXIT
           export WC_STORAGE_BACKEND=stado
           export WC_STADO_STORAGE_URL="$internal_url"
           export WC_STADO_STORAGE_NAMESPACE=probierz
-          ready=false
-          for attempt in $(seq 1 24); do
-            if stado-rs/target/release/stado storage stat \
-                 stado://probierz/registry.json --json >/dev/null 2>&1; then
-              ready=true
-              break
+          # The object API deliberately fails closed when its host-local Skarbiec
+          # grant expires. Repair both declared verifier grants before probing the
+          # channel, so a Skarbiec release does not depend on an already-healthy
+          # Skarbiec authorization path.
+          stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
+          retry_reconcile() {
+            for attempt in $(seq 1 6); do
+              if "$@"; then
+                return 0
+              fi
+              sleep "$((attempt * 5))"
+            done
+            return 1
+          }
+          retry_reconcile "$stado_bin" host reconcile-object-verifier \
+            charless-mac-mini --json
+          retry_reconcile "$stado_bin" host reconcile-release-verifier \
+            charless-mac-mini --json
+          canary="$RUNNER_TEMP/product-release-write-preflight.json"
+          printf '{"schema":"stado.product-release-write-preflight.v1","source_commit":"%s"}\n' \
+            "$GITHUB_SHA" > "$canary"
+          canary_sha="$(openssl dgst -sha256 "$canary" | sed 's/^.*= //')"
+          canary_uri="stado://sources/__release_preflight__/$canary_sha.json"
+          wait_for_channel() {
+            for attempt in $(seq 1 24); do
+              stored="$RUNNER_TEMP/product-release-write-preflight.stored.json"
+              rm -f "$stored"
+              if "$stado_bin" storage stat \
+                   stado://probierz/registry.json --json >/dev/null 2>&1 &&
+                 "$stado_bin" storage ls \
+                   stado://releases/skarbiec/__release_preflight__ --json >/dev/null 2>&1 &&
+                 { "$stado_bin" storage put "$canary_uri" "$canary" --if-absent \
+                     >/dev/null 2>&1 || true; } &&
+                 "$stado_bin" storage get "$canary_uri" "$stored" \
+                   >/dev/null 2>&1 &&
+                 cmp --silent "$canary" "$stored"; then
+                return 0
+              fi
+              sleep 5
+            done
+            return 1
+          }
+          if ! wait_for_channel; then
+            # Older object API processes load verifier grants only at startup.
+            # The declared service operation preserves the unit and Stado waits
+            # for the real authenticated channel below before publication.
+            "$stado_bin" service restart \
+              com.wisent.always-on.stado-object-api \
+              --host charless-mac-mini --json || true
+            # The restart can close its own host transport before returning a
+            # receipt. Only the authenticated write/read postcondition below
+            # decides whether it succeeded.
+            # Restarting the remote endpoint closes the forwarding transport by
+            # design; reconnect before asking the endpoint for its postcondition.
+            kill "$channel_pid" 2>/dev/null || true
+            start_channel
+            if ! wait_for_channel; then
+              cat "$RUNNER_TEMP/product-release-channel.log" >&2
+              false
             fi
-            sleep 5
-          done
-          if [ "$ready" != true ]; then
-            cat "$RUNNER_TEMP/product-release-channel.log" >&2
-            false
           fi
-          stado-rs/target/release/stado release submit \
+          "$stado_bin" release submit \
             --source "$GITHUB_WORKSPACE/product" \
             --version "$PRODUCT_VERSION" \
             --channel "$PRODUCT_CHANNEL"

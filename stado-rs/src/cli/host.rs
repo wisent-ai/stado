@@ -3868,7 +3868,6 @@ async fn reconcile_verifier(
     for (label, path, test) in [
         ("Skarbiec binary", skarbiec.as_str(), "-x"),
         ("vault", vault.as_str(), "-f"),
-        ("verifier token file", token_file.as_str(), "-f"),
     ] {
         let present = crate::deploy::host_channel::remote_test(
             &resolved,
@@ -3884,6 +3883,17 @@ async fn reconcile_verifier(
             )));
         }
     }
+    let bearer_preserved = crate::deploy::host_channel::remote_test(
+        &resolved,
+        &format!(
+            "-f {} && ! -L {}",
+            crate::deploy::shlex_quote(&token_file),
+            crate::deploy::shlex_quote(&token_file),
+        ),
+        &runner,
+    )
+    .await
+    .map_err(|error| CmdError::click(error.to_string()))?;
 
     let vault_text = crate::deploy::host_channel::remote_read_file(&resolved, &vault, &runner)
         .await
@@ -3912,54 +3922,150 @@ async fn reconcile_verifier(
         .checked_sub(now)
         .filter(|ttl| *ttl > 0)
         .ok_or_else(|| CmdError::click(format!("{kind} verifier grant is already expired")))?;
-    // Release publisher credentials are authored on the control plane that
-    // runs the release pipeline. Reconcile their payloads as well as the
-    // target verifier's read grant: preserving a stale target item makes a
-    // read-only verifier check pass while every authenticated write is 401.
-    // Payloads travel only in the SSH request body and are never printed.
+    // Publisher items remain authoritative in the control-plane vault. The
+    // release API reads target-local verifier shadows with the same ids. Keep
+    // those shadows target-owned and atomically replace a staged vault copy;
+    // this copies the current value without rotating or reclassifying source.
+    let mut publisher_lifecycles = Vec::new();
     if kind == "release" {
+        let authoritative_vault = crate::credential_store::owner::vault()
+            .map_err(|error| CmdError::click(error.to_string()))?;
+        let authoritative_text = std::fs::read_to_string(&authoritative_vault)?;
+        let authoritative: Value = serde_json::from_str(&authoritative_text)?;
+        let target_owner = document
+            .get("owner")
+            .and_then(Value::as_str)
+            .ok_or_else(|| CmdError::click("target vault has no owner identity"))?;
         for item in &items {
-            let token = crate::skarbiec::read_release_token(item, "token")
-                .await
+            let source_entry = authoritative
+                .get("items")
+                .and_then(Value::as_object)
+                .and_then(|entries| entries.get(item))
+                .ok_or_else(|| {
+                    CmdError::click(format!(
+                        "authoritative release publisher item {item} is absent"
+                    ))
+                })?;
+            let source_management = source_entry
+                .get("management")
+                .and_then(Value::as_object)
+                .ok_or_else(|| {
+                    CmdError::click(format!(
+                        "authoritative release publisher item {item} has no management metadata"
+                    ))
+                })?;
+            let mode = source_management
+                .get("mode")
+                .and_then(Value::as_str)
+                .filter(|value| matches!(*value, "owner" | "managed" | "external"))
+                .ok_or_else(|| {
+                    CmdError::click(format!(
+                        "authoritative release publisher item {item} has no supported lifecycle mode"
+                    ))
+                })?;
+            let controller = source_management
+                .get("controller")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    CmdError::click(format!(
+                        "authoritative release publisher item {item} has no lifecycle controller"
+                    ))
+                })?;
+            let token = crate::credential_store::owner::read_string(item, "token")
                 .map_err(|error| {
                     CmdError::click(format!(
                         "cannot read authoritative release publisher item {item}: {error}"
                     ))
-                })?
-                .ok_or_else(|| {
-                    CmdError::click(format!(
-                        "authoritative release publisher item {item} has no token field"
-                    ))
                 })?;
-            let payload = serde_json::to_string(&serde_json::json!({
-                "schema": "skarbiec.item.v2",
-                "kind": "token",
-                "fields": { "token": token },
-                "context": {}
-            }))?;
-            let set_command = format!(
-                "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin GNUPGHOME={} SKARBIEC_VAULT_FILE={} {} set-json {}",
+            let target_entry = document
+                .get("items")
+                .and_then(Value::as_object)
+                .and_then(|entries| entries.get(item));
+            let shadow_owned = target_entry
+                .and_then(|entry| entry.get("management"))
+                .and_then(Value::as_object)
+                .is_some_and(|management| {
+                    management.get("mode").and_then(Value::as_str) == Some("owner")
+                        && management.get("controller").and_then(Value::as_str)
+                            == Some(target_owner)
+                });
+            let compare_command = format!(
+                "set -eu; expected=$(/bin/cat); actual=$(PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin GNUPGHOME={} SKARBIEC_VAULT_FILE={} {} get {} --field token); [ \"$actual\" = \"$expected\" ]",
                 crate::deploy::shlex_quote(&gnupg_home),
                 crate::deploy::shlex_quote(&vault),
                 crate::deploy::shlex_quote(&skarbiec),
                 crate::deploy::shlex_quote(item),
             );
-            let synchronized = crate::deploy::host_channel::run_program_with_stdin(
+            let mut comparison = crate::deploy::host_channel::run_program_with_stdin(
                 &resolved,
-                &["/bin/sh", "-c", &set_command],
-                &payload,
+                &["/bin/sh", "-c", &compare_command],
+                &format!("{token}\n"),
                 &runner,
             )
             .await
             .map_err(|error| CmdError::click(error.to_string()))?;
-            if !synchronized.ok() {
+            if !shadow_owned || !comparison.ok() {
+                let payload = serde_json::to_string(&serde_json::json!({
+                    "schema": "skarbiec.item.v2",
+                    "kind": "token",
+                    "fields": { "token": token },
+                    "context": {}
+                }))?;
+                let staging = format!("{vault}.stado-release-verifier");
+                let set_command = format!(
+                    "set -eu; live={}; staging={}; trap '/bin/rm -f \"$staging\"' EXIT HUP INT TERM; /bin/cp -p \"$live\" \"$staging\"; PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin GNUPGHOME={} SKARBIEC_VAULT_FILE=\"$staging\" {} reclaim {} >/dev/null 2>&1 || true; PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin GNUPGHOME={} SKARBIEC_VAULT_FILE=\"$staging\" {} rm {} >/dev/null 2>&1 || true; PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin GNUPGHOME={} SKARBIEC_VAULT_FILE=\"$staging\" {} set-json {} --type token >/dev/null; /bin/chmod 600 \"$staging\"; /bin/mv -f \"$staging\" \"$live\"; trap - EXIT HUP INT TERM",
+                    crate::deploy::shlex_quote(&vault),
+                    crate::deploy::shlex_quote(&staging),
+                    crate::deploy::shlex_quote(&gnupg_home),
+                    crate::deploy::shlex_quote(&skarbiec),
+                    crate::deploy::shlex_quote(item),
+                    crate::deploy::shlex_quote(&gnupg_home),
+                    crate::deploy::shlex_quote(&skarbiec),
+                    crate::deploy::shlex_quote(item),
+                    crate::deploy::shlex_quote(&gnupg_home),
+                    crate::deploy::shlex_quote(&skarbiec),
+                    crate::deploy::shlex_quote(item),
+                );
+                let converged = crate::deploy::host_channel::run_program_with_stdin(
+                    &resolved,
+                    &["/bin/sh", "-c", &set_command],
+                    &payload,
+                    &runner,
+                )
+                .await
+                .map_err(|error| CmdError::click(error.to_string()))?;
+                if !converged.ok() {
+                    return Err(CmdError::click(format!(
+                        "{}: release verifier shadow for {item} could not be reconciled: {}",
+                        resolved.name,
+                        crate::deploy::host_channel::last_error_line(
+                            &converged,
+                            "verifier shadow lifecycle failed"
+                        ),
+                    )));
+                }
+                comparison = crate::deploy::host_channel::run_program_with_stdin(
+                    &resolved,
+                    &["/bin/sh", "-c", &compare_command],
+                    &format!("{token}\n"),
+                    &runner,
+                )
+                .await
+                .map_err(|error| CmdError::click(error.to_string()))?;
+            }
+            if !comparison.ok() {
                 return Err(CmdError::click(format!(
-                    "{}: release publisher item {item} could not be synchronized: stdout={:?}; stderr={:?}",
+                    "{}: release verifier shadow for {item} differs after reconciliation",
                     resolved.name,
-                    synchronized.stdout.trim(),
-                    synchronized.stderr.trim(),
                 )));
             }
+            publisher_lifecycles.push(json!({
+                "item": item,
+                "mode": mode,
+                "controller": controller,
+                "readable": true,
+            }));
         }
     }
     let capabilities = items
@@ -3968,14 +4074,28 @@ async fn reconcile_verifier(
         .collect::<Vec<_>>()
         .join(",");
     let command = format!(
-        "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin GNUPGHOME={} SKARBIEC_VAULT_FILE={} {} token-mint {} \
-         --capabilities {} --replace-capabilities --token-file {} --ttl-seconds {} > /dev/null",
+        "set -eu; \
+         PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin; export PATH; \
+         GNUPGHOME={}; export GNUPGHOME; \
+         SKARBIEC_VAULT_FILE={}; export SKARBIEC_VAULT_FILE; \
+         token_file={}; staged=''; \
+         if [ -L \"$token_file\" ]; then exit 40; fi; \
+         if [ -f \"$token_file\" ]; then source_file=\"$token_file\"; \
+         else \
+           staged=\"$token_file.stado-new.$$\"; \
+           trap '/bin/rm -f \"$staged\"' EXIT HUP INT TERM; \
+           umask 077; /usr/bin/openssl rand -hex 32 > \"$staged\"; \
+           source_file=\"$staged\"; \
+         fi; \
+         {} token-mint {} --capabilities {} --replace-capabilities \
+           --token-file \"$source_file\" --ttl-seconds {} > /dev/null; \
+         if [ -n \"$staged\" ]; then /bin/mv -f \"$staged\" \"$token_file\"; trap - EXIT HUP INT TERM; fi",
         crate::deploy::shlex_quote(&gnupg_home),
         crate::deploy::shlex_quote(&vault),
+        crate::deploy::shlex_quote(&token_file),
         crate::deploy::shlex_quote(&skarbiec),
         crate::deploy::shlex_quote(consumer),
         crate::deploy::shlex_quote(&capabilities),
-        crate::deploy::shlex_quote(&token_file),
         ttl,
     );
     let reconciled = crate::deploy::host_channel::run_command(&resolved, &command, &runner)
@@ -3983,7 +4103,7 @@ async fn reconcile_verifier(
         .map_err(|error| CmdError::click(error.to_string()))?;
     if !reconciled.ok() {
         return Err(CmdError::click(format!(
-            "{}: {kind} verifier reconciliation failed: {}",
+            "{}: {kind} verifier reconciliation failed without replacing its token file: {}",
             resolved.name,
             crate::deploy::host_channel::last_error_line(&reconciled, "remote command failed")
         )));
@@ -3997,7 +4117,8 @@ async fn reconcile_verifier(
                 "target": resolved.name,
                 "consumer": consumer,
                 "items": item_list,
-                "bearer_preserved": true,
+                "publisher_lifecycles": publisher_lifecycles,
+                "bearer_preserved": bearer_preserved,
                 "expires_at": expires_at,
             }))?
         );
