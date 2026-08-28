@@ -87,6 +87,78 @@ with open(path, "wb") as handle:
 PY
 /usr/bin/plutil -lint "$staged" >/dev/null
 
+
+reconcile_ingress() {
+  tailscale_bin=''
+  if /usr/bin/which tailscale >/dev/null 2>&1; then
+    tailscale_bin=$(/usr/bin/which tailscale)
+  else
+    for candidate in \
+      /Applications/Tailscale.app/Contents/MacOS/Tailscale \
+      /usr/local/bin/tailscale \
+      /opt/homebrew/bin/tailscale
+    do
+      if [ -x "$candidate" ]; then
+        tailscale_bin="$candidate"
+        break
+      fi
+    done
+  fi
+  if [ -z "$tailscale_bin" ]; then
+    printf 'ingress_unmanaged tailscale_absent\n'
+    return 0
+  fi
+
+  status="$work/tailscale-serve-status.json"
+  "$tailscale_bin" serve status --json > "$status"
+  route_state=$(/usr/bin/python3 - "$status" <<'PY'
+import json, sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    document = json.load(handle)
+declared = any(
+    key.endswith(":8443") and value is True
+    for key, value in (document.get("AllowFunnel") or {}).items()
+)
+if not declared:
+    print("undeclared")
+    raise SystemExit
+desired = "http://127.0.0.1:8765"
+matched = any(
+    key.endswith(":8443")
+    and ((value.get("Handlers") or {}).get("/") or {}).get("Proxy") == desired
+    for key, value in (document.get("Web") or {}).items()
+)
+print("matched" if matched else "drifted")
+PY
+)
+  if [ "$route_state" = undeclared ]; then
+    printf 'ingress_unmanaged https=8443\n'
+    return 0
+  fi
+  if [ "$route_state" = drifted ]; then
+    "$tailscale_bin" funnel --bg --yes --https=8443 http://127.0.0.1:8765
+    "$tailscale_bin" serve status --json > "$status"
+  fi
+  /usr/bin/python3 - "$status" <<'PY'
+import json, sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    document = json.load(handle)
+desired = "http://127.0.0.1:8765"
+assert any(
+    key.endswith(":8443") and value is True
+    for key, value in (document.get("AllowFunnel") or {}).items()
+)
+assert any(
+    key.endswith(":8443")
+    and ((value.get("Handlers") or {}).get("/") or {}).get("Proxy") == desired
+    for key, value in (document.get("Web") or {}).items()
+)
+PY
+  printf 'ingress_reconciled https=8443 proxy=http://127.0.0.1:8765 prior=%s\n' \
+    "$route_state"
+}
 healthy=0
 if /usr/bin/curl -fsS --max-time 3 "$health" 2>/dev/null |
   /usr/bin/grep -Eq '"object"[[:space:]]*:[[:space:]]*true'; then healthy=1; fi
@@ -103,6 +175,7 @@ PY
 then same=1; fi
 
 if [ "$healthy" -eq 1 ] && [ "$same" -eq 1 ]; then
+  reconcile_ingress
   printf 'already_healthy %s store=%s\n' "$label" "$store"
   exit 0
 fi
@@ -116,6 +189,7 @@ if /usr/bin/sudo -n /bin/test -f "$plist"; then
   printf 'backup %s\n' "$backup"
 fi
 if [ "$healthy" -eq 1 ]; then
+  reconcile_ingress
   # Persist the corrected definition without cycling a serving process. The
   # current launchd job keeps running; the file is authoritative after reboot.
   /usr/bin/sudo -n /usr/bin/install -m 644 -o root -g wheel "$staged" "$plist"
@@ -139,6 +213,7 @@ fi
 attempt=0
 while [ "$attempt" -lt 180 ]; do
   if /usr/bin/curl -fsS --max-time 3 "$health" >/dev/null 2>&1; then
+    reconcile_ingress
     printf '%s %s store=%s backup=%s\n' "$action" "$label" "$store" "${backup:-none}"
     exit 0
   fi

@@ -1510,31 +1510,137 @@ impl RemoteObjectApi {
     }
 
     async fn get_release(&self, uri: &str) -> Result<Vec<u8>, CmdError> {
-        let mut endpoint = self.endpoint("/api/release/object", &[("uri", uri)])?;
-        for hop in 0..=3 {
-            let response = if hop == 0 {
-                self.request(reqwest::Method::GET, endpoint.clone())
-                    .send()
-                    .await?
-            } else {
-                self.http.get(endpoint.clone()).send().await?
-            };
-            if response.status().is_redirection() {
-                let location = response
-                    .headers()
-                    .get(reqwest::header::LOCATION)
-                    .and_then(|value| value.to_str().ok())
-                    .ok_or_else(|| CmdError::click("release redirect carries no Location"))?;
-                endpoint = response.url().join(location).map_err(|error| {
-                    CmdError::click(format!("invalid release redirect: {error}"))
-                })?;
-                continue;
+        let origin = self.endpoint("/api/release/object", &[("uri", uri)])?;
+        let limit = max_object_api_download_body();
+        let mut body = Vec::new();
+        let mut last_read_error = None;
+
+        for recovery in 0..=3 {
+            let mut endpoint = origin.clone();
+            for hop in 0..=3 {
+                let mut request = if hop == 0 {
+                    self.request(reqwest::Method::GET, endpoint.clone())
+                } else {
+                    self.http.get(endpoint.clone())
+                };
+                if !body.is_empty() {
+                    request =
+                        request.header(reqwest::header::RANGE, format!("bytes={}-", body.len()));
+                }
+                let response = request.send().await?;
+                if response.status().is_redirection() {
+                    let location = response
+                        .headers()
+                        .get(reqwest::header::LOCATION)
+                        .and_then(|value| value.to_str().ok())
+                        .ok_or_else(|| CmdError::click("release redirect carries no Location"))?;
+                    endpoint = response.url().join(location).map_err(|error| {
+                        CmdError::click(format!("invalid release redirect: {error}"))
+                    })?;
+                    continue;
+                }
+                if !response.status().is_success() {
+                    return Err(self.response_error(response).await);
+                }
+                if !body.is_empty() && response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+                    return Err(CmdError::click(format!(
+                        "Stado object API release GET refused byte resume at offset {}",
+                        body.len()
+                    )));
+                }
+
+                let expected_start = body.len();
+                let total = if response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
+                    let content_range = response
+                        .headers()
+                        .get(reqwest::header::CONTENT_RANGE)
+                        .and_then(|value| value.to_str().ok())
+                        .ok_or_else(|| {
+                            CmdError::click(
+                                "Stado object API release GET partial response carries no \
+                                 Content-Range",
+                            )
+                        })?;
+                    let (range, total) = content_range
+                        .strip_prefix("bytes ")
+                        .and_then(|value| value.split_once('/'))
+                        .ok_or_else(|| {
+                            CmdError::click(format!(
+                                "Stado object API release GET returned invalid Content-Range \
+                                 {content_range:?}"
+                            ))
+                        })?;
+                    let (start, _) = range.split_once('-').ok_or_else(|| {
+                        CmdError::click(format!(
+                            "Stado object API release GET returned invalid Content-Range \
+                             {content_range:?}"
+                        ))
+                    })?;
+                    let start = start.parse::<usize>().map_err(|_| {
+                        CmdError::click(format!(
+                            "Stado object API release GET returned invalid Content-Range \
+                             {content_range:?}"
+                        ))
+                    })?;
+                    let total = total.parse::<usize>().map_err(|_| {
+                        CmdError::click(format!(
+                            "Stado object API release GET returned invalid Content-Range \
+                             {content_range:?}"
+                        ))
+                    })?;
+                    if start != expected_start {
+                        return Err(CmdError::click(format!(
+                            "Stado object API release GET resumed at byte {start}, expected \
+                             {expected_start}"
+                        )));
+                    }
+                    Some(total)
+                } else {
+                    response
+                        .content_length()
+                        .and_then(|length| usize::try_from(length).ok())
+                };
+                if total.is_some_and(|total| total > limit) {
+                    return Err(CmdError::click(format!(
+                        "Stado object API release GET response exceeds the {limit}-byte limit"
+                    )));
+                }
+                if let Some(total) = total {
+                    body.reserve(total.saturating_sub(body.capacity()));
+                }
+
+                let mut response = response;
+                loop {
+                    match response.chunk().await {
+                        Ok(Some(chunk)) => {
+                            if chunk.len() > limit.saturating_sub(body.len()) {
+                                return Err(CmdError::click(format!(
+                                    "Stado object API release GET response exceeds the \
+                                     {limit}-byte limit"
+                                )));
+                            }
+                            body.extend_from_slice(&chunk);
+                        }
+                        Ok(None) => return Ok(body),
+                        Err(error) => {
+                            last_read_error = Some(format!(
+                                "Stado object API release GET response body connection closed \
+                                 before completion after {} bytes: {error}",
+                                body.len()
+                            ));
+                            break;
+                        }
+                    }
+                }
+                break;
             }
-            return self
-                .success_body(response, max_object_api_download_body(), "release GET")
-                .await;
+            if recovery == 3 {
+                break;
+            }
         }
-        Err(CmdError::click("release GET exceeded three redirects"))
+        Err(CmdError::click(last_read_error.unwrap_or_else(|| {
+            "release GET exceeded three redirects".to_string()
+        })))
     }
 
     /// Ask the release channel itself whether it serves one object.
@@ -1673,7 +1779,13 @@ impl RemoteObjectApi {
             .and_then(|length| usize::try_from(length).ok())
             .unwrap_or_default();
         let mut body = Vec::with_capacity(capacity);
-        while let Some(chunk) = response.chunk().await? {
+        while let Some(chunk) = response.chunk().await.map_err(|error| {
+            CmdError::click(format!(
+                "Stado object API {operation} response body connection closed before completion \
+                 after {} bytes: {error}",
+                body.len()
+            ))
+        })? {
             if chunk.len() > limit.saturating_sub(body.len()) {
                 return Err(CmdError::click(format!(
                     "Stado object API {operation} response exceeds the {limit}-byte limit"
