@@ -47,7 +47,7 @@ jobs:
             "stado://releases/stado/$version/linux-amd64/stado" "$delivered"
           actual="$(openssl dgst -sha256 "$delivered")"
           actual="${actual##* }"
-          bytes="$(wc -c < "$delivered" | tr -d ' ')"
+          bytes="$(/usr/bin/stat -f %z "$delivered")"
           test "$bytes" -ge 50000000
           test "$actual" = "$expected"
           printf 'Verified %s bytes for immutable Stado %s writer read-back at %s\n' \
