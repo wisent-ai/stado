@@ -234,56 +234,76 @@ jobs:
             ' "$RUNNER_TEMP/release-lifecycles.json" >/dev/null
           }
           # Publisher items belong to their recorded controllers. Prove every
-          # declared lifecycle and exact token read before the verifier grant
-          # is refreshed; only then may the public writer canary run.
+          # declared lifecycle and exact token read before the object verifier
+          # is refreshed. Existing read grants can stay valid after a publisher
+          # item changes, so read-only preflight is not a reason to skip this.
           reconcile_release_lifecycles
-          if ! wait_for_preflight; then
-            # Reconcile both declared verifier policies. Current object APIs
-            # recover inline, which preserves every connection.
-            retry_command "$stado_bin" host reconcile-object-verifier \
-              charless-mac-mini --json
-            reconcile_release_lifecycles
-            if ! wait_for_preflight; then
-              # Upgrade path for an older object API that cannot reload its
-              # grants inline. Restarting can close the transport carrying this
-              # command, so both subsequent preflights are authoritative.
-              "$stado_bin" service restart \
-                com.wisent.always-on.stado-object-api \
-                --host charless-mac-mini --json || true
-              wait_for_preflight
-            fi
-          fi
-          state="$(jq -r '.state // ""' "$RUNNER_TEMP/object-preflight.json")"
-          case "$state" in
-            present|absent) ;;
-            *) echo "::error::object preflight is ${state:-unanswered}"; false ;;
-          esac
-          jq -e '.objects | type == "array"' \
-            "$RUNNER_TEMP/release-preflight.json" >/dev/null
+          retry_command "$stado_bin" host reconcile-object-verifier \
+            charless-mac-mini --json
+
+          verify_read_proof() {
+            wait_for_preflight
+            state="$(jq -r '.state // ""' "$RUNNER_TEMP/object-preflight.json")"
+            case "$state" in
+              present|absent) ;;
+              *) echo "::error::object preflight is ${state:-unanswered}"; return 1 ;;
+            esac
+            jq -e '.objects | type == "array"' \
+              "$RUNNER_TEMP/release-preflight.json" >/dev/null
+          }
+
           # A read grant cannot prove that this runner presents the publisher
-          # token expected by the target. This content-addressed canary makes
-          # `storage put` exercise create-if-absent and exact authenticated
-          # writer read-back before publication starts. The object service
-          # reloads publisher authorization independently, so retry the same
-          # immutable canary until that declared token is active.
+          # token expected by the target. Retain one content-addressed canary;
+          # storage put performs create-if-absent plus exact authenticated
+          # read-back through this same writer resolver.
           canary="$RUNNER_TEMP/release-write-preflight.json"
           printf '{"schema":"stado.release-write-preflight.v1","source_commit":"%s"}\n' \
             "$GITHUB_SHA" > "$canary"
           canary_sha="$(openssl dgst -sha256 "$canary" | sed 's/^.*= //')"
           canary_uri="stado://releases/stado/__release_preflight__/$canary_sha.json"
-          canary_written=false
-          for attempt in $(seq 1 12); do
-            if "$stado_bin" storage put "$canary_uri" "$canary" --if-absent; then
-              canary_written=true
-              break
-            fi
-            sleep "$((attempt * 2))"
-          done
-          if [ "$canary_written" != true ]; then
-            echo "::error::release publisher authorization did not stabilize"
-            false
-          fi
 
+          verify_read_proof
+          if ! "$stado_bin" storage put "$canary_uri" "$canary" --if-absent; then
+            # An old object runtime can keep the previous writer boundary after
+            # both verifier files are reconciled. Before its sole in-place
+            # restart, prove the exact managed unit and declared dependency
+            # route this job is about to disturb.
+            "$stado_bin" service show \
+              com.wisent.always-on.stado-object-api \
+              --host charless-mac-mini --json \
+              > "$RUNNER_TEMP/object-service-before-restart.json"
+            jq -e '
+              length == 1 and
+              .[0].unit == "com.wisent.always-on.stado-object-api" and
+              .[0].host == "charless-mac-mini" and
+              .[0].status == "runs" and
+              (.[0].detail | contains("dashboard --bind 127.0.0.1 --port 8765"))
+            ' "$RUNNER_TEMP/object-service-before-restart.json" >/dev/null
+            "$stado_bin" service directory connect stado-object-api \
+              --target lukasz-macbook --no-verify --json \
+              > "$RUNNER_TEMP/object-dependency-before-restart.json"
+            jq -e '
+              .service == "stado-object-api" and
+              .placed_on == "charless-mac-mini" and
+              .from == "lukasz-macbook"
+            ' "$RUNNER_TEMP/object-dependency-before-restart.json" >/dev/null
+
+            restart_status=0
+            "$stado_bin" service restart \
+              com.wisent.always-on.stado-object-api \
+              --host charless-mac-mini --json \
+              > "$RUNNER_TEMP/object-service-restart.json" ||
+              restart_status=$?
+            if [ "$restart_status" -ne 0 ]; then
+              echo "::notice::restart transport closed; the full postcondition decides"
+            fi
+
+            # No credential is removed and no lifecycle command is repeated.
+            # The post-restart verdict is the complete three-read plus writer
+            # proof, not the restart command's possibly interrupted response.
+            verify_read_proof
+            "$stado_bin" storage put "$canary_uri" "$canary" --if-absent
+          fi
       - name: Create Linux release manifest
         run: |
           machine_schema="$(
