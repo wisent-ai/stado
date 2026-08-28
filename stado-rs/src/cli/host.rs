@@ -3922,11 +3922,10 @@ async fn reconcile_verifier(
         .checked_sub(now)
         .filter(|ttl| *ttl > 0)
         .ok_or_else(|| CmdError::click(format!("{kind} verifier grant is already expired")))?;
-    // Publisher items are dependencies of the verifier grant, not values the
-    // verifier lifecycle owns. Inspect the authority recorded by Skarbiec and
-    // use only that authority: target-owner items may be converged through the
-    // owner's set-json lifecycle, while externally or lifecycle-managed items
-    // are read and proved but never owner-rotated here.
+    // Publisher items remain authoritative in the control-plane vault. The
+    // release API reads target-local verifier shadows with the same ids. Keep
+    // those shadows target-owned and atomically replace a staged vault copy;
+    // this copies the current value without rotating or reclassifying source.
     let mut publisher_lifecycles = Vec::new();
     if kind == "release" {
         let authoritative_vault = crate::credential_store::owner::vault()
@@ -3983,9 +3982,14 @@ async fn reconcile_verifier(
                 .get("items")
                 .and_then(Value::as_object)
                 .and_then(|entries| entries.get(item));
-            let metadata_matches = target_entry
+            let shadow_owned = target_entry
                 .and_then(|entry| entry.get("management"))
-                == source_entry.get("management");
+                .and_then(Value::as_object)
+                .is_some_and(|management| {
+                    management.get("mode").and_then(Value::as_str) == Some("owner")
+                        && management.get("controller").and_then(Value::as_str)
+                            == Some(target_owner)
+                });
             let compare_command = format!(
                 "set -eu; expected=$(/bin/cat); actual=$(PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin GNUPGHOME={} SKARBIEC_VAULT_FILE={} {} get {} --field token); [ \"$actual\" = \"$expected\" ]",
                 crate::deploy::shlex_quote(&gnupg_home),
@@ -4001,18 +4005,22 @@ async fn reconcile_verifier(
             )
             .await
             .map_err(|error| CmdError::click(error.to_string()))?;
-            let owner_controlled = mode == "owner" && controller == target_owner;
-            if (!metadata_matches || !comparison.ok()) && owner_controlled {
+            if !shadow_owned || !comparison.ok() {
                 let payload = serde_json::to_string(&serde_json::json!({
                     "schema": "skarbiec.item.v2",
                     "kind": "token",
                     "fields": { "token": token },
                     "context": {}
                 }))?;
+                let staging = format!("{vault}.stado-release-verifier");
                 let set_command = format!(
-                    "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin GNUPGHOME={} SKARBIEC_VAULT_FILE={} {} set-json {} --type token",
-                    crate::deploy::shlex_quote(&gnupg_home),
+                    "set -eu; live={}; staging={}; trap '/bin/rm -f \"$staging\"' EXIT HUP INT TERM; /bin/cp -p \"$live\" \"$staging\"; PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin GNUPGHOME={} SKARBIEC_VAULT_FILE=\"$staging\" {} rm {} >/dev/null 2>&1 || true; PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin GNUPGHOME={} SKARBIEC_VAULT_FILE=\"$staging\" {} set-json {} --type token >/dev/null; /bin/chmod 600 \"$staging\"; /bin/mv -f \"$staging\" \"$live\"; trap - EXIT HUP INT TERM",
                     crate::deploy::shlex_quote(&vault),
+                    crate::deploy::shlex_quote(&staging),
+                    crate::deploy::shlex_quote(&gnupg_home),
+                    crate::deploy::shlex_quote(&skarbiec),
+                    crate::deploy::shlex_quote(item),
+                    crate::deploy::shlex_quote(&gnupg_home),
                     crate::deploy::shlex_quote(&skarbiec),
                     crate::deploy::shlex_quote(item),
                 );
@@ -4026,11 +4034,11 @@ async fn reconcile_verifier(
                 .map_err(|error| CmdError::click(error.to_string()))?;
                 if !converged.ok() {
                     return Err(CmdError::click(format!(
-                        "{}: owner-controlled release publisher item {item} could not be reconciled: {}",
+                        "{}: release verifier shadow for {item} could not be reconciled: {}",
                         resolved.name,
                         crate::deploy::host_channel::last_error_line(
                             &converged,
-                            "owner lifecycle failed"
+                            "verifier shadow lifecycle failed"
                         ),
                     )));
                 }
@@ -4042,15 +4050,10 @@ async fn reconcile_verifier(
                 )
                 .await
                 .map_err(|error| CmdError::click(error.to_string()))?;
-            } else if !metadata_matches || !comparison.ok() {
-                return Err(CmdError::click(format!(
-                    "{}: release publisher item {item} is controlled by {controller:?} in {mode:?} mode and differs from its authoritative value; reconcile that controller lifecycle instead of owner rotation",
-                    resolved.name,
-                )));
             }
             if !comparison.ok() {
                 return Err(CmdError::click(format!(
-                    "{}: release publisher item {item} failed lifecycle-correct read verification",
+                    "{}: release verifier shadow for {item} differs after reconciliation",
                     resolved.name,
                 )));
             }

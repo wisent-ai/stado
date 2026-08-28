@@ -46,7 +46,7 @@ Release publication has a separate verifier and policy set. Its equivalent comma
 stado host reconcile-release-verifier <target> --json
 ```
 
-This command changes only the release verifier's host-local read grant. Publisher credentials remain owned by the control plane that runs `stado release submit`; verifier reconciliation must not copy or replace their item payloads. Release preflight proves the caller credential with an authenticated private operation, while verifier reconciliation proves that the release API can read the configured publisher items. A public `releases/` stat proves neither boundary.
+This command changes the release verifier's host-local read grant and target-local verifier shadows. Publisher credentials remain owned by the control plane that runs `stado release submit`; reconciliation reads those authoritative values without rotating them, writes target-owned shadows into a staged vault copy, and atomically installs that copy. Release preflight proves the caller credential with an authenticated private operation, while verifier reconciliation proves that the release API can read the matching shadow. A public `releases/` stat proves neither boundary.
 
 Use `stado storage stat <stado-uri> --json` as the smallest final check. `present` and `absent` are both authoritative answers. `503 object authorization unavailable` means the verifier boundary failed; it is not evidence that the requested object is absent.
 
