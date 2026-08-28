@@ -1433,6 +1433,20 @@ impl RemoteObjectApi {
         self.success_body(response, max_object_api_download_body(), "object GET")
             .await
     }
+    async fn get_optional(&self, uri: &str) -> Result<Option<Vec<u8>>, CmdError> {
+        let endpoint = self.endpoint("/api/object", &[("uri", uri)])?;
+        let bearer = self.release_bearer(uri).await?;
+        let response = self
+            .request_as(reqwest::Method::GET, endpoint, bearer.as_deref())
+            .send()
+            .await?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        self.success_body(response, max_object_api_download_body(), "object GET")
+            .await
+            .map(Some)
+    }
 
     async fn get_versioned(&self, uri: &str) -> Result<Option<(Vec<u8>, String)>, CmdError> {
         let endpoint = self.endpoint("/api/object", &[("uri", uri), ("versioned", "true")])?;
@@ -1903,6 +1917,17 @@ pub(crate) async fn store_object_with_metadata(
     }
     if let Some(remote) = RemoteObjectApi::configured()? {
         let bytes = read_object_source(source)?;
+        if create_only {
+            match remote.get_optional(&uri).await? {
+                Some(existing) if existing == bytes => return Ok(uri),
+                Some(_) => {
+                    return Err(CmdError::click(format!(
+                        "immutable object already differs on the writer: {uri}"
+                    )))
+                }
+                None => {}
+            }
+        }
         let expected_sha = Sha256::digest(&bytes);
         remote
             .put_with_metadata(&uri, content_type, create_only, bytes, extra_metadata)

@@ -261,19 +261,15 @@ jobs:
           jq -e '.objects | type == "array"' \
             "$RUNNER_TEMP/release-preflight.json" >/dev/null
           # A read grant cannot prove that this runner presents the publisher
-          # token expected by the target. Retain one content-addressed canary:
-          # create-if-absent plus exact authenticated read-back must both pass
-          # through the validated writer resolver before publication starts.
+          # token expected by the target. This content-addressed canary makes
+          # `storage put` exercise create-if-absent and exact authenticated
+          # writer read-back before publication starts.
           canary="$RUNNER_TEMP/release-write-preflight.json"
           printf '{"schema":"stado.release-write-preflight.v1","source_commit":"%s"}\n' \
             "$GITHUB_SHA" > "$canary"
           canary_sha="$(openssl dgst -sha256 "$canary" | sed 's/^.*= //')"
           canary_uri="stado://releases/stado/__release_preflight__/$canary_sha.json"
           "$stado_bin" storage put "$canary_uri" "$canary" --if-absent
-          "$stado_bin" storage get \
-            "$canary_uri" "$RUNNER_TEMP/release-write-preflight.stored.json"
-          cmp --silent \
-            "$canary" "$RUNNER_TEMP/release-write-preflight.stored.json"
 
       - name: Create Linux release manifest
         run: |
@@ -325,32 +321,20 @@ jobs:
           for source in "$RUNNER_TEMP"/stado-release/*; do
             name="${source##*/}"
             uri="stado://releases/stado/$STADO_VERSION/linux-amd64/$name"
-            stored="$RUNNER_TEMP/stored-$name"
             published=false
-            # The object boundary reloads its authorization independently of
-            # the release runner. A reconciled service may therefore return
-            # `object authorization unavailable` for longer than the old
-            # four-attempt (20 second) window. Every retry is still safe:
-            # creation is if-absent and each attempt reads the immutable bytes
-            # back before declaring success.
+            # The writer may briefly reload authorization. `storage put` is
+            # idempotent for an identical immutable object and verifies exact
+            # bytes through the authenticated writer before returning.
             max_attempts=12
             for attempt in $(seq 1 "$max_attempts"); do
-              rm -f "$stored"
-              if ! "$stado_bin" storage put "$uri" "$source" --if-absent; then
-                echo "Create attempt $attempt/$max_attempts did not complete; reading $uri back"
-              fi
-              if "$stado_bin" storage get "$uri" "$stored"; then
-                if ! cmp --silent "$source" "$stored"; then
-                  echo "::error::Published release object differs from its source at $uri"
-                  false
-                fi
+              if "$stado_bin" storage put "$uri" "$source" --if-absent; then
                 published=true
                 break
               fi
               sleep "$((attempt * 2))"
             done
             if [ "$published" != true ]; then
-              echo "::error::Could not create and read back $uri after $max_attempts attempts"
+              echo "::error::Could not create and verify $uri after $max_attempts attempts"
               false
             fi
           done
@@ -489,21 +473,13 @@ jobs:
           STADO_RELEASE_PREVIEW_INTEGRATIONS="gcs-storage,s3-storage,azure-blob-storage,gcp-compute,aws-ec2,azure-vm,box,vast" \
             "$STADO_SOURCE_DIR/scripts/release_manifest.sh"
           mv "$archive" "$release_dir/stado-v$version-$platform.tar.gz"
-          # Publish and read back through the authoritative service's declared
-          # resolver adapter; public delivery is verified in the next step.
+          # Each put reads exact bytes back through the authenticated writer;
+          # public delivery is verified in the next step.
           export STADO_API_URL="$STADO_WRITER_API_URL"
           for source in "$release_dir"/*; do
             name="${source##*/}"
             uri="stado://releases/stado/$version/$platform/$name"
-            if ! "$stado_bin" storage put "$uri" "$source" --if-absent; then
-              echo "Object already exists or the create was refused; reading $uri back"
-            fi
-            stored="$RUNNER_TEMP/stored-native-$name"
-            "$stado_bin" storage get "$uri" "$stored"
-            if ! cmp --silent "$source" "$stored"; then
-              echo "::error::Published release object differs from its source at $uri"
-              false
-            fi
+            "$stado_bin" storage put "$uri" "$source" --if-absent
           done
           echo "STADO_NATIVE_RELEASE_PLATFORM=$platform" >> "$GITHUB_ENV"
           echo "STADO_NATIVE_RELEASE_DIR=$release_dir" >> "$GITHUB_ENV"
