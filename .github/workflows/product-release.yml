@@ -68,9 +68,18 @@ jobs:
           # channel, so a Skarbiec release does not depend on an already-healthy
           # Skarbiec authorization path.
           stado_bin="$GITHUB_WORKSPACE/stado-rs/target/release/stado"
-          "$stado_bin" host reconcile-object-verifier \
+          retry_reconcile() {
+            for attempt in $(seq 1 6); do
+              if "$@"; then
+                return 0
+              fi
+              sleep "$((attempt * 5))"
+            done
+            return 1
+          }
+          retry_reconcile "$stado_bin" host reconcile-object-verifier \
             charless-mac-mini --json
-          "$stado_bin" host reconcile-release-verifier \
+          retry_reconcile "$stado_bin" host reconcile-release-verifier \
             charless-mac-mini --json
           ready=false
           for attempt in $(seq 1 24); do
