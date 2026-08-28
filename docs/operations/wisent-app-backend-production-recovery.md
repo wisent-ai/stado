@@ -1,6 +1,6 @@
 # Wisent app backend production recovery
 
-Last updated: 2026-08-28T22:15:58Z
+Last updated: 2026-08-28T23:12:08Z
 
 This record is the operator-readable source of truth for restoring the production
 Wisent app backend on `charless-mac-mini`. It contains no credentials or token
@@ -39,34 +39,26 @@ override, reused one canonical SSH option construction. Main qualification run
 [33209574217](https://github.com/wisent-ai/stado/actions/runs/33209574217)
 succeeded at 2026-08-28T20:59:26Z. Triggered release pipeline.
 
-**Current blocker: Funnel-path release delivery failures and fixes in flight.**
+**Current blocker: Stado 0.9.3 release object transfer failures. Recovery in flight.**
 
-**Recorded 0.9.2 deployment failure (run 33212229611):** "Validate public Linux
-release delivery" step failed repeatedly with "Stado object API returned HTTP 502
-Bad Gateway: <empty response body>" (21:39:07Z-21:41:52Z). Could not serve immutable
-`stado://releases/stado/0.9.2/linux-amd64/SHA256SUMS` through public release delivery
-route. Failed step: release; skipped: deploy-control-plane.
+**Recorded 0.9.3 deployment failure (run 33217803690):** "Create immutable Linux release
+through Stado" step failed at 23:07:14Z after 12 retry attempts (22:51:48Z-23:07:14Z).
+Failure sequence:
+- Initial HTTP error at 22:52:53Z: "error sending request for url
+  (http://127.0.0.1:18776/api/object?uri=stado%3A%2F%2Freleases%2Fstado%2F0.9.3%2Flinux-amd64%2Fstado&if_absent=true)"
+- Large-file transfer failures 22:54:38Z–23:04:07Z: Multiple "Stado object API object GET
+  response body connection closed before completion" errors; byte counts at failure:
+  42546242 (22:54:38Z), 56M+ (23:00:11Z, 23:04:07Z). Error code=infra_down.
+- Final verdict at 23:07:14Z: "Could not create and verify stado://releases/stado/0.9.3/linux-amd64/stado
+  after 12 attempts".
+- Deployment job skipped; production unchanged (port 8000 absent, bobloo/chat 502).
 
-**Fixes in flight:**
-- **PR #131 "Preserve release path through Funnel"** (merged 2026-08-28T14:00:45Z,
-  commit 2705a0672cf31b0495de6c5002b2e7d778119626, run 33177085951 SUCCESS):
-  Recorded issue: Public release handler stripped `/api/release/object` before proxying
-  to canonical resolver, so published immutable bytes answered 404 through Funnel.
-  Fix: Point path-scoped handler at same path on `127.0.0.1:18776`, assert exact
-  declaration in both canonical deployment flows (deploy.yml and deploy-existing-release.yml).
-
-- **PR #134 "Mount Stado release delivery beside mini ingress"** (merged
-  2026-08-28T22:00:51Z, commit d5fbe82f9d7d767d71c68dafe2f95ab931f60824, run
-  33214002442 SUCCESS): Fixes the 0.9.2 deploy failure by reconciling only the
-  path-scoped public release route on mini's existing 443 Funnel, preserving Brama
-  root and its separate 8443 route. Change: explicit port 8443 instead of implicit
-  443 in STADO_API_URL and tailscale serve handler assertions.
-
-**Merge qualification run in progress:** Run
-[33215035738](https://github.com/wisent-ai/stado/actions/runs/33215035738)
-(PR #134 merge, created 2026-08-28T22:00:54Z) version-check job in_progress.
-Once this qualifies, release deployment will be triggered. Production unchanged
-(port 8000 absent, bobloo/chat 502).
+**Recovery in flight:**
+- **Run 33219504511 "Resume authenticated Stado writer read-back"** (created 2026-08-28T23:10:29Z,
+  version-check job in_progress at 23:12:08Z). Objective: repair writer read-back loopback
+  path and re-qualify release delivery mechanism before re-deploying 0.9.3. Scheduled after
+  0.9.3 deployment failure. Once this version-check qualifies, release pipeline will be
+  re-triggered to re-attempt 0.9.3 deployment with recovered transport layer.
 ## Changes already delivered
 
 - PR [#118](https://github.com/wisent-ai/stado/pull/118), merge
@@ -118,7 +110,12 @@ Once this qualifies, release deployment will be triggered. Production unchanged
 | 2026-08-28T22:00:51Z | PR #134 merged: Mount Stado release delivery beside mini ingress | Fixes the 0.9.2 deployment failure (run 33212229611) by reconciling path-scoped public release route on mini's existing 443 Funnel. Merge commit `3eb5465367e8177159e6b14efa945767fe9ad946`. |
 | 2026-08-28T21:46:28Z–22:00:23Z | run 33214002442: PR #134 merge qualification | PR branch run completed with success conclusion before merge. |
 | 2026-08-28T22:00:54Z–in_progress | run 33215035738: Merge qualification for PR #134 | Post-merge qualification run started; version-check job in_progress (started 22:00:54Z, still running at 22:15:58Z). Once this qualifies, release deployment will be triggered again. |
-
+| 2026-08-28T22:16:52Z | run 33216160464: Release Stado 0.9.3 (cancelled) | Release pipeline attempted; run cancelled (created 22:16:52Z). |
+| 2026-08-28T22:18:11Z | run 33216246052: Release Stado 0.9.3 (SUCCESS) | Release pipeline retriggered after cancellation; version-check job completed SUCCESS. Tag stado-v0.9.3 (sha: 925a03be7be273a4c95c14f666ff37a58fda4313) created. Release timestamp 22:18:11Z. |
+| 2026-08-28T22:29:40Z | PR #135 merged: Release Stado 0.9.3 | Version-only release metadata for exact-qualified mini path-scoped release ingress fix. Merge commit `54e165bdf26adef1e6b8b2ac998f9cce891a7530` on origin/main. |
+| 2026-08-28T22:29:43Z | run 33217014224: Merge PR #135 (version-check SUCCESS) | Post-merge qualification run on merge commit completed SUCCESS. |
+| 2026-08-28T22:42:15Z–23:07:18Z | run 33217803690: 0.9.3 Deployment attempt | Deployment run after main merge. Release job failed in "Create immutable Linux release through Stado" step (22:51:48Z–23:07:14Z). Recorded failures: [1] "error sending request for url (http://127.0.0.1:18776/api/object?uri=stado%3A%2F%2Freleases%2Fstado%2F0.9.3%2Flinux-amd64%2Fstado&if_absent=true)" at 22:52:53Z; [2] Multiple "Stado object API object GET response body connection closed before completion" errors with byte counts 42M–56M during large file transfers (22:54:38Z–23:04:07Z). Error code=infra_down. Final error at 23:07:14Z: "Could not create and verify stado://releases/stado/0.9.3/linux-amd64/stado after 12 attempts". Deploy-control-plane job skipped. Production unchanged (port 8000 absent, bobloo/chat 502). |
+| 2026-08-28T23:10:29Z–in_progress | run 33219504511: Resume authenticated Stado writer read-back | Recovery run initiated after 0.9.3 deployment failure; version-check job in_progress (started 23:10:29Z, still running at 23:12:08Z). Objective: recover writer read-back and re-qualify release path for re-deployment. |
 All host operations use Stado's declared channels; no direct SSH is used.
 Representative sanctioned surfaces used during this recovery are:
 
