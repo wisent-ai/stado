@@ -16,7 +16,7 @@ jobs:
       contents: read
     env:
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
-      STADO_API_URL: https://stado.wisent.com
+      STADO_API_URL: ${{ vars.STADO_OBJECT_API_INTERNAL_URL }}
       WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
       WC_SKARBIEC_CONSUMER: stado-release-publisher
       WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
@@ -111,8 +111,9 @@ jobs:
               --host charless-mac-mini --json || true
             # The restart can close its own host transport before returning a
             # receipt. Only the authenticated write/read postcondition below
-            # decides whether it succeeded. The canonical HTTPS channel is
-            # independent of the host-control connection used for the restart.
+            # decides whether it succeeded. The declared internal object
+            # channel is independent of the host-control connection used for
+            # the restart.
             wait_for_channel
           fi
           "$stado_bin" release submit \
