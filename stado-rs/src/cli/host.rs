@@ -4027,24 +4027,31 @@ async fn reconcile_verifier(
                     crate::deploy::shlex_quote(&skarbiec),
                     crate::deploy::shlex_quote(item),
                 );
-                let converged = crate::deploy::host_channel::run_program_with_stdin(
-                    &resolved,
-                    &["/bin/sh", "-c", &set_command],
-                    &payload,
-                    &runner,
-                )
-                .await
-                .map_err(|error| CmdError::click(error.to_string()))?;
-                if !converged.ok() {
-                    return Err(CmdError::click(format!(
-                        "{}: release verifier shadow for {item} could not be reconciled: {}",
-                        resolved.name,
-                        crate::deploy::host_channel::last_error_line(
-                            &converged,
-                            "verifier shadow lifecycle failed"
-                        ),
-                    )));
-                }
+                let convergence_transport_error =
+                    match crate::deploy::host_channel::run_program_with_stdin(
+                        &resolved,
+                        &["/bin/sh", "-c", &set_command],
+                        &payload,
+                        &runner,
+                    )
+                    .await
+                    {
+                        Ok(converged) if converged.ok() => None,
+                        Ok(converged) => {
+                            return Err(CmdError::click(format!(
+                                "{}: release verifier shadow for {item} could not be reconciled: {}",
+                                resolved.name,
+                                crate::deploy::host_channel::last_error_line(
+                                    &converged,
+                                    "verifier shadow lifecycle failed"
+                                ),
+                            )));
+                        }
+                        // Replacing the vault may invalidate the transport whose
+                        // credential came from that vault. Reconnect and judge the
+                        // item by its postcondition instead of repeating the write.
+                        Err(error) => Some(error.to_string()),
+                    };
                 comparison = crate::deploy::host_channel::run_program_with_stdin(
                     &resolved,
                     &["/bin/sh", "-c", &compare_command],
@@ -4052,7 +4059,15 @@ async fn reconcile_verifier(
                     &runner,
                 )
                 .await
-                .map_err(|error| CmdError::click(error.to_string()))?;
+                .map_err(|error| {
+                    let first = convergence_transport_error
+                        .as_deref()
+                        .unwrap_or("shadow write completed");
+                    CmdError::click(format!(
+                        "{}: cannot verify release verifier shadow for {item} after {first}: {error}",
+                        resolved.name
+                    ))
+                })?;
             }
             if !comparison.ok() {
                 return Err(CmdError::click(format!(
