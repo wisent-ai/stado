@@ -45,8 +45,9 @@ permissions:
   contents: read
 
 concurrency:
-  # Deliberately not deploy.yml's group: a superseded check may be cancelled, a
-  # half-finished publish may not.
+  # Only the newest revision of a ref can become qualified. deploy.yml waits on
+  # this exact SHA's completed verdict on a hosted runner before it allocates the
+  # publisher runner, and a newer canonical tag supersedes older publication.
   group: wisent-compute-version-check-${{ github.ref }}
   cancel-in-progress: true
 
