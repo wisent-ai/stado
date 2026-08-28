@@ -1673,7 +1673,13 @@ impl RemoteObjectApi {
             .and_then(|length| usize::try_from(length).ok())
             .unwrap_or_default();
         let mut body = Vec::with_capacity(capacity);
-        while let Some(chunk) = response.chunk().await? {
+        while let Some(chunk) = response.chunk().await.map_err(|error| {
+            CmdError::click(format!(
+                "Stado object API {operation} response body connection closed before completion \
+                 after {} bytes: {error}",
+                body.len()
+            ))
+        })? {
             if chunk.len() > limit.saturating_sub(body.len()) {
                 return Err(CmdError::click(format!(
                     "Stado object API {operation} response exceeds the {limit}-byte limit"
