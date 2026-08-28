@@ -16,6 +16,9 @@ jobs:
       contents: read
     env:
       STADO_CONFIG: ${{ vars.STADO_CONFIG_PATH }}
+      WC_SKARBIEC_URL: ${{ vars.STADO_SKARBIEC_URL }}
+      WC_SKARBIEC_CONSUMER: stado-release-publisher
+      WC_SKARBIEC_TOKEN_FILE: ~/.stado/stado-release-publisher-acquisition-token
     steps:
       - uses: actions/checkout@v5
         with:
