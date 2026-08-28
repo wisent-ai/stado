@@ -52,7 +52,25 @@ impl StadoObjectBackend {
             .map_err(|error| StorageError::Other(format!("invalid Stado storage URL: {error}")))?;
         let host = base_url.host_str().unwrap_or_default().to_ascii_lowercase();
         let loopback = matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1");
-        if (base_url.scheme() != "https" && !(base_url.scheme() == "http" && loopback))
+        // Tailscale encrypts traffic before it leaves the host. Its fixed CGNAT
+        // and ULA ranges are therefore an authenticated private transport, not
+        // clear-text Internet HTTP. Keep names out of this exception: an IP
+        // literal makes the transport boundary explicit and cannot be rebound
+        // by DNS.
+        let tailnet = host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| match address {
+                std::net::IpAddr::V4(address) => {
+                    let octets = address.octets();
+                    octets[0] == 100 && (64..=127).contains(&octets[1])
+                }
+                std::net::IpAddr::V6(address) => {
+                    let segments = address.segments();
+                    segments[0] == 0xfd7a && segments[1] == 0x115c && segments[2] == 0xa1e0
+                }
+            });
+        if (base_url.scheme() != "https"
+            && !(base_url.scheme() == "http" && (loopback || tailnet)))
             || !base_url.username().is_empty()
             || base_url.password().is_some()
             || base_url.query().is_some()
@@ -60,7 +78,7 @@ impl StadoObjectBackend {
             || !matches!(base_url.path(), "" | "/")
         {
             return Err(StorageError::Other(
-                "Stado storage URL must be an HTTPS origin or authenticated HTTP loopback"
+                "Stado storage URL must be an HTTPS origin or authenticated HTTP loopback/tailnet IP"
                     .to_string(),
             ));
         }
