@@ -137,7 +137,7 @@ pub(crate) async fn read_local_snapshot(
     })
 }
 
-fn ssh_command() -> Command {
+fn ssh_command(control_master: &'static str) -> Command {
     let mut command = Command::new("ssh");
     command.args([
         "-T",
@@ -154,7 +154,7 @@ fn ssh_command() -> Command {
         "-o",
         "ServerAliveCountMax=2",
         "-o",
-        "ControlMaster=no",
+        control_master,
     ]);
     let key_file = std::env::var("STADO_RESOLVER_SSH_KEY_FILE")
         .ok()
@@ -180,8 +180,8 @@ fn ssh_command() -> Command {
 /// SSH process and one remote session per object read, while isolating snapshot
 /// reads prevents a stuck control master from freezing registry refresh.
 fn ssh_proxy_command() -> Command {
-    let mut command = ssh_command();
-    command.args(["-o", "ControlMaster=auto", "-o", "ControlPersist=60"]);
+    let mut command = ssh_command("ControlMaster=auto");
+    command.args(["-o", "ControlPersist=60"]);
     if let Ok(home) = std::env::var("HOME") {
         command
             .arg("-o")
@@ -271,7 +271,7 @@ impl SnapshotSource {
         let remote_command = format!("{} resolver snapshot", crate::deploy::shlex_quote(command));
         let output = match tokio::time::timeout(
             AUTHORITY_FETCH_TIMEOUT,
-            ssh_command()
+            ssh_command("ControlMaster=no")
                 .arg(ssh)
                 .arg(remote_command)
                 .stderr(Stdio::piped())
