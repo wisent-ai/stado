@@ -35,7 +35,7 @@ jobs:
                 "repos/$GITHUB_REPOSITORY/actions/workflows/version-check.yml/runs?head_sha=$SOURCE_SHA&event=push&per_page=100"
             )"
             verdict="$(
-              jq -r --arg sha "$SOURCE_SHA" '
+              jq -c --arg sha "$SOURCE_SHA" '
                 [.workflow_runs[]
                   | select(
                       .head_sha == $sha and
@@ -45,13 +45,19 @@ jobs:
                 | sort_by(.run_number)
                 | last
                 | if . == null then
-                    "missing\t\t"
+                    {status: "missing", conclusion: "", url: ""}
                   else
-                    [.status, (.conclusion // ""), .html_url] | @tsv
+                    {
+                      status: .status,
+                      conclusion: (.conclusion // ""),
+                      url: .html_url
+                    }
                   end
               ' <<<"$runs"
             )"
-            IFS=$'\t' read -r status conclusion url <<<"$verdict"
+            status="$(jq -r '.status' <<<"$verdict")"
+            conclusion="$(jq -r '.conclusion' <<<"$verdict")"
+            url="$(jq -r '.url' <<<"$verdict")"
             case "$status:$conclusion" in
               completed:success)
                 echo "Exact source qualification passed: $url"
